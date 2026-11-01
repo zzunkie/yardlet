@@ -356,7 +356,8 @@ final class VaultTests: XCTestCase {
     /// and a replaced password stays in the item.
     /// An account beside the username (design §17): one IAM username in two AWS accounts is two items, told apart by
     /// the account, which an agent can name and a refusal lists; a sign-in admits an item whose fields it does not
-    /// contradict; and the key button's list puts the item filled on a sign-in's earlier step first.
+    /// contradict; the key button's list puts the item filled on a sign-in's earlier step first; and a password sent
+    /// with no username (design §15, a reset or change dialog) updates the item Chrome would, the site's others offered.
     func testOtherFieldsTellAccountsOfOneUsernameApart() async throws {
         let account = { (value: String) in VaultFormField(id: "account", name: "account", label: "Account ID", value: value) }
         let one = VaultItem(name: "AWS", sites: ["signin.aws"], username: "dev", fields: [account("111122223333")])
@@ -386,6 +387,30 @@ final class VaultTests: XCTestCase {
         XCTAssertTrue(refusal.message.contains("(dev · 111122223333)"), refusal.message)
         XCTAssertEqual(center.pickerItems(for: "https://ap-southeast-2.signin.aws", matching: "", first: two.id).here.map(\.id),
                        [two.id, one.id])
+
+        // No username: the item that holds the password already (nothing to ask), else one with no username, else the one
+        // used last; the fields the page sent narrow them; the site's others are the choices.
+        let used = VaultItem(name: "AWS", sites: ["signin.aws"], username: "dev", lastUsedAt: Date(timeIntervalSinceNow: -60),
+                             fields: [account("111122223333")])
+        let older = VaultItem(name: "AWS", sites: ["signin.aws"], username: "dev", createdAt: Date(timeIntervalSinceNow: -7200),
+                              fields: [account("444455556666")])
+        let unnamed = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore([older.id: VaultSecret(password: "older"), used.id: VaultSecret(password: "used")]),
+            repository: InMemoryVaultRepository(items: [older, used]), hmac: MacVault.hmac, isAllowedBuild: true,
+            defaults: .vaultTests()))
+        let page = "https://ap-southeast-2.signin.aws"
+        let reset = unnamed.update(forUnnamed: "new", origin: page)
+        XCTAssertEqual(reset.item?.id, used.id)
+        XCTAssertFalse(reset.holdsIt)
+        XCTAssertEqual(reset.choices.map(\.id), [used.id, older.id])
+        let known = unnamed.update(forUnnamed: "older", origin: page)
+        XCTAssertTrue(known.holdsIt && known.item?.id == older.id)
+        XCTAssertEqual(unnamed.update(forUnnamed: "new", origin: page, fields: [account("444455556666")]).choices.map(\.id), [older.id])
+        XCTAssertNil(unnamed.update(forUnnamed: "new", origin: "https://example.test").item)
+        let blank = VaultItem(name: "AWS", sites: ["signin.aws"], username: "", createdAt: Date(timeIntervalSinceNow: -86400))
+        try unnamed.save(blank, secret: VaultSecret(password: "blank"))
+        XCTAssertEqual(unnamed.update(forUnnamed: "new", origin: page).item?.id, blank.id)
+        XCTAssertEqual(unnamed.update(forUnnamed: "new", origin: page, excluding: blank.id).item?.id, used.id)
     }
 
     /// Addresses and cards (design §18): a card is told by its number's checksum, named by its network and last four

@@ -335,6 +335,9 @@ enum VaultPageScripts {
         const walletScope = e => (e && (e.form || e.closest('form'))) || null;
         """#
 
+    /// `isPasswordField(e)`: a password field, or a text field that has been one, as Chrome's password manager reads a
+    /// password the page shows with its own "Show password" (Blink's `HasBeenPasswordField`); the watch notes such
+    /// fields in `wasPassword()` as their type changes. `passwordFieldsIn(scope)`: the scope's password fields.
     /// `autocompleteOf(e)`, `isCurrentPassword(e)` and `newPasswordFields(e)`: the fields a new password goes
     /// into when `e` is one of them (design §15). The form's fields marked `new-password`; else, past the
     /// current password (marked so, or named so in its name, id, placeholder or label), the form's other one
@@ -342,15 +345,19 @@ enum VaultPageScripts {
     /// and confirmation) or the last two of three; else a lone field named new. A sign-in's field has none.
     /// `madePasswords()` holds the fields that took a password the vault made, until the person types in one.
     static let newPasswordTests = """
+        const wasPassword = () => window.__yardletWasPassword || (window.__yardletWasPassword = new WeakSet());
+        const isPasswordField = e => e instanceof HTMLInputElement
+          && (e.type === 'password' || (wasPassword().has(e) && ['text', 'email', 'tel', ''].includes(e.type)));
+        const passwordFieldsIn = scope => Array.from((scope || document).querySelectorAll('input')).filter(isPasswordField);
         const autocompleteOf = e => (e.getAttribute('autocomplete') || '').toLowerCase().split(/\\s+/);
         const fieldWords = e => [e.name, e.id, e.placeholder, e.getAttribute('aria-label')]
           .concat(Array.from(e.labels || []).map(l => l.textContent)).join(' ');
         const isCurrentPassword = e => autocompleteOf(e).includes('current-password')
           || (!autocompleteOf(e).includes('new-password') && /current|old|existing|기존|현재/i.test(fieldWords(e)));
-        const passwordFieldsWith = e => Array.from((e.form || e.closest('form') || document).querySelectorAll('input[type=password]'))
+        const passwordFieldsWith = e => passwordFieldsIn(e.form || e.closest('form') || document)
           .filter(f => f === e || (!f.disabled && !f.readOnly && f.getBoundingClientRect().width > 0));
         const newPasswordFields = e => {
-          if (!(e instanceof HTMLInputElement) || e.type !== 'password') return [];
+          if (!isPasswordField(e)) return [];
           const fields = passwordFieldsWith(e);
           const marked = fields.filter(f => autocompleteOf(f).includes('new-password'));
           if (marked.length) return marked.includes(e) ? marked : [];
@@ -366,7 +373,8 @@ enum VaultPageScripts {
 
     /// Runs in the vault's isolated world of every document of a panel's tab. It listens for the person
     /// submitting a form whose password field they typed into, or that holds a password the vault made
-    /// (not one the vault filled from an item), and tells Yardlet through the binding, once per submission.
+    /// (not one the vault filled from an item), and tells Yardlet through the binding, once per submission; a click
+    /// on a button that says it cancels or closes is none, and a field the page shows as text stays a password field.
     /// A page that sends a new password with its own script from a `[role=button]` counts once the password
     /// leaves the page (`inPlace`). It tells when a password field takes or loses the focus, and whether it is an empty new-password
     /// field, for the strong password suggestion. It also looks, at most twice a second while the
@@ -385,7 +393,7 @@ enum VaultPageScripts {
           let toldTyped = false;
           addEventListener('input', e => {
             if (!e.isTrusted || !(e.target instanceof HTMLInputElement)) return;
-            if (e.target.type !== 'password') {
+            if (!isPasswordField(e.target)) {
               typedText.add(e.target);
               // A card's number, expiry or security code typed in keeps the page from the agent's scripts (design §18).
               if (!toldTyped && /^cc-(number|csc|exp)/.test(walletKind(e.target) || '')) { toldTyped = true; send({ kind: 'typedSecret' }); }
@@ -397,6 +405,10 @@ enum VaultPageScripts {
             if (madePasswords().delete(e.target) && !e.target.value
                 && !newPasswordFields(e.target).some(f => f.value && madePasswords().has(f))) send({ kind: 'madeCleared' });
           }, true);
+          // A password field the page shows as text ("Show password") stays one (`isPasswordField`).
+          new MutationObserver(records => {
+            for (const r of records) if (r.target instanceof HTMLInputElement && (r.oldValue || '').toLowerCase() === 'password') wasPassword().add(r.target);
+          }).observe(document, { subtree: true, attributes: true, attributeFilter: ['type'], attributeOldValue: true });
           let last = '';
           const tell = message => {
             const payload = JSON.stringify(message);
@@ -407,16 +419,16 @@ enum VaultPageScripts {
           // What submitting the scope tells: the password field it is about, and the message.
           const reading = scope => {
             const fields = Array.from((scope || document).querySelectorAll('input'));
-            const made = fields.find(e => e.type === 'password' && e.value && madePasswords().has(e));
+            const made = fields.find(e => isPasswordField(e) && e.value && madePasswords().has(e));
             // A field the vault filled counts once the person typed another password into it.
-            const own = fields.filter(e => e.type === 'password' && e.value && typed.has(e)
+            const own = fields.filter(e => isPasswordField(e) && e.value && typed.has(e)
               && !((window.__yardletVault || []).includes(e) && (window.__yardletVaultSecrets || []).includes(e.value)));
             // A change form's new password, not the current one typed above it.
             const pass = made || own.find(e => newPasswordFields(e).length) || own[0];
             if (!pass) return null;
             // A field marked as the username, also one the page hides (a password step's), else the text before the password.
             const user = fields.find(e => (textTypes.includes(e.type) || e.type === 'hidden') && autocompleteOf(e).includes('username') && e.value)
-              || fields.slice(0, fields.indexOf(pass)).reverse().find(e => textTypes.includes(e.type) && e.value);
+              || fields.slice(0, fields.indexOf(pass)).reverse().find(e => textTypes.includes(e.type) && e.value && !isPasswordField(e));
             const message = made ? { kind: 'signIn', username: user ? user.value : '', made: '1' }
               : { kind: 'signIn', username: user ? user.value : '', password: pass.value };
             const others = otherFields(pass, user);
@@ -435,6 +447,7 @@ enum VaultPageScripts {
             }
             if (!region || region === document.documentElement || region === document.body) return [];
             return Array.from(region.querySelectorAll('input')).filter(e => e !== user && e.value && e.value !== (user && user.value)
+                && !isPasswordField(e)
                 && (typedText.has(e) || shown(e))
                 && e.value.length <= 200 && (textTypes.includes(e.type) || e.type === 'number') && !isCodeField(e)
                 && !otherCodeNames.test(codeFieldWords(e)) && !codeCardNames.test(codeFieldWords(e))
@@ -445,7 +458,7 @@ enum VaultPageScripts {
           // password step that follows in the tab.
           const usernameStep = scope => {
             const inputs = Array.from((scope || document).querySelectorAll('input'));
-            if (inputs.some(e => e.type === 'password' && shown(e))) return null;
+            if (inputs.some(e => isPasswordField(e) && shown(e))) return null;
             const named = inputs.filter(e => e.value && typedText.has(e) && shown(e) && textTypes.includes(e.type) && !isCodeField(e)
               && (e.type === 'email' || autocompleteOf(e).some(t => t === 'username' || t === 'email')
                 || /user|e-?mail|login|account|아이디|이메일|계정/i.test(fieldWords(e))));
@@ -484,12 +497,14 @@ enum VaultPageScripts {
           const shown = e => { if (!e.isConnected) return false; const r = e.getBoundingClientRect(), s = getComputedStyle(e);
             return r.width > 0 && r.height > 0 && s.visibility !== 'hidden'; };
           const dismissing = /\\b(cancel|close|dismiss|back|not now|skip)\\b|취소|닫기|뒤로|이전|나중에|건너뛰기/i;
+          // A button that says it cancels, closes or goes back, or is marked disabled, sends nothing.
+          const sends = button => button.getAttribute('aria-disabled') !== 'true' && !dismissing.test(
+            (button.getAttribute('aria-label') || '') + ' ' + (button instanceof HTMLInputElement ? button.value : button.textContent));
           let sentInPlace = null;
           const inPlace = button => {
-            if (button.getAttribute('aria-disabled') === 'true'
-                || dismissing.test((button.getAttribute('aria-label') || '') + ' ' + button.textContent)) return null;
+            if (!sends(button)) return null;
             for (let area = button.parentElement; area && area !== document.documentElement; area = area.parentElement) {
-              if (!Array.from(area.querySelectorAll('input[type=password]')).some(f => f.value)) continue;
+              if (!passwordFieldsIn(area).some(f => f.value)) continue;
               const read = reading(area);
               if (!read || !(madePasswords().has(read.pass) || newPasswordFields(read.pass).length)
                   || !(read.pass.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING)) return null;
@@ -511,10 +526,10 @@ enum VaultPageScripts {
             const b = target && target.closest('button, input[type=submit]');
             const role = !b && e.isTrusted && target && target.closest('[role=button]');
             sentInPlace = role ? inPlace(role) : null;
-            if (b) offer(b.form || b.closest('form'));
+            if (b && sends(b)) offer(b.form || b.closest('form'));
           }, true);
           addEventListener('keydown', e => {
-            if (e.key === 'Enter' && e.target instanceof HTMLInputElement && e.target.type === 'password')
+            if (e.key === 'Enter' && isPasswordField(e.target))
               offer(e.target.form || e.target.closest('form'));
             const role = e.isTrusted && (e.key === 'Enter' || e.key === ' ') && e.target instanceof Element && e.target.closest('[role=button]');
             if (role) sentInPlace = inPlace(role);
@@ -527,13 +542,13 @@ enum VaultPageScripts {
               const which = kind.startsWith('cc-') ? (isCardForm(fields) ? 'card' : '') : (isAddressForm(fields) ? 'address' : '');
               if (which) send({ kind: 'walletFocus', which, page: location.href });
             }
-            if (!(e.target instanceof HTMLInputElement) || e.target.type !== 'password') return;
+            if (!isPasswordField(e.target)) return;
             const fresh = newPasswordFields(e.target);
             send({ kind: 'passwordFocus', page: location.href,
                    isNew: fresh.length && fresh.every(f => !f.value && !madePasswords().has(f)) ? '1' : '' });
           }, true);
           addEventListener('focusout', e => {
-            if (e.target instanceof HTMLInputElement && e.target.type === 'password') send({ kind: 'passwordBlur', page: location.href });
+            if (isPasswordField(e.target)) send({ kind: 'passwordBlur', page: location.href });
           }, true);
 
           \(codeFieldTests)

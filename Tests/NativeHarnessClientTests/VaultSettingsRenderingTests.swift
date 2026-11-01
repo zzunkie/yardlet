@@ -250,25 +250,30 @@ final class VaultSettingsRenderingTests: XCTestCase {
         }
     }
 
-    /// The browser panel's save bar (design §17): saving a sign-in, updating one of two accounts of one username (the bar
-    /// names it), and adding a username to an item saved without one, which says Save; each closes with its X for now.
+    /// The browser panel's save bar (design §15, §17): saving a sign-in, updating one of two accounts of one username (the
+    /// bar names it), adding a username to an item saved without one, which says Save, and a password sent with no
+    /// username, which names the item it updates and whose arrow offers the site's other items; each closes with its X.
     func testTheSaveBarDraws() throws {
         let directory = try WindowlessRender.directory("vault-qa")
         let account = [VaultFormField(id: "account", name: "account", label: "Account ID", value: "444455556666")]
         let iam = VaultItem(name: "signin.aws", sites: ["signin.aws"], username: "dev", hasPassword: true, fields: account)
         let blank = VaultItem(name: "example.test", sites: ["example.test"], username: "", hasPassword: true)
+        let console = VaultItem(name: "Console sign-in", sites: ["example.test"], username: "", hasPassword: true)
+        let admin = VaultItem(name: "Console admin", sites: ["example.test"], username: "admin@example.test", hasPassword: true)
         let offers = [
             BrowserVaultSaveOffer(origin: "https://github.com", site: "github.com", username: "ada@example.test",
                                   password: "not-a-real-password", updates: nil),
             BrowserVaultSaveOffer(origin: "https://ap-southeast-2.signin.aws", site: "signin.aws", username: "dev",
                                   password: "not-a-real-password", updates: iam, fields: account),
             BrowserVaultSaveOffer(origin: "https://www.example.test", site: "example.test", username: "ada@example.test",
-                                  password: "not-a-real-password", updates: blank, addsAccount: true)
+                                  password: "not-a-real-password", updates: blank, addsAccount: true),
+            BrowserVaultSaveOffer(origin: "https://us-east-1.console.example.test", site: "example.test", username: "",
+                                  password: "not-a-real-password", updates: console, choices: [console, admin])
         ]
-        let size = NSSize(width: 820, height: 150)
+        let size = NSSize(width: 820, height: 200)
         let bars = VStack(spacing: 0) {
             ForEach(offers.indices, id: \.self) { index in
-                BrowserVaultSaveBar(offer: offers[index], neverSave: {}, accept: {}, close: {})
+                BrowserVaultSaveBar(offer: offers[index], neverSave: {}, accept: { _ in }, close: {})
             }
         }
         .frame(width: size.width, height: size.height, alignment: .top)
@@ -280,9 +285,12 @@ final class VaultSettingsRenderingTests: XCTestCase {
         defer { host.close() }
         host.settle()
         let labels = host.accessibilityElements().map(\.label)
-        XCTAssertEqual(labels.filter { $0 == L10n.string("Close") }.count, 3, "\(labels)")
+        XCTAssertEqual(labels.filter { $0 == L10n.string("Close") }.count, 4, "\(labels)")
         XCTAssertEqual(labels.filter { $0 == L10n.string("Save") }.count, 2, "\(labels)")
-        XCTAssertEqual(labels.filter { $0 == L10n.string("Update") }.count, 1, "\(labels)")
+        XCTAssertEqual(labels.filter { $0 == L10n.string("Update") }.count, 2, "\(labels)")
+        let spoken = host.accessibilityElements().map { "\($0.label) \($0.value)" }
+        XCTAssertTrue(spoken.contains { $0.contains(L10n.format("Update the saved password of %@ for %@?", "“Console sign-in”",
+                                                                "us-east-1.console.example.test")) }, "\(spoken)")
         XCTAssertFalse(labels.contains { $0.contains("not-a-real-password") }, "\(labels)")
     }
 

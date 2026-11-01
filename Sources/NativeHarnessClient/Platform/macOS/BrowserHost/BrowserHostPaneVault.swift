@@ -16,13 +16,16 @@ struct BrowserVaultSaveOffer: Equatable {
     var fields: [VaultFormField] = []
     /// `updates` has this password already: the bar adds the username or the other fields to it.
     var addsAccount = false
+    /// A password sent with no username: the site's items the bar's menu offers to update instead of `updates`
+    /// (`VaultCenter.update(forUnnamed:origin:fields:excluding:)`).
+    var choices: [VaultItem] = []
 
-    /// The account the bar names: the item it updates as updating leaves it.
+    /// The account the bar names: the item it updates as updating leaves it, or its name for one that names no account.
     var account: String {
         guard var item = updates else { return "" }
         if item.username.isEmpty { item.username = username }
         item.fields = item.merging(fields)
-        return item.identity
+        return item.identity.isEmpty ? "“\(item.name)”" : item.identity
     }
 }
 
@@ -118,8 +121,8 @@ struct BrowserVaultSetupOffer: Equatable {
     var isImport: Bool { site == nil || setups.count > 1 }
 }
 
-/// Where the person saves a site's code from the setup bar.
-enum BrowserVaultSetupTarget {
+/// Where the person saves from a bar's menu: another of the site's items, or a new one.
+enum BrowserVaultTarget {
     case item(VaultItem)
     case newItem
 }
@@ -232,6 +235,20 @@ extension BrowserHostPaneController {
             guard let password = fields["password"] else { return }
             let never = UserDefaults.yardlet.stringArray(forKey: Self.neverSaveKey) ?? []
             guard !never.contains(site) else { return }
+            // A password sent with no username (a reset or change dialog, a password-only step) updates the item Chrome
+            // would, and the bar's menu offers the site's other items; an item that holds it already only takes new fields.
+            if username.isEmpty {
+                let update = self.vault.update(forUnnamed: password, origin: frame.origin, fields: others)
+                if update.holdsIt, let item = update.item {
+                    guard Set(item.merging(others) ?? []) != Set(item.fields ?? []) else { return }
+                    self.vaultOffer = BrowserVaultSaveOffer(origin: frame.origin, site: site, username: username, password: password,
+                                                            updates: item, fields: others, addsAccount: true)
+                    return
+                }
+                self.vaultOffer = BrowserVaultSaveOffer(origin: frame.origin, site: site, username: username, password: password,
+                                                        updates: update.item, fields: others, choices: update.choices)
+                return
+            }
             let here = self.vault.items(for: frame.origin)
             // The item of this account: the same username, and no other value in a field the form had (one IAM user
             // name in two AWS accounts is two items).
@@ -244,7 +261,7 @@ extension BrowserHostPaneController {
             }
             // An item saved without a username (a password step's before Yardlet kept the first step's) takes it once
             // its password signs in; it is not changed until the person says so.
-            if !username.isEmpty, let blank = here.first(where: {
+            if let blank = here.first(where: {
                 $0.username.isEmpty && $0.admits(others) && self.vault.secret(of: $0.id)?.password == password
             }) {
                 self.vaultOffer = BrowserVaultSaveOffer(origin: frame.origin, site: site, username: username, password: password,
@@ -284,9 +301,24 @@ extension BrowserHostPaneController {
         Task { await VaultPageScripts.noteSecretsShown([], on: tab.devTools, fills: tab.vaultFills) }
     }
 
-    func acceptVaultOffer() {
-        guard let offer = vaultOffer else { return }
+    /// Saves the bar's sign-in into the item it names, or into the one the person chose from its menu (`choice`).
+    func acceptVaultOffer(into choice: BrowserVaultTarget? = nil) {
+        guard var offer = vaultOffer else { return }
         vaultOffer = nil
+        switch choice {
+        case .item(let item):
+            offer.updates = item
+            offer.addsAccount = false
+        case .newItem:
+            offer.updates = nil
+            // A made password is in its own item already.
+            if let presaved = offer.presaved, let item = vault.items.first(where: { $0.id == presaved }) {
+                return vault.logMadePassword(item, .saved, origin: offer.origin, taskID: session,
+                                             "The person kept it in its own item.")
+            }
+        case nil:
+            break
+        }
         do {
             if let item = offer.updates {
                 var item = item
@@ -392,7 +424,8 @@ extension BrowserHostPaneController {
     /// The person submitted a form holding the password the vault made (Chrome saves it then), or the page sent it
     /// with its own script (the watch's `inPlace`): the presaved item takes the username the form held. Beside a saved
     /// item of that username, or, when neither the form nor the item has one (a change dialog, a recovery's new
-    /// password page), beside the site's one item with a password, the bar asks to update it.
+    /// password page), beside the item a password sent with no username updates, the bar asks to update it, and its menu
+    /// offers the site's other items.
     private func madePasswordSubmitted(username: String, fields: [VaultFormField], origin: String, site: String,
                                        on tab: BrowserTab) {
         guard let made = madePassword, made.tab == tab.id,
@@ -400,17 +433,18 @@ extension BrowserHostPaneController {
               let password = vault.secret(of: item.id)?.password else { return }
         madePassword?.submitted = true
         let username = username.trimmingCharacters(in: .whitespacesAndNewlines)
-        let others = vault.items(for: origin).filter { $0.id != item.id }
-        let signIns = others.filter(\.hasPassword)
-        let saved: VaultItem? = !username.isEmpty ? others.first(where: { $0.username == username && $0.admits(fields) })
-            : item.username.isEmpty && signIns.count == 1 ? signIns[0] : nil
+        let unnamed = username.isEmpty && item.username.isEmpty
+            ? vault.update(forUnnamed: password, origin: origin, fields: fields, excluding: item.id) : nil
+        let saved: VaultItem? = !username.isEmpty
+            ? vault.items(for: origin).first(where: { $0.id != item.id && $0.username == username && $0.admits(fields) })
+            : unnamed?.item
         if let saved {
             guard vault.secret(of: saved.id)?.password != password else {
                 return vault.logMadePassword(item, .saved, origin: origin, taskID: session,
                                              "The form holding it was sent; “\(saved.name)” already has it.")
             }
             vaultOffer = BrowserVaultSaveOffer(origin: origin, site: site, username: saved.username, password: password,
-                                               updates: saved, presaved: item.id, fields: fields)
+                                               updates: saved, presaved: item.id, fields: fields, choices: unnamed?.choices ?? [])
             return vault.logMadePassword(item, .saved, origin: origin, taskID: session,
                                          "The form holding it was sent; the bar asks to update “\(saved.name)”.")
         }
@@ -687,7 +721,7 @@ extension BrowserHostPaneController {
     /// Saves the setup bar's code: a site's into its item (the default target unless the person chose
     /// another), then fills its current code if the page asks for one to confirm the setup; an export's as
     /// items of their own.
-    func acceptSetupOffer(into choice: BrowserVaultSetupTarget? = nil) {
+    func acceptSetupOffer(into choice: BrowserVaultTarget? = nil) {
         guard let offer = vaultSetupOffer else { return }
         vaultSetupOffer = nil
         guard let site = offer.site, !offer.isImport else {

@@ -609,6 +609,7 @@ final class BrowserHostVaultQA {
         await exercisePanelCodes(controller)
         await exercisePanelPasswords(controller)
         await exercisePanelMadePasswordsKept(controller)
+        await exercisePanelFormlessReset(controller)
         await exercisePanelSignInSteps(controller)
         await exercisePanelWallet(controller)
         await exercisePanelPicks(controller)
@@ -1149,6 +1150,118 @@ final class BrowserHostVaultQA {
               recoverOffered && presaved != nil && !vault.items.contains { $0.id == presaved?.id } && recoverSent && recoverAsked
                 && password(recovering.id) == recoverValue && !recoverValue.isEmpty,
               "offered \(recoverOffered), presaved \(presaved != nil), sent \(recoverSent), asked \(recoverAsked)")
+    }
+
+    /// A password reset dialog with no form and no username, shaped like a cloud console's (the QA server's
+    /// `/vault/reset-dialog`, served at an https `.test` address): the person types a new password and sends it with a
+    /// formless `<button type=submit>`, the page's script sends it and removes the dialog. The site holds sign-ins with
+    /// and without a username. Cancel and Close modal send nothing; Reset password asks, as Chrome does, to update the
+    /// site's sign-in with no username (the one used last of two), and its menu offers all three; the one the person
+    /// picks takes the password and keeps its old one, and the others stay as they were. A password typed while the page
+    /// shows it ("Show password" makes its field a text field) is offered the same way, and never as another field.
+    private func exercisePanelFormlessReset(_ controller: BrowserHostPaneController) async {
+        guard let first = controller.tab else { return check("panel: a tab for the reset dialog checks", false, "no tab") }
+        let console = "https://us-east-1.console.qa-reset.test/"
+        let account = VaultFormField(id: "account", name: "account", label: "Account ID", value: "444455556666")
+        let admin = VaultItem(name: "QA reset admin", sites: ["qa-reset.test"], username: "admin@example.test",
+                              createdAt: Date(timeIntervalSinceNow: -7200))
+        let member = VaultItem(name: "QA reset member", sites: ["qa-reset.test"], username: "",
+                               createdAt: Date(timeIntervalSinceNow: -86400), lastUsedAt: Date(timeIntervalSinceNow: -60))
+        let other = VaultItem(name: "QA reset other", sites: ["qa-reset.test"], username: "",
+                              createdAt: Date(timeIntervalSinceNow: -3600), fields: [account])
+        try? vault.save(admin, secret: VaultSecret(password: "qa-reset-admin-not-real"))
+        try? vault.save(member, secret: VaultSecret(password: "qa-reset-member-not-real"))
+        try? vault.save(other, secret: VaultSecret(password: "qa-reset-other-not-real"))
+        let stopServing = await serve([console], on: first)
+        defer { stopServing() }
+        func page(_ tab: BrowserTab, _ expression: String) async -> JSONValue? {
+            let result = try? await tab.devTools.send("Runtime.evaluate", ["expression": .string(expression), "returnByValue": .bool(true)],
+                                                      timeout: .seconds(20))
+            return result?["result"]?["value"]
+        }
+        func press(_ tab: BrowserTab, _ id: String) async {
+            let point = await page(tab, "(() => { const r = document.getElementById('\(id)').getBoundingClientRect(); "
+                + "return [r.left + r.width / 2, r.top + r.height / 2]; })()")?.arrayValue
+            guard let x = point?.first?.doubleValue, let y = point?.last?.doubleValue else {
+                return check("panel: \(id) is on the page to click", false, "\(String(describing: point))")
+            }
+            for (kind, buttons) in [("mouseMoved", 0), ("mousePressed", 1), ("mouseReleased", 0)] {
+                var event: [String: JSONValue] = ["type": .string(kind), "x": .number(x), "y": .number(y), "buttons": .integer(Int64(buttons))]
+                if kind != "mouseMoved" { event["button"] = .string("left"); event["clickCount"] = .integer(1) }
+                _ = try? await tab.devTools.send("Input.dispatchMouseEvent", event, timeout: .seconds(10))
+            }
+        }
+        /// The dialog opened and the person's new password typed into its field, shown as text first with `showing`.
+        func openDialog(_ tab: BrowserTab, typing text: String, showing: Bool = false) async -> Bool {
+            await press(tab, "manage")
+            guard await waitUntilAsync(.seconds(5), { await page(tab, "!!document.getElementById('dialog')") == .bool(true) }) else {
+                return false
+            }
+            if showing {
+                await press(tab, "show")
+                guard await waitUntilAsync(.seconds(3), {
+                    await page(tab, "document.getElementById('formField:r1:').type") == .string("text")
+                }) else { return false }
+            }
+            _ = await page(tab, "document.getElementById('formField:r1:').focus()")
+            _ = try? await tab.devTools.send("Input.insertText", ["text": .string(text)], timeout: .seconds(10))
+            return true
+        }
+        let address = console + "vault/reset-dialog"
+        controller.addressInput = address
+        controller.submitAddress()
+        guard await waitUntilAsync(.seconds(20), {
+            controller.tab?.currentURL == address && controller.tab?.isLoading == false
+        }), let tab = controller.tab else {
+            return check("panel: \(address) loads", false, controller.tab?.currentURL ?? "no tab")
+        }
+        try? await Task.sleep(for: .seconds(1))
+        controller.vaultOffer = nil
+
+        var dismissed: [String] = []
+        for button in ["cancel", "close"] {
+            let opened = await openDialog(tab, typing: "qa-reset-cancelled-not-real")
+            await press(tab, button)
+            let closed = await waitUntilAsync(.seconds(3)) { await page(tab, "!document.getElementById('dialog')") == .bool(true) }
+            try? await Task.sleep(for: .milliseconds(1500))
+            dismissed.append("\(button): opened \(opened), closed \(closed), offer \(controller.vaultOffer != nil)")
+            controller.vaultOffer = nil
+        }
+        check("panel: Cancel or Close modal in a reset dialog with no form sends nothing",
+              dismissed == ["cancel: opened true, closed true, offer false", "close: opened true, closed true, offer false"],
+              dismissed.joined(separator: "; "))
+
+        let fresh = "qa-reset-new-not-real"
+        let opened = await openDialog(tab, typing: fresh)
+        await press(tab, "go")
+        let sent = await waitUntilAsync(.seconds(5)) { await page(tab, "window.qa.reset") == .string(fresh) }
+        let asked = await waitUntilAsync(.seconds(5)) { controller.vaultOffer != nil }
+        try? await Task.sleep(for: .milliseconds(300))
+        capture(controller, named: "vault-panel-reset-dialog-update.png")
+        let offer = controller.vaultOffer
+        check("panel: a reset dialog with no form and no username asks to update the site's sign-in with no username, and offers the others",
+              opened && sent && asked && offer?.password == fresh && offer?.updates?.id == member.id
+                && Set(offer?.choices.map(\.id) ?? []) == [admin.id, member.id, other.id] && offer?.account == "“QA reset member”",
+              "opened \(opened), sent \(sent), offer \(offer.map { "\($0.updates?.name ?? "new") among \($0.choices.map(\.name))" } ?? "none")")
+        if let picked = offer?.choices.first(where: { $0.id == other.id }) { controller.acceptVaultOffer(into: .item(picked)) }
+        let picked = vault.secret(of: other.id)
+        check("panel: the sign-in picked from the bar's menu takes the new password and keeps its old one; the others stay",
+              picked?.password == fresh && picked?.previousPasswords?.first?.password == "qa-reset-other-not-real"
+                && vault.secret(of: member.id)?.password == "qa-reset-member-not-real"
+                && vault.secret(of: admin.id)?.password == "qa-reset-admin-not-real" && controller.vaultOffer == nil,
+              "previous \(picked?.previousPasswords?.count ?? 0)")
+
+        let shownPassword = "qa-reset-shown-not-real"
+        let shownOpened = await openDialog(tab, typing: shownPassword, showing: true)
+        await press(tab, "go")
+        let shownSent = await waitUntilAsync(.seconds(5)) { await page(tab, "window.qa.reset") == .string(shownPassword) }
+        let shownAsked = await waitUntilAsync(.seconds(5)) { controller.vaultOffer?.password == shownPassword }
+        let shownOffer = controller.vaultOffer
+        check("panel: a password typed while the page shows it as text is offered as the password, not as another field",
+              shownOpened && shownSent && shownAsked && shownOffer?.updates != nil && shownOffer?.username == ""
+                && shownOffer?.fields.isEmpty == true,
+              "opened \(shownOpened), sent \(shownSent), offer \(shownOffer.map { "\($0.updates?.name ?? "new"), \($0.fields.count) fields" } ?? "none")")
+        controller.vaultOffer = nil
     }
 
     /// Sign-ins in steps and with an account beside the username (design §17): the username typed on a step that asks
