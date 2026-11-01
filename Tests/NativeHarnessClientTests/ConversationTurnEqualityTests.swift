@@ -6,7 +6,7 @@ final class ConversationTurnEqualityTests: XCTestCase {
     func testEveryStoredPropertyIsCompared() {
         let turn = ConversationTurn(id: "turn", status: .running, timing: ConversationTurnTiming())
         XCTAssertEqual(Mirror(reflecting: turn).children.count, ConversationTurn.comparedPropertyCount,
-                       "A property was added to ConversationTurn: compare it in its ==")
+                       "A property was added to ConversationTurn: compare it in its == and isUnchanged(from:)")
     }
 
     func testAChangeInAnyPartTellsTurnsApart() {
@@ -17,6 +17,12 @@ final class ConversationTurnEqualityTests: XCTestCase {
         base.answers = [item]
         base.recordOrder = ["a"]
         XCTAssertEqual(base, base)
+        XCTAssertTrue(base.isUnchanged(from: base))
+        // The same turn in storage of its own is equal, and reads as changed to the quick comparison.
+        var copied = base
+        copied.work = base.work.map { $0 }
+        XCTAssertEqual(copied, base)
+        XCTAssertFalse(copied.isUnchanged(from: base))
         var changes: [(String, (inout ConversationTurn) -> Void)] = [
             ("status", { $0.status = .completed }),
             ("prompt", { $0.prompt = [item] }),
@@ -34,6 +40,7 @@ final class ConversationTurnEqualityTests: XCTestCase {
             var changed = base
             change(&changed)
             XCTAssertNotEqual(base, changed, name)
+            XCTAssertFalse(changed.isUnchanged(from: base), name)
         }
     }
 }

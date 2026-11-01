@@ -68,6 +68,46 @@ enum ConversationWorkGrouping {
         return runs
     }
 
+    /// Where each of `runs(items)` lies in `items`: the indices of the items it was made from, thinking
+    /// a group leaves out included. Cut at these bounds, the parts of `items` group into the same runs.
+    static func runBounds(_ items: [ConversationItem]) -> [Range<Int>] {
+        var bounds: [Range<Int>] = []
+        var pendingStart: Int?
+        var pendingCalls = 0
+        var lastIsSuggestions = false
+        func flush(at end: Int) {
+            guard let start = pendingStart else { return }
+            if pendingCalls > 1 {
+                bounds.append(start..<end)
+            } else {
+                bounds += (start..<end).map { $0..<($0 + 1) }
+            }
+            pendingStart = nil
+            pendingCalls = 0
+            lastIsSuggestions = false
+        }
+        for (index, item) in items.enumerated() {
+            if joinsRun(item) {
+                if pendingStart == nil { pendingStart = index }
+                if ConversationWorkSummary.category(of: item) != nil { pendingCalls += 1 }
+            } else if case .taskSuggestion = item.kind {
+                flush(at: index)
+                if lastIsSuggestions, let last = bounds.last {
+                    bounds[bounds.count - 1] = last.lowerBound..<(index + 1)
+                } else {
+                    bounds.append(index..<(index + 1))
+                }
+                lastIsSuggestions = true
+            } else {
+                flush(at: index)
+                bounds.append(index..<(index + 1))
+                lastIsSuggestions = false
+            }
+        }
+        flush(at: items.count)
+        return bounds
+    }
+
     /// What a folded turn keeps of its work (`ConversationTurn.workKeptWhenFolded`) but the calls the
     /// live line stands for, in the runs the listed work has: consecutive calls still one summary line,
     /// suggested tasks one card.

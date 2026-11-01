@@ -22,6 +22,10 @@ enum ConversationSource {
 /// (`scrollView`), and an update draws again only the turns it changed (`ConversationTurnView` and the
 /// rail compare `.equatable()`); following pins a growing conversation to its bottom.
 ///
+/// A long turn whose work shows (it does not fold) is drawn in parts, each a row of a few runs of its
+/// work (`ConversationTurnRows`), and everything below that reads turns reads rows: the window, the
+/// reading position, find and the places gone to. The rail marks turns, and following reads the turns.
+///
 /// A conversation draws its latest 10 turns (`ConversationTurnWindow`, plan A5.3, D11); scrolling up
 /// to the top brings earlier ones in, 10 at a time, once per load, as an upward infinite scroll does
 /// (`TranscriptTopLoading`), and then asks a Codex thread for its earlier pages, or reads more of a
@@ -93,13 +97,18 @@ struct ConversationTimeline: View {
         let _ = ViewBodyCensus.note(.conversationTimeline)
 #endif
         // The whole conversation is what find searches and saved places resolve against; the window
-        // is what is drawn.
-        let whole = project()
+        // is what is drawn. Both are read in rows: a long turn whose work shows is drawn in parts
+        // (`ConversationTurnRows`), each a row the window counts.
+        let rows = rendering.parts.rows(of: project())
+        let whole = rows.presentation
         let window = turnWindow
         let windowed = window?.apply(to: whole) ?? whole
         let revealed = reveal.apply(to: windowed)
         let presentation = withProviderRetry(revealed.presentation)
         let turns = presentation.turns
+        // The turns the rows drawn are of, which the rail marks.
+        let railTurns = rows.turns(drawnIn: turns)
+        let hasEarlierTurns = hasEarlierTurns(presentation.earlier, firstDrawn: railTurns.first, rows: rows)
         let _ = rendering.keep(turnIDs: turns.map(\.id))
         let context = itemContext(presentation)
         // The transcript's last entry is in the last turn. An earlier turn is not told it, so what it
@@ -109,21 +118,22 @@ struct ConversationTimeline: View {
             earlier.lastEntryID = nil
             return earlier
         }()
-        let anchors = ConversationAnchorResolver(presentation: presentation, threadID: threadID)
         let wholeAnchors = ConversationAnchorResolver(presentation: whole, threadID: threadID)
-        let latestRequestID = latestRequest.id(latestTurnID: turns.last?.id) { anchors.isRenamed($0, as: $1) }
+        let latestRequestID = latestRequest.id(latestTurnID: railTurns.last?.id) { wholeAnchors.isRenamed($0, as: $1) }
         HStack(spacing: 0) {
-            if showsTurnRail(presentation) {
+            if railTurns.count > 1 || hasEarlierTurns {
                 CodexTurnRail(
-                    turns: turns,
-                    focusedTurnID: scrollState.isFollowing ? turns.last?.id : focusedTurnID,
+                    turns: railTurns,
+                    focusedTurnID: scrollState.isFollowing ? railTurns.last?.id : focusedTurnID,
                     onFocus: { turnID in
                         readingTracker.cancelRestoration()
                         focusedTurnID = turnID
                         scrollState.isFollowing = false
+                        // A turn whose start the window leaves out is drawn from its start, then gone to.
+                        if let window, window.hides(turnID, in: whole) { earliestReadTurnID = turnID }
                         turnFocusRequest += 1
                     },
-                    hasMoreTurns: presentation.earlier != .none,
+                    hasMoreTurns: hasEarlierTurns,
                     moreTurns: "\(presentation.earlier)",
                     onLoadMore: {
                         loadEarlierTurns(windowed.earlier, loadedTurnCount: whole.turns.count,
@@ -140,10 +150,22 @@ struct ConversationTimeline: View {
                         emptyState
                     }
                     ForEach(turns) { turn in
-                        ConversationTurnHost(turn: turn, context: turn.id == turns.last?.id ? context : earlierTurnContext,
-                                             handlers: handlers(for: turn), renderState: rendering)
-                            .equatable()
-                            .transcriptReadingAnchor(turn.id, tracker: readingTracker)
+                        let part = rows.part(of: turn.id)
+                        let host = ConversationTurnHost(
+                            turn: turn, part: part, context: turn.id == turns.last?.id ? context : earlierTurnContext,
+                            handlers: handlers(for: turn, turnID: rows.turnID(of: turn.id)), renderState: rendering
+                        ).equatable()
+                        // A part goes on from the one before as the items of one turn do. Only a part
+                        // takes the padding: around every turn, it cost a streaming conversation of 300
+                        // turns most of half again its drawing.
+                        Group {
+                            if part.continuesTurn {
+                                host.padding(.top, ConversationLayout.itemSpacing - ConversationLayout.turnSpacing)
+                            } else {
+                                host
+                            }
+                        }
+                        .transcriptReadingAnchor(turn.id, tracker: readingTracker)
                     }
                 }
                 .coordinateSpace(name: readingTracker.coordinateSpace)
@@ -190,10 +212,18 @@ struct ConversationTimeline: View {
                     }
                 }
                 .onChange(of: turnFocusRequest) { _, _ in
-                    if let focusedTurnID { proxy.scrollTo(focusedTurnID, anchor: .center) }
+                    guard let focusedTurnID else { return }
+                    proxy.scrollTo(focusedTurnID, anchor: .center)
+                    // A turn the window was just widened to is laid out in the next display cycle.
+                    guard earliestReadTurnID == focusedTurnID else { return }
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(30))
+                        guard self.focusedTurnID == focusedTurnID else { return }
+                        proxy.scrollTo(focusedTurnID, anchor: .center)
+                    }
                 }
                 .onChange(of: readingTracker.visibleAnchorID) { _, id in
-                    if !scrollState.isFollowing, let id { focusedTurnID = id }
+                    if !scrollState.isFollowing, let id { focusedTurnID = rows.turnID(of: id) }
                 }
                 .task(id: historySelection) {
                     let restoresReading = !handledInitialSearch && readingPosition?.bookmark.followsLatest == false
@@ -314,9 +344,16 @@ struct ConversationTimeline: View {
         return ConversationTurnWindow(turnCount: turnWindowCount + addedTurnCount, earliestTurnID: earliestReadTurnID)
     }
 
-    /// The rail beside a conversation with more than one turn, or with earlier turns to bring in.
-    private func showsTurnRail(_ presentation: ConversationPresentation) -> Bool {
-        presentation.turns.count > 1 || presentation.earlier != .none
+    /// Turns before the ones the rows drawn are of, which the rail beside the conversation brings in:
+    /// a provider's earlier turns, or turns the window leaves out. Parts of the first turn drawn that
+    /// the window leaves out come in as the reader scrolls up to them.
+    private func hasEarlierTurns(_ earlier: ConversationEarlierTurns, firstDrawn: ConversationTurn?,
+                                 rows: ConversationTurnRows) -> Bool {
+        switch earlier {
+        case .none: false
+        case .local: firstDrawn?.id != rows.turns.turns.first?.id
+        case .provider, .providerFile: true
+        }
     }
 
     /// The reader went back to the latest output: the window draws the latest turns again, so a
@@ -412,10 +449,10 @@ struct ConversationTimeline: View {
         return transcriptWorkspaceURL ?? URL(filePath: "/")
     }
 
-    /// The turn's controls, offered where the turn and the task both allow them.
-    private func handlers(for turn: ConversationTurn) -> ConversationTurnHandlers {
-        var handlers = ConversationTurnHandlers(loadMoreItems: { actions.loadMoreCodexItems(turn.id) })
-        let turnID = turn.id
+    /// The turn's controls, offered where the turn and the task both allow them. `turn` is the row,
+    /// a whole turn or a part of the turn `turnID`, whose actions say which controls it draws.
+    private func handlers(for turn: ConversationTurn, turnID: String) -> ConversationTurnHandlers {
+        var handlers = ConversationTurnHandlers(loadMoreItems: { actions.loadMoreCodexItems(turnID) })
         // Every harness retries by the turn's ID, the way its own app does (`AppModel.retryTurn`).
         if turn.actions.canRetry, let retry = actions.retryTurn {
             handlers.retry = { retry(turnID) }

@@ -72,6 +72,71 @@ final class ConversationTurnWindowTests: XCTestCase {
         XCTAssertEqual(ConversationTurnWindow(turnCount: 10).apply(to: paged), paged)
     }
 
+    /// A long turn whose work shows is drawn in rows of a few runs of its work, which the window
+    /// counts, so a conversation shown again builds only the rows it draws. The rows read as the turn:
+    /// every item once, grouped as the whole turn grouped it, the head named after the turn and the
+    /// tail closing it, and the parts before the tail stay as they were while the turn streams on.
+    func testALongTurnWhoseWorkShowsIsDrawnInRowsOfItsRuns() throws {
+        func presentation(_ turn: JSONValue) -> ConversationPresentation {
+            CodexConversationProjection.presentation(LongConversationFixture.codex(threadID: "thread-rows", turns: [turn]),
+                                                     workspaceURL: URL(filePath: "/tmp/yardlet-rows"), historySelection: nil)
+        }
+        func rows(_ presentation: ConversationPresentation) -> ConversationTurnRows {
+            ConversationTurnRows(turns: presentation, split: ConversationTurnRows.split)
+        }
+        func calls(_ items: [ConversationItem]) -> Int { items.count { ConversationWorkSummary.category(of: $0) != nil } }
+        let whole = presentation(LongConversationFixture.streamedCodexTurn(id: "turn-long", commands: 4, seconds: 100))
+        let turn = try XCTUnwrap(whole.turns.first)
+        XCTAssertFalse(turn.foldsWork)
+        let split = rows(whole)
+        let drawn = split.presentation.turns
+        XCTAssertGreaterThan(drawn.count, 3)
+        XCTAssertEqual(drawn.first?.id, turn.id)
+        XCTAssertEqual(drawn.first?.prompt, turn.prompt)
+        XCTAssertEqual(drawn.dropFirst().map(\.id),
+                       (1..<drawn.count).map { ConversationTurnRows.partID(turnID: turn.id, index: $0) })
+        XCTAssertEqual(Set(drawn.map { split.turnID(of: $0.id) }), [turn.id])
+        XCTAssertEqual(split.part(of: turn.id), .head)
+        XCTAssertEqual(split.part(of: drawn[1].id), .middle)
+        XCTAssertEqual(drawn.flatMap(\.work), turn.work)
+        XCTAssertEqual(drawn.flatMap { ConversationWorkGrouping.runs($0.work).map(\.id) },
+                       ConversationWorkGrouping.runs(turn.work).map(\.id))
+        XCTAssertTrue(drawn.dropLast().allSatisfy { ConversationWorkGrouping.runs($0.work).count == ConversationTurnRows.runsPerPart })
+        let tail = try XCTUnwrap(drawn.last)
+        XCTAssertEqual(tail.answers, turn.answers)
+        XCTAssertTrue(drawn.dropLast().allSatisfy { $0.answers.isEmpty && $0.outcome == nil })
+        XCTAssertEqual(split.part(of: tail.id), .tail(stepsBefore: calls(turn.work) - calls(tail.work)))
+        XCTAssertEqual(split.turns(drawnIn: Array(drawn.suffix(2))).map(\.id), [turn.id])
+        XCTAssertEqual(ConversationTurnWindow().apply(to: split.presentation).turns.count,
+                       ConversationTurnWindow.initialTurnCount)
+
+        // The longer stream's request names its length; its work is the same so far.
+        let grown = rows(presentation(LongConversationFixture.streamedCodexTurn(id: "turn-long", commands: 4, seconds: 130)))
+            .presentation.turns
+        XCTAssertGreaterThan(grown.count, drawn.count)
+        XCTAssertEqual(grown.first?.work, drawn.first?.work)
+        XCTAssertEqual(Array(grown[1..<(drawn.count - 1)]), Array(drawn[1..<(drawn.count - 1)]))
+
+        // A part saved as a place reads as its turn once the turn is drawn whole.
+        XCTAssertEqual(ConversationAnchorResolver(presentation: whole, threadID: "thread-rows").anchor(for: drawn[2].id)?.turnID,
+                       turn.id)
+        XCTAssertNil(ConversationTurnRows.turnID(ofPart: turn.id))
+
+        // A turn that folds its work, and a short one, are drawn whole.
+        guard case var .object(fields) = LongConversationFixture.streamedCodexTurn(id: "turn-folds", commands: 4, seconds: 98),
+              case var .array(items) = fields["items"],
+              let last = items.lastIndex(where: { $0["type"]?.stringValue == "agentMessage" }),
+              case var .object(answer) = items[last] else { return XCTFail("no answer to mark") }
+        answer["phase"] = .string("final_answer")
+        items[last] = .object(answer)
+        fields["items"] = .array(items)
+        let folding = presentation(.object(fields))
+        XCTAssertTrue(try XCTUnwrap(folding.turns.first).foldsWork)
+        XCTAssertEqual(rows(folding).presentation, folding)
+        let short = presentation(LongConversationFixture.codexTurn(0))
+        XCTAssertEqual(rows(short).presentation, short)
+    }
+
     private func transcript(turns: Int) -> ConversationPresentation {
         let entries = (1...turns).flatMap { index in
             [TranscriptEntry(content: .user(text: "Request \(index)")),

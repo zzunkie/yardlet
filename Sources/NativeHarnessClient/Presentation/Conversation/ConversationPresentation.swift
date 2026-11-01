@@ -93,6 +93,25 @@ struct ConversationTurn: Identifiable, Equatable, Sendable {
 
     /// The stored properties `==` compares, for the test that keeps it whole.
     static let comparedPropertyCount = 16
+
+    /// `self` is the turn `earlier` was: each of its lists the very same storage, and every other part
+    /// equal. A turn an update kept as it was (`ConversationProjectionCache`) is, and telling so costs
+    /// next to nothing where `==` compares items; a turn equal to `earlier` in storage of its own reads
+    /// as changed. Every stored property is compared, as `==` compares them.
+    func isUnchanged(from earlier: ConversationTurn) -> Bool {
+        id == earlier.id && status == earlier.status && progress == earlier.progress && outcome == earlier.outcome
+            && hasWorkDetails == earlier.hasWorkDetails && hasMoreItems == earlier.hasMoreItems
+            && showsHeader == earlier.showsHeader && timing == earlier.timing && plan == earlier.plan
+            && actions == earlier.actions
+            && Self.sharesStorage(prompt, earlier.prompt) && Self.sharesStorage(notices, earlier.notices)
+            && Self.sharesStorage(work, earlier.work) && Self.sharesStorage(answers, earlier.answers)
+            && Self.sharesStorage(requests, earlier.requests) && Self.sharesStorage(recordOrder, earlier.recordOrder)
+    }
+
+    private static func sharesStorage<Element>(_ lhs: [Element], _ rhs: [Element]) -> Bool {
+        lhs.count == rhs.count
+            && lhs.withUnsafeBufferPointer { left in rhs.withUnsafeBufferPointer { $0.baseAddress == left.baseAddress } }
+    }
 }
 
 enum ConversationTurnStatus: Equatable, Sendable {

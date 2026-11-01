@@ -117,6 +117,9 @@ enum ConversationTurnAction: Hashable, Sendable {
 /// followed, and while it runs, what came after its latest answer.
 struct ConversationTurnView: View, Equatable {
     let turn: ConversationTurn
+    /// The part of its turn `turn` is (`ConversationTurnRows`); a part never folds, since only a turn
+    /// whose work shows is drawn in parts.
+    let part: ConversationRowPart
     let context: ConversationItemContext
     let handlers: ConversationTurnHandlers
     /// What the turn draws from `context` and `handlers`, for telling an unchanged turn apart.
@@ -125,12 +128,14 @@ struct ConversationTurnView: View, Equatable {
     /// asking walks the turn's work.
     private let foldsWork: Bool
 
-    init(turn: ConversationTurn, context: ConversationItemContext, handlers: ConversationTurnHandlers) {
+    init(turn: ConversationTurn, part: ConversationRowPart = .whole, context: ConversationItemContext,
+         handlers: ConversationTurnHandlers) {
         self.turn = turn
+        self.part = part
         self.context = context
         self.handlers = handlers
         offers = ConversationTurnOffers(context: context, handlers: handlers)
-        foldsWork = turn.foldsWork
+        foldsWork = part == .whole && turn.foldsWork
     }
 
     /// The timeline draws each turn `.equatable()`, so an update redraws only the turns it changed
@@ -138,7 +143,24 @@ struct ConversationTurnView: View, Equatable {
     /// each time, so they are compared by what they offer. What a card reads through Observation or
     /// the environment still updates it on its own.
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.turn == rhs.turn && lhs.offers == rhs.offers
+        lhs.turn == rhs.turn && lhs.part == rhs.part && lhs.offers == rhs.offers
+    }
+
+    /// The live line, drawn by the part that closes the turn.
+    private var live: ConversationLiveWork? {
+        let stepsBefore: Int
+        switch part {
+        case .whole: stepsBefore = 0
+        case let .tail(steps): stepsBefore = steps
+        case .head, .middle: return nil
+        }
+        return ConversationLiveWork.make(turn, harness: context.harness, workspaceURL: context.workspaceURL,
+                                         stepsBefore: stepsBefore)
+    }
+
+    /// The runs listed in the work: the live line's run is the part's that closes the turn.
+    private var listedRuns: [ConversationWorkGrouping.Run] {
+        part.drawsEnd ? ConversationLiveWork.listedRuns(turn) : ConversationWorkGrouping.runs(turn.work)
     }
 
     @State private var showsWorkDetails = false
@@ -192,15 +214,13 @@ struct ConversationTurnView: View, Equatable {
 
                 // While the turn runs, its last run with a call still running is the live line's
                 // below, not listed here as well.
-                ForEach(ConversationLiveWork.listedRuns(turn)) { run in
+                ForEach(listedRuns) { run in
                     runView(run)
                 }
             } else {
                 // What the fold keeps in view, as the Codex app keeps it out of its folded work; a
                 // running turn's live call stays the live line's.
-                ForEach(ConversationWorkGrouping.runsKeptWhenFolded(
-                    turn, live: ConversationLiveWork.make(turn, harness: context.harness, workspaceURL: context.workspaceURL)
-                )) { run in
+                ForEach(ConversationWorkGrouping.runsKeptWhenFolded(turn, live: live)) { run in
                     runView(run)
                 }
             }
@@ -219,11 +239,11 @@ struct ConversationTurnView: View, Equatable {
                 CodexQuestionOptions(questions: turn.actions.questionsToAnswer, onAnswer: handlers.answerQuestion)
             }
 
-            if let live = ConversationLiveWork.make(turn, harness: context.harness, workspaceURL: context.workspaceURL) {
+            if let live {
                 // One line for the work in progress: thinking, the call that runs, or waiting on
                 // the person, with the turn's steps and time.
                 liveLine(live)
-            } else if workDetailsAreVisible {
+            } else if workDetailsAreVisible, part.drawsEnd {
                 ConversationTurnStatusLine(progress: turn.progress)
             }
 

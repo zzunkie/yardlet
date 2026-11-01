@@ -27,6 +27,10 @@ struct ConversationAnchorResolver {
     func anchor(for id: String) -> Anchor? {
         let turns = presentation.turns
         if turns.contains(where: { $0.id == id }) { return Anchor(turnID: id, keepsFraction: true) }
+        // A part of a turn drawn in parts (`ConversationTurnRows`) that is drawn whole now.
+        if let turnID = ConversationTurnRows.turnID(ofPart: id), turns.contains(where: { $0.id == turnID }) {
+            return Anchor(turnID: turnID, keepsFraction: false)
+        }
         if let turn = turns.first(where: { Self.holdsEntry(id, in: $0) }) {
             return Anchor(turnID: turn.id, keepsFraction: false)
         }

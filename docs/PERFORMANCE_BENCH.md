@@ -127,6 +127,9 @@ them under `budgets`, and the command exits with status 1.
   400-item turn) gets 2 ms of the main thread's CPU, a subagent's event 1 ms, a transcript publication
   2 ms. At 30 fragments a second, 2 ms an event leaves the main thread most of every frame for typing and
   scrolling.
+- Opening a long Codex task the window let go stops it for under half a second
+  (`codex-switch/switch`, `switches.longestPassMedianMs`): the conversation builds the latest rows of
+  the long turn, not all of it, which took 0.9 seconds.
 - Nine streamed turns in long Codex tasks, opened and let go again and again, grow the app by under
   250 MiB (`codex-switch/stream-switch`); what a task let go of when its views went was kept before,
   and the same phase grew by 550 MiB.

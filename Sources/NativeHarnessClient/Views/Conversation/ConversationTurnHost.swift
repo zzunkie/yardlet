@@ -8,15 +8,18 @@ import SwiftUI
 /// (`ConversationRenderState`), so a task opened again shows its turns without building them anew.
 struct ConversationTurnHost: NSViewRepresentable, Equatable {
     let turn: ConversationTurn
+    /// The part of its turn this row draws (`ConversationTurnRows`).
+    var part: ConversationRowPart = .whole
     let context: ConversationItemContext
     let handlers: ConversationTurnHandlers
     /// Where the task keeps its turns' hostings; nil draws the turn in one of its own.
     let renderState: ConversationRenderState?
     fileprivate let offers: ConversationTurnOffers
 
-    init(turn: ConversationTurn, context: ConversationItemContext, handlers: ConversationTurnHandlers,
-         renderState: ConversationRenderState?) {
+    init(turn: ConversationTurn, part: ConversationRowPart = .whole, context: ConversationItemContext,
+         handlers: ConversationTurnHandlers, renderState: ConversationRenderState?) {
         self.turn = turn
+        self.part = part
         self.context = context
         self.handlers = handlers
         self.renderState = renderState
@@ -24,7 +27,7 @@ struct ConversationTurnHost: NSViewRepresentable, Equatable {
     }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.turn == rhs.turn && lhs.offers == rhs.offers && lhs.renderState === rhs.renderState
+        lhs.turn == rhs.turn && lhs.part == rhs.part && lhs.offers == rhs.offers && lhs.renderState === rhs.renderState
     }
 
     final class Coordinator {
@@ -102,7 +105,7 @@ final class ConversationTurnHosting {
         let look = ConversationTurnLook(environment)
         if let shown, shown == host, look == shownLook { return }
         if let shown, look == shownLook, shown.offers == host.offers, shown.renderState === host.renderState,
-           let change = host.turn.streamedTextChange(from: shown.turn) {
+           shown.part == host.part, let change = host.turn.streamedTextChange(from: shown.turn) {
             self.shown = host
             streamedText.set(change.message, for: change.itemID)
             heights = [:]
@@ -116,7 +119,7 @@ final class ConversationTurnHosting {
         heights = [:]
         streamedText.clear()
         controller.rootView = AnyView(
-            ConversationTurnView(turn: host.turn, context: host.context, handlers: host.handlers)
+            ConversationTurnView(turn: host.turn, part: host.part, context: host.context, handlers: host.handlers)
                 .equatable()
                 .environment(\.conversationStreamedText, streamedText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -318,8 +321,9 @@ struct ConversationTurnLook: @MainActor Equatable {
     }
 }
 
-/// What a task's conversation keeps between the times it is shown: its projection (so an unchanged
-/// conversation is not projected again) and its turns' hostings (so they are not built again). The
+/// What a task's conversation keeps between the times it is shown: its projection and the rows its
+/// turns are drawn in (so an unchanged conversation is not projected or split again) and its rows'
+/// hostings (so they are not built again). The
 /// most recently shown conversations keep their hostings (`recentLimit`); the others let theirs go
 /// and build them again when shown.
 @MainActor
@@ -329,6 +333,8 @@ final class ConversationRenderState {
     private static var clock: UInt64 = 0
 
     let projection = ConversationProjectionCache()
+    /// The rows the conversation's turns were last drawn in (`ConversationTurnRows`).
+    let parts = ConversationTurnRowCache()
     private var hostings: [String: ConversationTurnHosting] = [:]
 
     init() {}

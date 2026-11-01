@@ -39,6 +39,9 @@
   "browser-tabs/tabs-hidden": {
     "process.yardletCPUPercent": 5.0
   },
+  "codex-switch/switch": {
+    "switches.longestPassMedianMs": 500
+  },
   "codex-switch/stream-switch": {
     "memory.footprintGrowthMiB": 250
   }

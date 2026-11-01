@@ -80,11 +80,13 @@ struct ConversationLiveWork: Equatable {
     let items: [ConversationItem]
 
     /// The live line of a running turn; nil for a turn that is not running.
-    static func make(_ turn: ConversationTurn, harness: HarnessKind, workspaceURL: URL?) -> ConversationLiveWork? {
+    /// `stepsBefore` counts the calls of the turn's parts drawn before this one (`ConversationTurnRows`).
+    static func make(_ turn: ConversationTurn, harness: HarnessKind, workspaceURL: URL?,
+                     stepsBefore: Int = 0) -> ConversationLiveWork? {
         guard turn.status == .running else { return nil }
         let runs = ConversationWorkGrouping.runs(turn.work)
         let live = liveRun(runs)
-        let steps = turn.work.filter { ConversationWorkSummary.category(of: $0) != nil }.count
+        let steps = stepsBefore + turn.work.filter { ConversationWorkSummary.category(of: $0) != nil }.count
         return ConversationLiveWork(activity: activity(turn, liveItems: live, harness: harness, workspaceURL: workspaceURL),
                                     steps: steps, items: live)
     }
