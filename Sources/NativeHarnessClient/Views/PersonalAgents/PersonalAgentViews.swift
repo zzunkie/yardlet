@@ -400,6 +400,8 @@ struct PersonalAgentsContent: View {
             loadMoreActivity: { Task { await center.loadMoreActivity() } },
             openedActivityID: center.activityReading?.activity.id,
             openActivity: { center.openActivity($0) },
+            startThreads: { center.startThreads() },
+            openThread: { center.openThread($0) },
             close: close)
     }
 
@@ -970,6 +972,10 @@ struct PersonalAgentDetailsPanel: View {
     var openedActivityID: String? = nil
     /// Opens an Activity task's execution record.
     var openActivity: (String) -> Void = { _ in }
+    /// Reads the dot's bound threads, once the details show.
+    var startThreads: () -> Void = {}
+    /// Opens a task the dot spawned, in the same reader as an Activity task.
+    var openThread: (String) -> Void = { _ in }
     /// Hides the details raised over a narrow conversation.
     var close: (() -> Void)? = nil
     @Environment(\.yardletInterfaceScale) private var scale
@@ -979,6 +985,9 @@ struct PersonalAgentDetailsPanel: View {
             VStack(alignment: .leading, spacing: 22) {
                 profile
                 section(L10n.string("Activity")) { activity }
+                if let threads = details?.threads {
+                    spawnedTasks(threads)
+                }
                 section(L10n.string("Scheduled")) { schedules }
                 if agent.rootThreadID != nil {
                     section(L10n.string("Computers")) { computers }
@@ -995,6 +1004,8 @@ struct PersonalAgentDetailsPanel: View {
             .padding(.top, 16)
             .padding(.bottom, 20)
             .frame(width: Self.width, alignment: .leading)
+            // Read when the details first show, not with every refresh of a hidden panel.
+            .task(id: details?.threads.map(ObjectIdentifier.init)) { startThreads() }
         }
         .scrollIndicators(.automatic)
         .frame(width: Self.width)
@@ -1082,6 +1093,56 @@ struct PersonalAgentDetailsPanel: View {
                 }
             }
         }
+    }
+
+    /// The Codex tasks the dot's conversations started, shown once read and only when there are any.
+    @ViewBuilder
+    private func spawnedTasks(_ list: PersonalAgentThreadList) -> some View {
+        switch list.state {
+        case .loading:
+            EmptyView()
+        case .failed:
+            section(L10n.string("Codex tasks")) { state(list.state, empty: "", isEmpty: { _ in false }) { _ in EmptyView() } }
+        case .loaded:
+            let tasks = list.tasks
+            if !tasks.isEmpty {
+                section(L10n.string("Codex tasks")) {
+                    SessionRailLimitedList(items: tasks, limit: 5) { thread in spawnedTaskRow(thread) }
+                }
+            }
+        }
+    }
+
+    private func spawnedTaskRow(_ thread: PersonalAgentThread) -> some View {
+        let activity = thread.activity
+        let place = PersonalAgentThreadPlace(thread, computers: details?.computers.value)
+        let opened = thread.id == openedActivityID
+        return Button { openThread(thread.id) } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: Self.symbol(activity))
+                    .foregroundStyle(.secondary).frame(width: 16).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(thread.displayTitle).lineLimit(1).truncationMode(.tail)
+                    if let place {
+                        Text(place.text).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    }
+                }
+                Spacer(minLength: 4)
+                if let date = activity.updatedAt {
+                    Text(date.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)))
+                        .font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                }
+            }
+            .frame(minHeight: 28)
+            .contentShape(Rectangle())
+            .background(opened ? ParityTheme.selectedFill : .clear, in: RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain).parityPointer()
+        .help(thread.preview ?? thread.displayTitle)
+        .accessibilityLabel(thread.displayTitle)
+        .accessibilityValue([place?.text, Self.statusText(activity)].compactMap { $0?.isEmpty == false ? $0 : nil }
+            .joined(separator: ", "))
+        .accessibilityAddTraits(opened ? .isSelected : [])
     }
 
     private var schedules: some View {

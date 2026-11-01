@@ -1500,6 +1500,54 @@ final class PersonalAgentTests: XCTestCase {
         XCTAssertNil(center.activityReading)
     }
 
+    /// A task the dot spawned is listed in its details once they show, and opens in the Activity reader
+    /// through the bound-thread reads, never the Activity's; a conversation root and a thread the list
+    /// does not hold do not open, and back finds the conversation where it was.
+    func testASpawnedTaskOpensFromTheDetailsThroughTheBoundThreadReads() async throws {
+        let center = PersonalAgentCenter()
+        let reader = FixturePersonalAgentReader(agents: [fixtureAgent()])
+        let turn: (String) -> CodexTurnState = { CodexTaskDecoder().turn(from: .object(["id": .string($0)]), fallbackID: $0)! }
+        let item = CodexItemPageEntry(turnID: "t1", item: CodexTaskDecoder().item(
+            from: .object(["id": .string("a"), "type": .string("agentMessage"), "text": .string("Tests pass.")]),
+            fallbackID: "a", lifecycle: .historical))
+        await reader.setOutputs(
+            scope: ["thread", "spawned"],
+            metadata: ["thread": .object(["id": .string("thread"), "threadSource": .string("aeon")]),
+                       "spawned": .object(["id": .string("spawned"), "threadSource": .string("aeon_child"),
+                                           "preview": .string("Run the tests")])],
+            turns: ["spawned:": .init(turns: [turn("t1")], nextCursor: nil, backwardsCursor: nil)],
+            items: ["spawned:t1:": .init(entries: [item], nextCursor: nil, backwardsCursor: nil)])
+        await reader.setBindingParents(["spawned": "thread"])
+        await center.connect(sourceKey: "home") { reader }
+        let list = try XCTUnwrap(center.details?.threads)
+        try await Task.sleep(for: .milliseconds(50))
+        let beforeShown = await reader.outputReads
+        XCTAssertFalse(beforeShown.contains("bindings"), "Read only once the details show")
+        center.startThreads()
+        try await waitUntil { list.state.value != nil }
+        XCTAssertEqual(list.tasks.map(\.id), ["spawned"], "Only the tasks a root spawned are listed")
+        center.openThread("thread")
+        center.openThread("elsewhere")
+        XCTAssertNil(center.activityReading)
+        center.openThread("spawned")
+        let reading = try XCTUnwrap(center.activityReading)
+        XCTAssertEqual(reading.activity.title, "Run the tests")
+        try await waitUntil {
+            reading.history.phase == .loaded && reading.history.loadingItems.isEmpty && reading.history.unreadTurns.isEmpty
+        }
+        XCTAssertEqual(reading.history.turns.first?.items.map(\.id), ["a"])
+        let reads = await reader.outputReads
+        XCTAssertTrue(reads.contains("thread:spawned") && reads.contains("turns:spawned:") && reads.contains("items:spawned:t1:"),
+                      "\(reads)")
+        let activityReads = await reader.historyReads
+        XCTAssertTrue(activityReads.isEmpty, "Not through the Activity's reads")
+        center.closeActivity()
+        XCTAssertNil(center.activityReading)
+        XCTAssertNotNil(center.conversation)
+        let sends = await reader.sentRequests()
+        XCTAssertTrue(sends.isEmpty)
+    }
+
     /// An upload under way when an Activity task opens finishes in the draft it was added to while the
     /// task is read, and coming back finds that draft with the same file and its provider file ID,
     /// nothing sent and the words as they were.
@@ -2037,6 +2085,12 @@ private actor FixturePersonalAgentReader: PersonalAgentClient {
     func outputThreads(for agent: PersonalAgent) async throws -> [String] {
         try await readOutputs("threads")
         return outputScope
+    }
+    private var bindingParents: [String: String] = [:]
+    func setBindingParents(_ value: [String: String]) { bindingParents = value }
+    func boundThreads(for agent: PersonalAgent) async throws -> [PersonalAgentThreadBinding] {
+        try await readOutputs("bindings")
+        return outputScope.map { .init(id: $0, parentID: bindingParents[$0], attachedAt: nil) }
     }
     private func metadata(_ id: String) throws -> CodexThreadState {
         try PersonalAgentActivityHistory.thread(.object(["thread": outputMetadata[id] ?? .object(["id": .string(id)])]), id: id)

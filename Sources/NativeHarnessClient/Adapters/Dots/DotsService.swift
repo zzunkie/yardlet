@@ -464,13 +464,20 @@ actor DotsService: PersonalAgentClient {
     /// name this dot and this root, and the threads the profile binds. This list is apart from the
     /// Activity's, which it never widens; a spawned thread joins it only through `outputChild`.
     func outputThreads(for agent: PersonalAgent) async throws -> [String] {
+        try await boundThreads(for: agent).map(\.id)
+    }
+
+    /// The listing behind `outputThreads`, with each binding's parent and time; the threads it names
+    /// are the ones the `output` reads admit.
+    func boundThreads(for agent: PersonalAgent) async throws -> [PersonalAgentThreadBinding] {
         try await verify(agent)
         guard let root = agent.rootThreadID, !root.isEmpty, profileRoots[agent.id] == root else { return [] }
         let profile = try await read("/tbo/by-thread/" + component(root))
         guard profile["id"]?.stringValue == agent.id.agentID, profile["active_root_thread_id"]?.stringValue == root else {
             throw PersonalAgentFailure.invalidResponse
         }
-        var threads = [root], seen: Set<String> = [root], cursor: String?, cursors = Set<String>()
+        var bindings = [PersonalAgentThreadBinding(id: root, parentID: nil, attachedAt: nil)]
+        var cursor: String?, cursors = Set<String>()
         repeat {
             var query = [URLQueryItem(name: "limit", value: "100"), URLQueryItem(name: "include_hidden", value: "false")]
             if let cursor { query.append(.init(name: "cursor", value: cursor)) }
@@ -478,15 +485,23 @@ actor DotsService: PersonalAgentClient {
             guard case let .array(items)? = page["items"] else { throw PersonalAgentFailure.invalidResponse }
             for item in items {
                 guard let id = item["thread_id"]?.stringValue, !id.isEmpty else { throw PersonalAgentFailure.invalidResponse }
-                if seen.insert(id).inserted { threads.append(id) }
+                let binding = PersonalAgentThreadBinding(
+                    id: id, parentID: item["parent_thread_id"]?.stringValue.flatMap { $0.isEmpty || $0 == id ? nil : $0 },
+                    attachedAt: DotsProjection.time(item["attached_at"]))
+                if let index = bindings.firstIndex(where: { $0.id == id }) {
+                    // The root keeps its place first; what the listing says of it is kept.
+                    if index == 0, id == root { bindings[0] = .init(id: root, parentID: nil, attachedAt: binding.attachedAt) }
+                } else {
+                    bindings.append(binding)
+                }
             }
             cursor = page["cursor"]?.stringValue.flatMap { $0.isEmpty ? nil : $0 }
             if let cursor, !cursors.insert(cursor).inserted { throw PersonalAgentFailure.invalidResponse }
-            guard threads.count <= 1_000 else { throw PersonalAgentFailure.invalidResponse }
+            guard bindings.count <= 1_000 else { throw PersonalAgentFailure.invalidResponse }
         } while cursor != nil
         try await verify(agent)
-        outputScopes[agent.id, default: []].formUnion(threads)
-        return threads
+        outputScopes[agent.id, default: []].formUnion(bindings.map(\.id))
+        return bindings
     }
 
     private func verifyOutput(_ threadID: String, for agent: PersonalAgent) async throws {

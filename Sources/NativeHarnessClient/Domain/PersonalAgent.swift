@@ -117,6 +117,15 @@ struct PersonalAgentSchedule: Identifiable, Equatable, Sendable {
     let isEnabled: Bool?
 }
 
+/// A Codex thread a dot's profile binds (`GET /tbo/{dot}/threads`): a conversation root, current or
+/// earlier, or a task one of them spawned, which names that root as its parent. Only this listing ties
+/// a spawned task to its dot: the execution history's own metadata names no parent for it.
+struct PersonalAgentThreadBinding: Identifiable, Equatable, Sendable {
+    let id: String
+    let parentID: String?
+    let attachedAt: Date?
+}
+
 /// A computer the dot's root thread can work on. Being attached is the dot's permission to use it;
 /// whether it is reachable is a separate provider status, unknown when the provider gives none.
 struct PersonalAgentComputer: Identifiable, Equatable, Sendable {
@@ -515,6 +524,9 @@ protocol PersonalAgentClient: Actor {
     /// The dot's execution threads whose work its Outputs come from: its current root first, then
     /// the threads its profile binds. Only these, and children verified under them, are read for it.
     func outputThreads(for agent: PersonalAgent) async throws -> [String]
+    /// The same threads as `outputThreads`, with what the profile's listing says of each: the root a
+    /// spawned task names as parent and when it was bound. Each is then read with the `output` reads.
+    func boundThreads(for agent: PersonalAgent) async throws -> [PersonalAgentThreadBinding]
     /// The metadata of a thread `outputThreads` named.
     func outputThread(_ threadID: String, for agent: PersonalAgent) async throws -> CodexThreadState
     /// A thread spawned from `parentID`, admitted only when its own metadata names that parent; nil when
@@ -557,6 +569,7 @@ extension PersonalAgentClient {
 
     /// A reader that knows no execution threads finds outputs only in the conversation.
     func outputThreads(for agent: PersonalAgent) async throws -> [String] { [] }
+    func boundThreads(for agent: PersonalAgent) async throws -> [PersonalAgentThreadBinding] { [] }
     func outputThread(_ threadID: String, for agent: PersonalAgent) async throws -> CodexThreadState {
         throw PersonalAgentFailure.accessDenied
     }
@@ -711,6 +724,12 @@ enum DotsProjection {
         case let .number(seconds)?: Date(timeIntervalSince1970: seconds)
         default: nil
         }
+    }
+
+    /// A time the provider writes as epoch seconds or as an ISO 8601 string; anything else is none.
+    static func time(_ value: JSONValue?) -> Date? {
+        if case let .string(text)? = value { return date(text) }
+        return epoch(value)
     }
 
     /// The lifecycle states the provider's room normalizer knows; any other value says nothing.

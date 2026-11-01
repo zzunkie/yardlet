@@ -239,8 +239,8 @@ Reading, messaging and waiting on other tasks, child tasks, subagents on other h
 hiding and showing projects, and listing accounts (`SessionToolCatalog`; archiving on 2026-10-22, the three project
 tools on 2026-10-26, the account list and the `account` argument on 2026-10-27). The names are one set that puts the
 Codex app's `codex_app` tools (`list_threads`, `read_thread`, `wait_threads`, `send_message_to_thread`, `create_thread`
-and `set_thread_archived`) into Yardlet's words. All have `openWorldHint: false`, and the five that read (including
-`list_projects` and `list_accounts`) have `readOnlyHint: true`. There is no `_meta` `anthropic/alwaysLoad` (Claude Code
+and `set_thread_archived`) into Yardlet's words. All have `openWorldHint: false`, and the eight that read (including
+`list_projects`, `list_accounts` and the three personal-agent tools) have `readOnlyHint: true`. There is no `_meta` `anthropic/alwaysLoad` (Claude Code
 keeps them behind tool search). The descriptions say only what each tool does, not when to call it. Inputs have
 `additionalProperties: false`.
 
@@ -257,6 +257,7 @@ keeps them behind tool search). The descriptions say only what each tool does, n
 | `hide_project` | `project` (required: a name, folder path or `projectId`) | `ProjectStore.hide`, the same as the sidebar's "Remove project". The folder, tasks and schedules stay, and its tasks leave the sidebar with it. It does not touch the selection or the new task screen. No card (the description says to call it only when the person asked). For a shared name the visible project comes first, and if several still match, an error asks for `projectId`. When it is already hidden, "already hidden", not an error. Argument errors are `Nothing was hidden: …` |
 | `show_project` | `project` (required: a name, folder path or `projectId`) | `ProjectStore.reveal`. For a shared name the hidden project comes first. When it is already visible, "already in the sidebar". Argument errors are `Nothing was shown: …` |
 | `list_accounts` | `harness` (the calling task's by default), `model` (for the limit of one model; the calling task's by default) | That harness's accounts (the same as the account list of the new task screen), after the account list's check (`.ifStale`, at most 8 seconds), as JSON `{harness, model, accounts:[{account, name, signedIn, automaticAssignment, newTaskAccount, runningTasks, checkedAt, limits:[{name, usedPercent, resetsAt, model}]}], automaticChoice, automaticReason}`. Times are ISO 8601 in this Mac's time zone. No model turn |
+| `list_personal_agents`, `read_personal_agent`, `read_personal_agent_thread` | none; `agent` (a reference or name) and `cursor`; `agent`, `thread_id` and `cursor` | Read the person's ChatGPT dots, not Yardlet tasks, through the app's watch of the account Personal agents follows (docs/PERSONAL_AGENTS.md, "Agents reading the dots"): the dots with their Activity and bound threads as JSON, a conversation page as text, a thread's turns as `read_task`'s compact text. Read-only; a thread the transport did not list for that dot is refused. No model turn |
 
 Links to tasks (2026-10-28): a reply opens another task when it links to it, as the Claude app and the Codex app open
 theirs (`TaskLink`): `[title](#<task id>)` with the task ID in either case, or a harness session ID that is a UUID; the
