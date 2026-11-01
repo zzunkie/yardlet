@@ -67,6 +67,7 @@ final class YardletMCPServerTests: XCTestCase {
             "spawn_task", "dismiss_task",
             "list_tasks", "read_task", "send_message_to_task", "wait_tasks", "create_task", "run_agent", "archive_task",
             "list_projects", "hide_project", "show_project", "list_accounts",
+            "list_personal_agents", "read_personal_agent", "read_personal_agent_thread",
             "create_scheduled_task", "list_scheduled_tasks", "update_scheduled_task", "delete_scheduled_task",
             "run_scheduled_task", "list_task_runs"
         ], "Without the app the list is Yardlet's own tools: the browser, task suggestion, session and scheduled-task tools")
@@ -288,8 +289,8 @@ final class YardletMCPServerTests: XCTestCase {
         }
         XCTAssertEqual(ids.sorted(), [1, 2, 3])
         let list = replies.first { $0["id"] == .integer(2) }
-        XCTAssertEqual(list?["result"]?["tools"]?.arrayValue?.count, 39,
-                       "20 browser tools, the 2 task suggestion tools, the 11 session tools and the 6 scheduled-task tools")
+        XCTAssertEqual(list?["result"]?["tools"]?.arrayValue?.count, 42,
+                       "20 browser tools, the 2 task suggestion tools, the 14 session tools and the 6 scheduled-task tools")
         let call = replies.first { $0["id"] == .integer(3) }
         XCTAssertEqual(call?["result"]?["isError"], .bool(true))
         XCTAssertTrue(call?["result"]?["content"]?.arrayValue?.first?["text"]?.stringValue?
