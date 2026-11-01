@@ -342,6 +342,14 @@ final class AppModel {
     /// An explicit navigation outside the main window asks it to reveal Tasks.
     /// Background index selection changes do not send this request.
     var taskSurfaceRevealRequest = 0
+    /// A dot's notification asks a window to show Personal agents with that dot chosen. The window
+    /// that takes it clears it; nothing in the background sets it.
+    var personalAgentReveal: PersonalAgentReveal?
+    /// The app's watch on the dots the person last opened (`AppModel+PersonalAgentNotifications`).
+    @ObservationIgnored let personalAgentWatch = PersonalAgentWatch()
+    @ObservationIgnored var personalAgentPreferenceObserver: (any NSObjectProtocol)?
+    /// The setting and account the watch last followed, so an unrelated setting changes nothing.
+    @ObservationIgnored var personalAgentPreferenceState: [String?] = []
     /// The main windows that show Tasks rather than another sidebar section. With none, no task
     /// counts as seen, so its updates stay unread and are announced.
     private(set) var taskWindowIDs = Set<UUID>()

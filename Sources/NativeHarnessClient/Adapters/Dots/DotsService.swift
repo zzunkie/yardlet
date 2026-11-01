@@ -582,16 +582,49 @@ actor DotsService: PersonalAgentClient {
     }
 
     func updates(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentUpdate> {
-        stopWatching()
-        let id = UUID()
-        watchID = id
         let pair = AsyncStream<PersonalAgentUpdate>.makeStream(bufferingPolicy: .bufferingNewest(2))
-        eventTask = Task { [weak self] in
-            guard let self else { pair.continuation.finish(); return }
-            await self.watch(agent, id: id, into: pair.continuation)
+        let id = startWatch(agent.id, rooms: [agent.id.roomID], finish: { pair.continuation.finish() }) { event in
+            switch event {
+            case .connected:
+                pair.continuation.yield(.connected)
+                // Cover messages that arrived between the initial read and subscription.
+                pair.continuation.yield(.changed)
+            case .changed: pair.continuation.yield(.changed)
+            case .reconnecting: pair.continuation.yield(.reconnecting)
+            case let .failed(failure): pair.continuation.yield(.failed(failure))
+            }
         }
         pair.continuation.onTermination = { [weak self] _ in Task { await self?.stopWatching(ifCurrent: id) } }
         return pair.stream
+    }
+
+    func roomUpdates(for agents: [PersonalAgent]) async -> AsyncStream<PersonalAgentRoomUpdate> {
+        // Every room is the same account's; a list that mixes logins watches nothing.
+        guard let first = agents.first?.id,
+              agents.allSatisfy({ $0.id.accountID == first.accountID && $0.id.userID == first.userID }) else {
+            return AsyncStream { $0.finish() }
+        }
+        let pair = AsyncStream<PersonalAgentRoomUpdate>.makeStream(bufferingPolicy: .bufferingNewest(64))
+        let id = startWatch(first, rooms: Set(agents.map(\.id.roomID)), finish: { pair.continuation.finish() }) {
+            pair.continuation.yield($0)
+        }
+        pair.continuation.onTermination = { [weak self] _ in Task { await self?.stopWatching(ifCurrent: id) } }
+        return pair.stream
+    }
+
+    /// Takes the reader's one watch for `rooms` of `identity`'s account, ended by `stopWatching(ifCurrent:)`
+    /// with the returned ID.
+    private func startWatch(_ identity: PersonalAgentIdentity, rooms: Set<String>, finish: @escaping @Sendable () -> Void,
+                            emit: @escaping @Sendable (PersonalAgentRoomUpdate) -> Void) -> UUID {
+        stopWatching()
+        let id = UUID()
+        watchID = id
+        eventTask = Task { [weak self] in
+            defer { finish() }
+            guard let self else { return }
+            await self.watch(identity, rooms: rooms, id: id, emit: emit)
+        }
+        return id
     }
 
     private func stopWatching(ifCurrent id: UUID? = nil) {
@@ -736,14 +769,14 @@ actor DotsService: PersonalAgentClient {
         throw PersonalAgentFailure.signInRequired
     }
 
-    private func watch(_ agent: PersonalAgent, id: UUID, into output: AsyncStream<PersonalAgentUpdate>.Continuation) async {
-        defer { output.finish() }
+    private func watch(_ identity: PersonalAgentIdentity, rooms: Set<String>, id: UUID,
+                       emit: @Sendable (PersonalAgentRoomUpdate) -> Void) async {
         var delay: UInt64 = 1
         let topic = "calpico-chatgpt-messaging"
         while !Task.isCancelled, !stopped, watchID == id {
             do {
                 let auth = try await credentials()
-                guard auth.identity.account == agent.id.accountID, auth.identity.user == agent.id.userID else {
+                guard auth.identity.account == identity.accountID, auth.identity.user == identity.userID else {
                     throw PersonalAgentFailure.accountChanged
                 }
                 let info = try await read("/celsius/ws/user")
@@ -783,18 +816,18 @@ actor DotsService: PersonalAgentClient {
                         if let command = frame["id"], let reply = frame["reply"] {
                             if command == .integer(2) {
                                 if reply["type"]?.stringValue == "subscribe" {
-                                    output.yield(.connected)
-                                    // Cover messages that arrived between the initial read and subscription.
-                                    output.yield(.changed)
+                                    emit(.connected)
                                     delay = 1
                                 }
                             } else {
                                 liveReply(command, reply)
                             }
                         }
-                        if frame["topic_id"]?.stringValue == topic,
-                           frame["payload"]?["payload"]?["room_id"]?.stringValue == agent.id.roomID {
-                            output.yield(.changed)
+                        if frame["topic_id"]?.stringValue == topic {
+                            // The topic is the user's; only the rooms asked for are reported.
+                            if let room = frame["payload"]?["payload"]?["room_id"]?.stringValue, rooms.contains(room) {
+                                emit(.changed(roomID: room))
+                            }
                         } else if frame["type"]?.stringValue == "message", let other = frame["topic_id"]?.stringValue {
                             liveMessage(topic: other, payload: frame["payload"])
                         }
@@ -803,12 +836,12 @@ actor DotsService: PersonalAgentClient {
                 socket.cancel(with: .normalClosure, reason: nil)
             } catch let failure as PersonalAgentFailure where failure == .accountChanged || failure == .signInRequired
                 || failure == .accessDenied || failure == .invalidResponse || failure == .runtimeUnavailable || failure == .stopped {
-                if !stopped { output.yield(.failed(failure)) }
+                if !stopped { emit(.failed(failure)) }
                 return
             } catch {
                 if Task.isCancelled || stopped { return }
                 eventSocket?.cancel(with: .goingAway, reason: nil)
-                output.yield(.reconnecting)
+                emit(.reconnecting)
                 try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
                 delay = min(30, delay * 2)
             }

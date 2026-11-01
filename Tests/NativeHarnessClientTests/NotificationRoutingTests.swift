@@ -102,6 +102,46 @@ final class NotificationRoutingTests: XCTestCase {
         XCTAssertNil(SystemNotificationTarget(userInfo: [SystemNotificationTarget.sessionKey: sessionID.uuidString])?.requestID)
     }
 
+    /// A dot's notification carries its dot and account, not a task; its click brings Yardlet forward
+    /// and asks a window to show that dot, even while the task index is read, and selects no task.
+    /// Turning the setting off ends the watch and forgets the account it followed.
+    func testADotsNotificationLeadsToItsDotAndTheSettingLeavesNothingWhenOff() async throws {
+        let first = task("First")
+        let (model, center, attention) = makeModel(sessions: [first])
+        model.splits.activate(.session(first.id))
+        let dot = PersonalAgent(id: .init(accountID: "account", userID: "person", agentID: "dot", roomID: "room"),
+                                name: "Atlas", rootThreadID: nil, isPaused: false, isPrimary: true)
+        await model.postPersonalAgentNotification(.init(agent: dot, accountChoiceID: "codex:home",
+                                                        preview: "May I deploy?", isRequest: true))
+        let posted = try XCTUnwrap(center.posted.last)
+        XCTAssertEqual(posted.title, "Atlas")
+        XCTAssertEqual(posted.body, L10n.format("Needs your input: %@", "May I deploy?"))
+        XCTAssertEqual(posted.identifier, "yardlet-dot-room-request")
+        XCTAssertFalse(posted.offersAllowOnce)
+        let reveal = PersonalAgentReveal(agent: dot.id, accountChoiceID: "codex:home")
+        XCTAssertEqual(posted.target, SystemNotificationTarget(personalAgent: reveal))
+        let userInfo: [AnyHashable: Any] = posted.target.userInfo
+        XCTAssertNil(userInfo[SystemNotificationTarget.sessionKey])
+        XCTAssertEqual(SystemNotificationTarget(userInfo: userInfo), posted.target)
+
+        await model.handleNotificationResponse(.init(target: posted.target, action: .open))
+        XCTAssertEqual(model.personalAgentReveal, reveal)
+        XCTAssertEqual(attention.bringForwardCount, 1)
+        XCTAssertEqual(model.splits.selection, .session(first.id))
+        XCTAssertEqual(model.taskSurfaceRevealRequest, 0)
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("PersonalAgentNotifications")))
+        XCTAssertTrue(PersonalAgentNotificationPreference.isOn(in: defaults), "On by default")
+        defaults.set("codex:home", forKey: PersonalAgentNotificationPreference.accountKey)
+        defaults.set(false, forKey: PersonalAgentNotificationPreference.key)
+        model.followPersonalAgents(defaults: defaults, force: true)
+        XCTAssertNil(defaults.object(forKey: PersonalAgentNotificationPreference.accountKey))
+        XCTAssertNil(model.personalAgentWatch.source)
+        // A window that reads dots while it is off records nothing.
+        model.notePersonalAgentsRead(accountChoiceID: "codex:home", hasAgents: true, defaults: defaults)
+        XCTAssertNil(defaults.object(forKey: PersonalAgentNotificationPreference.accountKey))
+    }
+
     // MARK: - Which finished turns are announced
 
     /// A turn another task's message opened ends without a notification; one the person asked for is

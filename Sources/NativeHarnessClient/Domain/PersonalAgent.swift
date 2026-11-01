@@ -419,6 +419,15 @@ enum PersonalAgentUpdate: Sendable {
     case changed, reconnecting, connected, failed(PersonalAgentFailure)
 }
 
+/// The account's messaging topic for several rooms at once: which room changed, by its ID.
+enum PersonalAgentRoomUpdate: Equatable, Sendable {
+    /// The topic's subscription was answered; what changed while it was not is unknown.
+    case connected
+    case changed(roomID: String)
+    case reconnecting
+    case failed(PersonalAgentFailure)
+}
+
 protocol PersonalAgentClient: Actor {
     func agents() async throws -> [PersonalAgent]
     func messages(for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage
@@ -426,6 +435,9 @@ protocol PersonalAgentClient: Actor {
     /// cursor in the result ends the thread's earlier pages.
     func replies(to rootID: String, for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage
     func updates(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentUpdate>
+    /// Changes to any of `agents`' rooms on the same topic `updates` reads, each naming its room. It
+    /// takes the reader's one watch, as `updates` does.
+    func roomUpdates(for agents: [PersonalAgent]) async -> AsyncStream<PersonalAgentRoomUpdate>
     /// The dot's room as its provider observes it: each bound state, nil while there is none. Asking
     /// for another dot's ends the first; ending the stream ends the observation.
     func liveState(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentLiveUpdate>
@@ -477,6 +489,9 @@ extension PersonalAgentClient {
     func replies(to rootID: String, for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage {
         throw PersonalAgentFailure.unavailable
     }
+
+    /// A reader that watches no topic reports no change.
+    func roomUpdates(for agents: [PersonalAgent]) async -> AsyncStream<PersonalAgentRoomUpdate> { AsyncStream { $0.finish() } }
 
     /// A reader that observes no room shows every dot idle.
     func liveState(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentLiveUpdate> { AsyncStream { $0.finish() } }

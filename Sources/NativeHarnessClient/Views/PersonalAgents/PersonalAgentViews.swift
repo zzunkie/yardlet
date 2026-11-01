@@ -97,6 +97,7 @@ private struct PersonalAgentRow: View {
     let center: PersonalAgentCenter
     let agent: PersonalAgent
     @Environment(\.yardletInterfaceScale) private var scale
+    @Environment(\.personalAgentWatch) private var watch
 
     var body: some View {
         Button { Task { await center.select(agent.id) } } label: {
@@ -109,6 +110,7 @@ private struct PersonalAgentRow: View {
                 if center.isPaused(agent) {
                     Text(L10n.string("Paused")).font(.system(size: 11 * scale)).foregroundStyle(.secondary)
                 }
+                if let watch { PersonalAgentUnreadMark(watch: watch, agent: agent.id) }
             }
             .padding(.horizontal, 8)
             .frame(height: 32 * scale)
@@ -120,8 +122,10 @@ private struct PersonalAgentRow: View {
         .parityPointer()
         .accessibilityLabel(agent.name)
         // Whether it is paused or at work, not the room's words for the work, which change far more often.
-        .accessibilityValue(center.isPaused(agent) ? L10n.string("Paused")
-                            : center.motion(for: agent) == .working ? L10n.string("Working") : "")
+        .accessibilityValue([center.isPaused(agent) ? L10n.string("Paused")
+                             : center.motion(for: agent) == .working ? L10n.string("Working") : "",
+                             watch?.unread[agent.id]?.accessibilityName ?? ""]
+            .filter { !$0.isEmpty }.joined(separator: ", "))
         .accessibilityAddTraits(center.selectedID == agent.id ? .isSelected : [])
     }
 }
@@ -481,6 +485,42 @@ struct PersonalAgentOriginalOpener {
 
 private struct PersonalAgentOriginalOpenerKey: EnvironmentKey {
     static let defaultValue: PersonalAgentOriginalOpener? = nil
+}
+
+private struct PersonalAgentWatchKey: EnvironmentKey {
+    static let defaultValue: PersonalAgentWatch? = nil
+}
+
+extension EnvironmentValues {
+    /// The app's watch, whose unread marks the sidebar shows.
+    var personalAgentWatch: PersonalAgentWatch? {
+        get { self[PersonalAgentWatchKey.self] }
+        set { self[PersonalAgentWatchKey.self] = newValue }
+    }
+}
+
+/// The dot that marks something new: the accent for a message, orange for a request waiting on the
+/// person, as a task's row marks them. It reads the watch itself, so a new mark redraws only it.
+extension PersonalAgentUnread {
+    var accessibilityName: String { L10n.string(self == .request ? "Needs your input" : "Unread") }
+}
+
+struct PersonalAgentUnreadMark: View {
+    let watch: PersonalAgentWatch
+    /// One dot's mark; nil marks whether any dot has one.
+    var agent: PersonalAgentIdentity?
+    @Environment(\.yardletInterfaceScale) private var scale
+
+    var body: some View {
+        let mark: PersonalAgentUnread? = if let agent { watch.unread[agent] } else { watch.hasUnread ? .message : nil }
+        if let mark {
+            // Its row or word says it in words (`accessibilityName`).
+            Circle()
+                .fill(mark == .request ? Color.orange : ParityTheme.accent)
+                .frame(width: 6 * scale, height: 6 * scale)
+                .accessibilityHidden(true)
+        }
+    }
 }
 
 extension EnvironmentValues {

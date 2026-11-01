@@ -3380,3 +3380,9 @@
 "Sent in the conversation" = "Sent in the conversation";
 "Sent in the conversation: %@" = "Sent in the conversation: %@";
 "Made by a task: %@" = "Made by a task: %@";
+"Personal agent messages" = "Personal agent messages";
+"Notify when a dot replies or asks for input while you are elsewhere" = "Notify when a dot replies or asks for input while you are elsewhere";
+"Needs your input" = "Needs your input";
+"Needs your input." = "Needs your input.";
+"Needs your input: %@" = "Needs your input: %@";
+"Sent an attachment." = "Sent an attachment.";

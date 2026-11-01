@@ -1549,6 +1549,126 @@ final class PersonalAgentTests: XCTestCase {
         XCTAssertEqual(cache.counts.reused - before.reused, 1_995)
     }
 
+    /// The app's watch counts only messages from the dot newer than what it read before, reads only
+    /// the room the topic names, marks and announces once per burst, and never marks a dot a window
+    /// shows. An unrelated room's change publishes nothing, however many dots there are. A login that
+    /// ends stops it until a window reads the dots again.
+    func testTheAppWatchAnnouncesOnlyNewMessagesFromTheDotOnce() async throws {
+        func dot(_ index: Int) -> PersonalAgent {
+            .init(id: .init(accountID: "account", userID: "person", agentID: "dot\(index)", roomID: "room\(index)"),
+                  name: "Dot \(index)", rootThreadID: nil, isPaused: false, isPrimary: index == 0)
+        }
+        func message(_ id: String, _ author: PersonalAgentMessage.Author, _ text: String, at seconds: Double,
+                     request: JSONValue? = nil) -> PersonalAgentMessage {
+            .init(id: id, author: author, text: text, createdAt: Date(timeIntervalSince1970: seconds), isDeleted: false,
+                  attachments: [], inputRequest: request)
+        }
+        let dots = (0..<200).map(dot)
+        let reader = FixturePersonalAgentReader(agents: dots)
+        let earlier = message("old", .agent, "Earlier answer", at: 10)
+        for agent in dots { await reader.setRoomPage(agent.id.roomID, [earlier]) }
+        let watch = PersonalAgentWatch()
+        watch.coalescing = .milliseconds(400)
+        var announced: [PersonalAgentAnnouncement] = []
+        var withdrawn: [PersonalAgentIdentity] = []
+        var active = true
+        watch.announce = { announced.append($0) }
+        watch.withdraw = { withdrawn.append($0) }
+        watch.isActive = { active }
+        watch.follow(.init(key: "account|home|codex", accountChoiceID: "account")) { reader }
+        try await waitUntil { await reader.roomReads.count == dots.count }
+        try await waitUntil { await reader.watchedRooms.count == dots.count }
+        await reader.pushRoom(.connected)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertTrue(announced.isEmpty, "What was there before the watch is not new")
+        XCTAssertTrue(watch.unread.isEmpty)
+
+        // An unrelated room changes with nothing new: that room alone is read, and nothing is published.
+        final class Count: @unchecked Sendable { var value = 0 }
+        let published = Count()
+        withObservationTracking { _ = watch.unread; _ = watch.hasUnread } onChange: { published.value += 1 }
+        let target = dots[0], other = dots[1]
+        await reader.pushRoom(.changed(roomID: other.id.roomID))
+        try await waitUntil { await reader.roomReads.count == dots.count + 1 }
+        let lastRead = await reader.roomReads.last
+        XCTAssertEqual(lastRead, other.id.roomID)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(published.value, 0)
+
+        // The person's own message is not news; two of the dot's in a burst are one notification, the latest.
+        await reader.setRoomPage(target.id.roomID, [earlier, message("mine", .person, "Thanks", at: 20)])
+        await reader.pushRoom(.changed(roomID: target.id.roomID))
+        try await waitUntil { await reader.roomReads.count == dots.count + 2 }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(announced.isEmpty)
+        await reader.setRoomPage(target.id.roomID, [earlier, message("mine", .person, "Thanks", at: 20),
+                                                    message("a1", .agent, "First   part\nof it", at: 30)])
+        await reader.pushRoom(.changed(roomID: target.id.roomID))
+        try await waitUntil { watch.unread[target.id] == .message }
+        XCTAssertTrue(watch.hasUnread)
+        XCTAssertEqual(published.value, 1)
+        await reader.setRoomPage(target.id.roomID, [earlier, message("a1", .agent, "First part", at: 30),
+                                                    message("a2", .agent, "The report is ready.", at: 31)])
+        await reader.pushRoom(.changed(roomID: target.id.roomID))
+        try await waitUntil { announced.count == 1 }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(announced.map(\.preview), ["The report is ready."], "One notification per burst, with its latest words")
+        XCTAssertEqual(announced.first?.identifier, "yardlet-dot-room0")
+        XCTAssertEqual(announced.first?.agent.name, "Dot 0")
+
+        // A request is its own notification, and its mark wins over a message's; the plain message it
+        // follows in the same burst is not announced again beside it.
+        let ask: JSONValue = .object(["request_id": .string("r1"), "thread_id": .string("t1"),
+                                      "params": .object(["threadId": .string("t1"), "message": .string("Allow the deploy?")])])
+        await reader.setRoomPage(target.id.roomID, [message("a2", .agent, "The report is ready.", at: 31),
+                                                    message("q1", .agent, "May I deploy?", at: 40, request: ask)])
+        await reader.pushRoom(.changed(roomID: target.id.roomID))
+        try await waitUntil { announced.count == 2 }
+        XCTAssertEqual(watch.unread[target.id], .request)
+        XCTAssertEqual(announced.last?.isRequest, true)
+        XCTAssertEqual(announced.last?.identifier, "yardlet-dot-room0-request")
+
+        // Showing the dot marks it read and withdraws its notifications; while shown in front, nothing is new.
+        let window = ObjectIdentifier(reader)
+        watch.setShown(target.id, by: window)
+        XCTAssertNil(watch.unread[target.id])
+        XCTAssertFalse(watch.hasUnread)
+        XCTAssertEqual(withdrawn, [target.id])
+        await reader.setRoomPage(target.id.roomID, [message("a3", .agent, "Deployed.", at: 50)])
+        await reader.pushRoom(.changed(roomID: target.id.roomID))
+        try await waitUntil { await reader.roomReads.filter { $0 == target.id.roomID }.count == 6 }
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(announced.count, 2)
+        // Shown while another app is in front: announced, still not unread.
+        active = false
+        await reader.setRoomPage(target.id.roomID, [message("a4", .agent, "Anything else?", at: 60)])
+        await reader.pushRoom(.changed(roomID: target.id.roomID))
+        try await waitUntil { announced.count == 3 }
+        XCTAssertTrue(watch.unread.isEmpty)
+        watch.setShown(nil, by: window)
+
+        // A login that ends stops the watch and its reader; the same source does not start it again by itself.
+        await reader.setRoomPage(other.id.roomID, [message("b1", .agent, "Hello", at: 70)])
+        await reader.pushRoom(.changed(roomID: other.id.roomID))
+        try await waitUntil { watch.unread[other.id] == .message }
+        await reader.pushRoom(.failed(.signInRequired))
+        try await waitUntil { !watch.isRunning }
+        try await waitUntil { await reader.didStop() }
+        XCTAssertTrue(watch.unread.isEmpty, "A login that ended takes its marks with it")
+        let readsBefore = await reader.roomReads.count
+        watch.follow(.init(key: "account|home|codex", accountChoiceID: "account")) { reader }
+        XCTAssertFalse(watch.isRunning)
+        try await Task.sleep(for: .milliseconds(100))
+        let readsMeanwhile = await reader.roomReads.count
+        XCTAssertEqual(readsMeanwhile, readsBefore)
+        // A window read the dots again.
+        watch.restart()
+        try await waitUntil { await reader.roomReads.count > readsBefore }
+        XCTAssertTrue(watch.isRunning)
+        watch.stop()
+        XCTAssertNil(watch.source)
+    }
+
     private func fixtureAgent(account: String = "account") -> PersonalAgent {
         .init(id: .init(accountID: account, userID: "person", agentID: "dot", roomID: "room"),
               name: "Atlas", rootThreadID: "thread", isPaused: false, isPrimary: true)
@@ -1581,6 +1701,11 @@ private actor FixturePersonalAgentReader: PersonalAgentClient {
         return values
     }
     func messages(for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage {
+        if before == nil, let page = roomPages[agent.id.roomID] {
+            roomReads.append(agent.id.roomID)
+            if let failure = roomFailure { throw failure }
+            return .init(messages: page, before: nil)
+        }
         if before != nil {
             olderMessageReads += 1
             if failsNextOlderRead { failsNextOlderRead = false; throw PersonalAgentFailure.network }
@@ -1605,6 +1730,21 @@ private actor FixturePersonalAgentReader: PersonalAgentClient {
               before: paged && before == nil ? "m1" : nil)
     }
     func updates(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentUpdate> { AsyncStream { $0.finish() } }
+    // Each room's newest page by room, and the account's messaging topic, for the app's watch.
+    private var roomPages: [String: [PersonalAgentMessage]] = [:]
+    private var roomFailure: PersonalAgentFailure?
+    private(set) var roomReads: [String] = []
+    private var roomStream: AsyncStream<PersonalAgentRoomUpdate>.Continuation?
+    private(set) var watchedRooms: [String] = []
+    func setRoomPage(_ room: String, _ messages: [PersonalAgentMessage]) { roomPages[room] = messages }
+    func failRoomReads(_ failure: PersonalAgentFailure?) { roomFailure = failure }
+    func roomUpdates(for agents: [PersonalAgent]) async -> AsyncStream<PersonalAgentRoomUpdate> {
+        let pair = AsyncStream<PersonalAgentRoomUpdate>.makeStream()
+        watchedRooms = agents.map(\.id.roomID)
+        roomStream = pair.continuation
+        return pair.stream
+    }
+    func pushRoom(_ update: PersonalAgentRoomUpdate) { roomStream?.yield(update) }
     private var liveStreams: [AsyncStream<PersonalAgentLiveUpdate>.Continuation] = []
     private(set) var liveRequests: [PersonalAgentIdentity] = []
     private(set) var liveEnded = 0

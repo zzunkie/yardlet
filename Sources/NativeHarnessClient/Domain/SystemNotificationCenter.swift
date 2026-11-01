@@ -31,17 +31,21 @@ enum SystemNotificationAuthorization: String, CaseIterable, Sendable {
 }
 
 /// The task a notification is about, carried in its `userInfo` so a click or an action finds the
-/// task again, as the Claude app's notifications carry `sessionId` and `requestId`.
+/// task again, as the Claude app's notifications carry `sessionId` and `requestId`. A personal agent's
+/// notification names its dot and account choice in place of a task.
 struct SystemNotificationTarget: Equatable, Sendable {
     static let sessionKey = "yardletSessionID"
     static let requestKey = "yardletRequestID"
     static let browserTabKey = "yardletBrowserTab"
+    static let personalAgentKey = "yardletPersonalAgent"
 
-    let sessionID: UUID
+    /// The task; nil for a personal agent's notification.
+    let sessionID: UUID?
     /// The request an approval notification asks about; nil for every other notification.
     var requestID: String?
     /// The browser tab a notification is about (the task's side-panel tab key): a click shows it in the task's panel.
     var browserTab: UUID?
+    var personalAgent: PersonalAgentReveal?
 
     init(sessionID: UUID, requestID: String? = nil, browserTab: UUID? = nil) {
         self.sessionID = sessionID
@@ -49,20 +53,39 @@ struct SystemNotificationTarget: Equatable, Sendable {
         self.browserTab = browserTab
     }
 
+    init(personalAgent: PersonalAgentReveal) {
+        sessionID = nil
+        self.personalAgent = personalAgent
+    }
+
     /// Reads a target back from a delivered notification; nil for one Yardlet did not post.
     init?(userInfo: [AnyHashable: Any]) {
+        if let text = userInfo[Self.personalAgentKey] as? String,
+           let reveal = try? JSONDecoder().decode(PersonalAgentReveal.self, from: Data(text.utf8)) {
+            self.init(personalAgent: reveal)
+            return
+        }
         guard let text = userInfo[Self.sessionKey] as? String, let id = UUID(uuidString: text) else { return nil }
-        sessionID = id
-        requestID = (userInfo[Self.requestKey] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        browserTab = (userInfo[Self.browserTabKey] as? String).flatMap(UUID.init(uuidString:))
+        self.init(sessionID: id, requestID: (userInfo[Self.requestKey] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                  browserTab: (userInfo[Self.browserTabKey] as? String).flatMap(UUID.init(uuidString:)))
     }
 
     var userInfo: [String: String] {
-        var info = [Self.sessionKey: sessionID.uuidString]
+        var info: [String: String] = [:]
+        if let sessionID { info[Self.sessionKey] = sessionID.uuidString }
         if let requestID { info[Self.requestKey] = requestID }
         if let browserTab { info[Self.browserTabKey] = browserTab.uuidString }
+        if let personalAgent, let data = try? JSONEncoder().encode(personalAgent) {
+            info[Self.personalAgentKey] = String(decoding: data, as: UTF8.self)
+        }
         return info
     }
+}
+
+/// The dot a notification leads to, and the account choice its watch read it under.
+struct PersonalAgentReveal: Codable, Equatable, Sendable {
+    let agent: PersonalAgentIdentity
+    let accountChoiceID: String
 }
 
 /// A notification that leads back to its task.

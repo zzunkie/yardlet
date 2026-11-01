@@ -175,7 +175,39 @@ While the personal-agent section is open, a native WebSocket subscription
 invalidates the displayed conversation when its room changes. Reconnection reads
 the displayed range again, including edits, deletions and any missing pages.
 Switching back to the tasks or closing the window stops the window's connection;
-existing cloud work continues independently.
+existing cloud work continues independently. The app's own watch for new messages
+(below) is separate and keeps running.
+
+## New messages while you are elsewhere
+
+While Yardlet runs, it watches the dots of the account a window last read them
+from, so a reply is noticed in Tasks or with every window closed. The account is
+remembered once its dots have been read and forgotten when it has none. Yardlet keeps
+one reader of its own for that account, apart from any window's, on the same
+messaging topic. When the topic says a room changed, only that room's newest page is
+read. A message from the dot that is newer than any read before counts as new; the
+person's own messages, edits and older messages coming into the page do not. When
+the watch starts, and after it reconnects, each room's newest page is read once.
+
+A dot with something new is marked on the sidebar's **Personal agents** word and on
+its row, orange when the message asks for input or an answer to an option question.
+Opening the dot's conversation clears the mark and withdraws its notifications. The
+mark is Yardlet's own and kept in memory only; nothing is marked read at the provider.
+
+Each new message is also a system notification through the same permission as task
+notifications: the dot's name and its words on one line, cut short. A request gets a
+notification of its own. Messages that arrive close together are gathered for two
+seconds into one notification per dot, which a later one replaces. A dot whose
+conversation is shown in a window while Yardlet is the active app is neither marked
+nor announced. Clicking a notification brings Yardlet forward and shows Personal
+agents with that dot chosen, under the account it came from.
+
+A dropped connection, sleep and a lost network reconnect after a wait that doubles up
+to 30 seconds, as the window's subscription does. A changed or ended login, or a
+runtime that cannot start, stops the watch and clears its marks; it starts again only
+when a window reads that account's dots. Settings › Notifications › **Personal agent
+messages** turns it off (it is on by default): the reader stops, the marks go and the
+remembered account is forgotten.
 
 The reading cache is in memory only. It is scoped to the chosen runtime/account
 connection. A changed login clears the old view and asks the person to reconnect.
@@ -439,7 +471,7 @@ each request names the thread's product as the provider's app does, as a label a
 never as a permission. A file on the dot's computer is read over that host's socket,
 whose connection carries the credential in its protocol header and nothing else.
 
-Opening or refreshing the section, or an Activity task, only reads and subscribes;
+Opening or refreshing the section, an Activity task, or the app's watch for new messages only reads and subscribes;
 it starts no model turn. The room observer's registration sends nothing but the account's credential:
 no message, approval, pause or resume. A person's explicit send or answer can start cloud work on their existing dot. The
 transport does not read authentication files, change the runtime's configuration,

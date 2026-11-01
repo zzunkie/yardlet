@@ -171,6 +171,7 @@ struct SettingsCenterView: View {
     /// Read when Yardlet quits and when it opens again (`RestartResumePolicy`).
     @AppStorage(RestartResumePreference.key) private var continuesWorkAfterRestart = true
     @AppStorage(KeepScreenAwakePreference.key) private var keepsScreenAwake = false
+    @AppStorage(PersonalAgentNotificationPreference.key) private var notifiesPersonalAgentMessages = true
     /// Read by the browser host client as it changes and by each memory check (`MemorySaverPreference`).
     @AppStorage(MemorySaverPreference.key) private var savesMemory = true
     @AppStorage(MemorySaverPreference.levelKey) private var memorySaverLevel = BrowserMemorySaver.Level.balanced
@@ -786,6 +787,23 @@ struct SettingsCenterView: View {
                 .disabled(notifications.isLoading)
             }
             .controlSize(.small)
+            Divider()
+            HStack(spacing: 12) {
+                settingsControlIcon("circle.dotted")
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(L10n.string("Personal agent messages")).font(.callout.weight(.medium))
+                    Text(L10n.string("Notify when a dot replies or asks for input while you are elsewhere"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Toggle(L10n.string("Personal agent messages"), isOn: $notifiesPersonalAgentMessages)
+                    .labelsHidden()
+                    .toggleStyle(.paritySwitch)
+                    .controlSize(.small)
+            }
+            .padding(.vertical, 6)
         }
     }
 

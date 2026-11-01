@@ -1274,6 +1274,7 @@ struct SidebarSectionTabs: View {
     let selection: ShellSection
     let onSelect: (ShellSection) -> Void
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.personalAgentWatch) private var personalAgentWatch
 
     var body: some View {
         HStack(spacing: 14 * interfaceScale) {
@@ -1288,11 +1289,19 @@ struct SidebarSectionTabs: View {
                         .overlay(alignment: .bottom) {
                             if isSelected { Capsule().fill(.primary).frame(height: 1.5) }
                         }
+                        // A dot has a message not seen yet: a mark after the word, as a task's row has.
+                        .overlay(alignment: .topTrailing) {
+                            if section == .personalAgents, let personalAgentWatch {
+                                PersonalAgentUnreadMark(watch: personalAgentWatch).offset(x: 7 * interfaceScale, y: 4 * interfaceScale)
+                            }
+                        }
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .parityPointer()
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
+                .accessibilityValue(section == .personalAgents && personalAgentWatch?.hasUnread == true
+                                    ? L10n.string("Unread") : "")
             }
             Spacer(minLength: 0)
         }

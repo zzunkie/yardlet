@@ -58,6 +58,56 @@ final class PersonalAgentRenderingTests: XCTestCase {
         try await waitUntil { !model.isSessionVisible(task.id) }
     }
 
+    /// A dot with a message not seen yet is marked on the sidebar's Personal agents word and on its row;
+    /// a new mark draws the marks again, not the window; opening the dot's conversation clears it.
+    func testUnreadDotsAreMarkedInTheSidebarAndOpeningOneClearsIt() async throws {
+        let (model, _) = try makeWindowModel()
+        let atlas = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                                  name: "Atlas", rootThreadID: nil, isPaused: false, isPrimary: true)
+        let juniper = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot-2", roomID: "room-2"),
+                                    name: "Juniper", rootThreadID: nil, isPaused: false, isPrimary: false)
+        let messages = [PersonalAgentMessage(id: "m1", author: .agent, text: "The report is ready.",
+                                             createdAt: nil, isDeleted: false, attachments: [])]
+        let shownBefore = PersonalAgentWindowVisibility.ReportingView.isOnScreen
+        PersonalAgentWindowVisibility.ReportingView.isOnScreen = { _ in true }
+        defer { PersonalAgentWindowVisibility.ReportingView.isOnScreen = shownBefore }
+        let watch = model.personalAgentWatch
+        let directory = try WindowlessRender.directory("personal-agent-notifications-qa")
+        for size in [NSSize(width: 1280, height: 800), NSSize(width: 920, height: 680)] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                watch.useFixture(unread: [:])
+                let reader = RenderedPersonalAgentReader(agents: [atlas, juniper], messages: messages)
+                let host = WindowlessRender.Host(MainWindow(model: model) { reader }
+                    .environment(\.colorScheme, appearance.colorScheme)
+                    .frame(width: size.width, height: size.height), size: size, appearance: appearance)
+                defer { host.close() }
+                host.settle()
+                let word = { host.accessibilityElements().first { $0.label == L10n.string("Personal agents") } }
+                XCTAssertEqual(word()?.value ?? "", "")
+                ViewBodyCensus.isEnabled = true
+                ViewBodyCensus.reset()
+                watch.useFixture(unread: [juniper.id: .message])
+                host.settle(passes: 10)
+                XCTAssertEqual(ViewBodyCensus[.mainWindow], 0, "A new mark drew the window again")
+                ViewBodyCensus.isEnabled = false
+                ViewBodyCensus.reset()
+                XCTAssertEqual(word()?.value, L10n.string("Unread"))
+                let name = "\(Int(size.width))-\(appearance.suffix).png"
+                try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "tasks-unread-\(name)"))
+
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
+                let row = { host.accessibilityElements().first { $0.label == "Juniper" } }
+                await host.settle(until: { row()?.value.contains(L10n.string("Unread")) == true })
+                host.settle(passes: 6)
+                try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "agents-unread-\(name)"))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: "Juniper"))
+                try await waitUntil { watch.unread.isEmpty }
+                XCTAssertFalse(watch.hasUnread)
+                host.close()
+            }
+        }
+    }
+
     /// Switching to personal agents and back leaves the task list as it was left: scrolled where it was,
     /// the shown task's project still folded, the search still typed.
     func testTheTaskListComesBackAsItWasLeft() async throws {

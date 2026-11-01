@@ -1895,6 +1895,17 @@ struct MainWindow: View {
             else { await personalAgents.disconnect() }
         }
         .onDisappear { Task { await personalAgents.disconnect() } }
+        // The app's watch marks the dots with something new, and learns which dot this window shows.
+        .environment(\.personalAgentWatch, model.personalAgentWatch)
+        .onAppear { personalAgents.watch = model.personalAgentWatch }
+        // A dot's notification was clicked: this window shows it, and no other window does too.
+        .onChange(of: model.personalAgentReveal, initial: true) { _, reveal in
+            guard let reveal else { return }
+            model.personalAgentReveal = nil
+            if personalAccounts.contains(where: { $0.id == reveal.accountChoiceID }) { personalAccountID = reveal.accountChoiceID }
+            Task { await personalAgents.reveal(reveal.agent) }
+            showPersonalAgents()
+        }
         // Only the task on screen is looked up, when it comes into view and while it stays.
         .onChange(of: model.pullRequestTargets(), initial: true) { _, targets in
             model.pullRequests.show(targets)
@@ -1957,6 +1968,9 @@ struct MainWindow: View {
             DotsService(executable: runtime, environmentManager: model.codexEnvironmentManager,
                         connection: account.connection)
         }
+        // The account whose dots were just read is the one the app watches for new messages.
+        guard !Task.isCancelled, personalAgents.sourceKey == key, personalAgents.hasLoaded, personalAgents.failure == nil else { return }
+        model.notePersonalAgentsRead(accountChoiceID: account.id, hasAgents: !personalAgents.agents.isEmpty)
     }
 
     private func reconnectPersonalAgents() {
