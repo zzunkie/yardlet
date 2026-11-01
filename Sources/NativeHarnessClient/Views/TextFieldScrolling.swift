@@ -12,17 +12,53 @@ extension View {
     /// (`.font`, `.textFieldStyle` applied after it): the height of `lines` lines is the height a
     /// field in that font and style takes for them.
     func scrollsPastLines(_ lines: Int) -> some View {
+        modifier(TextFieldScrolling(lines: lines))
+    }
+}
+
+private struct TextFieldScrolling: ViewModifier {
+    let lines: Int
+    /// The field takes the height of the most lines, so it may scroll: only then can its scroller show.
+    @State private var isFull = false
+    @State private var heights = Heights()
+
+    /// The scroll view's height and the most lines' height, read by the geometry actions without
+    /// redrawing the field.
+    private final class Heights {
+        var shown: CGFloat = 0
+        var most: CGFloat = .infinity
+    }
+
+    func body(content: Content) -> some View {
         TextFieldScrollingLayout {
             ScrollView(.vertical) {
-                self.background { TextFieldCaretFollower().accessibilityHidden(true) }
+                content.background { TextFieldCaretFollower().accessibilityHidden(true) }
             }
             .scrollBounceBehavior(.basedOnSize)
+            // A growing field lays out its taller text a moment before the scroll view takes the new
+            // height. A scroller that shows for that moment and takes width (as scrollers do with a
+            // mouse connected) narrows the text, which wraps again, and the field jumps to another
+            // height and back. Below the most lines there is nothing to scroll, so no scroller.
+            .scrollIndicators(isFull ? .automatic : .never)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                heights.shown = $0
+                updateIsFull()
+            }
             TextField(String(), text: .constant(""), axis: .vertical)
                 .lineLimit(lines, reservesSpace: true)
                 .disabled(true)
                 .hidden()
                 .accessibilityHidden(true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                    heights.most = $0
+                    updateIsFull()
+                }
         }
+    }
+
+    private func updateIsFull() {
+        let full = heights.shown >= heights.most - 0.5
+        if full != isFull { isFull = full }
     }
 }
 
