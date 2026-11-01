@@ -193,6 +193,153 @@ import XCTest
         }
     }
 
+    /// Settings › Accounts' default Antigravity login, which the CLI keeps in one keychain item, so
+    /// another account means signing out and in again. Its row's menu offers both, as the Harnesses
+    /// page does. The CLI signs out in its own terminal and stays open, so the console finishes when
+    /// the probe reads the login signed out; signing in with another account then opens the CLI's
+    /// sign-in in a new terminal of the same console. A fake `agy` and a fake probe stand in.
+    func testTheDefaultLoginSignsOutOrInWithAnotherAccountFromItsRow() async throws {
+        let directory = try WindowlessRender.directory("account-list-qa")
+        let root = FileManager.default.temporaryDirectory.appending(path: "account-sign-out-\(UUID().uuidString)")
+        roots.append(root)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let agy = root.appending(path: "agy")
+        let signedOut = root.appending(path: "signed-out"), signInStarted = root.appending(path: "sign-in-started")
+        // Signed in, it signs out on `/logout` and stays open; signed out, it asks for a login method.
+        try Data("""
+        #!/bin/sh
+        root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+        if [ -f "$root/signed-out" ]; then
+            printf 'Select login method:\\n'
+            IFS= read -r input
+            touch "$root/sign-in-started"
+        else
+            IFS= read -r input
+            [ "$input" = '/logout' ] || exit 3
+            touch "$root/signed-out"
+        fi
+        /bin/sleep 120 & wait
+        """.utf8).write(to: agy)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agy.path)
+        let store = ProviderConnectionStore(defaultLoader: { descriptor, _ in
+            let out = FileManager.default.fileExists(atPath: signedOut.path)
+            return HarnessAccountSnapshot(id: descriptor.id.rawValue, harness: descriptor.id, providerID: nil,
+                state: out ? .signedOut : .signedIn, accountLabel: nil, detail: "", credentialOwner: "",
+                checkedAt: Date(), usage: [], canLogin: out, canLogout: !out)
+        })
+        let descriptor = try XCTUnwrap(HarnessCatalog.descriptor(for: .antigravityCLI))
+        store.publishDefaults([await store.readDefault(descriptor, executableURL: agy)])
+        let runtime = RuntimeSelectionStore(
+            defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("AccountListRenderingTests"))),
+            discoversRuntimes: false, loadsPersistedSelections: false)
+        runtime.select(agy, for: .antigravityCLI)
+        let model = AccountCenterModel(connections: store)
+        defer { model.closeConsole() }
+        let size = NSSize(width: 629, height: 400)
+        func page(_ appearance: WindowlessRender.Appearance) -> some View {
+            ConnectionCenterContent(tab: .accounts, model: model, runtimeSelections: runtime, connections: store,
+                harnessUsage: AccountHarnessScope.Usage(withTasks: [.antigravityCLI], chosenForNewTask: nil),
+                initialHarness: nil, addingAccount: .constant(false), setupExpanded: .constant(false), onFinish: {})
+                .frame(width: size.width, height: size.height, alignment: .top)
+                .background(ParityTheme.canvas)
+                .environment(\.colorScheme, appearance.colorScheme)
+        }
+        let host = WindowlessRender.Host(page(.light), size: size, appearance: .light)
+        defer { host.close() }
+        host.settle()
+
+        // The row's menu, built as a right click builds it, without opening it.
+        let row = try rowFrame(store.choice(for: .antigravityCLI, connection: nil).title, in: host)
+        let click = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .rightMouseDown, location: NSPoint(x: row.midX, y: size.height - row.midY),
+            modifierFlags: [], timestamp: 0, windowNumber: host.window.windowNumber, context: nil,
+            eventNumber: 0, clickCount: 1, pressure: 1))
+        var target = host.hosting.hitTest(click.locationInWindow)
+        var menu: NSMenu?
+        while let view = target, menu == nil { menu = view.menu(for: click); target = view.superview }
+        let items = try XCTUnwrap(menu).items
+        let titles = items.map { $0.isSeparatorItem ? "-" : $0.title }
+        XCTAssertEqual(Array(titles.suffix(3)), [L10n.string("Sign In With Another Account…"), "-",
+                                                 L10n.string("Sign Out…")])
+        let lines = MenuLine.lines(items)
+        try WindowlessRender.hostedInBothAppearances("default-login-menu", in: directory,
+                                                     size: NSSize(width: size.width, height: 300)) { appearance in
+            ZStack(alignment: .topLeading) {
+                page(appearance)
+                MenuPanel(lines: lines, width: 250,
+                          highlighted: lines.firstIndex { $0.title == L10n.string("Sign In With Another Account…") })
+                    .padding(.leading, row.midX).padding(.top, row.midY)
+            }
+            .frame(width: size.width, height: 300, alignment: .topLeading)
+            .clipped()
+            .environment(\.colorScheme, appearance.colorScheme)
+        }
+
+        // Signing out alone finishes when the probe reads it, and returns rather than using an account.
+        await model.logout(descriptor: descriptor, runtimeSelections: runtime)
+        await host.settle(until: { model.loginController.phase == .completed })
+        XCTAssertEqual(model.loginController.operation, .disconnect)
+        XCTAssertFalse(model.loginController.isRunning)
+        XCTAssertEqual(store.defaultSnapshots[.antigravityCLI]?.state, .signedOut)
+        let labels = host.accessibilityElements().map(\.label)
+        XCTAssertTrue(labels.contains(L10n.string("Back")))
+        XCTAssertFalse(labels.contains(L10n.string("Use this account")))
+        try WindowlessRender.hostedInBothAppearances("default-login-signed-out", in: directory, size: size, content: page)
+        try await Task.sleep(for: .milliseconds(1_500))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: signInStarted.path), "Signing out alone signs nothing in")
+
+        // Signing in with another account signs out, then starts the CLI's sign-in in the same console.
+        model.closeConsole()
+        try FileManager.default.removeItem(at: signedOut)
+        store.publishDefaults([await store.readDefault(descriptor, executableURL: agy)])
+        await model.logout(descriptor: descriptor, signsInAfter: true, runtimeSelections: runtime)
+        await host.settle(until: { FileManager.default.fileExists(atPath: signInStarted.path) })
+        XCTAssertEqual(model.activeHarness, .antigravityCLI)
+        XCTAssertEqual(model.loginController.operation, .connect)
+        XCTAssertTrue(model.loginController.isRunning)
+        try WindowlessRender.hostedInBothAppearances("default-login-sign-in", in: directory, size: size, content: page)
+
+        // A CLI whose sign-out exits (Claude Code's `auth logout`) opens its sign-in once it has exited.
+        model.closeConsole()
+        let claude = root.appending(path: "claude-cli/claude")
+        try FileManager.default.createDirectory(at: claude.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("""
+        #!/bin/sh
+        [ "$*" = 'auth logout' ] && exit 0
+        [ "$*" = 'auth login' ] || exit 3
+        touch "$(dirname -- "$0")/sign-in-started"
+        /bin/sleep 120 & wait
+        """.utf8).write(to: claude)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: claude.path)
+        runtime.select(claude, for: .claudeCode)
+        await model.logout(descriptor: try XCTUnwrap(HarnessCatalog.descriptor(for: .claudeCode)), signsInAfter: true,
+                           runtimeSelections: runtime)
+        await host.settle(until: {
+            FileManager.default.fileExists(atPath: claude.deletingLastPathComponent().appending(path: "sign-in-started").path)
+        })
+        XCTAssertEqual(model.loginController.operation, .connect)
+    }
+
+    /// The frame of the row whose accessibility label starts with `title`, in the window's top-left space.
+    private func rowFrame(_ title: String, in host: WindowlessRender.Host<some View>) throws -> CGRect {
+        host.hosting.layoutSubtreeIfNeeded()
+        let window = host.window, height = host.hosting.bounds.height
+        return try WindowlessRender.withAccessibilityTree {
+            func find(_ node: AnyObject) -> CGRect? {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    if ((child.accessibilityLabel?() ?? nil) ?? "").hasPrefix(title),
+                       let screen = child.accessibilityFrame?(), screen.height > 0 {
+                        let frame = window.convertFromScreen(screen)
+                        return CGRect(x: frame.minX, y: height - frame.maxY, width: frame.width, height: frame.height)
+                    }
+                    if let frame = find(child) { return frame }
+                }
+                return nil
+            }
+            return try XCTUnwrap(find(host.hosting), "No row \(title)")
+        }
+    }
+
     private func list(_ mode: AccountListMode, store: ProviderConnectionStore, runtime: RuntimeSelectionStore)
         -> some View {
         let isSheet: Bool = if case .switchTask = mode { true } else { false }
