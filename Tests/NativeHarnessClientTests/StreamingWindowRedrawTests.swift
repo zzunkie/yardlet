@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import Foundation
 import Observation
@@ -63,6 +64,43 @@ final class StreamingWindowRedrawTests: XCTestCase {
         }
         XCTAssertEqual(writes[.mainWindow], 0)
         XCTAssertEqual(writes[.sidebarRow], 0)
+    }
+
+    /// A task the window showed keeps its views out of the window while another task shows
+    /// (`TaskSurfaceHost`). SwiftUI updates views out of a window when what they read changes, so
+    /// before, an answer streaming into such a task projected its conversation and its rail on every
+    /// publication, as if it were shown. It now draws nothing until it is shown again, and then shows
+    /// everything that streamed.
+    func testATaskStreamingOutOfTheWindowIsDrawnOnlyWhenItIsShownAgain() async throws {
+        let window = try await makeWindow(tasks: 3)
+        defer { window.close() }
+        let model = window.model, streaming = window.tasks[0]
+        let transport = try XCTUnwrap(window.fixture.transport(streaming.id))
+        let projection = model.taskWorkspaces.state(for: streaming.id, initialSurface: model.initialTaskSurface)
+            .conversationRender.projection
+        model.splits.activate(.session(window.tasks[1].id))
+        window.host.settle(passes: 20)
+
+        let projected = projection.counts
+        var text = ""
+        _ = await window.measure("an answer out of the window") {
+            text = await ClaudeAnswerStream(emit: { await transport.emit($0) },
+                                            pause: { window.host.settle(passes: 1, interval: 0.01) }).run(fragments: 40)
+        }
+        XCTAssertTrue((model.transcriptBySessionID[streaming.id] ?? []).contains { entry in
+            if case let .assistant(answer, _) = entry.content { return answer == text }
+            return false
+        }, "The answer streamed")
+        XCTAssertEqual(projection.counts, projected, "A conversation out of the window was projected again")
+
+        model.splits.activate(.session(streaming.id))
+        window.host.settle(passes: 20)
+        XCTAssertGreaterThan(projection.counts.projected, projected.projected)
+        XCTAssertTrue(Self.draws("word39", in: window.host.hosting), "Shown again, the task shows what streamed")
+    }
+
+    private static func draws(_ text: String, in view: NSView) -> Bool {
+        (view as? NSTextView)?.string.contains(text) == true || view.subviews.contains { draws(text, in: $0) }
     }
 
     /// A sidebar of forty tasks with nothing running: a task's CPU sample or unread mark redraws its

@@ -30,10 +30,10 @@ final class ConversationProjectionCache {
     private var update: UInt64 = 0
     /// The items of the Codex turns projected again (`codex(_:workspaceURL:historySelection:)`).
     let codexItems = CodexItemMemo()
-    /// The last shared-transcript conversation and the very record it came from. The record is kept,
-    /// so a changed record is a copy with storage of its own, and an unchanged one is known without
-    /// comparing its entries: a long conversation shown again is not projected again.
-    var lastTranscript: (entries: [TranscriptEntry], harness: HarnessKind, status: SessionStatus,
+    /// The last shared-transcript conversation and the very turns it came from. The turns are kept, so
+    /// an unchanged transcript is known by its turns without comparing its entries: a long conversation
+    /// shown again is not projected again.
+    var lastTranscript: (transcript: TranscriptTurns, harness: HarnessKind, status: SessionStatus,
                          latestTurnIsComplete: Bool, presentation: ConversationPresentation)?
 
     init() {}

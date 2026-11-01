@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
+import YardletAgentTools
 
 /// The session rail: its cards' order, hiding and folds and how
 /// they are kept, the window's switch and the raised rail, where it fits, and which cards each
@@ -405,6 +406,88 @@ final class SessionRailTests: XCTestCase {
                                          verifiedURL: folder.appending(path: "README.md"), line: nil, column: nil)
         XCTAssertEqual(SessionRailContent.outputs(entries: [], codexChanges: [added, updated], workspaceURL: folder)
             .map(\.name), ["plan.md"])
+    }
+
+    /// The rail, the composer and its line of background tasks read a transcript's few entries they read
+    /// (`SessionRailContent.reads`, gathered from each turn by `TranscriptTurns.railEntries`) and make of
+    /// them what they make of the whole transcript: a long conversation's publication costs them what
+    /// they show, not its history.
+    func testTheRailMakesTheSameOfTheEntriesItReadsAsOfTheWholeTranscript() throws {
+        var projection = ClaudeSessionProjection()
+        var builder = TranscriptBuilder()
+        func apply(_ line: [String: Any]) throws {
+            let data = try JSONSerialization.data(withJSONObject: line)
+            for payload in projection.payloads(from: try ClaudeWireCodec().decodeLine(data)) { builder.apply(payload) }
+        }
+        func call(_ id: String, _ name: String, _ input: [String: Any], result: String?) throws {
+            try apply(["type": "assistant", "message": ["content": [["type": "tool_use", "id": id, "name": name,
+                                                                      "input": input]]]])
+            guard let result else { return }
+            try apply(["type": "user", "message": ["content": [["type": "tool_result", "tool_use_id": id,
+                                                                 "content": result]]]])
+        }
+        // Turns of plain work around everything the rail lists.
+        for index in 0..<4 {
+            builder.appendUser("Request \(index)")
+            builder.apply(.assistantMessageCompleted("Looking at \(index)."))
+            try call("bash-\(index)", "Bash", ["command": "swift build"], result: "ok")
+        }
+        builder.appendUser("Plan, delegate and suggest")
+        try call("todo", "TodoWrite", ["todos": [["content": "Read", "status": "completed", "activeForm": "Reading"],
+                                                 ["content": "Fix", "status": "in_progress", "activeForm": "Fixing"]]],
+                 result: "Todos have been modified successfully")
+        try call("doc", "Write", ["file_path": "/tmp/session-rail-notes/report.md", "content": "x"],
+                 result: "File created successfully")
+        try call("docs", "Agent", ["description": "Read the docs", "prompt": "Read docs/"], result: "The docs say so.")
+        try call("survey", "Agent", ["description": "Survey", "prompt": "Survey", "run_in_background": true], result: nil)
+        try apply(["type": "system", "subtype": "task_started", "task_id": "a-survey", "tool_use_id": "survey",
+                   "description": "Survey", "task_type": "local_agent", "is_backgrounded": true])
+        try call("shell", "Bash", ["command": "swift test", "run_in_background": true], result: nil)
+        try apply(["type": "system", "subtype": "task_started", "task_id": "t-shell", "tool_use_id": "shell",
+                   "description": "swift test", "task_type": "local_bash", "is_backgrounded": true])
+        try call("run", "mcp__yardlet__run_agent", ["harness": "codex", "prompt": "Check the migration"],
+                 result: "agent_id: \(UUID().uuidString)\nharness: codex · state: completed\n\nDone.")
+        try call("spawn", "mcp__yardlet__spawn_task", ["title": "Remove the dead flag", "tldr": "It is never read.",
+                                                       "prompt": "Delete the flag."],
+                 result: TaskSuggestionToolCatalog.notedResult(taskID: "task_1a2b3c4d"))
+        try call("edit", "Bash", ["command": "rm -rf build"], result: nil)
+        builder.apply(.permissionRequested(PermissionRequest(id: "ask", title: "Run", detail: nil, command: "rm -rf build",
+                                                             toolCallID: "edit")))
+        builder.apply(.assistantDelta("Waiting on you."))
+
+        let all = builder.entries
+        let read = TranscriptTurns(all).railEntries
+        XCTAssertFalse(read.contains { entry in
+            switch entry.content {
+            case .user, .assistant: true
+            case let .activity(activity, _): activity.id.hasPrefix("bash-")
+            default: false
+            }
+        }, "The requests, answers and plain calls are not read")
+        let session = Fixtures.session(.claudeCode)
+        func rail(_ entries: [TranscriptEntry]) -> SessionRailContent {
+            SessionRailContent.make(
+                session: session, projectName: "p", instructionSources: TaskInstructionSources(origin: .detected, paths: []),
+                git: nil, options: SessionRailAgentsTests.options(.claudeCode), connectors: nil, account: nil,
+                entries: entries, codexPlan: nil, pullRequest: nil, pullRequestState: nil,
+                suggestionResolution: { _ in nil })
+        }
+        let whole = rail(all)
+        XCTAssertEqual(rail(read), whole)
+        XCTAssertNotNil(whole.progress)
+        XCTAssertEqual(whole.agents?.agents.count, 3)
+        XCTAssertEqual(whole.suggestions.map(\.id), ["task_1a2b3c4d"])
+        XCTAssertEqual(whole.outputs.map(\.name), ["report.md"])
+        XCTAssertEqual(whole.backgroundTasks?.rows.map(\.id), ["shell"])
+        for (agents, tasks) in [(true, true), (true, false), (false, true)] {
+            XCTAssertEqual(BackgroundTasksProjection(entries: read, includesAgents: agents, includesTasks: tasks),
+                           BackgroundTasksProjection(entries: all, includesAgents: agents, includesTasks: tasks))
+        }
+        XCTAssertEqual(ConversationSessionStatusProjection.pendingPermissionCount(in: read), 1)
+        XCTAssertEqual(ComposerSessionOptionsProjection.make(harness: .claudeCode, session: session, providerCapabilities: nil,
+                                                             providerUsage: nil, entries: read, isAttached: true),
+                       ComposerSessionOptionsProjection.make(harness: .claudeCode, session: session, providerCapabilities: nil,
+                                                             providerUsage: nil, entries: all, isAttached: true))
     }
 
     // MARK: - Git

@@ -410,7 +410,7 @@ final class TaskContextUsageRestoreTests: XCTestCase {
             TaskDetail(
                 session: session, composerDraft: TaskComposerDraft(), workspaceState: workspace,
                 panelState: Binding(get: { workspace.panels }, set: { workspace.setPanels($0) }),
-                focusedSurface: $focused, entries: [], errorMessage: nil, codexTaskState: state,
+                focusedSurface: $focused, transcript: TaskTranscriptReader([]), errorMessage: nil, codexTaskState: state,
                 codexHistorySelection: nil, codexQueue: [], codexCapabilities: .empty, providerCapabilities: nil,
                 providerUsage: nil, restoredCodexTokenUsage: restored, isProviderAttached: false,
                 onShowCodexCapabilities: {}, conversationActions: ConversationActions(),
