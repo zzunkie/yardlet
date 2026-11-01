@@ -38,6 +38,8 @@ final class AppModel {
     /// so a task streaming in the background does not invalidate the view showing another.
     var transcriptBySessionID: TaskStateReader<[TranscriptEntry]> { transcripts.reader }
     let transcripts = TaskStateTable<[TranscriptEntry]>()
+    /// The turns of the transcripts the window draws, kept between publications (`transcript(for:)`).
+    private let transcriptTurns = TranscriptTurnsCache()
     private(set) var errorBySessionID: [UUID: String] = [:]
     var codexPresentationBySessionID: TaskStateReader<CodexTaskState> { codexPresentations.reader }
     let codexPresentations = TaskStateTable<CodexTaskState>()
@@ -500,7 +502,10 @@ final class AppModel {
         self.initialCodexHistoryQuery = initialCodexHistoryQuery
         self.initialSettingsSection = initialSettingsSection
         self.bootstrapError = bootstrapError
-        transcripts.didSet = { [weak self] id in self?.refreshAttentionDetail(for: id) }
+        transcripts.didSet = { [weak self] id in
+            self?.transcriptTurns.transcriptChanged(id)
+            self?.refreshAttentionDetail(for: id)
+        }
         codexPresentations.didSet = { [weak self] id in
             self?.refreshAttentionDetail(for: id)
             self?.linkCodexParentIfNeeded(for: id)
@@ -6819,6 +6824,9 @@ final class AppModel {
         let entries = transcriptBuilders[sessionID]?.entries ?? []
         let hasLiveCodex = codexPresentationBySessionID[sessionID]?.activeTurnID != nil
         if !hasLiveCodex {
+            if let change = transcriptBuilders[sessionID]?.takeChange() {
+                transcriptTurns.willPublish(change, for: sessionID)
+            }
             transcripts[sessionID] = entries
             publicationCounts.transcripts += 1
             if store.selectedSessionID != sessionID { publicationCounts.backgroundTranscripts += 1 }
@@ -6832,6 +6840,14 @@ final class AppModel {
         }
         // Streaming publishes many times a second; the reading snapshot keeps the newest one.
         transcriptSnapshots.scheduleSave(entries, for: sessionID)
+    }
+
+    /// A task's transcript in its turns, for the views that draw it: the conversation, the session rail
+    /// and the composer. Reading it observes the task's transcript as `transcriptBySessionID` does, and a
+    /// publication changes the turns it changed (`TranscriptTurns`).
+    func transcript(for id: UUID) -> TranscriptTurns {
+        guard let entries = transcripts[id], !entries.isEmpty else { return .empty }
+        return transcriptTurns.turns(entries, of: id)
     }
 
     private func loadPersistedTranscripts() {

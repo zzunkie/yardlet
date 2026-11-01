@@ -21,7 +21,10 @@ struct TaskDetail: View {
     @Bindable var workspaceState: TaskWorkspaceState
     @Binding var panelState: TaskSurfaceNavigationProjection.PanelState
     var focusedSurface: FocusState<TaskSurface?>.Binding
-    let entries: [TranscriptEntry]
+    /// The task's transcript, which the conversation, the composer, its line of background tasks and
+    /// the rail each read in a view of their own (`TaskTranscriptView`): a publication updates those, and
+    /// not this view and the views around them.
+    let transcript: TaskTranscriptReader
     /// The task's saved conversation is being read from the provider's own history.
     var isReadingSavedConversation = false
     let errorMessage: String?
@@ -52,6 +55,10 @@ struct TaskDetail: View {
     /// Codex background terminals asked to stop, until the rail no longer lists them.
     @State private var stoppingTerminalIDs: Set<String> = []
 
+    /// The transcript's entries, for what this view reads of them while a panel shows them: reading them
+    /// here updates this view for every publication.
+    private var entries: [TranscriptEntry] { transcript.read().entries }
+
     /// The Codex thread's newest turn usage, else what was read back for it.
     private var shownCodexTokenUsage: CodexThreadTokenUsage? {
         codexTaskState?.thread?.turns.last(where: { $0.tokenUsage != nil })?.tokenUsage ?? restoredCodexTokenUsage
@@ -69,14 +76,6 @@ struct TaskDetail: View {
                     .environment(\.workSurfaceNavigation, nil)
             } else if conversationOnly { chatSurface }
             else { dockedWorkspace }
-        }
-        .onChange(of: entries) { _, _ in
-            stoppingSubtaskIDs = stoppingSubtaskIDs.filter { id in
-                entries.contains { entry in
-                    if case let .activity(activity, state) = entry.content { return activity.id == id && state == .running }
-                    return false
-                }
-            }
         }
         .onChange(of: session.providerSessionID) { _, _ in clearSubtask() }
         .onChange(of: session.connection) { _, _ in clearSubtask() }
@@ -189,22 +188,34 @@ struct TaskDetail: View {
 
     private var chatSurface: some View {
         VStack(spacing: 0) {
-            TaskConversationView(
-                harness: session.harness,
-                workspaceURL: session.workspaceURL,
-                entries: entries,
-                sessionStatus: session.status,
-                latestTurnIsComplete: session.completionState == .completed,
-                codexTaskState: codexTaskState,
-                codexHistorySelection: codexHistorySelection,
-                providerSessionID: session.providerSessionID,
-                transcriptReading: workspaceState.transcript,
-                codexReading: workspaceState.codex,
-                actions: chatActions,
-                isReadingSavedConversation: isReadingSavedConversation,
-                diagnosticID: session.id.uuidString,
-                renderState: workspaceState.conversationRender
-            )
+            TaskTranscriptView(transcript) { transcript in
+                TaskConversationView(
+                    harness: session.harness,
+                    workspaceURL: session.workspaceURL,
+                    transcript: transcript,
+                    sessionStatus: session.status,
+                    latestTurnIsComplete: session.completionState == .completed,
+                    codexTaskState: codexTaskState,
+                    codexHistorySelection: codexHistorySelection,
+                    providerSessionID: session.providerSessionID,
+                    transcriptReading: workspaceState.transcript,
+                    codexReading: workspaceState.codex,
+                    actions: chatActions,
+                    isReadingSavedConversation: isReadingSavedConversation,
+                    diagnosticID: session.id.uuidString,
+                    renderState: workspaceState.conversationRender
+                )
+                // A subtask asked to stop is stopping until it no longer runs.
+                .onChange(of: transcript) { _, transcript in
+                    guard !stoppingSubtaskIDs.isEmpty else { return }
+                    stoppingSubtaskIDs = stoppingSubtaskIDs.filter { id in
+                        transcript.railEntries.contains { entry in
+                            if case let .activity(activity, state) = entry.content { return activity.id == id && state == .running }
+                            return false
+                        }
+                    }
+                }
+            }
             .environment(\.transcriptWorkspaceURL, session.workspaceURL)
             .environment(\.conversationFind, workspaceState.conversationFind)
             // A web link opens in the task's browser; a file and the rest go where the window sends them.
@@ -222,10 +233,11 @@ struct TaskDetail: View {
                     .padding(.horizontal, 16)
             }
 
-            if let errorMessage = TaskErrorNotice.message(errorMessage, harness: session.harness, entries: entries,
-                                                          codexTaskState: codexTaskState) {
+            // The transcript is read only when there is an error to place.
+            if let errorMessage, let notice = TaskErrorNotice.message(
+                errorMessage, harness: session.harness, entries: entries, codexTaskState: codexTaskState) {
                 TranscriptErrorCard(
-                    harness: session.harness, message: errorMessage, recoverable: true,
+                    harness: session.harness, message: notice, recoverable: true,
                     onShowHarnessSettings: session.harness == .codex
                         ? onShowCodexCapabilities : conversationActions.showHarnessSettings
                 )
@@ -255,45 +267,51 @@ struct TaskDetail: View {
 
             // The task's background agents and tasks while they run, on the composer rail — but for what
             // the session rail on screen lists in its Agents and Background tasks cards.
-            let backgroundTasks = BackgroundTasksProjection(entries: entries, includesAgents: !railLists(.agents),
-                                                            includesTasks: !railLists(.backgroundTasks))
-            if backgroundTasks.isShown {
-                BackgroundTasksBar(projection: backgroundTasks, actions: activityActions)
-                    .attachedAboveComposer()
+            TaskTranscriptView(transcript) { transcript in
+                let backgroundTasks = BackgroundTasksProjection(
+                    entries: transcript.railEntries, includesAgents: !railLists(.agents),
+                    includesTasks: !railLists(.backgroundTasks))
+                if backgroundTasks.isShown {
+                    BackgroundTasksBar(projection: backgroundTasks, actions: activityActions)
+                        .attachedAboveComposer()
+                }
             }
 
-            PromptComposer(
-                harness: session.harness,
-                composerDraft: composerDraft,
-                skills: codexCapabilities.skills.filter(\.enabled),
-                modes: codexCapabilities.modes,
-                selectedModeID: codexCapabilities.selectedModeID,
-                modelCatalog: codexCapabilities.modelCatalog,
-                runLocation: codexCapabilities.selectedRunLocation,
-                providerSession: session,
-                providerEntries: entries,
-                providerCapabilities: providerCapabilities,
-                providerUsage: providerUsage,
-                isProviderAttached: isProviderAttached,
-                isRunning: session.status == .running
-                    || session.status == .waitingForApproval,
-                canSteer: presentationPolicy.showsCodexComposerControls
-                    ? codexTaskState?.activeTurnID != nil
-                    : session.harness == .claudeCode && isProviderAttached,
-                prefilledDraft: editingDraft,
-                prefilledDraftID: editingDraftID,
-                // The composer shows the queue where its harness has one.
-                codexQueue: codexQueue,
-                isCodexQueuePaused: isCodexQueuePaused,
-                mentionRoots: [session.workspaceURL] + session.additionalRootURLs,
-                codexHasThread: session.providerSessionID != nil,
-                codexTokenUsage: shownCodexTokenUsage,
-                canOpenSideChat: onOpenSideChat != nil,
-                workspaceURL: session.workspaceURL,
-                actions: promptActions
-            )
-            // Drawn again when what it shows changed, not for every fragment the conversation streams.
-            .equatable()
+            TaskTranscriptView(transcript) { transcript in
+                PromptComposer(
+                    harness: session.harness,
+                    composerDraft: composerDraft,
+                    skills: codexCapabilities.skills.filter(\.enabled),
+                    modes: codexCapabilities.modes,
+                    selectedModeID: codexCapabilities.selectedModeID,
+                    modelCatalog: codexCapabilities.modelCatalog,
+                    runLocation: codexCapabilities.selectedRunLocation,
+                    providerSession: session,
+                    // What its permission control reads: the requests that wait.
+                    providerEntries: transcript.railEntries,
+                    providerCapabilities: providerCapabilities,
+                    providerUsage: providerUsage,
+                    isProviderAttached: isProviderAttached,
+                    isRunning: session.status == .running
+                        || session.status == .waitingForApproval,
+                    canSteer: presentationPolicy.showsCodexComposerControls
+                        ? codexTaskState?.activeTurnID != nil
+                        : session.harness == .claudeCode && isProviderAttached,
+                    prefilledDraft: editingDraft,
+                    prefilledDraftID: editingDraftID,
+                    // The composer shows the queue where its harness has one.
+                    codexQueue: codexQueue,
+                    isCodexQueuePaused: isCodexQueuePaused,
+                    mentionRoots: [session.workspaceURL] + session.additionalRootURLs,
+                    codexHasThread: session.providerSessionID != nil,
+                    codexTokenUsage: shownCodexTokenUsage,
+                    canOpenSideChat: onOpenSideChat != nil,
+                    workspaceURL: session.workspaceURL,
+                    actions: promptActions
+                )
+                // Drawn again when what it shows changed, not for every fragment the conversation streams.
+                .equatable()
+            }
             .accessibilitySortPriority(ParityAccessibility.composer)
             // The status tray tucks under the composer's top edge.
             .zIndex(1)
@@ -379,32 +397,39 @@ struct TaskDetail: View {
 
     /// The composer's options for this task, read the same way the composer reads them, for the
     /// rail's Settings, Context and Connectors cards.
-    private var railOptions: ComposerSessionOptions {
+    private func railOptions(_ transcript: TranscriptTurns) -> ComposerSessionOptions {
         ComposerSessionOptionsProjection.make(
             harness: session.harness, session: session, codexCapabilities: codexCapabilities,
             providerCapabilities: providerCapabilities, providerUsage: providerUsage,
             codexTokenUsage: shownCodexTokenUsage,
-            entries: entries, isAttached: isProviderAttached)
+            entries: transcript.railEntries, isAttached: isProviderAttached)
     }
 
+    /// The rail, which reads the transcript in a view of its own (`TaskTranscriptView`).
     @ViewBuilder
     private func railHost(isRaised: Bool) -> some View {
         if let railServices {
-            let options = railOptions
-            SessionRailHost(
-                services: railServices, session: session, entries: entries,
-                codexPlan: codexTaskState?.thread?.turns.last(where: { $0.plan != nil })?.plan,
-                codexState: codexTaskState,
-                codexChanges: codexChanges,
-                options: options,
-                connectors: ComposerConnectorList.make(options.connectors, connectors: composerConnectors?.records ?? [],
-                                                       taskState: composerConnectors?.taskState ?? { _ in .on },
-                                                       standInServerNames: composerConnectors?.standInServerNames ?? []),
-                folds: $workspaceState.railFolds,
-                actions: railActions(options: options),
-                isRaised: isRaised,
-                panelBrowserKey: TaskSurfaceNavigationProjection.browserKey(inTab: panelState.trailingSurfaceID))
+            TaskTranscriptView(transcript) { transcript in
+                railHost(railServices, transcript: transcript, isRaised: isRaised)
+            }
         }
+    }
+
+    private func railHost(_ railServices: SessionRailServices, transcript: TranscriptTurns, isRaised: Bool) -> some View {
+        let options = railOptions(transcript)
+        return SessionRailHost(
+            services: railServices, session: session, entries: transcript.railEntries,
+            codexPlan: codexTaskState?.thread?.turns.last(where: { $0.plan != nil })?.plan,
+            codexState: codexTaskState,
+            codexChanges: codexChanges,
+            options: options,
+            connectors: ComposerConnectorList.make(options.connectors, connectors: composerConnectors?.records ?? [],
+                                                   taskState: composerConnectors?.taskState ?? { _ in .on },
+                                                   standInServerNames: composerConnectors?.standInServerNames ?? []),
+            folds: $workspaceState.railFolds,
+            actions: railActions(options: options),
+            isRaised: isRaised,
+            panelBrowserKey: TaskSurfaceNavigationProjection.browserKey(inTab: panelState.trailingSurfaceID))
     }
 
     private func railActions(options: ComposerSessionOptions) -> SessionRailActions {
@@ -881,7 +906,8 @@ struct TaskDetail: View {
 struct TaskConversationView: View {
     let harness: HarnessKind
     let workspaceURL: URL
-    let entries: [TranscriptEntry]
+    /// The task's transcript in its turns (`TranscriptTurns`).
+    let transcript: TranscriptTurns
     var sessionStatus: SessionStatus = .ready
     var latestTurnIsComplete = false
     var codexTaskState: CodexTaskState? = nil
@@ -910,7 +936,7 @@ struct TaskConversationView: View {
                 source: codexThread.map {
                     .codex($0, workspaceURL: workspaceURL, historySelection: codexHistorySelection)
                 } ?? .transcript(
-                    entries: entries, harness: harness, status: sessionStatus,
+                    transcript, harness: harness, status: sessionStatus,
                     latestTurnIsComplete: latestTurnIsComplete
                 ),
                 snapshotThreadID: providerSessionID,
@@ -925,7 +951,7 @@ struct TaskConversationView: View {
         } else {
             TranscriptConversationView(
                 harness: harness,
-                entries: entries,
+                transcript: transcript,
                 latestTurnIsComplete: latestTurnIsComplete,
                 sessionStatus: sessionStatus,
                 readingPosition: transcriptReading,
@@ -937,5 +963,57 @@ struct TaskConversationView: View {
                 renderState: renderState
             )
         }
+    }
+}
+
+extension TaskConversationView {
+    /// A conversation drawn from its entries as they are.
+    init(
+        harness: HarnessKind, workspaceURL: URL, entries: [TranscriptEntry], sessionStatus: SessionStatus = .ready,
+        latestTurnIsComplete: Bool = false, codexTaskState: CodexTaskState? = nil,
+        codexHistorySelection: CodexHistorySearchSelection? = nil, providerSessionID: String? = nil,
+        transcriptReading: TranscriptReadingPosition? = nil, codexReading: TranscriptReadingPosition? = nil,
+        actions: ConversationActions = ConversationActions(),
+        turnWindowCount: Int = ConversationTurnWindow.initialTurnCount, isReadingSavedConversation: Bool = false,
+        diagnosticID: String? = nil, renderState: ConversationRenderState? = nil
+    ) {
+        self.init(
+            harness: harness, workspaceURL: workspaceURL, transcript: TranscriptTurns(entries),
+            sessionStatus: sessionStatus, latestTurnIsComplete: latestTurnIsComplete, codexTaskState: codexTaskState,
+            codexHistorySelection: codexHistorySelection, providerSessionID: providerSessionID,
+            transcriptReading: transcriptReading, codexReading: codexReading, actions: actions,
+            turnWindowCount: turnWindowCount, isReadingSavedConversation: isReadingSavedConversation,
+            diagnosticID: diagnosticID, renderState: renderState)
+    }
+}
+
+/// How a task's views read its transcript (`AppModel.transcript(for:)`). Whatever reads it observes the
+/// transcript, so the task's views read it in views of their own that draw it (`TaskTranscriptView`): a
+/// publication then updates the conversation, the composer and the rail, not the task's views around them.
+struct TaskTranscriptReader {
+    let read: @MainActor () -> TranscriptTurns
+}
+
+extension TaskTranscriptReader {
+    /// A transcript as it is.
+    init(_ entries: [TranscriptEntry]) {
+        let transcript = TranscriptTurns(entries)
+        read = { transcript }
+    }
+}
+
+/// Reads the task's transcript in a body of its own and draws `content` with it; out of the window, it
+/// reads nothing (`TaskObservationScope`).
+struct TaskTranscriptView<Content: View>: View {
+    let transcript: TaskTranscriptReader
+    let content: (TranscriptTurns) -> Content
+
+    init(_ transcript: TaskTranscriptReader, @ViewBuilder content: @escaping (TranscriptTurns) -> Content) {
+        self.transcript = transcript
+        self.content = content
+    }
+
+    var body: some View {
+        TaskObservationScope { content(transcript.read()) }
     }
 }

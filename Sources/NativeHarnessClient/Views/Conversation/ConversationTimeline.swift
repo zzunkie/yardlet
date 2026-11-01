@@ -5,10 +5,17 @@ import SwiftUI
 enum ConversationSource {
     /// A Codex thread's typed state (`CodexConversationProjection`).
     case codex(CodexTaskState, workspaceURL: URL, historySelection: CodexHistorySearchSelection?)
-    /// A shared transcript (`TranscriptConversationProjection`).
+    /// A shared transcript (`TranscriptConversationProjection`), in its turns.
     case transcript(
-        entries: [TranscriptEntry], harness: HarnessKind, status: SessionStatus, latestTurnIsComplete: Bool
+        TranscriptTurns, harness: HarnessKind, status: SessionStatus, latestTurnIsComplete: Bool
     )
+
+    /// A shared transcript given as its entries.
+    static func transcript(
+        entries: [TranscriptEntry], harness: HarnessKind, status: SessionStatus, latestTurnIsComplete: Bool
+    ) -> ConversationSource {
+        .transcript(TranscriptTurns(entries), harness: harness, status: status, latestTurnIsComplete: latestTurnIsComplete)
+    }
 }
 
 /// The one conversation renderer (plan A5): a scrolling column of turns with the turn rail beside
@@ -286,9 +293,9 @@ struct ConversationTimeline: View {
         switch source {
         case let .codex(state, workspaceURL, historySelection):
             presentation = cache.codex(state, workspaceURL: workspaceURL, historySelection: historySelection)
-        case let .transcript(entries, harness, status, latestTurnIsComplete):
+        case let .transcript(transcript, harness, status, latestTurnIsComplete):
             presentation = cache.transcript(
-                entries, harness: harness, status: status, latestTurnIsComplete: latestTurnIsComplete
+                transcript, harness: harness, status: status, latestTurnIsComplete: latestTurnIsComplete
             )
             // The provider's file holds turns before the ones read from it.
             if actions.readEarlierHistory != nil { presentation.earlier = .providerFile }
@@ -435,8 +442,8 @@ struct ConversationTimeline: View {
 
     private func itemContext(_ presentation: ConversationPresentation) -> ConversationItemContext {
         var context = ConversationItemContext(harness: presentation.harness, workspaceURL: workspaceURL, actions: actions)
-        if case let .transcript(entries, _, _, _) = source {
-            context.lastEntryID = entries.last?.id
+        if case let .transcript(transcript, _, _, _) = source {
+            context.lastEntryID = transcript.entries.last?.id
         } else if case let .usageLimit(_, entryID)? = presentation.turns.last?.outcome {
             // A Codex limit card is named after its turn, so the last turn's card is the latest.
             context.lastEntryID = entryID

@@ -369,7 +369,7 @@ private struct TaskTerminalHost: View {
         TaskDetail(
             session: fixture.session, composerDraft: TaskComposerDraft(), workspaceState: workspace,
             panelState: Binding(get: { workspace.panels }, set: { workspace.setPanels($0) }),
-            focusedSurface: $focused, entries: fixture.entries, errorMessage: nil,
+            focusedSurface: $focused, transcript: TaskTranscriptReader(fixture.entries), errorMessage: nil,
             codexTaskState: fixture.codexTaskState, codexHistorySelection: nil, codexQueue: [],
             codexCapabilities: .empty, providerCapabilities: nil, providerUsage: nil, isProviderAttached: false,
             onShowCodexCapabilities: {}, conversationActions: ConversationActions(), composerActions: ComposerActions()

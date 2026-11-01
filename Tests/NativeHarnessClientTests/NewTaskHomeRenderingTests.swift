@@ -770,7 +770,7 @@ private struct ReplyTaskHost: View {
         TaskDetail(
             conversationOnly: true, session: session, composerDraft: draft, workspaceState: workspace,
             panelState: Binding(get: { workspace.panels }, set: { workspace.setPanels($0) }),
-            focusedSurface: $focused, entries: entries, errorMessage: nil, codexTaskState: nil,
+            focusedSurface: $focused, transcript: TaskTranscriptReader(entries), errorMessage: nil, codexTaskState: nil,
             codexHistorySelection: nil, codexQueue: [], codexCapabilities: .empty, providerCapabilities: nil,
             providerUsage: nil, isProviderAttached: true, onShowCodexCapabilities: {},
             conversationActions: conversation, composerActions: composer)

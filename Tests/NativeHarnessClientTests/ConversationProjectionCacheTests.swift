@@ -163,6 +163,75 @@ final class ConversationProjectionCacheTests: XCTestCase {
         XCTAssertLessThan(update, .seconds(1), "An update to one turn of a long transcript stays cheap")
     }
 
+    /// An answer streaming at the end of a long transcript, as a task publishes it: the builder at its
+    /// limit drops its oldest entries as new ones come, and says what changed (`TranscriptChange`). The
+    /// turns it left as they were are kept without being compared, so only the turn that changed (and
+    /// the oldest one, which lost entries) is split again and projected again; a change in an earlier
+    /// turn splits the turns from there and keeps those that came out the same.
+    func testATranscriptPublishedFromItsBuilderSplitsAndProjectsOnlyTheTurnsItChanged() throws {
+        var builder = TranscriptBuilder(entries: (0..<150).flatMap { index -> [TranscriptEntry] in
+            [
+                TranscriptEntry(content: .user(text: "Request \(index)")),
+                TranscriptEntry(content: .reasoning(text: "Thinking \(index).", isStreaming: false)),
+                TranscriptEntry(content: .activity(HarnessActivity(id: "call-\(index)", kind: "Bash", title: "Run \(index)",
+                                                                   input: "swift test", output: "ok"), state: .completed)),
+                TranscriptEntry(content: .assistant(text: "Done \(index).", isStreaming: false))
+            ]
+        }, limit: 400)
+        let cache = ConversationProjectionCache()
+        var transcript = TranscriptTurns(builder.entries)
+        _ = builder.takeChange()
+        _ = cache.transcript(transcript, harness: .claudeCode, status: .running, latestTurnIsComplete: false)
+        var counts = cache.counts
+
+        /// Publishes what the builder holds, and checks that the turns are the turns of a fresh split,
+        /// that `kept` of the earlier turns were kept as they were, and that `projected` were projected.
+        func publish(keeping kept: Int, projecting projected: Int, _ step: String,
+                     file: StaticString = #filePath, line: UInt = #line) {
+            let earlier = transcript.turns
+            transcript = transcript.updated(to: builder.entries, change: builder.takeChange())
+            XCTAssertEqual(transcript.turns.map(\.entries), TranscriptTurns(builder.entries).turns.map(\.entries), step,
+                           file: file, line: line)
+            let keptTurns = transcript.turns.filter { turn in earlier.contains { $0 === turn } }
+            XCTAssertEqual(keptTurns.count, kept, "\(step): turns kept", file: file, line: line)
+            let presentation = cache.transcript(transcript, harness: .claudeCode, status: .running,
+                                                latestTurnIsComplete: false)
+            XCTAssertEqual(cache.counts.projected - counts.projected, projected, "\(step): turns projected",
+                           file: file, line: line)
+            XCTAssertEqual(presentation, TranscriptConversationProjection.presentation(
+                from: builder.entries, harness: .claudeCode, status: .running, latestTurnIsComplete: false
+            ), step, file: file, line: line)
+            counts = cache.counts
+        }
+
+        // 100 turns of 4 entries. A request opens a turn and pushes out the oldest entry: the oldest
+        // turn is the rest of it, and the turn before the new one stops being the last.
+        builder.appendUser("Write it up.")
+        publish(keeping: 99, projecting: 3, "request")
+        // The answer's entry pushes out another.
+        builder.apply(.assistantDelta("Working "))
+        publish(keeping: 99, projecting: 2, "the answer starts")
+        // Fragments into the entry that streams change only its turn.
+        for fragment in 0..<5 {
+            builder.apply(.assistantDelta("word\(fragment) "))
+            publish(keeping: 100, projecting: 1, "fragment \(fragment)")
+        }
+        // A call between fragments ends the answer's entry; the next fragment starts another, and the
+        // oldest turn goes whole.
+        builder.apply(.activityStarted(HarnessActivity(id: "live", kind: "Bash", title: "Build")))
+        publish(keeping: 99, projecting: 2, "a call")
+        builder.apply(.assistantDelta("more "))
+        publish(keeping: 99, projecting: 1, "the answer goes on")
+        // The completed message takes the first entry and the other goes.
+        builder.apply(.assistantMessageCompleted("Working word0 word1 word2 word3 word4 more "))
+        publish(keeping: 99, projecting: 1, "the answer completes")
+        // A call in an earlier turn reports again, as a background task does: its turn is split and
+        // projected again, and the turns after it are split again and come out the same.
+        builder.apply(.activityCompleted(HarnessActivity(id: "call-120", kind: "Bash", title: "Run 120",
+                                                         input: "swift test", output: "ok, again")))
+        publish(keeping: 99, projecting: 1, "an earlier call")
+    }
+
     // MARK: - Fixtures
 
     private func project(_ state: CodexTaskState, with cache: ConversationProjectionCache) -> ConversationPresentation {

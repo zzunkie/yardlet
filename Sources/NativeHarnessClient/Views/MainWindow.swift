@@ -6,10 +6,27 @@ import SwiftUI
 /// `MainWindow`: a task streaming on screen redraws its surface without re-evaluating the window
 /// around it (the sidebar, the menu commands it publishes, and through them the menu bar and the
 /// scene).
+///
+/// While the task's views are out of the window (`TaskSurfacePresence`), it gives the views it made
+/// last and reads nothing, so what the task publishes while it is not shown updates none of its views;
+/// shown again, it reads the task as it is then. Before, a task streaming at the end of a long
+/// conversation in views the window kept cost the main thread about half as much as one on screen.
 struct TaskObservationScope<Content: View>: View {
     let content: () -> Content
+    @Environment(\.taskSurfacePresence) private var presence
+    @State private var made = Made()
 
-    var body: some View { content() }
+    var body: some View {
+        if presence?.isInWindow == false, let last = made.content { return last }
+        let content = content()
+        made.content = content
+        return content
+    }
+
+    /// The views made last, kept without being observed.
+    private final class Made {
+        var content: Content?
+    }
 }
 
 private struct ProjectEditPresentation: Identifiable {
@@ -1235,7 +1252,7 @@ struct MainWindow: View {
             workspaceState: workspace,
             panelState: Binding(get: { workspace.panels }, set: { workspace.setPanels($0) }),
             focusedSurface: focusedSurface ?? $focusedTaskSurface,
-            entries: model.transcriptBySessionID[session.id] ?? [],
+            transcript: TaskTranscriptReader { [model] in model.transcript(for: session.id) },
             isReadingSavedConversation: model.isReadingSavedConversation(session.id),
             errorMessage: model.errorBySessionID[session.id],
             codexTaskState: model.codexPresentationBySessionID[session.id],
