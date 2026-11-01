@@ -53,6 +53,7 @@ import subprocess
 import threading
 import html
 import json
+import secrets
 from urllib.parse import parse_qs, unquote
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -823,6 +824,20 @@ FOLLOW_HOME = """<!doctype html><meta charset="utf-8"><title>Follow home</title>
 <script>if (location.search.includes('rotate')) document.cookie = 'qa_rotate=' + Date.now() + '; path=/; max-age=3600';</script>"""
 FOLLOW_IDP = """<!doctype html><meta charset="utf-8"><title>QA sign-in</title><h1>Choose an account</h1>
 <a id="continue" href="RETURN?code=qa">Continue</a>"""
+# Several accounts in one sign-in, as Google keeps them. A post to /follow/accounts adds its account to those the
+# request's cookies name and starts a new session: qa_accounts lists the accounts, each of qa_s01 to qa_s30 carries
+# the session, and qa_seen, which the page reads, changes with it. The page reloads when qa_seen changes, as a Google
+# page does when its session changed in another tab.
+FOLLOW_ACCOUNTS = """<!doctype html><meta charset="utf-8"><title>Follow accounts</title>
+<form method="post" action="/follow/accounts"><input id="user" name="user" autocomplete="username">
+<input id="password" name="password" type="password" autocomplete="current-password">
+<button id="go" type="submit">Add account</button></form>
+<script>
+const seen = () => (document.cookie.match(/(?:^|; )qa_seen=([^;]*)/) || [])[1] || '';
+const shown = seen();
+setInterval(() => { if (seen() !== shown) location.reload(); }, 300);
+</script>"""
+FOLLOW_SESSION_COOKIES = 30
 
 # A sign-in's cookie check across two sites, the way accounts.google.com checks its cookies before a Google
 # Cloud console page opens and answers what it does not expect with /CookieMismatch. /cookie-check/start on
@@ -1625,6 +1640,17 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith('/follow/signin'):
             return self.redirect('/follow/home', ['qa_follow=%s; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600' % (
                 ''.join(c for c in fields.get('user', '') if c.isalnum()) or 'none')])
+        if self.path.startswith('/follow/accounts'):
+            sent = dict(part.strip().partition('=')[::2] for part in (self.headers.get('Cookie') or '').split(';'))
+            accounts = [name for name in sent.get('qa_accounts', '').split('.') if name]
+            user = ''.join(c for c in fields.get('user', '') if c.isalnum())
+            if user and user not in accounts:
+                accounts.append(user)
+            session = secrets.token_hex(8)
+            cookie = '%s=%s; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600'
+            return self.redirect('/follow/accounts', [cookie % ('qa_accounts', '.'.join(accounts))]
+                                 + [cookie % ('qa_s%02d' % index, session) for index in range(1, FOLLOW_SESSION_COOKIES + 1)]
+                                 + ['qa_seen=%s; Path=/; SameSite=Lax; Max-Age=3600' % session])
         if self.path.startswith('/shapes/'):
             return self.shapes()
         if self.path.startswith('/checkout/done'):
@@ -1662,6 +1688,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(FOLLOW_SIGN_IN.encode(), page)
         if route == '/follow/home':
             return self.send(FOLLOW_HOME.encode(), page)
+        if route == '/follow/accounts':
+            return self.send(FOLLOW_ACCOUNTS.encode(), page)
         if route == '/follow/idp':
             back = parse_qs(query).get('return', [''])[0]
             return self.send(FOLLOW_IDP.replace('RETURN', html.escape(back)).encode(), page)

@@ -64,8 +64,9 @@ These are the rules of "Per task". How sign-ins are found and passed on is in se
   (`on_request_context_initialized`). When the folder is new, it puts in the Touch ID key, opens the tab at about:blank,
   copies the starting cookies and then opens the requested address (navigation and DevTools messages that arrive while
   it waits for the profile or copies wait until it is done). The `copyCookies` command moves one site's cookies from
-  one profile to another, and with `replace` first deletes the target's cookies of that site. The `importCookies` command
-  replaces the chosen sites' cookies in one profile with cookies imported from another browser (section 10). When the
+  one profile to another, with `replace` first deletes the target's cookies of that site, and answers `cookiesCopied`
+  once the target has the cookies. The `importCookies` command replaces the chosen sites' cookies in one profile with
+  cookies imported from another browser (section 10). When the
   `open` command's `profile` has `follow` (a list of sites) or `fill`, the tab opens at about:blank, takes those sites
   from the default profile in place of its own, fills in the sites it has no cookie of, and then opens the address. The
   `cookieDigest` command answers a sum of hashes of one profile's cookies of one site (section 11).
@@ -404,6 +405,13 @@ M138 was in 2026-02, and the Homebrew cask is disabled too), **Safari** (above).
   hold. A task without an open tab takes the site's cookies from the default profile at about:blank when its tab next
   opens, then opens the address (`BrowserTaskProfiles.opening`, `follow` in the host's `open`). A sign-in imported from
   another browser (section 10) is the person's too, so it goes from the default profile to the same tasks.
+- **What Yardlet puts in is no one's sign-in:** while a copy (or an import) goes into a task's profile, that task's
+  watches of the site take no sums, and once the host says the profile has the cookies (`cookiesCopied`) they take a
+  new one. So a task the person used in the last three minutes does not take the sign-in it was given for its own and
+  pass it back to every task, and no task passes the site on while another copy is replacing its cookies (a copy that
+  read a profile between the target's deletion and insertion would carry fewer cookies or none, and the accounts
+  missing from it would go from every task it reached). A sign-in is passed on once, however many of a profile's
+  tabs watch the site: when one finds it, each of them takes the new sum.
 - **A task's own sign-in:** That site of that task leaves following, and a sign-in the person makes again in that task
   is not passed to others (whether the task's account is the person's cannot be known, so the side that overwrites
   nothing). A child task inherits its parent's own sign-ins. When the feature turns on, it reads the agents' fills in the
@@ -418,25 +426,36 @@ M138 was in 2026-02, and the Homebrew cask is disabled too), **Safari** (above).
   profile key the numbers it took (`received`) and its own sign-ins (`own`), the keys that began following
   (`followers`), and whether the vault log was read. No cookie values. The records of archived and deleted tasks go with
   their folders.
-- **Where:** `BrowserLoginFollow.swift`, `BrowserTaskProfiles.swift` (`opening`, `personSignedIn`,
-  `signedInItself`), `BrowserHostClient.swift` (`cookieDigest`, `copyCookies(from:to:site:)`, the tab event hook),
-  `BrowserHostProtocol.swift`, `BrowserHostPaneVault.swift` and `BrowserHostPaneLoginImport.swift` (moments and
+- **Log:** `Browser/Logs/sign-ins.log`, beside the host's log, has a line for each sign-in found: the time, the site,
+  the task (the start of its ID), the moment, and whose it is. For the person's, the sign-in number, how many profiles
+  it went to and how many cookies each took (a count well below the others, or 0, is a copy that read too little);
+  for a task's own, nothing more. Never a cookie's value or an account's name. It is kept under 1 MB; the lines
+  before go to `sign-ins.1.log`.
+- **Where:** `BrowserLoginFollow.swift` (`changing`), `BrowserSignInLog.swift`, `BrowserTaskProfiles.swift` (`opening`,
+  `personSignedIn`, `signedInItself`), `BrowserHostClient.swift` (`cookieDigest`, `copyCookies(from:to:site:)`, the tab
+  event hook), `BrowserHostProtocol.swift`, `BrowserHostPaneVault.swift` and `BrowserHostPaneLoginImport.swift` (moments and
   imports), `VaultCenter.swift` (`agentFills`), the host's `BrowserHost.swift` and `TaskProfiles.swift` (the list of
   copies, `cookieDigest`), and in the bridge `yardlet_cef_copy_cookies` (a list of sites; add, replace or fill) and
   `yardlet_cef_cookie_digest`.
 - **QA:** `run-check.sh … --ui-fixture-browser-check-only=isolation` (only these with `--ui-fixture-isolation-follow`).
   The QA server's `/follow/signin` (localhost) has a password form and a "Sign in with QA" link that goes through an
   account picker on another site (127.0.0.1) and back; both plant `qa_follow`. The person clicks through the host's
-  input (the panel's path); the agent acts through DevTools and reports its use. Seven checks: the agent's password
+  input (the panel's path); the agent acts through DevTools and reports its use. Nine checks: the agent's password
   sign-in is its task's own (the person's sign-in number unchanged, open task F does not get it); the person's password
   sign-in reaches open task F and the default profile, and the agent's task G keeps `AGENT`; cookies a site renews while
   the person browses are not passed on; a single sign-on round trip in a tab nobody drives is not passed on; the
   person's sign-in without a password (single sign-on) reaches F and a task made later, and G keeps its own; the person's password sign-in on a page the agent handed over
   reaches F and the default profile and does not become that task's own; a task from
   before following keeps its own cookie on 127.0.0.1 (`OLD`) and takes only the site it had no cookie of
-  (`fill.qa-follow.test`). The host log has command names only, no cookie values. The moments the QA goes through are
-  the password field and the round trip through another site. The popup, passkey window and code field moments use the
-  same comparison but are not run in QA (the passkey window could take the screen).
+  (`fill.qa-follow.test`); the person adds a second account on one task while five other tasks are at the same site's
+  sign-in page, each watched after the person clicked its password field, and the sign-in is passed on once, the
+  default profile and all six tasks holding both accounts and the 30 cookies of one session (the QA server's
+  `/follow/accounts` keeps several accounts in one set of cookies as Google does: a list of accounts, 30 cookies of the
+  session and one the page reads, and the page reloads when its session changes); the sign-ins log names that
+  sign-in, its task and where it went, and no value. The host log has command names only, no cookie values. The
+  moments the QA goes through are the password field and the round trip through another site. The popup, passkey
+  window and code field moments use the same comparison but are not run in QA (the passkey window could take the
+  screen).
 - **Limits:**
   - A sign-in the person makes on a page the agent handed over is the person's even with an account for that task alone
     (someone else's account, for example), so it spreads to other tasks. Such an account stays in its task when the
@@ -447,7 +466,11 @@ M138 was in 2026-02, and the Homebrew cask is disabled too), **Safari** (above).
     the agent started and the person answered with Touch ID is no one's sign-in (the agent's moment is not a password or
     code field).
   - If the site changes its cookies by itself within three minutes after a moment, that is passed on once too (the
-    window kept to catch two-step verification).
+    window kept to catch two-step verification). This includes a page that reloads after a sign-in reached its task and
+    gets renewed cookies (Google renews some on most pages): that task passes the sign-in it took on once more, with
+    the same accounts. Since passing on replaces the site's cookies, such a change in a task that lacks a sign-in the
+    person made elsewhere without a moment (one never passed on) takes that sign-in away from the other tasks too; for
+    Google, the account added there goes from the account list of every task.
   - When passing a sign-in on, the target's partitioned cookies of the site are deleted too and do not come back
     (section 5: partitioned cookies cannot be moved). localStorage and IndexedDB do not follow.
   - A sign-out that ends within the site is not passed on (no moment). A sign-out that goes through another site

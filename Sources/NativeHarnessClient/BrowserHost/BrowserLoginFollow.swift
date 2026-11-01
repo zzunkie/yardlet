@@ -15,10 +15,11 @@ import Foundation
 /// an app); Chromium's passkey window showed over the tab (the host says whose it is); the page opened a pop-up (a "Sign in with …" window); the tab left the site for another (a single
 /// sign-on's round trip). Browsing alone takes no digest, so a site that renews its cookies as it is used (Google)
 /// is not copied over and over, and a page nobody drives (one that goes through its sign-in site on its own) signs
-/// nobody in.
+/// nobody in. The cookies Yardlet itself puts into a profile (a sign-in passed on, an import) are no one's sign-in
+/// there: while it puts them in, that profile's watches of the site wait, and they take a digest again after.
 @MainActor
 final class BrowserLoginFollow {
-    enum Moment: Equatable {
+    enum Moment: String, Equatable {
         case passwordField, codeField, passkey, popup, leftSite
 
         /// A field the agent too signs in with: its change is the agent's sign-in when the agent drove the tab.
@@ -43,11 +44,20 @@ final class BrowserLoginFollow {
         var site: String
     }
 
+    /// A profile's (by key) cookies of a site.
+    private struct ProfileSite: Hashable {
+        var profile: String
+        var site: String
+    }
+
     static let window: Duration = .seconds(180)
 
     private let client: BrowserHostClient
     private let profiles: BrowserTaskProfiles
+    private let log: BrowserSignInLog?
     private var watches: [WatchKey: Watch] = [:]
+    /// The changes Yardlet is making to profiles' cookies of a site, and how many.
+    private var changes: [ProfileSite: Int] = [:]
     /// Each tab's site and session as its pages last showed them.
     private var tabSites: [BrowserTabID: (session: UUID, site: String)] = [:]
     /// Pop-ups and the tabs that opened them, while open.
@@ -56,9 +66,10 @@ final class BrowserLoginFollow {
     private var passkeyWindows: [Int: BrowserTabID] = [:]
     private var fillObserver: NSObjectProtocol?
 
-    init(client: BrowserHostClient, profiles: BrowserTaskProfiles) {
+    init(client: BrowserHostClient, profiles: BrowserTaskProfiles, log: BrowserSignInLog? = nil) {
         self.client = client
         self.profiles = profiles
+        self.log = log
     }
 
     /// Starts following the client's tabs; the password manager's agent fills mark the task's own sign-ins.
@@ -168,7 +179,10 @@ final class BrowserLoginFollow {
                 self?.watches[key] = nil
                 return
             }
-            if self?.watches[key]?.digest == nil { self?.watches[key]?.digest = digest }
+            // While Yardlet changes the profile's cookies, the change's end takes the digest.
+            if self?.watches[key]?.digest == nil, self?.changes[ProfileSite(profile: profile, site: site)] == nil {
+                self?.watches[key]?.digest = digest
+            }
         }
     }
 
@@ -217,9 +231,11 @@ final class BrowserLoginFollow {
             return
         }
         let profile = profiles.key(for: watch.session)
+        // A change Yardlet made meanwhile took the digest away or measured it again.
         guard let after = await client.cookieDigest(profile: profile, site: key.site), after != before,
               watches[key]?.digest == before else { return }
-        watches[key]?.digest = after
+        // One sign-in, however many of the profile's tabs watch the site.
+        for other in watchKeys(of: ProfileSite(profile: profile, site: key.site)) { watches[other]?.digest = after }
         // Whoever drove the tab last signed in: the person (on a page the agent handed over too) or the agent. A tab gone
         // (a pop-up that closed) is taken as it was driven when the sign-in began.
         let tab = client.tabs(forSession: watch.session).first { $0.id == key.tab }
@@ -232,9 +248,12 @@ final class BrowserLoginFollow {
             personLast = watch.byPerson || watch.handedOver
         }
         if personLast {
-            signedIn(session: watch.session, site: key.site)
+            signedIn(session: watch.session, site: key.site, moment: watch.moment)
         } else if agentLast, watch.moment.isSignInField {
             // The task's own: its agent's password or code sign-in, perhaps with an account for this task alone.
+            if !profiles.isOwn(key.site, in: profile) {
+                log?.write("\(key.site): the agent's sign-in in task \(Self.name(watch.session)) (\(watch.moment.rawValue)) is the task's own")
+            }
             profiles.signedInItself(to: key.site, in: profile)
         }
     }
@@ -242,24 +261,91 @@ final class BrowserLoginFollow {
     /// The person signed in to `site` in the session's tab: the default profile and the tasks open now that follow
     /// the site take its cookies in place of theirs; the others when their tab next opens. `fromDefault`: the sign-in
     /// is in the default profile already (imported from another browser), which the open tasks take it from.
-    func signedIn(session: UUID, site: String, fromDefault: Bool = false) {
+    func signedIn(session: UUID, site: String, fromDefault: Bool = false, moment: Moment? = nil) {
         guard profiles.storage == .perTask else { return }
         let key = profiles.key(for: session)
         let open = Set(client.sessionsWithTabs.map(profiles.key(for:)))
-        for target in profiles.personSignedIn(to: site, in: key, open: open) {
-            if fromDefault {
-                if let target { client.copyCookies(from: nil, to: target, site: site) }
-            } else {
-                client.copyCookies(from: key, to: target, site: site)
+        let how = moment?.rawValue ?? (fromDefault ? "imported" : "found")
+        guard !profiles.isOwn(site, in: key) else {
+            log?.write("\(site): the person's sign-in in task \(Self.name(session)) (\(how)) stays the task's own")
+            return
+        }
+        let source = fromDefault ? nil : key
+        let targets = profiles.personSignedIn(to: site, in: key, open: open).filter { $0 != source }
+        let number = profiles.following.signIns[site] ?? 0
+        // The targets' watches of the site wait for the copies, which are no one's sign-in there.
+        for target in targets { changing(target, site: site) }
+        let copies = targets.map { target in
+            Task { @MainActor [weak self] () -> Int in
+                let count = await self?.client.copyCookies(from: source, to: target, site: site) ?? -1
+                self?.changed(target, site: site)
+                return count
             }
         }
+        Task { @MainActor [weak self] in
+            var counts: [Int] = []
+            for copy in copies { counts.append(await copy.value) }
+            self?.log?.write("\(site): the person's sign-in \(number) in task \(Self.name(session)) (\(how)) went to "
+                             + "\(targets.count) profiles, cookies set \(counts.sorted(by: >).map(String.init).joined(separator: " "))")
+        }
+    }
+
+    /// Yardlet puts cookies of `sites` into `profile` (a key; nil for the default profile, which no watch reads) with
+    /// `change`: that profile's watches of those sites take it as no one's sign-in (an import from another browser).
+    func changing<T>(_ profile: String?, sites: [String], _ change: () async throws -> T) async rethrows -> T {
+        for site in sites { changing(profile, site: site) }
+        defer { for site in sites { changed(profile, site: site) } }
+        return try await change()
+    }
+
+    /// Yardlet starts changing a profile's cookies of `site`: its watches of the site wait until `changed`.
+    private func changing(_ profile: String?, site: String) {
+        guard let profile else { return }
+        let change = ProfileSite(profile: profile, site: site)
+        changes[change, default: 0] += 1
+        for key in watchKeys(of: change) { watches[key]?.digest = nil }
+    }
+
+    /// Yardlet changed a profile's cookies of `site`: once no change of them is under way, its watches of the site
+    /// take a digest again.
+    private func changed(_ profile: String?, site: String) {
+        guard let profile else { return }
+        let change = ProfileSite(profile: profile, site: site)
+        let count = changes[change] ?? 0
+        if count > 1 {
+            changes[change] = count - 1
+            return
+        }
+        changes[change] = nil
+        let waiting = watchKeys(of: change).filter { watches[$0]?.digest == nil }
+        guard !waiting.isEmpty else { return }
+        Task { @MainActor [weak self] in
+            guard let digest = await self?.client.cookieDigest(profile: profile, site: site),
+                  self?.changes[change] == nil else { return }
+            for key in waiting where self?.watches[key]?.digest == nil { self?.watches[key]?.digest = digest }
+        }
+    }
+
+    private func watchKeys(of change: ProfileSite) -> [WatchKey] {
+        watches.compactMap { key, watch in
+            key.site == change.site && profiles.key(for: watch.session) == change.profile ? key : nil
+        }
+    }
+
+    /// A task as the log names it: the start of its ID.
+    private static func name(_ session: UUID) -> String {
+        String(session.uuidString.prefix(8))
     }
 
     private func agentFilled(tab id: BrowserTabID?) {
         guard profiles.storage == .perTask, let id, let known = tabSites[id] ?? tabFor(id).flatMap({ tab in
             tab.session.flatMap { session in Self.site(of: tab.currentURL).map { (session, $0) } }
         }) else { return }
-        profiles.signedInItself(to: known.site, in: profiles.key(for: known.session))
+        let profile = profiles.key(for: known.session)
+        if !profiles.isOwn(known.site, in: profile) {
+            log?.write("\(known.site): the agent's sign-in in task \(Self.name(known.session)) (password manager fill) is the task's own")
+        }
+        profiles.signedInItself(to: known.site, in: profile)
     }
 
     private func tabFor(_ id: BrowserTabID) -> BrowserTab? {

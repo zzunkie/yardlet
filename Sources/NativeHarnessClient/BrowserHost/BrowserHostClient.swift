@@ -58,7 +58,8 @@ final class BrowserHostClient {
     /// opened again after the host ended.
     var carriesFilledValue: (String) -> Bool = { _ in false }
     private var sessionObservers: [UUID: [UUID: () -> Void]] = [:]
-    /// Cookie imports waiting for the host's `cookiesImported`, and digests for its `cookieDigest`.
+    /// Cookie imports and copies waiting for the host's `cookiesImported` or `cookiesCopied`, and digests for its
+    /// `cookieDigest`.
     private var cookieImports: [Int: CheckedContinuation<Int, Never>] = [:]
     private var cookieDigests: [Int: CheckedContinuation<String?, Never>] = [:]
     private var nextCookieImport = 1
@@ -124,9 +125,20 @@ final class BrowserHostClient {
     }
 
     /// A person's sign-in on `site` goes from one profile to another (a key; nil for the default profile), in place
-    /// of that profile's cookies of the site (`BrowserLoginFollow`). Nothing when the host is not running.
-    func copyCookies(from source: String?, to target: String?, site: String) {
-        connection?.send(.copyCookies(from: source, to: target, domain: site, replace: true))
+    /// of that profile's cookies of the site (`BrowserLoginFollow`). The cookies it set, once the target has them; -1
+    /// when the host is not running, could not copy, or did not answer within `timeout`.
+    func copyCookies(from source: String?, to target: String?, site: String, timeout: Duration = .seconds(10)) async -> Int {
+        guard let connection else { return -1 }
+        let request = nextCookieImport
+        nextCookieImport += 1
+        return await withCheckedContinuation { continuation in
+            cookieImports[request] = continuation
+            connection.send(.copyCookies(request: request, from: source, to: target, domain: site, replace: true))
+            Task { [weak self] in
+                try? await Task.sleep(for: timeout)
+                self?.cookieImports.removeValue(forKey: request)?.resume(returning: -1)
+            }
+        }
     }
 
     /// A sum of the hashes of a profile's cookies of `site` (a key; nil for the default profile), to tell that they
@@ -1041,7 +1053,7 @@ final class BrowserHostClient {
                 sessions.forEach(notifySession)
                 onPersonWaitsChange?()
             }
-        case .cookiesImported(let request, let count):
+        case .cookiesImported(let request, let count), .cookiesCopied(let request, let count):
             cookieImports.removeValue(forKey: request)?.resume(returning: count)
         case .cookieDigest(let request, let digest):
             cookieDigests.removeValue(forKey: request)?.resume(returning: digest.isEmpty ? nil : digest)

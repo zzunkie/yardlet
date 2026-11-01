@@ -344,9 +344,11 @@ final class MacBrowserHost: NativeSurfaceResource {
         profiles.adoptEarlierAgentFills { MacAgentToolService.shared.vault.agentFills() }
         return profiles
     }()
-    /// The sign-ins made in tasks' tabs, which tasks follow or keep (docs/BROWSER_SESSION_ISOLATION.md 11).
+    /// The sign-ins made in tasks' tabs, which tasks follow or keep (docs/BROWSER_SESSION_ISOLATION.md 11), each
+    /// written in `Logs/sign-ins.log` beside the host's log.
     private(set) lazy var loginFollow: BrowserLoginFollow = {
-        let follow = BrowserLoginFollow(client: client, profiles: profiles)
+        let log = BrowserSignInLog(file: paths.log.deletingLastPathComponent().appending(path: "sign-ins.log"))
+        let follow = BrowserLoginFollow(client: client, profiles: profiles, log: log)
         follow.start()
         return follow
     }()

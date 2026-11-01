@@ -41,6 +41,8 @@ final class BrowserHost {
     private var nextCookieCopy: Int32 = 1
     /// Imports under way (the copy's request → the app's), answered with `cookiesImported`.
     private var cookieImports: [Int32: Int] = [:]
+    /// The app's copies under way (the copy's request → the app's), answered with `cookiesCopied`.
+    private var cookieCopies: [Int32: Int] = [:]
     /// Digests under way (the bridge's request → the app's), answered with `cookieDigest`.
     private var cookieDigests: [Int32: Int] = [:]
     /// The memory saver's discards (docs/BROWSER_HOST.md §3 "Memory saver").
@@ -135,15 +137,23 @@ final class BrowserHost {
             }
         case "copyCookies":
             // The person signed in on a task's page: that site's cookies go to the default profile and the tasks
-            // that follow the person's sign-ins, in place of theirs (docs/BROWSER_SESSION_ISOLATION.md 11).
-            guard let profiles, let domain = fields["domain"] as? String, !domain.isEmpty else { return }
+            // that follow the person's sign-ins, in place of theirs (docs/BROWSER_SESSION_ISOLATION.md 11). The app
+            // hears when the target has them.
+            let asked = fields["request"] as? Int ?? 0
+            guard let profiles, let domain = fields["domain"] as? String, !domain.isEmpty else {
+                return send(["cookiesCopied": ["request": asked, "count": -1]])
+            }
             let from = profiles.path(forKey: fields["from"] as? String)
             let to = profiles.path(forKey: fields["to"] as? String)
-            guard from != to else { return }
+            guard from != to else { return send(["cookiesCopied": ["request": asked, "count": 0]]) }
             let request = nextCookieCopy
             nextCookieCopy += 1
-            _ = Self.copyCookies(request, TaskProfiles.Copy(from: from, sites: [domain], mode: fields["replace"] as? Bool == true ? 1 : 0),
-                                 to: to)
+            cookieCopies[request] = asked
+            if !Self.copyCookies(request, TaskProfiles.Copy(from: from, sites: [domain], mode: fields["replace"] as? Bool == true ? 1 : 0),
+                                 to: to) {
+                cookieCopies[request] = nil
+                send(["cookiesCopied": ["request": asked, "count": -1]])
+            }
         case "cookieDigest":
             // Whether a sign-in changed a site's cookies, without their values leaving the host.
             let asked = fields["request"] as? Int ?? 0
@@ -477,6 +487,9 @@ final class BrowserHost {
         FileHandle.standardError.write(Data("cookies copied request=\(request) count=\(count)\n".utf8))
         if let asked = cookieImports.removeValue(forKey: request) {
             return send(["cookiesImported": ["request": asked, "count": count]])
+        }
+        if let asked = cookieCopies.removeValue(forKey: request) {
+            return send(["cookiesCopied": ["request": asked, "count": count]])
         }
         guard let tab = waitingTabs.first(where: { $0.value.copyRequest == request })?.key else { return }
         advance(tab)
