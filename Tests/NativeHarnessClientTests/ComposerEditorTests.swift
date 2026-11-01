@@ -639,6 +639,61 @@ final class ComposerEditorTests: XCTestCase {
         XCTAssertEqual(scroll.frame.height, document.frame.height, accuracy: 1, "A short draft shows whole again")
     }
 
+    /// Typing that wraps the first line onto a new one grows the composer once, where scrollers take
+    /// width (a mouse connected). The field lays out its taller text a moment before its scroll view
+    /// takes the new height; a scroller that showed for that moment narrowed the text, the full line
+    /// below wrapped too, and the composer jumped a line too tall and back (`scrollsPastLines`).
+    func testTypingThatWrapsTheFirstLineGrowsTheComposerOnceWhereScrollersTakeWidth() throws {
+        let task = TaskProbe()
+        let composer = try mount(taskComposer(task))
+        let editor = try editor(composer)
+        let scroll = try XCTUnwrap(editor.enclosingScrollView)
+        scroll.scrollerStyle = .legacy
+        // The longest line that fits the field: one character more wraps it.
+        let words = String(repeating: "lorem ipsum dolor sit amet ", count: 8)
+        func height(withSecondLine count: Int) -> CGFloat {
+            task.draft.text = "Start\n" + words.prefix(count)
+            composer.host.settle(passes: 2)
+            return scroll.frame.height
+        }
+        let twoLines = height(withSecondLine: 1)
+        var fits = 1, wraps = words.count
+        while wraps - fits > 1 {
+            let count = (fits + wraps) / 2
+            if height(withSecondLine: count) > twoLines + 1 { wraps = count } else { fits = count }
+        }
+        let line = String(words.prefix(fits))
+        task.draft.text = line + "\n" + line
+        composer.host.settle()
+        editor.setSelectedRange(NSRange(location: (line as NSString).length, length: 0))
+        let start = scroll.frame.height
+        for character in "lorem" {
+            let before = scroll.frame.height
+            let taken = try heights(of: scroll) { try press(String(character), keyCode: 0, in: composer) }
+            XCTAssertLessThanOrEqual(taken.count, 1, "One keystroke, one new height: \(before) then \(taken)")
+            XCTAssertGreaterThanOrEqual(scroll.frame.height, before, "Typing never shrinks the composer")
+        }
+        XCTAssertEqual(task.draft.text, line + "lorem\n" + line)
+        XCTAssertGreaterThan(scroll.frame.height, start, "The first line wrapped onto a new one")
+    }
+
+    /// Every height `view` takes while `action` runs, in order.
+    private func heights(of view: NSView, during action: () throws -> Void) rethrows -> [CGFloat] {
+        let log = HeightLog()
+        view.postsFrameChangedNotifications = true
+        let observer = NotificationCenter.default.addObserver(
+            forName: NSView.frameDidChangeNotification, object: view, queue: nil) { [weak view] _ in
+            MainActor.assumeIsolated { if let view { log.heights.append(view.frame.height) } }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        try action()
+        return log.heights
+    }
+
+    @MainActor private final class HeightLog {
+        var heights: [CGFloat] = []
+    }
+
     func testTheTypedListsTakeShiftAndCommandReturnAsTheyTakeReturnWhileATurnRuns() throws {
         for modifiers in [NSEvent.ModifierFlags.shift, .command] {
             let probe = FollowUpProbe()
