@@ -4,6 +4,13 @@ import SwiftUI
 
 enum ConnectionCenterTab { case accounts, harnesses }
 
+/// A default login's sign-out waiting for the person to confirm it.
+private struct PendingSignOut {
+    let descriptor: HarnessDescriptor
+    /// Whether the harness's sign-in opens once the sign-out has finished.
+    var signsInAfter = false
+}
+
 /// Starts an accounts presentation's checks once and follows Codex's account notifications while
 /// it is open. The owner applies it, so the checks keep running while the user moves between
 /// Settings sections, and the notifications stop when the window closes. The readings belong to
@@ -170,7 +177,7 @@ struct ConnectionCenterContent: View {
     var tasksUsingAccount: ((ProviderConnection) -> AccountTaskCount)? = nil
     /// Moves an account's tasks to another folder of the same account, then removes it.
     var moveTasks: ((ProviderConnection, ProviderConnection) -> Void)? = nil
-    @State private var pendingLogout: HarnessDescriptor?
+    @State private var pendingLogout: PendingSignOut?
     @State private var shareRequest: AccountHomeShareSheet.Request?
     @State private var pendingRemoval: (connection: ProviderConnection, kind: AccountRemoval)?
     @State private var movingRemoval: AccountRemovalSheet.Request?
@@ -239,6 +246,12 @@ struct ConnectionCenterContent: View {
                     onAdd: { accountFilter = $0; connectChoice = nil; addingAccount = true },
                     onShare: share, onRemove: tasksUsingAccount == nil ? nil : { confirmRemoval($0, $1) },
                     onAddFound: addFound,
+                    // The default login signs out as the Harnesses page signs it out.
+                    onSignOut: { harness, action in
+                        guard let descriptor = HarnessCatalog.descriptor(for: harness) else { return }
+                        pendingLogout = PendingSignOut(descriptor: descriptor,
+                            signsInAfter: action == .signInWithAnotherAccount)
+                    },
                     harnessFilter: $accountFilter, harnessUsage: harnessUsage)
                     .padding(.horizontal, 16).padding(.top, 16)
             } else if let selectedHarness,
@@ -265,10 +278,11 @@ struct ConnectionCenterContent: View {
         )) {
             Button(L10n.string("Cancel"), role: .cancel) { pendingLogout = nil }
             Button(disconnectConfirmationAction, role: .destructive) {
-                guard let descriptor = pendingLogout else { return }
+                guard let pending = pendingLogout else { return }
                 pendingLogout = nil
                 Task { await model.logout(
-                    descriptor: descriptor,
+                    descriptor: pending.descriptor,
+                    signsInAfter: pending.signsInAfter,
                     runtimeSelections: runtimeSelections
                 ) }
             }
@@ -714,7 +728,7 @@ struct ConnectionCenterContent: View {
                 } else if !AccountConnectionPresentation.usesProviderLanguage(descriptor.id),
                           snapshot.canLogout {
                     Button(AccountConnectionPresentation.disconnectAction(for: descriptor.id)) {
-                        pendingLogout = descriptor
+                        pendingLogout = PendingSignOut(descriptor: descriptor)
                     }
                     .controlSize(.small)
                     .parityPointer()
@@ -747,7 +761,9 @@ struct ConnectionCenterContent: View {
             .controlSize(.mini)
             .parityPointer()
         } else if !AccountConnectionPresentation.usesProviderLanguage(descriptor.id), snapshot.canLogout {
-            Button(AccountConnectionPresentation.disconnectAction(for: descriptor.id)) { pendingLogout = descriptor }
+            Button(AccountConnectionPresentation.disconnectAction(for: descriptor.id)) {
+                pendingLogout = PendingSignOut(descriptor: descriptor)
+            }
                 .controlSize(.mini)
                 .parityPointer()
         }
@@ -800,7 +816,7 @@ struct ConnectionCenterContent: View {
                 }
                 if snapshot?.canLogout == true {
                     Button(AccountConnectionPresentation.disconnectAction(for: descriptor.id)) {
-                        pendingLogout = descriptor
+                        pendingLogout = PendingSignOut(descriptor: descriptor)
                     }
                     .controlSize(.small)
                     .parityPointer()
@@ -926,21 +942,25 @@ struct ConnectionCenterContent: View {
 
     private var disconnectConfirmationTitle: String {
         guard let pendingLogout else { return L10n.string("Sign out?") }
-        return AccountConnectionPresentation.usesProviderLanguage(pendingLogout.id)
+        if pendingLogout.signsInAfter { return L10n.string("Sign in with another account?") }
+        return AccountConnectionPresentation.usesProviderLanguage(pendingLogout.descriptor.id)
             ? L10n.string("Disconnect provider?")
             : L10n.string("Sign out?")
     }
 
     private var disconnectConfirmationAction: String {
         guard let pendingLogout else { return L10n.string("Sign out") }
-        return AccountConnectionPresentation.disconnectAction(for: pendingLogout.id)
+        return AccountConnectionPresentation.disconnectAction(for: pendingLogout.descriptor.id)
     }
 
     private var disconnectConfirmationMessage: String {
         guard let pendingLogout else {
             return L10n.string("The selected CLI will remove its own stored account credentials.")
         }
-        return AccountConnectionPresentation.usesProviderLanguage(pendingLogout.id)
+        if pendingLogout.signsInAfter {
+            return L10n.string("The selected CLI will remove its own stored account credentials, then open its sign-in.")
+        }
+        return AccountConnectionPresentation.usesProviderLanguage(pendingLogout.descriptor.id)
             ? L10n.string("The selected CLI will remove its own stored provider credentials.")
             : L10n.string("The selected CLI will remove its own stored account credentials.")
     }
@@ -1074,8 +1094,11 @@ struct ConnectionCenterContent: View {
                         .parityPointer()
                     }
                     if !model.loginController.isRunning {
-                        Button(L10n.string(model.loginController.phase == .completed ? "Use this account" : "Back")) {
-                            if model.loginController.phase == .completed {
+                        // A finished sign-out has no account to use; it only returns.
+                        let signedIn = model.loginController.phase == .completed
+                            && model.loginController.operation == .connect
+                        Button(L10n.string(signedIn ? "Use this account" : "Back")) {
+                            if signedIn {
                                 let binding = model.activeConnection.flatMap { active in connections.connections.first { $0.id == active.id } }
                                 connections.selection[descriptor.id] = binding?.id
                                 model.closeConsole()
@@ -1113,6 +1136,8 @@ struct ConnectionCenterContent: View {
                 controller: model.loginController,
                 isVisible: showsLoginDetails
             )
+            // A terminal runs one command; the next one starts in a new terminal.
+            .id(model.loginController.commandID)
             .frame(maxWidth: .infinity)
             .frame(height: showsLoginDetails ? 175 : 1)
             .opacity(showsLoginDetails ? 1 : 0)

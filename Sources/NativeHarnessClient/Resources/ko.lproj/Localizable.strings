@@ -2991,6 +2991,11 @@
 "Remove from List" = "목록에서 빼기";
 "Sign Out and Delete…" = "로그아웃하고 지우기…";
 "Sign Out and Delete" = "로그아웃하고 지우기";
+"Sign In With Another Account…" = "다른 계정으로 로그인…";
+"Sign Out…" = "로그아웃…";
+"Disconnect Provider…" = "제공자 연결 해제…";
+"Sign in with another account?" = "다른 계정으로 로그인할까요?";
+"The selected CLI will remove its own stored account credentials, then open its sign-in." = "선택한 CLI가 자체 저장한 계정 인증 정보를 제거한 뒤 로그인 화면을 엽니다.";
 "Accounts You Can Add" = "추가할 수 있는 계정";
 "Keeps its own conversation history" = "대화 기록을 따로 둠";
 "Add %@" = "%@ 추가";

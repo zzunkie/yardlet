@@ -2991,6 +2991,11 @@
 "Remove from List" = "Remove from List";
 "Sign Out and Delete…" = "Sign Out and Delete…";
 "Sign Out and Delete" = "Sign Out and Delete";
+"Sign In With Another Account…" = "Sign In With Another Account…";
+"Sign Out…" = "Sign Out…";
+"Disconnect Provider…" = "Disconnect Provider…";
+"Sign in with another account?" = "Sign in with another account?";
+"The selected CLI will remove its own stored account credentials, then open its sign-in." = "The selected CLI will remove its own stored account credentials, then open its sign-in.";
 "Accounts You Can Add" = "Accounts You Can Add";
 "Keeps its own conversation history" = "Keeps its own conversation history";
 "Add %@" = "Add %@";

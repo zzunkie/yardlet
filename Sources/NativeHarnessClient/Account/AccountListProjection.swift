@@ -23,6 +23,14 @@ enum AccountListMode: Hashable {
     }
 }
 
+/// What Settings › Accounts does with a harness's default login, through the harness's own CLI.
+enum DefaultLoginAction: Hashable {
+    /// Signed out, as the Harnesses page's sign-out does.
+    case signOut
+    /// Signed out, then the harness's sign-in opens.
+    case signInWithAnotherAccount
+}
+
 /// The accounts an `AccountList` shows and what each row offers. Pure, so each mode's filtering,
 /// sorting and actions are tested without drawing.
 @MainActor
@@ -92,6 +100,17 @@ enum AccountListProjection {
     static func offersConnect(_ choice: AccountChoice, mode: AccountListMode) -> Bool {
         guard mode.session == nil else { return false }
         return choice.snapshot?.canLogin == true && (choice.needsLogin || choice.snapshot?.state == .unknown)
+    }
+
+    /// What the default login's row offers besides choosing it, as the Harnesses page offers it:
+    /// the harness's own sign-out, and for an account login, signing out to sign in with another
+    /// account (the only way to change a login a harness cannot keep in a separate folder). Only
+    /// Settings offers them, and only while the last reading says the CLI can sign out. A harness
+    /// that connects model providers instead disconnects one; connecting another needs no sign-out.
+    static func defaultLoginActions(_ choice: AccountChoice, mode: AccountListMode) -> [DefaultLoginAction] {
+        guard mode == .manage, choice.connection == nil, choice.snapshot?.canLogout == true else { return [] }
+        return AccountConnectionPresentation.usesProviderLanguage(choice.harness)
+            ? [.signOut] : [.signInWithAnotherAccount, .signOut]
     }
 
     /// What appearing and the refresh button check: the default logins and saved accounts the
