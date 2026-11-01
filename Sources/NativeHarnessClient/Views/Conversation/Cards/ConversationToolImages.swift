@@ -264,13 +264,14 @@ struct ConversationToolImageTile: View {
 }
 
 /// An image at its own size, scaled down to fit the width offered and `maxHeight`.
-private struct ConversationToolImageFrame: Layout {
+struct ConversationToolImageFrame: Layout {
     let pixelSize: CGSize
     let maxHeight: CGFloat
+    var maxWidth: CGFloat = .infinity
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         guard pixelSize.width > 0, pixelSize.height > 0 else { return .zero }
-        let scale = min(1, maxHeight / pixelSize.height, (proposal.width ?? .infinity) / pixelSize.width)
+        let scale = min(1, maxHeight / pixelSize.height, min(maxWidth, proposal.width ?? .infinity) / pixelSize.width)
         return CGSize(width: (pixelSize.width * scale).rounded(), height: (pixelSize.height * scale).rounded())
     }
 

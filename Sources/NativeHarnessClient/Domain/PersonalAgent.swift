@@ -190,9 +190,26 @@ struct PersonalAgentAttachment: Equatable, Sendable {
     var isLoading = false
     /// A link's public web address, kept only when it passes the provider's own check (`publicLink`).
     var url: URL? = nil
+    /// The type the provider declared for the file (`mime_type`), if any.
+    var mimeType: String? = nil
+    /// The picture's size in pixels as the provider recorded it (`image_metadata`), if it did.
+    var pixelSize: PersonalAgentPixelSize? = nil
 
     /// A file Yardlet can read and preview; any other attachment is named only.
     var opensHere: Bool { type == "file" && fileID != nil }
+
+    /// The picture types the provider's room shows inline.
+    static let imageTypes: Set<String> = ["image/png", "image/jpeg", "image/gif", "image/webp"]
+
+    /// A file the provider's room shows as a picture: a PNG, JPEG, GIF or WebP by its declared type,
+    /// or by its name's extension only when no type was declared.
+    var isImage: Bool {
+        guard opensHere else { return false }
+        if let mimeType = mimeType?.trimmingCharacters(in: .whitespaces).lowercased(), !mimeType.isEmpty {
+            return Self.imageTypes.contains(mimeType == "image/jpg" ? "image/jpeg" : mimeType)
+        }
+        return ["png", "jpg", "jpeg", "gif", "webp"].contains(URL(filePath: name).pathExtension.lowercased())
+    }
 
     /// A link the provider's room shows as one: HTTPS, no user or password, no signature or token in
     /// its query, a title that is not blank, and no conversation it points into, which is a thread
@@ -209,6 +226,31 @@ struct PersonalAgentAttachment: Equatable, Sendable {
               }),
               let url = components.url else { return nil }
         return .init(fileID: nil, name: title, type: "link", url: url)
+    }
+}
+
+/// A picture's width and height in pixels, both positive.
+struct PersonalAgentPixelSize: Equatable, Sendable {
+    let width: Int
+    let height: Int
+
+    init?(width: Int, height: Int) {
+        guard width > 0, height > 0 else { return nil }
+        self.width = width
+        self.height = height
+    }
+
+    /// `image_metadata`'s width and height, when both are whole positive numbers.
+    init?(_ raw: JSONValue?) {
+        func pixels(_ value: JSONValue?) -> Int? {
+            switch value {
+            case let .integer(value)?: value > 0 && value <= 1_000_000 ? Int(value) : nil
+            case let .number(value)?: value >= 1 && value <= 1_000_000 && value.rounded() == value ? Int(value) : nil
+            default: nil
+            }
+        }
+        guard let width = pixels(raw?["width"]), let height = pixels(raw?["height"]) else { return nil }
+        self.init(width: width, height: height)
     }
 }
 
@@ -445,6 +487,9 @@ protocol PersonalAgentClient: Actor {
     /// One file into the dot's room, for a later message to name by its returned ID.
     func upload(_ file: PersonalAgentPreparedFile, to agent: PersonalAgent) async throws -> PersonalAgentUploadedFile
     func download(_ attachment: PersonalAgentAttachment, for agent: PersonalAgent) async throws -> PersonalAgentDownload
+    /// The bytes of a picture attachment for its thumbnail, read as `download` reads a file but bounded
+    /// as a picture and refused unless the response is one.
+    func image(_ attachment: PersonalAgentAttachment, for agent: PersonalAgent) async throws -> Data
     /// The bytes of the dot's profile picture, bounded; never read with an account credential on storage hosts.
     func avatar(for agent: PersonalAgent) async throws -> Data
     /// The pet `id` among the account's, which a dot's profile names; nil when the account has none such.
@@ -486,6 +531,11 @@ protocol PersonalAgentClient: Actor {
 }
 
 extension PersonalAgentClient {
+    /// A reader that reads no pictures shows each one's retry.
+    func image(_ attachment: PersonalAgentAttachment, for agent: PersonalAgent) async throws -> Data {
+        throw PersonalAgentFailure.attachmentUnavailable
+    }
+
     func replies(to rootID: String, for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage {
         throw PersonalAgentFailure.unavailable
     }
@@ -721,7 +771,10 @@ enum DotsProjection {
                           name: value["name"]?.stringValue ?? value["file"]?["name"]?.stringValue
                               ?? value["file"]?["file_name"]?.stringValue ?? value["filename"]?.stringValue ?? L10n.string("Attachment"),
                           type: value["type"]?.stringValue ?? (fileID == nil ? "unknown" : "file"),
-                          isLoading: status == "uploading" || status == "generating")
+                          isLoading: status == "uploading" || status == "generating",
+                          mimeType: value["mime_type"]?.stringValue ?? value["file"]?["mime_type"]?.stringValue,
+                          pixelSize: PersonalAgentPixelSize(value["image_metadata"])
+                              ?? PersonalAgentPixelSize(value["file"]?["image_metadata"]))
                 }
             } else { attachments = [] }
             let request = item["content"]?["elicitation"].flatMap { $0 == .null ? nil : $0 }

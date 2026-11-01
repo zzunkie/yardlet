@@ -41,7 +41,19 @@ The conversation opens on the latest page of the room. Reaching its top reads th
 next earlier page once, keeping the message you were reading in place; a failure
 waits for **Try again**, and **Load earlier messages** reads another page by hand.
 Yardlet does not download the whole history in advance, and reading sends no read
-receipt. File attachments open in a native preview, with an explicit save action.
+receipt. Pictures (PNG, JPEG, GIF and WebP, told by the type the provider declared,
+or by the file name only when it declared none) show in place: the person's as small
+squares above their words, as a coding conversation shows sent images; the dot's whole,
+at most 320 points tall (240 when there are several) and 400 points wide, or as a
+square when the provider recorded no size. Each picture's space is set before it
+arrives, so the place being read does not move. A picture is read only when its row
+comes near the view, at most two at a time, and a row that leaves before its turn
+reads nothing; it is read as an attachment is, refused unless storage answers with a
+picture, decoded off the main thread at a bounded size and kept in memory only for the
+account, never on disk. One that cannot be read shows **Try again** in its place;
+the rest of the conversation is unaffected. A file still being made shows a waiting
+placeholder until a later read. Choosing a picture opens it in the native preview, as
+other file attachments do, with an explicit save action.
 A link the dot attached opens in the browser when chosen; other attachment types are
 named but cannot be opened here yet. Reacting,
 pausing an agent and changing its settings are not implemented. Files and photos
@@ -476,7 +488,8 @@ it starts no model turn. The room observer's registration sends nothing but the 
 no message, approval, pause or resume. A person's explicit send or answer can start cloud work on their existing dot. The
 transport does not read authentication files, change the runtime's configuration,
 copy credentials between account homes, or fabricate service-verification data.
-Signed attachment downloads on provider storage hosts receive no account token.
+Signed attachment downloads on provider storage hosts, pictures shown in place among
+them, receive no account token.
 Uploads go only to the dot's own room, after the room's identity and type are
 checked again, with no upload URL, storage write or reservation.
 Closing a preview removes only its temporary copy; a file the person saved stays.

@@ -295,6 +295,10 @@ struct PersonalAgentsContent: View {
                                 retry: { center.retryUploads() },
                                 remove: { center.removeFile($0) }),
                             open: open,
+                            images: PersonalAgentImageLoader(
+                                cached: { center.cachedThumbnail(of: $0, size: $1, for: agent.id) },
+                                load: { await center.thumbnail(of: $0, size: $1, for: agent.id) },
+                                retry: { center.retryThumbnail(of: $0, size: $1, for: agent.id) }),
                             refresh: {
                                 if center.failure != nil { onRetry() }
                                 else {
@@ -549,6 +553,8 @@ struct PersonalAgentConversationView: View {
     let send: () -> Void
     var files = PersonalAgentComposerFiles()
     let open: (PersonalAgentAttachment) -> Void
+    /// The thumbnails of the conversation's pictures.
+    var images = PersonalAgentImageLoader()
     let refresh: () -> Void
     let loadOlder: () -> Void
     var toggleDetails: () -> Void = {}
@@ -772,21 +778,27 @@ struct PersonalAgentConversationView: View {
     private func personRow(_ message: PersonalAgentMessage, inThread: Bool) -> some View {
         VStack(alignment: .trailing, spacing: 6) {
             quote(of: message, inThread: inThread)
-            SentUserMessage(copyText: message.isDeleted ? "" : message.text, images: [],
-                            minimumLeadingSpace: ConversationLayout.sentMessageLeadingSpace) {
-                Group {
-                    if message.isDeleted {
-                        Text(L10n.string("Message deleted")).italic().foregroundStyle(.secondary)
-                    } else {
-                        Text(message.text).textSelection(.enabled)
+            // The pictures above the words, as a sent request's images are.
+            images(of: message)
+                .padding(.leading, ConversationLayout.sentMessageLeadingSpace)
+            // A message of pictures or files alone has no empty bubble.
+            if message.isDeleted || !message.text.isEmpty {
+                SentUserMessage(copyText: message.isDeleted ? "" : message.text, images: [],
+                                minimumLeadingSpace: ConversationLayout.sentMessageLeadingSpace) {
+                    Group {
+                        if message.isDeleted {
+                            Text(L10n.string("Message deleted")).italic().foregroundStyle(.secondary)
+                        } else {
+                            Text(message.text).textSelection(.enabled)
+                        }
                     }
+                    .font(ParityTheme.conversationFont(scale: scale))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(ConversationLayout.sentBubblePadding)
+                    .background(ParityTheme.selectedFill,
+                                in: RoundedRectangle(cornerRadius: ConversationLayout.sentBubbleCornerRadius))
+                    .frame(maxWidth: ConversationLayout.sentBubbleMaximumWidth, alignment: .trailing)
                 }
-                .font(ParityTheme.conversationFont(scale: scale))
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(ConversationLayout.sentBubblePadding)
-                .background(ParityTheme.selectedFill,
-                            in: RoundedRectangle(cornerRadius: ConversationLayout.sentBubbleCornerRadius))
-                .frame(maxWidth: ConversationLayout.sentBubbleMaximumWidth, alignment: .trailing)
             }
             attachments(of: message)
             unsupportedLink(message)
@@ -821,6 +833,7 @@ struct PersonalAgentConversationView: View {
                     .font(ParityTheme.conversationFont(scale: scale))
                     .textSelection(.enabled)
             }
+            images(of: message)
             attachments(of: message)
             requests(in: message)
             unsupportedLink(message)
@@ -886,11 +899,23 @@ struct PersonalAgentConversationView: View {
                      optionChosen: option?.chosen, optionAnswered: option?.isAnswered ?? false)
     }
 
+    /// The message's pictures in place (`PersonalAgentImageAttachments`).
+    @ViewBuilder
+    private func images(of message: PersonalAgentMessage) -> some View {
+        let pictures = message.isDeleted ? [] : message.attachments.filter(\.isImage)
+        if !pictures.isEmpty {
+            PersonalAgentImageAttachments(images: pictures, isPerson: message.author == .person, loader: images,
+                                          isOpening: isLoadingAttachment, open: open)
+        }
+    }
+
+    /// The message's other attachments, each by its name.
     @ViewBuilder
     private func attachments(of message: PersonalAgentMessage) -> some View {
-        if !message.isDeleted, !message.attachments.isEmpty {
+        let files = message.attachments.filter { !$0.isImage }
+        if !message.isDeleted, !files.isEmpty {
             VStack(alignment: message.author == .person ? .trailing : .leading, spacing: 4) {
-                ForEach(Array(message.attachments.enumerated()), id: \.offset) { _, attachment in
+                ForEach(Array(files.enumerated()), id: \.offset) { _, attachment in
                     if attachment.opensHere {
                         Button { open(attachment) } label: {
                             Label(attachment.name, systemImage: "paperclip").lineLimit(1).truncationMode(.middle)

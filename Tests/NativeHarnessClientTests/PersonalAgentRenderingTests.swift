@@ -2022,6 +2022,232 @@ final class PersonalAgentRenderingTests: XCTestCase {
         ((view as? NSScrollView).map { [$0] } ?? []) + view.subviews.flatMap { scrollViews(in: $0) }
     }
 
+    /// A made-up picture at most 640 pixels on its long side, in the recorded size's shape: a sky
+    /// coloured by its name, hills and a sun, so each picture looks different.
+    nonisolated static func syntheticPicture(_ name: String, size: PersonalAgentPixelSize?) throws -> Data {
+        let recorded = size.map { CGSize(width: $0.width, height: $0.height) } ?? CGSize(width: 900, height: 700)
+        let scale = min(1, 640 / max(recorded.width, recorded.height))
+        let width = Int(recorded.width * scale), height = Int(recorded.height * scale)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0))
+        let hue = CGFloat(name.unicodeScalars.reduce(0) { ($0 * 31 + Int($1.value)) % 997 }) / 997
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        let bounds = NSRect(x: 0, y: 0, width: width, height: height)
+        NSGradient(starting: NSColor(calibratedHue: hue, saturation: 0.45, brightness: 0.95, alpha: 1),
+                   ending: NSColor(calibratedHue: hue, saturation: 0.7, brightness: 0.7, alpha: 1))?.draw(in: bounds, angle: 90)
+        NSColor(calibratedHue: 0.13, saturation: 0.6, brightness: 1, alpha: 1).setFill()
+        NSBezierPath(ovalIn: NSRect(x: bounds.width * 0.68, y: bounds.height * 0.62, width: bounds.height * 0.18,
+                                    height: bounds.height * 0.18)).fill()
+        for (index, shade) in [0.55, 0.4].enumerated() {
+            NSColor(calibratedHue: (hue + 0.3).truncatingRemainder(dividingBy: 1), saturation: 0.5, brightness: shade, alpha: 1).setFill()
+            let hill = NSBezierPath()
+            hill.move(to: .zero)
+            hill.curve(to: NSPoint(x: bounds.width, y: bounds.height * (0.25 + 0.1 * CGFloat(index))),
+                       controlPoint1: NSPoint(x: bounds.width * 0.3, y: bounds.height * (0.6 - 0.2 * CGFloat(index))),
+                       controlPoint2: NSPoint(x: bounds.width * 0.6, y: 0))
+            hill.line(to: NSPoint(x: bounds.width, y: 0))
+            hill.close()
+            hill.fill()
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        return try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+    }
+
+    /// Pictures show in place in a dot's conversation and its replies: the person's above their words,
+    /// the dot's whole in the shape the provider recorded or as a square without one, a picture that
+    /// cannot be read as its retry, and other files by their names as before. Each picture is read only
+    /// once its row is shown, and only pictures are read. Rendered at both window sizes and appearances.
+    func testPicturesShowInPlaceFromTheDotAndThePersonWithARetry() async throws {
+        let (model, _) = try makeWindowModel()
+        let agent = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                                  name: "Atlas", rootThreadID: nil, isPaused: false, isPrimary: true)
+        func picture(_ id: String, _ name: String, _ size: (Int, Int)? = nil, type: String = "image/jpeg") -> PersonalAgentAttachment {
+            .init(fileID: id, name: name, type: "file", mimeType: type,
+                  pixelSize: size.flatMap { PersonalAgentPixelSize(width: $0.0, height: $0.1) })
+        }
+        var reply = PersonalAgentMessage(id: "r1", author: .agent, text: "Here is the corner you asked about, closer.",
+                                         createdAt: nil, isDeleted: false,
+                                         attachments: [picture("closeup", "corner-closeup.png", (900, 900), type: "image/png")])
+        reply.replyToMessageID = "m3"
+        reply.replyRootMessageID = "m3"
+        var messages: [PersonalAgentMessage] = [
+            .init(id: "m1", author: .person, text: "Photos from the site visit. Can you check the north wall?",
+                  createdAt: nil, isDeleted: false,
+                  attachments: [picture("site-1", "site-north.jpg", (4032, 3024)), picture("site-2", "site-east.jpg", (3024, 4032))]),
+            .init(id: "m2", author: .agent, text: "The north wall looks dry. I marked the spot that needs a second look.",
+                  createdAt: nil, isDeleted: false,
+                  attachments: [picture("marked", "north-wall-marked.png", (1600, 1000), type: "image/png"),
+                                .init(fileID: "notes", name: "inspection-notes.md", type: "file", mimeType: "text/markdown")]),
+            .init(id: "m3", author: .agent, text: "Two more views, one without a recorded size and one that could not be read.",
+                  createdAt: nil, isDeleted: false,
+                  attachments: [picture("plain", "east-corner.webp", type: "image/webp"),
+                                picture("broken-1", "roof-overview.jpg", (1200, 800))]),
+            .init(id: "m4", author: .person, text: "Thanks. Keep the marked spot on the list.", createdAt: nil,
+                  isDeleted: false, attachments: []),
+            reply
+        ]
+        let directory = try WindowlessRender.directory("dots-inline-images-qa")
+        if ProcessInfo.processInfo.environment["DEBUG_NOIMG"] != nil {
+            messages = messages.map { m in var v = PersonalAgentMessage(id: m.id, author: m.author, text: m.text, createdAt: nil, isDeleted: false, attachments: []); v.replyToMessageID = m.replyToMessageID; v.replyRootMessageID = m.replyRootMessageID; return v }
+        }
+        for size in [NSSize(width: 1280, height: 800), NSSize(width: 920, height: 680)] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let reader = RenderedPersonalAgentReader(agents: [agent], messages: messages)
+                let window = MainWindow(model: model) { reader }
+                    .environment(\.colorScheme, appearance.colorScheme)
+                    .frame(width: size.width, height: size.height)
+                let host = WindowlessRender.Host(window, size: size, appearance: appearance)
+                defer { host.close() }
+                host.settle()
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
+                let elements = { host.accessibilityElements() }
+                // Draws what arrived: a tile's picture is set by a main-actor task, which runs between turns.
+                let drawArrived = { for _ in 0..<12 { await Task.yield(); host.settle(passes: 1) } }
+                let shown = { (name: String) in elements().contains { $0.label == name && $0.role == "AXButton" } }
+                let retry = L10n.format("Load %@ again", "roof-overview.jpg")
+                // The conversation opens at its end: the pictures there are read, the person's above are not yet.
+                await host.settle(until: { shown("corner-closeup.png") && shown("east-corner.webp") && elements().contains { $0.label == retry } })
+                await drawArrived()
+                let capture = try host.capture()
+                XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6))
+                let name = "\(Int(size.width))-\(appearance.suffix).png"
+                try WindowlessRender.writePNG(capture.bitmap, to: directory.appending(path: "conversation-end-\(name)"))
+                // The retry reads the picture again, in place.
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: retry))
+                try await waitUntil { await reader.imageReads.filter { $0 == "broken-1" }.count == 2 }
+                await host.settle(until: { elements().contains { $0.label == retry } })
+                // Reading up brings the person's pictures, read as their rows come into view.
+                let scroll = try XCTUnwrap(Self.scrollViews(in: host.hosting).max {
+                    ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0)
+                })
+                for _ in 0..<12 {
+                    guard let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 200, wheel2: 0, wheel3: 0),
+                          let event = NSEvent(cgEvent: wheel) else { break }
+                    scroll.scrollWheel(with: event)
+                    host.settle(passes: 2)
+                }
+                await host.settle(until: { shown("site-north.jpg") && shown("site-east.jpg") && shown("north-wall-marked.png") })
+                await drawArrived()
+                try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "conversation-top-\(name)"))
+                XCTAssertTrue(shown("inspection-notes.md"), "Another file keeps its row")
+                // A little way down, the picture without a recorded size and the one that could not be read.
+                for _ in 0..<2 {
+                    guard let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -200, wheel2: 0, wheel3: 0),
+                          let event = NSEvent(cgEvent: wheel) else { break }
+                    scroll.scrollWheel(with: event)
+                    host.settle(passes: 2)
+                }
+                await drawArrived()
+                try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "conversation-middle-\(name)"))
+                let reads = await reader.imageReads
+                XCTAssertEqual(Set(reads), ["site-1", "site-2", "marked", "plain", "broken-1", "closeup"],
+                               "Only pictures are read")
+                // Back at the end, the pictures there come from memory.
+                for _ in 0..<12 {
+                    guard let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -200, wheel2: 0, wheel3: 0),
+                          let event = NSEvent(cgEvent: wheel) else { break }
+                    scroll.scrollWheel(with: event)
+                    host.settle(passes: 2)
+                }
+                await host.settle(until: { shown("corner-closeup.png") })
+                host.settle(passes: 12)
+                let readBack = await reader.imageReads
+                XCTAssertEqual(readBack.count, reads.count, "A picture shown again is not read again: \(reads) then \(readBack)")
+
+                // The reply's picture shows in its thread.
+                let count = PersonalAgentReplyIndicator.title(1)
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: count))
+                await host.settle(until: { shown("corner-closeup.png") })
+                host.settle(passes: 12)
+                // The thread's rows take the heights their pictures' frames set, measured as they are drawn.
+                let table = try XCTUnwrap(Self.views(NSTableView.self, in: host.hosting).first)
+                try await waitUntil { table.numberOfRows > 0 && table.rect(ofRow: table.numberOfRows - 1).height > 320 }
+                await drawArrived()
+                try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "replies-\(name)"))
+                let sends = await reader.sends
+                XCTAssertTrue(sends.isEmpty, "Reading pictures sends nothing")
+            }
+        }
+    }
+
+    /// In a conversation of 500 messages, 100 of them with a picture, only the pictures near the rows
+    /// shown are read. One that arrives draws its own tile alone and moves nothing being read; a new
+    /// message reads no picture again.
+    func testAPictureArrivingInALongConversationDrawsOnlyItself() async throws {
+        let (model, _) = try makeWindowModel()
+        let agent = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                                  name: "Atlas", rootThreadID: nil, isPaused: false, isPrimary: true)
+        let messages = (0..<500).map { index in
+            PersonalAgentMessage(id: "m\(index)", author: index.isMultiple(of: 2) ? .person : .agent,
+                                 text: "Message \(index) of a long conversation about the site visit.",
+                                 createdAt: nil, isDeleted: false,
+                                 attachments: index % 5 == 4 ? [.init(fileID: "img-\(index)", name: "photo-\(index).jpg", type: "file",
+                                                                      mimeType: "image/jpeg",
+                                                                      pixelSize: .init(width: 1200, height: 800))] : [])
+        }
+        let report = try WindowlessRender.directory("dots-inline-images-qa").appending(path: "perf.txt")
+        let size = NSSize(width: 1280, height: 920)
+        let reader = RenderedPersonalAgentReader(agents: [agent], messages: messages)
+        await reader.holdImage("img-499")
+        let host = WindowlessRender.Host(MainWindow(model: model) { reader }.frame(width: size.width, height: size.height), size: size)
+        defer { host.close() }
+        defer { ViewBodyCensus.isEnabled = false; ViewBodyCensus.reset() }
+        host.settle()
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
+        let shown = { (name: String) in host.accessibilityElements().contains { $0.label == name && $0.role == "AXButton" } }
+        try await waitUntil { await reader.hasPendingImage() }
+        host.settle(passes: 20)
+        let readAtOpen = await reader.imageReads
+        XCTAssertGreaterThan(readAtOpen.count, 0)
+        XCTAssertLessThanOrEqual(readAtOpen.count, 12, "Only the pictures near the rows shown are read")
+        // The person reads a little above the end.
+        let scroll = try XCTUnwrap(Self.scrollViews(in: host.hosting).max {
+            ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0)
+        })
+        for _ in 0..<3 {
+            guard let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 60, wheel2: 0, wheel3: 0),
+                  let event = NSEvent(cgEvent: wheel) else { break }
+            scroll.scrollWheel(with: event)
+            host.settle(passes: 1)
+        }
+        host.settle(passes: 20)
+        let place = scroll.contentView.bounds.origin.y
+        let height = scroll.documentView?.frame.height ?? 0
+        let readBefore = await reader.imageReads.count
+
+        ViewBodyCensus.isEnabled = true
+        ViewBodyCensus.reset()
+        await reader.releaseImage()
+        await host.settle(until: { shown("photo-499.jpg") })
+        host.settle(passes: 12)
+        let arrival = (image: ViewBodyCensus[.personalAgentImage], conversation: ViewBodyCensus[.personalAgentConversation],
+                       content: ViewBodyCensus[.personalAgentContent], window: ViewBodyCensus[.mainWindow])
+        XCTAssertLessThanOrEqual(arrival.image, 2, "Only the picture that arrived was drawn again")
+        XCTAssertEqual(arrival.conversation, 0, "A picture arriving drew the conversation again")
+        XCTAssertEqual(arrival.content, 0)
+        XCTAssertEqual(arrival.window, 0)
+        XCTAssertEqual(scroll.contentView.bounds.origin.y, place, accuracy: 1, "The place being read stays")
+        XCTAssertEqual(scroll.documentView?.frame.height ?? 0, height, accuracy: 1, "The picture's frame was set before it arrived")
+
+        // A new message draws the conversation, as it does without pictures, and reads no picture again.
+        ViewBodyCensus.reset()
+        await reader.setPage(messages + [PersonalAgentMessage(id: "m500", author: .agent, text: "One more thing about the visit.",
+                                                              createdAt: nil, isDeleted: false, attachments: [])])
+        await reader.signalChange()
+        await host.settle(until: { host.accessibilityElements().contains { $0.label.contains("One more thing") || $0.value.contains("One more thing") } })
+        host.settle(passes: 12)
+        let readAfter = await reader.imageReads.count
+        XCTAssertEqual(readAfter, readBefore, "A new message read no picture again")
+        let message = (image: ViewBodyCensus[.personalAgentImage], conversation: ViewBodyCensus[.personalAgentConversation])
+        try """
+            reads at open: \(readAtOpen.count) of 100 pictures
+            one picture arrives: image tiles \(arrival.image), conversation \(arrival.conversation), content \(arrival.content), window \(arrival.window)
+            new message: image tiles \(message.image), conversation \(message.conversation), pictures read again \(readAfter - readBefore)
+            """.write(to: report, atomically: true, encoding: .utf8)
+    }
+
     /// The dot's composer with a photo uploading, a document that failed and a photo ready, at both
     /// window sizes and in both appearances: thumbnails, names, progress, the failure and its Retry.
     func testComposerFilesShowTheirUploadsInTheWindow() async throws {
@@ -2601,6 +2827,21 @@ private actor RenderedPersonalAgentReader: PersonalAgentClient {
     }
     func download(_ attachment: PersonalAgentAttachment, for agent: PersonalAgent) async throws -> PersonalAgentDownload {
         throw PersonalAgentFailure.invalidResponse
+    }
+    /// Pictures read for thumbnails, by file, drawn here; a file named `broken…` cannot be read, and a
+    /// held one answers when released.
+    private(set) var imageReads: [String] = []
+    private var heldImage: String?
+    private var pendingImage: CheckedContinuation<Void, Never>?
+    func holdImage(_ file: String) { heldImage = file }
+    func hasPendingImage() -> Bool { pendingImage != nil }
+    func releaseImage() { pendingImage?.resume(); pendingImage = nil }
+    func image(_ attachment: PersonalAgentAttachment, for agent: PersonalAgent) async throws -> Data {
+        let file = attachment.fileID ?? ""
+        imageReads.append(file)
+        if heldImage == file { heldImage = nil; await withCheckedContinuation { pendingImage = $0 } }
+        if file.hasPrefix("broken") { throw PersonalAgentFailure.attachmentUnavailable }
+        return try PersonalAgentRenderingTests.syntheticPicture(file, size: attachment.pixelSize)
     }
     private(set) var avatarReads = 0
     private(set) var sheetReads = 0

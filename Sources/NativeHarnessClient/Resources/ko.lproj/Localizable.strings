@@ -3385,3 +3385,5 @@
 "Needs your input." = "입력이 필요합니다.";
 "Needs your input: %@" = "입력이 필요합니다: %@";
 "Sent an attachment." = "첨부 파일을 보냈습니다.";
+"This image could not be loaded." = "이미지를 불러오지 못했습니다.";
+"Load %@ again" = "%@ 다시 불러오기";

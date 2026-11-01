@@ -1,3 +1,4 @@
+import ImageIO
 import XCTest
 @testable import NativeHarnessClient
 
@@ -18,6 +19,15 @@ final class PersonalAgentTests: XCTestCase {
         XCTAssertEqual(result.messages[1].attachments.map(\.opensHere), [true])
         XCTAssertEqual(result.before, "m1")
         XCTAssertEqual(result.messages[1].attachments, [.init(fileID: "report", name: "report.txt", type: "file")])
+        XCTAssertFalse(result.messages[1].attachments[0].isImage)
+        // A picture is told by its declared type, by its name only when none was declared, and keeps the
+        // size the provider recorded, flat or nested, so its place is set before it is read.
+        let pictures = try DotsProjection.messages(try value(#"{"items":[{"id":"p1","role":"user","account_user_id":"person","content":{"text":"","attachments":[{"type":"file","file_id":"a","name":"photo.jpg","mime_type":"image/jpeg","image_metadata":{"width":1200,"height":800}},{"file":{"id":"b","name":"chart","mime_type":"image/webp","image_metadata":{"width":640,"height":0}}},{"type":"file","file_id":"c","name":"scan.png","mime_type":"application/pdf"},{"type":"file","file_id":"d","name":"plain.PNG"},{"type":"file","file_id":"e","name":"pending.gif","mime_type":"image/gif","status":"generating"},{"type":"file","file_id":"f","name":"vector.svg","mime_type":"image/svg+xml"}]}}],"prev_cursor":null}"#),
+                                                   room: room, agent: agent).messages[0].attachments
+        XCTAssertEqual(pictures.map(\.isImage), [true, true, false, true, true, false])
+        XCTAssertEqual(pictures[0].pixelSize, PersonalAgentPixelSize(width: 1200, height: 800))
+        XCTAssertNil(pictures[1].pixelSize, "A size without both sides reserves the plain square")
+        XCTAssertTrue(pictures[4].isLoading)
         let changedAccount = fixtureAgent(account: "different-account")
         XCTAssertNotEqual(agent.id, changedAccount.id)
         let wrongRoom = try value(#"{"id":"another-room","aeon_id":"dot","members":[]}"#)
@@ -1669,6 +1679,73 @@ final class PersonalAgentTests: XCTestCase {
         XCTAssertNil(watch.source)
     }
 
+    /// A small picture drawn here, never a provider's.
+    nonisolated static func syntheticPNG(width: Int = 48, height: Int = 32) -> Data {
+        let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.setFillColor(CGColor(red: 0.2, green: 0.5, blue: 0.8, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let data = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+        CGImageDestinationFinalize(destination)
+        return data as Data
+    }
+
+    /// A conversation's pictures are read only when a row asks, two at a time; a row that leaves
+    /// before its turn reads nothing; a picture read once is not read again, a failure waits for its
+    /// retry, and a changed account starts from nothing.
+    func testPictureThumbnailsAreReadTwoAtATimeOnceAndOnlyForTheirAccount() async throws {
+        let center = PersonalAgentCenter()
+        let agent = fixtureAgent()
+        let reader = FixturePersonalAgentReader(agents: [agent])
+        await center.connect(sourceKey: "saved-account") { reader }
+        let pictures = (0..<5).map { PersonalAgentAttachment(fileID: "p\($0)", name: "p\($0).png", type: "file", mimeType: "image/png") }
+        await reader.holdImages()
+        let reads = pictures.map { picture in Task { await center.thumbnail(of: picture, size: .tile, for: agent.id) } }
+        try await waitUntil { await reader.pendingImageCount() == 2 }
+        // The row of the last picture leaves while it waits for its turn.
+        reads[4].cancel()
+        let left = await reads[4].value
+        XCTAssertNil(left)
+        await reader.releaseImages()
+        for read in reads.prefix(4) {
+            let preview = await read.value
+            guard case .image? = preview else { return XCTFail("Each picture shown arrives") }
+        }
+        XCTAssertEqual(center.thumbnails.mostAtOnce, PersonalAgentThumbnails.concurrentReads)
+        let readFiles = await reader.imageReads
+        XCTAssertEqual(Set(readFiles), ["p0", "p1", "p2", "p3"], "The picture whose row left was not read")
+        // Shown again, a picture comes from memory.
+        guard case .image? = center.cachedThumbnail(of: pictures[0], size: .tile, for: agent.id) else { return XCTFail() }
+        _ = await center.thumbnail(of: pictures[0], size: .tile, for: agent.id)
+        let readAgain = await reader.imageReads.count
+        XCTAssertEqual(readAgain, 4)
+
+        // A picture that could not be read waits for its retry, and is read again only then.
+        await reader.failImage("p4")
+        let failed = await center.thumbnail(of: pictures[4], size: .tile, for: agent.id)
+        guard case .unavailable? = failed else { return XCTFail("The failure is shown") }
+        guard case .unavailable? = center.cachedThumbnail(of: pictures[4], size: .tile, for: agent.id) else { return XCTFail() }
+        _ = await center.thumbnail(of: pictures[4], size: .tile, for: agent.id)
+        let afterFailure = await reader.imageReads.count
+        XCTAssertEqual(afterFailure, 5, "A failed picture is not read again by itself")
+        center.retryThumbnail(of: pictures[4], size: .tile, for: agent.id)
+        guard case .image? = await center.thumbnail(of: pictures[4], size: .tile, for: agent.id) else { return XCTFail() }
+
+        // A file that is no picture, or one still being made, is never read for a thumbnail.
+        let document = PersonalAgentAttachment(fileID: "doc", name: "doc.png", type: "file", mimeType: "application/pdf")
+        var making = pictures[0]; making.isLoading = true
+        _ = await center.thumbnail(of: document, size: .tile, for: agent.id)
+        _ = await center.thumbnail(of: making, size: .tile, for: agent.id)
+        let afterOthers = await reader.imageReads.count
+        XCTAssertEqual(afterOthers, 6)
+
+        // Another account keeps nothing the last one read.
+        center.accept(PersonalAgentFailure.accountChanged)
+        XCTAssertNil(center.cachedThumbnail(of: pictures[0], size: .tile, for: agent.id))
+    }
+
     private func fixtureAgent(account: String = "account") -> PersonalAgent {
         .init(id: .init(accountID: account, userID: "person", agentID: "dot", roomID: "room"),
               name: "Atlas", rootThreadID: "thread", isPaused: false, isPrimary: true)
@@ -1774,6 +1851,21 @@ private actor FixturePersonalAgentReader: PersonalAgentClient {
     }
     func download(_ attachment: PersonalAgentAttachment, for agent: PersonalAgent) async throws -> PersonalAgentDownload {
         throw PersonalAgentFailure.attachmentUnavailable
+    }
+    /// Pictures read for thumbnails, by file; each waits while held, and a file set to fail fails once.
+    private(set) var imageReads: [String] = []
+    private var holdsImages = false
+    private var pendingImages: [CheckedContinuation<Void, Never>] = []
+    private var failingImages: Set<String> = []
+    func holdImages() { holdsImages = true }
+    func releaseImages() { holdsImages = false; pendingImages.forEach { $0.resume() }; pendingImages = [] }
+    func pendingImageCount() -> Int { pendingImages.count }
+    func failImage(_ file: String) { failingImages.insert(file) }
+    func image(_ attachment: PersonalAgentAttachment, for agent: PersonalAgent) async throws -> Data {
+        imageReads.append(attachment.fileID ?? "")
+        if holdsImages { await withCheckedContinuation { pendingImages.append($0) } }
+        if failingImages.remove(attachment.fileID ?? "") != nil { throw PersonalAgentFailure.network }
+        return PersonalAgentTests.syntheticPNG()
     }
     private var uploads = 0
     private var holdsUploads = false

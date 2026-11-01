@@ -291,6 +291,20 @@ final class DotsServiceTests: XCTestCase {
         let download = try XCTUnwrap(fixture.requests.first { $0.url?.host == "files.oaiusercontent.com" })
         XCTAssertNil(download.value(forHTTPHeaderField: "Authorization"))
         XCTAssertNil(download.value(forHTTPHeaderField: "ChatGPT-Account-Id"))
+        // A picture's thumbnail is the same room file read, with the same credentials, and only a picture.
+        let photo = PersonalAgentAttachment(fileID: "photo", name: "photo.png", type: "file", mimeType: "image/png")
+        let photoData = try await service.image(photo, for: agent)
+        XCTAssertEqual(photoData, Data("PNG".utf8))
+        let photoRead = try XCTUnwrap(fixture.requests.first { $0.url?.path == "/photo" })
+        XCTAssertNil(photoRead.value(forHTTPHeaderField: "Authorization"), "A signed picture is read without the account token")
+        let disguised = PersonalAgentAttachment(fileID: "file", name: "chart.png", type: "file", mimeType: "image/png")
+        do { _ = try await service.image(disguised, for: agent); XCTFail("Storage that answers with no picture is refused") }
+        catch { XCTAssertEqual(error as? PersonalAgentFailure, .attachmentUnavailable) }
+        let before = fixture.requests.count
+        let notes = PersonalAgentAttachment(fileID: "file", name: "notes.png", type: "file", mimeType: "text/plain")
+        do { _ = try await service.image(notes, for: agent); XCTFail("A file declared as another type is no picture") }
+        catch { XCTAssertEqual(error as? PersonalAgentFailure, .attachmentUnavailable) }
+        XCTAssertEqual(fixture.requests.count, before, "A file that is no picture is not read for one")
         var pictured = agent
         pictured.avatar = .init(location: "https://files.oaiusercontent.com/avatar", version: "v1")
         let picture = try await service.avatar(for: pictured)
@@ -831,7 +845,7 @@ private final class DotsHTTPRecorder: @unchecked Sendable {
             recorded.append(request)
             if request.url?.host == "files.oaiusercontent.com" {
                 if let status = ["/sheet-403": 403, "/sheet-404": 404][request.url?.path ?? ""] { return (status, Data()) }
-                return (200, Data((["/avatar", "/sheet"].contains(request.url?.path) ? "PNG" : "Preview text").utf8))
+                return (200, Data((["/avatar", "/sheet", "/photo"].contains(request.url?.path) ? "PNG" : "Preview text").utf8))
             }
             if request.url?.host == "cdn.openai.com" { return (200, Data("PNG".utf8)) }
             if request.url?.host == "codex-cloud-backend.chatgpt.com" {
@@ -885,6 +899,9 @@ private final class DotsHTTPRecorder: @unchecked Sendable {
             if request.url?.path == "/backend-api/celsius/ws/user" {
                 return (200, Data(#"{"websocket_url":"wss://ws.chatgpt.com/ws/user"}"#.utf8))
             }
+            if request.url?.path.hasSuffix("/files/photo") == true {
+                return (200, Data(#"{"name":"photo.png","download_url":"https://files.oaiusercontent.com/photo"}"#.utf8))
+            }
             if request.url?.path.hasSuffix("/files/file") == true {
                 return (200, Data(#"{"name":"report.txt","download_url":"https://files.oaiusercontent.com/file"}"#.utf8))
             }
@@ -932,7 +949,7 @@ private final class DotsHTTPProtocol: URLProtocol, @unchecked Sendable {
         guard let fixture = Self.current else { client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse)); return }
         let (status, data) = fixture.respond(request)
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil,
-                                       headerFields: ["Content-Type": ["/avatar", "/sheet"].contains(request.url?.path) || request.url?.host == "cdn.openai.com"
+                                       headerFields: ["Content-Type": ["/avatar", "/sheet", "/photo"].contains(request.url?.path) || request.url?.host == "cdn.openai.com"
                                                           ? "image/png" : "application/json",
                                                       "Content-Length": String(data.count)])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)

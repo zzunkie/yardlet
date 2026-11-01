@@ -226,13 +226,26 @@ actor DotsService: PersonalAgentClient {
     }
 
     func download(_ attachment: PersonalAgentAttachment, for agent: PersonalAgent) async throws -> PersonalAgentDownload {
+        try await roomFile(attachment, for: agent, imageOnly: false)
+    }
+
+    /// A picture for its thumbnail: the same room file read, refused unless storage answers with a picture.
+    func image(_ attachment: PersonalAgentAttachment, for agent: PersonalAgent) async throws -> Data {
+        guard attachment.isImage else { throw PersonalAgentFailure.attachmentUnavailable }
+        return try await roomFile(attachment, for: agent, imageOnly: true).data
+    }
+
+    /// A file of the dot's room: its metadata from the room, then its bytes from where that names,
+    /// bounded, with the account credential only on the provider's own API path.
+    private func roomFile(_ attachment: PersonalAgentAttachment, for agent: PersonalAgent,
+                          imageOnly: Bool) async throws -> PersonalAgentDownload {
         try await verify(agent)
         guard attachment.type == "file", let fileID = attachment.fileID, !fileID.isEmpty else {
             throw PersonalAgentFailure.attachmentUnavailable
         }
         let metadata = try await read("/messaging/rooms/" + component(agent.id.roomID) + "/files/" + component(fileID))
         guard let raw = metadata["download_url"]?.stringValue else { throw PersonalAgentFailure.attachmentUnavailable }
-        let data = try await fetch(DotsAttachmentLocation(raw), limit: 25 * 1024 * 1024)
+        let data = try await fetch(DotsAttachmentLocation(raw), limit: 25 * 1024 * 1024, imageOnly: imageOnly)
         try await verify(agent)
         return .init(data: data, name: metadata["name"]?.stringValue ?? attachment.name)
     }

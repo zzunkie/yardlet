@@ -32,6 +32,8 @@ enum ViewBodyCensus {
         case personalAgentReplyRowGraph
         /// A hosting view made for a message of a dot's reply dialog.
         case personalAgentReplyRowHosting
+        /// A picture of a dot's conversation, drawn again as its thumbnail arrives.
+        case personalAgentImage
     }
 
     static var isEnabled = false

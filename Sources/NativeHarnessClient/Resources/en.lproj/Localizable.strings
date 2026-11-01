@@ -3385,3 +3385,5 @@
 "Needs your input." = "Needs your input.";
 "Needs your input: %@" = "Needs your input: %@";
 "Sent an attachment." = "Sent an attachment.";
+"This image could not be loaded." = "This image could not be loaded.";
+"Load %@ again" = "Load %@ again";
