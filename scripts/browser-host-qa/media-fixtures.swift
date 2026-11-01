@@ -46,7 +46,11 @@ func toneBuffer(start: Int) -> CMSampleBuffer {
     var description: CMAudioFormatDescription?
     CMAudioFormatDescriptionCreate(allocator: nil, asbd: &format, layoutSize: 0, layout: nil, magicCookieSize: 0,
                                    magicCookie: nil, extensions: nil, formatDescriptionOut: &description)
-    let samples = (0..<chunk).map { Int16(sin(Double(start + $0) / Double(sampleRate) * 2 * .pi * 440) * 6_000) }
+    // In two steps, which older compilers type-check in time.
+    let samples = (0..<chunk).map { index -> Int16 in
+        let seconds = Double(start + index) / Double(sampleRate)
+        return Int16(sin(seconds * 2 * .pi * 440) * 6_000)
+    }
     var block: CMBlockBuffer?
     CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: chunk * 2, blockAllocator: nil,
                                        customBlockSource: nil, offsetToData: 0, dataLength: chunk * 2, flags: 0,
