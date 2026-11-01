@@ -159,6 +159,9 @@ much.
   `--repeat 3` (each number is then the median of the rounds) on both commits.
 - A scene with `problems`, or a phase whose `published` count is near zero while it should stream,
   measured something other than what it says; fix the scene before reading its numbers.
+- Each phase leaves a picture of the window at its end, `<n>-<phase>.png`, in the scene's folder under
+  `.build/perf-bench/run/browser-host-qa/bench/scenes/` (kept with `--keep`). AppKit draws it, the
+  browser's pages included, so it needs no screen recording; it shows what a phase measured.
 
 The bench measures the app with the fixture's model: an in-memory task index, no account checks,
 pull request lookups, network watch or task resource sampling, which the live app runs besides. Those
