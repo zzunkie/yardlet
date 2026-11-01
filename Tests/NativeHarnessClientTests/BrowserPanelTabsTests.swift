@@ -491,6 +491,40 @@ final class BrowserPanelTabsTests: XCTestCase {
         XCTAssertTrue(controller.isEditingAddress, "a new tab's address field is ready")
     }
 
+    /// A task's views out of the window, kept while another task shows (`TaskSurfaceHostings`), show no tab: the
+    /// panel lets its tab go as a tab no panel shows, so the memory saver's discard stands, and takes it again when
+    /// the task shows, its page loading again. A kept panel held its tab, which the saver then never discarded.
+    func testAPanelOutOfTheWindowLetsItsTabGoUntilItIsBack() throws {
+        let client = makeClient()
+        client.isMemorySaverOn = true
+        let task = UUID()
+        let workspace = TaskWorkspaceStore(browserClient: { client }).state(for: task)
+        let key = try XCTUnwrap(workspace.openBrowserTab(address: "https://a.test/"))
+        let controller = BrowserHostPaneController(session: task, key: key, workspace: workspace, client: client)
+        let view = BrowserHostView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        let content = NSView(frame: view.frame)
+        window.contentView = content
+        content.addSubview(view)
+        defer { withExtendedLifetime(window) {} }
+        controller.attach(view)
+        let tab = try XCTUnwrap(client.tab(key: key, forSession: task))
+        XCTAssertTrue(tab.isPanelAttached)
+
+        view.removeFromSuperview()
+        XCTAssertFalse(tab.isPanelAttached, "the kept panel held the tab")
+        connection.eventHandler?(.discarded(tab: tab.id))
+        XCTAssertTrue(tab.isDiscarded, "the panel woke the tab at once")
+
+        let sentBefore = connection.sent.count
+        content.addSubview(view)
+        XCTAssertTrue(tab.isPanelAttached)
+        XCTAssertTrue(connection.sent[sentBefore...].contains(.navigation(tab: tab.id, action: .reload)), "its page loads again")
+        XCTAssertFalse(tab.isDiscarded)
+        controller.detach()
+        XCTAssertFalse(tab.isPanelAttached)
+    }
+
     func testTheStripShowsEachBrowserTabWithItsTitleAndIcon() throws {
         let directory = try WindowlessRender.directory("browser-panel-tabs-render")
         let tabs = TaskBrowserTabs()

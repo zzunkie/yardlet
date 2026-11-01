@@ -146,6 +146,9 @@ final class BrowserHostPaneController {
     @ObservationIgnored private(set) weak var view: BrowserHostView?
     /// The panel told the lifetime manager it is off screen (`BrowserHostClient.setPanelOccluded`).
     @ObservationIgnored private var isPanelOccluded = false
+    /// The view is in no window: its task's views are kept while another task shows (`TaskSurfaceHostings`), and the
+    /// panel holds no tab until the view is in a window again (`panelWindowChanged`).
+    @ObservationIgnored private var isPanelParked = false
     @ObservationIgnored private var agentIndicatorTask: Task<Void, Never>?
     @ObservationIgnored private var noticeTask: Task<Void, Never>?
     /// Called for every event of the attached tab (QA fixtures record them).
@@ -210,6 +213,7 @@ final class BrowserHostPaneController {
         // A chooser the person asked for opens once the panel is in a window.
         view.onWindowChange = { [weak self] in
             guard let self, let tab = self.tab else { return }
+            self.panelWindowChanged(tab)
             self.showFileDialog(of: tab)
         }
         // The pane follows its tab whoever opens, fronts or closes tabs.
@@ -309,7 +313,7 @@ final class BrowserHostPaneController {
             MacBrowserHost.shared.stopShowingFrames(of: tab.id, in: view.frameDisplay)
             MacBrowserHost.shared.panelStopsShowing(tab.id, in: view)
         }
-        client.detachPanel(from: tab, occluded: isPanelOccluded)
+        if !isPanelParked { client.detachPanel(from: tab, occluded: isPanelOccluded) }
         tab.eventHandler = nil
         tab.onAgentActivity = nil
         tab.onEmulationChange = nil
@@ -319,6 +323,7 @@ final class BrowserHostPaneController {
         view?.emulatedSize = nil
         releaseVault(tab)
         isPanelOccluded = false
+        isPanelParked = false
         self.tab = nil
         view?.tabID = nil
         view?.sendCommand = nil
@@ -386,7 +391,8 @@ final class BrowserHostPaneController {
         // earlier panel (or opened by the agent) paints again now. A panel off screen attaches as one:
         // the tab neither paints nor counts as seen by the person (the memory saver).
         isPanelOccluded = view.isOccluded
-        client.attachPanel(to: tab, occluded: isPanelOccluded)
+        isPanelParked = view.window == nil
+        if !isPanelParked { client.attachPanel(to: tab, occluded: isPanelOccluded) }
         // Chromium's window over this tab (a passkey dialog) shows over this panel.
         MacBrowserHost.shared.panelShows(tab.id, in: view)
         view.resendViewport()
@@ -500,10 +506,26 @@ final class BrowserHostPaneController {
     private func panelOcclusionChanged(_ occluded: Bool) {
         guard let tab, occluded != isPanelOccluded else { return }
         isPanelOccluded = occluded
-        client.setPanelOccluded(occluded, on: tab)
+        if !isPanelParked { client.setPanelOccluded(occluded, on: tab) }
         MacBrowserHost.shared.chromiumWindows.present()
         // A chooser the person asked for opens once the panel is on screen (a window that was not drawn yet).
         if !occluded { showFileDialog(of: tab) }
+    }
+
+    /// The view left every window, its task's views kept while another task shows, or is in one again. Out of every
+    /// window the panel shows nothing, as when its task's views were let go: the tab goes on as one no panel shows,
+    /// hidden and discarded in the memory saver's time (an off-screen panel in a window keeps it, as Chrome keeps a
+    /// window's front tab), and back in a window the panel takes it again, its page loading again if it was discarded.
+    private func panelWindowChanged(_ tab: BrowserTab) {
+        guard let view, (view.window == nil) != isPanelParked else { return }
+        if isPanelParked {
+            isPanelParked = false
+            isPanelOccluded = view.isOccluded
+            client.attachPanel(to: tab, occluded: isPanelOccluded)
+        } else {
+            client.detachPanel(from: tab, occluded: isPanelOccluded)
+            isPanelParked = true
+        }
     }
 
     // MARK: Navigation
