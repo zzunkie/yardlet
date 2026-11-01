@@ -557,6 +557,9 @@ private struct OfferedSizeLayout: Layout {
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+#if DEBUG
+        MainActor.assumeIsolated { ViewBodyCensus.note(.conversationLayout) }
+#endif
         subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
     }
 

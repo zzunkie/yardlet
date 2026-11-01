@@ -16,6 +16,8 @@ enum ViewBodyCensus {
         case personalAgentAvatar
         /// The conversation's timeline (`ConversationTimeline`), which projects and lays out its turns.
         case conversationTimeline
+        /// The conversation's column of turns placed in its window, a layout pass of the conversation.
+        case conversationLayout
         /// The dots' content: the conversation beside its details. A new state of the room leaves it
         /// as it is.
         case personalAgentContent

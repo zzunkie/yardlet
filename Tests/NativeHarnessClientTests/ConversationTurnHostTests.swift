@@ -5,9 +5,10 @@ import XCTest
 @testable import NativeHarnessClient
 
 /// Each turn draws in a hosting view of its own (`ConversationTurnHost`): a streamed fragment of words
-/// goes to the running turn's message alone, a transcript's or a Codex thread's, and leaves every
-/// turn's graph as it was (`ConversationStreamedText`), a conversation shown again finds its turns
-/// kept with its task, and a change in how the conversation looks reaches every turn.
+/// goes to the running turn's message alone, a transcript's or a Codex thread's, leaves every turn's
+/// graph as it was (`ConversationStreamedText`) and lays the conversation out a time or two, a
+/// conversation shown again finds its turns kept with its task, and a change in how the conversation
+/// looks reaches every turn.
 @MainActor
 final class ConversationTurnHostTests: XCTestCase {
     @Observable
@@ -65,6 +66,9 @@ final class ConversationTurnHostTests: XCTestCase {
         }
         XCTAssertEqual(ViewBodyCensus[.conversationTurn], 0, "A fragment of words drew a turn whole")
         XCTAssertEqual(ViewBodyCensus[.conversationTurnHosting], 0)
+        // The running turn's live line keeps its time without a `TimelineView`, which had each fragment
+        // lay the conversation out again a dozen times or more: 41 times for these 20, 249 to 308 with one.
+        XCTAssertLessThanOrEqual(ViewBodyCensus[.conversationLayout], 80, "A fragment laid the conversation out again and again")
         let texts = TranscriptProseRenderingTests.proseTextViews(in: host.hosting)
         XCTAssertTrue(texts.contains { $0.string == text }, "The running message reads its latest words")
     }
