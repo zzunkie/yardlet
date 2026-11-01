@@ -12,11 +12,13 @@ final class CodexPersistedTimelineTests: XCTestCase {
         XCTAssertEqual(Self.referenceItems(state).count, 500, "The fixture must overflow the window")
 
         // A running command streams, an answer of an interrupted turn grows, a card settles,
-        // turns arrive and leave, and the walk reuses what did not change.
+        // turns arrive and leave, and the walk reuses what did not change. Each window says how it
+        // differs from the last, which decides whether it is saved at once or a second later.
         let last = state.thread!.turns.count - 1
         state.thread!.turns[last].status = .inProgress
         state.thread!.turns[last].items.append(Self.command("live", output: nil, done: false))
         XCTAssertEqual(timeline.items(from: state), Self.referenceItems(state))
+        XCTAssertEqual(timeline.lastChange, .cards)
         for line in ["Compiling\n", "Linking\n"] {
             let index = state.thread!.turns[last].items.count - 1
             guard case var .commandExecution(command) = state.thread!.turns[last].items[index].content else {
@@ -25,21 +27,27 @@ final class CodexPersistedTimelineTests: XCTestCase {
             command.aggregatedOutput = (command.aggregatedOutput ?? "") + line
             state.thread!.turns[last].items[index].content = .commandExecution(command)
             XCTAssertEqual(timeline.items(from: state), Self.referenceItems(state))
+            XCTAssertEqual(timeline.lastChange, .content)
         }
         state.thread!.turns[last].status = .interrupted
         state.thread!.turns[last].items.append(Self.answer("partial", "Half an answer"))
         state.thread!.turns[last].items.append(Self.answer("empty", ""))
         XCTAssertEqual(timeline.items(from: state), Self.referenceItems(state))
+        XCTAssertEqual(timeline.lastChange, .cards)
         state.thread!.turns[last].items[state.thread!.turns[last].items.count - 3] =
             Self.command("live", output: "Compiling\nLinking\n", done: true)
         XCTAssertEqual(timeline.items(from: state), Self.referenceItems(state))
+        XCTAssertEqual(timeline.lastChange, .cards)
         state.thread!.turns.removeFirst(3)
         state.thread!.turns.append(contentsOf: Self.thread(turns: 2, itemsPerTurn: 4, prefix: "new").thread!.turns)
         XCTAssertEqual(timeline.items(from: state), Self.referenceItems(state))
+        XCTAssertEqual(timeline.lastChange, .cards)
         state.thread!.turns[0].items.removeAll()
         XCTAssertEqual(timeline.items(from: state), Self.referenceItems(state))
+        XCTAssertEqual(timeline.lastChange, .none, "Cards outside the window changed it")
         state.thread = nil
         XCTAssertEqual(timeline.items(from: state), [])
+        XCTAssertEqual(timeline.lastChange, .cards)
     }
 
     func testSupplementingSavedCardsMatchesTheWholeThreadFilter() {
@@ -143,6 +151,22 @@ final class CodexPersistedTimelineTests: XCTestCase {
         let removed = cards.remove(at: cards.firstIndex { $0.turnID == state.thread!.turns[2].id }!)
         XCTAssertFalse(merged(state).thread!.turns[2].items.contains { $0.id == removed.pageEntry.item.id
             && $0.lifecycle == .completed }, "A card no longer saved still replaced its copy")
+
+        // Once the window is full, each card the running turn saves pushes the oldest one out. Read
+        // back, the timeline's own window merges as its page would, and a turn whose cards only moved
+        // keeps the items it merged to.
+        var long = Self.thread(turns: 3, itemsPerTurn: 600, prefix: "long")
+        cards = timeline.items(from: long)
+        for turn in long.thread!.turns.indices {
+            for item in long.thread!.turns[turn].items.indices { long.thread!.turns[turn].items[item].lifecycle = .historical }
+        }
+        long.thread!.turns[2].status = .inProgress
+        cards = timeline.items(from: merged(long))
+        long.thread!.turns[2].items.append(Self.command("next", output: nil, done: false))
+        let full = merged(long)
+        cards = timeline.items(from: full)
+        XCTAssertEqual(cards.count, CodexPersistedTimeline.limit)
+        XCTAssertTrue(sameStorage(full, merged(long), turn: 1), "A turn whose cards only moved was merged again")
         state.thread = nil
         var none = state
         timeline.merge(cards, into: &none)
