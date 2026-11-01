@@ -128,7 +128,9 @@ keep it too (a turn still going among them), the level's revisits do not apply, 
 off. Yardlet tells the agent nothing about closing its tabs. While macOS memory pressure is critical, as Chrome's urgent discarding (`UrgentPageDiscardingPolicy`)
 one tab goes every 5 seconds, the longest hidden first among those hidden for more than 10 minutes
 (kNonVisiblePagesUrgentProtectionTime). At the warning level Chrome discards nothing either. The tabs kept follow
-`DiscardEligibilityPolicy`: a tab a panel shows (an occluded panel too, as Chrome keeps each window's front tab); a page
+`DiscardEligibilityPolicy`: a tab a panel shows (an occluded panel too, as Chrome keeps each window's front tab, but not
+the panel of a task whose views the window keeps out of it while another task shows, which holds no tab until its task
+shows again: `BrowserHostPaneController` lets the tab go when its view leaves every window); a page
 loading, whose renderer ended or does not respond; a page playing sound (Chrome keeps it until a minute after the sound
 stops, kTabAudioProtectionTime; Yardlet, for the reason below, once the page has played sound in its current document); the
 camera or microphone in use; a form typed into (a field whose value differs from the one the page loaded with, or a
