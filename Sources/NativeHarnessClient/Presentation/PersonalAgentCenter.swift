@@ -88,6 +88,12 @@ final class PersonalAgentActivityReading {
     }
 }
 
+/// What a screen keeps of a conversation's pictures; the center only tells it when a connection ends.
+@MainActor
+protocol PersonalAgentThumbnailStore: AnyObject {
+    func forgetFailures()
+}
+
 /// Window-owned reading state. Switching the shell does not modify the selected
 /// coding task, its draft, or provider history. Nothing here writes read receipts.
 @MainActor @Observable
@@ -123,8 +129,9 @@ final class PersonalAgentCenter {
     /// Sprite sheets read in this window, by pet; each carries its version. Memory only.
     private var spriteSheets: [String: PersonalAgentSpriteSheet] = [:]
     @ObservationIgnored private var unavailableSprites: Set<String> = []
-    /// Thumbnails of the conversation's pictures, for this connection's account; memory only.
-    @ObservationIgnored private(set) var thumbnails = PersonalAgentThumbnails()
+    /// Thumbnails of the conversation's pictures, kept by the screens for this connection's account;
+    /// memory only, and dropped when the connection or account changes.
+    @ObservationIgnored var thumbnailStore: (any PersonalAgentThumbnailStore)?
     /// What the selected dot is doing, from its room's bound state; idle while none is shown.
     private(set) var liveStatus: PersonalAgentStatus = .idle
     /// The selected dot's motion, kept apart from its words so a new heading redraws no picture.
@@ -910,55 +917,9 @@ final class PersonalAgentCenter {
         return value
     }
 
-    /// A picture's thumbnail already in memory, or `.unavailable` while its failure waits for a retry.
-    func cachedThumbnail(of attachment: PersonalAgentAttachment, size: TranscriptImageThumbnails.Size,
-                         for identity: PersonalAgentIdentity) -> TranscriptImageThumbnails.Preview? {
-        guard let file = attachment.fileID else { return .unavailable }
-        return thumbnails.cached(PersonalAgentThumbnails.key(room: identity.roomID, file: file), size: size)
-    }
-
-    /// Reads and decodes a picture of the shown dot's room for its thumbnail, waiting for a reading
-    /// slot first. Nil when the asking row went away before it ended; `.unavailable` when it could not
-    /// be read here, which a retry may read again.
-    func thumbnail(of attachment: PersonalAgentAttachment, size: TranscriptImageThumbnails.Size,
-                   for identity: PersonalAgentIdentity) async -> TranscriptImageThumbnails.Preview? {
-        guard attachment.isImage, !attachment.isLoading, let file = attachment.fileID else { return .unavailable }
-        let store = thumbnails
-        let key = PersonalAgentThumbnails.key(room: identity.roomID, file: file)
-        if let cached = store.cached(key, size: size) { return cached }
-        guard await store.slot() else { return nil }
-        defer { store.release() }
-        if let cached = store.cached(key, size: size) { return cached }
-        guard !Task.isCancelled else { return nil }
-        guard store === thumbnails, let agent = selected, agent.id == identity, let client else { return .unavailable }
-        let current = generation
-        store.noteRead()
-        do {
-            let data = try await client.image(attachment, for: agent)
-            guard !Task.isCancelled else { return nil }
-            // What another connection or account read is not shown, nor kept as this one's failure.
-            guard store === thumbnails, current == generation else { return .unavailable }
-            let preview = await store.decode(data, key: key, size: size)
-            if case .unavailable = preview { store.fail(key, size: size) }
-            return preview
-        } catch {
-            guard !Task.isCancelled else { return nil }
-            guard store === thumbnails, current == generation else { return .unavailable }
-            store.fail(key, size: size)
-            return .unavailable
-        }
-    }
-
-    /// Lets a picture that could not be read be read again.
-    func retryThumbnail(of attachment: PersonalAgentAttachment, size: TranscriptImageThumbnails.Size,
-                        for identity: PersonalAgentIdentity) {
-        guard let file = attachment.fileID else { return }
-        thumbnails.retry(PersonalAgentThumbnails.key(room: identity.roomID, file: file), size: size)
-    }
-
     private func detach() -> (any PersonalAgentClient)? {
         generation += 1
-        thumbnails.forgetFailures()
+        thumbnailStore?.forgetFailures()
         // A local stop: each file is left to retry, and nothing is deleted on the provider.
         uploads.values.forEach { $0.cancel() }
         uploads = [:]
@@ -1014,7 +975,7 @@ final class PersonalAgentCenter {
         unavailableAvatars = []
         spriteSheets = [:]
         unavailableSprites = []
-        thumbnails = PersonalAgentThumbnails()
+        thumbnailStore = nil
         hasLoaded = false
         failure = nil
     }
@@ -1034,7 +995,7 @@ final class PersonalAgentCenter {
             unavailableAvatars = []
             spriteSheets = [:]
             unavailableSprites = []
-            thumbnails = PersonalAgentThumbnails()
+            thumbnailStore = nil
         }
         failure = value
     }

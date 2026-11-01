@@ -6,7 +6,7 @@ import Foundation
 /// read only as their rows ask, at most two at a time as the provider's room does, and a row that
 /// leaves before its turn comes reads nothing.
 @MainActor
-final class PersonalAgentThumbnails {
+final class PersonalAgentThumbnails: PersonalAgentThumbnailStore {
     static let concurrentReads = 2
     static let costLimit = 64 * 1_048_576
 
