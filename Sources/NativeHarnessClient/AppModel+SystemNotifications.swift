@@ -22,6 +22,8 @@ extension AppModel {
     }
 
     func handleNotificationResponse(_ response: SystemNotificationResponse) async {
+        // A dot's notification needs no task index.
+        if let reveal = response.target.personalAgent { return revealPersonalAgent(reveal) }
         guard !isRestoringIndex else {
             pendingNotificationResponses.append(response)
             return
@@ -49,16 +51,17 @@ extension AppModel {
     @discardableResult
     func openTask(from target: SystemNotificationTarget) async -> NotificationOpenOutcome {
         applicationAttention?.bringForward()
-        if store.sessions.contains(where: { $0.id == target.sessionID }) {
+        guard let sessionID = target.sessionID else { return .missing }
+        if store.sessions.contains(where: { $0.id == sessionID }) {
             // As choosing the task in the sidebar or with ⌥⌘A: a task in a split view opens the
             // split with its pane focused.
-            revealTask(target.sessionID)
+            revealTask(sessionID)
             // A browser tab's notification opens the task's panel on that tab.
-            if let tab = target.browserTab { showBrowserTab(tab, under: target.sessionID) }
+            if let tab = target.browserTab { showBrowserTab(tab, under: sessionID) }
             return .opened
         }
         if store.archivedSessions == nil { try? await store.loadArchivedSessions() }
-        guard store.archivedSessions?.contains(where: { $0.id == target.sessionID }) == true else {
+        guard store.archivedSessions?.contains(where: { $0.id == sessionID }) == true else {
             return .missing
         }
         archivedTasksRevealRequest += 1

@@ -410,6 +410,30 @@ final class DotsServiceTests: XCTestCase {
         await service.stop()
     }
 
+    /// The app's watch rides the same messaging topic for several rooms, each change naming its room;
+    /// a room it did not ask for is not reported, and another login's dots are not watched at all.
+    func testRoomUpdatesNameTheChangedRoomOnTheSameTopic() async throws {
+        let sockets = DotsSocketFactory(answersSubscriptions: false)
+        let service = makeService(DotsHTTPRecorder(), broker: DotsTestBroker(), sockets: sockets)
+        let second = PersonalAgent(id: .init(accountID: "account", userID: "person", agentID: "dot-2", roomID: "room-2"),
+                                   name: "Second", rootThreadID: nil, isPaused: false, isPrimary: false)
+        let mixed = PersonalAgent(id: .init(accountID: "elsewhere", userID: "person", agentID: "dot", roomID: "room-3"),
+                                  name: "Other", rootThreadID: nil, isPaused: false, isPrimary: false)
+        let none = DotsCollected(await service.roomUpdates(for: [agent, mixed]))
+        let updates = DotsCollected(await service.roomUpdates(for: [agent, second]))
+        try await waitUntil { sockets.sockets.first?.command("subscribe", topic: "calpico-chatgpt-messaging") != nil }
+        let socket = sockets.sockets[0]
+        socket.push(#"[{"id":2,"reply":{"type":"subscribe","topic_id":"calpico-chatgpt-messaging","recovered":false}}]"#)
+        for room in ["room-2", "elsewhere", "room"] {
+            socket.push(#"[{"type":"message","topic_id":"calpico-chatgpt-messaging","payload":{"type":"x","payload":{"room_id":"\#(room)"}}}]"#)
+        }
+        try await waitUntil { updates.values.count == 3 }
+        XCTAssertEqual(updates.values, [.connected, .changed(roomID: "room-2"), .changed(roomID: "room")])
+        XCTAssertTrue(none.values.isEmpty)
+        XCTAssertEqual(sockets.sockets.count, 1)
+        await service.stop()
+    }
+
     /// Statuses the provider's client registers again after, and ones it does not; a stream's end, an
     /// error event, a room the server cannot show, another account and a cancelled observer.
     func testRoomLiveRegistersAgainOnlyWhereTheProvidersClientDoes() async throws {

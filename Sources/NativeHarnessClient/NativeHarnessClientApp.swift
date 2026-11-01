@@ -577,6 +577,8 @@ struct NativeHarnessClientApp: App {
                         // Scheduled tasks run while Yardlet is open; one missed meanwhile runs once now.
                         model.startScheduledTasks()
                         await model.refreshNotificationPermission()
+                        // The dots last opened are watched for new messages while their setting is on.
+                        if !QABackground.isOn { model.startPersonalAgentWatch() }
                         await model.linkTasksStartedInTheClaudeAppOnce()
                         // The Claude app's and Codex's lists, now that the index is loaded.
                         Task { await model.followSessionListsIfDue() }

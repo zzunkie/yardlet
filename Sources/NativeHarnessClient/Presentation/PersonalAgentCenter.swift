@@ -139,6 +139,12 @@ final class PersonalAgentCenter {
     private var isVisible: Bool { !visibleReporters.isEmpty }
     /// The reporter a caller that speaks for the whole window uses.
     static let windowReporter = UUID()
+    /// The app's watch, told which dot this window shows so it is read and not announced.
+    @ObservationIgnored weak var watch: PersonalAgentWatch? {
+        didSet { if oldValue !== watch { oldValue?.setShown(nil, by: ObjectIdentifier(self)); reportShown() } }
+    }
+    /// The dot a notification asked to show, chosen once the agents are read.
+    @ObservationIgnored private var preferredID: PersonalAgentIdentity?
 
     private struct AvatarKey: Hashable {
         let identity: PersonalAgentIdentity
@@ -185,7 +191,23 @@ final class PersonalAgentCenter {
         let was = isVisible
         if visible { visibleReporters.insert(reporter) } else { visibleReporters.remove(reporter) }
         guard isVisible != was else { return }
+        reportShown()
         if isVisible { observeSelected() } else { stopObserving() }
+    }
+
+    /// Tells the watch the dot whose conversation the window shows now, if any.
+    private func reportShown() {
+        watch?.setShown(isVisible ? selectedID : nil, by: ObjectIdentifier(self))
+    }
+
+    /// Shows `id` once it is among the agents read: now, if it is, or after the next connection reads it.
+    func reveal(_ id: PersonalAgentIdentity) async {
+        if agents.contains(where: { $0.id == id }) {
+            preferredID = nil
+            await select(id)
+        } else {
+            preferredID = id
+        }
     }
 
     private func observeSelected() {
@@ -249,9 +271,14 @@ final class PersonalAgentCenter {
             agents = values
             hasLoaded = true
             isLoading = false
-            if !values.contains(where: { $0.id == selectedID }) {
+            if let preferredID, values.contains(where: { $0.id == preferredID }) {
+                closeActivity()
+                selectedID = preferredID
+            } else if !values.contains(where: { $0.id == selectedID }) {
                 selectedID = values.first(where: \.isPrimary)?.id ?? values.first?.id
             }
+            preferredID = nil
+            reportShown()
             // A new connection rereads the profiles, whose signed picture locations and pauses may be new.
             resumedSinceRead = []
             unavailableAvatars = []
@@ -271,6 +298,7 @@ final class PersonalAgentCenter {
         cancelOutputs()
         events?.cancel()
         selectedID = id
+        reportShown()
         stopObserving()
         await showSelected()
     }
@@ -930,6 +958,7 @@ final class PersonalAgentCenter {
         cancelOutputs()
         agents = []
         selectedID = nil
+        reportShown()
         conversations = [:]
         detailsByAgent = [:]
         avatarData = [:]
@@ -948,6 +977,7 @@ final class PersonalAgentCenter {
             cancelOutputs()
             agents = []
             selectedID = nil
+            reportShown()
             conversations = [:]
             detailsByAgent = [:]
             avatarData = [:]
