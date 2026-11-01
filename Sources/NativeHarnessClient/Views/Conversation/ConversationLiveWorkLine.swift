@@ -75,8 +75,8 @@ struct ConversationLiveWorkLine<Cell: View>: View {
     }
 
     private func label(isOpen: Bool) -> some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            let elapsed = BackgroundTasksProjection.elapsedText(since: startedAt ?? firstObservedAt, now: context.date)
+        EverySecond { now in
+            let elapsed = BackgroundTasksProjection.elapsedText(since: startedAt ?? firstObservedAt, now: now)
             let detail = ConversationLiveWork.detail(steps: live.steps, elapsed: elapsed)
             HStack(alignment: .center, spacing: 6) {
                 mark
@@ -131,6 +131,26 @@ struct ConversationLiveWorkLine<Cell: View>: View {
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
         }
+    }
+}
+
+/// Content drawn again once a second, by a task of its own while the line is shown: the turn's
+/// elapsed time. A `TimelineView` in its place, in the running turn's hosting view
+/// (`ConversationTurnHost`), had the conversation around the turn laid out again with the turn's
+/// updates: each publication of a streaming message laid it out about six times instead of four in
+/// a shown window, and a dozen times or more in one that is not on screen.
+private struct EverySecond<Content: View>: View {
+    @ViewBuilder let content: (Date) -> Content
+    @State private var now = Date()
+
+    var body: some View {
+        content(now)
+            .task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(1))
+                    now = Date()
+                }
+            }
     }
 }
 
