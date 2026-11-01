@@ -560,11 +560,17 @@ struct NativeHarnessClientApp: App {
 #endif
                     // The newest install of each harness the person chose no runtime for, read off
                     // the main thread; only files changed since the last launch run `--version`.
-                    Task { await model.runtimeSelections.findNewest() }
+                    // Launch work that starts a harness runtime waits for it: a runtime started
+                    // before it, from the versions an earlier launch read, would be an older install
+                    // kept for the rest of the session.
+                    let newestRuntimes = Task { await model.runtimeSelections.findNewest() }
                     await model.restoreIndex()
                     if !model.usesVisualFixture {
                         // What the last quit cut off continues alongside the rest of the launch.
-                        Task { await model.continueWorkInterruptedByRestart() }
+                        Task {
+                            await newestRuntimes.value
+                            await model.continueWorkInterruptedByRestart()
+                        }
                         // Idle tasks' runtimes end while the memory saver is on, and resume at the next message.
                         model.startHarnessMemorySaver()
                         // And what a lost connection cuts off, once the network is back.
@@ -575,13 +581,19 @@ struct NativeHarnessClientApp: App {
                         model.pullRequests.setApplicationActive(NSApp.isActive)
                         model.startPullRequestLookups()
                         // Scheduled tasks run while Yardlet is open; one missed meanwhile runs once now.
-                        model.startScheduledTasks()
+                        Task {
+                            await newestRuntimes.value
+                            model.startScheduledTasks()
+                        }
                         await model.refreshNotificationPermission()
                         // The dots last opened are watched for new messages while their setting is on.
                         if !QABackground.isOn { model.startPersonalAgentWatch() }
                         await model.linkTasksStartedInTheClaudeAppOnce()
                         // The Claude app's and Codex's lists, now that the index is loaded.
-                        Task { await model.followSessionListsIfDue() }
+                        Task {
+                            await newestRuntimes.value
+                            await model.followSessionListsIfDue()
+                        }
                         // The phone remote listens only once the person turns it on in Settings.
                         if model.remoteControl == nil {
                             let remote = RemoteControlService.live(model: model)
