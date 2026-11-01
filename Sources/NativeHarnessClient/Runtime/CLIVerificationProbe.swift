@@ -17,7 +17,8 @@ protocol CLIVerifying: Sendable {
 /// - Codex: App Server `initialize` and `thread/list` with `limit` 1, Yardlet's own requests.
 /// - Claude Code: `--version`, then the stream-json `initialize` control request Yardlet sends
 ///   before every session (the same exchange the usage check makes).
-/// - Antigravity CLI: `agy models`, which must list a model.
+/// - Antigravity CLI: `agy models`, which must list a model, and from the version Yardlet runs over
+///   ACP (`AntigravityTransport`), ACP `initialize` on `agy acp` as well.
 /// - ACP harnesses: `--version`, then ACP `initialize` (no session).
 ///
 /// Other harnesses have no check, so Yardlet does not update them on its own.
@@ -34,7 +35,14 @@ struct CLIVerificationProbe: CLIVerifying {
         switch harness {
         case .codex: return await codex(executable)
         case .claudeCode: return await claude(executable)
-        case .antigravityCLI: return await antigravity(executable)
+        case .antigravityCLI:
+            let listed = await antigravity(executable)
+            guard listed == .passed else { return listed }
+            let version = await CLIProcess.run(CLICommand(executable: executable, arguments: ["--version"],
+                                                          timeout: CLIUpdatePlan.versionTimeout))
+            let reported = version.succeeded ? CLIVersion.parse(version.stdout + "\n" + version.stderr) : nil
+            guard AntigravityTransport.servesACP(version: reported) else { return .passed }
+            return await acp(executable, arguments: HarnessCatalog.descriptor(for: .antigravityCLI)?.launchArguments ?? ["acp"])
         default:
             guard let descriptor = HarnessCatalog.descriptor(for: harness), descriptor.transport == .acp else {
                 return .failed(L10n.string("Yardlet has no check for this CLI"))

@@ -8,8 +8,6 @@ struct ComposerConnectorsSlot: Equatable, Sendable {
     /// Nil where the harness has not reported its servers, or reports none.
     var sessionServers: [HarnessMCPServerStatus]?
     var carriesYardletConnectors: Bool
-    /// The harness has a route for Yardlet's tools but gets no connectors (Antigravity).
-    var connectorsUnsupported = false
     /// The harness lists Yardlet's tools again when told (Claude Code), so a change reaches a
     /// running task from its next turn; others read the list when the task starts or resumes.
     var toolListFollowsNextTurn = false
@@ -106,8 +104,6 @@ struct ComposerConnectorList: Equatable, Sendable {
     }
 
     let rows: [Row]
-    /// Said in place of Yardlet's connectors where the harness gets none.
-    var note: String? = nil
     /// A change to Yardlet's connectors reaches this task from its next turn (`ComposerConnectorsSlot`).
     var toolListFollowsNextTurn = false
 
@@ -132,7 +128,7 @@ struct ComposerConnectorList: Equatable, Sendable {
         taskState: (ConnectorRecord) -> ConnectorTaskState = { _ in .on },
         standInServerNames: Set<String> = []
     ) -> ComposerConnectorList? {
-        guard let slot, slot.carriesYardletConnectors || slot.sessionServers != nil || slot.connectorsUnsupported else {
+        guard let slot, slot.carriesYardletConnectors || slot.sessionServers != nil else {
             return nil
         }
         let yardletServer = slot.sessionServers?.first { $0.name == AgentToolEnvironment.serverName }
@@ -152,7 +148,7 @@ struct ComposerConnectorList: Equatable, Sendable {
                     }
                 }
                 switch taskState(record) {
-                case .on, .unsupportedHarness: break
+                case .on: break
                 case .off: state = .offInTask
                 case .harnessHasIt: state = .harnessHasIt
                 }
@@ -179,7 +175,6 @@ struct ComposerConnectorList: Equatable, Sendable {
         let ordered = rows.filter(\.needsAttention) + rows.filter { !$0.needsAttention }
         return ComposerConnectorList(
             rows: ordered,
-            note: slot.connectorsUnsupported ? L10n.string("Antigravity tasks don't get Yardlet's connectors.") : nil,
             toolListFollowsNextTurn: slot.toolListFollowsNextTurn
         )
     }

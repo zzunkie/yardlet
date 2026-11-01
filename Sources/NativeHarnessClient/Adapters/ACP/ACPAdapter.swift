@@ -7,7 +7,8 @@ actor ACPAdapter:
     HarnessWorkspaceRootsConfiguring,
     HarnessImageInputReporting,
     HarnessAgentToolConfiguring,
-    HarnessYardletInstructionsConfiguring {
+    HarnessYardletInstructionsConfiguring,
+    HarnessModelCatalogReporting {
     private struct PermissionContext: Sendable {
         let localSessionID: UUID
         let rpcID: JSONValue
@@ -53,6 +54,10 @@ actor ACPAdapter:
     private var additionalRootsByLocalSessionID: [UUID: [URL]] = [:]
     private var agentToolServerByLocalSessionID: [UUID: AgentToolServerLaunch] = [:]
     private var yardletInstructionsByLocalSessionID: [UUID: YardletInstructionsDelivery] = [:]
+    /// Antigravity: the permission mode Yardlet answers approvals by, and the models the session
+    /// listed (`AntigravityACPOptions`).
+    private var antigravityPermissionModeByLocalSessionID: [UUID: String] = [:]
+    private var antigravityModelsByLocalSessionID: [UUID: [ProviderCapabilityChoice]] = [:]
 
     init(
         kind: HarnessKind,
@@ -193,6 +198,12 @@ actor ACPAdapter:
         localSessionID: UUID,
         workspaceURL: URL
     ) async throws -> HarnessSessionHandle {
+        // A print-mode Antigravity task that never ran a turn has no conversation to load yet.
+        if kind == .antigravityCLI,
+           AntigravityACPOptions.isPrintModePlaceholder(providerSessionID, localSessionID: localSessionID) {
+            return try await createSession(CreateHarnessSessionRequest(
+                localSessionID: localSessionID, workspaceURL: workspaceURL, initialPrompt: nil))
+        }
         try await ensureInitialized(workspaceURL: workspaceURL, localSessionID: localSessionID)
         guard canLoadSession else {
             await stopTransportIfUnused()
@@ -363,7 +374,14 @@ actor ACPAdapter:
         var state = capabilityStateByLocalSessionID[session.localSessionID]
             ?? capabilityProjector.state(from: .object([:]), harness: kind)
         state.acceptsImageInput = advertisesImagePrompts
-        return state
+        return presented(state, for: session.localSessionID)
+    }
+
+    /// The session's controls as Yardlet shows them: Antigravity's under the names its print mode
+    /// and Yardlet's menus use, with its permission mode (`AntigravityACPOptions`).
+    private func presented(_ state: ProviderCapabilityState, for localSessionID: UUID) -> ProviderCapabilityState {
+        guard kind == .antigravityCLI else { return state }
+        return AntigravityACPOptions.project(state, permissionMode: antigravityPermissionModeByLocalSessionID[localSessionID])
     }
 
     func setProviderOption(
@@ -372,6 +390,32 @@ actor ACPAdapter:
         in session: HarnessSessionHandle
     ) async throws -> ProviderCapabilityState {
         try requireRegistered(session)
+        guard kind == .antigravityCLI else {
+            return try await setSessionOption(id: id, value: value, in: session)
+        }
+        let current = capabilityStateByLocalSessionID[session.localSessionID]
+            ?? capabilityProjector.state(from: .object([:]), harness: kind)
+        var state = current
+        switch try AntigravityACPOptions.step(id: id, value: value, selectors: current.selectors,
+                                              models: antigravityModelsByLocalSessionID[session.localSessionID] ?? []) {
+        case let .permission(mode):
+            antigravityPermissionModeByLocalSessionID[session.localSessionID] = mode
+        case let .send(values):
+            for config in values {
+                state = try await setSessionOption(id: config.id, value: config.value, in: session)
+            }
+        case .none:
+            break
+        }
+        state.acceptsImageInput = advertisesImagePrompts
+        return presented(state, for: session.localSessionID)
+    }
+
+    private func setSessionOption(
+        id: String,
+        value: String,
+        in session: HarnessSessionHandle
+    ) async throws -> ProviderCapabilityState {
         let requestID = takeRequestID()
         let request: JSONValue
         if id == "model",
@@ -459,6 +503,8 @@ actor ACPAdapter:
         additionalRootsByLocalSessionID.removeValue(forKey: session.localSessionID)
         agentToolServerByLocalSessionID.removeValue(forKey: session.localSessionID)
         yardletInstructionsByLocalSessionID.removeValue(forKey: session.localSessionID)
+        antigravityPermissionModeByLocalSessionID.removeValue(forKey: session.localSessionID)
+        antigravityModelsByLocalSessionID.removeValue(forKey: session.localSessionID)
         eventChannel.close(session.localSessionID)
         if handles.isEmpty {
             messageTask?.cancel()
@@ -534,7 +580,7 @@ actor ACPAdapter:
                let localSessionID = localSessionIDByProviderID[providerSessionID] {
                 completeAssistantIfNeeded(for: localSessionID, rawData: frame.data)
             }
-            acceptPermissionRequest(value, rpcID: rpcID, rawData: frame.data)
+            await acceptPermissionRequest(value, rpcID: rpcID, rawData: frame.data)
             return
         }
         if value["id"] != nil, value["method"] != nil {
@@ -614,6 +660,9 @@ actor ACPAdapter:
         state.acceptsImageInput = advertisesImagePrompts
         capabilityStateByLocalSessionID[handle.localSessionID] = state
         capabilitySourceByLocalSessionID[handle.localSessionID] = result
+        if kind == .antigravityCLI {
+            antigravityModelsByLocalSessionID[handle.localSessionID] = AntigravityACPOptions.availableModels(in: result)
+        }
         if result["configOptions"]?.arrayValue == nil && result["modes"] != nil {
             usesLegacyModeByLocalSessionID.insert(handle.localSessionID)
         }
@@ -634,7 +683,7 @@ actor ACPAdapter:
         _ value: JSONValue,
         rpcID: JSONValue,
         rawData: Data
-    ) {
+    ) async {
         guard let providerSessionID = value["params"]?["sessionId"]?.stringValue,
               let localSessionID = localSessionIDByProviderID[providerSessionID] else { return }
         let options = value["params"]?["options"]?.arrayValue ?? []
@@ -644,6 +693,19 @@ actor ACPAdapter:
         let allow = PermissionActionPreference.preferred(from: actions, decision: .allow)?.id
         let deny = PermissionActionPreference.preferred(from: actions, decision: .deny)?.id
         let toolCall = value["params"]?["toolCall"] ?? .object([:])
+        // An Antigravity task in Bypass permissions or Plan has Yardlet answer for it.
+        if kind == .antigravityCLI {
+            switch antigravityPermissionModeByLocalSessionID[localSessionID] {
+            case AntigravityPermissionMode.bypass?:
+                try? await transport.send(ACPProtocol.permissionResponse(id: rpcID, optionID: allow))
+                return
+            case AntigravityPermissionMode.plan?:
+                try? await transport.send(ACPProtocol.permissionResponse(id: rpcID, optionID: deny))
+                return
+            default:
+                break
+            }
+        }
         let requestID = "acp-permission-\(rpcID.stringValue ?? String(rpcID.integerValue ?? 0))"
         permissions[requestID] = PermissionContext(
             localSessionID: localSessionID,
@@ -759,6 +821,12 @@ actor ACPAdapter:
         rawData: Data? = nil
     ) {
         eventChannel.emit(payload, for: localSessionID, rawProviderEvent: rawData)
+    }
+
+    /// Antigravity's models as the session listed them; the other ACP agents report none here.
+    func advertisedModels(for localSessionID: UUID) -> [HarnessModelOption]? {
+        guard kind == .antigravityCLI else { return nil }
+        return AntigravityACPOptions.catalog(from: antigravityModelsByLocalSessionID[localSessionID] ?? [])
     }
 
     private func readVersion() throws -> String {

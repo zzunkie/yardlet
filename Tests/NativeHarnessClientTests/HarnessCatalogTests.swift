@@ -23,7 +23,7 @@ final class HarnessCatalogTests: XCTestCase {
         )
         XCTAssertEqual(
             descriptors.filter { $0.transport == .acp }.map(\.id),
-            [.openCode, .kimiCode, .grokBuild, .hermes]
+            [.openCode, .antigravityCLI, .kimiCode, .grokBuild, .hermes]
         )
         XCTAssertEqual(
             descriptors.filter { $0.transport == .piRPC }.map(\.id),
@@ -33,10 +33,6 @@ final class HarnessCatalogTests: XCTestCase {
         XCTAssertEqual(
             descriptors.filter { $0.transport == .cursorStreamJSON }.map(\.id),
             [.cursorAgent]
-        )
-        XCTAssertEqual(
-            descriptors.filter { $0.transport == .antigravityStreamJSON }.map(\.id),
-            [.antigravityCLI]
         )
     }
 

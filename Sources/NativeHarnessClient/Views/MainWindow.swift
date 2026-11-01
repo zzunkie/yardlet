@@ -2842,7 +2842,6 @@ extension HarnessTransportKind {
         case .acp: L10n.string("Agent Client Protocol")
         case .piRPC: L10n.string("Pi JSONL RPC")
         case .cursorStreamJSON: L10n.string("Cursor streaming JSON")
-        case .antigravityStreamJSON: L10n.string("Antigravity streaming JSON")
         }
     }
 }

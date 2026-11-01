@@ -340,7 +340,7 @@ final class ComposerAttachmentParityTests: XCTestCase {
             XCTAssertTrue(HarnessComposerInputPolicy(harness: harness).showsAttachmentControl)
             XCTAssertTrue(HarnessComposerInputPolicy(harness: harness).showsMentionControl)
         }
-        for harness in [HarnessKind.grokBuild, .openCode, .kimiCode, .hermes] {
+        for harness in [HarnessKind.grokBuild, .openCode, .antigravityCLI, .kimiCode, .hermes] {
             XCTAssertEqual(
                 HarnessComposerInputPolicy(harness: harness).imageSupport,
                 .negotiated,
@@ -350,7 +350,7 @@ final class ComposerAttachmentParityTests: XCTestCase {
             XCTAssertTrue(HarnessComposerInputPolicy(harness: harness).showsAttachmentControl)
             XCTAssertTrue(HarnessComposerInputPolicy(harness: harness).showsMentionControl)
         }
-        for harness in [HarnessKind.cursorAgent, .antigravityCLI] {
+        for harness in [HarnessKind.cursorAgent] {
             let policy = HarnessComposerInputPolicy(harness: harness)
             XCTAssertEqual(policy.imageSupport, .unavailable, "\(harness) has no image input")
             XCTAssertFalse(policy.showsAttachmentControl)

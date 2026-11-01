@@ -33,7 +33,7 @@ struct HarnessComposerInputPolicy: Equatable, Sendable {
             imageSupport = .always
         case .acp:
             imageSupport = .negotiated
-        case .cursorStreamJSON, .antigravityStreamJSON, .codexAppServer, nil:
+        case .cursorStreamJSON, .codexAppServer, nil:
             imageSupport = .unavailable
         }
     }

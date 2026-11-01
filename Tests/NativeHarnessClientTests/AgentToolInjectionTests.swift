@@ -73,10 +73,10 @@ final class AgentToolInjectionTests: XCTestCase {
     func testOnlyClaudeCodexAndACPHaveARoute() {
         XCTAssertEqual(AgentToolInjectionRoute.route(for: .claudeCode), .claudeMCPConfig)
         XCTAssertEqual(AgentToolInjectionRoute.route(for: .codex), .codexThreadConfig)
-        for harness in [HarnessKind.openCode, .kimiCode, .grokBuild, .hermes] {
+        for harness in [HarnessKind.openCode, .antigravityCLI, .kimiCode, .grokBuild, .hermes] {
             XCTAssertEqual(AgentToolInjectionRoute.route(for: harness), .acpSessionMCPServers, "\(harness)")
         }
-        for harness in [HarnessKind.museCode, .pi, .cursorAgent, .antigravityCLI] {
+        for harness in [HarnessKind.museCode, .pi, .cursorAgent] {
             XCTAssertNil(AgentToolInjectionRoute.route(for: harness), "\(harness) has no per-session route")
         }
     }

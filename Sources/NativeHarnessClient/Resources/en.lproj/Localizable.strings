@@ -402,7 +402,6 @@
 "%@ credential store" = "%@ credential store";
 "This CLI does not expose account quota in a stable machine-readable command." = "This CLI does not expose account quota in a stable machine-readable command.";
 "Cursor streaming JSON" = "Cursor streaming JSON";
-"Antigravity streaming JSON" = "Antigravity streaming JSON";
 "Agent activity" = "Agent activity";
 "Agent reported an error" = "Agent reported an error";
 "Headless session is not attached" = "Headless session is not attached";
@@ -1341,13 +1340,12 @@
 "Off for this task" = "Off for this task";
 "Uses the harness's own server" = "Uses the harness's own server";
 "Uses Yardlet's connector" = "Uses Yardlet's connector";
-"Antigravity tasks don't get Yardlet's connectors." = "Antigravity tasks don't get Yardlet's connectors.";
 /* Connectors redesign (2026-10-17): the composer's "+" menu and Settings → Connectors. */
 "No connectors yet." = "No connectors yet.";
 "The harness's own servers" = "The harness's own servers";
 "Needs sign-in" = "Needs sign-in";
 "Error" = "Error";
-"Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account. Antigravity isn't supported." = "Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account. Antigravity isn't supported.";
+"Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account." = "Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account.";
 "Yardlet couldn't read %@, so your saved connectors aren't shown. The file is left as it is, and changes made here are lost when Yardlet quits." = "Yardlet couldn't read %@, so your saved connectors aren't shown. The file is left as it is, and changes made here are lost when Yardlet quits.";
 "Your connectors" = "Your connectors";
 "No connectors yet" = "No connectors yet";
@@ -1937,6 +1935,8 @@
 "That Antigravity permission mode is not available" = "That Antigravity permission mode is not available";
 "Bypass permissions asks first and then passes --dangerously-skip-permissions." = "Bypass permissions asks first and then passes --dangerously-skip-permissions.";
 "Antigravity will change files and run commands without asking." = "Antigravity will change files and run commands without asking.";
+"Antigravity asks before actions that need approval. Bypass permissions approves every request without asking." = "Antigravity asks before actions that need approval. Bypass permissions approves every request without asking.";
+"Antigravity CLI does not offer %@ to Yardlet" = "Antigravity CLI does not offer %@ to Yardlet";
 "Continue a conversation started in the Claude or Codex app or in Antigravity CLI. Its history stays where it is." = "Continue a conversation started in the Claude or Codex app or in Antigravity CLI. Its history stays where it is.";
 "Continue a conversation started in the Claude or Codex app or in Antigravity CLI." = "Continue a conversation started in the Claude or Codex app or in Antigravity CLI.";
 "Conversations from the Claude and Codex apps, Claude Code and Codex run elsewhere, and Antigravity CLI. Their history stays where it is." = "Conversations from the Claude and Codex apps, Claude Code and Codex run elsewhere, and Antigravity CLI. Their history stays where it is.";

@@ -557,8 +557,6 @@ enum ConnectorTaskState: Equatable, Sendable {
     /// cannot be told to leave it out (or Yardlet's connector was not connected when the task
     /// started), so Yardlet leaves its copy out rather than give the model the same tools twice.
     case harnessHasIt
-    /// Antigravity tasks get no connectors.
-    case unsupportedHarness
 }
 
 /// What Yardlet knows about a task when it injects the Yardlet MCP server: its harness and the
@@ -575,9 +573,6 @@ struct ConnectorTaskScope: Equatable, Sendable {
     /// The programs the harness starts itself (`NativeMCPServer.programKey`): a program connector
     /// that starts the same package stays out of the task, so the model gets the harness's copy.
     var nativePrograms: Set<String> = []
-
-    /// Antigravity's per-task route is going away, so its tasks get no connectors.
-    var carriesConnectors: Bool { harness != .antigravityCLI }
 
     /// The harness's own servers left out of this task for Yardlet's connectors.
     var leftOutNativeServers: [HarnessRemoteServer] {

@@ -31,8 +31,9 @@ struct YardletInstructionsDelivery: Hashable, Sendable {
 ///   do, but one OpenCode process serves the tasks of every folder and reads it once, so it could
 ///   follow neither a project's text nor its switch), `muse serve` (only an internal evaluation
 ///   variable), `kimi acp` (no options), `hermes acp` (its ephemeral prompt is read by the TUI and
-///   gateway only), and `cursor-agent` and `agy` (no such flag; Antigravity's `--add-dir` route was
-///   removed on purpose).
+///   gateway only), `cursor-agent`, and `agy` (print mode has no such flag and its `--add-dir` route
+///   was removed on purpose; `agy acp` advertises `_meta.antigravity.systemPrompt` in `initialize`
+///   but documents no shape for it).
 enum YardletInstructionsRoute: String, CaseIterable, Sendable {
     case claudeAppendSystemPrompt
     case codexDeveloperInstructions

@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 @testable import NativeHarnessClient
+@testable import YardletAgentTools
 
 final class AdditionalHarnessLiveTests: XCTestCase {
     func testLiveOpenCodeACPCreateAndStream() async throws {
@@ -40,6 +41,89 @@ final class AdditionalHarnessLiveTests: XCTestCase {
             throw error
         }
         await adapter.close(handle)
+    }
+
+    /// Antigravity CLI over ACP, as Yardlet runs it from 1.4.11: a new task, an approval the agent
+    /// asks for, a Yardlet tool reached through `yardlet-mcp` and the app's socket, the conversation
+    /// continued by another process, and `/usage`, with three short turns on the account already
+    /// signed in. It runs `agy acp` with a temporary `--gemini-dir`, so nothing is added to the
+    /// person's conversations, and leaves the sign-in as it is.
+    @MainActor
+    func testLiveAntigravityACPAsksCallsYardletToolsAndContinues() async throws {
+        guard let binaryPath = ProcessInfo.processInfo.environment["NHC_ANTIGRAVITY_LIVE_BINARY"] else {
+            throw XCTSkip("Set NHC_ANTIGRAVITY_LIVE_BINARY for the bounded Antigravity ACP smoke (three short turns)")
+        }
+        let executable = URL(filePath: binaryPath)
+        let routing = HarnessRegistry(versions: RuntimeVersionCache(defaults: nil))
+        let servesACP = await routing.servesACP(.antigravityCLI, executableURL: executable)
+        XCTAssertTrue(servesACP, "This runtime's version runs over ACP")
+
+        let rootURL = try makeTemporaryRoot(named: "antigravity")
+        defer { try? FileManager.default.removeItem(at: rootURL) }
+        let workspace = rootURL.appending(path: "work", directoryHint: .isDirectory)
+        let geminiDirectory = rootURL.appending(path: "gemini", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let arguments = ["acp", "--gemini-dir", geminiDirectory.path(percentEncoded: false)]
+
+        // Yardlet's tools, as a task gets them: `yardlet-mcp` reaching the broker over a socket.
+        // A socket path has to stay short, so it gets a folder of its own.
+        let socketDirectory = FileManager.default.temporaryDirectory.appending(path: "yag-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: socketDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: socketDirectory) }
+        let socket = socketDirectory.appending(path: "tools.sock").path(percentEncoded: false)
+        let suggestions = LiveSuggestionRecorder()
+        let broker = AgentToolBroker(
+            environment: AgentToolBroker.Environment(
+                executableURL: URL(filePath: ProcessInfo.processInfo.environment["NHC_YARDLET_MCP_BINARY"]
+                    ?? Bundle(for: Self.self).bundleURL.deletingLastPathComponent().appending(path: "yardlet-mcp")
+                        .path(percentEncoded: false)),
+                endpoint: socket, privateDirectory: rootURL, isEnabled: { false }),
+            tools: BrowserAgentTools(usesMacEditingCommands: true, pages: { _ in BrowserAgentPage(cdp: ScriptedCDP()) }))
+        broker.suggestions = suggestions
+        let listener = try UnixSocketListener(path: socket) { body, peer in await broker.respond(to: body, peer: peer) }
+        defer { listener.stop() }
+
+        let localID = UUID()
+        let adapter = ACPAdapter(kind: .antigravityCLI, executableURL: executable, launchArguments: arguments)
+        await adapter.setAgentToolServer(broker.agentToolServer(for: localID, workspaceRoots: [workspace]), for: localID)
+        let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: localID, workspaceURL: workspace, initialPrompt: nil))
+        let capabilities = try await adapter.providerCapabilities(for: handle)
+        XCTAssertEqual(capabilities.selectors.first { $0.id == AntigravityPermissionMode.optionID }?.choices.map(\.value),
+                       [AntigravityPermissionMode.standard, AntigravityPermissionMode.bypass])
+        let session = LiveApprovingSession(adapter: adapter, handle: handle)
+        await session.start()
+
+        let first = try await session.turn("Create a file named hello.txt containing the word hi in the current folder. "
+                                           + "Then reply with just DONE.")
+        XCTAssertGreaterThan(first.approvals, 0, "The agent asked before writing the file")
+        XCTAssertEqual(try String(contentsOf: workspace.appending(path: "hello.txt"), encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines), "hi")
+
+        _ = try await session.turn("Call the spawn_task tool of the yardlet MCP server once, with title \"Check the live "
+                                   + "ACP run\", tldr \"A live check suggested this.\" and prompt \"Nothing to do.\". "
+                                   + "Then reply with just DONE.")
+        XCTAssertEqual(suggestions.calls.first, "spawn_task", "The agent reached Yardlet's tool through yardlet-mcp")
+        await session.stop()
+        await adapter.close(handle)
+
+        // Another process continues the same conversation.
+        let resumedAdapter = ACPAdapter(kind: .antigravityCLI, executableURL: executable, launchArguments: arguments)
+        let resumed = try await resumedAdapter.resumeSession(providerSessionID: handle.providerSessionID,
+                                                             localSessionID: localID, workspaceURL: workspace)
+        let resumedSession = LiveApprovingSession(adapter: resumedAdapter, handle: resumed)
+        await resumedSession.start()
+        let third = try await resumedSession.turn("What is the name of the file you created earlier in this conversation? "
+                                                  + "Reply with just the file name.")
+        XCTAssertTrue(third.text.contains("hello.txt"), third.text)
+        await resumedSession.stop()
+        await resumedAdapter.close(resumed)
+
+        // The plan limits, without a turn.
+        let usage = try await AccountCommandRunner.run(executableURL: executable, arguments: AntigravityUsage.arguments,
+                                                       timeout: .seconds(30))
+        let metrics = try XCTUnwrap(AntigravityUsage.metrics(fromOutput: usage.output))
+        XCTAssertTrue(metrics.allSatisfy { $0.id.hasPrefix("antigravity:") && $0.usedFraction != nil })
     }
 
     func testLivePiRPCSessionEventProjectionAndResume() async throws {
@@ -301,6 +385,81 @@ final class AdditionalHarnessLiveTests: XCTestCase {
             throw HarnessAdapterError.invalidProviderEvent(
                 "Pi live turn produced neither assistant text nor a provider error"
             )
+        }
+    }
+}
+
+/// The task suggestion tools' answers in a live run: it keeps which tools were called.
+private final class LiveSuggestionRecorder: TaskSuggestionToolHandling, @unchecked Sendable {
+    private let lock = NSLock()
+    private var called: [String] = []
+
+    var calls: [String] { lock.withLock { called } }
+
+    func callTaskSuggestionTool(named name: String, arguments: ToolJSON, sessionID: UUID) async -> AgentToolResult {
+        lock.withLock { called.append(name) }
+        return .text("Suggested.")
+    }
+}
+
+/// One live ACP session's events, read by a single consumer that allows every approval the agent
+/// asks for, so each turn can wait for its own completion.
+private actor LiveApprovingSession {
+    struct Turn {
+        let text: String
+        let approvals: Int
+    }
+
+    private let adapter: ACPAdapter
+    private let handle: HarnessSessionHandle
+    private var consumer: Task<Void, Never>?
+    private var payloads: [HarnessEventPayload] = []
+    private var approvals = 0
+    private var completed = 0
+    private var failure: String?
+
+    init(adapter: ACPAdapter, handle: HarnessSessionHandle) {
+        self.adapter = adapter
+        self.handle = handle
+    }
+
+    func start() async {
+        let events = await adapter.events(for: handle)
+        consumer = Task { [weak self] in
+            for await event in events { await self?.accept(event.payload) }
+        }
+    }
+
+    func stop() {
+        consumer?.cancel()
+    }
+
+    func turn(_ prompt: String) async throws -> Turn {
+        let start = payloads.count
+        let approvalsBefore = approvals
+        let completedBefore = completed
+        try await adapter.send(prompt, to: handle)
+        try await waitUntil(timeout: .seconds(180)) { completed > completedBefore || failure != nil }
+        if let failure { throw HarnessAdapterError.invalidProviderEvent(failure) }
+        let text = payloads[start...].compactMap { payload -> String? in
+            if case let .assistantMessageCompleted(text) = payload { return text }
+            return nil
+        }.joined(separator: "\n")
+        return Turn(text: text, approvals: approvals - approvalsBefore)
+    }
+
+    private func accept(_ payload: HarnessEventPayload) async {
+        payloads.append(payload)
+        switch payload {
+        case let .permissionRequested(request):
+            approvals += 1
+            try? await adapter.respond(to: request.id, decision: .allow, in: handle)
+        case .turnCompleted:
+            completed += 1
+        case let .error(message, _, _):
+            failure = message
+        default:
+            break
         }
     }
 }

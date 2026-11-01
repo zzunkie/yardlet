@@ -226,7 +226,7 @@ struct SessionRailContent: Equatable {
             usageBreakdowns: options.usageBreakdowns,
             usage: account.flatMap { $0.windows.isEmpty ? nil : $0 },
             // A list with nothing in it is no card (Claude's: "when there is at least one connector").
-            connectors: connectors.flatMap { $0.rows.isEmpty && $0.note == nil ? nil : $0 },
+            connectors: connectors.flatMap { $0.rows.isEmpty ? nil : $0 },
             progress: plan.flatMap { $0.steps.isEmpty ? nil : Progress(plan: $0) },
             changes: hasChanges ? changes : nil,
             agents: SessionRailAgents.make(harness: session.harness, entries: entries, codexState: codexState,

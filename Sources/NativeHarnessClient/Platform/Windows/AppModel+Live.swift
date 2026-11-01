@@ -14,11 +14,14 @@ extension AppModel {
             let repository = try SQLiteSessionRepository(
                 databaseURL: storageRootURL.appending(path: "session-index.sqlite3")
             )
+            // One record of the versions runtimes reported, for choosing among installs and for
+            // the way a runtime runs (Antigravity CLI over ACP or in print mode).
+            let runtimeVersions = RuntimeVersionCache(defaults: defaults)
             let model = AppModel(
                 store: SessionStore(repository: repository),
-                runtimeSelections: RuntimeSelectionStore(defaults: defaults),
+                runtimeSelections: RuntimeSelectionStore(defaults: defaults, versions: runtimeVersions),
                 registry: HarnessRegistry(codexEnvironmentManager: codexEnvironmentManager,
-                                          runtimeOverrides: .shared),
+                                          runtimeOverrides: .shared, versions: runtimeVersions),
                 connections: ProviderConnectionStore(fileURL: storageRootURL.appending(path: "provider-connections.json"),
                     snapshotCacheURL: storageRootURL.appending(path: ProviderConnectionStore.snapshotCacheFileName),
                     defaults: defaults),

@@ -402,7 +402,6 @@
 "%@ credential store" = "%@ 인증 저장소";
 "This CLI does not expose account quota in a stable machine-readable command." = "이 CLI는 안정적인 기계 판독 명령으로 계정 할당량을 제공하지 않습니다.";
 "Cursor streaming JSON" = "Cursor 스트리밍 JSON";
-"Antigravity streaming JSON" = "Antigravity 스트리밍 JSON";
 "Agent activity" = "에이전트 활동";
 "Agent reported an error" = "에이전트가 오류를 보고했습니다";
 "Headless session is not attached" = "헤드리스 세션이 연결되지 않았습니다";
@@ -1341,13 +1340,12 @@
 "Off for this task" = "이 작업에서 꺼짐";
 "Uses the harness's own server" = "하네스 자체 서버 사용";
 "Uses Yardlet's connector" = "Yardlet 커넥터 사용";
-"Antigravity tasks don't get Yardlet's connectors." = "Antigravity는 지원하지 않음: Antigravity 작업에는 Yardlet 커넥터가 들어가지 않습니다.";
 /* Connectors redesign (2026-10-17): the composer's "+" menu and Settings → Connectors. */
 "No connectors yet." = "연결한 커넥터가 없습니다.";
 "The harness's own servers" = "하네스 자체 서버";
 "Needs sign-in" = "로그인 필요";
 "Error" = "오류";
-"Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account. Antigravity isn't supported." = "여기서 연결한 서비스의 도구는 Yardlet이 시작하거나 재개하는 모든 작업에서 씁니다. Claude Code·Codex·ACP 하네스와 모든 계정에 같고, Antigravity는 지원하지 않습니다.";
+"Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account." = "여기서 연결한 서비스의 도구는 Yardlet이 시작하거나 재개하는 모든 작업에서 씁니다. Claude Code·Codex·ACP 하네스와 모든 계정에 같습니다.";
 "Yardlet couldn't read %@, so your saved connectors aren't shown. The file is left as it is, and changes made here are lost when Yardlet quits." = "%@ 파일을 읽지 못해 저장된 커넥터를 표시하지 못했습니다. 파일은 그대로 두었으며, 여기서 바꾼 내용은 Yardlet을 끄면 사라집니다.";
 "Your connectors" = "내 커넥터";
 "No connectors yet" = "아직 연결한 커넥터가 없습니다";
@@ -1937,6 +1935,8 @@
 "That Antigravity permission mode is not available" = "해당 Antigravity 권한 모드를 사용할 수 없습니다";
 "Bypass permissions asks first and then passes --dangerously-skip-permissions." = "권한 우회는 먼저 묻고 --dangerously-skip-permissions로 실행합니다.";
 "Antigravity will change files and run commands without asking." = "Antigravity가 묻지 않고 파일을 바꾸고 명령을 실행합니다.";
+"Antigravity asks before actions that need approval. Bypass permissions approves every request without asking." = "Antigravity는 승인이 필요한 작업 전에 묻습니다. 권한 우회를 고르면 묻지 않고 모든 요청을 승인합니다.";
+"Antigravity CLI does not offer %@ to Yardlet" = "Antigravity CLI가 Yardlet에 %@ 모델을 제공하지 않습니다";
 "Continue a conversation started in the Claude or Codex app or in Antigravity CLI. Its history stays where it is." = "Claude 앱, Codex 앱이나 Antigravity CLI에서 시작한 대화를 Yardlet에서 이어갑니다. 기록은 원래 자리에 그대로 둡니다.";
 "Continue a conversation started in the Claude or Codex app or in Antigravity CLI." = "Claude 앱, Codex 앱이나 Antigravity CLI에서 시작한 대화를 이어갑니다.";
 "Conversations from the Claude and Codex apps, Claude Code and Codex run elsewhere, and Antigravity CLI. Their history stays where it is." = "Claude 앱과 Codex 앱, 그 밖에서 실행한 Claude Code·Codex, Antigravity CLI의 대화입니다. 기록은 원래 자리에 그대로 둡니다.";

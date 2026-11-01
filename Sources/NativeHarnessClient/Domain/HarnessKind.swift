@@ -46,7 +46,6 @@ enum HarnessTransportKind: String, Codable, Hashable, Sendable {
     case acp
     case piRPC
     case cursorStreamJSON
-    case antigravityStreamJSON
 }
 
 struct HarnessDescriptor: Identifiable, Codable, Hashable, Sendable {
@@ -154,9 +153,9 @@ enum HarnessCatalog {
             displayName: "Antigravity CLI",
             shortName: "Antigravity",
             symbolName: "arrow.up.and.down.and.arrow.left.and.right",
-            transport: .antigravityStreamJSON,
+            transport: .acp,
             executableName: "agy",
-            launchArguments: ["--print", "--output-format", "stream-json"],
+            launchArguments: ["acp"],
             relativeExecutablePaths: [".local/bin/agy"],
             websiteURL: URL(string: "https://antigravity.google/docs/cli/getting-started")!
         ),

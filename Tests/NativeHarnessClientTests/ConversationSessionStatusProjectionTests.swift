@@ -54,14 +54,14 @@ final class ConversationSessionStatusProjectionTests: XCTestCase {
             .claudeCode,
             .museCode,
             .openCode,
+            .antigravityCLI,
             .kimiCode,
             .grokBuild,
             .hermes,
             .pi
         ]
         let unavailable: Set<HarnessKind> = [
-            .cursorAgent,
-            .antigravityCLI
+            .cursorAgent
         ]
 
         XCTAssertEqual(

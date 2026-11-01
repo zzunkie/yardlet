@@ -29,7 +29,7 @@ actor HarnessAccountBroker {
                 return try await piCodexSnapshot(executableURL: executableURL)
             }
             if descriptor.id == .antigravityCLI {
-                return antigravitySnapshot(descriptor: descriptor)
+                return await antigravitySnapshot(descriptor: descriptor, executableURL: executableURL)
             }
             if descriptor.id == .museCode {
                 return await museCodeSnapshot(descriptor: descriptor)
@@ -466,8 +466,16 @@ actor HarnessAccountBroker {
         )
     }
 
-    private func antigravitySnapshot(descriptor: HarnessDescriptor) -> HarnessAccountSnapshot {
+    private func antigravitySnapshot(descriptor: HarnessDescriptor, executableURL: URL) async -> HarnessAccountSnapshot {
         let state = Self.antigravityCredentialState()
+        // The plan limits, which the CLI reports without a turn; none while signed out or unread.
+        var usage: [AccountUsageMetric] = []
+        if state == .signedIn,
+           let result = try? await AccountCommandRunner.run(executableURL: executableURL, arguments: AntigravityUsage.arguments,
+                                                            environment: connection?.environment ?? [:],
+                                                            timeout: .seconds(30)) {
+            usage = AntigravityUsage.metrics(fromOutput: result.output) ?? []
+        }
         let detail: String
         switch state {
         case .signedIn:
@@ -486,7 +494,7 @@ actor HarnessAccountBroker {
             detail: detail,
             credentialOwner: L10n.string("macOS Keychain (Antigravity CLI)"),
             checkedAt: Date(),
-            usage: [notExposedUsage()],
+            usage: usage,
             canLogin: state != .signedIn,
             canLogout: state == .signedIn
         )

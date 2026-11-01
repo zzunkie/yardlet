@@ -4890,6 +4890,9 @@ final class AppModel {
                 modelCatalogs.recordCodex(models, for: connection)
             }
         case .antigravityCLI:
+            // Over ACP every session is a conversation the CLI keeps, so the list comes from the
+            // tasks that attach (`rememberAdvertisedModels`) instead.
+            guard await !registry.servesACP(.antigravityCLI, executableURL: runtimeURL) else { return }
             // A session that runs nothing: its lists are `agy models` and its kin, which send no prompt.
             let adapter = await registry.adapter(for: .antigravityCLI, executableURL: runtimeURL,
                                                  environmentScope: .native, connection: nil)

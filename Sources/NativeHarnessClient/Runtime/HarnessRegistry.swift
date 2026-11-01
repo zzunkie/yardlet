@@ -34,7 +34,7 @@ struct HarnessRoutingPolicy: Sendable {
         if harness == .codex {
             return codex
         }
-        if harness == .cursorAgent || harness == .antigravityCLI {
+        if harness == .cursorAgent {
             return structuredHeadless
         }
         if harness == .claudeCode {
@@ -68,6 +68,10 @@ actor HarnessRegistry {
     private let routingPolicy: HarnessRoutingPolicy
     /// The earlier CLI version to start in place of an install whose update failed Yardlet's check.
     private let runtimeOverrides: CLIRuntimeOverrides?
+    /// The versions runtimes reported, read again only when a file changes. Antigravity CLI runs
+    /// over ACP from the version that serves it and in print mode before (`AntigravityTransport`);
+    /// without this, it keeps print mode.
+    private let versions: RuntimeVersionCache?
     private var adapters: [Key: any HarnessAdapter] = [:]
     /// The adapters start each task's harness in the task's folder, so a task whose folder is gone
     /// cannot be run (`TaskFolderMissing`). Its own adapters do; a factory's are the caller's, which
@@ -79,6 +83,7 @@ actor HarnessRegistry {
         codexEnvironmentManager: CodexEnvironmentManager? = nil,
         routingPolicy: HarnessRoutingPolicy = .productDefault,
         runtimeOverrides: CLIRuntimeOverrides? = nil,
+        versions: RuntimeVersionCache? = nil,
         startsHarnessesInTaskFolders: Bool? = nil
     ) {
         self.factory = factory
@@ -86,6 +91,7 @@ actor HarnessRegistry {
         self.codexEnvironmentManager = codexEnvironmentManager
         self.routingPolicy = routingPolicy
         self.runtimeOverrides = runtimeOverrides
+        self.versions = versions
     }
 
     func adapter(
@@ -93,7 +99,7 @@ actor HarnessRegistry {
         executableURL: URL,
         environmentScope: SessionEnvironmentScope = .native,
         connection: ProviderConnection? = nil
-    ) -> any HarnessAdapter {
+    ) async -> any HarnessAdapter {
         let key = Key(
             harness: harness,
             executableURL: executableURL.standardizedFileURL,
@@ -105,15 +111,33 @@ actor HarnessRegistry {
         }
         // The task keeps the runtime path it recorded; only the process started for it changes.
         let started = runtimeOverrides?.executable(for: harness, requested: key.executableURL) ?? key.executableURL
+        let antigravityPrintMode = factory == nil && harness == .antigravityCLI
+            ? !(await servesACP(.antigravityCLI, executableURL: started)) : false
+        // Another request may have made it while the version was read.
+        if let adapter = adapters[key] {
+            return adapter
+        }
         let adapter = factory?(harness, started)
             ?? makeDefaultAdapter(
                 harness: harness,
                 executableURL: started,
                 environmentScope: environmentScope,
-                connection: connection
+                connection: connection,
+                antigravityPrintMode: antigravityPrintMode
             )
         adapters[key] = adapter
         return adapter
+    }
+
+    /// Whether `harness` at `executableURL` runs over ACP, from the version the runtime reported
+    /// (`--version` runs only when the file changed since it was last read). Antigravity CLI does
+    /// from `AntigravityTransport.acpMinimum`; every other harness keeps its catalog transport.
+    func servesACP(_ harness: HarnessKind, executableURL: URL) async -> Bool {
+        guard HarnessCatalog.descriptor(for: harness)?.transport == .acp else { return false }
+        guard harness == .antigravityCLI else { return true }
+        let started = runtimeOverrides?.executable(for: harness, requested: executableURL.standardizedFileURL)
+            ?? executableURL.standardizedFileURL
+        return AntigravityTransport.servesACP(version: await versions?.version(of: started))
     }
 
     func invalidateAll() {
@@ -141,7 +165,8 @@ actor HarnessRegistry {
         harness: HarnessKind,
         executableURL: URL,
         environmentScope: SessionEnvironmentScope,
-        connection: ProviderConnection?
+        connection: ProviderConnection?,
+        antigravityPrintMode: Bool
     ) -> any HarnessAdapter {
         if harness == .codex {
             let legacy = CodexAdapter(
@@ -195,7 +220,7 @@ actor HarnessRegistry {
                 )
             }
         }
-        if HarnessCatalog.descriptor(for: harness)?.transport == .acp {
+        if HarnessCatalog.descriptor(for: harness)?.transport == .acp, !antigravityPrintMode {
             let legacy = ACPAdapter(kind: harness, executableURL: executableURL,
                 launchArguments: (HarnessCatalog.descriptor(for: harness)?.launchArguments ?? []) + (connection?.launchArguments ?? []),
                 launchEnvironmentOverrides: connection?.environment)

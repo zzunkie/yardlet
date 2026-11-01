@@ -103,7 +103,7 @@ struct AgentToolServerLaunch: Equatable, Sendable {
 }
 
 /// Which per-session route a harness offers for the Yardlet MCP server. Harnesses with none
-/// (Muse's MSP, Pi RPC, Cursor and Antigravity headless) run without it; their users can still
+/// (Muse's MSP, Pi RPC, Cursor, and Antigravity in print mode) run without it; their users can still
 /// register MCP servers in the harness itself.
 enum AgentToolInjectionRoute: Equatable, Sendable {
     /// Claude Code `--mcp-config`.
@@ -125,7 +125,7 @@ enum AgentToolInjectionRoute: Equatable, Sendable {
 
 /// Optional Yardlet tool surface. An adapter whose harness takes MCP servers per session gets the
 /// Yardlet server before the session starts, resumes, or forks; nil leaves the session without
-/// it. Adapters with no such route (Muse, Pi, Cursor, Antigravity) do not conform.
+/// it. Adapters with no such route (Muse, Pi, Cursor, Antigravity in print mode) do not conform.
 protocol HarnessAgentToolConfiguring: Actor {
     func setAgentToolServer(_ server: AgentToolServerLaunch?, for localSessionID: UUID) async
 }

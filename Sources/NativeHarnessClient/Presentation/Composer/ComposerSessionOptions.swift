@@ -379,16 +379,13 @@ enum ComposerSessionOptionsProjection {
     }
 
     /// A session gets Yardlet's connectors where its harness takes the Yardlet MCP server per
-    /// session (Claude, Codex, ACP); the servers are whatever the harness reported. Antigravity
-    /// gets none (`ConnectorTaskScope.carriesConnectors`), and its list says so.
+    /// session (Claude, Codex, ACP); the servers are whatever the harness reported.
     private static func connectorsSlot(harness: HarnessKind, servers: [HarnessMCPServerStatus]?) -> ComposerConnectorsSlot? {
         let route = AgentToolInjectionRoute.route(for: harness)
-        let unsupported = !ConnectorTaskScope(harness: harness).carriesConnectors
-        let carries = route != nil && !unsupported
-        guard carries || unsupported || servers != nil else { return nil }
+        let carries = route != nil
+        guard carries || servers != nil else { return nil }
         // Claude Code lists the server's tools again on `notifications/tools/list_changed`.
         return ComposerConnectorsSlot(sessionServers: servers, carriesYardletConnectors: carries,
-                                      connectorsUnsupported: unsupported,
                                       toolListFollowsNextTurn: carries && route == .claudeMCPConfig)
     }
 
@@ -423,10 +420,8 @@ enum ComposerSessionOptionsProjection {
             selector = claudeModeSelector(current: session.providerOptions[ClaudeLaunchOption.permissionMode])
         }
         if selector == nil, harness == .antigravityCLI {
-            // An Antigravity task not attached yet shows the mode its next run takes; opening the
-            // menu attaches (which starts nothing) and reads whether the account has Auto.
-            selector = AntigravityPermissionMode.selector(current: antigravitySavedPermissionMode(session),
-                                                          includesAuto: false)
+            // An Antigravity task not attached yet shows the mode it attaches with.
+            selector = AntigravityPermissionMode.askingSelector(current: antigravitySavedPermissionMode(session))
         }
         guard selector != nil || hasPending || supportsRequests else { return nil }
         let title: String
@@ -642,10 +637,9 @@ extension ComposerSessionOptionsProjection {
         return options
     }
 
-    /// Antigravity's permission modes for the new task's first run (Auto shows once a task has
-    /// read that the account has it). Bypass permissions asks first here too.
+    /// Antigravity's permission modes for the new task. Bypass permissions asks first here too.
     private static func antigravityLaunchPermission(_ chosen: String?) -> ComposerPermissionSlot {
-        let selector = AntigravityPermissionMode.selector(current: chosen, includesAuto: false)
+        let selector = AntigravityPermissionMode.askingSelector(current: chosen)
         return ComposerPermissionSlot(
             title: ProviderCapabilityAccessibility.selectedChoiceName(for: selector), selector: selector,
             confirmations: antigravityPermissionConfirmations, canChoose: true, apply: .providerOption,
@@ -740,7 +734,8 @@ enum NewTaskModelProjection {
             var chosen = choice ?? NewTaskModelChoice(model: nil)
             switch id {
             case StructuredHeadlessOptionID.permissionMode:
-                guard AntigravityPermissionMode.values(includesAuto: false).contains(value) else { return nil }
+                guard AntigravityPermissionMode.askingSelector(current: nil).choices.contains(where: { $0.value == value })
+                else { return nil }
                 chosen.permissionMode = value == AntigravityPermissionMode.standard ? nil : value
             case StructuredHeadlessOptionID.model:
                 if value == "default" {

@@ -127,6 +127,33 @@ enum AntigravityPermissionMode {
                 displayName(value).map { ProviderCapabilityChoice(value: value, name: $0, description: nil) }
             })
     }
+
+    /// Over ACP (`agy acp`) the agent asks before what needs approval, and has no modes of its own:
+    /// Default shows each request, Bypass permissions answers yes to all of them, and Plan, kept by
+    /// read-only runs and by tasks from print mode, answers no. Accept edits and Auto have no
+    /// counterpart there, so a task that kept one asks.
+    static func askingValue(_ saved: String?) -> String {
+        switch saved {
+        case bypass: bypass
+        case plan: plan
+        default: standard
+        }
+    }
+
+    /// The modes over ACP: Default and Bypass permissions, and Plan for a task that has it.
+    static func askingSelector(current: String?) -> ProviderCapabilitySelector {
+        let current = askingValue(current)
+        let values = current == plan ? [standard, plan, bypass] : [standard, bypass]
+        return ProviderCapabilitySelector(
+            id: optionID,
+            name: L10n.string("Permission mode"),
+            description: L10n.string("Antigravity asks before actions that need approval. Bypass permissions approves every request without asking."),
+            category: "mode",
+            currentValue: current,
+            choices: values.compactMap { value in
+                displayName(value).map { ProviderCapabilityChoice(value: value, name: $0, description: nil) }
+            })
+    }
 }
 
 /// The model menu of an Antigravity task that has not listed its models in this run: its own

@@ -21,8 +21,7 @@ struct HarnessPresentationPolicy: Equatable, Sendable {
             return
         }
         switch HarnessCatalog.descriptor(for: harness)?.transport {
-        case .claudeStreamJSON, .msp, .acp, .piRPC, .cursorStreamJSON,
-             .antigravityStreamJSON:
+        case .claudeStreamJSON, .msp, .acp, .piRPC, .cursorStreamJSON:
             capabilitySurface = .liveProvider
         case .codexAppServer, nil:
             capabilitySurface = .informational
