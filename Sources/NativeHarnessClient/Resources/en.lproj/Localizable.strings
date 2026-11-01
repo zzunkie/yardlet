@@ -1088,6 +1088,8 @@
 "Account for new tasks" = "Account for new tasks";
 "%@ %lld%% used" = "%1$@ %2$lld%% used";
 "Frees up %@" = "Frees up %@";
+"Switched from %@: nearly out of its limit" = "Switched from %@: nearly out of its limit";
+"Switched to %@: %@ was nearly out of its limit" = "Switched to %1$@: %2$@ was nearly out of its limit";
 "Use for new tasks" = "Use for new tasks";
 "Add and connect" = "Add and connect";
 "Primary limit" = "Primary limit";

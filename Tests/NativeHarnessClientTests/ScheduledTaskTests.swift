@@ -4,8 +4,9 @@ import XCTest
 
 /// Schedules in the app: a run is a task started through the new-task path (with a stand-in
 /// harness, so no runtime or model is contacted), skipped while the previous run still works,
-/// sent to its task when it continues one, announced when it was missed, paused and resumed, turned
-/// off after failed starts, kept across a relaunch, and imported once.
+/// sent to its task when it continues one, announced when it was missed, kept off an account that is
+/// nearly spent, paused and resumed, turned off after failed starts, kept across a relaunch, and
+/// imported once.
 @MainActor
 final class ScheduledTaskTests: XCTestCase {
     private var root: URL!
@@ -36,6 +37,7 @@ final class ScheduledTaskTests: XCTestCase {
     private func makeModel(adapter: SuggestionRecordingAdapter = SuggestionRecordingAdapter(),
                            notifications: any SystemNotificationCenter = ScheduleNotificationRecorder(),
                            repository: any ScheduledTaskRepository = InMemoryScheduledTaskRepository(),
+                           connections: ProviderConnectionStore? = nil,
                            clock: Clock) -> AppModel {
         let defaults = SuggestionVolatileDefaults()
         let runtimes = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
@@ -46,6 +48,7 @@ final class ScheduledTaskTests: XCTestCase {
             store: SessionStore(repository: InMemorySessionRepository()),
             runtimeSelections: runtimes,
             registry: HarnessRegistry { _, _ in adapter },
+            connections: connections,
             preferences: defaults,
             codexHistorySelectionRepository: UserDefaultsCodexHistorySelectionRepository(defaults: defaults),
             scheduleRepository: repository,
@@ -246,6 +249,123 @@ final class ScheduledTaskTests: XCTestCase {
         let chatSubmission = try model.scheduledSubmission(for: chat, at: date(16, 22)).get()
         XCTAssertNil(chatSubmission.workspaceURL)
         XCTAssertFalse(chatSubmission.startsInNewWorktree, "A chat has no repository for a worktree")
+    }
+
+    // MARK: - Accounts
+
+    /// A run whose account is nearly spent starts on the account automatic assignment picks instead, and
+    /// its line in the run history and its task's hover card say which and why. A run whose account has
+    /// room stays on it. When every account is nearly spent the run starts on the one that frees up
+    /// first, where a refusal shows on its task as it did before.
+    func testARunWhoseAccountIsNearlySpentStartsOnTheAccountAutomaticAssignmentPicks() async throws {
+        let clock = Clock(date(16, 20))
+        let accounts = try claudeAccounts(shared: ["work", "roomy"], separate: ["own"])
+        let model = makeModel(connections: accounts.store, clock: clock)
+        accounts.read("work", used: 0.95)
+        accounts.read("roomy", used: 0.1)
+        accounts.read("own", used: 0)
+        let modelChoice = NewTaskModelChoice(model: "claude-opus-5-5")
+        model.scheduledTasks.create(ScheduledTask(name: "Nightly", prompt: "Run the nightly checks.",
+            trigger: .daily(ScheduleTime(hour: 22, minute: 0)),
+            destination: ScheduleDestination(harness: .claudeCode, accountID: "work", modelChoice: modelChoice)))
+        let id = try XCTUnwrap(model.scheduledTasks.schedules.first?.id)
+        // Each run's task ends, so the next run is not skipped for it.
+        func latestRun() async throws -> (ScheduledTaskRun, SessionRecord) {
+            let run = try XCTUnwrap(model.scheduledTasks.schedule(id: id)?.state.runs.first)
+            XCTAssertEqual(run.outcome, .started, run.failure ?? "")
+            let task = try XCTUnwrap(model.store.sessions.first { $0.id == run.taskID })
+            try await model.store.updateSession(id: task.id, status: .completed)
+            return (run, task)
+        }
+
+        await model.scheduledTasks.runNow(id)
+        var (run, task) = try await latestRun()
+        XCTAssertEqual(task.connection, accounts["roomy"], "An account with room, not the one left out of automatic assignment")
+        XCTAssertEqual(run.account?.accountID, "roomy")
+        XCTAssertEqual(run.account?.replacedAccountName, "work@example.test")
+        XCTAssertEqual(run.account?.basis, .headroom)
+        XCTAssertEqual(model.accountAssignments.assignment(for: task.id), run.account, "The task's hover card says it too")
+        let row = try XCTUnwrap(ScheduledRunRow.rows(for: try XCTUnwrap(model.scheduledTasks.schedule(id: id)),
+                                                     task: { _ in task }).first)
+        let line = try XCTUnwrap(row.switchLine)
+        XCTAssertTrue(line.contains("roomy@example.test") && line.contains("work@example.test"), line)
+        XCTAssertTrue(row.detailText.hasSuffix(line), row.detailText)
+        XCTAssertEqual(model.scheduledTasks.schedule(id: id)?.destination.accountID, "work", "The schedule keeps its own account")
+
+        accounts.read("work", used: 0.5)
+        await model.scheduledTasks.runNow(id)
+        (run, task) = try await latestRun()
+        XCTAssertEqual(task.connection, accounts["work"])
+        XCTAssertNil(run.account)
+        XCTAssertNil(model.accountAssignments.assignment(for: task.id))
+
+        // Every account is nearly spent: the one that frees up first.
+        accounts.read("work", used: 0.95, resetsIn: 4)
+        accounts.read("roomy", used: 1, resetsIn: 1)
+        await model.scheduledTasks.runNow(id)
+        (run, task) = try await latestRun()
+        XCTAssertEqual(task.connection, accounts["roomy"])
+        XCTAssertEqual(run.account?.basis, .nearlySpent)
+        XCTAssertNotNil(run.account?.freesUpAt)
+        accounts.read("roomy", used: 1, resetsIn: 5)
+        await model.scheduledTasks.runNow(id)
+        (run, task) = try await latestRun()
+        XCTAssertEqual(task.connection, accounts["work"], "Its own account frees up first")
+        XCTAssertNil(run.account)
+        await model.shutdown()
+    }
+
+    /// A run that continues a Claude task whose account is nearly spent first moves the task to another
+    /// account that shares its history, as Continue with another account does, keeping its conversation,
+    /// and then sends. With no such account the message goes on the task's own account, as before.
+    func testAContinuingRunMovesItsTaskOffANearlySpentAccountFirst() async throws {
+        let adapter = SuggestionRecordingAdapter()
+        let clock = Clock(date(16, 20))
+        let accounts = try claudeAccounts(shared: ["work", "roomy"], separate: ["own"])
+        let model = makeModel(adapter: adapter, connections: accounts.store, clock: clock)
+        accounts.read("work", used: 0.97)
+        accounts.read("roomy", used: 0.2)
+        accounts.read("own", used: 0.97)
+        let project = try folder("release")
+        func continuing(_ account: String) async throws -> (SessionRecord, UUID) {
+            let task = try await model.store.createSession(
+                harness: .claudeCode, workspaceURL: project, runtimeExecutableURL: accounts.cli,
+                title: "Release watch on \(account)", providerSessionID: UUID().uuidString.lowercased(),
+                connection: accounts[account])
+            var destination = ScheduleDestination(harness: .claudeCode)
+            destination.mode = .continueTask
+            destination.targetTaskID = task.id
+            let schedule = ScheduledTask(name: "Heartbeat \(account)", prompt: "Any new failures since last time?",
+                                         trigger: .interval(hours: 2, anchor: date(16, 22), days: []),
+                                         destination: destination)
+            model.scheduledTasks.create(schedule)
+            return (task, schedule.id)
+        }
+
+        let (moving, movingSchedule) = try await continuing("work")
+        await model.scheduledTasks.runNow(movingSchedule)
+        var run = try XCTUnwrap(model.scheduledTasks.schedule(id: movingSchedule)?.state.runs.first)
+        XCTAssertEqual(run.outcome, .started, run.failure ?? "")
+        let moved = try XCTUnwrap(model.store.sessions.first { $0.id == moving.id })
+        XCTAssertEqual(moved.connection, accounts["roomy"])
+        XCTAssertEqual(moved.providerSessionID, moving.providerSessionID, "The same conversation goes on")
+        XCTAssertEqual(run.account?.accountID, "roomy")
+        XCTAssertEqual(run.account?.replacedAccountName, "work@example.test")
+        XCTAssertEqual(model.accountAssignments.assignment(for: moving.id), run.account)
+        var prompts = await adapter.prompts
+        XCTAssertEqual(prompts, ["Any new failures since last time?"], "Sent after the move")
+
+        let (staying, stayingSchedule) = try await continuing("own")
+        await model.scheduledTasks.runNow(stayingSchedule)
+        run = try XCTUnwrap(model.scheduledTasks.schedule(id: stayingSchedule)?.state.runs.first)
+        XCTAssertEqual(run.outcome, .started, run.failure ?? "")
+        XCTAssertNil(run.account)
+        XCTAssertEqual(model.store.sessions.first { $0.id == staying.id }?.connection, accounts["own"],
+                       "No other account shares its history")
+        XCTAssertNil(model.errorBySessionID[staying.id])
+        prompts = await adapter.prompts
+        XCTAssertEqual(prompts.count, 2)
+        await model.shutdown()
     }
 
     // MARK: - The center
@@ -450,6 +570,59 @@ final class ScheduledTaskTests: XCTestCase {
         let ended = center.schedules.first { $0.origin?.sourceID == "yesterday" }
         XCTAssertEqual(ended?.isEnabled, false)
         XCTAssertEqual(ended?.state.stopReason, .expired, "A past one-off comes in ended, never to run")
+    }
+}
+
+extension ScheduledTaskTests {
+    /// Claude account folders that a fake Claude reports signed in. The `shared` ones link `projects` to
+    /// the default login's, so automatic assignment may use them and a task moves between them; the
+    /// `separate` ones keep their own. The default login reads as signed out, so it takes no run.
+    fileprivate struct ClaudeAccounts {
+        let store: ProviderConnectionStore
+        let cli: URL
+        let connections: [String: ProviderConnection]
+
+        subscript(_ name: String) -> ProviderConnection? { connections[name] }
+
+        /// Shows a reading of the account with a 5 hour limit used as given, resetting in `hours`.
+        @MainActor func read(_ name: String, used: Double, resetsIn hours: Double = 4) {
+            guard let connection = connections[name] else { return }
+            let now = Date()
+            store.publish(HarnessAccountSnapshot(id: name, harness: .claudeCode, providerID: nil, state: .signedIn,
+                accountLabel: "\(name)@example.test", detail: "", credentialOwner: "", checkedAt: now,
+                usage: [AccountUsageMetric(id: "claude:session:", label: "5 hour limit", usedFraction: used, detail: "",
+                    resetsAt: now.addingTimeInterval(hours * 3600), evidence: .exactQuota, windowMinutes: 300)],
+                canLogin: false, canLogout: false), for: connection)
+        }
+    }
+
+    fileprivate func claudeAccounts(shared: [String], separate: [String]) throws -> ClaudeAccounts {
+        let native = try folder("claude-native")
+        try FileManager.default.createDirectory(at: native.appending(path: "projects"), withIntermediateDirectories: true)
+        let store = ProviderConnectionStore()
+        store.usesFixtureSnapshots = true
+        store.defaultLoginEnvironment = ["CLAUDE_CONFIG_DIR": native.path]
+        store.publishDefaults([HarnessAccountSnapshot(id: "claude-code", harness: .claudeCode, providerID: nil,
+            state: .signedOut, accountLabel: nil, detail: "", credentialOwner: "", checkedAt: Date(), usage: [],
+            canLogin: true, canLogout: false)])
+        var connections: [String: ProviderConnection] = [:]
+        for name in shared + separate {
+            let home = try folder("claude-\(name)")
+            if shared.contains(name) {
+                try FileManager.default.createSymbolicLink(at: home.appending(path: "projects"),
+                                                           withDestinationURL: native.appending(path: "projects"))
+            } else {
+                try FileManager.default.createDirectory(at: home.appending(path: "projects"), withIntermediateDirectories: true)
+            }
+            let connection = ProviderConnection(id: name, name: name, harness: .claudeCode, providerID: nil,
+                                                homePath: home.path, credentialSelector: nil)
+            try store.save(connection)
+            connections[name] = connection
+        }
+        let cli = root.appending(path: "claude-fixture")
+        try Data("#!/bin/sh\necho '{\"loggedIn\":true}'\n".utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+        return ClaudeAccounts(store: store, cli: cli, connections: connections)
     }
 }
 

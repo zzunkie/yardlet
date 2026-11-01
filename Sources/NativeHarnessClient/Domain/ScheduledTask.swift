@@ -180,4 +180,6 @@ struct ScheduledTaskRun: Codable, Equatable, Identifiable, Sendable {
     var failure: String?
     /// The task it started or continued.
     var taskID: UUID?
+    /// The account it went to instead of the schedule's or the task's own, which was nearly spent.
+    var account: AccountAssignment?
 }

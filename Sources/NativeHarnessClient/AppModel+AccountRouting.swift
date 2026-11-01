@@ -2,7 +2,8 @@ import Foundation
 import YardletAgentTools
 
 // Automatic account assignment (docs/NATIVE_SESSION_STORAGE.md, "Choosing an additional account"): the account a task an agent starts runs on (a
-// child task, a subagent, a suggestion the person starts), and `list_accounts`, which shows the
+// child task, a subagent, a suggestion the person starts), the account a schedule's run goes to when
+// its own is nearly spent, and `list_accounts`, which shows the
 // agent the accounts of a harness, their limits and the one Yardlet would pick. The rule is
 // `AccountRouting`; which accounts it may use is the person's
 // (`ProviderConnectionStore.isInAutomaticAssignment`). Reading the limits is the account list's own
@@ -46,6 +47,30 @@ extension AppModel {
         return .success(AccountStart(connection: fallback, assignment: AccountAssignment(
             choice: accountChoice(harness: harness, connection: fallback), origin: .newTaskAccount,
             runningTasks: tasksRunning(on: fallback, harness: harness), at: now)))
+    }
+
+    /// The account to use instead of `current` for work nobody watches start, a schedule's run: when the
+    /// last reading of `current` says it is nearly spent (`AccountRouting.Headroom.isNearlySpent`), the
+    /// one `AccountRouting.pick` picks among it and `alternatives`, if that is another one. Nil keeps
+    /// `current`: it has room or no reading, it is still the pick, or there is no other account. With
+    /// another account to choose, the readings are checked first as the account list checks them.
+    func accountReplacing(_ current: ProviderConnection?, harness: HarnessKind, model: String?,
+                          alternatives: () -> [AccountChoice]) async -> AccountStart? {
+        guard alternatives().contains(where: { $0.connection?.id != current?.id }) else { return nil }
+        await refreshAccountReadings(of: harness)
+        let now = Date()
+        let replaced = accountChoice(harness: harness, connection: current)
+        guard replaced.snapshot.flatMap({ AccountRouting.headroom(of: $0.usage, model: model, now: now) })?
+            .isNearlySpent == true else { return nil }
+        let newTaskAccount = connections.selected(for: harness)?.id
+        let candidates = ([replaced] + alternatives().filter { $0.connection?.id != current?.id }).map {
+            AccountRouting.Candidate(choice: $0, runningTasks: tasksRunning(on: $0.connection, harness: harness),
+                                     isNewTaskAccount: $0.connection?.id == newTaskAccount)
+        }
+        guard let pick = AccountRouting.pick(candidates, model: model, now: now),
+              pick.choice.connection?.id != current?.id else { return nil }
+        return AccountStart(connection: pick.choice.connection, assignment: AccountAssignment(
+            choice: pick.choice, origin: .automatic, pick: pick, replacing: replaced, at: now))
     }
 
     /// The signed-in accounts of `harness` automatic assignment may use, with the tasks on each.

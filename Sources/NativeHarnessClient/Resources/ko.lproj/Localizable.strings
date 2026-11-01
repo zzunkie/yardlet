@@ -1088,6 +1088,8 @@
 "Account for new tasks" = "새 작업 계정";
 "%@ %lld%% used" = "%1$@ %2$lld%% 사용";
 "Frees up %@" = "%@에 풀림";
+"Switched from %@: nearly out of its limit" = "%@ 한도가 거의 소진되어 바꿈";
+"Switched to %@: %@ was nearly out of its limit" = "%2$@ 한도가 거의 소진되어 %1$@ 계정으로 바꿈";
 "Use for new tasks" = "새 작업에 사용";
 "Add and connect" = "추가하고 연결";
 "Primary limit" = "단기 한도";

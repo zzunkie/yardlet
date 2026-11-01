@@ -5,7 +5,9 @@ import Foundation
 /// permission mode, folder, project, local or new worktree — so its status dots, notifications,
 /// the phone remote and resuming after a restart are those of any task. A continuing run is the
 /// task's next message, the way auto-fix's message goes (`deliverAutoFix`). Nothing here wakes a
-/// task that is busy: the center skips the slot instead.
+/// task that is busy: the center skips the slot instead. A run whose account is nearly spent goes to
+/// the one automatic assignment picks instead (`accountReplacing`): a new task starts there, and a
+/// continued task first moves there as Continue with another account moves it.
 extension AppModel {
     /// Gives the center its start and busy checks. The loop itself starts with the app.
     func wireScheduledTasks() {
@@ -47,31 +49,40 @@ extension AppModel {
                 return .failed(L10n.string("The task this schedule continues is no longer in Yardlet."))
             }
             let previousError = errorBySessionID[id]
+            let account = await moveToAccountWithRoom(target)
             let text = schedule.runText(sender: scheduleSenderName(schedule),
                                         relation: TaskMessage.relation(of: schedule.agentTaskID?.uuidString ?? "", to: target))
             guard await deliverAutoFix(text, to: id) else {
                 let error = errorBySessionID[id]
                 return .failed(error != previousError ? error ?? "" : L10n.string("The message could not be sent."))
             }
-            result = .started(taskID: id)
+            result = .started(taskID: id, account: account)
         case .newTask:
-            let submission: NewTaskDraft.Submission
+            var submission: NewTaskDraft.Submission
             switch scheduledSubmission(for: schedule, at: slot ?? scheduledTasks.now()) {
             case let .success(value): submission = value
             case let .failure(failure): return .failed(failure.message)
             }
+            let harness = submission.harness
+            let account = await accountReplacing(
+                submission.connection, harness: harness,
+                model: Self.modelOption(submission.providerOptions, harness: harness)) {
+                automaticAssignmentCandidates(harness: harness).map(\.choice)
+            }
+            if let account { submission.connection = account.connection }
             let previousError = bootstrapError
             do {
                 guard let created = try await createTask(submission) else {
                     let error = bootstrapError != previousError ? bootstrapError : nil
                     return .failed(error ?? L10n.string("The task could not start."))
                 }
-                result = .started(taskID: created.id)
+                if let account { accountAssignments.record(account.assignment, for: created.id) }
+                result = .started(taskID: created.id, account: account?.assignment)
             } catch {
                 return .failed(error.localizedDescription)
             }
         }
-        if trigger == .missed, let slot, case let .started(taskID) = result {
+        if trigger == .missed, let slot, case let .started(taskID, _) = result {
             await announceMissedRun(of: schedule, slot: slot, taskID: taskID)
         }
         return result
@@ -119,6 +130,25 @@ extension AppModel {
             providerOptions: destination.modelChoice?.providerOptions(for: harness) ?? [:],
             titleOverride: ScheduleText.runTitle(schedule.name, at: date),
             selectsTask: false, parentTaskID: parent))
+    }
+
+    /// Moves an idle task whose account is nearly spent to the account `accountReplacing` picks among the
+    /// ones it may go on under (`TaskAccountSwitch`, as Continue with another account offers) that
+    /// automatic assignment may use and that are signed in, and says why when it moved. With none, or
+    /// when the move is refused, the task stays where it was and its message goes there, as before
+    /// (sending clears the refusal's error).
+    private func moveToAccountWithRoom(_ task: SessionRecord) async -> AccountAssignment? {
+        let account = await accountReplacing(
+            task.connection, harness: task.harness, model: Self.modelOption(task.providerOptions, harness: task.harness)) {
+            usageLimitAccounts(for: task).map { accountChoice(harness: task.harness, connection: $0) }.filter {
+                $0.canSelect && $0.snapshot?.state == .signedIn && connections.isInAutomaticAssignment($0)
+            }
+        }
+        guard let account, let connection = account.connection else { return nil }
+        await switchAccount(to: connection, for: task)
+        guard store.sessions.first(where: { $0.id == task.id })?.connection == connection else { return nil }
+        accountAssignments.record(account.assignment, for: task.id)
+        return account.assignment
     }
 
     /// The name an agent's schedule sends its runs under: its task's title, while the task is here.

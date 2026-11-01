@@ -50,8 +50,8 @@ struct SidebarHoverCardContent: Equatable {
     let isScheduledRun: Bool
     let cpuPercent: Int?
     let pullRequest: TaskPullRequestRowMark?
-    /// The account an agent's start put the task on, and why; nil for a task the
-    /// person started.
+    /// The account an agent's start put the task on, or a schedule's run moved it to, and why; nil
+    /// for a task the person started on their own account.
     let accountName: String?
     let accountReason: String?
 

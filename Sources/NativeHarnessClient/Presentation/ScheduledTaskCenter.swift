@@ -1,9 +1,9 @@
 import Foundation
 import Observation
 
-/// What starting one run did.
+/// What starting one run did, and the account it went to instead of its own, when it did.
 enum ScheduleStartResult: Equatable, Sendable {
-    case started(taskID: UUID)
+    case started(taskID: UUID, account: AccountAssignment? = nil)
     case failed(String)
 }
 
@@ -181,9 +181,9 @@ final class ScheduledTaskCenter {
         let result = await start(schedule, trigger, slot)
         startingIDs.remove(schedule.id)
         switch result {
-        case let .started(taskID):
-            record(ScheduledTaskRun(slot: slot, at: at, trigger: trigger, outcome: .started, taskID: taskID),
-                   for: schedule.id)
+        case let .started(taskID, account):
+            record(ScheduledTaskRun(slot: slot, at: at, trigger: trigger, outcome: .started, taskID: taskID,
+                                    account: account), for: schedule.id)
         case let .failed(message):
             record(ScheduledTaskRun(slot: slot, at: at, trigger: trigger, outcome: .failed, failure: message),
                    for: schedule.id)

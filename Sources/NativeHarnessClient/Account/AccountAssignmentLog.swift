@@ -1,8 +1,9 @@
 import Foundation
 import Observation
 
-/// Which account each task an agent started runs on, and why (`AccountAssignment`), for the task's
-/// hover card and `read_task` after a restart. The account itself is the task's own connection; this
+/// Which account each task an agent started, or a schedule's run moved, runs on, and why
+/// (`AccountAssignment`), for the task's hover card and `read_task` after a restart. The account
+/// itself is the task's own connection; this
 /// keeps only the reason line's facts, for the latest `capacity` tasks, in one small file
 /// (`~/.yardlet/account-assignments.json`; per-task records stay out of the preferences). A deleted
 /// task takes its line along.

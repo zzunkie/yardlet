@@ -151,7 +151,7 @@ final class NewTaskDraft {
         let workspaceURL: URL?
         let projectID: UUID?
         let runtimeURL: URL
-        let connection: ProviderConnection?
+        var connection: ProviderConnection?
         /// Start in a new linked worktree of `workspaceURL`'s repository instead of the folder itself.
         var startsInNewWorktree = false
         /// The model and effort the new task keeps as its own, so its first turn runs on them.

@@ -1,7 +1,8 @@
 import Foundation
 
 /// Which account a task Yardlet starts for an agent runs on (docs/NATIVE_SESSION_STORAGE.md, "Choosing an additional account"): a child task
-/// (`create_task`), a subagent (`run_agent`) or a suggestion the person starts. The candidates are
+/// (`create_task`), a subagent (`run_agent`) or a suggestion the person starts, and where a
+/// schedule's run goes when its own account is nearly spent. The candidates are
 /// the harness's accounts in automatic assignment that are signed in
 /// (`ProviderConnectionStore.isInAutomaticAssignment`); this picks one of them from the plan limits
 /// Yardlet already reads, and the tasks already running on each. Pure, so the rule is tested
@@ -157,7 +158,8 @@ enum AccountRouting {
 }
 
 /// Which account a task an agent started runs on, and why, as the tool result, `read_task` and the
-/// task's hover card say it.
+/// task's hover card say it. A schedule's run that went to another account than its own, because that
+/// one was nearly spent, keeps one too, and its line in the run history says so (`switchLine`).
 struct AccountAssignment: Codable, Equatable, Sendable {
     enum Origin: String, Codable, Sendable {
         /// Yardlet picked it (`AccountRouting.pick`).
@@ -180,12 +182,16 @@ struct AccountAssignment: Codable, Equatable, Sendable {
     let freesUpAt: Date?
     let runningTasks: Int
     let assignedAt: Date
+    /// The account it was set to go to, which was nearly spent (`AppModel.accountReplacing`).
+    let replacedAccountName: String?
 
     init(choice: AccountChoice, origin: Origin, pick: AccountRouting.Pick? = nil,
-         headroom: AccountRouting.Headroom? = nil, runningTasks: Int = 0, at date: Date = Date()) {
+         headroom: AccountRouting.Headroom? = nil, runningTasks: Int = 0, replacing: AccountChoice? = nil,
+         at date: Date = Date()) {
         accountID = choice.id
         accountName = choice.title
         self.origin = origin
+        replacedAccountName = replacing?.title
         basis = pick?.basis
         let decided = pick?.headroom ?? headroom
         let window = decided?.deciding
@@ -201,6 +207,7 @@ struct AccountAssignment: Codable, Equatable, Sendable {
     /// limit 12% used, resets 2026-10-26T15:00:00+09:00)".
     var toolLine: String {
         var why: [String] = []
+        if let replacedAccountName { why.append("switched from \(replacedAccountName), nearly out of its limit") }
         switch origin {
         case .automatic:
             why.append(basis == .nearlySpent ? "chosen automatically: every account is nearly out, this one frees up first"
@@ -221,10 +228,14 @@ struct AccountAssignment: Codable, Equatable, Sendable {
     /// The person's words for why, after the account's name: "Chosen automatically · 5 hour limit
     /// 12% used · Resets 3:00 PM".
     func reasonLine(now: Date = Date()) -> String {
-        var parts: [String] = switch origin {
-        case .automatic: [L10n.string("Chosen automatically")]
-        case .agent: [L10n.string("Chosen by the agent")]
-        case .newTaskAccount: [L10n.string("Account for new tasks")]
+        var parts: [String] = if let replacedAccountName {
+            [L10n.format("Switched from %@: nearly out of its limit", replacedAccountName)]
+        } else {
+            switch origin {
+            case .automatic: [L10n.string("Chosen automatically")]
+            case .agent: [L10n.string("Chosen by the agent")]
+            case .newTaskAccount: [L10n.string("Account for new tasks")]
+            }
         }
         if let windowLabel, let usedFraction {
             parts.append(L10n.format("%@ %lld%% used", windowLabel, Int64((usedFraction * 100).rounded())))
@@ -234,6 +245,12 @@ struct AccountAssignment: Codable, Equatable, Sendable {
             parts.append(L10n.format("Frees up %@", ProviderNoticeText.resetTime(freesUpAt, now: now)))
         }
         return parts.joined(separator: " · ")
+    }
+
+    /// A schedule's run history line for a run that went to another account: "Switched to name: other
+    /// was nearly out of its limit".
+    var switchLine: String? {
+        replacedAccountName.map { L10n.format("Switched to %@: %@ was nearly out of its limit", accountName, $0) }
     }
 
     static func iso(_ date: Date) -> String {

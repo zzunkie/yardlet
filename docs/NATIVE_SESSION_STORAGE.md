@@ -65,6 +65,16 @@ includes it. An account whose tasks are moving to another of its folders before 
 No authentication or history files are copied and no account folder changes. The reason for each
 assignment is kept in the Yardlet file `~/.yardlet/account-assignments.json` (task ID → account ID, window and time).
 
+**Schedules and nearly spent accounts.** A schedule's run starts on the account the schedule names, or the one new
+tasks start on, unless that account's last reading says it is nearly spent (a limit window at or under 10% left, as
+`AccountRouting` counts it). A new-task run then starts on the account `AccountRouting.pick` picks among that account
+and the accounts in automatic assignment. A run that continues a Claude task first moves the task, as Continue with
+another account does, to the account picked among its own and the accounts that share its history, are in automatic
+assignment and are signed in; only the binding changes, and the provider ID, scope and history stay. When every account
+is nearly spent the run goes to the one that frees up first. A run with no other account, or whose move is refused,
+keeps its account and goes as before. The schedule's own account does not change. The run's line in the schedule's
+history and the task's hover card name the account it went to and the one it replaced.
+
 **Account folders, found sign-ins and removal** (see [PROVIDER_CONNECTIONS.md](PROVIDER_CONNECTIONS.md), "Account
 folder shape, finding sign-ins and removing accounts"). A Claude account folder Yardlet makes for a new sign-in links
 `projects` and the other shared entries to the default folder, so that account's tasks write to the default sign-in's

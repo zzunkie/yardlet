@@ -8,8 +8,9 @@ struct ScheduledTaskContext {
     var accountName: (ScheduledTask) -> String? = { _ in nil }
 }
 
-/// A run's line in the history: when, how it came about, and how its task stands now (the Codex
-/// app's run states: running now, completed, failed, needs you).
+/// A run's line in the history: when, how it came about, how its task stands now (the Codex
+/// app's run states: running now, completed, failed, needs you), and the account it went to when its
+/// own was nearly spent.
 struct ScheduledRunRow: Identifiable, Equatable {
     enum State: Equatable {
         case running, waiting, completed, failed, skipped(ScheduledTaskRun.SkipReason), notStarted(String), gone
@@ -22,6 +23,7 @@ struct ScheduledRunRow: Identifiable, Equatable {
     let taskID: UUID?
     let title: String?
     let isUnread: Bool
+    let switchLine: String?
 
     static func rows(for schedule: ScheduledTask, task: (UUID) -> SessionRecord?) -> [ScheduledRunRow] {
         schedule.state.runs.map { run in
@@ -41,7 +43,7 @@ struct ScheduledRunRow: Identifiable, Equatable {
             }
             return ScheduledRunRow(id: run.id, at: run.at, trigger: run.trigger, state: state,
                                    taskID: session?.id, title: session?.title,
-                                   isUnread: session?.hasUnreadUpdate == true)
+                                   isUnread: session?.hasUnreadUpdate == true, switchLine: run.account?.switchLine)
         }
     }
 
@@ -74,6 +76,12 @@ struct ScheduledRunRow: Identifiable, Equatable {
             message.isEmpty ? L10n.string("Could not start") : L10n.format("Could not start: %@", message)
         case .gone: L10n.string("Its task is no longer in the sidebar")
         }
+    }
+
+    /// The line under the title: how the run stands, how it came about, and the account it switched to.
+    var detailText: String {
+        ([title == nil ? nil : stateText, ScheduleText.trigger(trigger), switchLine].compactMap { $0 })
+            .joined(separator: " · ")
     }
 }
 
@@ -289,8 +297,7 @@ struct ScheduledTaskDetail: View {
                 Text(row.title ?? row.stateText)
                     .font(.callout)
                     .lineLimit(1)
-                Text(row.title == nil ? ScheduleText.trigger(row.trigger)
-                     : "\(row.stateText) · \(ScheduleText.trigger(row.trigger))")
+                Text(row.detailText)
                     .font(.caption)
                     .foregroundStyle(stateTint(row.state))
                     .lineLimit(2)

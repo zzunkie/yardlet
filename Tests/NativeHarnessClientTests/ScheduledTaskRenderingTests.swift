@@ -4,7 +4,8 @@ import XCTest
 @testable import NativeHarnessClient
 
 /// Scheduled tasks drawn for review into `.build/schedules-qa/`, light and dark: the sidebar entry,
-/// the list in the task list's place beside the chosen schedule with its run history, the empty
+/// the list in the task list's place beside the chosen schedule with its run history (a run that went
+/// to another account among them, and its task's hover card), the empty
 /// place, the editor for each trigger and for continuing a task, and the other-app import sheet
 /// before and after an import. No provider, runtime or app file is touched; the import sheet draws a
 /// listing made from made-up schedules.
@@ -27,6 +28,8 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         let project: Project
         let releaseTask: SessionRecord
         let schedules: [String: ScheduledTask]
+        /// The run that went to another account, and its task.
+        let switchedRun: (task: SessionRecord, account: AccountAssignment)
     }
 
     private func makeFixture() async throws -> Fixture {
@@ -59,6 +62,13 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         let yesterdayRun = try await task(ScheduleText.runTitle("Morning check", at: at(-1, 9)), .claudeCode, status: .completed)
         let missedRun = try await task(ScheduleText.runTitle("Morning check", at: at(-3, 9)), .claudeCode, status: .failed)
         let standupRun = try await task(ScheduleText.runTitle("Standup notes", at: at(-1, 9, 30)), .codex, status: .running)
+        func account(_ name: String) -> AccountChoice {
+            AccountChoice(harness: .claudeCode, connection: ProviderConnection(id: name, name: name, harness: .claudeCode,
+                providerID: nil, homePath: "/tmp/\(name)", credentialSelector: nil), snapshot: nil,
+                knownLabel: "\(name)@example.test")
+        }
+        let switched = AccountAssignment(choice: account("personal"), origin: .automatic, replacing: account("work"),
+                                         at: at(-1, 9))
 
         var morning = ScheduledTask(
             name: "Morning check", prompt: "Look at last night's CI runs and open pull requests, and list what needs me today.",
@@ -68,7 +78,8 @@ final class ScheduledTaskRenderingTests: XCTestCase {
                 workspacePath: path, projectID: project.id))
         morning.state.runs = [
             ScheduledTaskRun(slot: at(0, 9), at: at(0, 9), trigger: .scheduled, outcome: .started, taskID: todayRun.id),
-            ScheduledTaskRun(slot: at(-1, 9), at: at(-1, 9), trigger: .scheduled, outcome: .started, taskID: yesterdayRun.id),
+            ScheduledTaskRun(slot: at(-1, 9), at: at(-1, 9), trigger: .scheduled, outcome: .started, taskID: yesterdayRun.id,
+                             account: switched),
             ScheduledTaskRun(slot: at(-2, 9), at: at(-2, 9), trigger: .scheduled, outcome: .skipped, skipReason: .previousRunActive),
             ScheduledTaskRun(slot: at(-3, 9), at: at(-3, 12, 4), trigger: .missed, outcome: .started, taskID: missedRun.id),
             ScheduledTaskRun(slot: at(-9, 9), at: at(-9, 9), trigger: .scheduled, outcome: .failed,
@@ -124,7 +135,8 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         state.isShowing = true
         state.selection = morning.id
         return Fixture(model: model, state: state, project: project, releaseTask: releaseTask,
-                       schedules: ["morning": morning, "release": release, "nightly": nightly])
+                       schedules: ["morning": morning, "release": release, "nightly": nightly],
+                       switchedRun: (yesterdayRun, switched))
     }
 
     private func render<Content: View>(_ name: String, size: NSSize, appearances: [WindowlessRender.Appearance] = WindowlessRender.Appearance.allCases,
@@ -177,6 +189,16 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         XCTAssertTrue(shows(window, L10n.string("Ran once")))
         XCTAssertTrue(shows(window, L10n.string("Skipped: the previous run is still going")))
         XCTAssertTrue(shows(window, L10n.string("Missed, ran late")))
+        XCTAssertTrue(shows(window, L10n.format("Switched to %@: %@ was nearly out of its limit",
+                                                "personal@example.test", "work@example.test")))
+        let switched = fixture.switchedRun
+        let card = try render("hover-card-switched-account", size: NSSize(width: SidebarHoverCardMetrics.width + 40, height: 200)) { _ in
+            SidebarHoverCardView(content: SidebarHoverCardContent(
+                session: switched.task, projectName: "yardlet", status: nil, isScheduledRun: true, cpuPercent: nil,
+                pullRequest: nil, accountAssignment: switched.account))
+            .padding(10)
+        }
+        XCTAssertTrue(shows(card, L10n.format("Switched from %@: nearly out of its limit", "work@example.test")))
         XCTAssertTrue(shows(window, L10n.string("Today")))
         XCTAssertTrue(shows(window, L10n.string("Previous 7 days")))
         XCTAssertTrue(shows(window, L10n.string("Older")))
