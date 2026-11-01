@@ -24,7 +24,8 @@ enum PerfBenchFixture {
         /// The window at rest, then with a Claude Code task (shown) and a Codex task running a turn
         /// that waits.
         case idleRunning = "idle-running"
-        /// A Claude Code answer streaming at the end of a 60-turn conversation.
+        /// A Claude Code answer streaming at the end of a 60-turn conversation, then on while the window
+        /// shows another task.
         case streamClaude = "stream-claude"
         /// A Codex answer streaming at the end of a 60-turn thread.
         case streamCodex = "stream-codex"
@@ -163,8 +164,12 @@ enum PerfBenchFixture {
                           turns: (0..<10).map { LongConversationFixture.codexTurn($0) })
             ]
         case .streamClaude:
-            shown = [claudeTask(shownTaskID, title: "Fix the parser's empty input", runtime: claude,
-                                sessionID: claudeSessionID, turns: 60)]
+            shown = [
+                claudeTask(shownTaskID, title: "Fix the parser's empty input", runtime: claude,
+                           sessionID: claudeSessionID, turns: 60),
+                claudeTask(otherRunningTaskID, title: "Tidy the lexer", runtime: none, sessionID: otherClaudeSessionID,
+                           turns: 20)
+            ]
         case .streamCodex:
             shown = [codexTask(shownTaskID, title: "Fix the parser's empty input", threadID: codexThreadID,
                                turns: (0..<60).map { LongConversationFixture.codexTurn($0) })]
@@ -329,7 +334,13 @@ private final class PerfBenchRunner {
             note("tasks running: \(running)")
             try? await Task.sleep(for: .seconds(3))
             await phase("idle-running", seconds: 15)
-        case .streamClaude, .streamCodex:
+        case .streamClaude:
+            await stream(into: PerfBenchFixture.shownTaskID, seconds: 20, streamingFor: 50)
+            // The answer streams on while the window shows another task.
+            model.splits.activate(.session(PerfBenchFixture.otherRunningTaskID))
+            try? await Task.sleep(for: .seconds(2))
+            await phase("streaming-elsewhere", seconds: 10, frames: true)
+        case .streamCodex:
             await stream(into: PerfBenchFixture.shownTaskID, seconds: 20)
         case .codexHistory:
             await stream(into: PerfBenchFixture.shownTaskID, seconds: 20) {
@@ -353,9 +364,11 @@ private final class PerfBenchRunner {
 
     // MARK: Scenes
 
-    private func stream(into task: UUID, seconds: Double, beforeMeasuring: (() async -> Void)? = nil) async {
+    /// - Parameter streamingFor: how long the fake streams, by default 20 seconds more than the phase.
+    private func stream(into task: UUID, seconds: Double, streamingFor: Int? = nil,
+                        beforeMeasuring: (() async -> Void)? = nil) async {
         let published = model.publicationCounts
-        await send("perf stream \(Int(seconds) + 20)", to: task)
+        await send("perf stream \(streamingFor ?? Int(seconds) + 20)", to: task)
         let started = await waitUntil(.seconds(20)) {
             let counts = self.model.publicationCounts
             return counts.transcripts + counts.codexStates > published.transcripts + published.codexStates + 10
