@@ -32,7 +32,7 @@ actor HarnessAccountBroker {
                 return antigravitySnapshot(descriptor: descriptor)
             }
             if descriptor.id == .museCode {
-                return await museCodeSnapshot(descriptor: descriptor)
+                return await museCodeSnapshot(descriptor: descriptor, executableURL: executableURL)
             }
             return try await commandSnapshot(
                 descriptor: descriptor,
@@ -183,7 +183,7 @@ actor HarnessAccountBroker {
         case .claudeCode:
             arguments = ["auth", "logout"]
             initialInput = nil
-        case .cursorAgent, .grokBuild:
+        case .cursorAgent, .grokBuild, .museCode:
             arguments = ["logout"]
             initialInput = nil
         case .openCode:
@@ -492,29 +492,50 @@ actor HarnessAccountBroker {
         )
     }
 
-    /// MSP v1 intentionally has no authentication-status method. Installing Muse
-    /// or completing the protocol handshake does not prove that its provider
-    /// credential can run a turn, so Account Center stays fail-closed.
-    /// Muse's account state stays unknown. Its subscription usage is what a running Muse session
-    /// last read from its host, checked as of the host's own arrival stamp; no host is started
-    /// here, because a new one has observed nothing. Before any observation there is no row.
-    private func museCodeSnapshot(descriptor: HarnessDescriptor) async -> HarnessAccountSnapshot {
+    /// Muse's `muse usage --json` reads the Meta account's subscription allowance without a model
+    /// turn: it succeeds only with a login and says "not logged in" without one, so it is the
+    /// login's evidence too. Anything else (an API key in the environment, a network failure)
+    /// leaves the state unknown. The usage shown is the newest of that read and what a running
+    /// Muse session last read from its host, as of the host's own arrival stamp; before any
+    /// observation there is no row.
+    private func museCodeSnapshot(descriptor: HarnessDescriptor, executableURL: URL) async -> HarnessAccountSnapshot {
+        let result = try? await AccountCommandRunner.run(executableURL: executableURL,
+            arguments: ["usage", "--json"], environment: connection?.environment ?? [:])
+        let state = result.map(Self.museAccountState) ?? .unknown
+        if state == .signedIn, let read = result.flatMap({ Self.museUsage(fromCommandOutput: $0.output) }) {
+            await museUsageStore.record(read, for: descriptor.id)
+        }
         let observed = await museUsageStore.latest(for: descriptor.id)
+        let detail = switch state {
+        case .signedIn: L10n.string("The selected runtime reports usable authentication.")
+        case .signedOut: L10n.string("No usable runtime-owned account was found.")
+        default: L10n.string("Account status could not be confirmed.")
+        }
         return HarnessAccountSnapshot(
             id: descriptor.id.rawValue,
             harness: descriptor.id,
             providerID: nil,
-            state: .unknown,
+            state: state,
             accountLabel: nil,
-            detail: L10n.string(
-                "Muse Code does not expose a stable account-status probe through MSP v1."
-            ),
+            detail: detail,
             credentialOwner: L10n.string("Muse Code credential store"),
             checkedAt: observed?.observedAt ?? Date(),
             usage: observed.map(Self.museSubscriptionUsage(from:)) ?? [],
-            canLogin: true,
-            canLogout: false
+            canLogin: state != .signedIn,
+            canLogout: state == .signedIn
         )
+    }
+
+    static func museAccountState(_ result: AccountCommandResult) -> AccountAuthState {
+        if result.exitCode == 0 { return .signedIn }
+        return AccountLoginController.stripANSI(result.output).lowercased().contains("not logged in") ? .signedOut : .unknown
+    }
+
+    /// The allowance `muse usage --json` printed: MSP's one usage shape (`SubscriptionUsage`),
+    /// alone or as the `usage` member of a `usage/read`-style answer.
+    static func museUsage(fromCommandOutput output: String) -> MuseSubscriptionUsage? {
+        guard let value = structuredAccountPayload(from: output) else { return nil }
+        return MuseSubscriptionUsage(value["usage"]) ?? MuseSubscriptionUsage(value)
     }
 
     static func grokCredentialState(
@@ -578,6 +599,9 @@ actor HarnessAccountBroker {
         if harness == .openCode,
            let providerState = openCodeProviderState(from: normalized) {
             return providerState
+        }
+        if harness == .kimiCode, result.exitCode == 0, kimiHasConfiguredProvider(normalized) {
+            return .signedIn
         }
         let signedOutMarkers = [
             "not logged in", "not authenticated", "authentication required",
@@ -688,6 +712,16 @@ actor HarnessAccountBroker {
             persistedCredentialCount: persistedCredentialCount,
             environmentVariableCount: environmentVariableCount
         )
+    }
+
+    /// `kimi provider list` prints one `<id>  type=<type>  models=<n>  source=<source>` row per
+    /// configured provider (`kimi login` adds `managed:kimi-code` with source `oauth`), and
+    /// "No providers configured." without one. A configured provider is Kimi's connection, as for
+    /// OpenCode. Its `--json` form is not read because it carries the providers' keys.
+    static func kimiHasConfiguredProvider(_ normalizedOutput: String) -> Bool {
+        normalizedOutput.split(whereSeparator: \.isNewline).contains {
+            $0.range(of: #"^\S+\s+type=\S+\s+models=[0-9]+\s+source="#, options: .regularExpression) != nil
+        }
     }
 
     /// Environment-backed providers cannot be removed by `opencode auth logout`.
@@ -1019,7 +1053,7 @@ actor HarnessAccountBroker {
     }
 
     private func supportsLogout(_ harness: HarnessKind) -> Bool {
-        supportsLogin(harness) && ![HarnessKind.museCode, .hermes].contains(harness)
+        supportsLogin(harness) && harness != .hermes
     }
 }
 

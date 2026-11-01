@@ -230,7 +230,8 @@ final class AccountBoundaryTests: XCTestCase {
         )
         XCTAssertEqual(loginCommand?.arguments, ["login"])
         XCTAssertNil(loginCommand?.initialInput)
-        XCTAssertNil(logoutCommand)
+        // `muse logout` removes the saved Meta credential; it is offered once a login is read.
+        XCTAssertEqual(logoutCommand?.arguments, ["logout"])
     }
 
     func testProviderConnectionPresentationDoesNotCallOpenCodeOrPiAProductAccount() {
@@ -316,6 +317,24 @@ final class AccountBoundaryTests: XCTestCase {
                 )
             ),
             .unknown
+        )
+        // Kimi Code 0.36's own rows: `kimi login` adds the managed provider; none is signed out.
+        XCTAssertEqual(
+            HarnessAccountBroker.commandAccountState(
+                for: .kimiCode,
+                result: AccountCommandResult(
+                    exitCode: 0,
+                    output: "managed:kimi-code  type=kimi  models=3  source=oauth\n\nDefault model: kimi-code/k2\n"
+                )
+            ),
+            .signedIn
+        )
+        XCTAssertEqual(
+            HarnessAccountBroker.commandAccountState(
+                for: .kimiCode,
+                result: AccountCommandResult(exitCode: 0, output: "No providers configured.\n")
+            ),
+            .signedOut
         )
     }
 

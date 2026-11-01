@@ -394,7 +394,6 @@
 "This runtime does not expose a structured account probe." = "This runtime does not expose a structured account probe.";
 "The account status check did not finish in time." = "The account status check did not finish in time.";
 "Connect provider" = "Connect provider";
-"Muse Code does not expose a stable account-status probe through MSP v1." = "Muse Code does not expose a stable account-status probe through MSP v1.";
 "Muse Code credential store" = "Muse Code credential store";
 "No usable runtime-owned account was found." = "No usable runtime-owned account was found.";
 "The selected runtime reports usable authentication." = "The selected runtime reports usable authentication.";

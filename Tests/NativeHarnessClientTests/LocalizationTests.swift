@@ -161,13 +161,6 @@ final class LocalizationTests: XCTestCase {
             "프로바이더 연결"
         )
         XCTAssertEqual(
-            L10n.string(
-                "Muse Code does not expose a stable account-status probe through MSP v1.",
-                languageCode: "ko"
-            ),
-            "Muse Code는 MSP v1을 통해 안정적인 계정 상태 조회를 제공하지 않습니다."
-        )
-        XCTAssertEqual(
             L10n.string("Use arrow keys and Enter for CLI-owned choices.", languageCode: "ko"),
             "CLI 선택 화면에서는 화살표와 확인 버튼을 사용하세요."
         )
