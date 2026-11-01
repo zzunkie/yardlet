@@ -16,7 +16,8 @@ struct TaskPresentationBoundary: View {
     let workspaceState: TaskWorkspaceState
     @Binding var panelState: TaskSurfaceNavigationProjection.PanelState
     var focusedSurface: FocusState<TaskSurface?>.Binding
-    let entries: [TranscriptEntry]
+    /// The task's transcript, read where it is drawn (`TaskTranscriptView`).
+    let transcript: TaskTranscriptReader
     /// The task's saved conversation is being read from the provider's own history.
     var isReadingSavedConversation = false
     let errorMessage: String?
@@ -44,7 +45,7 @@ struct TaskPresentationBoundary: View {
             workspaceState: workspaceState,
             panelState: $panelState,
             focusedSurface: focusedSurface,
-            entries: entries,
+            transcript: transcript,
             isReadingSavedConversation: isReadingSavedConversation,
             errorMessage: errorMessage,
             codexTaskState: codexTaskState,

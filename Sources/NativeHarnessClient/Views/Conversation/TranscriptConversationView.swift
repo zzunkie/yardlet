@@ -8,7 +8,7 @@ import SwiftUI
 /// `TaskConversationView`, which also draws a Codex thread, and draws it as the task's own.
 struct TranscriptConversationView: View {
     let harness: HarnessKind
-    let entries: [TranscriptEntry]
+    let transcript: TranscriptTurns
     var latestTurnIsComplete = false
     var sessionStatus: SessionStatus = .ready
     var readingPosition: TranscriptReadingPosition? = nil
@@ -23,7 +23,7 @@ struct TranscriptConversationView: View {
     var body: some View {
         ConversationTimeline(
             source: .transcript(
-                entries: entries, harness: harness, status: sessionStatus,
+                transcript, harness: harness, status: sessionStatus,
                 latestTurnIsComplete: latestTurnIsComplete
             ),
             placement: placement,
@@ -34,5 +34,22 @@ struct TranscriptConversationView: View {
             diagnosticID: diagnosticID,
             renderState: renderState
         )
+    }
+}
+
+extension TranscriptConversationView {
+    /// A transcript drawn from its entries as they are.
+    init(
+        harness: HarnessKind, entries: [TranscriptEntry], latestTurnIsComplete: Bool = false,
+        sessionStatus: SessionStatus = .ready, readingPosition: TranscriptReadingPosition? = nil,
+        actions: ConversationActions = ConversationActions(), placement: ConversationPlacement = .panel,
+        turnWindowCount: Int = ConversationTurnWindow.initialTurnCount, isLoading: Bool = false,
+        diagnosticID: String? = nil, renderState: ConversationRenderState? = nil
+    ) {
+        self.init(
+            harness: harness, transcript: TranscriptTurns(entries), latestTurnIsComplete: latestTurnIsComplete,
+            sessionStatus: sessionStatus, readingPosition: readingPosition, actions: actions, placement: placement,
+            turnWindowCount: turnWindowCount, isLoading: isLoading, diagnosticID: diagnosticID,
+            renderState: renderState)
     }
 }

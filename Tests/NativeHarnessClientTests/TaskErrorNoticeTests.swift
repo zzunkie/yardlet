@@ -175,7 +175,7 @@ private struct FailedSendTaskHost: View {
         TaskDetail(
             session: session, composerDraft: TaskComposerDraft(), workspaceState: workspace,
             panelState: Binding(get: { workspace.panels }, set: { workspace.setPanels($0) }),
-            focusedSurface: $focused, entries: entries, errorMessage: errorMessage, codexTaskState: codexTaskState,
+            focusedSurface: $focused, transcript: TaskTranscriptReader(entries), errorMessage: errorMessage, codexTaskState: codexTaskState,
             codexHistorySelection: nil, codexQueue: queue, codexCapabilities: .empty, providerCapabilities: nil,
             providerUsage: nil, isProviderAttached: false, onShowCodexCapabilities: {},
             conversationActions: ConversationActions(),

@@ -1,7 +1,9 @@
 import Foundation
 
 struct TranscriptBuilder: Sendable {
-    private(set) var entries: [TranscriptEntry] = []
+    /// The entries, which note what changed since a publication last took the change (`takeChange()`).
+    private var list = TranscriptEntryList()
+    var entries: [TranscriptEntry] { list.elements }
     private var currentAssistantEntryID: UUID?
     private var currentReasoningEntryID: UUID?
     /// The answer and thinking entries streamed since the last completed message, in order. A
@@ -18,7 +20,7 @@ struct TranscriptBuilder: Sendable {
 
     init(entries: [TranscriptEntry] = [], limit: Int = 500) {
         entryLimit = min(max(1, limit), Self.maximumEntryLimit)
-        self.entries = Array(entries.suffix(entryLimit)).compactMap { entry in
+        list = TranscriptEntryList(Array(entries.suffix(entryLimit)).compactMap { entry in
             var restored = entry
             switch restored.content {
             case let .assistant(text, _):
@@ -35,7 +37,7 @@ struct TranscriptBuilder: Sendable {
                 break
             }
             return restored
-        }
+        })
     }
 
     /// - Parameter joinsRunningTurn: the provider read the message into the turn that was running.
@@ -48,7 +50,7 @@ struct TranscriptBuilder: Sendable {
         finishStreamingBlocks()
         let entry = TranscriptEntry(content: .user(text: text, images: images.isEmpty ? nil : images),
                                     joinsRunningTurn: joinsRunningTurn ? true : nil, origin: origin)
-        entries.append(entry)
+        list.append(entry)
         trimIfNeeded()
         return entry.id
     }
@@ -74,13 +76,18 @@ struct TranscriptBuilder: Sendable {
         let removedIDs = Set(entries[..<index].map(\.id))
         let room = max(0, entryLimit - (entries.count - index))
         let settled = TranscriptBuilder(entries: earlier, limit: entryLimit).entries
-        entries = Array(settled.suffix(room)) + entries[index...]
+        list.replaceSubrange(0..<index, with: settled.suffix(room))
         if let currentAssistantEntryID, removedIDs.contains(currentAssistantEntryID) {
             self.currentAssistantEntryID = nil
         }
         if let currentReasoningEntryID, removedIDs.contains(currentReasoningEntryID) {
             self.currentReasoningEntryID = nil
         }
+    }
+
+    /// What changed in the entries since the change was last taken, which a publication takes with them.
+    mutating func takeChange() -> TranscriptChange {
+        list.takeChange()
     }
 
     /// Keeps at least `limit` entries from now on: earlier history read in grows what the builder holds.
@@ -92,7 +99,7 @@ struct TranscriptBuilder: Sendable {
     mutating func replaceUserText(of id: UUID, with text: String) {
         guard let index = entries.lastIndex(where: { $0.id == id }),
               case let .user(_, images) = entries[index].content else { return }
-        entries[index].content = .user(text: text, images: images)
+        list[index].content = .user(text: text, images: images)
     }
 
     /// The request of a turn the provider started itself, read after the turn opened: it takes
@@ -100,8 +107,8 @@ struct TranscriptBuilder: Sendable {
     mutating func settleRequest(of id: UUID, as request: TranscriptEntry) {
         guard let index = entries.lastIndex(where: { $0.id == id }), case .user = entries[index].content,
               case .user = request.content else { return }
-        entries[index].content = request.content
-        entries[index].origin = request.origin
+        list[index].content = request.content
+        list[index].origin = request.origin
     }
 
     mutating func apply(_ payload: HarnessEventPayload) {
@@ -139,14 +146,14 @@ struct TranscriptBuilder: Sendable {
 
         case let .permissionRequested(request):
             finishStreamingBlocks()
-            entries.append(
+            list.append(
                 TranscriptEntry(content: .permission(request, state: .pending))
             )
 
         case let .permissionExpired(requestID):
             for index in entries.indices {
                 if case let .permission(request, .pending) = entries[index].content, request.id == requestID {
-                    entries[index].content = .permission(request, state: .expired)
+                    list[index].content = .permission(request, state: .expired)
                 }
             }
 
@@ -167,7 +174,7 @@ struct TranscriptBuilder: Sendable {
             forgetStreamedEntries()
             completeRunningActivities()
             finishRunningCompaction(as: .failed)
-            entries.append(
+            list.append(
                 TranscriptEntry(content: .error(message: message, recoverable: recoverable, transient: transient))
             )
 
@@ -207,7 +214,7 @@ struct TranscriptBuilder: Sendable {
     private mutating func upsertUsageLimit(_ limit: HarnessRateLimit) {
         guard let last = entries.indices.last,
               case let .usageLimit(existing) = entries[last].content else {
-            entries.append(TranscriptEntry(content: .usageLimit(limit)))
+            list.append(TranscriptEntry(content: .usageLimit(limit)))
             return
         }
         var merged = limit
@@ -217,7 +224,7 @@ struct TranscriptBuilder: Sendable {
         merged.usedFraction = limit.usedFraction ?? existing.usedFraction
         merged.message = limit.message ?? existing.message
         if merged.windows.isEmpty { merged.windows = existing.windows }
-        entries[last].content = .usageLimit(merged)
+        list[last].content = .usageLimit(merged)
     }
 
     /// A compaction shows as one marker that starts running and settles. The provider repeats its
@@ -229,7 +236,7 @@ struct TranscriptBuilder: Sendable {
             return false
         }
         guard let index, case let .compaction(existing) = entries[index].content else {
-            entries.append(TranscriptEntry(content: .compaction(update)))
+            list.append(TranscriptEntry(content: .compaction(update)))
             return
         }
         let isSameTurn = !entries[(index + 1)...].contains { entry in
@@ -239,10 +246,10 @@ struct TranscriptBuilder: Sendable {
         switch update.phase {
         case .started:
             guard existing.phase != .started else { return }
-            entries.append(TranscriptEntry(content: .compaction(update)))
+            list.append(TranscriptEntry(content: .compaction(update)))
         case .completed, .failed:
             guard existing.phase == .started || (isSameTurn && existing.phase == update.phase) else {
-                entries.append(TranscriptEntry(content: .compaction(update)))
+                list.append(TranscriptEntry(content: .compaction(update)))
                 return
             }
             var settled = existing
@@ -250,7 +257,7 @@ struct TranscriptBuilder: Sendable {
             settled.tokensBefore = update.tokensBefore ?? existing.tokensBefore
             settled.tokensAfter = update.tokensAfter ?? existing.tokensAfter
             settled.message = update.message ?? existing.message
-            entries[index].content = .compaction(settled)
+            list[index].content = .compaction(settled)
         }
     }
 
@@ -259,14 +266,14 @@ struct TranscriptBuilder: Sendable {
             guard case var .compaction(compaction) = entries[index].content,
                   compaction.phase == .started else { continue }
             compaction.phase = phase
-            entries[index].content = .compaction(compaction)
+            list[index].content = .compaction(compaction)
         }
     }
 
     private mutating func expirePendingPermissions() {
         for index in entries.indices {
             if case let .permission(request, .pending) = entries[index].content {
-                entries[index].content = .permission(request, state: .expired)
+                list[index].content = .permission(request, state: .expired)
             }
         }
     }
@@ -277,7 +284,7 @@ struct TranscriptBuilder: Sendable {
             return request.id == id && state == .pending
         }) else { return }
         guard case let .permission(request, _) = entries[index].content else { return }
-        entries[index].content = .permission(
+        list[index].content = .permission(
             request,
             state: decision == .allow ? .allowed : .denied
         )
@@ -289,12 +296,12 @@ struct TranscriptBuilder: Sendable {
         if let currentAssistantEntryID,
            let index = entries.lastIndex(where: { $0.id == currentAssistantEntryID }),
            case let .assistant(text, _) = entries[index].content {
-            entries[index].content = .assistant(text: text + delta, isStreaming: true)
+            list[index].content = .assistant(text: text + delta, isStreaming: true)
         } else {
             let entry = TranscriptEntry(content: .assistant(text: delta, isStreaming: true))
             currentAssistantEntryID = entry.id
             streamedAssistantIDs.append(entry.id)
-            entries.append(entry)
+            list.append(entry)
         }
     }
 
@@ -304,9 +311,9 @@ struct TranscriptBuilder: Sendable {
             // The streamed entries were this message's.
         } else if let currentAssistantEntryID,
            let index = entries.lastIndex(where: { $0.id == currentAssistantEntryID }) {
-            entries[index].content = .assistant(text: text, isStreaming: false)
+            list[index].content = .assistant(text: text, isStreaming: false)
         } else if !text.isEmpty {
-            entries.append(
+            list.append(
                 TranscriptEntry(content: .assistant(text: text, isStreaming: false))
             )
         }
@@ -336,9 +343,9 @@ struct TranscriptBuilder: Sendable {
             let first = streamed[start].id
             let rest = Set(streamed[(start + 1)...].map(\.id))
             if let index = entries.lastIndex(where: { $0.id == first }) {
-                entries[index].content = content(text)
+                list[index].content = content(text)
             }
-            entries.removeAll { rest.contains($0.id) }
+            list.removeAll { rest.contains($0.id) }
             return first
         }
         return nil
@@ -371,12 +378,12 @@ struct TranscriptBuilder: Sendable {
         if let currentReasoningEntryID,
            let index = entries.lastIndex(where: { $0.id == currentReasoningEntryID }),
            case let .reasoning(text, _) = entries[index].content {
-            entries[index].content = .reasoning(text: text + delta, isStreaming: true)
+            list[index].content = .reasoning(text: text + delta, isStreaming: true)
         } else {
             let entry = TranscriptEntry(content: .reasoning(text: delta, isStreaming: true))
             currentReasoningEntryID = entry.id
             streamedReasoningIDs.append(entry.id)
-            entries.append(entry)
+            list.append(entry)
         }
     }
 
@@ -389,15 +396,15 @@ struct TranscriptBuilder: Sendable {
             // The streamed thinking was this block's.
         } else if let currentReasoningEntryID,
            let index = entries.lastIndex(where: { $0.id == currentReasoningEntryID }) {
-            entries[index].content = .reasoning(text: text, isStreaming: false)
+            list[index].content = .reasoning(text: text, isStreaming: false)
             completed = currentReasoningEntryID
         } else if !text.isEmpty {
             let entry = TranscriptEntry(content: .reasoning(text: text, isStreaming: false))
-            entries.append(entry)
+            list.append(entry)
             completed = entry.id
         }
         if isProgressUpdate, let completed, let index = entries.lastIndex(where: { $0.id == completed }) {
-            entries[index].isProgressUpdate = true
+            list[index].isProgressUpdate = true
         }
         currentReasoningEntryID = nil
         streamedReasoningIDs.removeAll()
@@ -410,7 +417,7 @@ struct TranscriptBuilder: Sendable {
             self.currentReasoningEntryID = nil
             return
         }
-        entries[index].content = .reasoning(text: text, isStreaming: false)
+        list[index].content = .reasoning(text: text, isStreaming: false)
         self.currentReasoningEntryID = nil
     }
 
@@ -421,7 +428,7 @@ struct TranscriptBuilder: Sendable {
             self.currentAssistantEntryID = nil
             return
         }
-        entries[index].content = .assistant(text: text, isStreaming: false)
+        list[index].content = .assistant(text: text, isStreaming: false)
         self.currentAssistantEntryID = nil
     }
 
@@ -429,7 +436,7 @@ struct TranscriptBuilder: Sendable {
         for index in entries.indices {
             guard case let .activity(activity, .running) = entries[index].content else { continue }
             guard includingBackground || activity.isBackground != true else { continue }
-            entries[index].content = .activity(activity, state: .stopped)
+            list[index].content = .activity(activity, state: .stopped)
         }
     }
 
@@ -442,12 +449,12 @@ struct TranscriptBuilder: Sendable {
             return existing.id == activity.id
         }) {
             guard case let .activity(existing, _) = entries[index].content else { return }
-            entries[index].content = .activity(
+            list[index].content = .activity(
                 Self.merging(existing, with: activity),
                 state: state
             )
         } else {
-            entries.append(TranscriptEntry(content: .activity(activity, state: state)))
+            list.append(TranscriptEntry(content: .activity(activity, state: state)))
         }
     }
 
@@ -482,9 +489,9 @@ struct TranscriptBuilder: Sendable {
             if case .plan = entry.content { return true }
             return false
         }), latestUserIndex == nil || index > latestUserIndex! {
-            entries[index].content = .plan(plan)
+            list[index].content = .plan(plan)
         } else {
-            entries.append(TranscriptEntry(content: .plan(plan)))
+            list.append(TranscriptEntry(content: .plan(plan)))
         }
     }
 
@@ -493,7 +500,7 @@ struct TranscriptBuilder: Sendable {
         guard entries.count > limit else { return }
         let overflow = entries.count - limit
         let removedIDs = Set(entries.prefix(overflow).map(\.id))
-        entries.removeFirst(overflow)
+        list.removeFirst(overflow)
         if let currentAssistantEntryID, removedIDs.contains(currentAssistantEntryID) {
             self.currentAssistantEntryID = nil
         }

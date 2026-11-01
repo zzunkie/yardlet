@@ -440,7 +440,7 @@ private final class AgentsRailFixture {
             return TaskDetail(
                 session: fixture.session, composerDraft: TaskComposerDraft(), workspaceState: workspace,
                 panelState: Binding(get: { workspace.panels }, set: { workspace.setPanels($0) }),
-                focusedSurface: $focused, entries: fixture.entries, errorMessage: nil, codexTaskState: nil,
+                focusedSurface: $focused, transcript: TaskTranscriptReader(fixture.entries), errorMessage: nil, codexTaskState: nil,
                 codexHistorySelection: nil, codexQueue: [], codexCapabilities: .empty,
                 providerCapabilities: ComposerUnificationFixtures.claudeLiveCapabilities,
                 providerUsage: ComposerUnificationFixtures.providerUsage, isProviderAttached: true,

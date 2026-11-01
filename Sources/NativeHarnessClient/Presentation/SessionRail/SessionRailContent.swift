@@ -242,6 +242,28 @@ struct SessionRailContent: Equatable {
             outputs: outputs(entries: entries, codexChanges: codexChanges, workspaceURL: session.workspaceURL))
     }
 
+    /// Whether the rail, the composer or its line of background tasks reads the entry: a plan, a
+    /// request that waits, and the calls that are a provider's subtasks and agents, Yardlet's
+    /// subagents, task suggestions or files written whole. Whatever `make` and the composer read of a
+    /// transcript is among these, so a long conversation gives them its few such entries
+    /// (`TranscriptTurns.railEntries`) instead of all of them.
+    static func reads(_ entry: TranscriptEntry) -> Bool {
+        switch entry.content {
+        case .plan, .permission(_, .pending):
+            return true
+        case let .activity(activity, state):
+            if activity.subtask != nil || SessionRailAgents.claudeAgentTools.contains(activity.kind)
+                || ConversationAgentRunProjection.subagent(from: activity, phase: .running, isApproved: false) != nil {
+                return true
+            }
+            guard state == .completed else { return false }
+            if let diff = activity.diff, diff.oldText == nil, diff.newText != nil, !diff.path.isEmpty { return true }
+            return ConversationTaskSuggestionProjection.suggestion(from: activity) != nil
+        default:
+            return false
+        }
+    }
+
     /// The files the task wrote, newest first, each once: completed calls that wrote a whole file
     /// (Claude Code's `Write`, an ACP or Pi diff with no old text) and Codex's added files.
     static func outputs(entries: [TranscriptEntry], codexChanges: [CodexChangeHandoff],

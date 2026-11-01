@@ -158,7 +158,7 @@ final class TaskComposerDraftTests: XCTestCase {
                     TaskDetail(
                         session: task, composerDraft: drafts.draft(for: task.id), workspaceState: workspace,
                         panelState: Binding(get: { workspace.panels }, set: { workspace.setPanels($0) }),
-                        focusedSurface: focusedSurface, entries: [], errorMessage: nil, codexTaskState: nil,
+                        focusedSurface: focusedSurface, transcript: TaskTranscriptReader([]), errorMessage: nil, codexTaskState: nil,
                         codexHistorySelection: nil, codexQueue: queue, codexCapabilities: .empty,
                         providerCapabilities: nil, providerUsage: nil, isProviderAttached: false,
                         onShowCodexCapabilities: {}, conversationActions: ConversationActions(),
