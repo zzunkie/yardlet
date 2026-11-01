@@ -195,10 +195,11 @@ struct SentImageNameChip: View {
 }
 
 /// Rows that wrap and sit against the trailing edge, as a sent message's attachments do, or against
-/// the leading edge.
+/// the leading edge. Items of a row are centered on it, or set against its top.
 struct SentAttachmentFlow: Layout {
     var spacing: CGFloat
     var alignsTrailing = true
+    var alignsTop = false
 
     private struct Row {
         var indices: [Int] = []
@@ -219,7 +220,7 @@ struct SentAttachmentFlow: Layout {
             for index in row.indices {
                 let size = size(of: subviews[index], width: bounds.width)
                 subviews[index].place(
-                    at: CGPoint(x: x, y: y + (row.height - size.height) / 2),
+                    at: CGPoint(x: x, y: alignsTop ? y : y + (row.height - size.height) / 2),
                     anchor: .topLeading, proposal: ProposedViewSize(size)
                 )
                 x += size.width + spacing

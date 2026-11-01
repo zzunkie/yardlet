@@ -23,7 +23,7 @@ struct PersonalAgentImageAttachments: View {
     let open: (PersonalAgentAttachment) -> Void
 
     var body: some View {
-        SentAttachmentFlow(spacing: isPerson ? 6 : 8, alignsTrailing: isPerson) {
+        SentAttachmentFlow(spacing: isPerson ? 6 : 8, alignsTrailing: isPerson, alignsTop: true) {
             ForEach(Array(images.enumerated()), id: \.offset) { _, image in
                 PersonalAgentImageTile(attachment: image,
                                        shape: !isPerson ? image.pixelSize.map { .whole($0, several: images.count > 1) } ?? .square : .square,

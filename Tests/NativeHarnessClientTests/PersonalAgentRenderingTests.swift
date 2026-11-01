@@ -2072,7 +2072,7 @@ final class PersonalAgentRenderingTests: XCTestCase {
                                          attachments: [picture("closeup", "corner-closeup.png", (900, 900), type: "image/png")])
         reply.replyToMessageID = "m3"
         reply.replyRootMessageID = "m3"
-        var messages: [PersonalAgentMessage] = [
+        let messages: [PersonalAgentMessage] = [
             .init(id: "m1", author: .person, text: "Photos from the site visit. Can you check the north wall?",
                   createdAt: nil, isDeleted: false,
                   attachments: [picture("site-1", "site-north.jpg", (4032, 3024)), picture("site-2", "site-east.jpg", (3024, 4032))]),
@@ -2089,9 +2089,6 @@ final class PersonalAgentRenderingTests: XCTestCase {
             reply
         ]
         let directory = try WindowlessRender.directory("dots-inline-images-qa")
-        if ProcessInfo.processInfo.environment["DEBUG_NOIMG"] != nil {
-            messages = messages.map { m in var v = PersonalAgentMessage(id: m.id, author: m.author, text: m.text, createdAt: nil, isDeleted: false, attachments: []); v.replyToMessageID = m.replyToMessageID; v.replyRootMessageID = m.replyRootMessageID; return v }
-        }
         for size in [NSSize(width: 1280, height: 800), NSSize(width: 920, height: 680)] {
             for appearance in WindowlessRender.Appearance.allCases {
                 let reader = RenderedPersonalAgentReader(agents: [agent], messages: messages)
