@@ -409,9 +409,10 @@ enum BrowserHostCommand: Codable, Equatable, Sendable {
     /// Opens a tab; with a profile it shares that task profile's cookies and storage, else the default's.
     case open(tab: BrowserTabID, url: String, viewport: BrowserViewport, profile: BrowserTabProfile? = nil)
     /// Copies the cookies of `domain` and its subdomains from one profile to another (a key; nil for the
-    /// default profile), with `replace` in place of the target's cookies of `domain`: a person's sign-in in a
-    /// task's tab goes to the default profile and the tasks that follow it.
-    case copyCookies(from: String?, to: String?, domain: String, replace: Bool)
+    /// default profile), with `replace` in place of the target's cookies of `domain`, answered with `cookiesCopied`
+    /// once the target has them: a person's sign-in in a task's tab goes to the default profile and the tasks that
+    /// follow it.
+    case copyCookies(request: Int, from: String?, to: String?, domain: String, replace: Bool)
     /// Sums a hash of each cookie of `site` and its subdomains in a profile (a key; nil for the default profile),
     /// answered with `cookieDigest`: whether a sign-in changed them, without their values leaving the host.
     case cookieDigest(request: Int, profile: String?, site: String)
@@ -485,6 +486,8 @@ enum BrowserHostEvent: Codable, Equatable, Sendable {
     case ready(processID: Int, engine: String, acceleratedPaint: Bool)
     /// An `importCookies` is done: the cookies it set (0 for a task profile it left as it is), or -1 when it could not run.
     case cookiesImported(request: Int, count: Int)
+    /// A `copyCookies` is done: the cookies it set, or -1 when it could not run.
+    case cookiesCopied(request: Int, count: Int)
     /// A `cookieDigest`'s sum, 16 hexadecimal digits; empty when it could not run.
     case cookieDigest(request: Int, digest: String)
     /// Chromium opened (true) or closed its last window of its own in the host, such as the passkey
@@ -590,7 +593,7 @@ enum BrowserHostEvent: Codable, Equatable, Sendable {
     /// The tab an event belongs to; nil for host-wide events.
     var tab: BrowserTabID? {
         switch self {
-        case .ready, .chromiumWindow, .cookiesImported, .cookieDigest, .failed, .terminated: nil
+        case .ready, .chromiumWindow, .cookiesImported, .cookiesCopied, .cookieDigest, .failed, .terminated: nil
         case .opened(let tab), .frame(let tab, _), .popup(let tab, _), .cursor(let tab, _),
              .contextMenu(let tab, _), .compositionBounds(let tab, _), .address(let tab, _),
              .title(let tab, _), .favicon(let tab, _, _), .loading(let tab, _, _, _), .loadEnd(let tab, _, _),

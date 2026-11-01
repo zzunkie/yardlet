@@ -32,10 +32,15 @@ extension BrowserHostPaneController {
             return try BrowserLoginImport.cookies(in: profile, sites: sites, password: secret)
         }.value
         var profiles: [String?] = [nil]
-        if let own = client.profileForSession?(session)?.key { profiles.append(own) }
-        let counts = try await client.importCookies(cookies, sites: sites, into: profiles)
+        let own = client.profileForSession?(session)?.key
+        if let own { profiles.append(own) }
+        let follow = MacBrowserHost.shared.loginFollow
+        // The import is no sign-in of the panel task's own: its watches of the sites wait for it.
+        let counts = try await follow.changing(own, sites: sites) {
+            try await client.importCookies(cookies, sites: sites, into: profiles)
+        }
         guard !counts.contains(-1) else { throw BrowserLoginImport.Failure.hostDidNotAnswer }
-        for site in sites { MacBrowserHost.shared.loginFollow.signedIn(session: session, site: site, fromDefault: true) }
+        for site in sites { follow.signedIn(session: session, site: site, fromDefault: true) }
         showVaultNotice(sites.count == 1
                         ? L10n.format("Imported the sign-in for %@ from %@.", sites[0], profile.browser.name)
                         : L10n.format("Imported sign-ins for %lld sites from %@.", Int64(sites.count), profile.browser.name))

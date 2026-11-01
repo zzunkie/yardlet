@@ -16,6 +16,9 @@ final class BrowserHostIsolationQA {
     private var client: BrowserHostClient { MacBrowserHost.shared.client }
     private var profiles: BrowserTaskProfiles { MacBrowserHost.shared.profiles }
     private static let passkeyKey = "qa-metadata-key-not-real"
+    /// The cookies of the QA server's sign-in with several accounts (`/follow/accounts`): the accounts, the session the
+    /// page reads, and the session's 30 cookies.
+    private static let accountCookies = ["qa_accounts", "qa_seen"] + (1...30).map { String(format: "qa_s%02d", $0) }
 
     init(output: URL, base: String) {
         self.output = output
@@ -319,7 +322,7 @@ final class BrowserHostIsolationQA {
             return check("follow: the default profile's page loads", false, "no tab")
         }
         // An earlier run's sign-in in the default profile would be what new tasks start with.
-        for name in ["qa_follow", "qa_rotate", "qa_pre"] {
+        for name in ["qa_follow", "qa_rotate", "qa_pre"] + Self.accountCookies {
             for domain in ["localhost", "127.0.0.1"] {
                 _ = try? await start.devTools.send("Network.deleteCookies", ["name": .string(name), "domain": .string(domain)])
             }
@@ -467,7 +470,71 @@ final class BrowserHostIsolationQA {
         record["follow"] = .object(["signIns": .integer(Int64(signIns())),
                                     "own": .array((profiles.following.own[profiles.key(for: g)] ?? []).sorted().map(JSONValue.string))])
         for task in [p, f, g, h, q, u, k, old] { client.closeTabs(forSession: task) }
+        await addsAnAccountOnce(start)
         start.close()
+    }
+
+    /// Several accounts in one sign-in, as Google keeps them (the QA server's `/follow/accounts`), reach every task
+    /// whole: the person adds a second account on task A while five other tasks, at the same site's sign-in page, are
+    /// watched for a sign-in of their own. The cookies Yardlet puts into them are not their sign-ins, so the second
+    /// account is passed on once and none passes back the cookies it was being given (docs/BROWSER_SESSION_ISOLATION.md
+    /// 11).
+    private func addsAnAccountOnce(_ start: BrowserTab) async {
+        let page = base + "follow/accounts"
+        let site = "localhost"
+        let names = Self.accountCookies
+        let earlier = profiles.following.signIns[site] ?? 0
+        let signIns = { (self.profiles.following.signIns[site] ?? 0) - earlier }
+        let a = UUID(), others = (1...5).map { _ in UUID() }
+        guard let tabA = await taskTab(a, page) else { return }
+        var watched: [BrowserTab] = []
+        for task in others {
+            guard let tab = await taskTab(task, page) else { return }
+            watched.append(tab)
+        }
+        func signIn(_ account: String) async {
+            await personClick(tabA, "#password")
+            try? await Task.sleep(for: .seconds(1))
+            _ = await value(tabA, "document.querySelector('#user').value = '\(account)'; document.querySelector('#password').value = 'x'; 1")
+            await personClick(tabA, "#go")
+        }
+        await signIn("ONE")
+        _ = await waitUntil(.seconds(10)) { signIns() == 1 }
+        try? await Task.sleep(for: .seconds(4))
+        // The person is at the others' sign-in pages too: each is watched for three minutes.
+        for tab in watched { await personClick(tab, "#password") }
+        try? await Task.sleep(for: .seconds(2))
+        await signIn("TWO")
+        _ = await waitUntil(.seconds(10)) { signIns() >= 2 }
+        // The others' pages reload as their session changes, and each is checked a second after its load.
+        try? await Task.sleep(for: .seconds(15))
+        var held: [String] = []
+        var whole = true
+        for (name, tab) in zip(["A", "B", "C", "D", "E", "F", "default"], [tabA] + watched + [start]) {
+            let sent = await sentCookies(tab, page)
+            let sessions = Set(names.dropFirst(2).compactMap { sent[$0]?.first })
+            let missing = names.dropFirst(2).filter { sent[$0] == nil }.count
+            whole = whole && sent["qa_accounts"] == ["ONE.TWO"] && sessions.count == 1 && missing == 0
+                && sent["qa_seen"].map(Set.init) == sessions
+            held.append("\(name) accounts \(sent["qa_accounts"]?.joined(separator: ",") ?? "none"), \(sessions.count) sessions, "
+                        + "\(missing) of 30 missing")
+        }
+        record["accounts"] = .object(["signIns": .integer(Int64(signIns())), "held": .array(held.map(JSONValue.string))])
+        check("follow: an account added on one task is passed on once, and every task keeps both accounts",
+              signIns() == 2 && whole, "sign-ins \(signIns()); " + held.joined(separator: "; "))
+        // The sign-ins log names the second account's sign-in, its task and where it went, and no value.
+        let session = await sentCookies(tabA, page)["qa_seen"]?.first ?? "?"
+        let logged = ((try? String(contentsOf: MacBrowserHost.shared.paths.log.deletingLastPathComponent()
+            .appending(path: "sign-ins.log"), encoding: .utf8)) ?? "")
+            .split(separator: "\n").filter { $0.contains(" \(site): ") }.suffix(signIns()).map(String.init)
+        let second = "the person's sign-in \(earlier + 2) in task \(a.uuidString.prefix(8)) (passwordField) went to "
+        check("follow: the sign-ins log names each of the person's sign-ins and where it went, with no cookie value",
+              logged.count == 2 && logged[1].contains(second) && !logged.contains { $0.contains(session) }, logged.joined(separator: " | "))
+        for task in [a] + others { client.closeTabs(forSession: task) }
+        // The page's own cookie would show in the next run's other checks, which read the default profile's cookies.
+        for name in names {
+            _ = try? await start.devTools.send("Network.deleteCookies", ["name": .string(name), "domain": .string(site)])
+        }
     }
 
     // MARK: The old copy's domain cookies

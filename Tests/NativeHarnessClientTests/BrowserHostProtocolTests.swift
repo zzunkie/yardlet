@@ -35,8 +35,10 @@ final class BrowserHostProtocolTests: XCTestCase {
             #"{"open":{"profile":{"fill":true,"follow":["example.com"],"key":"task-c"},"tab":3,"url":"about:blank","viewport":{"height":300,"scale":2,"screenX":0,"screenY":0,"width":400}}}"#)
         XCTAssertEqual(try json(BrowserHostCommand.cookieDigest(request: 4, profile: nil, site: "example.com")),
                        #"{"cookieDigest":{"request":4,"site":"example.com"}}"#)
-        XCTAssertEqual(try json(BrowserHostCommand.copyCookies(from: "task-a", to: nil, domain: "example.com", replace: true)),
-                       #"{"copyCookies":{"domain":"example.com","from":"task-a","replace":true}}"#)
+        XCTAssertEqual(try json(BrowserHostCommand.copyCookies(request: 5, from: "task-a", to: nil, domain: "example.com", replace: true)),
+                       #"{"copyCookies":{"domain":"example.com","from":"task-a","replace":true,"request":5}}"#)
+        XCTAssertEqual(try JSONDecoder().decode(BrowserHostEvent.self, from: Data(#"{"cookiesCopied":{"request":5,"count":33}}"#.utf8)),
+                       .cookiesCopied(request: 5, count: 33))
     }
 
     func testTheViewportCarriesTheDisplayRefreshRateOnlyWhenKnown() throws {
