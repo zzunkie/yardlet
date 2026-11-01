@@ -38,6 +38,10 @@ enum PerfBenchFixture {
         case sidebar
         /// Six pages open in the task's browser panel, shown and then hidden.
         case browserTabs = "browser-tabs"
+        /// Ten Codex tasks, each a turn of 400 finished commands and the work and answers a 400-second
+        /// stream left after them, opened one after another; then three of them at a time stream a new
+        /// answer while the window goes from task to task.
+        case codexSwitch = "codex-switch"
     }
 
     static var isRequested: Bool { CommandLine.arguments.contains(argument) }
@@ -53,6 +57,12 @@ enum PerfBenchFixture {
     static let otherClaudeSessionID = "0fa1b2c3-0000-4000-8000-00000000c002"
     static let codexThreadID = "perf-codex-thread"
     static let otherCodexThreadID = "perf-codex-other"
+    static let switchTaskCount = 10
+
+    /// The `codex-switch` scene's tasks; the first is the shown task.
+    static func switchTaskID(_ index: Int) -> UUID {
+        index == 0 ? shownTaskID : NameBasedUUID.make(namespace: shownTaskID, name: "switch|\(index)")
+    }
 
     /// When the scenario was built, as the app made its model, and when the app finished launching.
     nonisolated(unsafe) static var scenarioBuiltAt: Date?
@@ -170,6 +180,14 @@ enum PerfBenchFixture {
                                turns: (0..<4).map { LongConversationFixture.codexTurn($0) })]
         case .browserTabs:
             shown = [claudeTask(shownTaskID, title: "Check the pages", runtime: none, sessionID: claudeSessionID, turns: 5)]
+        case .codexSwitch:
+            shown = (0..<switchTaskCount).map { index in
+                let threadID = "\(codexThreadID)-\(index)"
+                let turn = LongConversationFixture.streamedCodexTurn(id: "\(threadID)-turn", commands: 400, seconds: 400)
+                savedCards[switchTaskID(index)] = LongConversationFixture.savedCards(of: [turn])
+                return codexTask(switchTaskID(index), title: "Stream \(index): " + titles[index % titles.count],
+                                 threadID: threadID, turns: [turn])
+            }
         }
         sessions.insert(contentsOf: shown, at: 0)
 
@@ -327,6 +345,8 @@ private final class PerfBenchRunner {
             await scrollSidebar()
         case .browserTabs:
             await openBrowserTabs()
+        case .codexSwitch:
+            await switchTasks()
         }
         finish()
     }
@@ -423,12 +443,69 @@ private final class PerfBenchRunner {
         await phase("tabs-hidden", seconds: 10)
     }
 
+    /// Each task runs a short turn, as a task a person worked in this launch holds its thread, and is
+    /// opened once. Then the window goes from task to task every 1.5 seconds, each opened after the four
+    /// the window keeps were opened (`switch`), and the time each opening took of the main thread is
+    /// noted; then tasks stream new turns as the window goes on switching (`stream-switch`).
+    private func switchTasks() async {
+        let tasks = (0..<PerfBenchFixture.switchTaskCount).map(PerfBenchFixture.switchTaskID)
+        for task in tasks { await send("perf stream 1", to: task) }
+        let loaded = await waitUntil(.seconds(60)) {
+            tasks.allSatisfy { self.codexItems($0) > 500 && !self.isRunning($0) }
+        }
+        if !loaded { problems.append("threads loaded: \(tasks.map(codexItems))") }
+        for task in tasks {
+            model.splits.activate(.session(task))
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        note("threads loaded: \(tasks.map(codexItems))")
+        try? await Task.sleep(for: .seconds(2))
+        var opened: [Double] = []
+        var longest: [Double] = []
+        await phase("switch", seconds: 30, driving: { deadline in
+            var index = 0
+            while ContinuousClock.now + .milliseconds(1_500) <= deadline {
+                let busy = self.steps.busyMilliseconds
+                let passes = self.steps.passCount
+                self.model.splits.activate(.session(tasks[index % tasks.count]))
+                try? await Task.sleep(for: .milliseconds(1_500))
+                opened.append(self.steps.busyMilliseconds - busy)
+                longest.append(self.steps.longestPass(since: passes))
+                index += 1
+            }
+        })
+        if var entry = phases.popLast() {
+            entry["switches"] = ["count": opened.count, "busyMedianMs": round2(median(opened)),
+                                 "busyMaxMs": round2(opened.max() ?? 0), "longestPassMedianMs": round2(median(longest)),
+                                 "longestPassMaxMs": round2(longest.max() ?? 0)]
+            phases.append(entry)
+        }
+
+        // A working session: each round three of the tasks stream an answer for 30 seconds while the
+        // window goes from task to task every 2 seconds. What the app holds after it, beside what it held
+        // before, is what each streamed turn left behind.
+        let rounds = 3
+        await phase("stream-switch", seconds: Double(rounds * 40), driving: { deadline in
+            var index = 0
+            for round in 0..<rounds {
+                for slot in 0..<3 { await self.send("perf stream 30", to: tasks[(round * 3 + slot) % tasks.count]) }
+                let end = min(deadline, ContinuousClock.now + .seconds(40))
+                while ContinuousClock.now + .seconds(2) <= end {
+                    self.model.splits.activate(.session(tasks[index % tasks.count]))
+                    index += 1
+                    try? await Task.sleep(for: .seconds(2))
+                }
+            }
+        })
+    }
+
     // MARK: Phases
 
     /// Writes `<n>-<name>.ready` for the script, waits for its `.go` (it starts its sampler then), and
     /// measures for `seconds`.
     private func phase(_ name: String, seconds: Double, frames: Bool = false,
-                       onFrame: ((CADisplayLink) -> Void)? = nil) async {
+                       onFrame: ((CADisplayLink) -> Void)? = nil,
+                       driving: ((ContinuousClock.Instant) async -> Void)? = nil) async {
         let marker = "\(phases.count + 1)-\(name)"
         let markers = output.appending(path: "markers")
         try? JSONSerialization.data(withJSONObject: ["name": name, "seconds": seconds] as [String: Any])
@@ -445,11 +522,14 @@ private final class PerfBenchRunner {
         EventCostLog.reset()
         let started = ContinuousClock.now
         let cpu = ProcessClock.threadCPUSeconds()
+        let footprint = ProcessClock.footprintMiB()
         probe?.start()
-        try? await Task.sleep(for: .seconds(seconds))
+        await driving?(started + .seconds(seconds))
+        if ContinuousClock.now < started + .seconds(seconds) { try? await Task.sleep(until: started + .seconds(seconds)) }
         probe?.stop()
         let elapsed = (ContinuousClock.now - started) / .seconds(1)
         let threadCPU = ProcessClock.threadCPUSeconds() - cpu
+        let footprintAtEnd = ProcessClock.footprintMiB()
         var entry: [String: Any] = [
             "name": name, "seconds": elapsed, "sampled": sampled,
             "mainThread": steps.summary(seconds: elapsed, cpuSeconds: threadCPU),
@@ -459,6 +539,8 @@ private final class PerfBenchRunner {
             ],
             "shownTaskItems": ["before": shownItems, "after": shownItemCount()],
             "shownTaskRunning": isRunning(PerfBenchFixture.shownTaskID),
+            "memory": ["footprintStartMiB": round2(footprint), "footprintEndMiB": round2(footprintAtEnd),
+                       "footprintGrowthMiB": round2(footprintAtEnd - footprint)],
             "events": EventCostLog.summary()
         ]
         if let probe { entry["frames"] = probe.summary(seconds: elapsed) }
@@ -594,6 +676,14 @@ private final class MainThreadSteps {
         durations.removeAll(keepingCapacity: true)
     }
 
+    var passCount: Int { durations.count }
+    /// The main thread's time in passes since the last reset, the pass running now included up to now.
+    var busyMilliseconds: Double {
+        durations.reduce(0, +) + (wokeAt > 0 ? Double(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - wokeAt) / 1_000_000 : 0)
+    }
+
+    func longestPass(since count: Int) -> Double { durations.dropFirst(count).max() ?? 0 }
+
     func summary(seconds: Double, cpuSeconds: Double) -> [String: Any] {
         let sorted = durations.sorted()
         func percentile(_ fraction: Double) -> Double {
@@ -667,6 +757,11 @@ private final class FrameProbe: NSObject {
 
 private func round2(_ value: Double) -> Double { (value * 100).rounded() / 100 }
 
+private func median(_ values: [Double]) -> Double {
+    let sorted = values.sorted()
+    return sorted.isEmpty ? 0 : sorted[sorted.count / 2]
+}
+
 private enum ProcessClock {
     /// When the kernel started this process.
     static func startDate() -> Date? {
@@ -681,6 +776,18 @@ private enum ProcessClock {
     /// The calling thread's CPU time.
     static func threadCPUSeconds() -> Double {
         Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)) / 1_000_000_000
+    }
+
+    /// The process's physical footprint, what Activity Monitor calls its memory.
+    static func footprintMiB() -> Double {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? Double(info.phys_footprint) / 1_048_576 : -1
     }
 }
 #endif

@@ -119,6 +119,27 @@ final class TranscriptProseRenderingTests: XCTestCase {
         }
     }
 
+    /// A message's text view, and what TextKit 2 builds inside it (the views that draw its lines and
+    /// its selection, and its layout manager with every line it laid out), are let go with the message.
+    /// A conversation opened again builds its messages anew; on macOS 27 each one let go otherwise left
+    /// its laid-out text behind.
+    func testAMessageLeavesNothingBehindOnceItIsGone() async throws {
+        var host: WindowlessRender.Host<Message>? = WindowlessRender.Host(
+            Message(scheme: .light), size: NSSize(width: 720, height: 1_000), appearance: .light)
+        host?.settle()
+        var released: [() -> AnyObject?] = []
+        for text in Self.proseTextViews(in: try XCTUnwrap(host?.hosting)) {
+            for object in [text, text.textLayoutManager as AnyObject?] + text.subviews {
+                weak var weakObject = object
+                released.append { weakObject }
+            }
+        }
+        XCTAssertGreaterThan(released.count, 4)
+        host?.close()
+        host = nil
+        try await waitUntil { released.allSatisfy { $0() == nil } }
+    }
+
     static func proseTextViews(in root: NSView) -> [TranscriptProseTextView] {
         func all(_ view: NSView) -> [TranscriptProseTextView] {
             ((view as? TranscriptProseTextView).map { [$0] } ?? []) + view.subviews.flatMap(all)

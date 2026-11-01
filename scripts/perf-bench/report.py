@@ -26,7 +26,7 @@ LAUNCH_FLOOR_MS = 50.0
 HEADLINE = ['process.yardletCPUPercent', 'process.appFootprintMiB', 'mainThread.cpuPercent',
             'mainThread.passP95Ms', 'mainThread.passesOver50MsCount', 'frames.missedPercent', 'frames.latenessP95Ms',
             'events.codexState.cpuP95Ms', 'events.transcriptPublication.cpuP95Ms', 'events.agentRunState.cpuP95Ms',
-            'events.agentRunEvent.cpuP95Ms']
+            'events.agentRunEvent.cpuP95Ms', 'switches.longestPassMedianMs', 'memory.footprintGrowthMiB']
 
 
 def unit(name):
@@ -97,6 +97,8 @@ def collect_round(folder):
         flatten('mainThread', phase.get('mainThread', {}), numbers)
         flatten('frames', phase.get('frames', {}), numbers)
         flatten('events', phase.get('events', {}), numbers)
+        flatten('switches', phase.get('switches', {}), numbers)
+        flatten('memory', phase.get('memory', {}), numbers)
         if phase['name'] in samples:
             flatten('process', process_numbers(samples[phase['name']], scene.get('pid')), numbers)
         phases[phase['name']] = {

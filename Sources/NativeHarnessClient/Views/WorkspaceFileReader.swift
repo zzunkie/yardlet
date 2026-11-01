@@ -557,6 +557,12 @@ final class WorkspaceFileContainer: NSView {
 
     required init?(coder: NSCoder) { nil }
 
+    deinit {
+        let scroll = scroll
+        guard Thread.isMainThread else { return }
+        MainActor.assumeIsolated { (scroll.documentView as? NSTextView)?.releaseTextKitLayout() }
+    }
+
     override func layout() {
         super.layout()
         let width = gutter.ruleThickness

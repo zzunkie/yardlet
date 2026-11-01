@@ -10,7 +10,7 @@ what else runs on it, so they are compared between runs on the same Mac.
 
 ```bash
 ./scripts/perf-bench/run.sh --build          # build a debug bundle, then every scene and benchmark
-./scripts/perf-bench/run.sh --no-micro       # the app's scenes only (about 6 minutes)
+./scripts/perf-bench/run.sh --no-micro       # the app's scenes only (about 10 minutes)
 ./scripts/perf-bench/run.sh --scenes "codex-history subagent" --repeat 3 --compare main
 ./scripts/perf-bench/run.sh --micro-only     # the in-process benchmarks only
 ```
@@ -51,6 +51,7 @@ projects unless the scene says otherwise. Phases are measured after the scene ha
 | `subagent` | the shown Claude Code task's turn waits on a Codex subagent (`run_agent`) whose turn already holds 400 finished commands with output, and which streams on | `streaming` (20) |
 | `sidebar` | 400 tasks in 40 projects and 400 archived tasks (every fifth task's parent is archived); the sidebar scrolled down to its end and back at 1,200 points a second | `scroll` (10), then with a Codex answer streaming in the shown task: `scroll-streaming` (10) |
 | `browser-tabs` | six local pages open in the shown task's browser panel | `tabs-shown` (15), then with the panel closed: `tabs-hidden` (10) |
+| `codex-switch` | ten Codex tasks, each a turn of 400 finished commands with output followed by the reasoning, commands and answers of a 400-second stream (about 540 items, 1.4 MB) | `switch` (30): another task opened every 1.5 seconds, each after the four the window keeps; then `stream-switch` (120): three tasks at a time stream an answer for 30 seconds while another task opens every 2 seconds |
 
 The fakes stream about 30 fragments a second, the rate of a working agent, in the providers' own frame
 shapes: Claude Code's `stream-json` with partial messages, and Codex App Server notifications. A message
@@ -93,6 +94,14 @@ side of a frame; the bench does not measure WindowServer's compositing, since th
 - `agentCPUPercent`: the agent CLIs Yardlet runs, here the fakes. It is reported apart and is not
   Yardlet's cost.
 
+**Memory** (measured by the app, `memory.*`): its footprint as the phase starts and ends, and how much
+it grew over the phase (`footprintGrowthMiB`). A scene that streams and opens tasks keeps nothing of what
+it let go, so its growth is what the new turns hold.
+
+**Switches** (measured by the app in `codex-switch/switch`, `switches.*`): for each task opened, the main
+thread's time in the 1.5 seconds after it (`busyMedianMs`, `busyMaxMs`) and its longest pass then
+(`longestPassMedianMs`, `longestPassMaxMs`), which is how long the window stopped answering.
+
 **Launch** (`launch.*`, from the kernel's start time of the process): to the model being made
 (`processStartToModelMs`), to the app finishing launching (`processStartToFinishedLaunchingMs`), to the
 window's first task (`processStartToWindowMs`), to the first frame the main thread served after laying the
@@ -118,6 +127,9 @@ them under `budgets`, and the command exits with status 1.
   400-item turn) gets 2 ms of the main thread's CPU, a subagent's event 1 ms, a transcript publication
   2 ms. At 30 fragments a second, 2 ms an event leaves the main thread most of every frame for typing and
   scrolling.
+- Nine streamed turns in long Codex tasks, opened and let go again and again, grow the app by under
+  250 MiB (`codex-switch/stream-switch`); what a task let go of when its views went was kept before,
+  and the same phase grew by 550 MiB.
 - An idle window, with or without running tasks, stays under 1% and 3% of a core; scrolling the long
   sidebar keeps its 95th percentile pass under a 60 Hz frame and no pass over 50 ms.
 - The limits are for a debug build on an Apple silicon Mac at the load a working day leaves (load

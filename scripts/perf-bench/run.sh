@@ -7,7 +7,7 @@
 #   ./scripts/perf-bench/run.sh [--build] [--app <Yardlet.app>] [--scenes "<scene> ..."] [--no-micro]
 #       [--micro-only] [--repeat <n>] [--compare <result.json>] [--tolerance <fraction>] [--keep]
 #
-# Scenes: launch idle-running stream-claude stream-codex codex-history subagent sidebar browser-tabs (all by
+# Scenes: launch idle-running stream-claude stream-codex codex-history subagent sidebar browser-tabs codex-switch (all by
 # default; `PerfBenchFixture` in Sources/NativeHarnessClient/Development says what each holds). Each runs
 # in a fresh launch of the QA copy: its own bundle identifier (com.zzunkie.yardletqa.perf), a temporary
 # home, windows off every screen, never the active app (`QABackground`). Tasks that stream talk to fake
@@ -40,7 +40,7 @@ if [[ -z "${YARDLET_HEAVY_LOCK_HELD:-}" ]]; then
         /bin/zsh "$0" "$@"
 fi
 
-all_scenes=(launch idle-running stream-claude stream-codex codex-history subagent sidebar browser-tabs)
+all_scenes=(launch idle-running stream-claude stream-codex codex-history subagent sidebar browser-tabs codex-switch)
 app=$PROJECT_ROOT/.build/Yardlet.app
 build=0
 scenes=($all_scenes)

@@ -144,6 +144,55 @@ enum LongConversationFixture {
         }
     }
 
+    /// The turn the bench's fake Codex (scripts/perf-bench/fake-codex.py) leaves after
+    /// `perf stream <seconds> <commands>`: `commands` finished commands with 1,500 characters of output,
+    /// then reasoning, commands with output and answers, each streamed for a few seconds, in turn for
+    /// `seconds`.
+    static func streamedCodexTurn(id turnID: String, commands: Int, seconds: Int) -> JSONValue {
+        func text(_ length: Int, _ seed: String) -> String {
+            let words = "\(seed) reads the module, checks the failing case and explains the change. "
+            return String(String(repeating: words, count: length / words.count + 1).prefix(length))
+        }
+        func command(_ id: String, output: String) -> JSONValue {
+            .object(["id": .string(id), "type": .string("commandExecution"), "command": .string("swift build"),
+                     "cwd": .string("/tmp/workspace"), "processId": .null, "source": .string("agent"),
+                     "status": .string("completed"), "commandActions": .array([]),
+                     "aggregatedOutput": .string(output), "exitCode": .integer(0), "durationMs": .null])
+        }
+        var items: [JSONValue] = [.object([
+            "id": .string("\(turnID)-request"), "type": .string("userMessage"),
+            "content": .array([.object(["type": .string("text"), "text": .string("perf stream \(seconds) \(commands)")])])
+        ])]
+        items += (0..<commands).map { command("\(turnID)-done-\($0)", output: text(1_500, "\(turnID)-done-\($0)")) }
+        // (kind, fragments a second, seconds), as the fake streams them.
+        let pattern: [(String, Int, Int)] = [("reasoning", 20, 2), ("commandExecution", 40, 4), ("agentMessage", 30, 4),
+                                             ("commandExecution", 40, 2), ("agentMessage", 30, 2)]
+        var elapsed = 0
+        var index = 0
+        while elapsed < seconds {
+            let (kind, rate, length) = pattern[index % pattern.count]
+            let itemID = "\(turnID)-\(index)"
+            let steps = rate * min(length, seconds - elapsed)
+            let written = (1...steps).map { step in
+                if kind == "commandExecution" { return "[\(step)/400] Compiling Module\(step).swift and linking its objects\n" }
+                return step.isMultiple(of: 25) ? "\n\n- point \(step) " : "\(itemID)-\(step) streamed words, "
+            }.joined()
+            switch kind {
+            case "reasoning":
+                items.append(.object(["id": .string(itemID), "type": .string(kind), "summary": .array([.string(written)]),
+                                      "content": .array([])]))
+            case "agentMessage":
+                items.append(.object(["id": .string(itemID), "type": .string(kind), "text": .string(written)]))
+            default:
+                items.append(command(itemID, output: written))
+            }
+            elapsed += length
+            index += 1
+        }
+        return .object(["id": .string(turnID), "status": .string("completed"), "itemsView": .string("full"),
+                        "items": .array(items), "startedAt": .integer(1_800_000_000)])
+    }
+
     /// The cards Yardlet saved as the items of `turns` streamed in: every item but the requests.
     static func savedCards(of turns: [JSONValue]) -> [CodexPersistedTimelineItem] {
         turns.flatMap { turn -> [CodexPersistedTimelineItem] in

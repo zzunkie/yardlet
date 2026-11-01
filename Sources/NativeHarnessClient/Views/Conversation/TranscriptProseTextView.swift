@@ -127,6 +127,12 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
+    deinit {
+        let textView = textView
+        guard Thread.isMainThread else { return }
+        MainActor.assumeIsolated { textView.releaseTextKitLayout() }
+    }
+
     override var isFlipped: Bool { true }
 
     // MARK: - Content
