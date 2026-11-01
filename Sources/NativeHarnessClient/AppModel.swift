@@ -7253,24 +7253,27 @@ final class AppModel {
         deferringStreamedContent: Bool = false
     ) {
         let bounded = codexPersistedTimelines[sessionID, default: CodexPersistedTimeline()].items(from: state)
-        guard savedCodexItems[sessionID] != bounded else {
-            codexItemSaveTasks.removeValue(forKey: sessionID)?.cancel()
-            return
-        }
-        if deferringStreamedContent, let saved = savedCodexItems[sessionID],
-           saved.count == bounded.count,
-           zip(saved, bounded).allSatisfy({ $0.turnID == $1.turnID && $0.id == $1.id
-               && $0.lifecycleRawValue == $1.lifecycleRawValue }) {
-            guard codexItemSaveTasks[sessionID] == nil else { return }
-            codexItemSaveTasks[sessionID] = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(1))
-                guard !Task.isCancelled, let self else { return }
-                self.codexItemSaveTasks.removeValue(forKey: sessionID)
-                if let latest = self.codexPresentationBySessionID[sessionID] {
-                    self.persistCodexTimelineItems(latest, for: sessionID)
-                }
+        // Cards that came, went or settled are saved at once, so while the window holds the cards of
+        // the last one it differs from the saved cards at most in their content, and the saved cards
+        // are usually the window itself: neither is compared card by card.
+        if let saved = savedCodexItems[sessionID], let timeline = codexPersistedTimelines[sessionID],
+           timeline.lastChange != .cards {
+            if timeline.isLastWindow(saved) {
+                codexItemSaveTasks.removeValue(forKey: sessionID)?.cancel()
+                return
             }
-            return
+            if deferringStreamedContent {
+                guard codexItemSaveTasks[sessionID] == nil else { return }
+                codexItemSaveTasks[sessionID] = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(1))
+                    guard !Task.isCancelled, let self else { return }
+                    self.codexItemSaveTasks.removeValue(forKey: sessionID)
+                    if let latest = self.codexPresentationBySessionID[sessionID] {
+                        self.persistCodexTimelineItems(latest, for: sessionID)
+                    }
+                }
+                return
+            }
         }
         codexItemSaveTasks.removeValue(forKey: sessionID)?.cancel()
         savedCodexItems[sessionID] = bounded
