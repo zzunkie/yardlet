@@ -57,6 +57,17 @@ final class PersonalAgentDetails {
     var computers: Part<[PersonalAgentComputer]> = .loading
     /// What the dot produced, as far as read; a new one with each refresh of the details.
     var outputs: PersonalAgentOutputs?
+    /// The dot's bound threads, read when the details are first shown; a new list with each refresh.
+    var threads: PersonalAgentThreadList?
+}
+
+/// A dot's bound threads as one read of the details found them; read once, when first shown.
+@MainActor @Observable
+final class PersonalAgentThreadList {
+    var state: PersonalAgentDetails.Part<[PersonalAgentThread]> = .loading
+    @ObservationIgnored var started = false
+    /// The tasks the dot's roots spawned, which the details list.
+    var tasks: [PersonalAgentThread] { state.value?.filter { $0.kind == .task } ?? [] }
 }
 
 /// The draft files go to, fixed when the person starts choosing them.
@@ -73,13 +84,34 @@ struct PersonalAgentFileTarget {
 final class PersonalAgentActivityReading {
     let agentID: PersonalAgentIdentity
     let activity: PersonalAgentActivity
+    /// A thread the dot's profile binds, read through the transport's bound-thread scope, rather than
+    /// an Activity task.
+    let isBoundThread: Bool
     var history: PersonalAgentActivityHistory
     @ObservationIgnored fileprivate var tasks: [Task<Void, Never>] = []
 
-    init(agentID: PersonalAgentIdentity, activity: PersonalAgentActivity) {
+    init(agentID: PersonalAgentIdentity, activity: PersonalAgentActivity, isBoundThread: Bool = false) {
         self.agentID = agentID
         self.activity = activity
+        self.isBoundThread = isBoundThread
         history = PersonalAgentActivityHistory(threadID: activity.id)
+    }
+
+    /// The reads of this thread, from the scope it was listed in.
+    func thread(from reader: any PersonalAgentClient, for agent: PersonalAgent) async throws -> CodexThreadState {
+        isBoundThread ? try await reader.outputThread(activity.id, for: agent)
+            : try await reader.activityThread(activity.id, for: agent)
+    }
+
+    func turns(after cursor: String?, from reader: any PersonalAgentClient, for agent: PersonalAgent) async throws -> CodexTurnPage {
+        isBoundThread ? try await reader.outputTurns(activity.id, cursor: cursor, for: agent)
+            : try await reader.activityTurns(activity.id, cursor: cursor, for: agent)
+    }
+
+    func items(of turnID: String, after cursor: String?, from reader: any PersonalAgentClient,
+               for agent: PersonalAgent) async throws -> CodexItemPage {
+        isBoundThread ? try await reader.outputItems(activity.id, turnID: turnID, cursor: cursor, for: agent)
+            : try await reader.activityItems(activity.id, turnID: turnID, cursor: cursor, for: agent)
     }
 
     fileprivate func cancel() {
@@ -440,6 +472,7 @@ final class PersonalAgentCenter {
             outputs.noteConversation(before: state.before, loaded: true)
         }
         details.outputs = outputs
+        details.threads = PersonalAgentThreadList()
         let epoch = details.refreshEpoch
         // The shown list stays; its next page is the old read's, so "Show more" waits for the new first page.
         details.activityCursor = nil
@@ -548,6 +581,35 @@ final class PersonalAgentCenter {
         }
     }
 
+    // MARK: Bound threads
+
+    /// Reads the selected dot's bound threads, once for each refresh of its details, when first shown.
+    func startThreads() {
+        guard let agent = selected, let reader = client, let details = detailsByAgent[agent.id],
+              let list = details.threads, !list.started else { return }
+        list.started = true
+        let current = generation
+        Task {
+            do {
+                let values = try await PersonalAgentThreads.read(from: reader, agent: agent)
+                if current == generation, details.threads === list { list.state = .loaded(values) }
+            } catch {
+                if current == generation, details.threads === list { list.state = .failed(detailFailure(error)) }
+            }
+        }
+    }
+
+    /// Opens a task the dot spawned, from its details' list, in the same reader as an Activity task.
+    func openThread(_ id: String) {
+        guard let agent = selected, let thread = detailsByAgent[agent.id]?.threads?.tasks.first(where: { $0.id == id })
+        else { return }
+        if let open = activityReading, open.agentID == agent.id, open.activity.id == id { return }
+        closeActivity()
+        let reading = PersonalAgentActivityReading(agentID: agent.id, activity: thread.activity, isBoundThread: true)
+        activityReading = reading
+        startActivity(reading)
+    }
+
     private func cancelOutputs() {
         for details in detailsByAgent.values { details.outputs?.cancel() }
     }
@@ -588,7 +650,7 @@ final class PersonalAgentCenter {
         reading.history.earlierTurnsFailure = nil
         runActivity(reading) { [weak self] isCurrent in
             do {
-                let page = try await reader.activityTurns(reading.activity.id, cursor: cursor, for: agent)
+                let page = try await reading.turns(after: cursor, from: reader, for: agent)
                 guard isCurrent() else { return }
                 reading.history.isLoadingEarlierTurns = false
                 let added = try reading.history.apply(turns: page, after: cursor)
@@ -621,12 +683,11 @@ final class PersonalAgentCenter {
 
     private func startActivity(_ reading: PersonalAgentActivityReading) {
         guard let (_, agent, reader) = currentActivity() else { return }
-        let threadID = reading.activity.id
         runActivity(reading) { [weak self] isCurrent in
             do {
-                let thread = try await reader.activityThread(threadID, for: agent)
+                let thread = try await reading.thread(from: reader, for: agent)
                 guard isCurrent() else { return }
-                let page = try await reader.activityTurns(threadID, cursor: nil, for: agent)
+                let page = try await reading.turns(after: nil, from: reader, for: agent)
                 guard isCurrent() else { return }
                 var history = reading.history
                 history.begin(thread)
@@ -657,7 +718,7 @@ final class PersonalAgentCenter {
         guard isCurrent(), !reading.history.loadingItems.contains(turnID) else { return }
         reading.history.loadingItems.insert(turnID)
         do {
-            let page = try await reader.activityItems(reading.activity.id, turnID: turnID, cursor: cursor, for: agent)
+            let page = try await reading.items(of: turnID, after: cursor, from: reader, for: agent)
             guard isCurrent() else { return }
             var history = reading.history
             history.loadingItems.remove(turnID)

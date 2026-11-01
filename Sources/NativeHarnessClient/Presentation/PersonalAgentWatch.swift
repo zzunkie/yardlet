@@ -91,6 +91,14 @@ final class PersonalAgentWatch {
     /// Whether the watch is connected to a source now; one that ended stays ended until asked again.
     var isRunning: Bool { task != nil }
 
+    /// The watch's own reader and the account choice it follows, while it runs, for the session tools'
+    /// reads of the dots: the same login and runtime, no second credential path. Callers only read
+    /// through it; when the watch stops or moves, the reader stops and their reads end with it.
+    var reading: (reader: any PersonalAgentClient, accountChoiceID: String)? {
+        guard task != nil, let client, let source else { return nil }
+        return (client, source.accountChoiceID)
+    }
+
     /// Follows `source`: another one replaces the watch. The same source carries on, and one whose
     /// login ended stays ended until `restart`.
     func follow(_ source: Source, makeClient: @escaping () -> any PersonalAgentClient) {

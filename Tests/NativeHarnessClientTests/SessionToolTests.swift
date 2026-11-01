@@ -17,14 +17,17 @@ final class SessionToolTests: XCTestCase {
     func testTheToolsAreSmallPullOnlySchemasBehindToolSearch() throws {
         let names = SessionToolCatalog.tools.map(\.name)
         XCTAssertEqual(names, ["list_tasks", "read_task", "send_message_to_task", "wait_tasks", "create_task", "run_agent",
-                               "archive_task", "list_projects", "hide_project", "show_project", "list_accounts"])
+                               "archive_task", "list_projects", "hide_project", "show_project", "list_accounts",
+                               "list_personal_agents", "read_personal_agent", "read_personal_agent_thread"])
         let required: [String: [String]] = [
             "list_tasks": [], "read_task": ["task_id"], "send_message_to_task": ["task_id", "message"],
             "wait_tasks": ["ids"], "create_task": ["prompt"], "run_agent": ["harness", "prompt"],
             "archive_task": ["task_ids"], "list_projects": [], "hide_project": ["project"], "show_project": ["project"],
-            "list_accounts": []
+            "list_accounts": [], "list_personal_agents": [], "read_personal_agent": ["agent"],
+            "read_personal_agent_thread": ["agent", "thread_id"]
         ]
-        let readOnly: Set<String> = ["list_tasks", "read_task", "wait_tasks", "list_projects", "list_accounts"]
+        let readOnly: Set<String> = ["list_tasks", "read_task", "wait_tasks", "list_projects", "list_accounts",
+                                     "list_personal_agents", "read_personal_agent", "read_personal_agent_thread"]
         for tool in SessionToolCatalog.tools {
             let json = tool.json
             XCTAssertEqual(json["inputSchema"]?["type"], .string("object"), tool.name)
@@ -2152,6 +2155,107 @@ final class SessionToolTests: XCTestCase {
         var answer: String?
     }
 
+    // MARK: - Personal agents
+
+    /// The personal-agent tools read through the app's watch, the reader of the account Personal agents
+    /// follows: the dots with their unread mark, Activity and bound threads (a spawned task's computer by
+    /// name and its folder's last part, never its path), a conversation a page at a time, and a thread
+    /// only when the reader listed it for that dot. Nothing is sent, uploaded or answered, and with no
+    /// watch, or the setting off, the tools say to open Personal agents.
+    func testPersonalAgentToolsReadOnlyWhatTheWatchedReaderListed() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let model = fixture.model
+        let refused = await call(model, "list_personal_agents", [:], from: fixture.caller)
+        XCTAssertTrue(refused.isError && refused.text.contains("open Personal agents"), refused.text)
+
+        let reader = ToolPersonalAgentReader()
+        let watch = model.personalAgentWatch
+        watch.follow(.init(key: "codex:home|home|codex", accountChoiceID: "codex:home")) { reader }
+        defer { watch.stop() }
+        try await waitUntil { await reader.watchedRooms == ["room"] }
+        watch.useFixture(unread: [ToolPersonalAgentReader.atlas.id: .request])
+
+        let listed = try decode(PersonalAgentListing.self, await call(model, "list_personal_agents", [:], from: fixture.caller).text)
+        let atlas = try XCTUnwrap(listed.agents.first)
+        XCTAssertEqual(atlas.agent, "dot")
+        XCTAssertEqual(atlas.unread, "asks for input")
+        XCTAssertEqual(atlas.activity?.map(\.threadId), ["act"])
+        let threads = try XCTUnwrap(atlas.threads)
+        XCTAssertEqual(threads.map(\.threadId), ["spawn-mac", "spawn-cloud", "root"], "Newest first")
+        XCTAssertEqual(threads.map(\.kind), ["task", "task", "conversation"])
+        XCTAssertEqual(threads[0].ranOn, "Studio Mac")
+        XCTAssertEqual(threads[0].folder, "app")
+        XCTAssertEqual(threads[0].parentThreadId, "root")
+        XCTAssertEqual(threads[1].ranOn, "cloud")
+        XCTAssertNil(threads[1].folder)
+        XCTAssertEqual(threads[2].current, true)
+        let listText = await call(model, "list_personal_agents", [:], from: fixture.caller).text
+        XCTAssertFalse(listText.contains("/Users/person"), "A folder is named, not its path")
+
+        // The conversation, newest page first, then the page before it from the cursor.
+        let newest = await call(model, "read_personal_agent", ["agent": "atlas"], from: fixture.caller)
+        XCTAssertFalse(newest.isError, newest.text)
+        XCTAssertTrue(newest.text.contains("Atlas: The report is ready.") && newest.text.contains("Attachments: report.pdf"),
+                      newest.text)
+        XCTAssertTrue(newest.text.contains("Replies on this page: 1"), newest.text)
+        XCTAssertFalse(newest.text.contains("Can you draft it?"), "The earlier page waits for the cursor")
+        let cursor = try XCTUnwrap(newest.text.firstMatch(of: /Pass cursor "([^"]+)"/)?.1).description
+        let earlier = await call(model, "read_personal_agent", ["agent": "dot", "cursor": cursor], from: fixture.caller)
+        XCTAssertTrue(earlier.text.contains("Person: Can you draft it?") && earlier.text.contains("start of the conversation"),
+                      earlier.text)
+
+        // A spawned task through the bound-thread reads, its earlier turns from the cursor; an Activity
+        // task through the Activity's; a thread neither listed is refused before anything is asked.
+        let spawned = await call(model, "read_personal_agent_thread", ["agent": "dot", "thread_id": "spawn-mac"],
+                                 from: fixture.caller)
+        XCTAssertFalse(spawned.isError, spawned.text)
+        XCTAssertTrue(spawned.text.contains("Answer: Tests pass.") && spawned.text.contains("Person: Run the tests"), spawned.text)
+        let turnCursor = try XCTUnwrap(spawned.text.firstMatch(of: /Pass cursor "([^"]+)"/)?.1).description
+        let older = await call(model, "read_personal_agent_thread",
+                               ["agent": "dot", "thread_id": "spawn-mac", "cursor": turnCursor], from: fixture.caller)
+        XCTAssertTrue(older.text.contains("Answer: Set up.") && !older.text.contains("Tests pass."), older.text)
+        let activity = await call(model, "read_personal_agent_thread", ["agent": "dot", "thread_id": "act"], from: fixture.caller)
+        XCTAssertFalse(activity.isError, activity.text)
+        let readsBefore = await reader.historyReads
+        let stranger = await call(model, "read_personal_agent_thread", ["agent": "dot", "thread_id": "stranger"],
+                                  from: fixture.caller)
+        XCTAssertEqual(stranger.failure?.kind, .notFound, stranger.text)
+        let readsAfter = await reader.historyReads
+        XCTAssertEqual(readsAfter, readsBefore, "Nothing is asked for a thread the reader did not list")
+        XCTAssertTrue(readsAfter.contains("output:thread:spawn-mac") && readsAfter.contains("activity:thread:act"), "\(readsAfter)")
+        XCTAssertFalse(readsAfter.contains("activity:thread:spawn-mac"))
+        let writes = await reader.writes
+        XCTAssertEqual(writes, 0, "Only reads")
+
+        let off = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("PersonalAgentToolsOff")))
+        off.set(false, forKey: PersonalAgentNotificationPreference.key)
+        let whileOff = await model.callPersonalAgentTool(named: "list_personal_agents", arguments: .object([:]), defaults: off)
+        XCTAssertEqual(whileOff.failure?.kind, .unreachable)
+        watch.stop()
+        let stopped = await call(model, "read_personal_agent", ["agent": "dot"], from: fixture.caller)
+        XCTAssertTrue(stopped.isError && stopped.text.contains("open Personal agents"), stopped.text)
+    }
+
+    private struct PersonalAgentListing: Decodable {
+        struct Agent: Decodable {
+            struct Activity: Decodable { var threadId: String }
+            struct Thread: Decodable {
+                var threadId: String
+                var kind: String
+                var current: Bool?
+                var parentThreadId: String?
+                var ranOn: String?
+                var folder: String?
+            }
+            var agent: String
+            var unread: String?
+            var activity: [Activity]?
+            var threads: [Thread]?
+        }
+        var agents: [Agent]
+    }
+
     private func decode<T: Decodable>(_ type: T.Type, _ text: String) throws -> T {
         try JSONDecoder().decode(type, from: Data(text.utf8))
     }
@@ -2434,4 +2538,136 @@ extension MacLoad {
                               thermalState: .nominal)
     static let busy = MacLoad(cores: 12, physicalMemory: 32 << 30, loadAverage: 23, memoryPressure: .warning,
                               thermalState: .fair)
+}
+
+/// One dot as the transport would list it, for the personal-agent tools: a conversation of two pages,
+/// one Activity task, a root and two tasks it spawned (one on the person's computer, one in the cloud),
+/// and the transport's own rule that only a listed thread is read. Every write is counted.
+private actor ToolPersonalAgentReader: PersonalAgentClient {
+    static let atlas = PersonalAgent(id: .init(accountID: "account", userID: "person", agentID: "dot", roomID: "room"),
+                                     name: "Atlas", rootThreadID: "root", isPaused: false, isPrimary: true)
+    private(set) var watchedRooms: [String] = []
+    private(set) var historyReads: [String] = []
+    private(set) var writes = 0
+    private var bound: Set<String> = []
+    private var listed: Set<String> = []
+    private var rooms: AsyncStream<PersonalAgentRoomUpdate>.Continuation?
+
+    func agents() async throws -> [PersonalAgent] { [Self.atlas] }
+    func messages(for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage {
+        func message(_ id: String, _ author: PersonalAgentMessage.Author, _ text: String, minutes: Double,
+                     attachments: [PersonalAgentAttachment] = []) -> PersonalAgentMessage {
+            .init(id: id, author: author, text: text, createdAt: Date(timeIntervalSince1970: 1_793_200_000 + minutes * 60),
+                  isDeleted: false, attachments: attachments)
+        }
+        if before == "page-1" { return .init(messages: [message("m1", .person, "Can you draft it?", minutes: 0)], before: nil) }
+        var reply = message("m3", .person, "Thanks", minutes: 2)
+        reply.replyToMessageID = "m2"
+        reply.replyRootMessageID = "m2"
+        return .init(messages: [message("m2", .agent, "The report is ready.", minutes: 1,
+                                        attachments: [.init(fileID: "f", name: "report.pdf", type: "file")]), reply],
+                     before: "page-1")
+    }
+    func updates(for agent: PersonalAgent) async -> AsyncStream<PersonalAgentUpdate> { AsyncStream { $0.finish() } }
+    func roomUpdates(for agents: [PersonalAgent]) async -> AsyncStream<PersonalAgentRoomUpdate> {
+        let pair = AsyncStream<PersonalAgentRoomUpdate>.makeStream()
+        watchedRooms = agents.map(\.id.roomID)
+        rooms = pair.continuation
+        return pair.stream
+    }
+    func send(_ submission: PersonalAgentSubmission, to agent: PersonalAgent) async throws -> PersonalAgentMessage {
+        writes += 1
+        throw PersonalAgentFailure.sendRejected
+    }
+    func upload(_ file: PersonalAgentPreparedFile, to agent: PersonalAgent) async throws -> PersonalAgentUploadedFile {
+        writes += 1
+        throw PersonalAgentFailure.uploadFailed
+    }
+    func respond(_ result: DotsInputResult, fingerprint: String, in messageID: String,
+                 for agent: PersonalAgent) async throws -> DotsResponseOutcome {
+        writes += 1
+        throw DotsResponseFailure.notDispatched(.unavailable)
+    }
+    func download(_ attachment: PersonalAgentAttachment, for agent: PersonalAgent) async throws -> PersonalAgentDownload {
+        throw PersonalAgentFailure.attachmentUnavailable
+    }
+    func avatar(for agent: PersonalAgent) async throws -> Data { throw PersonalAgentFailure.attachmentUnavailable }
+    func pet(_ id: String, for agent: PersonalAgent) async throws -> PersonalAgentPet? { nil }
+    func spriteSheet(_ pet: PersonalAgentPet, for agent: PersonalAgent) async throws -> Data { Data() }
+    func activity(for agent: PersonalAgent, cursor: String?) async throws -> PersonalAgentActivityPage {
+        listed.insert("act")
+        return .init(items: [.init(id: "act", title: "Weekly report", status: .completed, outcome: .succeeded,
+                                   updatedAt: nil, preview: nil)], cursor: nil)
+    }
+    func schedules(for agent: PersonalAgent) async throws -> [PersonalAgentSchedule] { [] }
+    func computers(for agent: PersonalAgent) async throws -> [PersonalAgentComputer] {
+        [.init(id: "env-mac", name: "Studio Mac", isCloud: false, isAttached: true, availability: .offline),
+         .init(id: "env-cloud", name: "Cloud computer", isCloud: true, isAttached: true, availability: .unknown)]
+    }
+    func boundThreads(for agent: PersonalAgent) async throws -> [PersonalAgentThreadBinding] {
+        bound.formUnion(["root", "spawn-mac", "spawn-cloud"])
+        return [.init(id: "root", parentID: nil, attachedAt: nil),
+                .init(id: "spawn-mac", parentID: "root", attachedAt: nil),
+                .init(id: "spawn-cloud", parentID: "root", attachedAt: nil)]
+    }
+    private func metadata(_ id: String) throws -> CodexThreadState {
+        let fields: [String: JSONValue] = switch id {
+        case "spawn-mac": ["threadSource": .string("aeon_child"), "preview": .string("Run the tests"), "updatedAt": .integer(1_793_300_000),
+                           "environments": .array([.object(["environmentId": .string("env-mac"), "cwd": .string("/Users/person/work/app")])])]
+        case "spawn-cloud": ["threadSource": .string("aeon_child"), "preview": .string("Draft the summary"), "updatedAt": .integer(1_793_250_000),
+                             "environments": .array([.object(["environmentId": .string("env-cloud"), "cwd": .string("/tmp/codex-1")])])]
+        case "root": ["threadSource": .string("aeon"), "updatedAt": .integer(1_793_100_000), "environments": .array([])]
+        default: [:]
+        }
+        return try PersonalAgentActivityHistory.thread(.object(["thread": .object(fields.merging(["id": .string(id)]) { $1 })]), id: id)
+    }
+    private func page(_ cursor: String?) -> CodexTurnPage {
+        let turn: (String) -> CodexTurnState = {
+            CodexTaskDecoder().turn(from: .object(["id": .string($0), "status": .string("completed")]), fallbackID: $0)!
+        }
+        return cursor == "older" ? .init(turns: [turn("t1")], nextCursor: nil, backwardsCursor: nil)
+            : .init(turns: [turn("t2")], nextCursor: "older", backwardsCursor: nil)
+    }
+    private func items(_ turnID: String) -> CodexItemPage {
+        let item: (String, String, String) -> CodexItemPageEntry = { id, type, text in
+            .init(turnID: turnID, item: CodexTaskDecoder().item(
+                from: .object(["id": .string(id), "type": .string(type), "text": .string(text),
+                               "content": .array([.object(["type": .string("text"), "text": .string(text)])])]),
+                fallbackID: id, lifecycle: .historical))
+        }
+        return turnID == "t1" ? .init(entries: [item("a", "agentMessage", "Set up.")], nextCursor: nil, backwardsCursor: nil)
+            : .init(entries: [item("u", "userMessage", "Run the tests"), item("b", "agentMessage", "Tests pass.")],
+                    nextCursor: nil, backwardsCursor: nil)
+    }
+    private func admit(_ kind: String, _ threadID: String, in scope: Set<String>) throws {
+        guard scope.contains(threadID) else { throw PersonalAgentFailure.accessDenied }
+        historyReads.append(kind + ":" + threadID)
+    }
+    func activityThread(_ threadID: String, for agent: PersonalAgent) async throws -> CodexThreadState {
+        try admit("activity:thread", threadID, in: listed)
+        return try metadata(threadID)
+    }
+    func activityTurns(_ threadID: String, cursor: String?, for agent: PersonalAgent) async throws -> CodexTurnPage {
+        try admit("activity:turns", threadID, in: listed)
+        return page(cursor)
+    }
+    func activityItems(_ threadID: String, turnID: String, cursor: String?,
+                       for agent: PersonalAgent) async throws -> CodexItemPage {
+        try admit("activity:items", threadID, in: listed)
+        return items(turnID)
+    }
+    func outputThread(_ threadID: String, for agent: PersonalAgent) async throws -> CodexThreadState {
+        try admit("output:thread", threadID, in: bound)
+        return try metadata(threadID)
+    }
+    func outputTurns(_ threadID: String, cursor: String?, for agent: PersonalAgent) async throws -> CodexTurnPage {
+        try admit("output:turns", threadID, in: bound)
+        return page(cursor)
+    }
+    func outputItems(_ threadID: String, turnID: String, cursor: String?,
+                     for agent: PersonalAgent) async throws -> CodexItemPage {
+        try admit("output:items", threadID, in: bound)
+        return items(turnID)
+    }
+    func stop() async { rooms?.finish() }
 }

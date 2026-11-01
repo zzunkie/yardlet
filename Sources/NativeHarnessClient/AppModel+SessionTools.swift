@@ -64,6 +64,9 @@ extension AppModel: SessionToolHandling {
         case SessionToolCatalog.hideProject: return hideProject(arguments)
         case SessionToolCatalog.showProject: return showProject(arguments)
         case SessionToolCatalog.listAccounts: return await listAccounts(arguments, caller: caller)
+        case SessionToolCatalog.listPersonalAgents, SessionToolCatalog.readPersonalAgent,
+             SessionToolCatalog.readPersonalAgentThread:
+            return await callPersonalAgentTool(named: name, arguments: arguments)
         default: return .error("Unknown tool: \(name)")
         }
     }

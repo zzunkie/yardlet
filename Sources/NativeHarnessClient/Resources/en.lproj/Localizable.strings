@@ -3164,6 +3164,9 @@
 "Earlier messages could not be loaded." = "Earlier messages could not be loaded.";
 "No activity yet" = "No activity yet";
 "No computers" = "No computers";
+"Codex tasks" = "Codex tasks";
+"Codex task" = "Codex task";
+"Another computer" = "Another computer";
 "No dots in this account" = "No dots in this account";
 "Loading your dots…" = "Loading your dots…";
 "Create your dot in ChatGPT, then refresh here." = "Create your dot in ChatGPT, then refresh here.";

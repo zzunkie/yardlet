@@ -3164,6 +3164,9 @@
 "Earlier messages could not be loaded." = "이전 메시지를 불러오지 못했습니다.";
 "No activity yet" = "아직 활동이 없습니다";
 "No computers" = "연결된 컴퓨터가 없습니다";
+"Codex tasks" = "Codex 작업";
+"Codex task" = "Codex 작업";
+"Another computer" = "다른 컴퓨터";
 "No dots in this account" = "이 계정에는 Dots가 없습니다";
 "Loading your dots…" = "Dots를 불러오는 중…";
 "Create your dot in ChatGPT, then refresh here." = "ChatGPT에서 Dots를 만든 뒤 새로고침해 주세요.";

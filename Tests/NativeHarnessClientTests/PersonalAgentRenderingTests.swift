@@ -511,6 +511,57 @@ final class PersonalAgentRenderingTests: XCTestCase {
         }
     }
 
+    /// The Codex tasks a dot's conversations started are listed in its details, each with where it ran,
+    /// and one opens in place of the conversation as an Activity task does, with no composer; back finds
+    /// the conversation.
+    func testADotsSpawnedCodexTasksListInItsDetailsAndOpenInTheReader() async throws {
+        let (model, _) = try makeWindowModel()
+        let agents = [PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                                    name: "Atlas", rootThreadID: "root", isPaused: false, isPrimary: true)]
+        let conversation = (1...12).map { index in
+            PersonalAgentMessage(id: "m\(index)", author: index.isMultiple(of: 2) ? .agent : .person,
+                                 text: "Message \(index) about the launch plan.", createdAt: nil, isDeleted: false, attachments: [])
+        }
+        let task = "Run the release checks on the launch site"
+        let directory = try WindowlessRender.directory("personal-agent-reading-qa")
+        for size in [NSSize(width: 1280, height: 800), NSSize(width: 920, height: 680)] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let reader = RenderedPersonalAgentReader(agents: agents, messages: conversation)
+                await reader.useSpawnedTasks()
+                let host = WindowlessRender.Host(MainWindow(model: model) { reader }
+                    .environment(\.colorScheme, appearance.colorScheme)
+                    .frame(width: size.width, height: size.height), size: size, appearance: appearance)
+                defer { host.close() }
+                host.settle()
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
+                await host.settle(until: { host.accessibilityElements().contains { $0.label == L10n.string("Send message") } })
+                let compact = size.width < 1280
+                if compact { XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Show dot details"))) }
+                await host.settle(until: { host.accessibilityElements().contains { $0.label == task } })
+                host.settle(passes: 12)
+                let name = "\(Int(size.width))-\(appearance.suffix).png"
+                try WindowlessRender.writePNG(try host.capture().bitmap, to: directory.appending(path: "details-codex-tasks-\(name)"))
+                let rows = host.accessibilityElements()
+                XCTAssertTrue(rows.contains { $0.label == task && $0.value.contains("Studio Mac · launch-site") }, "\(size)")
+                XCTAssertTrue(rows.contains { $0.label == "Draft the release notes"
+                    && $0.value.contains(L10n.string("Cloud computer")) })
+                XCTAssertTrue(rows.contains { $0.label == "Compare the staging build"
+                    && $0.value.contains(L10n.string("Another computer")) })
+                XCTAssertFalse(rows.contains { $0.value.contains("/Users/person") }, "A folder is named, not its path")
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: task))
+                if compact { XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Hide dot details"))) }
+                let request = "Check launch item 12 and note what is left."
+                await host.settle(until: { host.accessibilityElements().contains { $0.label.contains(request) || $0.value.contains(request) } })
+                host.settle(passes: 20)
+                try WindowlessRender.writePNG(try host.capture().bitmap, to: directory.appending(path: "codex-task-open-\(name)"))
+                let visible = host.accessibilityElements(visibleOnly: true)
+                XCTAssertFalse(visible.contains { $0.label == L10n.string("Send message") }, "The record has no composer")
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.format("Back to %@", "Atlas")))
+                await host.settle(until: { host.accessibilityElements().contains { $0.label == L10n.string("Send message") } })
+            }
+        }
+    }
+
     /// Reading a task and coming back leaves the conversation as it was: scrolled where the person
     /// read it, with the draft they were writing, its files, and the answer they were filling in.
     func testComingBackFromAnActivityTaskKeepsTheConversationsPlaceAndDraft() async throws {
@@ -2927,17 +2978,42 @@ private actor RenderedPersonalAgentReader: PersonalAgentClient {
     func hasPendingFile() -> Bool { pendingFile != nil }
     func releaseFile() { pendingFile?.resume(); pendingFile = nil }
     func outputThreads(for agent: PersonalAgent) async throws -> [String] { agent.rootThreadID.map { [$0] } ?? [] }
+    // The Codex tasks the dot's root spawned, when asked for: one on the person's computer, one in the
+    // cloud and one on a computer the dot's list does not hold. Their record is the Activity task's.
+    private var spawnsTasks = false
+    func useSpawnedTasks() { spawnsTasks = true }
+    func boundThreads(for agent: PersonalAgent) async throws -> [PersonalAgentThreadBinding] {
+        guard spawnsTasks, let root = agent.rootThreadID else { return [] }
+        return [.init(id: root, parentID: nil, attachedAt: nil)]
+            + ["spawn-mac", "spawn-cloud", "spawn-other"].map { .init(id: $0, parentID: root, attachedAt: nil) }
+    }
+    private static let spawned: [String: (String, String, String, Double)] = [
+        "spawn-mac": ("Run the release checks on the launch site", "studio", "/Users/person/work/launch-site", -1_800),
+        "spawn-cloud": ("Draft the release notes", "cloud", "/tmp/codex-1", -86_400),
+        "spawn-other": ("Compare the staging build", "elsewhere", "/Users/person/staging", -3 * 86_400)
+    ]
     func outputThread(_ threadID: String, for agent: PersonalAgent) async throws -> CodexThreadState {
-        try PersonalAgentActivityHistory.thread(.object(["thread": .object(["id": .string(threadID), "environments": .array([
+        if let (preview, environment, cwd, age) = Self.spawned[threadID] {
+            return try PersonalAgentActivityHistory.thread(.object(["thread": .object([
+                "id": .string(threadID), "threadSource": .string("aeon_child"), "preview": .string(preview),
+                "updatedAt": .integer(Int64(Date().addingTimeInterval(age).timeIntervalSince1970)),
+                "status": .object(["type": .string("idle")]),
+                "environments": .array([.object(["environmentId": .string(environment), "cwd": .string(cwd)])])])]), id: threadID)
+        }
+        return try PersonalAgentActivityHistory.thread(.object(["thread": .object(["id": .string(threadID), "environments": .array([
             .object(["environmentId": .string("env"), "cwd": .string("/mnt/data")])])])]), id: threadID)
     }
     func outputTurns(_ threadID: String, cursor: String?, for agent: PersonalAgent) async throws -> CodexTurnPage {
+        if Self.spawned[threadID] != nil { return try await activityTurns(threadID, cursor: cursor, for: agent) }
         let done = Int(Date().addingTimeInterval(-7_200).timeIntervalSince1970)
         return try PersonalAgentActivityHistory.turnPage(JSONDecoder().decode(JSONValue.self, from: Data(
             #"{"data":[{"id":"o1","status":"completed","completedAt":\#(done)}],"nextCursor":null,"backwardsCursor":null}"#.utf8)))
     }
     func outputItems(_ threadID: String, turnID: String, cursor: String?,
                      for agent: PersonalAgent) async throws -> CodexItemPage {
+        if Self.spawned[threadID] != nil {
+            return try await activityItems(threadID, turnID: turnID, cursor: cursor, for: agent)
+        }
         let items = [
             #"{"turnId":"o1","item":{"id":"o1-i","type":"imageGeneration","status":"completed","result":"","savedPath":"/mnt/data/launch-chart.png"}}"#,
             #"{"turnId":"o1","item":{"id":"o1-a","type":"agentMessage","phase":"final_answer","text":"The plan is in :codex-file-citation{path=\"launch-plan.pdf\"}."}}"#

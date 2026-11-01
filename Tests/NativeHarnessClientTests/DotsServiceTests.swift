@@ -641,6 +641,10 @@ final class DotsServiceTests: XCTestCase {
         XCTAssertEqual(fixture.requests.filter { $0.url!.path == "/backend-api/tbo/dot/threads" }
             .map { URLComponents(url: $0.url!, resolvingAgainstBaseURL: false)!.queryItems!.first { $0.name == "cursor" }?.value },
                        [nil, "next"])
+        // The same listing with what it says of each: only it ties a spawned task to its root.
+        let bindings = try await service.boundThreads(for: dot)
+        XCTAssertEqual(bindings, [.init(id: "root", parentID: nil, attachedAt: nil), .init(id: "bound", parentID: nil, attachedAt: nil),
+                                  .init(id: "plain", parentID: "root", attachedAt: Date(timeIntervalSince1970: 1_793_200_000))])
         _ = try await service.outputTurns("bound", cursor: nil, for: dot)
         let child = try await service.outputChild("child", of: "bound", for: dot)
         XCTAssertEqual(child?.id, "child")
@@ -885,7 +889,7 @@ private final class DotsHTTPRecorder: @unchecked Sendable {
             case "/backend-api/tbo/by-thread/root": return (200, Data(profile.utf8))
             case "/backend-api/tbo/dot/threads":
                 return (200, Data((request.url?.query?.contains("cursor=next") == true
-                    ? #"{"items":[{"thread_id":"plain"},{"thread_id":"bound"}],"cursor":null}"#
+                    ? #"{"items":[{"thread_id":"plain","parent_thread_id":"root","attached_at":1793200000},{"thread_id":"bound"}],"cursor":null}"#
                     : #"{"items":[{"thread_id":"root"},{"thread_id":"bound"}],"cursor":"next"}"#).utf8))
             case "/backend-api/tbo/dot/activity":
                 return (200, Data(#"{"data":[{"thread_id":"task"},{"thread_id":"root"},{"thread_id":"plain"},{"thread_id":"gone"},{"thread_id":"other-task"},{"thread_id":"big"},{"thread_id":"huge"},{"thread_id":"bulky"},{"thread_id":"refused"}],"next_cursor":null}"#.utf8))

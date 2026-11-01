@@ -78,8 +78,8 @@ handed on; a failure says so under the conversation.
 ## Dot details
 
 Beside the conversation, where the window has room, the dot's details show its
-picture, name, account and whether it is paused; its **Activity**; its
-**Scheduled** tasks; the **Computers** its root thread can use; and its **Outputs**
+picture, name, account and whether it is paused; its **Activity**; its **Codex
+tasks** (below); its **Scheduled** tasks; the **Computers** its root thread can use; and its **Outputs**
 (below). In a narrower window
 the conversation keeps its width and the details button in its header raises them
 over it, below the header; their close button, the same header button or Escape
@@ -87,7 +87,22 @@ hides them again. Each part loads and fails on its own, so a part that cannot be
 holds up the conversation; a changed account clears them all.
 
 These parts only read. Activity is the dot's own task list, empty until it has
-tasks; it is not the list of its execution threads. A computer being attached
+tasks; it is not the list of its execution threads.
+
+**Codex tasks** lists the tasks the dot's conversations started, newest first, five
+with **Show more**. They are the threads its profile binds (`GET /tbo/{dot}/threads`)
+whose binding names one of the dot's conversation roots as parent; the history host's
+own metadata names no parent for them, so only that listing ties them to the dot. The
+list is read when the details first show, with each thread's metadata from the
+execution-history host, and the section is left out while it loads and when there
+are none. A row's second line says where the task ran: **Cloud computer**, or the
+computer's name from the dot's computers with the last part of its folder, never the
+whole path; **Another computer** when its computer is not among them. Yardlet does
+not tell whether that computer is this Mac. The agent loop of these tasks runs on the
+provider's side, also when their commands ran on a person's computer, so their
+history is only on the execution-history host: no local Codex session exists for
+them and Yardlet links them to none. Choosing one opens it as an Activity task opens
+(below). A computer being attached
 means the dot may use it; it is shown as connected or offline only when the
 provider says so. Nothing here starts work, connects a computer, runs a schedule or
 changes the dot.
@@ -154,11 +169,14 @@ ID alone, and the results of sites and other connectors that do not report
 
 Choosing a task in **Activity** shows its execution record in place of the
 conversation, in the same conversation view as a coding task, with no composer.
-It only reads: it does not resume, stop, answer or start the task. Back returns
+A Codex task from the details opens the same way. It only reads: it does not
+resume, stop, answer or start the task. Back returns
 to the conversation where it was left: its scroll position, draft, attached files
 and any answer being given stay, because the conversation stays under the task,
-still and taking no input; uploads already under way carry on. A task opens only from the Activity the transport itself read
-for that dot and account; no other thread is read.
+still and taking no input; uploads already under way carry on. A task opens only from the Activity, or the bound
+threads, that the transport itself read for that dot and account; no other thread is
+read. The two lists stay apart: a bound thread is read through the same scope as the
+Outputs' threads and does not widen the Activity's.
 
 The record arrives in two kinds of pages. The task's metadata never stands for its
 turns. Opening reads the newest five turns, then the first hundred items of each,
@@ -225,6 +243,22 @@ The reading cache is in memory only. It is scoped to the chosen runtime/account
 connection. A changed login clears the old view and asks the person to reconnect.
 No credentials, messages, provider history or browser profile are copied into the
 Yardlet session index.
+
+## Agents reading the dots
+
+Three of Yardlet's session tools let an agent in any task read the person's dots:
+`list_personal_agents` (each dot with its reference, name, pause, unread mark,
+first page of Activity and its bound threads with kind, times, status and where they
+ran), `read_personal_agent` (the conversation, newest page first, with an opaque
+cursor for earlier pages) and `read_personal_agent_thread` (one Activity task or
+bound thread as compact text of its turns, five turns a page with each turn's first
+hundred items, and a cursor for earlier turns). They read through the app's watch
+(above): the same reader, login and runtime, and no other credential path. While the
+watch is not running, the setting is off or the login ended, they answer that the
+person should open Personal agents. They only read: nothing is sent, answered,
+uploaded or marked read, the unread marks stay, and no turn starts. A thread is read
+only after the transport itself listed it for that dot and account, in its Activity
+or its bound threads; any other thread is refused before anything is asked.
 
 ## What the dot is doing
 
