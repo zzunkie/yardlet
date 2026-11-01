@@ -218,5 +218,20 @@ import XCTest
         for name in ["projects/-work/one.jsonl", "settings.json", "skills/mine/SKILL.md", "sessions"] {
             XCTAssertTrue(fileManager.fileExists(atPath: primary.appending(path: name).path), name)
         }
+
+        // Grok Build signs out of its `GROK_HOME` without asking (`grok logout`); Kimi Code signs
+        // out only inside its own screen, so its folder is only taken off the list.
+        let grokHome = try store.makeAccountHome(for: .grokBuild)
+        let grok = try store.add(name: "grok", harness: .grokBuild, home: grokHome)
+        let kimi = try store.add(name: "kimi", harness: .kimiCode, home: try store.makeAccountHome(for: .kimiCode))
+        XCTAssertFalse(store.canSignOutAndDelete(kimi))
+        XCTAssertTrue(store.canSignOutAndDelete(grok))
+        let grokCLI = root.appending(path: "grok")
+        try "#!/bin/sh\necho \"$GROK_HOME $*\" >> '\(log.path)'\n".write(to: grokCLI, atomically: true, encoding: .utf8)
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: grokCLI.path)
+        try await store.signOutAndDelete(grok, executableURL: grokCLI)
+        XCTAssertEqual(store.connections, [kimi])
+        XCTAssertTrue(try String(contentsOf: log, encoding: .utf8).contains("\(grokHome.path) logout"))
+        XCTAssertFalse(fileManager.fileExists(atPath: grokHome.path))
     }
 }

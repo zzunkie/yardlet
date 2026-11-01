@@ -440,8 +440,11 @@ actor HarnessAccountBroker {
         )
     }
 
+    /// Read in the environment the account's Grok runs in: a saved account's `GROK_HOME`, without
+    /// the API keys an account folder does not inherit.
     private func grokSnapshot(descriptor: HarnessDescriptor) -> HarnessAccountSnapshot {
-        let state = Self.grokCredentialState()
+        let state = Self.grokCredentialState(environment: RuntimeProcessEnvironment.accountScoped(
+            ProcessInfo.processInfo.environment.merging(connection?.environment ?? [:]) { _, new in new }))
         let detail: String
         switch state {
         case .signedIn:

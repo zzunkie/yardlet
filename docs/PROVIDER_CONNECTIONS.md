@@ -38,7 +38,12 @@ The latest screen flow and design decisions follow [ACCOUNT_SELECTION_UX.md](ACC
 | Pi | A separate model provider | PI_CODING_AGENT_DIR, provider choice | Not shown when the CLI does not publish it | Choose the environment in a new task |
 | OpenCode | A separate model provider | Per-account XDG data/config/state/cache | The existing CLI lookup boundary | Choose the environment in a new task |
 | Hermes Agent | A separate model provider | HERMES_HOME | No safe structured lookup | Choose the environment in a new task |
+| Kimi Code | Its own service or a provider set in the CLI | KIMI_CODE_HOME | Not shown; the CLI publishes none | Choose the environment in a new task |
+| Grok Build | Its own service | GROK_HOME | Not shown; the CLI publishes none | Choose the environment in a new task |
 | Other harnesses | The default or external provider settings that the CLI owns | Keep the existing connection | Only public lookups verified before | No extra paths are made up |
+
+An extra account environment is offered only where the CLI officially moves its sign-in and its history together
+("Which CLIs can keep a second account" below).
 
 The Gemini CLI entry was removed in an earlier installed build, and it is separate from choosing a Google model
 provider in other harnesses such as Pi. Gajae Code and Oh My Pi (including Deep Agents Code) were dropped from the
@@ -138,6 +143,30 @@ Evidence: the accounts CLI, account-inventory and root flags in the official Gaj
 CLI source of the installed Pi 0.84.1; the official OpenAI App Server account docs.
 Reproduction logs are in `.build/provider-connections-*.log`, and the fixture is in `scripts/fixtures/codex-session-home.py`
 (`gjc-account-selection.py` for Gajae was deleted together with Gajae Code on 2026-10-23).
+
+## Which CLIs can keep a second account
+
+A harness takes an extra account environment (`HarnessConnectionCapabilities.supportsSeparateHome`) only when its CLI
+officially moves both its sign-in and its conversation history to another folder, so a task's session ID always lives in
+the account folder it was saved in. Yardlet makes no other route: no Keychain items are renamed or swapped and no
+credential is copied between folders. As the CLIs' documentation and these versions show:
+
+| CLI | Official route | Where the sign-in is kept | History moves with it | Extra account |
+|---|---|---|---|---|
+| Kimi Code 0.36 | `KIMI_CODE_HOME` ("all Kimi Code data lands under the new path: config, sessions, logs, OAuth credentials", Kimi Code docs, "Data locations") | `credentials/<name>.json` in that folder | Yes, `sessions/` | Yes |
+| Grok Build 1.0.70 | `GROK_HOME` ("Override config directory", its user guide, "Configuration") | `auth.json` in that folder | Yes, `sessions/` | Yes |
+| OpenCode 1.19, Hermes Agent 0.21, Pi 0.84 | XDG folders, `HERMES_HOME`, `PI_CODING_AGENT_DIR` | A file in that folder | Yes | Yes (Hermes: a folder inside `~/.hermes` falls back to the default sign-in for providers it lacks, so Yardlet's folders are elsewhere) |
+| Cursor Agent 2026.08 | `CURSOR_CONFIG_DIR` moves the settings and chats only | macOS Keychain items with fixed names (`cursor-access-token` and the like) | Chats only | No: two folders would share one sign-in |
+| Antigravity CLI 1.4 | None documented | One OS keyring item (service `gemini`, account `antigravity`) | — | No |
+| Muse Code 1.4 | None documented (the binary reads the XDG folders) | macOS Keychain by default, with a pointer file in the config folder; whether the item differs per folder is not known | With `XDG_DATA_HOME` | Not offered until two sign-ins are seen to stay apart |
+
+Where no route exists, another account means signing out and signing in to the other one with the CLI. An extra Kimi
+Code or Grok Build account starts in an empty folder of its own and keeps its own history, as a Codex account does:
+its tasks do not move to another account, and automatic assignment leaves it out until the person includes it. In an
+empty folder each CLI writes only there (checked with `kimi acp` and `grok agent stdio` answering `initialize` and an
+empty `session/list`), and Grok Build updates itself only when run from that folder's own `bin/grok`, so no copy of the
+runtime lands in an account folder. Titles, Grok Build's session details and its transcript repair read a task's
+history in its account's folder (`ProviderSessionTitlePaths.forAccount`).
 
 ## Claude plan limit lookup (2026-10-06)
 
@@ -303,8 +332,9 @@ keeps only the harness page's sign-out, as before. That sign-out applies only to
   (`Yardlet.accountTaskMoves`, account → target) until it ends, so after a quit the next launch goes on with it
   (`AppModel.continueAccountTaskMoves`) and asks the target's CLI again. Nothing in either folder is copied, moved or
   deleted.
-- **Sign Out and Delete…:** offered only for a Claude or Codex folder Yardlet made (`<connections>/<UUID>/<harness>`,
-  `signOutAndDelete`). Yardlet runs that CLI's `auth logout` (Codex: `logout`) in the folder's environment; only when it
+- **Sign Out and Delete…:** offered only for a Claude, Codex or Grok Build folder Yardlet made
+  (`<connections>/<UUID>/<harness>`, `signOutAndDelete`), the CLIs that sign out from the command line without asking.
+  Yardlet runs that CLI's `auth logout` (Codex and Grok Build: `logout`) in the folder's environment; only when it
   succeeds does it take the account off the list, remove every link in the folder first (only `unlink`), and move the
   `<UUID>` folder to the Trash. When the sign-out fails, nothing changes. When tasks use the folder, the confirmation
   offers only Remove from List. The shared originals (`~/.claude` and the like) and Session Switch folders have no way to

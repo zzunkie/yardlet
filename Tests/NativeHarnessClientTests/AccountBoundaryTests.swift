@@ -383,7 +383,7 @@ final class AccountBoundaryTests: XCTestCase {
         )
     }
 
-    func testGrokCredentialPresenceUsesMetadataWithoutReadingCredentialValues() throws {
+    func testGrokCredentialPresenceUsesMetadataWithoutReadingCredentialValues() async throws {
         let root = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -405,6 +405,20 @@ final class AccountBoundaryTests: XCTestCase {
             ),
             .signedIn
         )
+
+        // A saved account is read in its own folder, the `GROK_HOME` its Grok runs with.
+        let descriptor = try XCTUnwrap(HarnessCatalog.descriptor(for: .grokBuild))
+        func account(_ home: URL) -> HarnessAccountBroker {
+            HarnessAccountBroker(connection: ProviderConnection(id: UUID().uuidString, name: "B", harness: .grokBuild,
+                providerID: nil, homePath: home.path(percentEncoded: false), credentialSelector: nil))
+        }
+        let empty = root.appending(path: "empty", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        let signedIn = await account(root).snapshot(for: descriptor, executableURL: authURL)
+        XCTAssertEqual(signedIn.state, .signedIn)
+        XCTAssertTrue(signedIn.canLogout)
+        let signedOut = await account(empty).snapshot(for: descriptor, executableURL: authURL)
+        XCTAssertEqual(signedOut.state, .signedOut)
     }
 
     func testGrokEnvironmentAPIKeyCountsAsConfiguredWithoutPersistedOAuth() {
