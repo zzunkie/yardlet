@@ -45,7 +45,7 @@ projects unless the scene says otherwise. Phases are measured after the scene ha
 |---|---|---|
 | `launch` | 200 tasks; a 60-turn Claude Code conversation shown | launch timings, `settled` (10) |
 | `idle-running` | a 20-turn Claude Code task shown; a Codex task in the sidebar | `idle` (15), then both start a turn that keeps running: `idle-running` (15) |
-| `stream-claude` | a Claude Code answer streaming at the end of a 60-turn conversation: thinking, text and a Bash call with output, over and over | `streaming` (20) |
+| `stream-claude` | a Claude Code answer streaming at the end of a 60-turn conversation: thinking, text and a Bash call with output, over and over | `streaming` (20), then with the window showing another task's 20-turn conversation while the answer streams on: `streaming-elsewhere` (10) |
 | `stream-codex` | a Codex answer streaming in a 60-turn thread (the App Server's resume window loads its newest turns): reasoning, commands with output and answers | `streaming` (20) |
 | `codex-history` | a Codex task whose 500 saved cards (two turns of builds, 5,000 characters of output each) every streamed state merges, with an answer streaming | `streaming` (20) |
 | `subagent` | the shown Claude Code task's turn waits on a Codex subagent (`run_agent`) whose turn already holds 400 finished commands with output, and which streams on | `streaming` (20) |
