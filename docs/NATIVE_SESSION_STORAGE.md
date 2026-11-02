@@ -157,6 +157,21 @@ authentication. The read cache stays as the first view, and the thread read repl
 quits, the read cache is rewritten from that view, as for any other visible Codex thread. A failure or a response
 without turns leaves the cache as it is.
 
+**Other ACP agents (OpenCode, Kimi Code, Grok Build, Hermes Agent).** A detached task that shows nothing, an imported or
+unarchived one, shows the conversation the agent replays when the session loads (`ACPSessionHistory`,
+`AppModel.replayACPConversation`). Yardlet starts the agent's ACP process for the read alone, with the task's runtime
+and the arguments and account folder environment the task's own process gets, sends `initialize` and `session/load`
+(the stored provider session ID, the task's folder, no MCP servers) and stops the process once the load answers. The
+replayed messages, thinking, tool calls and plan become the conversation through the same projection as a running
+turn (`ACPReplayTranscript`), and the read cache keeps them. There is no `session/new` or `session/prompt`, and the
+account, folder and sign-in stay as they are; the agent starts what it starts for any session it loads, such as its own
+MCP servers, and they end with the process. A conversation is replayed once a launch, whether or not it brought
+anything, and only while the task shows nothing, so a task with a read cache keeps it. Opening the task starts the
+read; resting the pointer on its row does not. Attaching waits for a replay in flight, so the read's process has ended
+before the task's own process loads the same session, and what the person sent meanwhile stays after the replayed
+conversation. When the task's own process loads the session, what the agent replays before the next prompt is not
+shown again (`ACPAdapter`). A failure leaves the task, its binding and the agent's record as they are.
+
 ## Editing, forking and restoring files
 
 **Editing the latest input.** `TaskDraftSnapshot.editState` is optional JSON that stores together the original provider
@@ -267,7 +282,9 @@ harness, and restores them with **Unarchive**.
   `HarnessSessionLifecycleProviding` (Codex and its YHP wrapper).
 - **Local caches:** archiving deletes the draft, the conversation cache and the Codex timeline cache. An unarchived
   Claude task rereads its native history when opened, and a Codex task reads its native thread with `thread/read` when
-  opened and loads the conversation from the native thread on continue (`thread/resume`) or the next send.
+  opened and loads the conversation from the native thread on continue (`thread/resume`) or the next send. An
+  unarchived task of another ACP agent shows the conversation the agent replays when it opens ("Opening a saved task"
+  above).
 
 ## Importing conversations from other apps
 
@@ -275,11 +292,21 @@ Import adds only what the person chose, one index row each. It does not copy or 
 homes, and stores the provider session ID, the `.native` scope and the account binding together.
 
 - **Import does not start a runtime:** an imported task is created detached, like a task restored after a relaunch (no
-  `attach`). It attaches on the first send. When opened, Claude rereads the native JSONL and Codex reads the thread with
-  `thread/read` ("Opening a saved task" above). For a Codex task imported from a search result, the match positions are
-  asked only with `thread/searchOccurrences` on the App Server of the same account and scope. A conversation already
-  imported (same harness, scope, provider ID and account, or for Claude an account that shares the history) opens the
-  existing task.
+  `attach`). It attaches on the first send. When opened, Claude rereads the native JSONL, Codex reads the thread with
+  `thread/read` and another ACP agent replays the session with `session/load` ("Opening a saved task" above). For a
+  Codex task imported from a search result, the match positions are asked only with `thread/searchOccurrences` on the
+  App Server of the same account and scope. A conversation already imported (same harness, scope, provider ID and
+  account, or for Claude an account that shares the history) opens the existing task.
+- **ACP agents in Import conversation… (the File menu and the account menu):** besides Claude Code, Codex and
+  Antigravity CLI, the sheet lists each other ACP agent that is installed (OpenCode, Kimi Code, Grok Build, Hermes
+  Agent; `ACPSessionHistory.reads`). The list is the agent's own `session/list` (`cwd` the chosen project folder, and
+  `cursor` for the next page), read by a process of the read's own that stops after `initialize` and the list, with no
+  session made or loaded. The agent must advertise `sessionCapabilities.list`, or the sheet says it does not list its
+  conversations. Only sessions whose `cwd` is that folder show, since an agent may list every folder's; each one's title
+  is the agent's `title` (its first line) and its time `updatedAt`. The account is the one chosen in the sheet: a saved
+  Kimi Code, Grok Build, Hermes or OpenCode account's folder (`KIMI_CODE_HOME`, `GROK_HOME`, `HERMES_HOME`, OpenCode's
+  XDG folders) is the environment the list is read in, and the imported task keeps that account's binding with the
+  agent's session ID and the `.native` scope. Codex's search is not offered; nothing is copied into Yardlet's folders.
 - **Bulk import (File > Import Conversations from Other Apps…):**
   - The Claude source is the Claude app's
     `~/Library/Application Support/Claude/claude-code-sessions/<org>/<account>/local_*.json`. These are undocumented

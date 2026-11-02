@@ -516,6 +516,45 @@ final class ACPAdapterTests: XCTestCase {
         collector.cancel()
     }
 
+    /// `session/load` replays the conversation, and what of it reaches the adapter after the load's
+    /// answer is history the task already shows: no turn of the task until it sends the next prompt.
+    func testReplayedHistoryAfterALoadIsNotATurn() async throws {
+        let transport = FakeACPTransport()
+        let adapter = ACPAdapter(kind: .kimiCode, executableURL: URL(filePath: "/tmp/fake-kimi"),
+                                 launchArguments: ["acp"], transport: transport)
+        let handle = try await adapter.resumeSession(providerSessionID: "saved", localSessionID: UUID(),
+                                                     workspaceURL: URL(filePath: "/tmp/acp-workspace"))
+        let recorder = ACPPayloadRecorder()
+        let events = await adapter.events(for: handle)
+        let collector = Task { for await event in events { await recorder.append(event.payload) } }
+        defer { collector.cancel() }
+        func update(_ fields: [String: JSONValue]) -> JSONValue {
+            .object(["jsonrpc": .string("2.0"), "method": .string("session/update"),
+                     "params": .object(["sessionId": .string("saved"), "update": .object(fields)])])
+        }
+        func answer(_ text: String) -> JSONValue {
+            update(["sessionUpdate": .string("agent_message_chunk"),
+                    "content": .object(["type": .string("text"), "text": .string(text)])])
+        }
+        await transport.emit(answer("Earlier answer"))
+        await transport.emit(update(["sessionUpdate": .string("tool_call"), "toolCallId": .string("earlier-tool"),
+                                     "title": .string("Earlier tool"), "status": .string("completed")]))
+        // The session's state still arrives: frames are taken in order, so the replay came before it.
+        await transport.emit(update(["sessionUpdate": .string("usage_update"), "used": .integer(1), "size": .integer(10)]))
+        try await waitUntil { await recorder.payloads.contains { if case .usageUpdated = $0 { true } else { false } } }
+
+        try await adapter.send("Next", to: handle)
+        try await waitUntil { await transport.requestMethods.contains("session/prompt") }
+        await transport.emit(answer("New answer"))
+        await transport.completePrompt()
+        try await waitUntil { await recorder.payloads.contains(.turnCompleted) }
+        let payloads = await recorder.payloads
+        XCTAssertFalse(payloads.contains(.assistantDelta("Earlier answer")))
+        XCTAssertFalse(payloads.contains { if case .activityCompleted = $0 { true } else { false } })
+        XCTAssertTrue(payloads.contains(.assistantDelta("New answer")))
+        await adapter.close(handle)
+    }
+
     func testYHPProductRoutePreservesACPControlsPermissionsAndLifecycle() async throws {
         let directTransport = FakeACPTransport(exposesConfig: true)
         let routedTransport = FakeACPTransport(exposesConfig: true)

@@ -2696,7 +2696,7 @@ struct MainWindow: View {
             CommandPaletteItem(
                 id: "import-conversation",
                 title: L10n.string("Import conversation…"),
-                subtitle: L10n.string("Continue a conversation started in the Claude or Codex app or in Antigravity CLI."),
+                subtitle: L10n.string("Continue a conversation started in another app or CLI."),
                 systemName: "square.and.arrow.down",
                 action: { isPresentingImport = true }
             ),

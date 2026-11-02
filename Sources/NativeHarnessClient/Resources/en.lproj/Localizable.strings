@@ -325,6 +325,7 @@
 "%@ adapter is not implemented yet for %@" = "%@ adapter is not implemented yet for %@";
 "Yardlet no longer supports %@." = "Yardlet no longer supports %@.";
 "%@ does not advertise ACP session loading" = "%@ does not advertise ACP session loading";
+"%@ does not list its conversations over ACP" = "%@ does not list its conversations over ACP";
 "… earlier terminal output trimmed …\n" = "… earlier terminal output trimmed …\n";
 "Codex App Server" = "Codex App Server";
 "Claude streaming JSON" = "Claude streaming JSON";
@@ -1936,8 +1937,8 @@
 "Antigravity will change files and run commands without asking." = "Antigravity will change files and run commands without asking.";
 "Antigravity asks before actions that need approval. Bypass permissions approves every request without asking." = "Antigravity asks before actions that need approval. Bypass permissions approves every request without asking.";
 "Antigravity CLI does not offer %@ to Yardlet" = "Antigravity CLI does not offer %@ to Yardlet";
-"Continue a conversation started in the Claude or Codex app or in Antigravity CLI. Its history stays where it is." = "Continue a conversation started in the Claude or Codex app or in Antigravity CLI. Its history stays where it is.";
-"Continue a conversation started in the Claude or Codex app or in Antigravity CLI." = "Continue a conversation started in the Claude or Codex app or in Antigravity CLI.";
+"Continue a conversation started in another app or CLI. Its history stays where it is." = "Continue a conversation started in another app or CLI. Its history stays where it is.";
+"Continue a conversation started in another app or CLI." = "Continue a conversation started in another app or CLI.";
 "Conversations from the Claude and Codex apps, Claude Code and Codex run elsewhere, and Antigravity CLI. Their history stays where it is." = "Conversations from the Claude and Codex apps, Claude Code and Codex run elsewhere, and Antigravity CLI. Their history stays where it is.";
 "No conversations are open in the Claude or Codex app or Antigravity CLI." = "No conversations are open in the Claude or Codex app or Antigravity CLI.";
 "Antigravity conversation" = "Antigravity conversation";

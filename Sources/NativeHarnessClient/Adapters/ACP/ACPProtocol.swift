@@ -72,6 +72,14 @@ enum ACPProtocol {
         return request(id: id, method: "session/load", params: .object(params))
     }
 
+    /// The agent's saved sessions in `workspaceURL`, a page at a time from `cursor`
+    /// (`sessionCapabilities.list`).
+    static func listSessions(id: Int64, workspaceURL: URL, cursor: String? = nil) -> JSONValue {
+        var params: [String: JSONValue] = ["cwd": .string(workspaceURL.standardizedFileURL.path(percentEncoded: false))]
+        if let cursor { params["cursor"] = .string(cursor) }
+        return request(id: id, method: "session/list", params: .object(params))
+    }
+
     static func prompt(id: Int64, providerSessionID: String, text: String) -> JSONValue {
         prompt(id: id, providerSessionID: providerSessionID, text: text, images: [])
     }
