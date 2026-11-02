@@ -69,6 +69,9 @@ struct SessionRailView: View {
     private var cards: [SessionRailCardKind] { content.cards(preferences.preferences) }
 
     var body: some View {
+#if DEBUG
+        let _ = ViewBodyCensus.note(.sessionRail)
+#endif
         ScrollView(.vertical) {
             VStack(spacing: SessionRailPlacement.cardSpacing) {
                 ForEach(cards) { kind in

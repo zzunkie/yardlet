@@ -43,6 +43,11 @@ final class AppModel {
     private(set) var errorBySessionID: [UUID: String] = [:]
     var codexPresentationBySessionID: TaskStateReader<CodexTaskState> { codexPresentations.reader }
     let codexPresentations = TaskStateTable<CodexTaskState>()
+    /// What the session rail reads of each task's Codex state (`CodexRailStates`), set only when that
+    /// changed: the rail is not drawn again for words streaming into the conversation.
+    var codexRailStateBySessionID: TaskStateReader<CodexTaskState> { codexRailStates.reader }
+    private let codexRailStates = TaskStateTable<CodexTaskState>()
+    private let codexRailReads = CodexRailStates()
     /// How many reads of each task's saved conversation from the provider's own history are under
     /// way (`isReadingSavedConversation`).
     private let savedConversationReads = TaskStateTable<Int>()
@@ -530,6 +535,7 @@ final class AppModel {
             self?.refreshAttentionDetail(for: id)
         }
         codexPresentations.didSet = { [weak self] id in
+            self?.refreshCodexRailState(for: id)
             self?.refreshAttentionDetail(for: id)
             self?.linkCodexParentIfNeeded(for: id)
             self?.keepCodexTokenUsage(for: id)
@@ -7185,6 +7191,13 @@ final class AppModel {
             modelCatalogs.recordClaudeContextWindow(window, model: model)
         }
         saveContextUsage(for: id)
+    }
+
+    /// The rail's part of a task's Codex state, set again only when it changed: a state that streams
+    /// into the conversation leaves the rail as it is.
+    private func refreshCodexRailState(for id: UUID) {
+        let state = codexRailReads.state(of: codexPresentations[id], for: id)
+        if codexRailStates[id] != state { codexRailStates[id] = state }
     }
 
     /// A Codex thread's newest turn usage, kept when it changed. The table calls this on every change

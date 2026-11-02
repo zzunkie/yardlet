@@ -102,7 +102,9 @@ final class StreamingWindowRedrawTests: XCTestCase {
     /// A Codex task's turn publishes its thread's state a few times a second. Each state updates the
     /// conversation, which draws it, and not the task's views around it (`TaskDetail`): the composer
     /// and the rail read the state in views of their own. Before, every state drew the task's views
-    /// again, and with them every view of the task the window handed new values.
+    /// again, and with them every view of the task the window handed new values. The rail reads only
+    /// its part of the state (`CodexRailStates`), which commands and an answer streaming leave as it
+    /// was, so its cards are not drawn again either.
     func testACodexTaskStreamingRedrawsItsConversationAndNotTheTaskAroundIt() throws {
         let window = try ConversationBlankFrameTests.makeWindow([.codex("Codex", turns: 60)], for: self)
         defer { window.close() }
@@ -128,6 +130,7 @@ final class StreamingWindowRedrawTests: XCTestCase {
                        "The states streamed")
         XCTAssertGreaterThan(ViewBodyCensus[.conversationTimeline], 0, "The conversation drew the states")
         XCTAssertEqual(ViewBodyCensus[.taskSurface], 0, "A state drew the task's views around its conversation")
+        XCTAssertEqual(ViewBodyCensus[.sessionRail], 0, "A state drew the rail's cards, which show nothing new")
         XCTAssertEqual(ViewBodyCensus[.mainWindow], 0)
     }
 

@@ -264,6 +264,17 @@ struct SessionRailContent: Equatable {
         }
     }
 
+    /// Whether the rail reads a Codex thread's item: the agents a turn spawned and their activity, MCP
+    /// calls (Yardlet's subagents, task suggestions, computer use's screens) and file changes. Whatever
+    /// `make`, the rail's preview and its Changes and Outputs read of a Codex thread is among these, with
+    /// each turn's identity, status, start, plan and token usage (`CodexRailStates`).
+    static func reads(_ item: CodexItemState) -> Bool {
+        switch item.content {
+        case .collaboration, .subagentActivity, .mcpToolCall, .fileChange: true
+        default: false
+        }
+    }
+
     /// The files the task wrote, newest first, each once: completed calls that wrote a whole file
     /// (Claude Code's `Write`, an ACP or Pi diff with no old text) and the files Codex added, once the
     /// patch that added them was applied (a declined or failed one never wrote them).

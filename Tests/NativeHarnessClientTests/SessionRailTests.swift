@@ -494,6 +494,85 @@ final class SessionRailTests: XCTestCase {
                                                              providerUsage: nil, entries: all, isAttached: true))
     }
 
+    /// The rail reads a Codex task's state through its part of it (`CodexRailStates`): the agents, MCP
+    /// calls and file changes of each turn, with the turn's plan and token usage. It makes the same of
+    /// that part as of the whole thread, and words streaming into the answer leave the part as it was.
+    func testTheRailMakesTheSameOfACodexThreadsRailStateAsOfTheWholeThread() throws {
+        let noted = TaskSuggestionToolCatalog.notedResult(taskID: "task_1a2b3c4d")
+            .replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+        let json = #"""
+        {"id":"codex-rail","turns":[
+         {"id":"turn-0","status":"completed","items":[
+          {"id":"u0","type":"userMessage","content":[{"type":"text","text":"Fix the parser"}]},
+          {"id":"r0","type":"reasoning","summary":["Reading the parser"],"content":[]},
+          {"id":"cmd0","type":"commandExecution","command":"swift build","cwd":"/tmp/codex-rail","status":"completed",
+           "aggregatedOutput":"Build complete","exitCode":0},
+          {"id":"fc0","type":"fileChange","status":"completed",
+           "changes":[{"path":"/tmp/codex-rail/notes.md","kind":{"type":"add"},"diff":"+notes"}]},
+          {"id":"ra0","type":"mcpToolCall","server":"yardlet","tool":"run_agent","status":"completed",
+           "arguments":{"harness":"codex","prompt":"Check the migration"},
+           "result":{"content":[{"type":"text","text":"agent_id: \#(UUID().uuidString)\nharness: codex · state: completed\n\nDone."}]}},
+          {"id":"st0","type":"mcpToolCall","server":"yardlet","tool":"spawn_task","status":"completed",
+           "arguments":{"title":"Remove the dead flag","tldr":"It is never read.","prompt":"Delete the flag."},
+           "result":{"content":[{"type":"text","text":"\#(noted)"}]}},
+          {"id":"a0","type":"agentMessage","text":"Fixed."}
+         ]},
+         {"id":"turn-1","status":"inProgress","items":[
+          {"id":"u1","type":"userMessage","content":[{"type":"text","text":"Split the audit"}]},
+          {"id":"c1","type":"collabAgentToolCall","tool":"spawnAgent","status":"completed","senderThreadId":"codex-rail",
+           "receiverThreadIds":["child-a"],"prompt":"Audit the build scripts","model":"gpt-5.5",
+           "agentsStates":{"child-a":{"status":"running"}}},
+          {"id":"s1","type":"subAgentActivity","agentThreadId":"child-b","agentPath":"/root/explorer","kind":"started"},
+          {"id":"m1","type":"mcpToolCall","server":"computer-use","tool":"screenshot","status":"completed","arguments":{},
+           "result":{"content":[{"type":"image","data":"iVBORw0KGgo=","mimeType":"image/png"}]}},
+          {"id":"a1","type":"agentMessage","text":"Working"}
+         ]}
+        ]}
+        """#
+        var whole = CodexTaskState(thread: try XCTUnwrap(CodexTaskDecoder().thread(
+            from: try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8)))))
+        whole.thread?.turns[1].plan = CodexPlanState(explanation: nil, steps: [
+            CodexPlanStep(id: "1", text: "Spawn the audit", status: .completed),
+            CodexPlanStep(id: "2", text: "Read its report", status: .inProgress)
+        ])
+        whole.thread?.turns[1].tokenUsage = Fixtures.codexTokenUsage
+        let reads = CodexRailStates(), task = UUID()
+        let rail = try XCTUnwrap(reads.state(of: whole, for: task))
+        XCTAssertEqual(rail.thread?.turns.flatMap(\.items).map(\.id), ["fc0", "ra0", "st0", "c1", "s1", "m1"],
+                       "The requests, reasoning, commands and answers are not read")
+
+        let session = Fixtures.session(.codex)
+        let workspace = URL(filePath: "/tmp/codex-rail")
+        func content(_ state: CodexTaskState) -> SessionRailContent {
+            SessionRailContent.make(
+                session: session, projectName: "p", instructionSources: TaskInstructionSources(origin: .detected, paths: []),
+                git: nil, options: SessionRailAgentsTests.options(.codex), connectors: nil, account: nil, entries: [],
+                codexPlan: state.thread?.turns.last(where: { $0.plan != nil })?.plan, pullRequest: nil,
+                pullRequestState: nil, codexChanges: CodexWorkSurfaceProjection.changes(from: state, workspaceURL: workspace),
+                codexState: state, suggestionResolution: { _ in nil })
+        }
+        let made = content(whole)
+        XCTAssertEqual(content(rail), made)
+        XCTAssertNotNil(made.progress)
+        XCTAssertEqual(made.agents?.agents.count, 3)
+        XCTAssertEqual(made.suggestions.map(\.id), ["task_1a2b3c4d"])
+        XCTAssertEqual(made.outputs.map(\.name), ["notes.md"])
+        XCTAssertNotNil(SessionRailComputerFrame.latest(in: whole))
+        XCTAssertEqual(SessionRailComputerFrame.latest(in: rail), SessionRailComputerFrame.latest(in: whole))
+        XCTAssertEqual(rail.thread?.turns.last?.tokenUsage, Fixtures.codexTokenUsage)
+
+        // The answer streams on: the rail's part stays as it was. A file the turn changes is the rail's.
+        guard case var .agentMessage(answer) = whole.thread?.turns[1].items[4].content else { return XCTFail() }
+        answer.text += " on the audit"
+        whole.thread?.turns[1].items[4].content = .agentMessage(answer)
+        XCTAssertEqual(reads.state(of: whole, for: task), rail)
+        let change = try XCTUnwrap(whole.thread?.turns[0].items[3])
+        whole.thread?.turns[1].items.append(change)
+        XCTAssertNotEqual(reads.state(of: whole, for: task), rail)
+        XCTAssertNil(reads.state(of: nil, for: task))
+    }
+
     // MARK: - Git
 
     func testChangeSummaryCountsNumstatLinesOnceAndBinaryFilesWithoutLines() {

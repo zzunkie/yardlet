@@ -68,8 +68,10 @@ struct TaskDetail: View {
     private func readCodexState() -> CodexTaskState? { codexTaskState.read() }
 
     /// The Codex thread's newest turn usage, else what was read back for it.
-    private var shownCodexTokenUsage: CodexThreadTokenUsage? {
-        readCodexState()?.thread?.turns.last(where: { $0.tokenUsage != nil })?.tokenUsage ?? restoredCodexTokenUsage
+    private var shownCodexTokenUsage: CodexThreadTokenUsage? { shownCodexTokenUsage(in: readCodexState()) }
+
+    private func shownCodexTokenUsage(in codexTaskState: CodexTaskState?) -> CodexThreadTokenUsage? {
+        codexTaskState?.thread?.turns.last(where: { $0.tokenUsage != nil })?.tokenUsage ?? restoredCodexTokenUsage
     }
 
     private func restoreDraft(_ draft: CodexComposerDraft) {
@@ -423,11 +425,11 @@ struct TaskDetail: View {
 
     /// The composer's options for this task, read the same way the composer reads them, for the
     /// rail's Settings, Context and Connectors cards.
-    private func railOptions(_ transcript: TranscriptTurns) -> ComposerSessionOptions {
+    private func railOptions(_ transcript: TranscriptTurns, codexTaskState: CodexTaskState?) -> ComposerSessionOptions {
         ComposerSessionOptionsProjection.make(
             harness: session.harness, session: session, codexCapabilities: codexCapabilities,
             providerCapabilities: providerCapabilities, providerUsage: providerUsage,
-            codexTokenUsage: shownCodexTokenUsage,
+            codexTokenUsage: shownCodexTokenUsage(in: codexTaskState),
             entries: transcript.railEntries, isAttached: isProviderAttached)
     }
 
@@ -442,8 +444,8 @@ struct TaskDetail: View {
     }
 
     private func railHost(_ railServices: SessionRailServices, transcript: TranscriptTurns, isRaised: Bool) -> some View {
-        let options = railOptions(transcript)
-        let codexTaskState = readCodexState()
+        let codexTaskState = codexTaskState.readRail()
+        let options = railOptions(transcript, codexTaskState: codexTaskState)
         return SessionRailHost(
             services: railServices, session: session, entries: transcript.railEntries,
             codexPlan: codexTaskState?.thread?.turns.last(where: { $0.plan != nil })?.plan,
@@ -1059,21 +1061,27 @@ extension TaskTranscriptReader {
 /// How a task's views read its Codex state (`AppModel.codexPresentationBySessionID`). Whatever reads it
 /// is updated for every state the App Server publishes, a few each second while a turn streams, so the
 /// task's views read it where they draw it, as they read the transcript (`TaskTranscriptReader`): the
-/// conversation, the composer, the status panel and the rail, not the task's views around them.
+/// conversation, the composer and the status panel, not the task's views around them. The rail reads
+/// only its part of the state (`AppModel.codexRailStateBySessionID`), which words streaming into the
+/// conversation leave as it is.
 struct TaskCodexStateReader: ExpressibleByNilLiteral {
     let read: @MainActor () -> CodexTaskState?
+    /// What the rail reads of the state (`CodexRailStates`).
+    let readRail: @MainActor () -> CodexTaskState?
 
-    init(read: @escaping @MainActor () -> CodexTaskState?) {
+    init(read: @escaping @MainActor () -> CodexTaskState?, readRail: @escaping @MainActor () -> CodexTaskState?) {
         self.read = read
+        self.readRail = readRail
     }
 
-    /// A state as it is.
+    /// A state as it is, which the rail reads whole.
     init(_ state: CodexTaskState?) {
         read = { state }
+        readRail = { state }
     }
 
     init(nilLiteral: ()) {
-        read = { nil }
+        self.init(nil)
     }
 }
 
