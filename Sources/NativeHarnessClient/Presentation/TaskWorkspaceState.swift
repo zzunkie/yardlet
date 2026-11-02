@@ -106,7 +106,6 @@ struct TaskWorkspaceSnapshot: Codable, Equatable {
     var codex = TranscriptReadingBookmark()
     // Optional so existing version-1 workspace snapshots retain their layout and reading position.
     var review: DiffReviewPreferences?
-    var sideChatSessionID: UUID?
     var files: WorkspaceFilePreferences?
     var browser: BrowserPreviewPreferences?
     /// The session rail's folded and opened cards for this task; nil while every card keeps its
@@ -189,7 +188,9 @@ final class TaskWorkspaceState {
         }
     }
     var review: DiffReviewPreferences { didSet { if review != oldValue { onChange?() } } }
-    var sideChatSessionID: UUID? { didSet { if sideChatSessionID != oldValue { onChange?() } } }
+    /// The side chat open in the side panel. A side chat is temporary, as the Codex app's: never
+    /// saved, and ended when its tab closes (`onSideChatClose`) or Yardlet quits.
+    var sideChatSessionID: UUID?
     /// The session rail's folds for this task, kept with its panels.
     var railFolds: SessionRailFolds { didSet { if railFolds != oldValue { onChange?() } } }
     /// What the side panel shows over its tabs for an agent or a background task. Never saved.
@@ -237,6 +238,8 @@ final class TaskWorkspaceState {
     /// it. Closing the terminal or leaving the task drops it. Never persisted.
     var terminalHandoff: TerminalCommandRequest?
     @ObservationIgnored var onChange: (() -> Void)?
+    /// The side chat's tab closed, which ends the side chat.
+    @ObservationIgnored var onSideChatClose: (() -> Void)?
 
     /// - Parameter sizes: the window's shared sizes; a task shown on its own (a render, a test)
     ///   keeps the sizes its snapshot carries.
@@ -245,7 +248,6 @@ final class TaskWorkspaceState {
         self.sizes = sizes ?? TaskWorkspaceSizeStore(TaskWorkspaceSizes(carriedBy: snapshot.layout))
         isExpanded = snapshot.layout.isExpanded
         review = snapshot.review ?? .init()
-        sideChatSessionID = snapshot.sideChatSessionID
         railFolds = snapshot.railFolds ?? SessionRailFolds()
         files = WorkspaceFilesState(preferences: snapshot.files ?? .init())
         browserTabs = TaskBrowserTabs(pages: snapshot.browser?.pages ?? [], visited: snapshot.browser?.visited ?? [])
@@ -411,7 +413,6 @@ final class TaskWorkspaceState {
         return TaskWorkspaceSnapshot(panels: panels, layout: layout,
                                      transcript: transcript.bookmark, codex: codex.bookmark,
                                      review: review == .init() ? nil : review,
-                                     sideChatSessionID: sideChatSessionID,
                                      files: files.preferences == .init() ? nil : files.preferences,
                                      browser: browserTabs.preferences(order: browserKeys, latest: latestBrowser),
                                      railFolds: railFolds.isDefault ? nil : railFolds,
@@ -426,8 +427,10 @@ final class TaskWorkspaceState {
             terminalStartRequested = false
             terminalHandoff = nil
         }
+        let closesSideChat = panels.trailingTabs.contains("sideChat") && !value.trailingTabs.contains("sideChat")
         panels = value
         onChange?()
+        if closesSideChat { onSideChatClose?() }
         // The browser tab the panel shows is the one in front, which the agent's tools use when they
         // name no tab; the browser is told before anything else can ask it.
         frontShownBrowserTab()
@@ -565,6 +568,8 @@ final class TaskWorkspaceStore {
     /// is not lost.
     private var sizesKnown: Bool
     private var sizesDirty = false
+    /// A task's side chat tab closed (`TaskWorkspaceState.onSideChatClose`).
+    var onSideChatClose: ((UUID) -> Void)?
 
     /// The browser engine the tasks' browser tabs open in, when this build has one; a store without it
     /// keeps each browser tab as a WebKit preview page.
@@ -598,6 +603,7 @@ final class TaskWorkspaceStore {
         ), sizes: sizes)
         if saved == nil, initialSurface != nil { state.terminalStartRequested = state.panels.isTerminalPresented }
         state.onChange = { [weak self] in self?.changed(id) }
+        state.onSideChatClose = { [weak self] in self?.onSideChatClose?(id) }
         states[id] = state
         if let client = browserClient() { state.attachBrowser(client, session: id) }
         // A snapshot moved to newer panel rules is saved under them at once: its new browser tab keys

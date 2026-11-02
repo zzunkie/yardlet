@@ -562,6 +562,7 @@ final class AppModel {
             self?.taskOpened(id)
             self?.noteMemorySaverScreen()
         }
+        taskWorkspaces.onSideChatClose = { [weak self] id in self?.endSideChat(of: id) }
         resourceMonitor.request = { [weak self] in self?.taskResourceRequest() ?? TaskResourceRequest() }
         resourceMonitor.describe = { [weak self] in self?.taskResourceDescription($0) }
         systemNotificationCenter.setResponseHandler { [weak self] response in
@@ -928,6 +929,9 @@ final class AppModel {
 
     /// Side chats retain the source conversation, but own their input and subsequent turns.
     /// An adapter with a native method forks; any other receives a fixed context on first send.
+    /// A side chat is temporary, as the Codex app's: the index never holds it, its harness keeps
+    /// none of it where it can (`HarnessHistoryFreeSessionConfiguring`), and it ends when its tab
+    /// closes or Yardlet quits (`endSideChat`).
     private func prepareSideChat(for parent: SessionRecord) async -> SessionRecord? {
         guard store.sessions.contains(where: { $0.id == parent.id }) else { return nil }
         let workspace = taskWorkspaces.state(for: parent.id)
@@ -964,7 +968,7 @@ final class AppModel {
                 environmentScope: parent.environmentScope, selectsSession: false,
                 inheritedContext: context.messages.isEmpty ? nil : context,
                 providerOptions: parent.providerOptions,
-                connection: parent.connection
+                connection: parent.connection, isTemporary: true
             )
             guard store.sessions.contains(where: { $0.id == parent.id }) else {
                 try? await store.discardSession(id: child.id)
@@ -982,6 +986,31 @@ final class AppModel {
                 sideChatErrors[parent.id] = error.localizedDescription
             }
             return nil
+        }
+    }
+
+    /// Ends the task's side chat when its tab closes, as closing the Codex app's side chat does:
+    /// its runtime closes and nothing of it stays in Yardlet. A side chat from before side chats
+    /// were temporary is a task in the index, and stays one.
+    func endSideChat(of parentID: UUID) {
+        guard let workspace = taskWorkspaces.loadedState(for: parentID), let id = workspace.sideChatSessionID else { return }
+        workspace.sideChatSessionID = nil
+        sideChatErrors.removeValue(forKey: parentID)
+        guard store.isTemporary(id), let child = store.sessions.first(where: { $0.id == id }) else { return }
+        Task { await removeSessionState(for: child, removal: .discard) }
+    }
+
+    /// Quitting ends every side chat and closes its tab, as the Codex app's side chats are gone
+    /// after a restart; this runs before the drafts and panels are saved.
+    private func endSideChatsForQuit() async {
+        for parent in store.sessions {
+            guard let workspace = taskWorkspaces.loadedState(for: parent.id),
+                  let id = workspace.sideChatSessionID, store.isTemporary(id) else { continue }
+            workspace.sideChatSessionID = nil
+            workspace.setPanels(TaskSurfaceNavigationProjection.closingTrailingTab("sideChat", in: workspace.panels))
+        }
+        for session in store.sessions where store.isTemporary(session.id) {
+            await removeSessionState(for: session, removal: .discard)
         }
     }
 
@@ -2875,6 +2904,11 @@ final class AppModel {
     }
 
     private func removeSessionState(for session: SessionRecord, removal: SessionRemoval) async {
+        // The task's side chat goes with it.
+        if let side = taskWorkspaces.loadedState(for: session.id)?.sideChatSessionID, store.isTemporary(side),
+           let child = store.sessions.first(where: { $0.id == side }) {
+            await removeSessionState(for: child, removal: .discard)
+        }
         eventTasksBySessionID.removeValue(forKey: session.id)?.cancel()
         followUpDrainTasks.removeValue(forKey: session.id)?.cancel()
         discardShellCommands(for: session.id)
@@ -3252,7 +3286,7 @@ final class AppModel {
                 inheritedContext: context, providerOptions: current.providerOptions, connection: current.connection,
                 projectID: current.projectID, additionalRoots: current.additionalRoots,
                 // A fork nests under its task in the sidebar; a side chat lives in its side panel.
-                parentTaskID: selectsSession ? current.id : nil
+                parentTaskID: selectsSession ? current.id : nil, isTemporary: !selectsSession
             )
             guard matchingSession(current) != nil else {
                 try? await store.discardSession(id: child.id)
@@ -3804,7 +3838,7 @@ final class AppModel {
                 connection: session.connection,
                 projectID: session.projectID,
                 additionalRoots: session.additionalRoots,
-                parentTaskID: selectsSession ? session.id : nil
+                parentTaskID: selectsSession ? session.id : nil, isTemporary: !selectsSession
             )
             do {
                 guard matchingSession(session) != nil else {
@@ -3817,6 +3851,10 @@ final class AppModel {
                                                    projectID: projects.project(for: forkedSession)?.id, for: forkedSession.id)
                 if let roots = adapter as? any HarnessWorkspaceRootsConfiguring {
                     await roots.setAdditionalWorkspaceRoots(forkedSession.additionalRootURLs, for: forkedSession.id)
+                }
+                // A side chat's thread is ephemeral: in no thread list, and gone with the App Server.
+                if !selectsSession, let history = adapter as? any HarnessHistoryFreeSessionConfiguring {
+                    _ = await history.keepNoHistory(for: forkedSession.id)
                 }
                 let forkedHandle = try await provider.fork(
                     handle,
@@ -5026,6 +5064,7 @@ final class AppModel {
         scheduledTasks.stop()
         // Before their runtimes close: the subagents the quit cuts off, kept for their callers.
         interruptAgentRunsForQuit()
+        await endSideChatsForQuit()
         // The quit has written down what was still in line; nothing more begins.
         restartResumeLine = RestartResumeLine()
         sessionJobScan?.cancel()
@@ -5673,13 +5712,15 @@ final class AppModel {
     }
 
     /// What keeps an attached task's runtime whatever the memory saver's rules say, in a word for the log and tests;
-    /// nil when the saver may end it. When in doubt it keeps the runtime: the task on screen, a turn or its question,
-    /// messages waiting to go, the harness's background shells and schedules, a server of the task or its processes
-    /// keeping a core busy (its terminal's among them), child tasks and subagents still working, and an edit, move or
-    /// continuation under way. An idle terminal does not keep it: the shell goes on without the runtime.
+    /// nil when the saver may end it. When in doubt it keeps the runtime: the task on screen, a side chat, a turn or
+    /// its question, messages waiting to go, the harness's background shells and schedules, a server of the task or its
+    /// processes keeping a core busy (its terminal's among them), child tasks and subagents still working, and an edit,
+    /// move or continuation under way. An idle terminal does not keep it: the shell goes on without the runtime.
     func memorySaverKeeps(_ session: SessionRecord) -> String? {
         let id = session.id
         if memorySaverOnScreenIDs().contains(id) { return "on screen" }
+        // A side chat's runtime holds its whole conversation: its harness keeps none of it.
+        if store.isTemporary(id) { return "side chat" }
         if session.status == .running || session.status == .waitingForApproval
             || codexPresentationBySessionID[id]?.activeTurnID != nil || runningShellCommandBySessionID[id] != nil {
             return "turn"
@@ -6166,6 +6207,11 @@ final class AppModel {
                     session.additionalRootURLs,
                     for: session.id
                 )
+            }
+            // A side chat leaves nothing in its harness's history where the harness can keep none:
+            // Claude Code with `--no-session-persistence`, Pi with `--no-session`.
+            if store.isTemporary(session.id), let history = adapter as? any HarnessHistoryFreeSessionConfiguring {
+                _ = await history.keepNoHistory(for: session.id)
             }
             if let source = session.inheritedContext?.nativeForkSource {
                 guard session.harness == .claudeCode, let childID = session.providerSessionID,
@@ -6922,6 +6968,8 @@ final class AppModel {
            codexPresentationBySessionID[sessionID]?.thread != nil {
             return
         }
+        // A side chat's conversation is not written anywhere.
+        guard !store.isTemporary(sessionID) else { return }
         // Streaming publishes many times a second; the reading snapshot keeps the newest one.
         transcriptSnapshots.scheduleSave(entries, for: sessionID)
     }
@@ -7290,7 +7338,7 @@ final class AppModel {
     private func persistCodexTranscriptSnapshot(_ state: CodexTaskState, for sessionID: UUID, inBackground: Bool = false) {
         // An absent thread is a transient presentation bootstrap and must not erase a previously
         // hydrated detached snapshot. A present empty thread is authoritative and clears it.
-        guard state.thread != nil else { return }
+        guard state.thread != nil, !store.isTemporary(sessionID) else { return }
         let entries = CodexTranscriptSnapshotProjection.entries(from: state)
         if entries.isEmpty {
             if inBackground { transcriptSnapshots.removeSoon(for: sessionID) } else { transcriptSnapshots.remove(for: sessionID) }

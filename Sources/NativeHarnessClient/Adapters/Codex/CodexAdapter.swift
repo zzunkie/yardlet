@@ -41,7 +41,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
     private var additionalRootsByLocalSessionID: [UUID: [URL]] = [:]
     private var agentToolServerByLocalSessionID: [UUID: AgentToolServerLaunch] = [:]
     private var yardletInstructionsByLocalSessionID: [UUID: String] = [:]
-    /// Threads to start ephemeral, written nowhere (`run_agent`).
+    /// Threads to start or fork ephemeral, written nowhere (`run_agent`, a side chat).
     private var historyFreeSessionIDs = Set<UUID>()
     private var instructionSourcesByLocalSessionID: [UUID: [String]] = [:]
     private var serverRequestContexts: [String: ApprovalContext] = [:]
@@ -219,9 +219,9 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
             configured: configuration["developer_instructions"]?.stringValue, yardlet: text)
     }
 
-    /// The thread this session starts is ephemeral: the App Server keeps it in memory only, so it
-    /// is in neither the Codex app's list nor an import, and it is not named. Only a thread not
-    /// started yet can be; a resumed or forked one is already saved.
+    /// The thread this session starts or forks into is ephemeral: the App Server keeps it in memory
+    /// only, so it is in neither the Codex app's list nor an import, and it is not named. Only a
+    /// thread not started yet can be; a resumed one is already saved.
     func keepNoHistory(for localSessionID: UUID) -> Bool {
         guard handles[localSessionID] == nil else { return false }
         historyFreeSessionIDs.insert(localSessionID)
@@ -1319,7 +1319,8 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
                 workspaceURL: session.workspaceURL,
                 config: agentToolServerByLocalSessionID[newLocalSessionID]?.codexConfig,
                 throughTurnID: throughTurnID,
-                developerInstructions: developerInstructions
+                developerInstructions: developerInstructions,
+                ephemeral: historyFreeSessionIDs.contains(newLocalSessionID)
             )
         )
         let threadID = try threadID(from: response)

@@ -167,7 +167,8 @@ extension AppModel {
 
     /// The tasks the sidebar lists, the ones "Next task needing attention" chooses from.
     var sidebarSessions: [SessionRecord] {
-        projects.visibleGroups(sessions: store.sessions).flatMap(\.sessions) + projects.chats(sessions: store.sessions)
+        let listed = store.listedSessions
+        return projects.visibleGroups(sessions: listed).flatMap(\.sessions) + projects.chats(sessions: listed)
     }
 
     /// How many tasks need the person, the Dock badge's number.

@@ -176,19 +176,21 @@ extension CodexProtocol {
     }
 
     /// A fork is a new task, so `config` carries that task's own Yardlet MCP server rather than
-    /// the source thread's.
+    /// the source thread's. A side chat's fork is `ephemeral`: kept in memory only, as the Codex
+    /// app's side chat.
     static func forkThread(
         id: Int64,
         threadID: String,
         workspaceURL: URL,
         config: JSONValue? = nil,
         throughTurnID: String? = nil,
-        developerInstructions: String? = nil
+        developerInstructions: String? = nil,
+        ephemeral: Bool = false
     ) -> CodexRPCRequest {
         var params: [String: JSONValue] = [
             "threadId": .string(threadID),
             "cwd": .string(workspaceURL.standardizedFileURL.path),
-            "ephemeral": .bool(false),
+            "ephemeral": .bool(ephemeral),
             "excludeTurns": .bool(true)
         ]
         if let config { params["config"] = config }

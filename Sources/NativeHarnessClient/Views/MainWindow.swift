@@ -185,13 +185,13 @@ struct MainWindow: View {
     /// The tasks as the task list orders them: the shown task where it was while the list is scrolled
     /// away from its top (`SidebarOrderHold`).
     private var listedSessions: [SessionRecord] {
-        sidebarOrderHold.listing(model.store.sessions)
+        sidebarOrderHold.listing(model.store.listedSessions)
     }
 
     /// Holds the shown task's place from now, or lets it go with the list at its top.
     private func holdSidebarOrder() {
         guard !isSidebarListAtTop else {
-            sidebarOrderHold.hold([], listing: model.store.sessions)
+            sidebarOrderHold.hold([], listing: model.store.listedSessions)
             return
         }
         let shown: [UUID]
@@ -201,7 +201,8 @@ struct MainWindow: View {
         case .home: shown = []
         }
         let ids = Set(shown)
-        sidebarOrderHold.hold(model.store.sessions.filter { ids.contains($0.id) }, listing: model.store.sessions)
+        let listed = model.store.listedSessions
+        sidebarOrderHold.hold(listed.filter { ids.contains($0.id) }, listing: listed)
     }
 
     private var visibleChats: [SessionRecord] {
@@ -1648,7 +1649,7 @@ struct MainWindow: View {
 
     private func newTaskHome(takesDraftWorkspace: Bool) -> some View {
         NewTaskHome(
-            recentSessions: Array(model.store.sessions.prefix(6)),
+            recentSessions: Array(model.store.listedSessions.prefix(6)),
             projects: projects.visibleGroups(sessions: model.store.sessions).compactMap(\.project),
             draft: newTaskDraft,
             runtimeSelections: model.runtimeSelections,

@@ -72,7 +72,8 @@ protocol HarnessLaunchOptionConfiguring: Actor {
 
 /// Optional surface for a session that leaves no history of its own with the provider: nothing
 /// saved where the provider's app, its CLI or Yardlet's import would list it. `run_agent` asks
-/// for it before the session is created, as its conversation is kept with the calling task.
+/// for it before the session is created, as its conversation is kept with the calling task, and a
+/// side chat, which is temporary.
 protocol HarnessHistoryFreeSessionConfiguring: Actor {
     /// Asks that the session about to be created for `localSessionID` keep no history. False
     /// when this provider has no way to, and the session is kept as any other.

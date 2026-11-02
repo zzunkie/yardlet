@@ -25,6 +25,9 @@ final class SessionStore {
         }
     }
     @ObservationIgnored var onSelectionChange: ((SessionRecord.ID?) -> Void)?
+    /// Side chats, which are temporary as the Codex app's: listed here while they are open and never
+    /// written to the index, so none is there after a restart.
+    @ObservationIgnored private var temporaryIDs: Set<UUID> = []
     private let repository: any SessionRepository
     /// How a task folder's Git identity is read. Injected so tests can describe a worktree
     /// without one on disk; the live reader only reads Git's own files.
@@ -74,7 +77,7 @@ final class SessionStore {
 
     /// Keeps a task's context usage in the index. Not activity: the task itself does not change.
     func saveContextUsage(_ snapshot: TaskContextUsageSnapshot, for id: UUID) async throws {
-        guard sessions.contains(where: { $0.id == id }) else { return }
+        guard sessions.contains(where: { $0.id == id }), !isTemporary(id) else { return }
         try await repository.saveContextUsage(snapshot, for: id)
     }
 
@@ -104,7 +107,8 @@ final class SessionStore {
         additionalRoots: [String] = [],
         workspaceOrigin knownOrigin: WorkspaceGitOrigin? = nil,
         lastActivityAt: Date? = nil,
-        parentTaskID: UUID? = nil
+        parentTaskID: UUID? = nil,
+        isTemporary: Bool = false
     ) async throws -> SessionRecord {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         // A task made in a linked worktree keeps the worktree as its cwd and additionally
@@ -135,10 +139,26 @@ final class SessionStore {
             parentTaskID: parentTaskID
         )
 
-        try await repository.upsert(session)
+        if isTemporary { temporaryIDs.insert(session.id) }
+        try await save(session)
         sessions.append(session)
         if selectsSession { selectedSessionID = session.id }
         return session
+    }
+
+    /// Whether the task is a temporary side chat, which the index never holds.
+    func isTemporary(_ id: UUID) -> Bool { temporaryIDs.contains(id) }
+
+    /// The tasks lists show: all but the side chats open now, which are in their side panel only,
+    /// as the Codex app's side chats are in no thread list.
+    var listedSessions: [SessionRecord] {
+        temporaryIDs.isEmpty ? sessions : sessions.filter { !temporaryIDs.contains($0.id) }
+    }
+
+    /// Writes the task to the index, unless it is temporary.
+    private func save(_ session: SessionRecord) async throws {
+        guard !temporaryIDs.contains(session.id) else { return }
+        try await repository.upsert(session)
     }
 
     /// Fills a task's worktree origin the first time the task is opened, and only when its
@@ -321,7 +341,7 @@ final class SessionStore {
         var updated = sessions[index]
         updated.runtimeExecutableURL = url.standardizedFileURL
         guard updated.runtimeExecutableURL != sessions[index].runtimeExecutableURL else { return updated }
-        try await repository.upsert(updated)
+        try await save(updated)
         guard let currentIndex = sessions.firstIndex(where: { $0.id == id }) else { return updated }
         sessions[currentIndex].runtimeExecutableURL = updated.runtimeExecutableURL
         return sessions[currentIndex]
@@ -332,7 +352,7 @@ final class SessionStore {
         try connection.validate(for: sessions[index].harness)
         var updated = sessions[index]
         updated.connection = connection
-        try await repository.upsert(updated)
+        try await save(updated)
         guard let currentIndex = sessions.firstIndex(where: { $0.id == id }) else { return }
         sessions[currentIndex].connection = connection
     }
@@ -355,6 +375,8 @@ final class SessionStore {
     /// Archives a task so it can be restored from the archived list. `providerArchived` says the
     /// provider's thread was archived as well.
     func archiveSession(id: UUID, providerArchived: Bool = false) async throws {
+        // A side chat is not kept anywhere, so archiving one ends it.
+        guard !isTemporary(id) else { return try await discardSession(id: id) }
         let record = sessions.first { $0.id == id }
         try await repository.archive(id: id, providerArchived: providerArchived)
         removeFromIndex(id)
@@ -367,10 +389,10 @@ final class SessionStore {
         }
     }
 
-    /// Removes a deleted task, or one a failed fork, import, or side chat created, without
-    /// listing it among archived tasks.
+    /// Removes a deleted task, a side chat that ended, or one a failed fork or import created,
+    /// without listing it among archived tasks.
     func discardSession(id: UUID) async throws {
-        try await repository.discard(id: id)
+        if temporaryIDs.remove(id) == nil { try await repository.discard(id: id) }
         removeFromIndex(id)
     }
 
@@ -442,11 +464,11 @@ final class SessionStore {
     private func modify(_ id: UUID, _ change: (inout SessionRecord) -> Void) async throws -> SessionRecord? {
         guard var updated = sessions.first(where: { $0.id == id }) else { return nil }
         change(&updated)
-        try await repository.upsert(updated)
+        try await save(updated)
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return nil }
         change(&sessions[index])
         let current = sessions[index]
-        if current != updated { try await repository.upsert(current) }
+        if current != updated { try await save(current) }
         return current
     }
 }

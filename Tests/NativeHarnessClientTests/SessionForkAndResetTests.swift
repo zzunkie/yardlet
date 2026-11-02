@@ -276,23 +276,46 @@ final class SessionForkAndResetTests: XCTestCase {
     }
 
     /// A fork of the saved conversation is a task of its own nested under its source, and the index
-    /// keeps the link; the side chat made the same way is not nested.
-    func testAClaudeForkNestsUnderItsTaskAndTheIndexKeepsTheLink() async throws {
+    /// keeps the link. The side chat made the same way is temporary, as the Codex app's: not nested,
+    /// launched to keep no history of its own, and gone when its tab closes or Yardlet quits.
+    func testAClaudeForkNestsUnderItsTaskAndASideChatEndsWithItsTab() async throws {
         let fixture = try ForkFixture()
         defer { fixture.cleanup() }
-        let model = try fixture.model(ForkRecordingAdapter())
+        let adapter = ForkRecordingAdapter()
+        let model = try fixture.model(adapter)
         let sideResult = await model.branch(fixture.parent, placement: .sidePanel)
         let side = try XCTUnwrap(sideResult)
         XCTAssertNil(side.parentTaskID)
+        XCTAssertTrue(model.store.isTemporary(side.id))
         let forkResult = await model.branch(fixture.parent)
         let forked = try XCTUnwrap(forkResult)
         XCTAssertEqual(forked.parentTaskID, fixture.parent.id)
+        XCTAssertFalse(model.store.isTemporary(forked.id))
         XCTAssertEqual(model.store.selectedSessionID, forked.id)
         let repository = try SQLiteSessionRepository(databaseURL: fixture.root.appending(path: "lineage-index.sqlite3"))
         try await repository.upsert(forked)
         let saved = try await repository.loadSessions()
         XCTAssertEqual(saved.first?.parentTaskID, fixture.parent.id)
+
+        await model.send("What did the last step find?", to: side)
+        let historyFree = await adapter.historyFreeIDs
+        let sources = await adapter.forkSources
+        XCTAssertEqual(historyFree, [side.id])
+        XCTAssertEqual(sources.compactMap { $0 }.map(\.throughMessageID), [fixture.answerID])
+        let workspace = model.taskWorkspaces.state(for: fixture.parent.id)
+        workspace.setPanels(TaskSurfaceNavigationProjection.showing("sideChat", in: workspace.panels))
+        workspace.setPanels(TaskSurfaceNavigationProjection.closingTrailingTab("sideChat", in: workspace.panels))
+        try await waitUntil { !model.store.sessions.contains { $0.id == side.id } }
+        XCTAssertFalse(model.isAttached(side.id))
+        XCTAssertNil(workspace.sideChatSessionID)
+
+        let reopened = await model.branch(fixture.parent, placement: .sidePanel)
+        let again = try XCTUnwrap(reopened)
+        XCTAssertNotEqual(again.id, side.id)
+        workspace.setPanels(TaskSurfaceNavigationProjection.showing("sideChat", in: workspace.panels))
         await model.shutdown()
+        XCTAssertFalse(model.store.sessions.contains { $0.id == again.id })
+        XCTAssertFalse(workspace.panels.trailingTabs.contains("sideChat"))
     }
 
     /// A side chat opens on a task whose turn is still running, as in the Claude app, through Claude's
@@ -637,13 +660,14 @@ private struct ForkFixture {
     func cleanup() { try? FileManager.default.removeItem(at: root) }
 }
 
-private actor ForkRecordingAdapter: HarnessAdapter, HarnessSessionForkConfiguring, HarnessNewSessionConfiguring, HarnessConversationQuiescing, HarnessFileRewinding, ProviderCapabilityProviding, HarnessSessionBranching {
+private actor ForkRecordingAdapter: HarnessAdapter, HarnessSessionForkConfiguring, HarnessNewSessionConfiguring, HarnessConversationQuiescing, HarnessFileRewinding, ProviderCapabilityProviding, HarnessSessionBranching, HarnessHistoryFreeSessionConfiguring {
     nonisolated let kind = HarnessKind.claudeCode
     nonisolated let sessionBranchMethod: HarnessSessionBranchMethod? = .savedConversation
     private(set) var probes = 0
     private(set) var forkSources: [HarnessSessionForkSource?] = []
     private(set) var resumedIDs: [String?] = []
     private(set) var newSessionIDs: [String?] = []
+    private(set) var historyFreeIDs: [UUID] = []
     private(set) var sentInputs: [HarnessUserInput] = []
     private(set) var fileRestoreCount = 0
     private var continuations: [UUID: AsyncStream<HarnessEventEnvelope>.Continuation] = [:]
@@ -655,6 +679,7 @@ private actor ForkRecordingAdapter: HarnessAdapter, HarnessSessionForkConfigurin
     }
     func setSessionForkSource(_ source: HarnessSessionForkSource?, for localSessionID: UUID) { forkSources.append(source) }
     func setNewSessionID(_ providerSessionID: String?, for localSessionID: UUID) { newSessionIDs.append(providerSessionID) }
+    func keepNoHistory(for localSessionID: UUID) -> Bool { historyFreeIDs.append(localSessionID); return true }
     func requireReadyForRewind(in session: HarnessSessionHandle) async throws {}
     func previewFileRewind(userMessageID: String, in session: HarnessSessionHandle) async throws -> HarnessFileRewindResult {
         .init(canRewind: true, error: nil, filesChanged: ["file.swift"], insertions: 1, deletions: 1, skippedLinks: nil, inFlight: nil)
