@@ -272,9 +272,62 @@ import XCTest
         XCTAssertTrue(model.codexHistorySelectionBySessionID.isEmpty)
     }
 
+    /// An ACP agent's conversations (Kimi Code's here, in a saved account's own folder) are listed with
+    /// its `session/list`, come in detached under that account, and are replayed with `session/load`
+    /// when the task opens, once: no prompt, no attach.
+    func testACPAgentsConversationsComeInUnderTheirAccountAndReplayWhenOpened() async throws {
+        let workspace = Project.canonical(root.appending(path: "project"))
+        let home = root.appending(path: "kimi-work")
+        for folder in [workspace, home] { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) }
+        let cli = root.appending(path: "kimi")
+        try Data("#!/bin/sh\n".utf8).write(to: cli)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cli.path)
+        let adapter = ResumeRecorder()
+        let model = AppModel(store: SessionStore(repository: InMemorySessionRepository()),
+            runtimeSelections: RuntimeSelectionStore(discoversRuntimes: false),
+            registry: HarnessRegistry { _, _ in adapter }, restoresIndexOnLaunch: false)
+        addTeardownBlock { await model.shutdown() }
+        model.runtimeSelections.select(cli, for: .kimiCode)
+        let agent = ScriptedACPAgent(
+            sessions: [ACPSessionHistoryTests.session("s-2", "Fix the importer", in: workspace, updatedAt: "2026-11-02T09:30:00Z")],
+            replays: ["s-2": ACPSessionHistoryTests.replay])
+        model.acpSessionHistory = ACPSessionHistory(makeTransport: { _ in agent.transport() }, timeout: .seconds(10))
+        let account = ProviderConnection(id: "kimi-work", name: "Kimi work", harness: .kimiCode, providerID: nil,
+                                         homePath: home.path, credentialSelector: nil)
+
+        let listed = try await model.importableConversations(harness: .kimiCode, workspaceURL: workspace, connection: account)
+        let conversation = try XCTUnwrap(listed.conversations.first)
+        let imported = await model.importConversation(conversation, connection: account)
+        let task = try XCTUnwrap(imported)
+        XCTAssertEqual(task.harness, .kimiCode)
+        XCTAssertEqual(task.providerSessionID, "s-2")
+        XCTAssertEqual(task.connection, account)
+        XCTAssertEqual(task.environmentScope, .native)
+        XCTAssertEqual(task.title, "Fix the importer")
+        XCTAssertFalse(model.isAttached(task.id))
+
+        await model.refreshConversationStatus(for: task)
+        let shown = model.transcriptBySessionID[task.id] ?? []
+        XCTAssertEqual(shown.first?.content, .user(text: "Read the importer", images: nil))
+        XCTAssertEqual(shown.last?.content, .assistant(text: "You're welcome.", isStreaming: false))
+        // Opened again, it shows what it has and starts no agent.
+        await model.refreshConversationStatus(for: task)
+        let connections = agent.connections
+        var methods: [String] = []
+        for connection in connections {
+            methods += await connection.methods
+            let folder = await connection.configuration?.environmentOverrides["KIMI_CODE_HOME"]
+            XCTAssertEqual(folder, home.path)
+        }
+        XCTAssertEqual(methods, ["initialize", "session/list", "initialize", "session/load"])
+        let resumed = await adapter.resumed
+        XCTAssertEqual(resumed, [])
+    }
+
     /// The import sheet drawn without a window into `.build/import-qa/`, light and dark: Codex's
-    /// search with its matches marked and the already-imported row's "Open", and Claude's list with
-    /// a conversation still running elsewhere.
+    /// search with its matches marked and the already-imported row's "Open", Claude's list with a
+    /// conversation still running elsewhere, and Kimi Code's, an installed ACP agent's, from its
+    /// `session/list` under a saved account.
     func testWindowlessImportSheetRenders() async throws {
         let directory = try WindowlessRender.directory("import-qa")
         let fixture = try codexImport()
@@ -313,9 +366,30 @@ import XCTest
         try model.connections.save(claude)
         model.connections.selection[.claudeCode] = claude.id
 
+        // Kimi Code installed, with a saved account whose folder its list is read from.
+        let kimiCLI = root.appending(path: "kimi")
+        try Data("#!/bin/sh\n".utf8).write(to: kimiCLI)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: kimiCLI.path)
+        model.runtimeSelections.select(kimiCLI, for: .kimiCode)
+        let kimiHome = root.appending(path: "kimi-work")
+        try FileManager.default.createDirectory(at: kimiHome, withIntermediateDirectories: true)
+        let kimi = ProviderConnection(id: "kimi-work", name: "kimi@example.test", harness: .kimiCode, providerID: nil,
+                                      homePath: kimiHome.path, credentialSelector: nil)
+        try model.connections.save(kimi)
+        model.connections.selection[.kimiCode] = kimi.id
+        let iso = Date.ISO8601FormatStyle()
+        let agent = ScriptedACPAgent(sessions: [
+            ACPSessionHistoryTests.session("k-1", "Bring Kimi's history in", in: fixture.workspace,
+                                           updatedAt: iso.format(now.addingTimeInterval(-1_800))),
+            ACPSessionHistoryTests.session("k-2", "Check the account folder", in: fixture.workspace,
+                                           updatedAt: iso.format(now.addingTimeInterval(-86_400 * 3)))
+        ], replays: [:])
+        model.acpSessionHistory = ACPSessionHistory(makeTransport: { _ in agent.transport() }, timeout: .seconds(10))
+
         let sheets: [(String, HarnessKind, String?, String)] = [
             ("codex-search", .codex, "needle", "Search Codex history in one sheet"),
-            ("claude", .claudeCode, nil, "Keep this one running")
+            ("claude", .claudeCode, nil, "Keep this one running"),
+            ("kimi", .kimiCode, nil, "Check the account folder")
         ]
         for (name, harness, search, lastRow) in sheets {
             for appearance in WindowlessRender.Appearance.allCases {
@@ -343,6 +417,12 @@ import XCTest
         let searches = await fixture.transport.requests.filter { $0.method == "thread/search" }
         XCTAssertEqual(searches.map { $0.params["searchTerm"]?.stringValue }, ["needle", "needle"],
                        "The sheet opened on Codex's search runs it at once")
+        for connection in agent.connections {
+            let methods = await connection.methods
+            XCTAssertEqual(methods, ["initialize", "session/list"])
+            let folder = await connection.configuration?.environmentOverrides["KIMI_CODE_HOME"]
+            XCTAssertEqual(folder, kimiHome.path, "Kimi's list is the saved account's")
+        }
         XCTAssertEqual(model.store.sessions.count, 1, "Drawing the sheet imported nothing")
 
         // Choosing a conversation opens its task in the window, whichever sidebar section it showed.

@@ -688,7 +688,7 @@ struct NewTaskHomeLists: View {
                         .buttonStyle(.borderless)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .help(L10n.string("Continue a conversation started in the Claude or Codex app or in Antigravity CLI."))
+                        .help(L10n.string("Continue a conversation started in another app or CLI."))
                 }
                 if let onImportFromOtherApps {
                     Button(L10n.string("Import Conversations from Other Apps…"), action: onImportFromOtherApps)

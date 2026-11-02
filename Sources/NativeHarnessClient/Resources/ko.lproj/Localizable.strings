@@ -325,6 +325,7 @@
 "%@ adapter is not implemented yet for %@" = "%@ 어댑터가 아직 구현되지 않았습니다: %@";
 "Yardlet no longer supports %@." = "Yardlet은 이제 %@ 하네스를 지원하지 않습니다.";
 "%@ does not advertise ACP session loading" = "%@에서 ACP 세션 불러오기를 지원하지 않습니다";
+"%@ does not list its conversations over ACP" = "%@에서 ACP로 대화 목록을 읽을 수 없습니다";
 "… earlier terminal output trimmed …\n" = "… 이전 터미널 출력 생략 …\n";
 "Codex App Server" = "Codex 앱 서버";
 "Claude streaming JSON" = "Claude 스트리밍 JSON";
@@ -1936,8 +1937,8 @@
 "Antigravity will change files and run commands without asking." = "Antigravity가 묻지 않고 파일을 바꾸고 명령을 실행합니다.";
 "Antigravity asks before actions that need approval. Bypass permissions approves every request without asking." = "Antigravity는 승인이 필요한 작업 전에 묻습니다. 권한 우회를 고르면 묻지 않고 모든 요청을 승인합니다.";
 "Antigravity CLI does not offer %@ to Yardlet" = "Antigravity CLI가 Yardlet에 %@ 모델을 제공하지 않습니다";
-"Continue a conversation started in the Claude or Codex app or in Antigravity CLI. Its history stays where it is." = "Claude 앱, Codex 앱이나 Antigravity CLI에서 시작한 대화를 Yardlet에서 이어갑니다. 기록은 원래 자리에 그대로 둡니다.";
-"Continue a conversation started in the Claude or Codex app or in Antigravity CLI." = "Claude 앱, Codex 앱이나 Antigravity CLI에서 시작한 대화를 이어갑니다.";
+"Continue a conversation started in another app or CLI. Its history stays where it is." = "다른 앱이나 CLI에서 시작한 대화를 Yardlet에서 이어갑니다. 기록은 원래 자리에 그대로 둡니다.";
+"Continue a conversation started in another app or CLI." = "다른 앱이나 CLI에서 시작한 대화를 이어갑니다.";
 "Conversations from the Claude and Codex apps, Claude Code and Codex run elsewhere, and Antigravity CLI. Their history stays where it is." = "Claude 앱과 Codex 앱, 그 밖에서 실행한 Claude Code·Codex, Antigravity CLI의 대화입니다. 기록은 원래 자리에 그대로 둡니다.";
 "No conversations are open in the Claude or Codex app or Antigravity CLI." = "Claude 앱, Codex 앱이나 Antigravity CLI에 열린 대화가 없습니다.";
 "Antigravity conversation" = "Antigravity 대화";

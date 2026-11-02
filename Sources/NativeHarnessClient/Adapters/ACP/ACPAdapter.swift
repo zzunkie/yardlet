@@ -58,6 +58,12 @@ actor ACPAdapter:
     /// listed (`AntigravityACPOptions`).
     private var antigravityPermissionModeByLocalSessionID: [UUID: String] = [:]
     private var antigravityModelsByLocalSessionID: [UUID: [ProviderCapabilityChoice]] = [:]
+    /// Sessions loaded since their last prompt. `session/load` replays the conversation as session
+    /// updates, some of which can reach `accept` after the load's answer registered the session; the
+    /// task already shows that history (its read cache, or the replay `ACPSessionHistory` read), so
+    /// what the agent says of its messages, thinking, tool calls and plan before the next prompt is
+    /// not a turn of this task.
+    private var replayingProviderSessionIDs: Set<String> = []
 
     init(
         kind: HarnessKind,
@@ -220,6 +226,7 @@ actor ACPAdapter:
                 )
             )
         }
+        replayingProviderSessionIDs.insert(providerSessionID)
         do {
             let id = takeRequestID()
             let result = try await transport.request(
@@ -242,6 +249,7 @@ actor ACPAdapter:
             register(handle)
             return handle
         } catch {
+            replayingProviderSessionIDs.remove(providerSessionID)
             await stopTransportIfUnused()
             throw error
         }
@@ -280,6 +288,7 @@ actor ACPAdapter:
                 L10n.string("An ACP prompt is already running")
             )
         }
+        replayingProviderSessionIDs.remove(session.providerSessionID)
         emit(.sessionStatusChanged(.running), for: session.localSessionID)
         let id = takeRequestID()
         promptTasks[session.localSessionID] = Task { [weak self] in
@@ -497,6 +506,7 @@ actor ACPAdapter:
     func close(_ session: HarnessSessionHandle) async {
         handles.removeValue(forKey: session.localSessionID)
         localSessionIDByProviderID.removeValue(forKey: session.providerSessionID)
+        replayingProviderSessionIDs.remove(session.providerSessionID)
         promptTasks.removeValue(forKey: session.localSessionID)?.cancel()
         permissions = permissions.filter { $0.value.localSessionID != session.localSessionID }
         activities.removeValue(forKey: session.localSessionID)
@@ -601,6 +611,9 @@ actor ACPAdapter:
               let update = value["params"]?["update"] else { return }
 
         let updateKind = update["sessionUpdate"]?.stringValue
+        if replayingProviderSessionIDs.contains(providerSessionID), ACPReplayTranscript.conversationUpdates.contains(updateKind ?? "") {
+            return
+        }
         if updateKind == "turn_completed",
            let usage = projector.usage(from: update) {
             emit(.usageUpdated(usage), for: localSessionID, rawData: frame.data)

@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Continues a conversation the Claude or Codex app started, as a Yardlet task with the same
-/// session. The list is one project folder's history under the chosen account. Codex's can be
-/// searched; a conversation opened from a search shows its match.
+/// Continues a conversation another app or CLI started, as a Yardlet task with the same session.
+/// The list is one project folder's history under the chosen account: Claude Code's, Codex's,
+/// Antigravity CLI's, and that of each other ACP agent installed (`ACPSessionHistory`). Codex's can
+/// be searched; a conversation opened from a search shows its match.
 struct ImportConversationSheet: View {
     let model: AppModel
     let projects: [Project]
@@ -63,6 +64,13 @@ struct ImportConversationSheet: View {
 
     private var accounts: [AccountChoice] { Self.accounts(for: harness, in: model.connections) }
 
+    /// Claude Code, Codex and Antigravity CLI, then the other ACP agents installed, in the catalog's order.
+    private var harnesses: [HarnessKind] {
+        [.claudeCode, .codex, .antigravityCLI] + HarnessCatalog.builtIns.map(\.id).filter {
+            ACPSessionHistory.reads($0) && model.runtimeSelections.selectedURL(for: $0) != nil
+        }
+    }
+
     /// The harness's accounts, then its folders found with a login or history that are not saved
     /// (importing under one saves it).
     private static func accounts(for harness: HarnessKind, in connections: ProviderConnectionStore) -> [AccountChoice] {
@@ -88,14 +96,14 @@ struct ImportConversationSheet: View {
                 Spacer()
                 Button(L10n.string("Done"), action: onDismiss).keyboardShortcut(.cancelAction)
             }
-            Text(L10n.string("Continue a conversation started in the Claude or Codex app or in Antigravity CLI. Its history stays where it is."))
+            Text(L10n.string("Continue a conversation started in another app or CLI. Its history stays where it is."))
                 .font(.callout).foregroundStyle(.secondary)
             Picker(L10n.string("Harness"), selection: $harness) {
-                Text(HarnessKind.claudeCode.displayName).tag(HarnessKind.claudeCode)
-                Text(HarnessKind.codex.displayName).tag(HarnessKind.codex)
-                Text(HarnessKind.antigravityCLI.displayName).tag(HarnessKind.antigravityCLI)
+                ForEach(harnesses) { harness in
+                    Text(harnesses.count > 3 ? harness.shortDisplayName : harness.displayName).tag(harness)
+                }
             }
-            .pickerStyle(.segmented).labelsHidden().frame(width: 420)
+            .pickerStyle(.segmented).labelsHidden().frame(width: harnesses.count > 3 ? nil : 420)
             HStack(spacing: 12) {
                 Picker(L10n.string("Project"), selection: $workspacePath) {
                     ForEach(folders) { Text($0.name).tag($0.id) }
@@ -192,8 +200,11 @@ struct ImportConversationSheet: View {
                     if let snippet = conversation.snippet, !snippet.isEmpty, snippet != conversation.title {
                         highlighted(snippet).font(.system(size: 11.5)).lineLimit(2)
                     }
-                    Text(conversation.updatedAt.formatted(.relative(presentation: .named)))
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                    // An ACP agent may list a session without its time.
+                    if conversation.updatedAt != .distantPast {
+                        Text(conversation.updatedAt.formatted(.relative(presentation: .named)))
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 if importingID == conversation.id {

@@ -166,7 +166,10 @@ its tasks do not move to another account, and automatic assignment leaves it out
 empty folder each CLI writes only there (checked with `kimi acp` and `grok agent stdio` answering `initialize` and an
 empty `session/list`), and Grok Build updates itself only when run from that folder's own `bin/grok`, so no copy of the
 runtime lands in an account folder. Titles, Grok Build's session details and its transcript repair read a task's
-history in its account's folder (`ProviderSessionTitlePaths.forAccount`).
+history in its account's folder (`ProviderSessionTitlePaths.forAccount`). Importing reads the chosen account's folder
+too: the import list's `session/list` and the replay's `session/load` run in that account's environment, and the task
+imported keeps that account ([NATIVE_SESSION_STORAGE.md](NATIVE_SESSION_STORAGE.md), "Importing conversations from
+other apps").
 
 ## Claude plan limit lookup (2026-10-06)
 
