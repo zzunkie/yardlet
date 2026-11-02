@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The task actions the shell exposes to the menu bar. `targets` decides what each command acts
@@ -108,6 +109,55 @@ enum TaskCommandShortcut {
     static let all = [toggleSidebar, previousTask, nextTask, nextTaskNeedingAttention, toggleActivityView,
                       togglePinned, markUnread, archive, toggleSessionRail, toggleSidePanel, toggleTerminal, openModelMenu,
                       back, forward]
+}
+
+/// The Codex app's Open Terminal key, `Control+\``, beside the View menu's ⌘J, which the menu cannot
+/// give one item twice. Its window takes it before the focused view does, as it takes a menu's key, so it
+/// works with the terminal focused (whose shell would read it as Control-@). Off while a sheet is up.
+struct TerminalToggleKey: NSViewRepresentable {
+    let isEnabled: Bool
+    let toggle: () -> Void
+
+    /// Control and the key left of 1, whatever character the keyboard's layout gives it.
+    static func matches(_ event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            .subtracting([.capsLock, .numericPad, .function])
+        return modifiers == .control && (event.keyCode == 50 || event.charactersIgnoringModifiers == "`")
+    }
+
+    func makeNSView(context: Context) -> KeyView { KeyView() }
+
+    func updateNSView(_ view: KeyView, context: Context) {
+        view.toggle = isEnabled ? toggle : nil
+    }
+
+    static func dismantleNSView(_ view: KeyView, coordinator: ()) {
+        view.stopWatching()
+    }
+
+    final class KeyView: NSView {
+        var toggle: (() -> Void)?
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopWatching()
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, let window = self.window, event.window === window, !event.isARepeat,
+                      let toggle = self.toggle, TerminalToggleKey.matches(event) else { return event }
+                toggle()
+                return nil
+            }
+        }
+
+        func stopWatching() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
 }
 
 struct YardletTaskCommands: Commands {

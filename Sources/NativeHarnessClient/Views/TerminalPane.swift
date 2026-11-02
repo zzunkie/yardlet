@@ -17,6 +17,22 @@ struct TerminalFolderContext {
     }
 }
 
+/// The task's terminal tabs, which the panel's header shows as the side panel shows its tabs, with a
+/// + for another tab in the task's folder. The task's workspace keeps them (`TaskWorkspaceState.terminals`).
+struct TerminalTabsContext {
+    let workspace: TaskWorkspaceState
+    /// Where a new tab opens: the task's folder, or the new-task screen's.
+    let folder: URL
+    let launch: ShellLaunchEnvironment
+    let taskID: UUID?
+}
+
+/// What a terminal tab's menu adds to the side panel's tab menu (`WorkSurfaceTabMenu`).
+struct TerminalTabMenuActions: Sendable {
+    var rename: @MainActor @Sendable (String) -> Void
+    var restart: @MainActor @Sendable (String) -> Void
+}
+
 struct TerminalPane: View {
     private var workspaceURL: URL { session.workspaceURL }
     /// A command a conversation card handed to this terminal (`TaskWorkspaceState.handOffToTerminal`).
@@ -25,12 +41,18 @@ struct TerminalPane: View {
     var onHandoffDone: (TerminalCommandRequest.ID) -> Void = { _ in }
     let onClose: () -> Void
     var folder: TerminalFolderContext? = nil
+    var tabs: TerminalTabsContext? = nil
     @State private var session: NativeTerminalSession
     /// The task's workspace keeps the shell (`TaskWorkspaceState.terminal`), which goes on while no
     /// panel shows it; otherwise the panel's own shell ends with the panel.
     private let isShared: Bool
-    @State private var confirmsRestart = false
+    /// A tab to restart where a program still runs, until the person says.
+    @State private var restarting: NativeTerminalSession?
     @State private var confirmsFolderRestart = false
+    /// Tabs to close where a program still runs, until the person says.
+    @State private var closing: [NativeTerminalSession]?
+    @State private var renaming: NativeTerminalSession?
+    @State private var renameText = ""
     @State private var hasStarted: Bool
     @FocusState private var isStartFocused: Bool
     @Environment(\.taskKeyboardFocus) private var keyboardFocus
@@ -54,9 +76,10 @@ struct TerminalPane: View {
         _hasStarted = State(initialValue: startsAutomatically)
     }
 
-    /// A panel showing the shell its task's workspace keeps. A shell already running shows as it is.
+    /// A panel showing a tab its task's workspace keeps. A shell already running shows as it is.
     init(
         session: NativeTerminalSession,
+        tabs: TerminalTabsContext? = nil,
         handoff: TerminalCommandRequest? = nil,
         startsAutomatically: Bool = true,
         folder: TerminalFolderContext? = nil,
@@ -67,30 +90,31 @@ struct TerminalPane: View {
         self.onHandoffDone = onHandoffDone
         self.onClose = onClose
         self.folder = folder
+        self.tabs = tabs
         isShared = true
         _session = State(initialValue: session)
         _hasStarted = State(initialValue: startsAutomatically || session.hasShell)
     }
 
     var body: some View {
+        let titles = TerminalTabTitle.titles(for: tabs?.workspace.terminals ?? [session])
         VStack(spacing: 0) {
             WorkSurfaceHeader(
-                title: workspaceURL.lastPathComponent,
+                title: titles[ObjectIdentifier(session)] ?? workspaceURL.lastPathComponent,
                 systemName: "terminal",
                 workspaceURL: workspaceURL,
                 status: session.isRunning ? nil : session.statusText,
                 statusTint: session.exitCode.map({ $0 != 0 }) == true || session.terminationSignal != nil
                     ? .red : .secondary,
-                onClose: onClose
+                onClose: tabs == nil ? onClose : { close([session]) }
             ) {
                 EmptyView()
 
             }
+            .environment(\.workSurfaceNavigation, tabs.map { navigation($0, titles: titles) })
             .contextMenu {
-                if hasStarted {
-                    Button(L10n.string("Restart")) {
-                        if session.isRunning { confirmsRestart = true } else { session.restart() }
-                    }
+                if tabs == nil, hasStarted {
+                    Button(L10n.string("Restart")) { restart(session) }
                 }
             }
 
@@ -108,6 +132,7 @@ struct TerminalPane: View {
                 VStack(spacing: 10) {
                     Button(L10n.string("Start terminal")) {
                         hasStarted = true
+                        tabs?.workspace.terminalStartRequested = true
                         keyboardFocus?.move(to: .terminal)
                     }
                         .buttonStyle(.bordered)
@@ -117,9 +142,14 @@ struct TerminalPane: View {
                 .background(ParityTheme.canvas)
             }
         }
-        .confirmationDialog(L10n.string("Restart terminal?"), isPresented: $confirmsRestart) {
-            Button(L10n.string("Restart terminal"), role: .destructive) { session.restart() }
-            Button(L10n.string("Cancel"), role: .cancel) {}
+        .confirmationDialog(L10n.string("Restart terminal?"), isPresented: Binding(
+            get: { restarting != nil }, set: { if !$0 { restarting = nil } }
+        )) {
+            Button(L10n.string("Restart terminal"), role: .destructive) {
+                if let restarting { finishRestarting(restarting) }
+                restarting = nil
+            }
+            Button(L10n.string("Cancel"), role: .cancel) { restarting = nil }
         } message: {
             Text(L10n.string("This stops the terminal's running processes and clears its output."))
         }
@@ -128,6 +158,29 @@ struct TerminalPane: View {
             Button(L10n.string("Cancel"), role: .cancel) {}
         } message: {
             Text(L10n.string("This stops the terminal's running processes and clears its output."))
+        }
+        .confirmationDialog(
+            closing.map { TerminalCloseQuestion.title(closing: $0.count) } ?? "",
+            isPresented: Binding(get: { closing != nil }, set: { if !$0 { closing = nil } })
+        ) {
+            Button(L10n.string((closing?.count ?? 1) > 1 ? "Close terminals" : "Close terminal"), role: .destructive) {
+                if let closing { finishClosing(closing) }
+                closing = nil
+            }
+            Button(L10n.string("Cancel"), role: .cancel) { closing = nil }
+        } message: {
+            if let closing { Text(TerminalCloseQuestion.message(closing: closing, titles: titles)) }
+        }
+        .alert(L10n.string("Rename terminal"), isPresented: Binding(
+            get: { renaming != nil }, set: { if !$0 { renaming = nil } }
+        )) {
+            TextField(renaming.map(TerminalTabTitle.defaultTitle) ?? "", text: $renameText)
+            Button(L10n.string("Cancel"), role: .cancel) { renaming = nil }
+            Button(L10n.string("Rename")) {
+                let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                renaming?.name = name.isEmpty ? nil : name
+                renaming = nil
+            }
         }
         .onAppear {
             if isShared { session.panelAppeared() }
@@ -150,6 +203,72 @@ struct TerminalPane: View {
                 isStartFocused = true
             }
         }
+    }
+
+    /// The header's tab strip: the task's terminal tabs, each closing on its own, with a + for another.
+    private func navigation(_ tabs: TerminalTabsContext, titles: [ObjectIdentifier: String]) -> WorkSurfaceNavigation {
+        let shells = tabs.workspace.terminals
+        let byID = Dictionary(shells.map { (TerminalTabTitle.tabID($0), $0) }, uniquingKeysWith: { first, _ in first })
+        return WorkSurfaceNavigation(
+            tabs: shells.map { shell in
+                WorkSurfaceTab(id: TerminalTabTitle.tabID(shell), title: titles[ObjectIdentifier(shell)] ?? "",
+                               systemName: "terminal")
+            },
+            activeID: TerminalTabTitle.tabID(session),
+            choices: [],
+            select: { id in
+                guard let shell = byID[id] else { return }
+                tabs.workspace.showTerminalTab(shell)
+                keyboardFocus?.move(to: .terminal)
+            },
+            open: { _ in },
+            closeTab: { id in if let shell = byID[id] { close([shell]) } },
+            closeTabs: { ids in close(ids.compactMap { byID[$0] }) },
+            closePanel: { onClose() },
+            newTab: WorkSurfaceNewTab(help: L10n.string("New terminal")) {
+                tabs.workspace.openTerminalTab(in: tabs.folder, launch: tabs.launch, taskID: tabs.taskID)
+                keyboardFocus?.move(to: .terminal)
+            },
+            terminalMenu: TerminalTabMenuActions(
+                rename: { id in
+                    guard let shell = byID[id] else { return }
+                    renameText = shell.name ?? ""
+                    renaming = shell
+                },
+                restart: { id in if let shell = byID[id] { restart(shell) } }
+            )
+        )
+    }
+
+    /// Closing tabs ends their shells, asking first only where a program still holds the terminal, as
+    /// the Claude app asks before closing a terminal whose command still runs; a shell at its prompt
+    /// closes without a question.
+    private func close(_ shells: [NativeTerminalSession]) {
+        guard !shells.isEmpty else { return }
+        if shells.contains(where: \.isRunningProgram) { closing = shells } else { finishClosing(shells) }
+    }
+
+    private func finishClosing(_ shells: [NativeTerminalSession]) {
+        guard let tabs else { return onClose() }
+        if !tabs.workspace.closeTerminalTabs(shells) {
+            onClose()
+        } else {
+            keyboardFocus?.move(to: .terminal)
+        }
+    }
+
+    /// Restart asks first only while a program holds the terminal; a shell at its prompt, or one that
+    /// exited, starts over at once. A tab the panel did not show shows as it starts over.
+    private func restart(_ shell: NativeTerminalSession) {
+        if shell.isRunningProgram { restarting = shell } else { finishRestarting(shell) }
+    }
+
+    private func finishRestarting(_ shell: NativeTerminalSession) {
+        if let tabs {
+            tabs.workspace.terminalStartRequested = true
+            tabs.workspace.showTerminalTab(shell)
+        }
+        shell.restart()
     }
 
     /// Puts a handed-off command at the shell's prompt without running it: the person reads it and
@@ -178,7 +297,7 @@ struct TerminalPane: View {
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Button(L10n.format("Restart in %@", target.lastPathComponent)) {
-                if session.isRunning { confirmsFolderRestart = true } else { folder?.restart() }
+                if session.isRunningProgram { confirmsFolderRestart = true } else { folder?.restart() }
             }
             .buttonStyle(.borderless)
             .fixedSize()
@@ -191,6 +310,45 @@ struct TerminalPane: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(ParityTheme.subtleFill)
+    }
+}
+
+/// A terminal tab's title: the name the person gave it, else its folder's name, numbered from the
+/// second tab on in the order the tabs opened ("yardlet", "yardlet 2"), so each keeps its title while
+/// others open and close.
+@MainActor
+enum TerminalTabTitle {
+    static func defaultTitle(of shell: NativeTerminalSession) -> String {
+        let folder = shell.workspaceURL.lastPathComponent
+        return shell.number > 1 ? "\(folder) \(shell.number)" : folder
+    }
+
+    static func titles(for shells: [NativeTerminalSession]) -> [ObjectIdentifier: String] {
+        Dictionary(shells.map { (ObjectIdentifier($0), $0.name ?? defaultTitle(of: $0)) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// The tab's id in the header's strip.
+    static func tabID(_ shell: NativeTerminalSession) -> String {
+        "terminal:" + shell.id.uuidString
+    }
+}
+
+/// The Claude app's question before closing a terminal whose command still runs ("Close terminal?",
+/// "A command is still running in {name}. Closing the terminal stops it.").
+@MainActor
+enum TerminalCloseQuestion {
+    static func title(closing count: Int) -> String {
+        count > 1 ? L10n.format("Close %d terminals?", count) : L10n.string("Close terminal?")
+    }
+
+    static func message(closing shells: [NativeTerminalSession], titles: [ObjectIdentifier: String]) -> String {
+        let running = shells.filter(\.isRunningProgram)
+        guard running.count == 1, let shell = running.first else {
+            return L10n.format("Commands are still running in %d terminals. Closing them stops them.", running.count)
+        }
+        let name = titles[ObjectIdentifier(shell)] ?? TerminalTabTitle.defaultTitle(of: shell)
+        return L10n.format(shells.count > 1 ? "A command is still running in %@. Closing the terminals stops it."
+                                            : "A command is still running in %@. Closing the terminal stops it.", name)
     }
 }
 
@@ -234,7 +392,14 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
         alpha: 1
     )
 
+    /// The header strip's id for its tab.
+    let id = UUID()
     let workspaceURL: URL
+    /// The name the person gave its tab; nil keeps the default (`TerminalTabTitle`).
+    var name: String?
+    /// Its place among the tabs its task opened, for its default title: the lowest a tab of the task
+    /// does not have.
+    var number = 1
     private(set) var isRunning = false
     private(set) var title: String?
     private(set) var currentDirectory: String?
@@ -245,6 +410,8 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
     var dismissedFolderNotice: URL?
     /// The shell ended for good (`end()`); its task's workspace opens a new one next.
     private(set) var hasEnded = false
+    /// Told once the shell ends for good: its task's workspace drops its tab.
+    @ObservationIgnored var onEnd: (() -> Void)?
 
     /// The shell's view, kept with the shell rather than by the panel, so a panel drawn again for the
     /// same shell (the task the new-task screen started, the same task in another place) shows the same
@@ -310,10 +477,15 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
         }
     }
 
-    /// Ends the shell for good: the workspace that keeps it opens a new one next time.
+    /// Ends the shell for good: the workspace that keeps it drops its tab, and opens a new one when
+    /// it was the last.
     func end() {
+        guard !hasEnded else { return }
         hasEnded = true
         stop()
+        let onEnd = onEnd
+        self.onEnd = nil
+        onEnd?()
     }
 
     private func registerShell(of view: LocalProcessTerminalView) {
@@ -384,11 +556,6 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
         terminalView.send(source: terminalView, data: bytes[...])
     }
 
-    /// Sends `text` once the shell is at its prompt: running, and quiet for `quietPeriod` since it
-    /// last printed. A shell that has just started prints its startup files' output and its prompt
-    /// first; text typed before the prompt would be echoed twice. Past `limit` it is sent if a shell
-    /// runs, whatever it printed. False when no shell ran in time or the wait was cancelled.
-    @discardableResult
     /// A command typed for the person to review and run: the text a shell takes as input without
     /// executing it. Without a trailing Return a one-line command waits at the prompt. A command over
     /// several lines goes as a bracketed paste when the shell asked for that mode (zsh's line editor
@@ -412,6 +579,9 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
         return true
     }
 
+    /// Sends `text` once the shell is at its prompt (`waitUntilReady`). False when no shell was at its
+    /// prompt in time or the wait was cancelled.
+    @discardableResult
     func typeWhenReady(
         _ text: String, quietPeriod: Duration = .milliseconds(300), limit: Duration = .seconds(10)
     ) async -> Bool {
@@ -420,16 +590,41 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
         return true
     }
 
-    /// The shell is running and its output has been quiet for `quietPeriod`: it is at its prompt.
+    /// The shell holds its terminal and has been quiet for `quietPeriod` since it last printed: it is
+    /// at its prompt. A shell that has just started prints its startup files' output and its prompt
+    /// first; text typed before the prompt would be echoed twice. Past `limit` the shell is taken to be
+    /// at its prompt if it holds the terminal, whatever it printed; never while a program holds it (a
+    /// sign-in waiting, a dev server), whose input the text would be.
     private func waitUntilReady(
         quietPeriod: Duration = .milliseconds(300), limit: Duration = .seconds(10)
     ) async -> Bool {
         let deadline = ContinuousClock.now + limit
         while ContinuousClock.now < deadline, !Task.isCancelled {
-            if isRunning, let lastOutputAt, ContinuousClock.now - lastOutputAt >= quietPeriod { break }
+            if isAtPrompt, let lastOutputAt, ContinuousClock.now - lastOutputAt >= quietPeriod { break }
             try? await Task.sleep(for: .milliseconds(50))
         }
-        return !Task.isCancelled && isRunning
+        return !Task.isCancelled && isAtPrompt
+    }
+
+    /// The process group that holds the terminal while the shell runs: the shell's own at its prompt,
+    /// a program's while one runs in the foreground (an interactive shell gives each job its group).
+    private var foregroundProcessGroup: pid_t? {
+        guard isRunning, let process = terminalView?.process, process.childfd >= 0 else { return nil }
+        let group = tcgetpgrp(process.childfd)
+        return group > 0 ? group : nil
+    }
+
+    /// A program other than the shell holds the terminal: a command still runs in it. Read when asked,
+    /// never watched.
+    var isRunningProgram: Bool {
+        guard let group = foregroundProcessGroup, let shell = terminalView?.process.shellPid else { return false }
+        return group != shell
+    }
+
+    /// The shell holds its terminal: no command runs in the foreground.
+    var isAtPrompt: Bool {
+        guard let group = foregroundProcessGroup, let shell = terminalView?.process.shellPid else { return false }
+        return group == shell
     }
 
     func focus() -> Bool {

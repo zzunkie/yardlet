@@ -460,6 +460,8 @@ final class MenuBarMenuTests: XCTestCase {
             KeyboardShortcut("g", modifiers: .command), KeyboardShortcut("g", modifiers: [.command, .shift]),
             KeyboardShortcut("d", modifiers: [.command, .shift]), KeyboardShortcut("d", modifiers: [.command, .shift, .option]),
             KeyboardShortcut("w", modifiers: [.command, .control]),
+            // The terminal's second key (`TerminalToggleKey`).
+            KeyboardShortcut("`", modifiers: .control),
         ]
         others += PaneFocusDirection.allCases.map {
             KeyboardShortcut(SplitCommandTitle.focusShortcut($0), modifiers: [.command, .option])

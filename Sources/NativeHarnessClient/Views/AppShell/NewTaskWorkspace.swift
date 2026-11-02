@@ -7,8 +7,8 @@ import SwiftUI
 /// shell and pages as they are (`AppModel.handOffDraftWorkspace`), as the Codex app's thread takes
 /// over its draft's tabs.
 ///
-/// Leaving the screen ends its terminal's shell, as leaving a task ends the task's; the side panel's
-/// tabs and the browser's pages stay with the draft.
+/// Leaving the screen leaves its terminal's shells running, as leaving a task leaves the task's; the
+/// side panel's tabs and the browser's pages stay with the draft.
 struct NewTaskWorkspace<Home: View>: View {
     let draft: NewTaskDraft
     @Bindable var workspaceState: TaskWorkspaceState
@@ -110,8 +110,11 @@ struct NewTaskWorkspace<Home: View>: View {
         let session = workspaceState.terminal(in: folder, launch: terminalShellLaunch, taskID: nil)
         return TerminalPane(
             session: session,
+            tabs: TerminalTabsContext(workspace: workspaceState, folder: folder, launch: terminalShellLaunch, taskID: nil),
             startsAutomatically: workspaceState.terminalStartRequested,
-            folder: TerminalFolderContext(folders: [folder], restart: { workspaceState.restartTerminal() }),
+            folder: TerminalFolderContext(folders: [folder], restart: {
+                workspaceState.restartTerminal(in: folder, launch: terminalShellLaunch, taskID: nil)
+            }),
             onClose: closeTerminal
         )
         .id(ObjectIdentifier(session))

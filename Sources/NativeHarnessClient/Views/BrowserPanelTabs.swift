@@ -103,6 +103,11 @@ struct WorkSurfaceTabMenu: View {
             }
             Divider()
         }
+        if let terminal = navigation.terminalMenu {
+            Button(L10n.string("Rename…")) { terminal.rename(tabID) }
+            Button(L10n.string("Restart")) { terminal.restart(tabID) }
+            Divider()
+        }
         let ids = navigation.tabs.map(\.id)
         let index = ids.firstIndex(of: tabID)
         Button(L10n.string("Close Tab")) { navigation.closeTab(tabID) }

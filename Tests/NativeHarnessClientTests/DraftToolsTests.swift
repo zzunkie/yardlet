@@ -73,9 +73,10 @@ final class DraftToolsTests: XCTestCase {
         draft.files.preferences.selectedPath = "README.md"
         let files = draft.files
         let browser = draft.browserTabs
-        let shell = draft.terminal(in: folder, launch: .userLoginShell(), taskID: nil)
-        XCTAssertTrue(draft.terminal(in: folder, launch: .userLoginShell(), taskID: nil) === shell,
-                      "the workspace keeps one shell")
+        let first = draft.terminal(in: folder, launch: .userLoginShell(), taskID: nil)
+        XCTAssertTrue(draft.terminal(in: folder, launch: .userLoginShell(), taskID: nil) === first,
+                      "the workspace keeps its tabs")
+        let shell = draft.openTerminalTab(in: folder, launch: .userLoginShell(), taskID: nil)
         let panels = draft.panels
 
         let taskID = UUID()
@@ -86,8 +87,10 @@ final class DraftToolsTests: XCTestCase {
         XCTAssertTrue(task.files === files, "the Files panel's state, unsaved edits included")
         XCTAssertTrue(task.browserTabs === browser, "the browser tabs' pages, the WebKit pages among them")
         XCTAssertTrue(task.terminal(in: URL(filePath: "/elsewhere"), launch: .userLoginShell(), taskID: taskID) === shell,
-                      "the same shell goes on")
+                      "the same shell goes on, shown")
+        XCTAssertTrue(task.terminals.elementsEqual([first, shell], by: ===), "every tab goes on")
         XCTAssertEqual(shell.taskID, taskID, "it counts toward the task now")
+        XCTAssertEqual(first.taskID, taskID)
         XCTAssertEqual(task.snapshot.browser?.pages, [BrowserTabPage(key: browserKey, address: "https://example.test", title: "")])
 
         // The new-task screen starts over empty, as the Codex app's does with a new draft.
@@ -97,7 +100,56 @@ final class DraftToolsTests: XCTestCase {
         XCTAssertFalse(draft.browserTabs === browser)
         XCTAssertNil(draft.browserTabs.tab(browserKey))
         XCTAssertFalse(draft.terminal(in: folder, launch: .userLoginShell(), taskID: nil) === shell)
+        XCTAssertEqual(draft.terminals.count, 1)
         XCTAssertFalse(shell.hasEnded)
+        XCTAssertFalse(first.hasEnded)
+        first.end()
+        XCTAssertTrue(task.terminals.elementsEqual([shell], by: ===), "a tab that ends leaves the task's tabs")
+    }
+
+    /// Each task keeps several terminal tabs, as the Claude app's sessions and the Codex app's threads
+    /// do: + opens one in the task's folder and shows it, each takes the lowest number no tab has for
+    /// its title, and closing one shows the tab after it, else the one before. A tab whose shell ended
+    /// leaves; with none left the panel hides, and the next opens a new tab.
+    func testATaskKeepsSeveralTerminalTabs() {
+        let workspace = TaskWorkspaceState()
+        let folder = URL(filePath: "/tmp/yardlet")
+        let first = workspace.terminal(in: folder, launch: .userLoginShell(), taskID: nil)
+        let second = workspace.openTerminalTab(in: folder, launch: .userLoginShell(), taskID: nil)
+        let third = workspace.openTerminalTab(in: folder, launch: .userLoginShell(), taskID: nil)
+        XCTAssertTrue(workspace.terminals.elementsEqual([first, second, third], by: ===))
+        XCTAssertTrue(workspace.terminal(in: folder, launch: .userLoginShell(), taskID: nil) === third, "+ shows its tab")
+        XCTAssertEqual(workspace.terminals.map(\.number), [1, 2, 3])
+        XCTAssertEqual(workspace.terminals.map(TerminalTabTitle.defaultTitle), ["yardlet", "yardlet 2", "yardlet 3"])
+
+        workspace.showTerminalTab(second)
+        let revision = workspace.terminalRevision
+        XCTAssertTrue(workspace.closeTerminalTabs([second]))
+        XCTAssertTrue(second.hasEnded, "closing a tab ends its shell")
+        XCTAssertGreaterThan(workspace.terminalRevision, revision)
+        XCTAssertTrue(workspace.terminal(in: folder, launch: .userLoginShell(), taskID: nil) === third, "the tab after it")
+        let reopened = workspace.openTerminalTab(in: folder, launch: .userLoginShell(), taskID: nil)
+        XCTAssertEqual(reopened.number, 2, "the lowest number no tab has")
+        XCTAssertEqual(first.number, 1)
+        XCTAssertEqual(third.number, 3, "the others keep theirs")
+
+        reopened.name = "server"
+        XCTAssertEqual(TerminalTabTitle.titles(for: workspace.terminals)[ObjectIdentifier(reopened)], "server")
+        workspace.restartTerminal(in: URL(filePath: "/tmp/elsewhere"), launch: .userLoginShell(), taskID: nil)
+        let restarted = workspace.terminal(in: folder, launch: .userLoginShell(), taskID: nil)
+        XCTAssertTrue(reopened.hasEnded, "Restart in … ends the shell")
+        XCTAssertTrue(workspace.terminals.elementsEqual([first, third, restarted], by: ===), "and keeps its place")
+        XCTAssertEqual(restarted.name, "server")
+        XCTAssertEqual(restarted.number, 2)
+        XCTAssertEqual(restarted.workspaceURL.path(percentEncoded: false), "/tmp/elsewhere")
+
+        third.end()
+        XCTAssertTrue(workspace.terminals.elementsEqual([first, restarted], by: ===), "a shell that ended leaves")
+        XCTAssertFalse(workspace.closeTerminalTabs([first, restarted]), "none left: the panel hides")
+        XCTAssertTrue(workspace.terminals.isEmpty)
+        let next = workspace.terminal(in: folder, launch: .userLoginShell(), taskID: nil)
+        XCTAssertEqual(next.number, 1)
+        XCTAssertTrue(workspace.terminals.elementsEqual([next], by: ===))
     }
 
     /// A running shell goes on while no panel shows it, as a thread's terminal does in the Codex app,
@@ -164,7 +216,7 @@ final class DraftToolsTests: XCTestCase {
         let next = workspace.terminal(in: folder, launch: .userLoginShell(), taskID: nil)
         let revision = workspace.terminalRevision
         workspace.terminalStartRequested = false
-        workspace.restartTerminal()
+        workspace.restartTerminal(in: folder, launch: .userLoginShell(), taskID: nil)
         XCTAssertTrue(next.hasEnded)
         XCTAssertTrue(workspace.terminalStartRequested)
         XCTAssertGreaterThan(workspace.terminalRevision, revision)
