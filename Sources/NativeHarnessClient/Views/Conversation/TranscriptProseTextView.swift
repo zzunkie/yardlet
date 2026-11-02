@@ -27,6 +27,7 @@ struct TranscriptProseText: NSViewRepresentable {
         view.fullSource = fullSource
         view.dialect = dialect
         view.openURL = environment.openURL
+        view.linkPlaces = environment.conversationLinkPlaces
         view.opensLocalFiles = environment.transcriptOpensLocalFiles
         view.pauseFollowing = environment.pauseTranscriptFollowing
         view.textView.copyDetails = copyDetails
@@ -64,6 +65,8 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     var fullSource = ""
     var dialect: TranscriptMarkdownDialect = .standard
     var openURL: OpenURLAction?
+    /// Where the links' menus open them besides where a click does (`ConversationLinkMenu`).
+    var linkPlaces = ConversationLinkPlaces()
     /// The text's file links are on this Mac (`transcriptOpensLocalFiles`).
     var opensLocalFiles = true
     var pauseFollowing: () -> Void = {}
@@ -407,14 +410,15 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
         return TranscriptCopyPayload.code(in: fullSource, blockPath: block.path, dialect: dialect)
     }
 
-    /// The link drawn at `point` (in this view).
-    func link(at point: CGPoint) -> URL? {
+    /// The link drawn at `point` (in this view), and the words it is written with.
+    func link(at point: CGPoint) -> (url: URL, text: String)? {
         guard let storage = textView.textStorage, storage.length > 0 else { return nil }
-        var found: URL?
+        var found: (url: URL, text: String)?
         storage.enumerateAttribute(.link, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
             guard let value, let rect = rect(of: range), rect.insetBy(dx: -2, dy: -2).contains(point),
-                  rects(of: range).contains(where: { $0.insetBy(dx: -2, dy: -2).contains(point) }) else { return }
-            found = (value as? URL) ?? (value as? String).flatMap(URL.init(string:))
+                  rects(of: range).contains(where: { $0.insetBy(dx: -2, dy: -2).contains(point) }),
+                  let url = (value as? URL) ?? (value as? String).flatMap(URL.init(string:)) else { return }
+            found = (url, storage.attributedSubstring(from: range).string)
             stop.pointee = true
         }
         return found
@@ -659,17 +663,35 @@ final class TranscriptProseTextView: NSTextView {
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
-        let menu = super.menu(for: event)
-        if let menu, let container = superview as? TranscriptProseContainerView {
-            let point = container.convert(event.locationInWindow, from: nil)
-            let items = TranscriptProseMenu.items(code: container.code(at: point), link: container.link(at: point),
+        let container = superview as? TranscriptProseContainerView
+        let point = container?.convert(event.locationInWindow, from: nil) ?? .zero
+        let link = container?.link(at: point)
+        let selection = selectedRanges
+        var menu = super.menu(for: event)
+        // A right click on a link leaves the selection as it was, as a browser's does, where the text
+        // system would select the link's word.
+        if link != nil { selectedRanges = selection }
+        if let textMenu = menu, let container {
+            let items = TranscriptProseMenu.items(code: container.code(at: point), link: link,
                                                   message: container.messageText, container: container)
-            // The text's own link items give way to the conversation's, which also open in the task.
-            if container.link(at: point) != nil {
-                for item in menu.items where TranscriptProseMenu.isTextLinkItem(item) { menu.removeItem(item) }
+            if link != nil {
+                // Over a link the menu is the link's, as a browser's and the Codex app's are: its places and
+                // copies, the selection's Copy while there is one, and the message's, without the text
+                // system's writing, font and speech items.
+                let linkMenu = NSMenu()
+                for item in items { linkMenu.addItem(item) }
+                if selectedRange().length > 0 || ConversationSelection.spans(self),
+                   let copy = textMenu.items.first(where: { $0.action == #selector(copy(_:)) }) {
+                    textMenu.removeItem(copy)
+                    // At the head of the copies, after the last separator.
+                    let copies = (linkMenu.items.lastIndex(where: \.isSeparatorItem) ?? -1) + 1
+                    linkMenu.insertItem(copy, at: copies)
+                }
+                menu = linkMenu
+            } else {
+                for (index, item) in items.enumerated() { textMenu.insertItem(item, at: index) }
+                if !items.isEmpty, textMenu.items.count > items.count { textMenu.insertItem(.separator(), at: items.count) }
             }
-            for (index, item) in items.enumerated() { menu.insertItem(item, at: index) }
-            if !items.isEmpty, menu.items.count > items.count { menu.insertItem(.separator(), at: items.count) }
         }
         if let copyDetails, let menu {
             menu.addItem(.separator())
@@ -896,45 +918,36 @@ private struct TranscriptFullCodeButton: View {
 }
 
 /// The conversation's items at the top of a message's menu, as the Claude and Codex apps put them
-/// there: "Copy code" over a code block; over a web link, which a click opens in the task's browser
-/// (decision of 2026-10-22: the Yardlet browser is the default), open it in the default browser and
-/// copy it; over a file link, open it in the task's files, show it in Finder and copy its path (only
-/// the path for a file on another computer, `transcriptOpensLocalFiles`); and
-/// "Copy message" for the whole message.
+/// there: "Copy code" over a code block; over a link, its own items (`ConversationLinkMenu`): a task
+/// opened here or beside, a web page in the task's browser or the default browser, a file in the task's
+/// files, its own app or Finder, and the link's copy; and "Copy message" for the whole message, with the
+/// link's copy.
 @MainActor
 enum TranscriptProseMenu {
-    static func items(code: String?, link: URL?, message: String, container: TranscriptProseContainerView) -> [NSMenuItem] {
+    static func items(code: String?, link: (url: URL, text: String)?, message: String,
+                      container: TranscriptProseContainerView) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
         if let code {
             items.append(item(L10n.string("Copy code")) { TranscriptClipboard.copy(code) })
         }
         if let link {
-            if link.isFileURL {
-                // A file on another computer is named, not opened or shown here.
-                if container.opensLocalFiles {
-                    items.append(item(L10n.string("Open file")) { [weak container] in container?.open(link) })
-                    items.append(item(L10n.string("Reveal in Finder")) {
-                        NSWorkspace.shared.activateFileViewerSelecting([link])
+            let places = container.linkPlaces
+            for (index, group) in ConversationLinkMenu.items(for: link.url, opensLocalFiles: container.opensLocalFiles,
+                                                             places: places).enumerated() {
+                if index > 0 { items.append(.separator()) }
+                for linkItem in group {
+                    items.append(item(ConversationLinkMenu.title(linkItem, for: link.url)) { [weak container] in
+                        ConversationLinkMenu.perform(linkItem, url: link.url, text: link.text, places: places) { url in
+                            container?.open(url)
+                        }
                     })
                 }
-                items.append(item(L10n.string("Copy path")) { TranscriptClipboard.copy(link.path(percentEncoded: false)) })
-            } else {
-                if ConversationLinkRoute(link) == .taskBrowser {
-                    items.append(item(L10n.string("Open in default browser")) { OutsideBrowser.open(link) })
-                }
-                items.append(item(L10n.string("Copy link")) { TranscriptClipboard.copy(link.absoluteString) })
             }
         }
         if !message.isEmpty {
             items.append(item(L10n.string("Copy message")) { TranscriptClipboard.copy(message) })
         }
         return items
-    }
-
-    /// The text system's own "Open Link" and "Copy Link", which the conversation's items replace.
-    static func isTextLinkItem(_ item: NSMenuItem) -> Bool {
-        guard let action = item.action else { return false }
-        return ["openLink:", "copyLink:", "_openLinkFromMenu:", "_copyLinkFromMenu:"].contains(NSStringFromSelector(action))
     }
 
     private static func item(_ title: String, action: @escaping @MainActor () -> Void) -> NSMenuItem {

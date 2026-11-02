@@ -337,6 +337,9 @@ private struct TaskSuggestionStartedRow: View {
         .parityPointer()
         .accessibilityLabel(L10n.format("%@: %@", title, L10n.string("Started")))
         .help(target == nil ? "" : L10n.format("Open session %@", title))
+        .conversationLinkMenu(target.map(TaskLink.url), text: title) {
+            if let target { actions?.openTask?(target) }
+        }
     }
 }
 

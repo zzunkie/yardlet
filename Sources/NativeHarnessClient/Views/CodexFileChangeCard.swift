@@ -113,6 +113,7 @@ struct CodexFileChangeLink: View {
         .accessibilityValue(
             target == nil ? L10n.string("Path is outside the task workspace") : L10n.string("Open file")
         )
+        .conversationLinkMenu(target, open: open)
     }
 
     /// The move destination when there is one; the handoff verifies only relative provider paths.
