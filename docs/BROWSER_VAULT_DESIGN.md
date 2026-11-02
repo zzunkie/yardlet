@@ -404,7 +404,7 @@ tab, in any frame and including a redirect, whose address carries the password, 
 twice, with or without `+` for a space. A form's body is not looked at there: CEF does not give `OnBeforeBrowse` a
 navigation's body. Where a form sends a password is checked before the fill instead (section 5.2, step 4).
 
-The host says only that it refused (`filledValueBlocked`), never the address. The panel shows a notice over the page, and
+The host says only that it refused (`filledValueBlocked`), never the address. The panel shows a notice above the page, and
 the agent's next result on that tab says what happened and what to do. One-time codes are scrubbed from results but do
 not hold navigations: they expire in seconds, and a site that sends one in its address would otherwise not sign in.
 
@@ -729,7 +729,7 @@ apps, and backup and restore work only between devices of the same kind
 ### 14.3 Decisions
 
 - **At sign-in:** when the panel's watcher script (in Yardlet's isolated world) sees a verification code field, it
-  reports it, and if that site's item has a code, a code bar appears over the page (the same shape as the save bar).
+  reports it, and if that site's item has a code, a code bar appears above the page (the same shape as the save bar).
   Clicking it fills the current code into the field. With several items, the person picks one from a menu. The key
   button fills the code when focus is in a code field, or when the page has only a code field and no sign-in fields; a
   sign-in with no code of its own gives the code of the page's one other item of its account, as an agent's fill does
@@ -965,7 +965,7 @@ space), `ascii-printable`, `unicode` and custom ones in brackets, where `-` come
 
 ### 15.2 Decisions
 
-- **When the bar shows:** when an empty new password field takes the focus, the panel shows a bar over the page, "Use a
+- **When the bar shows:** when an empty new password field takes the focus, the panel shows a bar above the page, "Use a
   strong password for github.com? The password manager saves it. [Not Now] [Use Strong Password]" (the same shape as the
   save and code bars; section 8.3 says why there is no list under the field). A new password field is one marked
   `autocomplete="new-password"`; else, past a current password (marked `current-password` or named so in its name, id,

@@ -52,14 +52,14 @@ final class BrowserHostPaneController {
     /// The screen size the shown tab's page is emulated at, and who chose it (`BrowserTab.emulation`), for the
     /// Viewport menu.
     private(set) var emulation: BrowserViewportEmulation?
-    /// The agent handed the shown tab to the person and waits for their answer (`BrowserTab.handoff`): a bar over the
-    /// page with its reason, Done and Decline.
+    /// The agent handed the shown tab to the person and waits for their answer (`BrowserTab.handoff`): a bar above
+    /// the page with its reason, Done and Decline.
     private(set) var handoff: BrowserHandoff?
     /// What the shown tab's page asks permission for (`BrowserTab.permissionPrompt`): Chrome's permission
-    /// bubble, as a bar over the page.
+    /// bubble, as a bar above the page.
     private(set) var permissionPrompt: BrowserPermissionPrompt?
     /// Another app's address the page asked to open (`BrowserTab.externalAppQuestion`): Chrome's "Open ‹app›?",
-    /// as a bar over the page, with its "Always allow" box.
+    /// as a bar above the page, with its "Always allow" box.
     private(set) var externalAppQuestion: BrowserExternalAppQuestion?
     var alwaysAllowExternalApp = false
     /// The shown tab's JavaScript dialog (`BrowserTab.javaScriptDialog`), drawn over the page as Chrome draws a tab's
@@ -1014,7 +1014,7 @@ final class BrowserHostPaneController {
         showVaultNotice(text)
     }
 
-    /// The notice over the page, for a while (the vault's words use it too).
+    /// The notice above the page, for a while (the vault's words use it too).
     func showVaultNotice(_ text: String, for duration: Duration = .seconds(6)) {
         notice = text
         noticeTask?.cancel()
@@ -1023,6 +1023,12 @@ final class BrowserHostPaneController {
             guard !Task.isCancelled else { return }
             self?.notice = nil
         }
+    }
+
+    /// The notice's ✕: it takes the page's room until it goes.
+    func closeNotice() {
+        noticeTask?.cancel()
+        notice = nil
     }
 
     private func agentUsedBrowser() {
@@ -1250,62 +1256,59 @@ struct BrowserHostPane: View {
             }
             toolbar
             if controller.isFindVisible { findBar }
-            // The page keeps its size while it loads, a notice comes and goes or it stops responding:
-            // each resize lays the page out again, and its next frame comes late on a busy Mac, so these
-            // lie over the page instead of pushing it. Loading shows on the tab and the Stop button, as
-            // in Chrome and the Codex app.
-            ZStack(alignment: .top) {
-                BrowserHostViewRepresentable(controller: controller)
-                if controller.showsStartPage {
-                    startPage
-                } else if !controller.hasTab, controller.errorMessage == nil {
-                    emptyState
-                }
-                if controller.isUnresponsive {
-                    // Its bar over the page says so; the page stays.
-                } else if let crash = controller.crash {
-                    errorState(title: L10n.string("This page crashed"),
-                               message: L10n.format("%@ ended unexpectedly. Error code: %@",
-                                                    BrowserHostPaneController.shortAddress(controller.tab?.currentURL ?? ""),
-                                                    crash.errorCode),
-                               action: L10n.string("Reload"))
-                } else if let errorMessage = controller.errorMessage {
-                    errorState(title: L10n.string("Page unavailable"), message: errorMessage, action: L10n.string("Try again"))
-                }
-                VStack(spacing: 0) {
-                    if let handoff = controller.handoff { handoffBar(handoff) }
-                    if controller.isUnresponsive { unresponsiveBar }
-                    if let prompt = controller.permissionPrompt { permissionBar(prompt) }
-                    if let question = controller.externalAppQuestion { externalAppBar(question) }
-                    if let chooser = controller.fileDialog, controller.fileDialogByAgent { fileChooserBar(chooser) }
-                    if let offer = controller.vaultOffer { vaultOfferBar(offer) }
-                    if let offer = controller.vaultSetupOffer { vaultSetupBar(offer) }
-                    if let offer = controller.vaultCodeOffer { vaultCodeBar(offer) }
-                    if let offer = controller.vaultPasswordOffer { vaultPasswordBar(offer) }
-                    if let offer = controller.vaultLinkOffer { vaultLinkBar(offer) }
-                    if let offer = controller.walletSaveOffer {
-                        BrowserWalletSaveBar(offer: offer, accept: controller.acceptWalletOffer) { controller.walletSaveOffer = nil }
-                    }
-                    if let offer = controller.walletFillOffer {
-                        BrowserWalletFillBar(offer: offer, wallet: vault.wallet, fillAddress: controller.fillWallet(address:),
-                                             fillCard: controller.fillWallet(card:), dismiss: controller.dismissWalletFillOffer)
-                    }
-                    if let notice = controller.notice {
-                        Label(notice, systemImage: "hand.raised")
-                            .font(.callout).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(10).frame(maxWidth: .infinity, alignment: .leading)
-                            .background(ParityTheme.subtleFill)
-                            .background(.background)
-                            .overlay(alignment: .bottom) { Rectangle().fill(ParityTheme.separator).frame(height: 1) }
+            // The bars sit above the page and take their room from it, as Chrome's infobars do, so none hides the top of
+            // the page, such as a sign-in button or a dialog's fields (`BrowserPanelBarsLayout`). Loading changes no
+            // size, since each resize lays the page out again: it shows on the tab and the Stop button, as in Chrome and
+            // the Codex app.
+            BrowserPanelBarsLayout {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        if let handoff = controller.handoff { handoffBar(handoff) }
+                        if controller.isUnresponsive { unresponsiveBar }
+                        if let prompt = controller.permissionPrompt { permissionBar(prompt) }
+                        if let question = controller.externalAppQuestion { externalAppBar(question) }
+                        if let chooser = controller.fileDialog, controller.fileDialogByAgent { fileChooserBar(chooser) }
+                        if let offer = controller.vaultOffer { vaultOfferBar(offer) }
+                        if let offer = controller.vaultSetupOffer { vaultSetupBar(offer) }
+                        if let offer = controller.vaultCodeOffer { vaultCodeBar(offer) }
+                        if let offer = controller.vaultPasswordOffer { vaultPasswordBar(offer) }
+                        if let offer = controller.vaultLinkOffer { vaultLinkBar(offer) }
+                        if let offer = controller.walletSaveOffer {
+                            BrowserWalletSaveBar(offer: offer, accept: controller.acceptWalletOffer) { controller.walletSaveOffer = nil }
+                        }
+                        if let offer = controller.walletFillOffer {
+                            BrowserWalletFillBar(offer: offer, wallet: vault.wallet, fillAddress: controller.fillWallet(address:),
+                                                 fillCard: controller.fillWallet(card:), dismiss: controller.dismissWalletFillOffer)
+                        }
+                        if let notice = controller.notice { noticeBar(notice) }
                     }
                 }
-                if let dialog = controller.javaScriptDialog {
-                    BrowserJavaScriptDialogView(dialog: dialog, controller: controller)
-                        .id(dialog.id)
+                .scrollBounceBehavior(.basedOnSize)
+                ZStack(alignment: .top) {
+                    BrowserHostViewRepresentable(controller: controller)
+                    if controller.showsStartPage {
+                        startPage
+                    } else if !controller.hasTab, controller.errorMessage == nil {
+                        emptyState
+                    }
+                    if controller.isUnresponsive {
+                        // Its bar above the page says so; the page stays.
+                    } else if let crash = controller.crash {
+                        errorState(title: L10n.string("This page crashed"),
+                                   message: L10n.format("%@ ended unexpectedly. Error code: %@",
+                                                        BrowserHostPaneController.shortAddress(controller.tab?.currentURL ?? ""),
+                                                        crash.errorCode),
+                                   action: L10n.string("Reload"))
+                    } else if let errorMessage = controller.errorMessage {
+                        errorState(title: L10n.string("Page unavailable"), message: errorMessage, action: L10n.string("Try again"))
+                    }
+                    if let dialog = controller.javaScriptDialog {
+                        BrowserJavaScriptDialogView(dialog: dialog, controller: controller)
+                            .id(dialog.id)
+                    }
                 }
+                .background(Color(nsColor: .textBackgroundColor))
             }
-            .background(Color(nsColor: .textBackgroundColor))
             if !controller.downloads.isEmpty { downloadList }
         }
         .taskFocus(.browser, isFocused: $isAddressFocused)
@@ -1454,6 +1457,23 @@ struct BrowserHostPane: View {
         .accessibilityElement(children: .contain)
     }
 
+    /// The panel's notice, for a while or until the person closes it (`showVaultNotice`).
+    private func noticeBar(_ notice: String) -> some View {
+        HStack(spacing: 8) {
+            Label(notice, systemImage: "hand.raised")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 4)
+            ParityIconButton(systemName: "xmark", help: L10n.string("Close")) { controller.closeNotice() }
+        }
+        .padding(.leading, 10).padding(.trailing, 4).padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ParityTheme.subtleFill)
+        .background(.background)
+        .overlay(alignment: .bottom) { Rectangle().fill(ParityTheme.separator).frame(height: 1) }
+        .accessibilityElement(children: .contain)
+    }
+
     private var toolbar: some View {
         HStack(spacing: 6) {
             HStack(spacing: 2) {
@@ -1544,7 +1564,7 @@ struct BrowserHostPane: View {
         .accessibilityAddTraits(controller.isPickingElement ? .isSelected : [])
     }
 
-    /// Chrome's permission bubble, as a bar over the page: Block, Allow, or close it unanswered.
+    /// Chrome's permission bubble, as a bar above the page: Block, Allow, or close it unanswered.
     private func permissionBar(_ prompt: BrowserPermissionPrompt) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "hand.raised").foregroundStyle(.secondary)
@@ -1567,7 +1587,7 @@ struct BrowserHostPane: View {
         .accessibilityElement(children: .contain)
     }
 
-    /// Chrome's "Open ‹app›?" for another app's address, as a bar over the page like the permission bubble's:
+    /// Chrome's "Open ‹app›?" for another app's address, as a bar above the page like the permission bubble's:
     /// who asks, Chrome's "Always allow" box where Chrome offers it, Cancel and Open ‹app›.
     private func externalAppBar(_ question: BrowserExternalAppQuestion) -> some View {
         let text = BrowserHostPaneController.externalAppText(question)
@@ -1647,7 +1667,7 @@ struct BrowserHostPane: View {
         .accessibilityLabel(L10n.string("Pop-ups were blocked on this page."))
     }
 
-    /// Chrome's save bubble, as a bar over the page: the person just signed in with a password the vault
+    /// Chrome's save bubble, as a bar above the page: the person just signed in with a password the vault
     /// does not have.
     private func vaultOfferBar(_ offer: BrowserVaultSaveOffer) -> some View {
         BrowserVaultSaveBar(offer: offer, neverSave: controller.neverSaveHere, accept: controller.acceptVaultOffer) {
@@ -1655,7 +1675,7 @@ struct BrowserHostPane: View {
         }
     }
 
-    /// The suggestion at a code field that password managers show, as a bar over the page: the site's
+    /// The suggestion at a code field that password managers show, as a bar above the page: the site's
     /// item has a two-factor code and the page asks for one. A code with no site yet, offered by its name,
     /// says the site it keeps.
     private func vaultCodeBar(_ offer: BrowserVaultCodeOffer) -> some View {
@@ -1715,7 +1735,7 @@ struct BrowserHostPane: View {
         }
     }
 
-    /// The strong password suggestion at a new-password field that Chrome and Safari show, as a bar over the
+    /// The strong password suggestion at a new-password field that Chrome and Safari show, as a bar above the
     /// page. The password is made when the person takes it, so the bar never holds one.
     private func vaultPasswordBar(_ offer: BrowserVaultPasswordOffer) -> some View {
         vaultBar(systemName: "key") {
@@ -1930,7 +1950,25 @@ struct BrowserHostViewRepresentable: NSViewRepresentable {
     }
 }
 
-/// The save bar over the page (design §8.3, §15, §17), as Chrome's save and update bubbles: save the sign-in, update a
+/// The panel's bars and the page under them: the bars take the height they need, up to half the room, and scroll past
+/// it; the page takes the rest. So no bar lies over the page, and many bars in a short window still leave it half.
+struct BrowserPanelBarsLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 2 else { return }
+        let needed = subviews[0].sizeThatFits(ProposedViewSize(width: bounds.width, height: nil)).height
+        // Whole points, so that the page is drawn on the pixel grid.
+        let bars = min(needed.rounded(.up), (bounds.height / 2).rounded(.down))
+        subviews[0].place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: bars))
+        subviews[1].place(at: CGPoint(x: bounds.minX, y: bounds.minY + bars),
+                          proposal: ProposedViewSize(width: bounds.width, height: bounds.height - bars))
+    }
+}
+
+/// The save bar above the page (design §8.3, §15, §17), as Chrome's save and update bubbles: save the sign-in, update a
 /// saved one (naming its account), or add the username or other fields to one; "Not for This Site", or close it for now.
 /// A password sent with no username updates the item the bar names, and the arrow updates another of the site's items
 /// or saves a new one, as Chrome's update bubble offers the site's saved usernames.
