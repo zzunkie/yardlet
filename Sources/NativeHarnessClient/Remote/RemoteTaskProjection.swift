@@ -4,7 +4,8 @@ import YardletRemote
 /// The projects and tasks the phone lists (docs/REMOTE_PROTOCOL.md §4.1): the sidebar's own — its
 /// project groups and Chats, not archived tasks — each with the sidebar's attention state and row
 /// mark, the same definitions the sidebar dots, the menu bar menu and the Dock badge read
-/// (`TaskAttentionProjection`, `SidebarTaskIndicatorProjection`). No folder paths, accounts or
+/// (`TaskAttentionProjection`, `SidebarTaskIndicatorProjection`), and under the task the sidebar
+/// draws it under (`SidebarProjection.Layout.nestingParents`). No folder paths, accounts or
 /// settings are sent.
 enum RemoteTaskProjection {
     static let chatsProjectID = "chats"
@@ -13,6 +14,7 @@ enum RemoteTaskProjection {
         groups: [WorkspaceGroup],
         chats: [SessionRecord],
         pinnedIDs: Set<UUID>,
+        nestingParents: [UUID: UUID],
         details: [UUID: TaskAttentionDetail],
         shellBusy: Set<UUID>,
         newestRequestID: (SessionRecord) -> String? = { _ in nil },
@@ -30,7 +32,6 @@ enum RemoteTaskProjection {
             projects.append(RemoteProject(id: chatsProjectID, name: L10n.string("Chats"), kind: .chats, canCreateTask: true))
             listed += chats.map { ($0, chatsProjectID) }
         }
-        let listedIDs = Set(listed.map(\.0.id))
         var seen = Set<UUID>()
         var tasks: [RemoteTask] = []
         var requests: [String: String] = [:]
@@ -40,7 +41,7 @@ enum RemoteTaskProjection {
         }) where seen.insert(session.id).inserted {
             var task = self.task(session, projectID: projectID, detail: details[session.id],
                                  isShellBusy: shellBusy.contains(session.id), isPinned: pinnedIDs.contains(session.id),
-                                 listedIDs: listedIDs)
+                                 nestedUnder: nestingParents[session.id])
             if task.attention == .waiting, let request = newestRequestID(session) {
                 requests[task.id] = request
                 let waiting = requestSummary(session)
@@ -59,7 +60,7 @@ enum RemoteTaskProjection {
         detail: TaskAttentionDetail?,
         isShellBusy: Bool,
         isPinned: Bool,
-        listedIDs: Set<UUID>
+        nestedUnder: UUID?
     ) -> RemoteTask {
         let attention: RemoteAttention = switch TaskAttentionProjection.state(of: session, detail: detail, isShellBusy: isShellBusy) {
         case .waiting: .waiting
@@ -96,8 +97,7 @@ enum RemoteTaskProjection {
             running: session.status == .running || session.status == .waitingForApproval || isShellBusy,
             pinned: isPinned,
             lastActivityAt: RemoteJSON.milliseconds(session.updatedAt),
-            // The sidebar nests a task under its parent only while the parent is listed too.
-            parentTaskId: session.parentTaskID.flatMap { listedIDs.contains($0) ? $0.uuidString : nil }
+            parentTaskId: nestedUnder?.uuidString
         )
     }
 

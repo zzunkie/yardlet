@@ -565,8 +565,9 @@ Sidebar nesting records the task a task was started from in that task's index ro
   be prevented (that build does not know the mark). A move is not activity, and archive and unarchive leave the link and
   the mark as they are. Sessions detached in the Claude app (`lineageDetached`) are imported without a link, but tasks
   that already have a link in Yardlet stay as they are (links are not overwritten).
-- **Where the sidebar lists a task and who started it:** the link is where the sidebar, the phone app (`parentTaskId`),
-  `list_tasks`, `read_task`'s `childTaskIds` and the Agents card list the task. What follows from who started it reads
+- **Where the sidebar lists a task and who started it:** the link is where the sidebar, `list_tasks`, `read_task`'s
+  `childTaskIds` and the Agents card list the task; the phone app gets the task the sidebar draws it under
+  (`parentTaskId`, docs/REMOTE_PROTOCOL.md §4.1). What follows from who started it reads
   `SessionRecord.startedFromTaskID`, the link unless the mark is 1: the sentence naming a message's sender as "the
   Yardlet task that started this one", the child tasks that go with an agent's own `archive_task` (a task the person
   placed stays, as a session detached in the Claude app does not go with its parent), the browser profile a new task's

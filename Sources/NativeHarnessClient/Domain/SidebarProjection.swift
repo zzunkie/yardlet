@@ -190,6 +190,31 @@ enum SidebarProjection {
         /// A plain list in place of the sections, as the activity view lists its rows; only
         /// keyboard navigation reads it.
         static func list(_ rows: [SidebarRow]) -> Layout { Layout(pinned: rows) }
+
+        /// The tasks under Pinned: pinned tasks and the tasks of pinned split views.
+        var pinnedSessionIDs: Set<UUID> {
+            Set(pinned.flatMap(\.rowsWithChildren).flatMap(\.sessions).map(\.id))
+        }
+
+        /// The task each nested task is drawn under, in every list, rows past "Show more" included:
+        /// the nearest task shown a level out above it (`SidebarFamilyPlace.depth`), which for a task
+        /// started further down than `deepestNesting` is the task its own parent sits under. A task
+        /// at top level has none; the phone nests by this alone (docs/REMOTE_PROTOCOL.md §4.1).
+        var nestingParents: [UUID: UUID] {
+            var parents: [UUID: UUID] = [:]
+            for row in pinned + (chats?.allRows ?? []) + sections.flatMap(\.allRows) {
+                guard case let .session(top) = row.content else { continue }
+                // The latest task shown at each level so far, the family's top at level 0.
+                var latest = [top.id]
+                for child in row.children {
+                    guard case let .session(task) = child.content, let depth = child.familyPlace?.depth,
+                          depth >= 1, depth <= latest.count else { continue }
+                    parents[task.id] = latest[depth - 1]
+                    latest = Array(latest.prefix(depth)) + [task.id]
+                }
+            }
+            return parents
+        }
     }
 
     /// - Parameters:
