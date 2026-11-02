@@ -167,8 +167,11 @@ final class BrowserAgentTools {
     /// could leave part of one.
     func scrub(_ text: String) -> String {
         let text = vaultScrub.scrub(text)
-        return vault?.hidesCredentials ?? true ? CredentialText.scrub(text) : text
+        return hidesCredentials ? CredentialText.scrub(text) : text
     }
+
+    /// Whether keys and tokens stay out of results and pictures: unless the person turned that off in Settings.
+    var hidesCredentials: Bool { vault?.hidesCredentials ?? true }
 
     /// A tab tool or a page tool, on the tab its `tabId` names now (`BrowserAgentTabDirectory.resolve`): a tab opened
     /// again in its place under another id is that one, and the result begins by saying so.
@@ -1135,14 +1138,16 @@ final class BrowserAgentTools {
             "x": .number(clip.x), "y": .number(clip.y), "width": .number(clip.width),
             "height": .number(clip.height), "scale": .number(scale)
         ])
-        // A picture of a filled page can show a value however the page draws it again (a field of its own, a canvas,
-        // a code in boxes), which no cover of the filled fields reaches; asked again in case it was filled meanwhile.
-        if let refusal = vaultObservationRefusal(page, AgentToolCatalog.screenshot, linked: false) {
-            throw BrowserAgentToolError(refusal, Self.vaultBoundary)
+        let shot = try await CredentialText.covering(page.cdp, when: hidesCredentials, wait: loadTimeout * 2) {
+            // A picture of a filled page can show a value however the page draws it again (a field of its own, a canvas,
+            // a code in boxes), which no cover of the filled fields reaches; asked again in case it was filled meanwhile.
+            if let refusal = vaultObservationRefusal(page, AgentToolCatalog.screenshot, linked: false) {
+                throw BrowserAgentToolError(refusal, Self.vaultBoundary)
+            }
+            let capture = { try await self.send(page, "Page.captureScreenshot", params, timeout: self.loadTimeout) }
+            return fullPage ? try await drawn(atLeast: (clip.width, clip.height), pixelRatio: pixelRatio, on: page, capture)
+                : try await capture()
         }
-        let capture = { try await self.send(page, "Page.captureScreenshot", params, timeout: self.loadTimeout) }
-        let shot = fullPage ? try await drawn(atLeast: (clip.width, clip.height), pixelRatio: pixelRatio, on: page, capture)
-            : try await capture()
         // Capturing beyond the viewport lays the page out for the moment as Chromium likes, which drops an emulated
         // phone's touch points; the emulation goes back as it was.
         if fullPage, let emulation = page.emulation() { try? await page.emulate(emulation) }

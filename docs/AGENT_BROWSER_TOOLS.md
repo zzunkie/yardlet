@@ -71,7 +71,7 @@ batch's, with its `action` number and `tool`; a batch that holds a picture keeps
 | `browser_scroll` | `deltaX` and `deltaY` (+ `x` and `y`, or `ref`), or `ref` alone | A wheel event, or brings the element into view. Returns the new scroll position |
 | `browser_select_option` | `ref`, `values` | Picks by value or visible label in a `<select>` and sends `input` and `change`. When there is no match, an error with the list of options |
 | `browser_wait_for` | `text`, `textGone`, `time`, `timeout` | Checks every 200 ms (10 seconds by default, at most 60 seconds) whether the text is a part of the visible text (`innerText`) of the page and of its frames from the same origin that have a box, ignoring case and runs of whitespace, as Playwright's text matching reads it; a frame from another origin is not read. When the time runs out, the error names what it waited for and the rule, the page's address, title and whether it has loaded, and the page's text now: the first 1,000 characters for `text`, the 150 characters on each side of where it still is for `textGone` (scrubbed of the vault's values and of keys and tokens before the cut, and left out on a page that holds a password or code). When the text is in a frame from another origin (the first 10 frame sessions are read once), it says so and that `browser_snapshot` reads it. `time` is at most 30 seconds. `browser_handoff`'s `text` matches the same way |
-| `browser_screenshot` | `ref`, `fullPage`, `format` | Image content (png or jpeg). One image pixel per CSS pixel, whatever the display scale. `fullPage` captures the whole page in one shot, but cuts it so that no side is over 16,384 device pixels and captures the top; then the result text gives the page's height ([BROWSER_HOST](BROWSER_HOST.md) section 3, "Full-page screenshots") |
+| `browser_screenshot` | `ref`, `fullPage`, `format` | Image content (png or jpeg). One image pixel per CSS pixel, whatever the display scale. `fullPage` captures the whole page in one shot, but cuts it so that no side is over 16,384 device pixels and captures the top; then the result text gives the page's height ([BROWSER_HOST](BROWSER_HOST.md) section 3, "Full-page screenshots"). Keys and tokens the page shows are left out of the picture unless the person turned that off (below, "Keys and tokens") |
 | `browser_console_messages` | `onlyErrors` | `Runtime.consoleAPICalled`, `exceptionThrown` and `Log.entryAdded`. The latest 200 |
 | `browser_evaluate` | `function`, `ref` | Runs one function and returns the result as JSON. With a reference, the element is the argument. An expression that is not a function returns its value as is. A promise it returns is awaited for up to 15 seconds; past that, when the renderer answers the check after it ("Pages that do not respond" below), the error says the function did not finish while the page answers other calls, so its renderer is not stuck. Cuts at 50,000 characters |
 | `browser_handle_dialog` | `accept`, `promptText` | Answers the open JS dialog (alert, confirm, prompt or leave-page confirmation). When there is no JS dialog and Chromium's passkey dialog or sign-in window is open over a tab of this task, accept false closes only that window (a passkey request gets `NotAllowedError` and can move on to another sign-in method). accept true is an error (only the person can finish a passkey). It does not close the windows of another task's tabs, or windows whose tab is not known (printing) |
@@ -196,9 +196,9 @@ built into the server (`builtInTools`) either.
 | `browser_fill_credential` | `ref` (the sign-in, code or new password field), `item` (optional), `kind` (`login` by default, `one_time_code`, `passkey`, `new_password`), `submit`, `tabId` | Gets the origin of the tab's main frame from `Page.getFrameTree` (`securityOrigin`) and asks the vault (`VaultCenter.authorize`: on, team signature, registered domain match, named or the only match among the items that have what `kind` asks for, step and Touch ID). When allowed, it takes the reference's node in an isolated world of Yardlet's own (`yardlet-vault`) and puts the password in the `type=password` field, the username in a text or email field of the same form, and the code in the code field (split up when the fields hold one character each), with the native `value` setter and `input` and `change` events. It refuses a field in a frame other than the main frame, refuses when the page changed while it asked, and fills a password or a code only into a form that sends its fields to the item's own sites over https (docs/BROWSER_VAULT_DESIGN.md, "Filled values and addresses"). It submits a safe form (to the page's own origin over https, by POST when it holds a password) right after filling unless `submit` is false, by pressing the form's submit button (`requestSubmit` when there is none); a form that would send a password by GET or a secret to another origin it fills and leaves unsent whatever `submit` says, saying why, and a field in no form gets Enter only with `submit: true`. The browser host refuses a navigation that would carry the filled password in its address, and the next result on that tab says so. The result is "Filled the username and password of “name” into the form on host[ and submitted it]. The values are not shown to you." and gives no values or lengths. `passkey` attaches a CDP virtual authenticator to the tab, adds the item's one credential so that it signs the next single request within 60 seconds, and then detaches it (the signature count is updated in the keychain). `new_password` takes a sign-up form's password field: Yardlet makes a strong password within the field's `passwordrules`, `minlength` and `maxlength`, saves it as a new item with the username the form holds, and fills it into the field and its confirmation on the same path as a saved password (the form must send to the site over https, the tab's record and the address guard come first, and only a safe form is submitted); it refuses when an item of that username or name is already saved for the site, since changing a saved password is the person's ([BROWSER_VAULT_DESIGN](BROWSER_VAULT_DESIGN.md) section 15) |
 
 - **Keeping values from leaking:** Once a password or code is filled, `browser_evaluate` is refused on that document
-  until the main frame opens another one, by a navigation or a reload; an emptied field does not end it. While the
-  filled field stays (the field kept in the isolated world is attached and not empty), `browser_screenshot` makes its
-  text transparent, captures, and restores it (the username is not a secret and stays as is). In the text of every
+  until the main frame opens another one, by a navigation or a reload; an emptied field does not end it.
+  `browser_screenshot` is refused on that document as well, since a page can draw a value again where no cover of the
+  filled fields reaches (a field of its own, a canvas, a code in boxes). In the text of every
   browser tool result, a value filled in the last 30 minutes (4 characters or more), as written and in its common
   encodings (JSON escaping, base64, percent-encoding, hex), becomes `[saved value]` (`VaultScrubList`, in one place,
   `run(tool:arguments:sessionID:)`). The fill's `input` event does not carry the value. The
@@ -208,18 +208,27 @@ built into the server (`builtInTools`) either.
   text shaped like a key or token a service issues becomes its kind's prefix and `[hidden credential]`, wherever it
   shows (a read-only field, a page's text, an address, a script's result; `CredentialText`): Slack tokens (`xoxb-`,
   `xoxp-` and the other `xox…-` kinds, `xapp-`) and webhook addresses (`hooks.slack.com/services/…`), GitHub tokens
-  (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), OpenAI and Anthropic keys (`sk-`, `sk-proj-`, `sk-ant-…`, with
-  32 characters or more after the kind), Stripe secret and restricted keys and webhook secrets (`sk_live_`, `rk_live_`,
-  their `_test_` kinds, `whsec_`), AWS access key IDs (`AKIA`, `ASIA`), Google API keys (`AIza`), and PEM, OpenSSH and
-  PGP private key blocks. A tool that cuts a page's text (a snapshot's names and values, `browser_wait_for`,
-  `browser_console_messages`, `browser_evaluate`) takes them out first (`BrowserAgentTools.scrub(_:)`). A secret with no
-  such prefix (a Slack signing secret, an AWS secret access key) is not found, a screenshot shows what the page shows,
-  and a script that changes a value before returning it gets past the shapes: this keeps keys out of a task's history
-  by accident, not from an agent set on reading one. "Hide keys and tokens" in Settings → General (on by default) turns
-  it off, in a team-signed build only and after Touch ID or the login password (`VaultCenter.setHidesCredentials`). No
-  tool changes it, and the choice is kept in a keychain item of Yardlet's own (service `‹bundle id›.vault.settings`,
-  there only while keys are shown) rather than in Yardlet's preferences, which a task's commands can write. The rules
-  for password fields and the vault's values above apply either way.
+  (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), OpenAI and Anthropic keys (`sk-`, `sk-proj-`, `sk-ant-…`,
+  with 32 characters or more after the kind), Stripe secret and restricted keys and webhook secrets (`sk_live_`,
+  `rk_live_`, their `_test_` kinds, `whsec_`), AWS access key IDs (`AKIA`, `ASIA`), Google API keys (`AIza`), and PEM,
+  OpenSSH and PGP private key blocks. A tool that cuts a page's text (a snapshot's names and values, `browser_wait_for`,
+  `browser_console_messages`, `browser_evaluate`) takes them out first (`BrowserAgentTools.scrub(_:)`). A picture leaves
+  them out too: `browser_screenshot` and the picture of an element the person picks are taken with the keys made
+  transparent and the page put back right after (`CredentialText.covering`). In Yardlet's isolated world of each frame
+  the tools reach (a frame from another site on its own session), a script given the same expressions
+  (`CredentialText.pageShapes`) finds the fields whose value holds one and the innermost elements whose text holds one,
+  in the document and its open shadow roots, and sets their `color` and `-webkit-text-fill-color` to transparent, with
+  no text shadow or transition, as `!important` inline styles; then it puts back the styles they had, or takes away the
+  `style` attribute it added. An element's text goes blank as a whole, so a key split over a highlighted code's elements
+  takes that code block with it, and a frame puts itself back after twice the capture's time limit should Yardlet's call
+  not come. A secret with no such prefix (a Slack signing secret, an AWS secret access key) is not found; a key drawn
+  where no style reaches (a canvas, an image, a closed shadow root) stays in a picture, and a script that changes a
+  value before returning it gets past the shapes: this keeps keys out of a task's history by accident, not from an agent
+  set on reading one. "Hide keys and tokens" in Settings → General (on by default) turns it off, in a team-signed build
+  only and after Touch ID or the login password (`VaultCenter.setHidesCredentials`). No tool changes it, and the choice
+  is kept in a keychain item of Yardlet's own (service `‹bundle id›.vault.settings`, there only while keys are shown)
+  rather than in Yardlet's preferences, which a task's commands can write. The rules for password fields and the vault's
+  values above apply either way.
 - **Log and notifications:** Fills and refusals are logged in `~/.yardlet/vault/usage.jsonl` (no values) with the task,
   harness, site, kind and confirmation method. A notification goes out only when the person has something to do (waiting
   for Touch ID, or an item the agent named by its name refused because it is for another site). The panel header shows
