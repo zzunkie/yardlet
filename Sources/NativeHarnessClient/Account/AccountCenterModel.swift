@@ -3,7 +3,7 @@ import Observation
 
 /// The sign-in and sign-out console of an accounts presentation. Account readings belong to the
 /// `ProviderConnectionStore` it was given: the console only runs a harness's own sign-in command
-/// and, for Pi, reports what its read-only probe found to that store.
+/// and, for Pi and Antigravity, reports what its read-only probe found to that store.
 @MainActor
 @Observable
 final class AccountCenterModel {
@@ -60,8 +60,8 @@ final class AccountCenterModel {
         activeConnection = connection
         activeHarness = descriptor.id
         loginController.start(command)
-        if descriptor.id == .pi {
-            verifyPiConnection(descriptor: descriptor, executableURL: executableURL, runtimeSelections: runtimeSelections)
+        if [.pi, .antigravityCLI].contains(descriptor.id) {
+            verifyConnection(descriptor: descriptor, executableURL: executableURL, runtimeSelections: runtimeSelections)
         }
     }
 
@@ -92,35 +92,37 @@ final class AccountCenterModel {
         connectionVerificationID = nil
     }
 
-    /// Pi returns to its editor after OAuth instead of exiting. While this exact
-    /// login is open, use its credential-free, no-refresh probe to detect completion.
-    /// Other providers retain their own exit/interactive contracts.
-    private func verifyPiConnection(
+    /// Pi returns to its editor after OAuth, and Antigravity to its chat, instead of exiting.
+    /// While this exact login is open, use the harness's credential-free, no-refresh probe to
+    /// detect completion. Other providers retain their own exit/interactive contracts.
+    private func verifyConnection(
         descriptor: HarnessDescriptor,
         executableURL: URL,
         runtimeSelections: RuntimeSelectionStore
     ) {
+        let harness = descriptor.id
         let verificationID = UUID()
         connectionVerificationID = verificationID
         connectionVerificationTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
                 guard let self, self.connectionVerificationID == verificationID,
-                      self.activeHarness == .pi, self.loginController.isRunning,
-                      runtimeSelections.selectedURL(for: .pi) == executableURL else { return }
+                      self.activeHarness == harness, self.loginController.isRunning,
+                      runtimeSelections.selectedURL(for: harness) == executableURL else { return }
                 // A probe of the default login is that login's reading; a saved account's probe
                 // only tells the console when to finish.
                 let readsDefault = self.activeConnection?.homePath == nil
-                let read = readsDefault ? self.connections.beginRead(ofDefault: .pi) : nil
+                let read = readsDefault ? self.connections.beginRead(ofDefault: harness) : nil
                 let snapshot = await self.connections.readDefault(descriptor, executableURL: executableURL,
                     connection: self.activeConnection)
                 guard !Task.isCancelled, self.connectionVerificationID == verificationID,
-                      self.activeHarness == .pi, self.loginController.isRunning,
-                      runtimeSelections.selectedURL(for: .pi) == executableURL else { return }
+                      self.activeHarness == harness, self.loginController.isRunning,
+                      runtimeSelections.selectedURL(for: harness) == executableURL else { return }
                 // A check can supersede this read while the same login is still open. Discard
                 // only this result and keep verifying.
                 if let read, !self.connections.finishRead(read, with: snapshot) { continue }
-                if snapshot.state == .signedIn, self.activeConnection?.providerID != nil {
+                // A Pi login completes for the provider it was opened for.
+                if snapshot.state == .signedIn, harness != .pi || self.activeConnection?.providerID != nil {
                     self.loginController.completeVerifiedConnection()
                     return
                 }
