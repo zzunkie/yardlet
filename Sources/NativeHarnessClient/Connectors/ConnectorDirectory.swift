@@ -123,17 +123,18 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
                         note: "Yardlet's own Google Drive server, with the same Google OAuth app as Gmail.",
                         claudeAINames: ["claude.ai Google Drive"], codexPlugins: ["google-drive", "google_drive"]),
         // Google Analytics 4 and Google Ads on the same Google sign-in (2026-10-27), read only: each
-        // account turns them on by itself, so their scopes are asked for only then.
+        // account turns them on by itself, so their scopes are asked for only then, and only with a
+        // Google OAuth app of the person's own (`GoogleOAuth.BuiltInApp.services`).
         ConnectorPreset(id: "google-analytics", name: "Google Analytics",
                         serverURL: GoogleOAuth.Endpoints.live.analyticsAdminAPI, signIn: .googleAccount,
                         scope: GoogleAnalyticsToolCatalog.scopes.joined(separator: " "),
                         authorizationParameters: googleOffline, symbol: "chart.line.uptrend.xyaxis", setupURL: googleSetup,
-                        note: "Yardlet's own Google Analytics 4 server, read only, with the same Google OAuth app as Gmail."),
+                        note: "Yardlet's own Google Analytics 4 server, read only, with a Google OAuth app of your own."),
         ConnectorPreset(id: "google-ads", name: "Google Ads",
                         serverURL: GoogleOAuth.Endpoints.live.adsAPI, signIn: .googleAccount,
                         scope: GoogleAdsToolCatalog.scopes.joined(separator: " "),
                         authorizationParameters: googleOffline, symbol: "megaphone", setupURL: googleSetup,
-                        note: "Yardlet's own Google Ads server, read only, with the same Google OAuth app as Gmail."),
+                        note: "Yardlet's own Google Ads server, read only, with a Google OAuth app of your own."),
         // Yardlet's own servers on Microsoft Graph (2026-10-27), all signed in with one Microsoft Entra
         // app: Microsoft's own MCP servers (Work IQ) follow each tenant's Copilot licensing and policy.
         ConnectorPreset(id: "outlook-mail", name: "Outlook Mail", serverURL: LocalConnectorService.outlookMail.address,

@@ -14,6 +14,8 @@ import XCTest
 /// - `gmail-page-steps-*`: the same with the app's steps opened again.
 /// - `gmail-page-builtin-empty-*`, `gmail-page-builtin-accounts-*`: a build with Yardlet's own Google
 ///   app, before and after accounts sign in.
+/// - `gmail-page-builtin-analytics-*`: the same with an account that turned Analytics on with
+///   Yardlet's app, which now waits for an app of the person's own.
 /// - `add-directory-own-apps-*`: the directory's own-app group, Gmail with its account count.
 /// - `settings-gmail-*`: Settings → Connectors with the Gmail accounts among the connectors.
 /// - `claude-request-send-*`: Claude Code asking before a send, on the request card.
@@ -33,11 +35,12 @@ final class GmailSetupRenderingTests: XCTestCase {
         record("old.address@example.test", slug: "gmail_old_address", status: .signInRequired)
     ]
 
-    private func center(_ records: [ConnectorRecord], app: Bool, builtIn: Bool = false) -> ConnectorCenter {
+    private func center(_ records: [ConnectorRecord], app: Bool, builtIn: Bool = false,
+                        credentials: InMemoryConnectorCredentialStore = InMemoryConnectorCredentialStore()) -> ConnectorCenter {
         var environment = ConnectorCenter.Environment(
             repository: InMemoryConnectorRepository(records: records,
                                                     googleAppClientID: app ? FakeGoogle.clientID : nil),
-            credentials: InMemoryConnectorCredentialStore(), http: FakeGoogle(), userAgent: FakeUserAgent(),
+            credentials: credentials, http: FakeGoogle(), userAgent: FakeUserAgent(),
             sha256: MacOAuthUserAgent.sha256, clientVersion: "9.9")
         environment.google = FakeGoogle.endpoints
         if builtIn {
@@ -140,6 +143,36 @@ final class GmailSetupRenderingTests: XCTestCase {
         let tiles = spoken(ConnectorSetupTiles(center: center([], app: false, builtIn: true), onOpen: { _ in }),
                            size: NSSize(width: 580, height: 160))
         XCTAssertTrue(tiles.contains { $0.contains(L10n.string("Sign in to start")) }, "\(tiles)")
+    }
+
+    /// With Yardlet's own app, Analytics and Ads cannot be turned on, and an account that turned
+    /// Analytics on with it before keeps Gmail and says what Analytics now needs, with Reconnect.
+    func testWithTheBuiltInAppAnalyticsAndAdsAskForAnAppOfYourOwn() async throws {
+        let directory = try WindowlessRender.directory(Self.folder)
+        let gmail = Self.accounts[0]
+        let analytics = ConnectorRecord(name: "Google Analytics", slug: "analytics",
+                                        serverURL: GoogleOAuth.Endpoints.live.analyticsAdminAPI, authorization: .oauth,
+                                        status: .connected, toolsUpdatedAt: Date(), presetID: "google-analytics",
+                                        localService: .googleAnalytics, account: gmail.account, accountSignInID: gmail.id)
+        let credentials = InMemoryConnectorCredentialStore()
+        try credentials.save(ConnectorCredential(kind: .oauth, accessToken: "access", refreshToken: "1//refresh",
+                                                 clientID: FakeGoogle.clientID), for: gmail.id)
+        let builtIn = center([gmail, analytics], app: false, builtIn: true, credentials: credentials)
+        try await waitUntil { builtIn.failures[analytics.id] != nil }
+
+        let size = NSSize(width: 580, height: 620)
+        let captures = try WindowlessRender.hostedInBothAppearances("gmail-page-builtin-analytics", in: directory, size: size,
+                                                                    passes: 10) { appearance in
+            page(GoogleSetupPage(center: builtIn), size: size, appearance: appearance)
+        }
+        for capture in captures { XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6)) }
+        let text = spoken(page(GoogleSetupPage(center: builtIn), size: size, appearance: .light), size: size)
+        for expected in [try XCTUnwrap(GoogleSignInError.needsOwnApp([.googleAnalytics]).errorDescription),
+                         L10n.string("Google Analytics and Google Ads connect only with a Google OAuth app of your own."),
+                         L10n.string("Reconnect"), L10n.string("Use a Google OAuth app of your own…"),
+                         L10n.string("your own app only")] {
+            XCTAssertTrue(text.contains { $0.contains(expected) }, "No \(expected): \(text)")
+        }
     }
 
     /// Not `async`: the sheet's scroll to the opened group is a `.task`, which runs only while the

@@ -2,15 +2,16 @@ import AppKit
 import SwiftUI
 
 /// Settings → Connectors → Set up Google: each Google account signed in once with the services the
-/// person picks for it (Gmail, Calendar, Drive). Yardlet serves the three itself over Google's
-/// public APIs, so personal and Workspace accounts both connect, without Google's developer preview
-/// (docs/CONNECTORS.md, "Google").
+/// person picks for it (Gmail, Calendar, Drive, Analytics, Ads). Yardlet serves them itself over
+/// Google's public APIs, so personal and Workspace accounts both connect, without Google's developer
+/// preview (docs/CONNECTORS.md, "Google").
 ///
 /// A build that carries Yardlet's own Google app (`GoogleOAuth.BuiltInApp`) shows only the sign-in,
-/// with a link to set up an app of the person's own instead. Otherwise, or after that link, it is
-/// laid out as the setup assistant (`ConnectorSetupAssistant`): each console step with the button
-/// that opens its page and copy buttons for what it asks to paste, the client fields checked as
-/// they are typed, and a check per step. Once the app is saved, its steps fold into one line.
+/// with a link to set up an app of the person's own instead, which Analytics and Ads need.
+/// Otherwise, or after that link, it is laid out as the setup assistant (`ConnectorSetupAssistant`):
+/// each console step with the button that opens its page and copy buttons for what it asks to
+/// paste, the client fields checked as they are typed, and a check per step. Once the app is saved,
+/// its steps fold into one line.
 struct GoogleSetupPage: View {
     let center: ConnectorCenter
     @State private var clientID = ""
@@ -26,7 +27,7 @@ struct GoogleSetupPage: View {
     /// - Parameters:
     ///   - showsSteps: the app's steps start open even with an app saved (review renders).
     ///   - service: the service the page was opened for (an import suggestion); a new account
-    ///     starts with all three either way.
+    ///     starts with Gmail, Calendar, and Drive either way, and with it when a sign-in can turn it on.
     ///   - clientID, clientSecret: the fields start with these (review renders).
     init(center: ConnectorCenter, showsSteps: Bool = false, service: LocalConnectorService? = nil,
          clientID: String = "", clientSecret: String = "") {
@@ -34,7 +35,8 @@ struct GoogleSetupPage: View {
         _clientID = State(initialValue: clientID)
         _clientSecret = State(initialValue: clientSecret)
         _showsSteps = State(initialValue: showsSteps)
-        _newAccountServices = State(initialValue: Set(LocalConnectorService.googleDefaults).union(service.map { [$0] } ?? []))
+        let opened = service.flatMap { center.signInServices(.google).contains($0) ? [$0] : nil } ?? []
+        _newAccountServices = State(initialValue: Set(LocalConnectorService.googleDefaults).union(opened))
     }
 
     /// The person saved a Google OAuth app of their own.
@@ -44,6 +46,13 @@ struct GoogleSetupPage: View {
     private var usesBuiltInApp: Bool { center.googleBuiltInApp != nil && !hasApp && !editingApp }
 
     private var opened: Set<ConnectorSetupAssistant.StepID> { ConnectorSetupProgress.decode(openedSteps) }
+
+    /// Google services a new sign-in cannot turn on: Analytics and Ads, while accounts sign in with
+    /// Yardlet's own app.
+    private var ownAppOnly: [LocalConnectorService] {
+        let available = center.signInServices(.google)
+        return LocalConnectorService.google.filter { !available.contains($0) }
+    }
 
     private var assistant: ConnectorSetupAssistant {
         .google(opened: opened, appSaved: hasApp,
@@ -79,6 +88,12 @@ struct GoogleSetupPage: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if !ownAppOnly.isEmpty {
+                Text(L10n.string("Google Analytics and Google Ads connect only with a Google OAuth app of your own."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if usesBuiltInApp {
                 Button(L10n.string("Use a Google OAuth app of your own…")) {
                     clientID = ""
@@ -255,6 +270,10 @@ struct GoogleSetupPage: View {
                         .font(.caption.monospaced())
                     Text(scope.classification.word)
                         .foregroundStyle(scope.classification == .restricted ? AnyShapeStyle(.orange) : AnyShapeStyle(.tertiary))
+                    if ownAppOnly.contains(scope.service) {
+                        Text(L10n.string("your own app only"))
+                            .foregroundStyle(.tertiary)
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
