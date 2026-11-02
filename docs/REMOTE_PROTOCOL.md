@@ -1235,6 +1235,46 @@ and deleting schedules stay on the Mac.
   ("tomorrow" becoming "today").
 - The audit log (§4.4) names the schedule of `runScheduledTask` and `setScheduledTaskEnabled` in place of a task.
 
+### 15.22 Files from the Mac
+
+Added on 2026-11-02. The phone opens what a task made: the files the Mac's Outputs card lists, and a file in the
+task's own folders that the conversation names. Until now files went only from the phone to the Mac (§15.20).
+
+- The snapshot carries `taskFiles: true` when the Mac answers the requests below. A phone offers them only then.
+- ```json
+  {"id": "34", "type": "taskOutputs", "taskId": "4C1F…"}
+  ```
+
+  ```json
+  {"re": "34", "ok": true, "outputs": [
+    {"path": "/Users/example/Desktop/report.pdf", "name": "report.pdf", "size": 482113, "writtenAt": 1792158000000}]}
+  ```
+
+  The files the Mac's Outputs card shows for the task, in its order (newest first, at most 50): files the task
+  wrote whole, outside its folder of any kind and inside it only documents and media. `size` is absent for a file
+  that is gone; `writtenAt` (milliseconds since 1970) when the Mac knows it. Not a command. Errors: `notFound`
+  (no such task).
+- ```json
+  {"id": "35", "type": "readFile", "taskId": "4C1F…", "path": "/Users/example/Desktop/report.pdf", "offset": 0}
+  ```
+
+  ```json
+  {"re": "35", "ok": true, "path": "/Users/example/Desktop/report.pdf", "name": "report.pdf",
+   "mediaType": "application/pdf", "size": 482113, "offset": 0, "data": "<base64 of up to 4 MiB>",
+   "modifiedAt": 1792158000000}
+  ```
+
+  Reads up to 4 MiB of one file from `offset`; the phone asks again from `offset` plus the bytes it got until it
+  has `size`, and starts over when `modifiedAt` or `size` changes between parts. `path` is absolute, or relative to
+  the task's folder as a conversation writes it; the answer gives the absolute path the Mac read. The Mac serves a
+  regular file only, at most 100 MiB, and only when it is one of the task's outputs (above) or, once symbolic links
+  are resolved, lies inside one of the task's own folders (its working folder or worktree and the project's other
+  folders). Anything else is refused, the same for a file that does not exist, so the phone learns nothing about
+  folders it may not read. `mediaType` is the Mac's guess from the file's type. Not a command. Errors: `badRequest`,
+  `notFound` (no such task, or a file it may not read or that does not exist), `tooLarge` (over 100 MiB).
+- The audit log (§4.4) records each `readFile` that starts at offset 0 with the task and the file's name (not its
+  path), so the person can see what a phone opened.
+
 ## 16. Push notifications
 
 The Mac pushes to a device that registered (§15.6) and **has no open v2 connection**, for these
