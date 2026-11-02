@@ -7,6 +7,7 @@ struct TaskDetail: View {
     @Environment(\.sessionRail) private var railServices
     @Environment(\.composerConnectors) private var composerConnectors
     @Environment(\.taskFolderMissing) private var folderMissing
+    @Environment(\.taskAccountMove) private var accountMove
     /// The header the task's area draws (the title bar, or a split pane's header), which the raised rail
     /// leaves uncovered.
     @Environment(\.taskAreaHeader) private var areaHeader
@@ -260,6 +261,10 @@ struct TaskDetail: View {
             if let providerNotices = conversationActions.providerNotices,
                ProviderNoticeLines.showsAnything(providerNotices) {
                 ProviderNoticeLines(notices: providerNotices)
+            }
+
+            if let accountMove {
+                TaskAccountMoveLine(notice: accountMove)
             }
 
             if session.harness == .codex, let codexStatus {

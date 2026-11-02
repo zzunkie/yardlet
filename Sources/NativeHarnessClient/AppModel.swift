@@ -216,6 +216,12 @@ final class AppModel {
     private var reviewedFileRewinds: [UUID: FileRewindPreview] = [:]
     var pendingCodexReview: CodexReviewRequest?
     private(set) var switchingAccounts = Set<UUID>()
+    /// The account each task moves to when its turn ends, chosen while it worked (`chooseAccount`).
+    private(set) var accountSwitchesAfterTurn: [UUID: ProviderConnection] = [:]
+    /// Tasks moving to the account chosen during their turn now that it ended, and the wait of each
+    /// for what else keeps it busy; the end of another turn cuts the wait short.
+    @ObservationIgnored private var switchingAfterTurn = Set<UUID>()
+    @ObservationIgnored private var accountSwitchWaits: [UUID: Task<Void, Never>] = [:]
     private(set) var sideChatErrors: [UUID: String] = [:]
     private(set) var bootstrapError: String?
     /// Archived tasks being restored, and the last restore or listing failure, for the archived list.
@@ -1123,6 +1129,12 @@ final class AppModel {
             await submitFollowUp(input, action: .automatic, to: session)
             return
         }
+        // A task whose turn ended but that still waits to move to another account (its background
+        // work runs on) sends this after the move, on the new account.
+        if accountSwitchesAfterTurn[session.id] != nil {
+            followUps.append(QueuedFollowUp(draft: CodexComposerDraft(input)), to: session.id)
+            return
+        }
         // Messages the provider lost unread with its last runtime were sent before this one: the
         // first of them starts the turn, and the rest and this one follow it into that turn.
         if let first = followUps.queue(for: session.id).first, first.waitsToBeSteered {
@@ -1365,7 +1377,8 @@ final class AppModel {
         cancelUsageLimitAutoContinue(for: session.id)
         let target = await runningFollowUpTarget(for: session)
         let mode: FollowUpMode = switch action {
-        case .automatic: FollowUpMode.current(in: preferences)
+        // While the task waits to move to another account, what is sent goes after the move.
+        case .automatic: accountSwitchesAfterTurn[session.id] == nil ? FollowUpMode.current(in: preferences) : .queue
         case .queue: .queue
         case .steer: .steer
         }
@@ -1636,6 +1649,7 @@ final class AppModel {
     /// (Claude Code), it starts that turn itself, so the queue waits for it.
     private func drainFollowUps(for sessionID: UUID) async {
         guard let session = store.sessions.first(where: { $0.id == sessionID }), !followUps.isPaused(sessionID),
+              accountSwitchesAfterTurn[sessionID] == nil,
               let delivery = followUpDelivery(for: session),
               case let queue = followUps.queue(for: sessionID),
               !queue.contains(where: { $0.state == .sent || followUps.isClaimed($0.id) }),
@@ -1954,6 +1968,7 @@ final class AppModel {
         guard let session = store.sessions.first(where: { $0.id == sessionID }), session.harness == .claudeCode,
               session.status != .running, session.status != .waitingForApproval,
               !sessionMutations.contains(sessionID), !switchingAccounts.contains(sessionID),
+              accountSwitchesAfterTurn[sessionID] == nil,
               !followUps.queue(for: sessionID).contains(where: { $0.state != .failed }),
               let delivery = pendingShellDeliveries[sessionID]?.first else { return }
         pendingShellDeliveries[sessionID]?.removeFirst()
@@ -5102,6 +5117,84 @@ final class AppModel {
         await registry.invalidateAll()
     }
 
+    /// Choose account for a task. An idle task moves now. One in a turn or waiting for an answer keeps
+    /// the choice and moves once that is over, as an account's tasks move when it leaves the list
+    /// (`settlesForAccountMove`); what is sent meanwhile goes after the move. Choosing its own account
+    /// again forgets the choice.
+    func chooseAccount(_ connection: ProviderConnection, for session: SessionRecord) async {
+        guard let current = store.sessions.first(where: { $0.id == session.id }) else { return }
+        guard Self.isWorking(current) else {
+            cancelAccountSwitchAfterTurn(for: current.id)
+            await switchAccount(to: connection, for: current)
+            return
+        }
+        guard connection != current.connection else {
+            cancelAccountSwitchAfterTurn(for: current.id)
+            return
+        }
+        guard TaskAccountSwitch.allows(connection, for: current) else { return }
+        accountSwitchesAfterTurn[current.id] = connection
+    }
+
+    /// Keeps a working task on its account after all.
+    func cancelAccountSwitchAfterTurn(for sessionID: UUID) {
+        guard accountSwitchesAfterTurn.removeValue(forKey: sessionID) != nil else { return }
+        accountSwitchWaits[sessionID]?.cancel()
+        // What was sent for the new account goes on this one.
+        if !isRunning(sessionID) { scheduleFollowUpDrain(for: sessionID) }
+        scheduleShellDelivery(for: sessionID)
+    }
+
+    /// A task whose account was chosen during its turn moves once the turn ends, before the messages
+    /// sent meanwhile go: they start its next turn on the new account. One still busy otherwise (a
+    /// message the provider holds, a background command) is looked at again, as an account move
+    /// looks again at its tasks; a turn that starts meanwhile looks again when it ends.
+    private func switchAccountAfterTurn(_ id: UUID) {
+        guard accountSwitchesAfterTurn[id] != nil else { return }
+        guard switchingAfterTurn.insert(id).inserted else {
+            accountSwitchWaits[id]?.cancel()
+            return
+        }
+        Task {
+            defer { switchingAfterTurn.remove(id) }
+            while let target = accountSwitchesAfterTurn[id] {
+                guard let task = store.sessions.first(where: { $0.id == id }) else {
+                    accountSwitchesAfterTurn.removeValue(forKey: id)
+                    return
+                }
+                guard !Self.isWorking(task) else { return }
+                if settlesForAccountMove(task, heldMessagesGoAfter: true) {
+                    accountSwitchesAfterTurn.removeValue(forKey: id)
+                    await completeAccountSwitch(task, to: target)
+                    return
+                }
+                let wait = Task { [accountMoveSleep] in _ = try? await accountMoveSleep() }
+                accountSwitchWaits[id] = wait
+                await wait.value
+                accountSwitchWaits[id] = nil
+            }
+        }
+    }
+
+    /// Moves a task whose turn ended to the account chosen during it, then sends what waited for the
+    /// move. A refusal shows as the immediate switch's does, and holds what the person queued for
+    /// the new account until they resume it.
+    private func completeAccountSwitch(_ task: SessionRecord, to target: ProviderConnection) async {
+        let target = connections.connections.first { $0.id == target.id } ?? target
+        if TaskAccountSwitch.allows(target, for: task) {
+            await switchAccount(to: target, for: task)
+        } else {
+            errorBySessionID[task.id] = L10n.format(
+                "%@ no longer shares this task's conversation history, so the task stays on its account.",
+                accountChoice(harness: task.harness, connection: target).title)
+        }
+        if store.sessions.first(where: { $0.id == task.id })?.connection != target {
+            followUps.pause(task.id)
+        }
+        scheduleFollowUpDrain(for: task.id)
+        scheduleShellDelivery(for: task.id)
+    }
+
     func switchAccount(to connection: ProviderConnection, for session: SessionRecord) async {
         guard let current = store.sessions.first(where: { $0.id == session.id }),
               !switchingAccounts.contains(session.id),
@@ -5258,11 +5351,16 @@ final class AppModel {
     /// memory saver waits for (`memorySaverKeeps`) but being on screen and session jobs, which the
     /// runtime brings back on resuming: a turn or question, messages or a shell command on their way,
     /// the harness's background commands, subagents it hosts, another change, or a continuation. An
-    /// armed continue after a limit goes on under the same account (`moveSettledTask`).
-    private func settlesForAccountMove(_ session: SessionRecord) -> Bool {
+    /// armed continue after a limit goes on under the same account (`moveSettledTask`). With
+    /// `heldMessagesGoAfter`, the messages and shell output Yardlet holds go after the move instead, on
+    /// the new account; only those the provider holds or one being sent are waited for.
+    private func settlesForAccountMove(_ session: SessionRecord, heldMessagesGoAfter: Bool = false) -> Bool {
         let id = session.id
-        return !Self.isWorking(session) && followUps.queue(for: id).isEmpty
-            && runningShellCommandBySessionID[id] == nil && pendingShellDeliveries[id]?.isEmpty != false
+        let queue = followUps.queue(for: id)
+        let messagesSettle = heldMessagesGoAfter
+            ? !queue.contains { $0.state == .sent || followUps.isClaimed($0.id) }
+            : queue.isEmpty && pendingShellDeliveries[id]?.isEmpty != false
+        return !Self.isWorking(session) && messagesSettle && runningShellCommandBySessionID[id] == nil
             && TaskAttentionProjection.waitingRequest(of: session, detail: taskAttentionDetails[id]) == nil
             && heldRequests(in: id).isEmpty
             && BackgroundTasksProjection(entries: transcriptBySessionID[id] ?? []).rows.isEmpty
@@ -6622,6 +6720,7 @@ final class AppModel {
                 pullRequestDetails.taskBecameIdle(event.localSessionID)
                 agentTools?.taskTurnEnded(event.localSessionID)
                 wakeAccountMove(for: event.localSessionID)
+                switchAccountAfterTurn(event.localSessionID)
             }
             // A shell command's output waits for the turn to end, however it ended.
             if status != .running, status != .waitingForApproval {

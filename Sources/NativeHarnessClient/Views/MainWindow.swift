@@ -1337,6 +1337,11 @@ struct MainWindow: View {
             TaskFolderMissingNotice(missing: missing, isRecreating: model.recreatingTaskWorktrees.contains(session.id),
                                     recreateWorktree: { Task { await model.recreateTaskWorktree(session.id) } })
         })
+        .environment(\.taskAccountMove, model.accountSwitchesAfterTurn[session.id].map { connection in
+            TaskAccountMoveNotice(accountName: model.accountChoice(harness: session.harness, connection: connection).title,
+                                  isInTurn: AppModel.isWorking(session),
+                                  cancel: { model.cancelAccountSwitchAfterTurn(for: session.id) })
+        })
         .task(id: session.id) { await model.refreshTaskFolder(session.id) }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await model.refreshTaskFolder(session.id) }
@@ -2341,7 +2346,7 @@ struct MainWindow: View {
         .sheet(item: $accountSwitchSession, onDismiss: finishShellModal) { session in
             TaskAccountSelectionView(session: session, store: model.connections, runtimeSelections: model.runtimeSelections) { connection in
                 accountSwitchSession = nil
-                Task { await model.switchAccount(to: connection, for: session) }
+                Task { await model.chooseAccount(connection, for: session) }
             }
         }
         .sheet(item: $connectionPresentation, onDismiss: finishShellModal) { presentation in

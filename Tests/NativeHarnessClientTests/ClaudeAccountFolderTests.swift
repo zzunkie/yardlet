@@ -131,6 +131,47 @@ import XCTest
         XCTAssertEqual(model.errorBySessionID[task.id], ProviderConnectionError.signedOut.localizedDescription)
         let afterRefusal = await adapters.resumedIDs()
         XCTAssertEqual(afterRefusal, [providerID], "A refused switch leaves the attached session alone")
+
+        // An account chosen during a turn takes the task once the turn ends, and a message sent
+        // meanwhile goes there. Until then nothing restarts; cancelled, the task stays.
+        func turn(_ status: SessionStatus) async throws {
+            await adapters.emit(.sessionStatusChanged(status), in: task.id)
+            try await waitUntil { model.store.sessions.first?.status == status }
+        }
+        try await turn(.running)
+        await model.chooseAccount(connection(first), for: switched)
+        XCTAssertEqual(model.accountSwitchesAfterTurn[task.id], connection(first))
+        model.cancelAccountSwitchAfterTurn(for: task.id)
+        try await turn(.ready)
+        XCTAssertEqual(model.store.sessions.first?.connection, connection(next), "A cancelled choice leaves the task")
+
+        try await turn(.running)
+        await model.chooseAccount(connection(first), for: switched)
+        await model.send(HarnessUserInput(text: "After the move"), to: switched)
+        XCTAssertEqual(model.followUps.queue(for: task.id).map(\.state), [.pending], "The message waits for the move")
+        try await turn(.waitingForApproval)
+        try await turn(.running)
+        XCTAssertEqual(model.store.sessions.first?.connection, connection(next), "A turn is not cut off")
+        let duringTurn = await adapters.resumedIDs()
+        XCTAssertEqual(duringTurn, [providerID])
+        // The message starts the next turn on the new account at once.
+        await adapters.emit(.sessionStatusChanged(.ready), in: task.id)
+        try await waitUntil { await adapters.sent() == [[], [], ["After the move"]] }
+        XCTAssertEqual(model.store.sessions.first?.connection, connection(first))
+        XCTAssertNil(model.accountSwitchesAfterTurn[task.id])
+        let afterTurn = await adapters.resumedIDs()
+        XCTAssertEqual(afterTurn, [providerID, providerID], "The task resumes its own session under the account chosen")
+
+        // A refusal when the turn ends says why, and what was sent for the other account waits.
+        let moved = try XCTUnwrap(model.store.sessions.first)
+        await model.chooseAccount(connection(signedOut), for: moved)
+        await model.send(HarnessUserInput(text: "Held"), to: moved)
+        await adapters.emit(.sessionStatusChanged(.ready), in: task.id)
+        try await waitUntil { model.errorBySessionID[task.id] == ProviderConnectionError.signedOut.localizedDescription }
+        XCTAssertEqual(model.store.sessions.first?.connection, connection(first))
+        XCTAssertTrue(model.followUps.isPaused(task.id))
+        let afterRefusedMove = await adapters.sent()
+        XCTAssertEqual(afterRefusedMove, [[], [], ["After the move"]])
     }
 
     /// An account's tasks, archived ones too, move to another folder signed in to the same account (the
@@ -366,12 +407,20 @@ import XCTest
         func emit(_ payload: HarnessEventPayload, in id: UUID) async {
             for adapter in lock.withLock({ adapters }) { await adapter.emit(payload, in: id) }
         }
+        /// What each runtime was sent, one per account in the order they started.
+        func sent() async -> [[String]] {
+            var result: [[String]] = []
+            for adapter in lock.withLock({ adapters }) { result.append(await adapter.sent) }
+            return result
+        }
     }
 
-    /// Keeps each session's event stream open until it is closed, as a running CLI does.
-    private actor RecordingAdapter: HarnessAdapter {
+    /// Keeps each session's event stream open until it is closed, as a running CLI does, and takes
+    /// messages during a turn as Claude Code does.
+    private actor RecordingAdapter: HarnessAdapter, HarnessFollowUpQueueing {
         nonisolated let kind: HarnessKind
         private(set) var resumed: [String] = []
+        private(set) var sent: [String] = []
         private var streams: [UUID: AsyncStream<HarnessEventEnvelope>.Continuation] = [:]
         init(kind: HarnessKind) { self.kind = kind }
 
@@ -388,7 +437,12 @@ import XCTest
             return HarnessSessionHandle(harness: kind, localSessionID: localSessionID, providerSessionID: providerSessionID,
                                         workspaceURL: workspaceURL)
         }
-        func send(_ prompt: String, to session: HarnessSessionHandle) async throws {}
+        func send(_ prompt: String, to session: HarnessSessionHandle) async throws { sent.append(prompt) }
+        func sendFollowUp(_ input: HarnessUserInput, messageID: String, priority: HarnessFollowUpPriority,
+                          to session: HarnessSessionHandle) async throws { sent.append(input.text) }
+        func cancelFollowUp(messageID: String, in session: HarnessSessionHandle) async throws -> Bool { true }
+        func canSendFollowUpNow(in session: HarnessSessionHandle) async -> Bool { false }
+        func sendFollowUpNow(messageID: String, in session: HarnessSessionHandle) async throws -> HarnessFollowUpSendNow? { nil }
         func interrupt(_ session: HarnessSessionHandle) async throws {}
         func respond(to permissionRequestID: String, decision: PermissionDecision, in session: HarnessSessionHandle) async throws {}
         func events(for session: HarnessSessionHandle) async -> AsyncStream<HarnessEventEnvelope> {

@@ -24,8 +24,21 @@ The latest screen flow and design decisions follow [ACCOUNT_SELECTION_UX.md](ACC
   to the same real folder, so the session ID and history location stay the same and no file is moved or copied. Session
   Switch account folders have this structure (`projects` and the like link to `~/.claude`, and only the sign-in is kept
   per account). If the CLI of the target account does not confirm the sign-in in `auth status`, the switch does not
-  happen. It does not switch during a turn in progress or while waiting for approval, and after the switch it
-  reconnects with the same session ID.
+  happen. After the switch it reconnects with the same session ID.
+- An account chosen while the task is in a turn or waiting for approval takes effect when that turn ends
+  (`AppModel.chooseAccount`), since switching closes the task's CLI. Until then the task keeps working where it is, a
+  line above the composer says "Moving to <account> after this turn" with **Cancel**, and Return queues what the person
+  sends (⌘Return still delivers it at Claude's next step). Once the turn has ended (finished, stopped or failed), the
+  switch waits for what moving an account's tasks waits for ("Removing an account" below), except that the messages
+  and shell output Yardlet holds go after the switch instead, on the new account. While background work keeps it
+  waiting after the turn, the line says "Moving to <account> when its background work ends" and a message sent then
+  waits too. A switch refused then (the target
+  signed out, or no longer sharing the history) says why above the composer, as an immediate one does, and what was
+  queued for the new account waits paused until the person resumes it. The choice is not kept across a quit. The
+  Claude app has the same notice for a task that moves to another computer ("Moving to {place} after this turn"); for
+  accounts it keeps one account for the whole app and lets a switch go ahead, keeping working sessions of the previous
+  account running out of the list, and Codex also keeps one account for all threads. Evidence: the strings and code in
+  their app bundles, 2026-11-02.
 - When usage is not published, it is shown as not available. Short-term and long-term limits are shown separately,
   not combined, and a limit without a number is not turned into 0.
 
@@ -404,6 +417,13 @@ for the sign-out), `AccountIdentityTests` (the organization), and
 `AccountListRenderingTests.testSettingsNamesOrganizationsAndOffersFoldersFound` (Settings › Accounts and the sheet, light
 and dark, `.build/account-list-qa/manage-found-*` and `share-sheet-*`). The confirmations are AppKit alerts that a
 windowless render cannot draw, so only their text is given above.
+
+Choosing an account during a turn: `ClaudeAccountFolderTests.testSwitchResumesTheSameSessionOnlyUnderASignedInSharedAccount`
+(nothing restarts during the turn or while it waits for approval, a cancelled choice leaves the task, the switch at the
+turn's end resumes the same session and the message sent meanwhile goes to the new account's runtime, and a refused
+switch shows its reason and pauses that message) and `ComposerStreamQARenderingTests` (the line and the composer's
+Return, light and dark, `.build/composer-stream-qa/composer-claude-moving-account-*`; both wordings of the line under
+a limit warning, `.build/claude-provider-notices-qa/notices-*`).
 
 Moving the tasks first: `ClaudeAccountFolderTests.testMovingAnAccountsTasksKeepsTheirSessionsAndRemovesItOnceAllMoved`
 (fake account folders and CLI: which folders qualify, a target whose CLI reports another address takes nothing, not even
