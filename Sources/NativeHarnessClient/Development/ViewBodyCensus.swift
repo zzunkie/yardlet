@@ -11,6 +11,8 @@ enum ViewBodyCensus {
         /// A task's views around its conversation (`TaskDetail`), which what the task streams leaves as
         /// they are: the conversation, the composer and the rail read it in views of their own.
         case taskSurface
+        /// The session rail's cards (`SessionRailView`), drawn again when what the rail shows changed.
+        case sessionRail
         /// A conversation turn drawn again in its own hosting view (`ConversationTurnHosting`).
         case conversationTurn
         /// A conversation turn's hosting view made, not found kept with its task.
