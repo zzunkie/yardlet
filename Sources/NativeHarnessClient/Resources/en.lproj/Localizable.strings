@@ -2537,6 +2537,10 @@
 "Yardlet runs its own Gmail, Google Calendar, and Google Drive servers and signs in with its own Google app. Personal Gmail and Google Workspace accounts both work." = "Yardlet runs its own Gmail, Google Calendar, and Google Drive servers and signs in with its own Google app. Personal Gmail and Google Workspace accounts both work.";
 "The first sign-in of each account shows “Google hasn't verified this app”: choose Advanced, then go on to Yardlet. Until Google reviews Yardlet's app, it lets up to 100 people sign in with it." = "The first sign-in of each account shows “Google hasn't verified this app”: choose Advanced, then go on to Yardlet. Until Google reviews Yardlet's app, it lets up to 100 people sign in with it.";
 "Use a Google OAuth app of your own…" = "Use a Google OAuth app of your own…";
+"Yardlet's Google app does not sign in for %@. Save a Google OAuth app of your own, then reconnect this account." = "Yardlet's Google app does not sign in for %@. Save a Google OAuth app of your own, then reconnect this account.";
+"Connects only with a Google OAuth app of your own" = "Connects only with a Google OAuth app of your own";
+"Google Analytics and Google Ads connect only with a Google OAuth app of your own." = "Google Analytics and Google Ads connect only with a Google OAuth app of your own.";
+"your own app only" = "your own app only";
 "Sign in to start" = "Sign in to start";
 "Yardlet's own Gmail server. Each Google account signs in once." = "Yardlet's own Gmail server. Each Google account signs in once.";
 "Search services" = "Search services";
@@ -3136,8 +3140,8 @@
 "Yardlet's own Outlook calendar server, with the same Microsoft app as Outlook Mail." = "Yardlet's own Outlook calendar server, with the same Microsoft app as Outlook Mail.";
 "Yardlet's own OneDrive server, with the same Microsoft app as Outlook Mail." = "Yardlet's own OneDrive server, with the same Microsoft app as Outlook Mail.";
 "Yardlet's own Teams server, for work or school accounts, with the same Microsoft app as Outlook Mail." = "Yardlet's own Teams server, for work or school accounts, with the same Microsoft app as Outlook Mail.";
-"Yardlet's own Google Analytics 4 server, read only, with the same Google OAuth app as Gmail." = "Yardlet's own Google Analytics 4 server, read only, with the same Google OAuth app as Gmail.";
-"Yardlet's own Google Ads server, read only, with the same Google OAuth app as Gmail." = "Yardlet's own Google Ads server, read only, with the same Google OAuth app as Gmail.";
+"Yardlet's own Google Analytics 4 server, read only, with a Google OAuth app of your own." = "Yardlet's own Google Analytics 4 server, read only, with a Google OAuth app of your own.";
+"Yardlet's own Google Ads server, read only, with a Google OAuth app of your own." = "Yardlet's own Google Ads server, read only, with a Google OAuth app of your own.";
 "Needs a Zoom app of your own. Yardlet asks only to read meetings, their summaries, and recordings." = "Needs a Zoom app of your own. Yardlet asks only to read meetings, their summaries, and recordings.";
 "Needs a Zoom app of your own. Yardlet asks only to read chats and channels." = "Needs a Zoom app of your own. Yardlet asks only to read chats and channels.";
 "Needs a Zoom app of your own. Yardlet asks only to read and search docs." = "Needs a Zoom app of your own. Yardlet asks only to read and search docs.";

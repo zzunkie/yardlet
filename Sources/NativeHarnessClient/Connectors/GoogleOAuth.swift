@@ -3,14 +3,16 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// Google's sign-in for the services Yardlet serves itself: Gmail, Calendar, and Drive, each account
-/// signed in once with the scopes of the services turned on for it (docs/CONNECTORS.md, "Google").
+/// Google's sign-in for the services Yardlet serves itself: Gmail, Calendar, Drive, Analytics, and
+/// Ads, each account signed in once with the scopes of the services turned on for it
+/// (docs/CONNECTORS.md, "Google").
 ///
 /// Two apps can sign in. A build may carry Yardlet's own Desktop client (`BuiltInApp`, from the
-/// bundle's Info.plist), so a person only signs in. The person may instead register an app in
-/// their own Google Cloud project: its client ID and secret are one item in the secure store
-/// (`appCredentialID`), kept apart from each account's tokens, and it takes precedence over the
-/// built-in one. Each account's item carries the client it signed in with, so a refresh keeps
+/// bundle's Info.plist), so a person only signs in; it signs in for Gmail, Calendar, and Drive
+/// only (`BuiltInApp.services`). The person may instead register an app in their own Google Cloud
+/// project, which signs in for every service: its client ID and secret are one item in the secure
+/// store (`appCredentialID`), kept apart from each account's tokens, and it takes precedence over
+/// the built-in one. Each account's item carries the client it signed in with, so a refresh keeps
 /// working whichever app later signs in new accounts.
 enum GoogleOAuth {
     /// The Desktop OAuth client a build carries, from `YardletGoogleOAuthClientID` and
@@ -24,6 +26,10 @@ enum GoogleOAuth {
 
         static let clientIDKey = "YardletGoogleOAuthClientID"
         static let clientSecretKey = "YardletGoogleOAuthClientSecret"
+
+        /// The services Yardlet's own app signs in for, whose scopes are the ones its Google Cloud
+        /// project lists. Analytics and Ads sign in only with an app of the person's own.
+        static let services: [LocalConnectorService] = [.gmail, .googleCalendar, .googleDrive]
 
         /// The app in a bundle's info dictionary; nil when the build carries none.
         static func from(info: [String: Any]?) -> BuiltInApp? {
@@ -135,6 +141,15 @@ enum GoogleOAuth {
             .filter { seen.insert($0).inserted }.joined(separator: " ")
     }
 
+    /// The services a sign-in with `clientID` may use: with Yardlet's own app, only those it signs
+    /// in for; with any other app, all of them. An app saved under the same client ID as Yardlet's
+    /// is Yardlet's.
+    static func services(_ services: some Sequence<LocalConnectorService>, clientID: String?,
+                         builtIn: BuiltInApp?) -> [LocalConnectorService] {
+        guard let builtIn, clientID == builtIn.clientID else { return Array(services) }
+        return services.filter(BuiltInApp.services.contains)
+    }
+
     /// The services whose every scope a granted scope string holds. Without one (a token from
     /// before Google listed it), every asked-for service counts as granted.
     static func grantedServices(_ granted: String?, of services: some Sequence<LocalConnectorService>)
@@ -196,9 +211,16 @@ enum GoogleSignInError: Error, Equatable, LocalizedError {
     case scopeNotGranted(String)
     /// Google issued no refresh token, so the sign-in would not outlast the hour.
     case noRefreshToken
+    /// The account signs in with Yardlet's own app, which does not sign in for these services
+    /// (Analytics, Ads), by name.
+    case needsOwnApp(String)
 
     static func scopeNotGranted(_ services: [LocalConnectorService]) -> GoogleSignInError {
         .scopeNotGranted(services.map(\.name).formatted(.list(type: .and)))
+    }
+
+    static func needsOwnApp(_ services: [LocalConnectorService]) -> GoogleSignInError {
+        .needsOwnApp(services.map(\.name).formatted(.list(type: .and)))
     }
 
     var errorDescription: String? {
@@ -209,6 +231,9 @@ enum GoogleSignInError: Error, Equatable, LocalizedError {
             L10n.format("Google did not grant access to %@. Connect again and allow it.", services)
         case .noRefreshToken:
             L10n.string("Google did not issue a lasting sign-in. Connect again.")
+        case .needsOwnApp(let services):
+            L10n.format("Yardlet's Google app does not sign in for %@. Save a Google OAuth app of your own, then reconnect this account.",
+                        services)
         }
     }
 }

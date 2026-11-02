@@ -2537,6 +2537,10 @@
 "Yardlet runs its own Gmail, Google Calendar, and Google Drive servers and signs in with its own Google app. Personal Gmail and Google Workspace accounts both work." = "Yardlet이 Gmail, Google Calendar, Google Drive 서버를 직접 실행하고, Yardlet의 Google 앱으로 로그인합니다. 개인 Gmail과 Google Workspace 계정 모두 쓸 수 있습니다.";
 "The first sign-in of each account shows “Google hasn't verified this app”: choose Advanced, then go on to Yardlet. Until Google reviews Yardlet's app, it lets up to 100 people sign in with it." = "계정마다 처음 로그인할 때 ‘Google에서 확인하지 않은 앱’ 화면이 나옵니다. ‘고급’을 누른 뒤 Yardlet으로 이동하세요. Google이 Yardlet의 앱을 심사하기 전까지는 100명까지 로그인할 수 있습니다.";
 "Use a Google OAuth app of your own…" = "직접 만든 Google OAuth 앱 쓰기…";
+"Yardlet's Google app does not sign in for %@. Save a Google OAuth app of your own, then reconnect this account." = "Yardlet의 Google 앱으로는 %@에 로그인할 수 없습니다. 직접 만든 Google OAuth 앱을 저장한 뒤 이 계정을 다시 연결하세요.";
+"Connects only with a Google OAuth app of your own" = "직접 만든 Google OAuth 앱으로만 연결됩니다";
+"Google Analytics and Google Ads connect only with a Google OAuth app of your own." = "Google Analytics와 Google Ads는 직접 만든 Google OAuth 앱으로만 연결됩니다.";
+"your own app only" = "직접 만든 앱에서만";
 "Sign in to start" = "로그인하면 바로 사용";
 "Yardlet's own Gmail server. Each Google account signs in once." = "Yardlet 자체 Gmail 서버입니다. Google 계정마다 한 번 로그인합니다.";
 "Search services" = "서비스 검색";
@@ -3136,8 +3140,8 @@
 "Yardlet's own Outlook calendar server, with the same Microsoft app as Outlook Mail." = "Yardlet 자체 Outlook 일정 서버입니다. Outlook Mail과 같은 Microsoft 앱을 씁니다.";
 "Yardlet's own OneDrive server, with the same Microsoft app as Outlook Mail." = "Yardlet 자체 OneDrive 서버입니다. Outlook Mail과 같은 Microsoft 앱을 씁니다.";
 "Yardlet's own Teams server, for work or school accounts, with the same Microsoft app as Outlook Mail." = "회사나 학교 계정용 Yardlet 자체 Teams 서버입니다. Outlook Mail과 같은 Microsoft 앱을 씁니다.";
-"Yardlet's own Google Analytics 4 server, read only, with the same Google OAuth app as Gmail." = "Yardlet 자체 Google Analytics 4 서버이며 읽기 전용입니다. Gmail과 같은 Google OAuth 앱을 씁니다.";
-"Yardlet's own Google Ads server, read only, with the same Google OAuth app as Gmail." = "Yardlet 자체 Google Ads 서버이며 읽기 전용입니다. Gmail과 같은 Google OAuth 앱을 씁니다.";
+"Yardlet's own Google Analytics 4 server, read only, with a Google OAuth app of your own." = "Yardlet 자체 Google Analytics 4 서버이며 읽기 전용입니다. 직접 만든 Google OAuth 앱으로 연결합니다.";
+"Yardlet's own Google Ads server, read only, with a Google OAuth app of your own." = "Yardlet 자체 Google Ads 서버이며 읽기 전용입니다. 직접 만든 Google OAuth 앱으로 연결합니다.";
 "Needs a Zoom app of your own. Yardlet asks only to read meetings, their summaries, and recordings." = "직접 만든 Zoom 앱이 필요합니다. Yardlet은 회의, 회의 요약, 녹화를 읽는 권한만 요청합니다.";
 "Needs a Zoom app of your own. Yardlet asks only to read chats and channels." = "직접 만든 Zoom 앱이 필요합니다. Yardlet은 채팅과 채널을 읽는 권한만 요청합니다.";
 "Needs a Zoom app of your own. Yardlet asks only to read and search docs." = "직접 만든 Zoom 앱이 필요합니다. Yardlet은 문서를 읽고 검색하는 권한만 요청합니다.";
