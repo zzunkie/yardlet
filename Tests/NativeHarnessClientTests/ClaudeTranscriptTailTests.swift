@@ -287,10 +287,10 @@ final class ClaudeTranscriptTailTests: XCTestCase {
     /// A turn longer than the doubled budget brings in no earlier turn by itself: asking for earlier
     /// turns reads further back until one arrives, so every ask shows more.
     func testAskingForEarlierTurnsReadsPastATurnLongerThanTheBudget() async throws {
-        let fixture = try makeFixture(turns: 40, longTurn: 39)
+        let fixture = try makeFixture(turns: 50, longTurn: 39)
         let model = fixture.model, task = fixture.task
         await model.refreshConversationStatus(for: task)
-        XCTAssertEqual(Self.requestNumbers(model.transcriptBySessionID[task.id] ?? []), [40],
+        XCTAssertEqual(Self.requestNumbers(model.transcriptBySessionID[task.id] ?? []), Array(40...50),
                        "the 1 MiB read begins inside the long turn")
 
         await model.readEarlierClaudeHistory(for: task)
@@ -301,10 +301,12 @@ final class ClaudeTranscriptTailTests: XCTestCase {
         XCTAssertLessThan(Self.requestNumbers(read).first ?? .max, 39)
     }
 
-    /// A last turn longer than the first read is shown in part, without its request. Asking for
-    /// earlier turns reads back to its request and puts the whole turn, with the turns before it, in
-    /// place of that part rather than in front of it: no step of the turn shows twice, and the
-    /// entries are the ones one read of the same bytes gives.
+    /// A last turn longer than the first read is read in part, without its request. Reading earlier
+    /// turns goes back to its request and puts the whole turn, with the turns before it, in place of
+    /// that part rather than in front of it: no step of the turn shows twice, and the entries are the
+    /// ones one read of the same bytes gives. Opening the task reads that far before it shows
+    /// anything: the part alone drew a conversation shorter than its view, its latest message well
+    /// above the composer.
     func testALastTurnLongerThanTheFirstReadReadsWholeInPlaceOfItsPart() async throws {
         let config = root.appending(path: "config")
         try writeTranscript(in: config, turns: 40, longTurn: 40)
@@ -324,12 +326,9 @@ final class ClaudeTranscriptTailTests: XCTestCase {
         reader.maximumEntries = TranscriptBuilder.maximumEntryLimit
         XCTAssertEqual(shown, try XCTUnwrap(try reader.readConversation(sessionID: Self.sessionID)).entries)
 
-        // The task does the same with what it shows.
+        // The task opens on the whole turn and the turns before it, never on the part.
         let fixture = try makeFixture(turns: 40, longTurn: 40)
         await fixture.model.refreshConversationStatus(for: fixture.task)
-        XCTAssertEqual(fixture.model.transcriptBySessionID[fixture.task.id] ?? [], newest.entries)
-        XCTAssertTrue(fixture.model.hasEarlierClaudeHistory(fixture.task))
-        await fixture.model.readEarlierClaudeHistory(for: fixture.task)
         XCTAssertEqual(fixture.model.transcriptBySessionID[fixture.task.id] ?? [], shown)
         XCTAssertFalse(fixture.model.hasEarlierClaudeHistory(fixture.task))
     }
