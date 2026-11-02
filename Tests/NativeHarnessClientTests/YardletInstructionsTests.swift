@@ -29,16 +29,17 @@ final class YardletInstructionsTests: XCTestCase {
 
     // MARK: - Routes
 
-    func testFourHarnessesHaveARouteAndSettingsListsTheRest() {
+    func testFiveHarnessesHaveARouteAndSettingsListsTheRest() {
         XCTAssertEqual(YardletInstructionsRoute.route(for: .claudeCode), .claudeAppendSystemPrompt)
         XCTAssertEqual(YardletInstructionsRoute.route(for: .codex), .codexDeveloperInstructions)
         XCTAssertEqual(YardletInstructionsRoute.route(for: .grokBuild), .grokSessionRules)
         XCTAssertEqual(YardletInstructionsRoute.route(for: .pi), .piAppendSystemPrompt)
+        XCTAssertEqual(YardletInstructionsRoute.route(for: .antigravityCLI), .antigravitySystemPrompt)
         XCTAssertEqual(YardletInstructionsRoute.unsupportedHarnesses,
-                       [.museCode, .openCode, .cursorAgent, .antigravityCLI, .kimiCode, .hermes],
+                       [.museCode, .openCode, .cursorAgent, .kimiCode, .hermes],
                        "Every other built-in harness is named as not supported, in catalog order")
         XCTAssertEqual(Set(HarnessCatalog.builtIns.map(\.id)),
-                       Set(YardletInstructionsRoute.unsupportedHarnesses + [.claudeCode, .codex, .grokBuild, .pi]))
+                       Set(YardletInstructionsRoute.unsupportedHarnesses + [.claudeCode, .codex, .grokBuild, .pi, .antigravityCLI]))
     }
 
     // MARK: - Claude Code
@@ -196,7 +197,7 @@ final class YardletInstructionsTests: XCTestCase {
                                         manifest: HarnessProtocolCompatibilityManifest.acp(kind))
     }
 
-    func testGrokGetsRulesOnNewAndLoadAndOtherACPAgentsGetNothing() async throws {
+    func testGrokGetsRulesOnNewAndLoadAntigravityOnNewOnlyAndOtherACPAgentsGetNothing() async throws {
         let transport = RecordingACPTransport()
         let grok = routedACP(.grokBuild, transport)
         let configurable = try XCTUnwrap(grok as? any HarnessYardletInstructionsConfiguring)
@@ -212,6 +213,19 @@ final class YardletInstructionsTests: XCTestCase {
         XCTAssertEqual(loadMeta, .object(["rules": .string(text)]))
         let launch = await transport.configuration
         XCTAssertEqual(launch?.arguments, ["agent", "stdio"], "Grok's launch itself is unchanged")
+
+        let antigravityTransport = RecordingACPTransport()
+        let antigravity = routedACP(.antigravityCLI, antigravityTransport)
+        await (antigravity as? any HarnessYardletInstructionsConfiguring)?
+            .setYardletInstructions(YardletInstructionsDelivery(text: text), for: created)
+        await (antigravity as? any HarnessYardletInstructionsConfiguring)?
+            .setYardletInstructions(YardletInstructionsDelivery(text: text), for: loaded)
+        _ = try await antigravity.createSession(CreateHarnessSessionRequest(localSessionID: created, workspaceURL: workspace, initialPrompt: nil))
+        _ = try await antigravity.resumeSession(providerSessionID: "acp-0", localSessionID: loaded, workspaceURL: workspace)
+        let antigravityNewMeta = await antigravityTransport.meta(in: "session/new")
+        let antigravityLoadMeta = await antigravityTransport.meta(in: "session/load")
+        XCTAssertEqual(antigravityNewMeta, .object(["antigravity": .object(["systemPrompt": .object(["append": .string(text)])])]))
+        XCTAssertNil(antigravityLoadMeta, "The CLI keeps the text a conversation started with; sent again it would come twice")
 
         let openCodeTransport = RecordingACPTransport()
         let openCode = routedACP(.openCode, openCodeTransport)

@@ -93,14 +93,20 @@ actor ACPAdapter:
     }
 
     /// Yardlet instructions for the session this task creates or loads, as Grok's `_meta.rules` on the
-    /// session request. The other ACP agents document no per-session route and receive nothing.
+    /// session request, or Antigravity's `_meta.antigravity.systemPrompt` on `session/new` only, since
+    /// the CLI keeps that text with the conversation (`YardletInstructionsRoute`). The other ACP agents
+    /// document no per-session route and receive nothing.
     func setYardletInstructions(_ instructions: YardletInstructionsDelivery?, for localSessionID: UUID) {
         yardletInstructionsByLocalSessionID[localSessionID] = instructions
     }
 
-    private func sessionMeta(for localSessionID: UUID) -> JSONValue? {
-        guard YardletInstructionsRoute.route(for: kind) == .grokSessionRules else { return nil }
-        return YardletInstructionsLaunch.grokSessionMeta(yardletInstructionsByLocalSessionID[localSessionID]?.text)
+    private func sessionMeta(for localSessionID: UUID, loading: Bool) -> JSONValue? {
+        let text = yardletInstructionsByLocalSessionID[localSessionID]?.text
+        switch YardletInstructionsRoute.route(for: kind) {
+        case .grokSessionRules: return YardletInstructionsLaunch.grokSessionMeta(text)
+        case .antigravitySystemPrompt: return loading ? nil : YardletInstructionsLaunch.antigravitySessionMeta(text)
+        default: return nil
+        }
     }
 
     /// Only after `initialize`, so an agent that turned stdio MCP servers down gets none.
@@ -166,7 +172,7 @@ actor ACPAdapter:
                     id: id,
                     workspaceURL: request.workspaceURL,
                     mcpServers: mcpServers(for: request.localSessionID),
-                    meta: sessionMeta(for: request.localSessionID)
+                    meta: sessionMeta(for: request.localSessionID, loading: false)
                 ),
                 id: id
             )
@@ -222,7 +228,7 @@ actor ACPAdapter:
                     providerSessionID: providerSessionID,
                     workspaceURL: workspaceURL,
                     mcpServers: mcpServers(for: localSessionID),
-                    meta: sessionMeta(for: localSessionID)
+                    meta: sessionMeta(for: localSessionID, loading: true)
                 ),
                 id: id
             )

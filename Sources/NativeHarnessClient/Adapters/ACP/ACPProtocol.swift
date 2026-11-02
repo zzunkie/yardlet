@@ -51,7 +51,8 @@ enum ACPProtocol {
 
     /// `mcpServers` holds only the Yardlet MCP server (ACP stdio form) when the task has one; the
     /// agent's own configured servers stay the agent's. `meta` is the agent's own `_meta` session
-    /// options (Grok's `rules` for Yardlet instructions); nil leaves the field out.
+    /// options (Grok's `rules` or Antigravity's `systemPrompt` for Yardlet instructions); nil leaves
+    /// the field out.
     static func newSession(id: Int64, workspaceURL: URL, mcpServers: [JSONValue] = [],
                            meta: JSONValue? = nil) -> JSONValue {
         var params = sessionParams(workspaceURL: workspaceURL, mcpServers: mcpServers).objectValue ?? [:]
