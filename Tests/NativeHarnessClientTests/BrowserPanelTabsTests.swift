@@ -395,12 +395,23 @@ final class BrowserPanelTabsTests: XCTestCase {
         XCTAssertTrue(after.tabs(forSession: task).isEmpty)
 
         // The agent's first call opens them, the one used last in front: listing them too, so the ids
-        // it lists are ones the other tools take.
+        // it lists are ones the other tools take. Only the one in front loads its page; the others load
+        // as a tool names them or selects them.
+        // The pages the new host was asked to open (each host start has a connection of its own).
+        let loaded: () -> [String] = {
+            self.connection.sent.compactMap { command -> String? in
+                if case .open(_, let url, _, _) = command { url } else { nil }
+            }
+        }
         let list = try tabs.tabs(for: task)
         XCTAssertEqual(list.tabs.count, 3)
         XCTAssertEqual(after.tabs(forSession: task).map(\.key), [first, second, c])
+        XCTAssertEqual(loaded(), ["https://b.test/"])
         _ = try tabs.page(for: task, tabID: list.tabs[0].id)
+        XCTAssertEqual(loaded(), ["https://b.test/", "https://a.test/next"])
         XCTAssertEqual(after.tab(forSession: task)?.key, second)
+        _ = try tabs.select(list.tabs[2].id, for: task)
+        XCTAssertEqual(loaded(), ["https://b.test/", "https://a.test/next", "https://c.test/"])
         XCTAssertEqual(Navigation.browserKeys(in: restored.panels), [first, blank, second, c], "the same panel tabs")
 
         // The blank tab opens when shown, between the first two.

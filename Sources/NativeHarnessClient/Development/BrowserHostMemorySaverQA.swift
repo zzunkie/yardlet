@@ -10,7 +10,8 @@ import Foundation
 /// first three are discarded and the rest kept, each for its reason; the browser's processes and memory before and
 /// after go to `result.json` (and run-check.sh samples them at the phase markers). A discarded tab loads its page
 /// again for the agent and for a panel, with its history; turning the saver off loads the rest. Then the agent's tabs
-/// no panel showed on screen go soon after its turn (`runAgentTabs`).
+/// no panel showed on screen go soon after its turn (`runAgentTabs`), and tabs saved before a restart come back with only
+/// the one in front loaded (`runRestoredTabs`).
 @MainActor
 final class BrowserHostMemorySaverQA {
     private let output: URL
@@ -114,7 +115,56 @@ final class BrowserHostMemorySaverQA {
         await phase("saver-3-restored")
         client.closeTabs(forSession: session)
         await runAgentTabs()
+        await runRestoredTabs()
         await finish()
+    }
+
+    /// A task's tabs saved before a restart come back with only the one in front loaded, as Chrome restores tabs: the
+    /// others start no renderer until the agent names or selects one or a panel shows one (docs/BROWSER_HOST.md §3
+    /// "Host lifetime"). Each page holds about 80 MB with another site's frame, so loading all four would show.
+    private func runRestoredTabs() async {
+        let session = UUID()
+        let numbers = [11, 12, 13, 14]
+        let before = measure()
+        client.rememberTabs(BrowserRememberedTabs(addresses: numbers.map { base + "saver/page?n=\($0)" },
+                                                  titles: numbers.map { "Saver \($0)" }, fronted: 0), forSession: session)
+        let agentTabs = BrowserAgentTabs { MacBrowserHost.shared.client }
+        guard let listed = try? agentTabs.tabs(for: session).tabs, listed.count == numbers.count else {
+            return check("the saved tabs come back", false, "not listed")
+        }
+        let tabs = client.tabs(forSession: session)
+        if let front = tabs.first { await front.untilRestored() }
+        let frontLoaded = await waitUntil(.seconds(20)) { tabs.first?.isLoading == false && tabs.first?.title == "Saver 11" }
+        try? await Task.sleep(for: .seconds(3))
+        let restored = measure()
+        record["restoredTabs"] = .object(["before": before.json, "afterRestore": restored.json])
+        check("the saved tabs come back with only the one in front loaded",
+              frontLoaded && tabs.first?.pendingAddress == nil && tabs.dropFirst().allSatisfy { $0.pendingAddress != nil },
+              tabs.map { "\($0.title) \($0.pendingAddress == nil ? "loaded" : "waiting")" }.joined(separator: ", "))
+        check("the waiting tabs start no renderer",
+              restored.processes <= before.processes + 3,
+              "processes \(before.processes) → \(restored.processes), footprint \(before.footprint >> 20) → \(restored.footprint >> 20) MiB")
+        await phase("saver-6-restored-tabs")
+
+        let named = tabs[2]
+        if let page = try? agentTabs.page(for: session, tabID: String(named.id)) { await page.untilRestored() }
+        let namedTitle = await value(named, "document.title")
+        check("a tool that names a waiting tab (tabId) loads it", named.pendingAddress == nil && namedTitle == .string("Saver 13"),
+              Self.describe(namedTitle))
+        let selected = tabs[3]
+        _ = try? agentTabs.select(String(selected.id), for: session)
+        await selected.untilRestored()
+        let selectedTitle = await value(selected, "document.title")
+        check("browser_tab_select loads a waiting tab", selected.pendingAddress == nil && selectedTitle == .string("Saver 14"),
+              Self.describe(selectedTitle))
+        let shown = tabs[1]
+        client.attachPanel(to: shown)
+        await shown.untilRestored()
+        let shownTitle = await value(shown, "document.title")
+        client.detachPanel(from: shown)
+        check("a panel showing a waiting tab loads it", shown.pendingAddress == nil && shownTitle == .string("Saver 12"),
+              Self.describe(shownTitle))
+        client.closeTabs(forSession: session)
     }
 
     /// Tabs the agent opened with its tools that no panel showed on screen (one of them in a panel off screen) go once
