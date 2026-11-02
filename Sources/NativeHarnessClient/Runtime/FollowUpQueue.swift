@@ -101,6 +101,11 @@ struct QueuedFollowUp: Codable, Equatable, Identifiable, Sendable {
     /// Yardlet holds it, on its way into the running turn.
     var waitsToBeSteered: Bool { state == .pending && steered == true }
 
+    /// Another task sent it (`TaskMessage`). It waits in the queue as the person's messages do, but it
+    /// is not the person's to manage: the composer lists only the person's, and a pause holds the
+    /// queue only while one of theirs waits.
+    var isFromAnotherTask: Bool { TaskMessage.parse(draft.text) != nil }
+
     /// The message held by Yardlet again, unsent: the provider that held it let it go unread. It
     /// was written to be read in the running turn, and keeps that place (2026-10-23: after an update
     /// restart, a message another task sent before the quit reached its parent after one sent after).
@@ -516,7 +521,7 @@ struct TurnByTurnFollowUpDelivery: FollowUpDelivery {
 
 /// Every task's follow-up queue: one list per task in the order it goes, the tasks the user paused
 /// by interrupting, the messages an action is working on, and their saved copies. Each change is
-/// saved as it is made; a queue that empties takes its pause with it.
+/// saved as it is made; a queue left with none of the person's messages takes its pause with it.
 ///
 /// The app model owns the one store and acts on it for the composer's queue actions; views read it.
 @MainActor
@@ -531,6 +536,9 @@ final class FollowUpQueueStore {
     @ObservationIgnored private let repository: any CodexQueueRepository
     /// Called when a task's queue empties: what waits behind it (a finished bash command) may go.
     @ObservationIgnored var queueDidEmpty: (@MainActor (UUID) -> Void)?
+    /// Called when a pause ends because the person's last message left the queue: what other tasks
+    /// sent goes on as after Resume.
+    @ObservationIgnored var pauseDidEnd: (@MainActor (UUID) -> Void)?
 
     init(repository: any CodexQueueRepository = UserDefaultsCodexQueueRepository()) {
         self.repository = repository
@@ -574,13 +582,18 @@ final class FollowUpQueueStore {
 
     /// Reads these tasks' saved queues and pauses, replacing what the store held. A message a
     /// provider held went unread with the runtime that ended with the last launch, so Yardlet holds
-    /// it again (plan A8), still on its way into the running turn (`heldAgain`).
+    /// it again (plan A8), still on its way into the running turn (`heldAgain`). A pause saved over
+    /// a queue with none of the person's messages left, which earlier builds kept, is let go.
     func load(for sessionIDs: some Sequence<UUID>) {
         queues = Dictionary(uniqueKeysWithValues: sessionIDs.compactMap { sessionID in
             let queue = repository.load(for: sessionID).map(\.heldAgain)
             return queue.isEmpty ? nil : (sessionID, queue)
         })
         pausedSessionIDs = Set(queues.keys.filter { repository.isPaused(for: $0) })
+        for sessionID in pausedSessionIDs where !holdsPersonsMessage(sessionID) {
+            pausedSessionIDs.remove(sessionID)
+            repository.setPaused(false, for: sessionID)
+        }
     }
 
     /// Queues a fixture or test starts with, as they are; nothing is saved.
@@ -674,10 +687,11 @@ final class FollowUpQueueStore {
 
     // MARK: Pause
 
-    /// Holds a task's queue until Resume. Only a queue with messages pauses; true when this paused it.
+    /// Holds a task's queue until Resume. Only a queue with a message of the person's pauses, since
+    /// only theirs show with the pause; true when this paused it.
     @discardableResult
     func pause(_ sessionID: UUID) -> Bool {
-        guard queues[sessionID]?.isEmpty == false, !pausedSessionIDs.contains(sessionID) else { return false }
+        guard holdsPersonsMessage(sessionID), !pausedSessionIDs.contains(sessionID) else { return false }
         pausedSessionIDs.insert(sessionID)
         repository.setPaused(true, for: sessionID)
         return true
@@ -716,6 +730,11 @@ final class FollowUpQueueStore {
         let queue = queues[sessionID] ?? []
         guard queue.isEmpty else {
             repository.save(queue, for: sessionID)
+            // The pause held the person's messages; with none of theirs left, what other tasks sent
+            // goes on as after Resume instead of waiting behind a pause with nothing to show.
+            if pausedSessionIDs.contains(sessionID), !holdsPersonsMessage(sessionID), resume(sessionID) {
+                pauseDidEnd?(sessionID)
+            }
             return
         }
         // Nothing is left to hold back; the next queued message starts a fresh queue.
@@ -723,5 +742,9 @@ final class FollowUpQueueStore {
         if pausedSessionIDs.contains(sessionID) { pausedSessionIDs.remove(sessionID) }
         repository.remove(for: sessionID)
         queueDidEmpty?(sessionID)
+    }
+
+    private func holdsPersonsMessage(_ sessionID: UUID) -> Bool {
+        queues[sessionID]?.contains { !$0.isFromAnotherTask } == true
     }
 }
