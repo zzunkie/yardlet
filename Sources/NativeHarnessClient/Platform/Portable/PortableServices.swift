@@ -96,3 +96,10 @@ enum EventCostLog {
     static func record(_ kind: Kind, since start: Start?) {}
 }
 #endif
+
+/// Mail connections, which a platform without its own layer cannot make yet.
+struct LiveMailSockets: MailSocketOpening {
+    func open(host: String, port: Int, tls: Bool) async throws -> any MailSocket {
+        throw MailSocketFailure.unreachable("Mail connections are not available on this platform yet.")
+    }
+}

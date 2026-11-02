@@ -3,10 +3,10 @@ import YardletAgentTools
 
 /// What Claude Code's request card says for a Google tool that writes: a Gmail send, draft deletion,
 /// or label change (`GmailToolApproval`, with the draft it read), a Calendar event created, changed,
-/// deleted, or answered, or a Drive file created, copied, or changed; and for a Microsoft or Apple
-/// service's write (`MicrosoftToolApproval`, `AppleToolApproval`). It names the account and what the
-/// call would do. Claude Code asks before each such call; the card offers no "always allow", as for a
-/// scheduled-task change.
+/// deleted, or answered, or a Drive file created, copied, or changed; for a Microsoft or Apple
+/// service's write (`MicrosoftToolApproval`, `AppleToolApproval`); and for an IMAP mail account's
+/// draft sent. It names the account and what the call would do. Claude Code asks before each such
+/// call; the card offers no "always allow", as for a scheduled-task change.
 enum GoogleToolApproval {
     static func request(toolName: String?, input: JSONValue, gmailDraft: GmailDraftPreview? = nil,
                         labels: ConnectorToolLabels = .shared) -> (title: String, detail: String)? {
@@ -21,6 +21,9 @@ enum GoogleToolApproval {
         case .googleDrive: return drive(label.tool, account: account, input: input)
         case let microsoft where microsoft.isMicrosoft:
             return MicrosoftToolApproval.request(microsoft, tool: label.tool, account: label.account, input: input)
+        case .imapMail where label.tool == MailAccountToolCatalog.sendDraft:
+            return (L10n.format("Allow Claude to send a draft from %@?", account),
+                    text(input, "draftId").map { L10n.format("Draft %@", $0) } ?? "")
         default: return AppleToolApproval.request(service, tool: label.tool, account: label.account, input: input)
         }
     }

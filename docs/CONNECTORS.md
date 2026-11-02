@@ -14,7 +14,9 @@ section of this document by its title.
   well: they sign in once per Microsoft account and call Microsoft Graph (the "Microsoft 365" section). The Apple
   connectors (App Store Connect, the Mac's calendars, reminders and contacts, and Xcode) are also servers inside
   the app. App Store Connect calls Apple's REST API with the person's API key, the three Mac connectors use the Mac's
-  data once macOS allows it, and Xcode goes through Xcode's `mcpbridge` (the "Apple" section). A connector can also be
+  data once macOS allows it, and Xcode goes through Xcode's `mcpbridge` (the "Apple" section). Mail (IMAP) is one
+  more: an account at any other mail service, read over IMAP and sent over SMTP with an app password (the "Mail over
+  IMAP" section). A connector can also be
   a program Yardlet runs on this Mac (stdio), from an MCP registry or another app's settings, once the person has seen
   what it runs and said yes (the "Programs on this Mac" section).
 - Besides its own directory, Add connector lists the public MCP registries' servers and searches them (the
@@ -44,6 +46,7 @@ section of this document by its title.
 | Microsoft account | Outlook Mail, Outlook Calendar, OneDrive and Microsoft Teams | The "Microsoft 365" section |
 | App Store Connect API key | App Store Connect | The `.p8` key file, the key ID and (for a team key) the issuer ID. The "Apple" section |
 | macOS permission | Apple Calendar, Apple Reminders and Apple Contacts | macOS asks once when it is turned on. The "Apple" section |
+| App password | Mail (IMAP): Naver, Daum, Kakao, NAVER WORKS, iCloud, Yahoo, AOL, Zoho, Fastmail, Proton Mail Bridge or any IMAP server | The address and an app password the service made; Yardlet signs in to IMAP and SMTP once to check. The "Mail over IMAP" section |
 | App on this Mac | Xcode | No sign-in. Xcode's `mcpbridge` provides the tools. The "Apple" section |
 | Program on this Mac | A registry package (`npx`, `uvx`, `docker run`) or a program another app's settings start | Runs after the person confirms what runs; its arguments and environment values are in Keychain. The "Programs on this Mac" section |
 
@@ -129,6 +132,7 @@ registration, the connection error shows the reason the service gave.
 | Google account | Gmail, Google Calendar, Google Drive, Google Analytics, Google Ads (the "Google" section) |
 | Microsoft account | Outlook Mail, Outlook Calendar, OneDrive, Microsoft Teams (the "Microsoft 365" section) |
 | Apple | App Store Connect (API key), Apple Calendar, Apple Reminders and Apple Contacts (macOS permission), Xcode (`mcpbridge` on this Mac) (the "Apple" section) |
+| App password | Mail (IMAP), any number of accounts (the "Mail over IMAP" section) |
 | GitHub | GitHub (`https://api.githubcopilot.com/mcp/`): device code sign-in (the "GitHub sign-in" section), a personal access token or your own OAuth app |
 | Key in the address | Browserbase (`https://mcp.browserbase.com/mcp`, key in Keychain) |
 
@@ -567,12 +571,13 @@ What the person does (per service):
   program's runtime, program name, package, version, origin and environment names (`program`). Google and Microsoft
   services have `localService`, `account` (the address) and `googleAccountID` (the account's sign-in, for both), and the
   top of the file has the `googleOAuthClientID` of the Google app the user saved and the `microsoftOAuthApp` (client ID
-  and directory) of the Microsoft app the user saved (neither is a secret). Apple services have `localService`, and App Store Connect also has `account` (the key ID). The server
+  and directory) of the Microsoft app the user saved (neither is a secret). Apple services have `localService`, and App Store Connect also has `account` (the key ID). A Mail (IMAP) account has `localService`, `account` (the address) and `mailServer` (its IMAP and SMTP hosts, ports, TLS or STARTTLS, and user names). The server
   address of the three Mac services is the Mac app that holds that data (`/System/Applications/Calendar.app` and
   others), and Xcode's is the path of the `mcpbridge` it found. No secrets are written. Older files are read as they are
   (new fields are empty when missing).
 - Keychain: generic password, service `<bundle ID>.connectors`, account the connector UUID (for Google, the ID of the
-  account sign-in), and a JSON value (kinds `oauth`, `token`, `client`, `signingKey` and `program`; a program's
+  account sign-in), and a JSON value (kinds `oauth`, `token`, `client`, `signingKey`, `password` and `program`; a
+  Mail (IMAP) account's app password; a program's
   arguments and environment values; access and refresh tokens,
   expiry, client ID and secret, token endpoint and auth method, resource, and for Microsoft the scope a refresh names
   again (`refreshScope`); `signingKey` holds App Store Connect's key ID,
@@ -1257,7 +1262,7 @@ registered OAuth app can offer a sign-in button. Yardlet signs in with the devic
 | `Sources/NativeHarnessClient/Connectors/ConnectorProgram.swift` | Program connectors: the record's `ConnectorProgram`, the Keychain `ConnectorProgramSpec`, registry packages as commands, finding the program, its environment, the page's draft (`ConnectorProgramDraft`) | engine |
 | `Sources/NativeHarnessClient/Connectors/MCPHTTPClient.swift` | Streamable HTTP client, `WWW-Authenticate` parsing, event stream, key in the address | engine |
 | `Sources/NativeHarnessClient/Connectors/ConnectorOAuth.swift` | Discovery, dynamic registration, your own client, authorization URL, token exchange and refresh, PKCE | engine |
-| `Sources/NativeHarnessClient/Connectors/ConnectorCenter.swift` | The connector list, connecting and sign-in, the per-task switch, standing in for harness servers (`withYardletStandIns`), tool lists and calls, per-session token refresh (`ConnectorSession`), the Google app, accounts and sign-in, adding and connecting Apple services (`isAvailable`, `addLocal`, `addAppStoreConnectKey`), list change notification (`onToolsChanged`) | engine |
+| `Sources/NativeHarnessClient/Connectors/ConnectorCenter.swift` | The connector list, connecting and sign-in, the per-task switch, standing in for harness servers (`withYardletStandIns`), tool lists and calls, per-session token refresh (`ConnectorSession`), the Google app, accounts and sign-in, adding and connecting Apple services (`isAvailable`, `addLocal`, `addAppStoreConnectKey`), adding a Mail (IMAP) account (`addMailAccount`), list change notification (`onToolsChanged`) | engine |
 | `Sources/NativeHarnessClient/Connectors/GoogleOAuth.swift` | Google endpoints, the app in the build (`BuiltInApp`), the Keychain item ID of the Google app, authorization parameters, scope checks | engine |
 | `Sources/NativeHarnessClient/Connectors/OAuthAPISession.swift` | One account's bearer token for a REST API Yardlet calls itself (Google's, Microsoft Graph): refresh a minute before expiry and once after a 401, one at a time | engine |
 | `Sources/NativeHarnessClient/Connectors/ConnectorToolSupport.swift` | Argument reading (`ConnectorToolArguments`) and schema pieces (`ConnectorToolSchema`) shared by Yardlet's own servers | engine |
@@ -1269,6 +1274,7 @@ registered OAuth app can offer a sign-in button. Yardlet signs in with the devic
 | `Sources/NativeHarnessClient/Connectors/GoogleAnalyticsToolCatalog.swift`, `GoogleAnalyticsToolRunner.swift`, `GoogleAdsToolCatalog.swift`, `GoogleAdsToolRunner.swift` | Analytics and Ads tools and scopes; Admin, Data and Google Ads API requests, report rows, the `SELECT` check | engine |
 | `Sources/NativeHarnessClient/Connectors/MicrosoftOAuth.swift`, `GraphAPI.swift` | Microsoft's endpoints per tenant, the app in the build, the person's app, permissions and grant checks, sign-in errors; the Graph client (headers, page links only into Graph, uploads) and shared shapes (`GraphShape`) | engine |
 | `Sources/NativeHarnessClient/Connectors/OutlookMailToolCatalog.swift`, `OutlookMailToolRunner.swift`, `OutlookCalendarToolCatalog.swift`, `OutlookCalendarToolRunner.swift`, `OneDriveToolCatalog.swift`, `OneDriveToolRunner.swift`, `TeamsToolCatalog.swift`, `TeamsToolRunner.swift` | The Microsoft 365 tools, permissions and tools that ask; Graph requests and answers | engine |
+| `Sources/NativeHarnessClient/Connectors/MailServerPreset.swift`, `MailAccountTools.swift`, `IMAPMailTransport.swift` | Mail (IMAP): the services' servers and steps, the five tools and the one that asks, and the account's IMAP connection the tools and the mailbox share | engine |
 | `Sources/NativeHarnessClient/Connectors/AppStoreConnectAPI.swift`, `AppStoreConnectToolCatalog.swift`, `AppStoreConnectToolRunner.swift` | `.p8` keys and ES256 tokens (the `ES256Signing` contract), the key session (a new token after a 401), JSON:API requests, the 14 tools and those that ask | engine |
 | `Sources/NativeHarnessClient/Connectors/MacDataStore.swift`, `MacDataToolCatalog.swift`, `MacDataToolRunner.swift` | The Mac data store contract (`MacDataStoring`), permission states and error text; calendar, reminder and contact tools and running them | engine |
 | `Sources/NativeHarnessClient/Connectors/MCPStdioClient.swift`, `XcodeBridge.swift` | stdio MCP client (matching request IDs, cancellation, the reason from standard error), the child process channel, finding `mcpbridge` and the Xcode version | engine |
@@ -1287,6 +1293,7 @@ registered OAuth app can offer a sign-in button. Yardlet signs in with the devic
 | `Sources/NativeHarnessClient/Views/AppShell/ConnectorRegistryViews.swift` | "From MCP registries" (`ConnectorRegistrySection`) and a program's page (`ConnectorProgramPage`) | views |
 | `Sources/NativeHarnessClient/Views/AppShell/GoogleSetupPage.swift`, `MicrosoftSetupPage.swift`, `SlackSetupPage.swift`, `ZoomSetupPage.swift`, `ServiceAccountList.swift`, `ConnectorSetupAssistantViews.swift` | Google, Microsoft 365, Slack and Zoom setup assistants (step rows, copy buttons, checked fields), and the account list with per-account service chips that Google and Microsoft share | views |
 | `Sources/NativeHarnessClient/Views/AppShell/AppStoreConnectSetupPage.swift` | The App Store Connect page (steps, key type, choosing the `.p8`, ID fields, key list, the Trash question) | views |
+| `Sources/NativeHarnessClient/Views/AppShell/MailAccountSetupPage.swift` | The Mail (IMAP) page (the service from the address, its steps, the app password, other servers, the account list) | views |
 | `Sources/NativeHarnessClient/Views/Composer/ComposerPlusMenu.swift` | Rows and keys of the composer "+" menu (`ComposerMenuList`), the "+" order (`ComposerPlusMenu`), the connector list (`ComposerConnectorsMenu`) | views |
 | `Sources/NativeHarnessClient/Views/Composer/ComposerConnectorsMenu.swift`, `Presentation/Composer/ComposerConnectorList.swift` | The connector environment, `ConnectorIcon`, session rail rows, list state | views |
 
@@ -1490,3 +1497,25 @@ Microsoft Entra. The Microsoft page opens the steps in order (`ConnectorSetupAss
 - Calendar: recurrence rules on create, shared calendars of other people, rooms.
 - OneDrive: replacing or deleting files, sharing, SharePoint sites, reading Word, Excel, PowerPoint and PDF as text.
 - Teams: reading channel messages (administrator consent), creating chats or teams, meeting transcripts.
+
+## 18. Mail over IMAP
+
+An account at a mail service Yardlet has no API for is a **Mail (IMAP)** connector, one per address. How it is added,
+read and sent, and its servers per service, are in docs/MAILBOX.md ("Mail accounts over IMAP"); this section covers
+what belongs to connectors.
+
+- **Adding.** Add connector › Mail (IMAP) › Set up… opens the setup page (`MailAccountSetupPage`): the address picks
+  the service and its steps, the app password goes in a secure field, and Connect signs in to IMAP and SMTP once
+  (`ConnectorCenter.addMailAccount`). Nothing is stored until both servers accept it. The same address added again
+  replaces its password and servers. The first account's slug is `mail`; later ones add the part before the `@`
+  (`mail_dana`).
+- **Tools** (`MailAccountToolCatalog`): `search_messages` (a folder's newest messages, or the server's search),
+  `get_message`, `list_folders`, `create_draft` (a new message, or a reply with the original's subject and quote) and
+  `send_draft`. Names and arguments follow Outlook Mail's. There is no delete. A message read through them is not
+  marked read.
+- **When the harness asks.** `send_draft` asks the person before every call, with the account and the draft named.
+- **Connecting** signs in to the IMAP server; a refused password marks the connector as needing the account again,
+  from the mailbox, a tool call or a reconnect alike. Its row then offers **Set up…**, which opens the page to enter
+  the address and a new app password, and the row's menu has **Mail accounts…** at any time.
+- **Turning off and removing.** Remove deletes the record and the Keychain item and closes the connection. The app
+  password stays valid at the service until the person deletes it there.

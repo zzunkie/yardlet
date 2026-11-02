@@ -66,7 +66,7 @@ final class ConnectorDirectoryTests: XCTestCase {
             "basecamp", "teamwork", "lucid", "pandadoc", "fathom", "deepl", "mobbin",
             "zoom-meetings", "zoom-team-chat", "zoom-docs",
             "apollo-io", "attio", "customer-io", "klaviyo", "mailerlite", "ahrefs", "semrush", "similarweb", "amplitude", "mixpanel",
-            "xcode", "app-store-connect", "gitlab", "supabase", "neon", "prisma", "netlify", "cloudflare", "posthog", "semgrep",
+            "xcode", "app-store-connect", "imap-mail", "gitlab", "supabase", "neon", "prisma", "netlify", "cloudflare", "posthog", "semgrep",
             "postman", "jam", "circleci", "browserstack", "bugsnag", "swagger", "zephyr", "grafana", "honeycomb", "axiom", "statsig",
             "port", "aiven", "upstash", "algolia", "contentful", "sanity", "workos", "apify", "mapbox",
             "stripe", "paypal", "square", "mercury", "webflow", "wix", "ramp", "brex", "paddle", "beancount-io", "hostinger",
@@ -149,16 +149,17 @@ final class ConnectorDirectoryTests: XCTestCase {
         XCTAssertEqual(try preset("openai-docs").signIn, ConnectorPreset.SignIn.none)
         XCTAssertEqual(try preset("figma-desktop").serverURL.host(), "127.0.0.1", "Figma's remote server admits only its catalog")
         // The Mac's own data and Xcode are served from this Mac (docs/CONNECTORS.md, "Apple"); App Store
-        // Connect is Apple's API.
+        // Connect is Apple's API; a mail account is its own IMAP server (docs/CONNECTORS.md, "Mail over IMAP").
         for (id, signIn) in [("apple-calendar", ConnectorPreset.SignIn.macPermission), ("apple-reminders", .macPermission),
-                             ("apple-contacts", .macPermission), ("xcode", .localApp), ("app-store-connect", .appStoreConnectKey)] {
+                             ("apple-contacts", .macPermission), ("xcode", .localApp), ("app-store-connect", .appStoreConnectKey),
+                             ("imap-mail", .mailPassword)] {
             XCTAssertEqual(try preset(id).signIn, signIn, id)
             XCTAssertEqual(try preset(id).localService?.presetID, id)
         }
         XCTAssertEqual(try preset("app-store-connect").serverURL.absoluteString, "https://api.appstoreconnect.apple.com/")
         for item in ConnectorPreset.all where item.id != "figma-desktop" {
             let onThisMac = item.localService.map { $0.isMac || $0 == .xcode } ?? false
-            XCTAssertEqual(item.serverURL.scheme, onThisMac ? "file" : "https", item.id)
+            XCTAssertEqual(item.serverURL.scheme, onThisMac ? "file" : item.localService == .imapMail ? "imaps" : "https", item.id)
         }
         XCTAssertEqual(ConnectorPreset.preset(for: URL(string: "https://api.githubcopilot.com/mcp")!)?.id, "github",
                        "A trailing slash does not hide a preset")

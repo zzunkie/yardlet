@@ -417,7 +417,7 @@ final class MailboxCenter {
                     wait = interval
                 } catch {
                     guard let self, !Task.isCancelled else { return }
-                    if case OAuthAPISession.Failure.signInRequired = error {
+                    if Self.isSignInRefusal(error) {
                         self.failures[id] = MailFailure(kind: .signInRequired,
                                                         message: L10n.string("Sign in to this account again in Settings › Connectors."))
                         self.watches[id] = nil
@@ -519,6 +519,12 @@ final class MailboxCenter {
         let readTo = accounts.compactMap { inboxNextPages[$0.id] != nil ? inboxes[$0.id]?.last?.date : nil }.max()
         if let readTo { merged.removeAll { $0.date < readTo } }
         if merged != threads { threads = merged }
+    }
+
+    /// A refused sign-in: a Gmail or Outlook token that no longer refreshes, or a password an IMAP server refused.
+    private static func isSignInRefusal(_ error: Error) -> Bool {
+        if case OAuthAPISession.Failure.signInRequired = error { return true }
+        return (error as? MailFailure)?.kind == .signInRequired
     }
 
     private static func failure(_ error: Error) -> MailFailure {

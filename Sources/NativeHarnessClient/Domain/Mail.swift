@@ -26,6 +26,10 @@ struct MailAccount: Identifiable, Hashable, Sendable {
     /// The name the account's connector gives its tools (`gmail`, `gmail_dana`), by which an agent
     /// reads the account's mail.
     var connectorSlug: String? = nil
+    /// The service an IMAP account is at, as its connector names it ("Naver Mail"); nil names the provider.
+    var service: String? = nil
+
+    var serviceName: String { service ?? provider.serviceName }
 
     /// The part of the address before the `@`, which tells accounts apart in a list of several.
     var shortName: String {
@@ -179,6 +183,10 @@ struct MailFailure: Error, Hashable, Sendable {
 
     var kind: Kind
     var message: String
+}
+
+extension MailFailure: LocalizedError {
+    var errorDescription: String? { message }
 }
 
 /// How the mailbox reaches one account's service. Each provider has one: the Gmail API, Microsoft Graph,

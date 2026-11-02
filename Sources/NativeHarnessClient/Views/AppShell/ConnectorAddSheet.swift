@@ -70,7 +70,7 @@ struct ConnectorSetupGuide: Equatable {
             if gitHubSignIn, preset.id == "github" { return .oneClick }
             return switch preset.signIn {
             case .oauth, .none, .macPermission, .localApp: .oneClick
-            case .token, .appStoreConnectKey: .key
+            case .token, .appStoreConnectKey, .mailPassword: .key
             case .registeredClient, .googleAccount, .microsoftAccount: .ownApp
             }
         }
@@ -120,6 +120,7 @@ struct ConnectorSetupGuide: Equatable {
         case "xcode": return L10n.string("Needs Xcode open with a project")
         case "apple-calendar", "apple-reminders", "apple-contacts": return L10n.string("On this Mac · macOS asks once")
         case "app-store-connect": return L10n.string("API key (.p8 file)")
+        case "imap-mail": return L10n.string("App password · iCloud, Naver, Daum, Kakao and others")
         case "github": return L10n.string("Personal access token")
         case "browserbase": return L10n.string("API key")
         case "slack": return L10n.string("A Slack app made from Yardlet's manifest")
@@ -506,10 +507,10 @@ struct ConnectorAddSheet: View {
 
     // MARK: Rows
 
-    /// A service added already; Gmail takes any number of accounts and App Store Connect any
-    /// number of keys, so neither is ever "added". Xcode and the Mac's data are once per Mac.
+    /// A service added already; Gmail and IMAP mail take any number of accounts and App Store
+    /// Connect any number of keys, so none is ever "added". Xcode and the Mac's data are once per Mac.
     private func isAdded(_ preset: ConnectorPreset) -> Bool {
-        guard preset.signIn != .googleAccount, preset.signIn != .microsoftAccount, preset.signIn != .appStoreConnectKey else { return false }
+        guard ![.googleAccount, .microsoftAccount, .appStoreConnectKey, .mailPassword].contains(preset.signIn) else { return false }
         if let service = preset.localService { return center.connectors.contains { $0.localService == service } }
         let address = MCPServerAddress.canonical(preset.serverURL)
         return center.connectors.contains { MCPServerAddress.canonical($0.serverURL) == address }
@@ -543,7 +544,7 @@ struct ConnectorAddSheet: View {
                     case .oneClick:
                         Button(L10n.string("Connect")) { addOneClick(preset) }
                             .controlSize(.small)
-                    case .key where preset.signIn == .appStoreConnectKey:
+                    case .key where preset.signIn == .appStoreConnectKey || preset.signIn == .mailPassword:
                         Button(L10n.string("Set up…")) { open(preset) }
                             .controlSize(.small)
                     case .key:
@@ -579,6 +580,8 @@ struct ConnectorAddSheet: View {
         }
         let keys = center.connectors.filter { $0.localService == .appStoreConnect }.count
         if preset.signIn == .appStoreConnectKey, keys > 0 { return L10n.format("%lld keys", Int64(keys)) }
+        let mail = center.connectors.filter { $0.localService == .imapMail }.count
+        if preset.signIn == .mailPassword, mail > 0 { return L10n.format("%lld mail accounts", Int64(mail)) }
         return ConnectorSetupGuide.summary(preset, gitHubSignIn: center.canSignInToGitHub)
     }
 
@@ -737,6 +740,8 @@ struct ConnectorAddSheet: View {
                 ZoomSetupPage(center: center, product: preset)
             } else if preset.signIn == .appStoreConnectKey {
                 AppStoreConnectSetupPage(center: center)
+            } else if preset.signIn == .mailPassword {
+                MailAccountSetupPage(center: center)
             } else if preset.id == "slack" {
                 SlackSetupPage(center: center)
             } else if isAdded(preset) {

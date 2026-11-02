@@ -302,8 +302,11 @@ enum GmailText {
 /// An RFC 5322 message for a draft or a send, as `raw` (base64url): UTF-8 bodies in base64, a
 /// non-ASCII subject, display name, or file name as RFC 2047 encoded words, a reply's
 /// `In-Reply-To` and `References`, and attachments in `multipart/mixed` after the body. Gmail
-/// fills `From` with the signed-in account.
+/// fills `From`, `Date` and `Message-ID` itself; an IMAP draft sets them (`IMAPMailSession`).
 struct GmailOutgoingMessage: Equatable {
+    var from: String?
+    var date: Date?
+    var messageID: String?
     var to: [String] = []
     var cc: [String] = []
     var bcc: [String] = []
@@ -356,6 +359,9 @@ struct GmailOutgoingMessage: Equatable {
 
     var mime: String {
         var lines: [String] = []
+        if let from { lines.append("From: " + Self.encodedAddress(Self.oneLine(from))) }
+        if let date { lines.append("Date: " + Self.dateFormatter.string(from: date)) }
+        if let messageID { lines.append("Message-ID: " + Self.oneLine(messageID)) }
         if !to.isEmpty { lines.append("To: " + to.map(Self.encodedAddress).joined(separator: ", ")) }
         if !cc.isEmpty { lines.append("Cc: " + cc.map(Self.encodedAddress).joined(separator: ", ")) }
         if !bcc.isEmpty { lines.append("Bcc: " + bcc.map(Self.encodedAddress).joined(separator: ", ")) }
@@ -408,6 +414,14 @@ struct GmailOutgoingMessage: Equatable {
     private static func base64Lines(_ data: Data) -> String {
         data.base64EncodedString(options: [.lineLength76Characters, .endLineWithCarriageReturn, .endLineWithLineFeed])
     }
+
+    /// RFC 5322's date: `Mon, 2 Nov 2026 21:05:00 +0900`.
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "EEE, d MMM yyyy HH:mm:ss Z"
+        return formatter
+    }()
 
     private static func oneLine(_ text: String) -> String {
         text.components(separatedBy: .newlines).joined(separator: " ")
