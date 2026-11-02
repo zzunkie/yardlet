@@ -2,9 +2,7 @@ import SwiftUI
 
 /// What the mailbox's buttons do, given by the window.
 struct MailActions {
-    enum ComposeKind: Hashable { case reply, replyAll, forward }
-
-    var compose: (MailThread, MailMessage, ComposeKind) -> Void = { _, _, _ in }
+    var compose: (MailThread, MailMessage, MailComposition.Kind) -> Void = { _, _, _ in }
     var editDraft: (MailThread, MailMessage) -> Void = { _, _ in }
     var sendDraft: (MailThread, MailMessage) -> Void = { _, _ in }
     var discardDraft: (MailThread, MailMessage) -> Void = { _, _ in }
@@ -25,7 +23,9 @@ struct MailContent: View {
 
     var body: some View {
         Group {
-            if center.accounts.isEmpty {
+            if window.composition != nil {
+                MailComposeView(center: center, window: window)
+            } else if center.accounts.isEmpty {
                 placeholder(systemName: "envelope", title: L10n.string("No accounts in the mailbox"),
                             detail: L10n.string("Connect Gmail in Settings › Connectors, and its inbox shows here.")) {
                     Button(L10n.string("Open Connectors"), action: actions.openSettings)

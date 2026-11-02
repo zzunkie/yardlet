@@ -41,6 +41,15 @@ final class MailboxRenderingTests: XCTestCase {
                 host.settle(passes: 4)
                 try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "thread-\(name)"))
 
+                // Reply: the message is written in the thread's place, then closed into Drafts.
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Mail reply")))
+                await host.settle(until: { host.accessibilityElements().contains { $0.label == L10n.string("Mail field to") } })
+                host.settle(passes: 6)
+                try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "compose-\(name)"))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Close and keep as draft")))
+                await host.settle(until: { host.accessibilityElements().contains { $0.label == L10n.string("Ask an agent") } })
+                try await waitUntil { await !gmail.drafts.isEmpty }
+
                 // Ask an agent: a new chat names the thread for the account's connector, without its body.
                 XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Ask an agent")))
                 let draft = { model.composerDrafts.home.text }

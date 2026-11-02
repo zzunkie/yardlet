@@ -435,7 +435,14 @@ struct MainWindow: View {
     }
 
     private var mailActions: MailActions {
-        MailActions(askAgent: { thread in
+        MailActions(compose: { thread, message, kind in
+                        guard let account = model.mailbox.account(thread.summary.id.accountID) else { return }
+                        mailWindow.write(kind, account: account, message: message, in: thread)
+                    },
+                    editDraft: { thread, message in mailWindow.edit(message, in: thread, center: model.mailbox) },
+                    sendDraft: { thread, message in mailWindow.sendDraft(message, in: thread, center: model.mailbox) },
+                    discardDraft: { thread, message in mailWindow.discardDraft(message, in: thread, center: model.mailbox) },
+                    askAgent: { thread in
                         guard let account = model.mailbox.account(thread.summary.id.accountID) else { return }
                         newTaskDraft.takeMailThread(MailText.handoff(thread, account: account))
                         showNewTask()
@@ -1786,7 +1793,12 @@ struct MainWindow: View {
                             MailSidebar(center: model.mailbox, window: mailWindow, accountMenu: accountMenu,
                                         onHome: showNewTask, onShowSchedules: showSchedules,
                                         onSelectSection: selectSection,
-                                        onNewMessage: {},
+                                        onNewMessage: {
+                                            let mailbox = model.mailbox
+                                            guard let account = mailWindow.mailbox.accountID.flatMap(mailbox.account)
+                                                ?? mailbox.accounts.first else { return }
+                                            mailWindow.write(.new, account: account)
+                                        },
                                         onRefresh: { Task { await model.mailbox.refresh() } })
                         }
                     }

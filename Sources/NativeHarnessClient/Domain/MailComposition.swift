@@ -5,6 +5,9 @@ import Foundation
 struct MailComposition: Equatable, Sendable {
     enum Kind: Hashable, Sendable { case new, reply, replyAll, forward }
 
+    /// One message being written, from its start to its last save.
+    let id = UUID()
+
     var accountID: UUID
     var kind: Kind
     /// The thread a reply or forward belongs to.
