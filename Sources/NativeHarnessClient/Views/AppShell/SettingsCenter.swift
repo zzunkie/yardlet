@@ -157,6 +157,7 @@ struct SettingsCenterView: View {
         YardletInterfaceSizePreference.standard.rawValue
     /// Read when a task starts or resumes, so a change applies from the next session on.
     @AppStorage(AgentToolPreference.browserToolsKey) private var agentBrowserTools = true
+    @AppStorage(TerminalSharingPreference.key) private var sharesTerminal = true
     @AppStorage(TaskServersPreference.key) private var showsTaskServers = true
     /// Read when a tab opens: its task's own profile, or the default profile every task shares.
     @AppStorage(BrowserTaskProfiles.storageKey) private var cookieStorage = BrowserTaskProfiles.Storage.perTask.rawValue
@@ -461,6 +462,23 @@ struct SettingsCenterView: View {
                     Text(L10n.string("Agent browser tools")).font(.callout.weight(.medium))
                     Spacer(minLength: 8)
                     Toggle(L10n.string("Agent browser tools"), isOn: $agentBrowserTools)
+                        .labelsHidden()
+                        .toggleStyle(.paritySwitch)
+                        .controlSize(.small)
+                }
+                .padding(.vertical, 14)
+                Divider().padding(.leading, Self.dividerLeading)
+                HStack(spacing: 12) {
+                    settingsControlIcon("terminal")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(L10n.string("Share the terminal with agents")).font(.callout.weight(.medium))
+                        Text(L10n.string("A task's agent can read the task's terminal tabs, without typing in them, and a selection in the terminal can be attached to your message (⌘⇧L)."))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Toggle(L10n.string("Share the terminal with agents"), isOn: $sharesTerminal)
                         .labelsHidden()
                         .toggleStyle(.paritySwitch)
                         .controlSize(.small)

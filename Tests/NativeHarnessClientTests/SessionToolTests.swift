@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+@preconcurrency import SwiftTerm
 import XCTest
 @testable import NativeHarnessClient
 @testable import YardletAgentTools
@@ -8,8 +10,8 @@ import XCTest
 /// into an idle task, a running one and another project's, the receiving task's "Sent from" reading,
 /// the refusals, `create_task`'s parent link, `run_agent` in the foreground, in the background and past
 /// its time, the depth, concurrency and permission caps, and `archive_task`'s one card, its refusals and
-/// its answer for each task. No harness runs and no model is contacted: adapters are doubles, every
-/// store and preference is in memory, and the only files are temporary.
+/// its answer for each task, and `read_terminal`. No harness runs and no model is contacted: adapters are
+/// doubles, every store and preference is in memory, and the only files are temporary.
 @MainActor
 final class SessionToolTests: XCTestCase {
     // MARK: - Schemas
@@ -49,8 +51,10 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(AgentToolCatalog.builtInTools.map(\.name).filter {
             !browserNames.contains($0) && $0.hasPrefix(AgentToolCatalog.browserToolPrefix)
         }, [], "yardlet-mcp refuses an unknown browser_ name itself, so only a browser tool starts with it")
-        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.dropLast().suffix(names.count)), names.map { "mcp__yardlet__\($0)" },
+        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.dropLast(2).suffix(names.count)), names.map { "mcp__yardlet__\($0)" },
                        "A Claude task runs them without the CLI's card; the app asks the person where it should")
+        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.suffix(2)),
+                       ["mcp__yardlet__read_terminal", "mcp__yardlet__list_task_runs"])
         XCTAssertEqual(AgentToolServerLaunch.codexToolTimeoutSeconds, 1_800, "Codex lets a call wait 30 minutes")
         let invoker = UnixSocketToolInvoker(environment: [:])
         XCTAssertEqual(invoker.timeout, 180)
@@ -100,12 +104,22 @@ final class SessionToolTests: XCTestCase {
                 privateDirectory: URL(filePath: "/tmp/Yardlet-tools-test"), isEnabled: { false }),
             tools: BrowserAgentTools(usesMacEditingCommands: true, pages: { _ in BrowserAgentPage(cdp: ScriptedCDP()) }))
         broker.sessions = fixture.model
+        var sharesTerminal = false
+        broker.sharesTerminal = { sharesTerminal }
         let launch = try XCTUnwrap(broker.agentToolServer(for: fixture.caller.id, workspaceRoots: []),
                                    "The session tools alone are reason to inject the server")
         let token = try XCTUnwrap(launch.environment[AgentToolEnvironment.token])
-        let list = await broker.list(AgentToolCall(token: token, session: fixture.caller.id.uuidString, tool: "",
-                                                   arguments: .object([:]), method: AgentToolCall.listMethod))
-        XCTAssertEqual(list?.tools.compactMap { $0["name"]?.stringValue }, SessionToolCatalog.tools.map(\.name))
+        func listed() async -> [String]? {
+            await broker.list(AgentToolCall(token: token, session: fixture.caller.id.uuidString, tool: "",
+                                            arguments: .object([:]), method: AgentToolCall.listMethod))?
+                .tools.compactMap { $0["name"]?.stringValue }
+        }
+        let list = await listed()
+        XCTAssertEqual(list, SessionToolCatalog.tools.map(\.name), "Not shared, the terminal tool is not listed")
+        sharesTerminal = true
+        let shared = await listed()
+        XCTAssertEqual(shared, SessionToolCatalog.tools.map(\.name) + [TerminalToolCatalog.readTerminal],
+                       "Shared, the next list has it")
 
         // Over the socket, as yardlet-mcp reaches the app.
         let directory = FileManager.default.temporaryDirectory.appending(path: "yst-\(UUID().uuidString.prefix(8))")
@@ -148,6 +162,76 @@ final class SessionToolTests: XCTestCase {
                                    arguments: .object([:]))
         let refused = await broker.handle(forged)
         XCTAssertTrue(refused.isError, "A call without the task's token reads nothing")
+        await fixture.model.shutdown()
+    }
+
+    // MARK: - read_terminal
+
+    /// `read_terminal` (docs/AGENT_BROWSER_TOOLS.md, "Terminal tool") reads the calling task's own terminal
+    /// tabs while the person shares the terminal: each tab's name, folder and state, and the last lines of
+    /// the shown tab or the one named, with keys and tokens hidden as the browser tools hide them. The shells
+    /// are zsh with a temporary `ZDOTDIR`; nothing typed reaches the person's history.
+    func testReadTerminalReadsTheCallersOwnTabsWhileShared() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let broker = AgentToolBroker(
+            environment: AgentToolBroker.Environment(
+                executableURL: URL(filePath: "/bin/sh"), endpoint: "/tmp/Yardlet-tools-test/tools.sock",
+                privateDirectory: URL(filePath: "/tmp/Yardlet-tools-test"), isEnabled: { false }),
+            tools: BrowserAgentTools(usesMacEditingCommands: true, pages: { _ in BrowserAgentPage(cdp: ScriptedCDP()) }))
+        broker.sessions = fixture.model
+        var sharesTerminal = true
+        broker.sharesTerminal = { sharesTerminal }
+        let launch = try XCTUnwrap(broker.agentToolServer(for: fixture.caller.id, workspaceRoots: []))
+        let token = try XCTUnwrap(launch.environment[AgentToolEnvironment.token])
+        func read(_ arguments: [String: ToolJSON] = [:]) async -> AgentToolResult {
+            await broker.handle(AgentToolCall(token: token, session: fixture.caller.id.uuidString,
+                                              tool: TerminalToolCatalog.readTerminal, arguments: .object(arguments)))
+        }
+        let none = await read()
+        XCTAssertEqual(none.text, "This task has no terminal tab open.")
+
+        let folder = fixture.root.appending(path: "yardlet")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let shell = ShellLaunchEnvironment.isolatedZsh(in: fixture.root)
+        let workspace = fixture.model.taskWorkspaces.state(for: fixture.caller.id)
+        let first = workspace.terminal(in: folder, launch: shell, taskID: fixture.caller.id)
+        let second = workspace.openTerminalTab(in: folder, launch: shell, taskID: fixture.caller.id)
+        defer { workspace.endTerminal() }
+        second.name = "server"
+        for tab in [first, second] {
+            _ = tab.view {
+                NativeTerminalView(frame: NSRect(x: 0, y: 0, width: 600, height: 300),
+                                   font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+                                   options: TerminalOptions(cursorStyle: .steadyBlock, scrollback: 100))
+            }
+        }
+        let secret = "gh" + "p_" + String(repeating: "A", count: 36)
+        let typed = await first.typeWhenReady("printf '%s\\n' one two \(secret)\r", limit: testWaitLimit)
+        XCTAssertTrue(typed)
+        try await waitUntil { first.bufferText.contains("\ntwo\n") }
+        let started = await second.typeWhenReady("sleep 30\r", limit: testWaitLimit)
+        XCTAssertTrue(started)
+        try await waitUntil { second.isRunningProgram }
+
+        let shown = await read()
+        XCTAssertFalse(shown.isError, shown.text)
+        let path = ShellLaunchEnvironment.directoryPath(folder)
+        XCTAssertTrue(shown.text.hasPrefix("Terminal tabs (2):\n1. \"yardlet\", in \(path): at its prompt\n"
+            + "2. \"server\" (shown), in \(path): a command is running\n\nThe last "), shown.text)
+        XCTAssertTrue(shown.text.contains("sleep 30"), "the shown tab by default: \(shown.text)")
+
+        let named = await read(["tab": .integer(1), "lines": .integer(4)])
+        XCTAssertTrue(named.text.contains("The last 4 of "), named.text)
+        XCTAssertTrue(named.text.contains("\none\ntwo\nghp_" + CredentialText.marker + "\n"), named.text)
+        XCTAssertFalse(named.text.contains(secret), "keys and tokens a command printed are hidden")
+        let outside = await read(["tab": .integer(3)])
+        XCTAssertEqual(outside.text, "This task's terminal has 2 tabs; tab 3 is not one of them.")
+
+        sharesTerminal = false
+        let off = await read()
+        XCTAssertTrue(off.isError)
+        XCTAssertFalse(off.text.contains("one"), "nothing read once the terminal is not shared: \(off.text)")
         await fixture.model.shutdown()
     }
 

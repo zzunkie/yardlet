@@ -709,6 +709,10 @@ struct TaskDetail: View {
                 folder: TerminalFolderContext(folders: [session.workspaceURL] + session.additionalRootURLs, restart: {
                     workspaceState.restartTerminal(in: session.workspaceURL, launch: terminalShellLaunch, taskID: session.id)
                 }),
+                onAttachSelection: { selection, title in
+                    TerminalSelectionText.attach(selection, from: title, to: composerDraft)
+                    workspaceState.keyboardFocus.move(to: .chat)
+                },
                 onHandoffDone: { workspaceState.finishTerminalHandoff($0) },
                 onClose: closeTerminal
             )

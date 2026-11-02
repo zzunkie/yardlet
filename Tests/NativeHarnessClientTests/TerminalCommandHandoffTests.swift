@@ -247,6 +247,96 @@ final class TerminalCommandHandoffTests: XCTestCase {
         XCTAssertEqual(toggles, 2, "Control-Shift-` is not it")
     }
 
+    /// While the person shares the terminal, a selection in it goes to the task's message with ⌘⇧L (the
+    /// Claude app's key) or the terminal's right-click menu: a fenced block under the tab's name after what
+    /// the message says. Turned off in Settings, the terminal has no menu and the key does nothing. Review
+    /// images: `.build/terminal-tabs-qa/attach-*.png` and `settings-terminal-*.png`.
+    func testASelectionInTheTerminalGoesToTheMessageWhileShared() throws {
+        let directory = try WindowlessRender.directory("terminal-tabs-qa")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("TerminalSharing")))
+        let launch = ShellLaunchEnvironment.isolatedZsh(in: try temporaryFolder())
+        let fixture = HandoffFixture.all(workspace: try temporaryFolder(named: "yardlet"))[0]
+        let workspace = TaskWorkspaceState()
+        workspace.setPanels(.init(isTerminalPresented: true))
+        let draft = TaskComposerDraft()
+        draft.text = "Why does this fail?"
+        for appearance in WindowlessRender.Appearance.allCases {
+            let host = WindowlessRender.Host(
+                TaskTerminalHost(fixture: fixture, workspace: workspace, draft: draft)
+                    .environment(\.terminalShellLaunch, launch)
+                    .environment(\.colorScheme, appearance.colorScheme)
+                    .defaultAppStorage(defaults)
+                    .frame(width: 1_000, height: 820)
+                    .background(ParityTheme.canvas),
+                size: NSSize(width: 1_000, height: 820), appearance: appearance
+            )
+            defer { host.close() }
+            host.settle()
+            if appearance == .dark {
+                try WindowlessRender.writePNG(Self.asShown(host, appearance: appearance),
+                                              to: directory.appending(path: "attach-dark.png"))
+                continue
+            }
+            let shell = workspace.terminal(in: fixture.workspaceURL, launch: launch, taskID: nil)
+            try waitUntilSettled(in: host) { shell.isAtPrompt && host.hosting.terminalText.contains("%") }
+            shell.send("printf 'B2-%s\\n' selected\r")
+            try waitForLine("B2-selected", in: host)
+            let terminal = try XCTUnwrap(host.hosting.terminalView)
+            XCTAssertTrue(host.window.makeFirstResponder(terminal))
+            terminal.selectAll(nil)
+            let click = try XCTUnwrap(NSEvent.mouseEvent(
+                with: .rightMouseDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: host.window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            let key = try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
+                windowNumber: host.window.windowNumber, context: nil, characters: "L",
+                charactersIgnoringModifiers: "l", isARepeat: false, keyCode: 37))
+            XCTAssertEqual(terminal.menu(for: click)?.items.first?.title, L10n.string("Attach Selection to Message"))
+            XCTAssertTrue(terminal.performKeyEquivalent(with: key))
+            host.settle()
+            let heading = "Why does this fail?\n\n" + L10n.format("Terminal (%@):", "yardlet") + "\n```\n"
+            XCTAssertTrue(draft.text.hasPrefix(heading), draft.text)
+            XCTAssertTrue(draft.text.contains("\nB2-selected\n"), draft.text)
+            XCTAssertTrue(draft.text.hasSuffix("\n```\n"), draft.text)
+            XCTAssertEqual(draft.selection?.lowerBound, draft.text.endIndex, "the caret goes after the block")
+            // A window never shown never becomes key, so the composer's own step that puts the caret back
+            // (`ComposerEditor`, which reads the key window's field) leaves AppKit's select-all here; the
+            // field is drawn with the caret where that step puts it.
+            Self.editableFields(in: host.hosting).forEach {
+                $0.setSelectedRange(NSRange(location: $0.string.utf16.count, length: 0))
+            }
+            try WindowlessRender.writePNG(Self.asShown(host, appearance: appearance),
+                                          to: directory.appending(path: "attach-light.png"))
+
+            defaults.set(false, forKey: TerminalSharingPreference.key)
+            host.settle()
+            let attached = draft.text
+            XCTAssertNil(terminal.menu(for: click), "Not shared, the terminal has no menu")
+            XCTAssertFalse(terminal.performKeyEquivalent(with: key))
+            XCTAssertEqual(draft.text, attached, "and the key attaches nothing")
+            defaults.removeObject(forKey: TerminalSharingPreference.key)
+            host.settle()
+        }
+        workspace.endTerminal()
+
+        // The setting, below the browser tools' switch in Settings › General.
+        for appearance in WindowlessRender.Appearance.allCases {
+            let host = WindowlessRender.Host(
+                SettingsCenterView(notificationCenter: MenuBarQuietNotificationCenter())
+                    .defaultAppStorage(defaults)
+                    .environment(\.colorScheme, appearance.colorScheme),
+                size: NSSize(width: 820, height: 1_400), appearance: appearance)
+            defer { host.close() }
+            host.settle()
+            try WindowlessRender.writePNG(host.capture().bitmap,
+                                          to: directory.appending(path: "settings-terminal-\(appearance.suffix).png"))
+            guard appearance == .light else { continue }
+            let labels = host.accessibilityElements().filter { $0.role == NSAccessibility.Role.checkBox.rawValue }
+                .map(\.label)
+            XCTAssertTrue(labels.contains(L10n.string("Share the terminal with agents")), labels.description)
+        }
+    }
+
     /// Three tabs, one renamed, in both appearances, for review: `.build/terminal-tabs-qa/`.
     func testTheTerminalDrawsItsTabs() throws {
         let directory = try WindowlessRender.directory("terminal-tabs-qa")
@@ -296,6 +386,10 @@ final class TerminalCommandHandoffTests: XCTestCase {
         let shown = NSBitmapImageRep(cgImage: try XCTUnwrap(context.makeImage()))
         shown.size = window.size
         return shown
+    }
+
+    private static func editableFields(in view: NSView) -> [NSTextView] {
+        ((view as? NSTextView).flatMap { $0.isEditable ? [$0] : nil } ?? []) + view.subviews.flatMap(editableFields)
     }
 
     private static func taskHost(_ fixture: HandoffFixture, _ workspace: TaskWorkspaceState, launch: ShellLaunchEnvironment,
@@ -523,11 +617,12 @@ private struct HandoffFixture {
 private struct TaskTerminalHost: View {
     let fixture: HandoffFixture
     let workspace: TaskWorkspaceState
+    var draft = TaskComposerDraft()
     @FocusState private var focused: TaskSurface?
 
     var body: some View {
         TaskDetail(
-            session: fixture.session, composerDraft: TaskComposerDraft(), workspaceState: workspace,
+            session: fixture.session, composerDraft: draft, workspaceState: workspace,
             panelState: Binding(get: { workspace.panels }, set: { workspace.setPanels($0) }),
             focusedSurface: $focused, transcript: TaskTranscriptReader(fixture.entries), errorMessage: nil,
             codexTaskState: fixture.codexTaskState, codexHistorySelection: nil, codexQueue: [],

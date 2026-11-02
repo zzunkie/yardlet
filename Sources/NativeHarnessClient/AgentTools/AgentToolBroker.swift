@@ -85,6 +85,10 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     weak var suggestions: (any TaskSuggestionToolHandling)?
     /// The app, which answers the session tools. Nil, as in tests, offers none.
     weak var sessions: (any SessionToolHandling)?
+    /// Whether the person shares the task's terminal with its agent (`TerminalSharingPreference`): the
+    /// session tools then include `read_terminal`. Read at every list, so a change reaches a running task
+    /// once its harness is told the list changed (`toolsMayHaveChanged`).
+    var sharesTerminal: @MainActor () -> Bool = { TerminalSharingPreference.isOn() }
     /// The app, which answers the scheduled-task tools. Nil, as in tests, offers none.
     weak var schedules: (any ScheduleToolHandling)?
     /// The vault for agents. A task with the browser tools also gets `browser_fill_credential` while
@@ -237,6 +241,20 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         if SessionToolCatalog.definition(named: call.tool) != nil, let sessions {
             return await sessions.callSessionTool(named: call.tool, arguments: call.arguments, callerID: sessionID)
         }
+        if TerminalToolCatalog.definition(named: call.tool) != nil, let sessions {
+            guard sharesTerminal() else {
+                return .error("The person stopped sharing the terminal in Yardlet's settings, so it was not read.")
+            }
+            // Keys and tokens a command printed are hidden as the browser tools hide them.
+            let result = await sessions.callSessionTool(named: call.tool, arguments: call.arguments, callerID: sessionID)
+            guard vault?.hidesCredentials ?? true else { return result }
+            var hidden = result
+            hidden.content = result.content.map { content in
+                guard case let .text(text) = content else { return content }
+                return .text(CredentialText.scrub(text))
+            }
+            return hidden
+        }
         if ScheduleToolCatalog.definition(named: call.tool) != nil, let schedules {
             return await schedules.callScheduleTool(named: call.tool, arguments: call.arguments, callerID: sessionID)
         }
@@ -250,7 +268,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     private static func ownDefinition(named name: String) -> AgentToolDefinition? {
         AgentToolCatalog.definition(named: name) ?? VaultToolCatalog.definition(named: name)
             ?? TaskSuggestionToolCatalog.definition(named: name) ?? SessionToolCatalog.definition(named: name)
-            ?? ScheduleToolCatalog.definition(named: name)
+            ?? TerminalToolCatalog.definition(named: name) ?? ScheduleToolCatalog.definition(named: name)
     }
 
     /// A call to a tool the task does not have, such as one its harness listed before a connector went off,
@@ -266,7 +284,8 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     }
 
     /// The task's tools: the browser catalog when it was on, the task suggestion tools, the session
-    /// tools, the scheduled-task tools, then connected connectors' tools, less any whose name is one of Yardlet's own (a
+    /// tools with `read_terminal` while the terminal is shared, the scheduled-task tools, then connected
+    /// connectors' tools, less any whose name is one of Yardlet's own (a
     /// connector slug and tool can spell `spawn_task`), with their fingerprint. Nil when the
     /// call's token does not match.
     func list(_ call: AgentToolCall) async -> AgentToolList? {
@@ -281,13 +300,14 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         let vaultTools = browserOn && vault?.offersTool == true ? [VaultToolCatalog.tool.json] : []
         let suggestionTools = suggestions == nil ? [] : TaskSuggestionToolCatalog.tools.map(\.json)
         let sessionTools = sessions == nil ? [] : SessionToolCatalog.tools.map(\.json)
+        let terminalTools = sessions != nil && sharesTerminal() ? [TerminalToolCatalog.tool.json] : []
         let scheduleTools = schedules == nil ? [] : ScheduleToolCatalog.tools.map(\.json)
         let ownNames = Set((TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools + ScheduleToolCatalog.tools
-            + [VaultToolCatalog.tool]).map(\.name))
+            + [VaultToolCatalog.tool, TerminalToolCatalog.tool]).map(\.name))
         let connectorTools = (await connectors?.connectorTools(for: connectorContext(sessionID)) ?? []).filter {
             !ownNames.contains($0["name"]?.stringValue ?? "")
         }
-        return browser + vaultTools + suggestionTools + sessionTools + scheduleTools + connectorTools
+        return browser + vaultTools + suggestionTools + sessionTools + terminalTools + scheduleTools + connectorTools
     }
 
     // MARK: Tool list changes
