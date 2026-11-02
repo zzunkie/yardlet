@@ -262,12 +262,13 @@ of Xcode 16.0, since its macOS 15 images run the latest 15.x.
 ### Screenshots and demo videos
 
 Debug builds carry a showcase scene for public screenshots and videos: made-up projects, people and
-accounts, in English, with Codex, Claude Code and OpenCode tasks, a pull request whose checks
-passed, and a turn that can play over and over for recording (`--ui-fixture=showcase`, optionally
-with `--ui-fixture-playback`). `scripts/showcase/capture.sh <folder>` takes the stills and the
-looping videos in light and dark mode from a QA copy of `.build/Yardlet.app` with its own bundle
-identifier and temporary home, then moves that copy to the Trash. It needs the screen unlocked and
-the Screen Recording permission; see the script's header for the scenes and file names.
+accounts, in English, with Codex, Claude Code and OpenCode tasks and a pull request whose checks
+passed (`--ui-fixture=showcase`). With `--ui-fixture-playback` it plays a round over and over for
+recording: beside a running Claude Code task, a Codex task is started on the account with room
+left. `scripts/showcase/capture.sh <folder>` takes the stills and the looping videos in light and
+dark mode from a QA copy of `.build/Yardlet.app` with its own bundle identifier and temporary home,
+then moves that copy to the Trash. It needs the screen unlocked and the Screen Recording permission;
+see the script's header for the scenes and file names.
 
 ### Signing and notarization
 

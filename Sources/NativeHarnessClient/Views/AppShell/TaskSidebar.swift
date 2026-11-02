@@ -1653,6 +1653,15 @@ private struct TaskRow: View {
     /// Where the row is in the window, kept without drawing the row again as the list scrolls.
     @State private var place = SidebarRowPlace()
 
+    /// While a script captures the showcase, the row shows no hover (`HoverRevealedActionsCapture`).
+    private static var ignoresHover: Bool {
+#if DEBUG
+        HoverRevealedActionsCapture.hidesActions
+#else
+        false
+#endif
+    }
+
     private var isScheduledRun: Bool { scheduledTaskIDs.contains(session.id) }
 
     private var cpuPercent: Int? {
@@ -1781,7 +1790,7 @@ private struct TaskRow: View {
         // The Codex app's row: its hover card opens after a rest, or at once at the row's end, where
         // its buttons are.
         .onContinuousHover(coordinateSpace: .local) { phase in
-            guard let hoverCard else { return }
+            guard let hoverCard, !Self.ignoresHover else { return }
             switch phase {
             case let .active(location):
                 hoverCard.rowHovered(hoverContent, frame: place.frame,
@@ -1793,7 +1802,7 @@ private struct TaskRow: View {
         .onChange(of: hoverContent) { _, content in hoverCard?.rowChanged(content) }
         .onDisappear { hoverCard?.rowLeft(session.id) }
         .onHover { hovering in
-            isHovering = hovering
+            isHovering = hovering && !Self.ignoresHover
             prefetch?.cancel()
             prefetch = nil
             guard hovering, !isSelected else { return }

@@ -15,7 +15,8 @@ import YardletAgentTools
 /// - `--ui-fixture-split=right` puts the running Claude Code task beside it.
 /// - `--ui-fixture-settings-section=accounts|connectors` opens Settings on the same accounts and
 ///   connectors.
-/// - `--ui-fixture-playback` plays the latest turn over and over (`ShowcasePlayback`).
+/// - `--ui-fixture-playback` plays, over and over, the dark mode task being started on the Codex
+///   account with room left, beside the running Claude Code task (`ShowcasePlayback`).
 ///
 /// Conversations go through the providers' own decoders: the Codex task is App Server items and
 /// notifications through `CodexTaskReducer`, the Claude Code task stream-json lines through
@@ -89,10 +90,11 @@ enum ShowcaseFixture {
             originWorkspacePath: web.path(percentEncoded: false), worktreeName: "fix-flaky-checkout",
             branch: "fix/flaky-checkout")
 
-        // The first two are the split's panes (`--ui-fixture-split=right`).
+        // The first two are the split's panes (`--ui-fixture-split=right`). The dark mode task runs
+        // on the personal Codex account, the one with room left.
         let sessions = [
             task(darkModeTaskID, .codex, web, "Add a dark mode toggle to settings", .completed,
-                 minutesAgo: 1, branch: "feat/settings-sections"),
+                 minutesAgo: 1, connection: Accounts.codexPersonal, branch: "feat/settings-sections"),
             flakyCheckout,
             task(imagesTaskID, .openCode, web, "Serve product images in AVIF", .completed, minutesAgo: 26, unread: true),
             task(refundDocsTaskID, .codex, api, "Document the /v2/refunds endpoint", .running,
@@ -274,7 +276,8 @@ enum ShowcaseFixture {
 
     /// The person's accounts. Codex and Claude Code each have their own home's login (work,
     /// jordan@example.com), which Settings › Accounts lists first, and a saved personal account;
-    /// OpenCode has the provider it is set up with. Each shows the usage its harness reports.
+    /// OpenCode has the provider it is set up with. Each shows the usage its harness reports: the
+    /// work Codex login has 6% of its five-hour limit left, the personal one 88%.
     enum Accounts {
         static let codexPersonal = ProviderConnection(id: "showcase-codex-personal", name: "Personal", harness: .codex,
             providerID: "openai-codex", homePath: "/tmp/yardlet-showcase-accounts/codex-personal", credentialSelector: nil)
@@ -300,7 +303,7 @@ enum ShowcaseFixture {
                 HarnessAccountSnapshot(id: HarnessKind.codex.rawValue, harness: .codex, providerID: "openai-codex",
                     state: .signedIn, accountLabel: "jordan@example.com", accountPlan: L10n.format("ChatGPT %@ plan", "Pro"),
                     detail: "", credentialOwner: L10n.string("Codex CLI / system credential store"), checkedAt: now,
-                    usage: usage(0.34, 0.21, resetsIn: 2.5, now: now), canLogin: false, canLogout: false),
+                    usage: usage(0.94, 0.58, resetsIn: 1.2, now: now), canLogin: false, canLogout: false),
                 HarnessAccountSnapshot(id: HarnessKind.claudeCode.rawValue, harness: .claudeCode, providerID: "anthropic",
                     state: .signedIn, accountLabel: "jordan@example.com", accountPlan: "Claude Max",
                     detail: "", credentialOwner: "Claude Code", checkedAt: now,
@@ -318,9 +321,9 @@ enum ShowcaseFixture {
             let now = Date()
             connections.publishDefaults(VisualFixtureScenario.harnessCenterSnapshots)
             let accounts: [(ProviderConnection, String, String?, [AccountUsageMetric])] = [
-                (codexPersonal, "jordan.park@example.net", L10n.format("ChatGPT %@ plan", "Plus"),
+                (codexPersonal, "jpark@example.net", L10n.format("ChatGPT %@ plan", "Plus"),
                  usage(0.12, 0.46, resetsIn: 4, now: now)),
-                (claudePersonal, "jordan.park@example.net", "Claude Pro", usage(0.63, 0.52, resetsIn: 3, now: now))
+                (claudePersonal, "jpark@example.net", "Claude Pro", usage(0.63, 0.52, resetsIn: 3, now: now))
             ]
             for (connection, label, plan, metrics) in accounts {
                 try? connections.save(connection)
@@ -461,7 +464,18 @@ enum ShowcaseFixture {
         return state
     }
 
-    /// The playback shows the turn's seconds counting from 3 to 14; the still says the same.
+    /// The dark mode task as the playback starts it: a new thread with nothing in it yet.
+    static func newTaskState(workspacePath: String) -> CodexTaskState {
+        var state = CodexTaskState.empty
+        _ = CodexTaskReducer().applySnapshot(.object([
+            "id": .string(codexThreadID), "name": .string("Add a dark mode toggle to settings"),
+            "preview": .string(latestRequest), "cwd": .string(workspacePath),
+            "status": .object(["type": .string("idle")]), "turns": .array([])
+        ]), to: &state)
+        return state
+    }
+
+    /// The playback shows the turn's seconds counting from 4 to 14; the still says the same.
     static let latestTurnDurationMs = 14_400
 
     static let latestPlan = [
@@ -486,8 +500,9 @@ enum ShowcaseFixture {
         return .object(["total": usage, "last": usage, "modelContextWindow": .integer(272_000)])
     }
 
-    /// The latest turn after its request, in the order the playback shows them.
-    static func latestTurnItems(workspacePath: String) -> [JSONValue] {
+    /// The latest turn after its request, in the order the playback shows them. The playback's new
+    /// task has no pull request yet, so its answer offers to open one (`newTaskAnswer`).
+    static func latestTurnItems(workspacePath: String, answer: String = latestAnswer) -> [JSONValue] {
         [
             agentMessage("note-dark-mode-1", "I’ll look at how the theme is set and where the settings page leaves room for it.",
                          phase: "commentary"),
@@ -516,7 +531,7 @@ enum ShowcaseFixture {
             fileChange("patch-dark-mode", workspacePath: workspacePath),
             command("cmd-dark-mode-4", "pnpm test settings theme", in: workspacePath, output: testOutput, durationMs: 2_410),
             command("cmd-dark-mode-5", "pnpm lint", in: workspacePath, output: "✔ No ESLint warnings or errors", durationMs: 3_870),
-            agentMessage("answer-dark-mode", latestAnswer, phase: "final_answer")
+            agentMessage("answer-dark-mode", answer, phase: "final_answer")
         ]
     }
 
@@ -542,6 +557,10 @@ enum ShowcaseFixture {
 
         `pnpm test` passes (12 tests) and lint is clean. These changes are not committed yet; say the word and I’ll push them to #128.
         """
+
+    static var newTaskAnswer: String {
+        latestAnswer.replacingOccurrences(of: "I’ll push them to #128.", with: "I’ll open a pull request.")
+    }
 
     /// The dark mode change as App Server's `fileChange` item has it: hunks for an update, the
     /// whole text for an added file. It is the diff make-projects.sh leaves uncommitted.
@@ -760,8 +779,9 @@ enum ShowcaseFixture {
     // MARK: The Claude Code task
 
     /// The running Claude Code task, as its stream-json would have it so far: it reproduced the
-    /// failure, found the fixed wait, replaced it, and is running the test fifty times.
-    static func flakyCheckoutTranscript(worktree: URL) -> [TranscriptEntry] {
+    /// failure, found the fixed wait, replaced it, and is running the test fifty times. `finished`,
+    /// as the playback ends it: the fifty runs passed and it says so.
+    static func flakyCheckoutTranscript(worktree: URL, finished: Bool = false) -> [TranscriptEntry] {
         let folder = worktree.path(percentEncoded: false)
         var projection = ClaudeSessionProjection()
         var builder = TranscriptBuilder()
@@ -829,6 +849,16 @@ enum ShowcaseFixture {
         result("todo-3", "Todos have been modified successfully")
         assistant([tool("bash-2", "Bash", ["command": .string("pnpm playwright test checkout.spec.ts --repeat-each=50"),
                                              "description": .string("Run the checkout test 50 times")])])
+        guard finished else { return builder.entries }
+        result("bash-2", "Running 50 tests using 4 workers\n\n  50 passed (3.4m)")
+        assistant([tool("todo-4", "TodoWrite", todos(4))])
+        result("todo-4", "Todos have been modified successfully")
+        assistant([text("""
+            All 50 runs passed. The test now waits for **Pay** to be enabled instead of sleeping for 500 ms, \
+            so a slow card check on CI no longer lands the click on a disabled button.
+            """)])
+        line(["type": .string("result"), "subtype": .string("success"), "is_error": .bool(false),
+              "duration_ms": .integer(214_000), "num_turns": .integer(9), "result": .string("All 50 runs passed.")])
         return builder.entries
     }
 

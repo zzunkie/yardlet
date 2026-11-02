@@ -98,8 +98,9 @@ struct ConversationMessageActionButtons: View {
 }
 
 #if DEBUG
-/// A script capturing the showcase (`--ui-fixture-ignore-pointer`) shows no message's actions:
-/// whether one shows would depend on where the person's pointer and the window's focus happen to be.
+/// A script capturing the showcase (`--ui-fixture-ignore-pointer`) shows no message's actions and no
+/// sidebar row's hover or hover card: whether one shows would depend on where the person's pointer
+/// and the window's focus happen to be, and a row moving under a resting pointer counts as hovered.
 @MainActor
 enum HoverRevealedActionsCapture {
     static var hidesActions = false
