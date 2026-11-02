@@ -46,11 +46,16 @@ extension AppModel {
 
     /// The tasks under Pinned in the sidebar: pinned tasks and the tasks of pinned split views.
     var pinnedSidebarSessionIDs: Set<UUID> {
+        sidebarLists.pinnedSessionIDs
+    }
+
+    /// The sidebar's lists as the window lays them out with no search and every row shown: what the
+    /// menu bar menu and the phone read of it.
+    var sidebarLists: SidebarProjection.Layout {
         let groups = projects.visibleGroups(sessions: store.sessions)
-        let layout = SidebarProjection.layout(
+        return SidebarProjection.layout(
             visibleGroups: groups, allGroups: groups, chats: projects.chats(sessions: store.sessions),
-            splits: splits.splits, isFiltering: false)
-        return Set(layout.pinned.flatMap(\.rowsWithChildren).flatMap(\.sessions).map(\.id))
+            splits: splits.splits, isFiltering: false, archivedParents: store.archivedParentIDs)
     }
 
     /// The line under a task's title where tasks are listed apart from their project (the activity

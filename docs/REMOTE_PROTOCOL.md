@@ -120,7 +120,7 @@ Mac's language). Listed in sidebar order. No folder paths are sent.
 | `running` | a turn (or a Claude bash command) is running, waiting on a request included: `stopTurn` applies. `attention` `waiting` always comes with `running: true` |
 | `pinned` | listed under Pinned in the sidebar |
 | `lastActivityAt` | last activity |
-| `parentTaskId` | the task it was started from (fork, subagent), when that task is in Yardlet; the sidebar nests it |
+| `parentTaskId` | the task the Mac's sidebar draws it under, absent when the sidebar lists it at the top of its list. That is the task it was started from (fork, subagent, a task an agent started) or the person moved it under, past archived tasks the nearest one the same list shows, and past the sidebar's second level the task its own parent sits under. A task whose parent is in another project or Chats, is pinned apart (Pinned is a list of its own), is in a split view or is not in Yardlet has none. A phone nests by it alone, with no rule of its own |
 
 `attention` and `indicator` are the same definition the Mac's sidebar dots, menu bar menu and Dock
 badge read (`TaskAttentionProjection`, `SidebarTaskIndicatorProjection`).
@@ -559,6 +559,9 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
   (§7, §13.1, §14.3).
 - 2026-11-02, v2 only: scheduled tasks, Run now, Pause and Resume, and their change event (§15.21); a task's outputs
   and the files in its folders (§15.22).
+- 2026-11-02, a rule restated: `parentTaskId` (§4.1) is the task the Mac's sidebar draws the task under, so a task
+  whose parent is in another list, pinned apart or in a split view comes without one, as the sidebar lists it.
+  Before, it was the task it was started from whenever that task was listed anywhere.
 
 ## 11. v2 transport
 

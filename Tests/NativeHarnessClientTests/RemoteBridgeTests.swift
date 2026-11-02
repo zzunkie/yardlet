@@ -379,6 +379,57 @@ final class RemoteBridgeTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// The phone nests by `parentTaskId` alone, so it carries the task the Mac's sidebar draws each task
+    /// under: none for a task whose parent is in another list, pinned apart or in a split view, the
+    /// nearest listed task past an archived parent, and below the sidebar's deepest level the task its
+    /// own parent sits under.
+    func testTasksNestOnThePhoneWhereTheSidebarNestsThem() async throws {
+        let folder = URL(filePath: "/tmp/remote-bridge-nesting/app", directoryHint: .isDirectory)
+        let otherFolder = URL(filePath: "/tmp/remote-bridge-nesting/site", directoryHint: .isDirectory)
+        var minutes = 0.0
+        func task(_ title: String, in place: URL = folder, under parent: SessionRecord? = nil,
+                  pinned: Bool = false) -> SessionRecord {
+            minutes += 1
+            return SessionRecord(harness: .claudeCode, workspaceURL: place, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                 title: title, updatedAt: Date(timeIntervalSince1970: 1_000_000 - minutes * 60),
+                                 isPinned: pinned, parentTaskID: parent?.id)
+        }
+        let top = task("Plan the release")
+        let child = task("Write the notes", under: top)
+        let grandchild = task("Check the links", under: child)
+        let greatGrandchild = task("Fix one link", under: grandchild)
+        let elsewhere = task("Update the site", in: otherFolder, under: top)
+        let pinned = task("Pinned work", pinned: true)
+        let underPinned = task("From pinned work", under: pinned)
+        let left = task("Left pane")
+        let right = task("Right pane")
+        let underSplit = task("From the left pane", under: left)
+        let archived = task("Archived step", under: top)
+        let underArchived = task("After the archived step", under: archived)
+        let model = try Self.model(
+            sessions: [top, child, grandchild, greatGrandchild, elsewhere, pinned, underPinned, left, right, underSplit,
+                       underArchived],
+            transcripts: [:], archived: [archived])
+        try await model.store.loadArchivedSessions()
+        model.splits.activate(.session(left.id))
+        model.splits.split(.right, placing: right.id)
+
+        let parents = Dictionary(uniqueKeysWithValues: AppModelRemoteBridge(model: model).snapshot().tasks.map {
+            ($0.id, $0.parentTaskId)
+        })
+        func parent(of task: SessionRecord) -> String?? { parents[task.id.uuidString] }
+        XCTAssertEqual(parent(of: child), top.id.uuidString)
+        XCTAssertEqual(parent(of: grandchild), child.id.uuidString)
+        XCTAssertEqual(parent(of: greatGrandchild), child.id.uuidString,
+                       "Past the deepest level it sits beside its parent, as the sidebar draws it")
+        XCTAssertEqual(parent(of: elsewhere), .some(nil), "Another project's list shows it at its top")
+        XCTAssertEqual(parent(of: underPinned), .some(nil), "Pinned is a list of its own")
+        XCTAssertEqual(parent(of: underSplit), .some(nil), "A split view nests nothing")
+        XCTAssertEqual(parent(of: underArchived), top.id.uuidString, "The nearest listed task past an archived one")
+        XCTAssertEqual(parent(of: top), .some(nil))
+        await model.shutdown()
+    }
+
     // MARK: - Scheduled tasks (§15.21)
 
     func testScheduledTasksAreTheMacsListAndActThroughItsMenu() async throws {
@@ -607,10 +658,12 @@ final class RemoteBridgeTests: XCTestCase {
     // MARK: - Helpers
 
     private static func model(sessions: [SessionRecord], transcripts: [UUID: [TranscriptEntry]],
-                              queues: [UUID: [QueuedFollowUp]] = [:], schedules: [ScheduledTask] = []) throws -> AppModel {
+                              queues: [UUID: [QueuedFollowUp]] = [:], schedules: [ScheduledTask] = [],
+                              archived: [SessionRecord] = []) throws -> AppModel {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteBridgeTests")))
+        let repository = InMemorySessionRepository(sessions: sessions + archived, archived: archived.map(\.id))
         return AppModel(
-            store: SessionStore(sessions: sessions, repository: InMemorySessionRepository(sessions: sessions)),
+            store: SessionStore(sessions: sessions, repository: repository),
             runtimeSelections: RuntimeSelectionStore(defaults: defaults),
             initialTranscripts: transcripts,
             initialCodexQueues: queues,

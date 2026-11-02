@@ -53,10 +53,12 @@ final class AppModelRemoteBridge: RemoteBridge {
 
     static func snapshot(of model: AppModel) -> RemoteSnapshot {
         let sessions = model.store.sessions
+        let sidebar = model.sidebarLists
         var snapshot = RemoteTaskProjection.snapshot(
             groups: model.projects.visibleGroups(sessions: sessions),
             chats: model.projects.chats(sessions: sessions),
-            pinnedIDs: model.pinnedSidebarSessionIDs,
+            pinnedIDs: sidebar.pinnedSessionIDs,
+            nestingParents: sidebar.nestingParents,
             details: model.taskAttentionDetails,
             shellBusy: model.shellBusySessionIDs,
             newestRequestID: { model.newestPendingApproval(in: $0)?.id },
