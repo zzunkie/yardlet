@@ -689,6 +689,8 @@ also provides tools that read and edit the structure inside Docs, Sheets and Sli
   that call's error and does not change the state.
 - **Reconnect and remove:** reconnecting a Google service signs in the whole account again. Remove removes only that
   service, and "Remove this Google account" removes the whole account. Yardlet does not ask Google to revoke tokens.
+- The mailbox (docs/MAILBOX.md) shows the inbox of each connected Gmail account with the same sign-in and session,
+  and asks for no other scope.
 - Google account row: the address, five service chips (on or off, and state), and Reconnect and `…` when needed. Below
   them is "What Yardlet asks Google for" (the scopes and their classes, and "your own app only" on the Analytics and
   Ads scopes while new sign-ins use the app in the build).
