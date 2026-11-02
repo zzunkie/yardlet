@@ -59,9 +59,13 @@ struct ConversationTurnWindow: Equatable, Sendable {
 /// main thread for well over a tenth of a second. So once the reader asks for earlier turns, the turns
 /// that arrive before the earliest one drawn are drawn over `cycles` display cycles, the nearest first,
 /// at least one each cycle, while the reader holds the view still: a place kept while their scrolling
-/// moves the view would be read from before it moved. Asking for earlier turns again draws the rest at
-/// once. The reader's place is kept as each few arrive above it (`TranscriptScrollFollowing`), as it
-/// was kept for all of them at once, and the turns drawn in the end are the same.
+/// moves the view would be read from before it moved (SwiftUI moves the view for a wheel in its next
+/// update, after work the main thread already had waiting). Asking for earlier turns again while some
+/// are waiting goes on from the earliest one drawn: reaching the top as the reader keeps scrolling
+/// draws the next of them, as a display cycle would, kept in place from the scroll that reached it
+/// (`TranscriptTopLoading`), and the turns the rail brings in are drawn after them. The reader's place
+/// is kept as each few arrive above it (`TranscriptScrollFollowing`), as it was kept for all of them
+/// at once, and the turns drawn in the end are the same.
 struct ConversationTurnReveal: Equatable, Sendable {
     /// The display cycles the turns that arrive are drawn over.
     static let cycles = 10
@@ -80,8 +84,8 @@ struct ConversationTurnReveal: Equatable, Sendable {
     /// Display cycles since the turns drawing now began to arrive.
     private var cycle = 0
 
-    /// The reader asked for the turns before `turnID`, the earliest loaded turn the window draws: any
-    /// still waiting after it are drawn now.
+    /// The reader asked for the turns before `turnID`, the earliest turn drawn: those waiting and those
+    /// that arrive there are drawn over the next `cycles` display cycles, the next of them in this one.
     mutating func begin(before turnID: String?) {
         self = ConversationTurnReveal(boundary: turnID)
     }

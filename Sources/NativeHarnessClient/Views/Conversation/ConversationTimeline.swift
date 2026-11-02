@@ -41,8 +41,9 @@ enum ConversationSource {
 /// (`TranscriptTopLoading`), and then asks a Codex thread for its earlier pages, or reads more of a
 /// Claude transcript a read took from its end (`ConversationEarlierTurns.providerFile`); the rail's
 /// "Load more history" asks the same way. The turns that arrive are drawn over the next few display
-/// cycles the reader holds still, the nearest first (`ConversationTurnReveal`), and as each arrives
-/// above them, the turns being read stay where they are in the viewport (`TranscriptReadingTracker.placeToKeep`). Going
+/// cycles the reader holds still, and the next of them each time their scrolling reaches the top, the
+/// nearest first (`ConversationTurnReveal`), and as each arrives above them, the turns being read stay
+/// where they are in the viewport (`TranscriptReadingTracker.placeToKeep`). Going
 /// back to the latest output — a sent message, a new turn, a request to answer, "Latest response" —
 /// draws the latest 10 again. Find, saved places and an opened history result read the whole loaded
 /// conversation and widen the window to the turn they reach.
@@ -381,12 +382,13 @@ struct ConversationTimeline: View {
     /// provider's earlier page, or more of the provider's file, whose turns the window's next step then
     /// draws. The rail's "Load more history" and scrolling up to the top both ask for them, and the
     /// turns that arrive are drawn a few each display cycle (`ConversationTurnReveal`). Turns still
-    /// waiting to be drawn come first: reaching the top draws them at once, and the rail draws them and
-    /// asks for more.
+    /// waiting to be drawn come first, from the earliest one drawn: reaching the top draws the next of
+    /// them, and the rail asks for more, which are drawn after them.
     private func loadEarlierTurns(_ earlier: ConversationEarlierTurns, loadedTurnCount: Int, before firstTurnID: String?,
                                   revealing: ConversationTurnReveal.Progress, asksForMore: Bool) {
+        let earliestDrawn = revealing.hidden > 0 ? revealing.earliestDrawn : firstTurnID
         if revealing.hidden > 0 {
-            reveal.begin(before: firstTurnID)
+            reveal.begin(before: earliestDrawn)
             guard asksForMore else { return }
         }
         switch earlier {
@@ -399,7 +401,7 @@ struct ConversationTimeline: View {
             actions.readEarlierHistory?()
         case .none: return
         }
-        reveal.begin(before: firstTurnID)
+        reveal.begin(before: earliestDrawn)
     }
 
     /// Draws the next of the turns that arrived once what this display cycle drew is laid out and

@@ -8,8 +8,8 @@ import XCTest
 /// infinite scroll does: the local window's next step, a Codex thread's earlier page, or more of a
 /// Claude transcript read from its end. Only the reader's own scrolling asks, once per load, and
 /// what the reader sees stays where it is as the earlier turns arrive above it, a few each display
-/// cycle the reader holds still (`ConversationTurnReveal`). The rail's "Load more history" stays and
-/// keeps the place the same way.
+/// cycle the reader holds still and the next each time their scrolling reaches the top
+/// (`ConversationTurnReveal`). The rail's "Load more history" stays and keeps the place the same way.
 @MainActor
 final class ConversationTopLoadingTests: XCTestCase {
     // MARK: - When to load
@@ -144,7 +144,9 @@ final class ConversationTopLoadingTests: XCTestCase {
     }
 
     /// A classic mouse wheel, without a trackpad's phases, is the reader's scrolling too (SwiftUI
-    /// reports it as interacting): wheeling up to the top brings the earlier turns in.
+    /// reports it as interacting): wheeling up to the top brings the earlier turns in. Turned on without
+    /// holding still, it reaches the top again while turns that arrived are still waiting to be drawn,
+    /// which draws the next of them, not all the rest in one display cycle.
     func testAMouseWheelToTheTopBringsEarlierTurnsIn() throws {
         try requireAwakeDisplay()
         let mounted = mount(ConversationTimeline(source: .transcript(
@@ -154,16 +156,28 @@ final class ConversationTopLoadingTests: XCTestCase {
         let scroll = try XCTUnwrap(scrollView(in: mounted.hosting))
         pump(mounted.hosting, passes: 12)
         scrollToNearTheTop(scroll, in: mounted.hosting)
-        for _ in 0..<80 where drawnTurnCount(mounted.hosting) == 10 {
+        func wheelUp() {
             guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: 5,
                                       wheel2: 0, wheel3: 0),
-                  let wheel = NSEvent(cgEvent: event) else { continue }
+                  let wheel = NSEvent(cgEvent: event) else { return }
             scroll.scrollWheel(with: wheel)
             pump(mounted.hosting, passes: 2)
         }
+        for _ in 0..<80 where drawnTurnCount(mounted.hosting) == 10 { wheelUp() }
         pumpUntil(mounted.hosting) { drawnTurnCount(mounted.hosting) == 20 }
         XCTAssertEqual(drawnTurnCount(mounted.hosting), 20)
         XCTAssertGreaterThan(scroll.contentView.bounds.minY, 1_500, "the earlier turns arrived above the reader")
+
+        // On up to the top and through the next 10 turns as they arrive, without holding still.
+        pump(mounted.hosting, passes: 4)
+        var drawn = [drawnTurnCount(mounted.hosting) ?? 0]
+        for _ in 0..<240 where drawn.last ?? 0 < 30 {
+            wheelUp()
+            drawn.append(drawnTurnCount(mounted.hosting) ?? 0)
+        }
+        XCTAssertEqual(drawn.last, 30, "the wheel went on until every turn that arrived was drawn")
+        let mostAtOnce = zip(drawn, drawn.dropFirst()).map { $1 - $0 }.max() ?? 0
+        XCTAssertLessThanOrEqual(mostAtOnce, 4, "a few turns at a time, not all that were waiting: \(drawn)")
     }
 
     /// A Codex thread with loaded turns the window leaves out brings those in first and then asks for
