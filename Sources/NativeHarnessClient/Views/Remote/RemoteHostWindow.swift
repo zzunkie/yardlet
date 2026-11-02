@@ -396,14 +396,13 @@ struct RemoteTaskView: View {
                 if let limit = conversation.usageLimit, !(limit.options ?? []).isEmpty {
                     RemoteUsageLimitBar(model: model, taskID: conversation.taskID, limit: limit)
                 }
-                if !conversation.queued.isEmpty {
-                    RemoteQueueChips(model: model, taskID: conversation.taskID, queued: conversation.queued)
-                }
-                RemoteComposer(model: model, taskID: conversation.taskID, draft: draft)
+                RemoteComposer(model: model, taskID: conversation.taskID, draft: draft, queued: conversation.queued)
             }
-            .padding(.horizontal, ParityTheme.conversationInset)
-            .padding(.bottom, 14)
-            .frame(maxWidth: ParityTheme.contentWidth + ParityTheme.conversationInset * 2)
+            // Where the local composer sits under its conversation.
+            .frame(maxWidth: ParityTheme.contentWidth)
+            .padding(.horizontal, 24)
+            .padding(.top, 6)
+            .padding(.bottom, 16)
             .frame(maxWidth: .infinity)
         }
         .confirmationDialog(
@@ -511,45 +510,5 @@ private struct RemoteUsageLimitBar: View {
         }
         .padding(10)
         .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 10))
-    }
-}
-
-/// Messages waiting in the task's follow-up queue, each with the chip's actions on the host (§15.15).
-private struct RemoteQueueChips: View {
-    let model: RemoteHostModel
-    let taskID: String
-    let queued: [RemoteItem]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(queued, id: \.id) { item in
-                HStack(spacing: 8) {
-                    Image(systemName: item.queueFailed == true ? "exclamationmark.circle" : "clock")
-                        .foregroundStyle(item.queueFailed == true ? .orange : .secondary)
-                    Text(item.text ?? "")
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    Spacer(minLength: 8)
-                    ForEach((item.options ?? []).compactMap(RemoteQueuedAction.init(rawValue:)), id: \.self) { action in
-                        Button(Self.title(action)) {
-                            model.send(.actOnQueued(taskID: taskID, itemID: item.id, action: action))
-                        }
-                        .controlSize(.small)
-                    }
-                }
-                .font(.callout)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 8))
-            }
-        }
-    }
-
-    static func title(_ action: RemoteQueuedAction) -> String {
-        switch action {
-        case .sendNow: L10n.string("Send now")
-        case .stopAndSend: L10n.string("Stop and send")
-        case .remove: L10n.string("Remove")
-        }
     }
 }

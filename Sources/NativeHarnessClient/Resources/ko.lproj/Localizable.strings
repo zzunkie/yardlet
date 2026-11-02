@@ -2020,7 +2020,6 @@
 "Follow and drive another Mac's tasks here. On that Mac, open Settings › Remote, choose Pair…, then Copy link, and paste the link below." = "다른 Mac의 작업을 여기서 보고 조작합니다. 그 Mac에서 설정 › 원격 연결을 열어 연결…과 링크 복사를 차례로 누른 뒤, 아래에 붙여 넣으세요.";
 "Its window closes and this Mac forgets it. When it can be reached now, it forgets this Mac too; otherwise remove this Mac in its Settings › Remote." = "창이 닫히고 이 Mac에서 그 Mac을 지웁니다. 지금 연결할 수 있으면 그 Mac에서도 이 Mac을 지웁니다. 연결할 수 없으면 그 Mac의 설정 › 원격 연결에서 이 Mac을 제거하세요.";
 "Loading…" = "불러오는 중…";
-"Message %@ on %@" = "%2$@의 %1$@에게 메시지";
 "No other account can continue this task." = "이 작업을 이어 갈 다른 계정이 없습니다.";
 "Not paired" = "연결되지 않음";
 "Nothing is running." = "실행 중인 것이 없습니다.";
@@ -2028,12 +2027,10 @@
 "Pair it again from File › Connect to Mac…." = "파일 › Mac에 연결…에서 다시 연결하세요.";
 "Paired Macs" = "연결한 Mac";
 "Press Return to start the task" = "Return을 누르면 작업을 시작합니다";
-"Queue for when this turn ends, or ⌘Return to send it now" = "이번 턴이 끝나면 보냅니다. 지금 보내려면 ⌘Return";
 "Reconnecting…" = "다시 연결하는 중…";
 "Remote Mac" = "원격 Mac";
 "Remove from This Mac" = "이 Mac에서 지우기";
 "Remove…" = "제거…";
-"Send into this turn, or ⌘Return to queue it" = "진행 중인 턴에 보냅니다. 대기열에 두려면 ⌘Return";
 "Slash commands run on %@." = "슬래시 명령은 %@에서 실행하세요.";
 "That isn't offered for this task now." = "지금 이 작업에서는 할 수 없습니다.";
 "The file is too large to send." = "파일이 너무 커서 보낼 수 없습니다.";
@@ -2052,7 +2049,6 @@
 "What should %@ work on?" = "%@에서 무엇을 할까요?";
 "Write a message first." = "먼저 메시지를 쓰세요.";
 "Yardlet on %@ quit." = "%@의 Yardlet이 종료되었습니다.";
-"the agent" = "에이전트";
 "exit code %lld" = "종료 코드 %lld";
 "Homebrew's answer could not be read" = "Homebrew의 응답을 읽을 수 없습니다";
 "npm's answer could not be read" = "npm의 응답을 읽을 수 없습니다";
