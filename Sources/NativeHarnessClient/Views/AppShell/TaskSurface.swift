@@ -786,18 +786,18 @@ struct TaskDetail: View {
         workspaceState.keyboardFocus.move(to: .browser)
     }
 
-    /// "Run in terminal" on any harness's command card: the task's terminal opens and types it at a
-    /// tab's prompt.
     /// A shell code block in an answer runs in the task's terminal, as the Claude app's code blocks do; a
     /// conversation shown without the task's panels (a side chat) has no terminal to run it in.
     private var codeBlockRun: TranscriptTerminalRun {
         guard !conversationOnly else { return TranscriptTerminalRun() }
-        let run: @MainActor (String) -> Void = { command in runInTerminal(command, runs: true) }
+        let run: @MainActor (String) -> Void = { command in runInTerminal(command) }
         return TranscriptTerminalRun(run: run)
     }
 
-    private func runInTerminal(_ command: String, runs: Bool = false) {
-        workspaceState.handOffToTerminal(command, runs: runs, in: session.workspaceURL, launch: terminalShellLaunch,
+    /// "Run in terminal" on any harness's command card and on a code block: the task's terminal opens and
+    /// runs it at a tab's prompt.
+    private func runInTerminal(_ command: String) {
+        workspaceState.handOffToTerminal(command, in: session.workspaceURL, launch: terminalShellLaunch,
                                          taskID: session.id)
         openSurface(.terminal)
     }
