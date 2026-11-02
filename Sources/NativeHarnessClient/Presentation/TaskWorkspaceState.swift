@@ -172,10 +172,14 @@ enum TerminalTabTitle {
 struct TerminalCommandRequest: Equatable, Identifiable, Sendable {
     let id: UUID
     let command: String
+    /// Return follows the command, as a code block's "Run in terminal" runs it (the Claude app's runs what
+    /// it types); a command card's leaves it at the prompt for the person to read and run.
+    var runs = false
 
-    init(id: UUID = UUID(), command: String) {
+    init(id: UUID = UUID(), command: String, runs: Bool = false) {
         self.id = id
         self.command = command
+        self.runs = runs
     }
 }
 
@@ -496,7 +500,8 @@ final class TaskWorkspaceState {
     /// dev server) is left alone: another tab at its prompt shows, else a new tab opens in `folder`, as
     /// the Claude app's terminal takes a tab at its prompt and leaves one where a command runs. The
     /// click is the explicit gesture that may start a shell; the caller opens the terminal panel.
-    func handOffToTerminal(_ command: String, in folder: URL, launch: ShellLaunchEnvironment, taskID: UUID?) {
+    func handOffToTerminal(_ command: String, runs: Bool = false, in folder: URL, launch: ShellLaunchEnvironment,
+                           taskID: UUID?) {
         if let shown = shownTerminalTab, shown.isRunningProgram {
             if let idle = terminalTabs.first(where: { $0 !== shown && $0.isAtPrompt }) {
                 showTerminalTab(idle)
@@ -504,7 +509,7 @@ final class TaskWorkspaceState {
                 openTerminalTab(in: folder, launch: launch, taskID: taskID)
             }
         }
-        terminalHandoff = TerminalCommandRequest(command: command)
+        terminalHandoff = TerminalCommandRequest(command: command, runs: runs)
         terminalStartRequested = true
     }
 

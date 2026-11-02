@@ -30,6 +30,7 @@ struct TranscriptProseText: NSViewRepresentable {
         view.linkPlaces = environment.conversationLinkPlaces
         view.opensLocalFiles = environment.transcriptOpensLocalFiles
         view.pauseFollowing = environment.pauseTranscriptFollowing
+        view.terminalRun = environment.transcriptTerminalRun
         view.textView.copyDetails = copyDetails
         view.segmentKey = segmentKey
         view.fitsWidth = fitsWidth
@@ -70,6 +71,10 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     /// The text's file links are on this Mac (`transcriptOpensLocalFiles`).
     var opensLocalFiles = true
     var pauseFollowing: () -> Void = {}
+    /// A shell code block's "Run in terminal", where the conversation has a terminal.
+    var terminalRun = TranscriptTerminalRun() {
+        didSet { if terminalRun != oldValue { updateCodeControls(rebuilding: true) } }
+    }
     var segmentKey: ConversationFindSegmentKey?
     var fitsWidth = false
 
@@ -326,26 +331,31 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
 
     // MARK: - Code block controls
 
-    /// A code block's Copy over its frame's top row, and "View full code" under a long one.
+    /// A code block's Copy over its frame's top row, with "Run in terminal" before it for a command, and
+    /// "View full code" under a long one.
     private final class CodeControls {
         var block: TranscriptProsePiece.CodeBlock
         let copy: NSHostingView<AnyView>
+        let run: NSHostingView<AnyView>?
         let full: NSHostingView<AnyView>?
 
-        init(block: TranscriptProsePiece.CodeBlock, copy: NSHostingView<AnyView>, full: NSHostingView<AnyView>?) {
+        init(block: TranscriptProsePiece.CodeBlock, copy: NSHostingView<AnyView>, run: NSHostingView<AnyView>?,
+             full: NSHostingView<AnyView>?) {
             self.block = block
             self.copy = copy
+            self.run = run
             self.full = full
         }
 
         func remove() {
             copy.removeFromSuperview()
+            run?.removeFromSuperview()
             full?.removeFromSuperview()
         }
     }
 
-    private func updateCodeControls() {
-        let same = codeControls.count == codeBlocks.count && zip(codeControls, codeBlocks).allSatisfy {
+    private func updateCodeControls(rebuilding: Bool = false) {
+        let same = !rebuilding && codeControls.count == codeBlocks.count && zip(codeControls, codeBlocks).allSatisfy {
             $0.block.path == $1.path && $0.block.language == $1.language && $0.block.isTruncated == $1.isTruncated
         }
         if same {
@@ -366,6 +376,19 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
             let copy = NSHostingView(rootView: AnyView(TranscriptCopyButton(
                 title: L10n.string("Copy code"), detail: String(detail.prefix(80)), payload: payload)))
             addSubview(copy)
+            // A shell command's block runs it in the task's terminal, read again from the message at the click.
+            var run: NSHostingView<AnyView>?
+            if terminalRun.run != nil,
+               TerminalCodeBlockCommand.command(language: block.language, code: payload() ?? "") != nil {
+                let view = NSHostingView(rootView: AnyView(TranscriptRunInTerminalButton(detail: String(detail.prefix(80))) {
+                    [weak self] in
+                    guard let self, let command = TerminalCodeBlockCommand.command(language: block.language,
+                                                                                    code: payload() ?? "") else { return }
+                    self.terminalRun.run?(command)
+                }))
+                addSubview(view)
+                run = view
+            }
             var full: NSHostingView<AnyView>?
             if block.isTruncated {
                 let view = NSHostingView(rootView: AnyView(TranscriptFullCodeButton(
@@ -374,7 +397,7 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
                 addSubview(view)
                 full = view
             }
-            return CodeControls(block: block, copy: copy, full: full)
+            return CodeControls(block: block, copy: copy, run: run, full: full)
         }
     }
 
@@ -382,6 +405,7 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
         for controls in codeControls {
             guard let frame = codeFrame(controls.block) else {
                 controls.copy.isHidden = true
+                controls.run?.isHidden = true
                 controls.full?.isHidden = true
                 continue
             }
@@ -391,6 +415,14 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
                 x: frame.maxX - TranscriptProseMetrics.codePadding - copySize.width,
                 y: frame.minY + (TranscriptProseMetrics.codeHeaderHeight - 1 - copySize.height) / 2,
                 width: copySize.width, height: copySize.height)
+            if let run = controls.run {
+                run.isHidden = false
+                let size = run.fittingSize
+                run.frame = CGRect(
+                    x: controls.copy.frame.minX - TranscriptProseMetrics.codePadding - size.width,
+                    y: frame.minY + (TranscriptProseMetrics.codeHeaderHeight - 1 - size.height) / 2,
+                    width: size.width, height: size.height)
+            }
             if let full = controls.full {
                 full.isHidden = false
                 let size = full.fittingSize
