@@ -528,6 +528,10 @@ struct ConversationWorkLine: View, Equatable {
                 ConnectorIcon(name: connector.connector, presetID: connector.presetID, sources: connector.icons, size: 16 * interfaceScale)
                     .centeredOnCapHeight(ofTextSize: ConversationStatusLineFont.size * interfaceScale)
             }
+            if let counts = tool.lineCounts {
+                CodexLineCountsText(counts: counts)
+                    .font(.system(size: 13 * interfaceScale).monospacedDigit())
+            }
             if item.phase == .running {
                 ProgressView().controlSize(.mini)
                     .centeredOnCapHeight(ofTextSize: ConversationStatusLineFont.size * interfaceScale)
@@ -566,11 +570,17 @@ struct ConversationWorkLine: View, Equatable {
                         handoffs: []
                     )
                 }
-                if !tool.diffs.isEmpty {
-                    CodexFileChangeRows(
-                        rows: tool.diffs.map { ConversationFileChangeProjection.row(for: $0, phase: item.phase, workspaceURL: workspaceURL) },
-                        handoffs: []
-                    )
+                // Each file's diff in its box, as a file change's line opens. The files are another Mac's: each is
+                // named as that Mac named it, and opens nothing here.
+                ForEach(Array(tool.diffs.enumerated()), id: \.offset) { _, diff in
+                    let row = ConversationFileChangeProjection.row(for: diff, phase: item.phase, workspaceURL: nil)
+                    if row.canExpand {
+                        CodexFileDiffBox(row: row) {
+                            Text(diff.path)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
                 }
                 if isLoading {
                     ProgressView()

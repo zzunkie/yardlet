@@ -120,17 +120,25 @@ enum RemoteTurnProjection {
         var tool = ConversationTool(kind: .worded(title), name: "", status: item.status)
         tool.isApproved = item.approved == true
         tool.detail = item.detail
+        if let additions = item.additions, let deletions = item.deletions {
+            tool.lineCounts = .init(additions: additions, deletions: deletions)
+        }
         if let code = item.exitCode, code != 0 { tool.errorMessage = L10n.format("Exit code %lld", code) }
+        let detail = item.hasDetail == true ? details[item.id] : nil
         if item.hasDetail == true {
             tool.loadsDetailOnOpen = true
-            if let detail = details[item.id] {
-                tool.output = detail.output ?? ""
+            if let detail {
+                // A change's line shows its diff; its output, when it has one, beside it.
+                tool.output = detail.output ?? (detail.diffs.isEmpty ? "" : nil)
                 tool.diffs = detail.diffs.map { HarnessActivityDiff(path: $0.path, unified: $0.patch) }
             }
         }
         let activity = HarnessActivity(id: item.id, kind: item.activity ?? "other", title: title, detail: item.detail)
-        return ConversationItem(id: item.id, kind: .tool(tool), phase: phase(item.status),
-                                source: source(item, .activity(activity, state: activityState(item.status))))
+        var line = ConversationItem(id: item.id, kind: .tool(tool), phase: phase(item.status),
+                                    source: source(item, .activity(activity, state: activityState(item.status))))
+        // What "Copy item details" takes, as a local line copies what it ran and returned.
+        line.copyDetails = [title, item.detail, detail?.output].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
+        return line
     }
 
     private static func plan(_ item: RemoteItem) -> ConversationPlan {

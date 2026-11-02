@@ -387,8 +387,11 @@ struct ConversationTool: Equatable, Sendable {
     var input: String? = nil
     var output: String? = nil
     var diff: HarnessActivityDiff? = nil
-    /// The changes of a line that changed several files (a worded line's, §15.8); `diff` is a call's one.
+    /// The changes of a line that changed several files (a worded line's, §15.8), each opened as its diff;
+    /// `diff` is a call's one.
     var diffs: [HarnessActivityDiff] = []
+    /// The lines a worded line's change added and removed, shown after its words as a file change's are.
+    var lineCounts: CodexFileChangeCardProjection.LineCounts? = nil
     /// The line holds more than it has here (a worded line's output and changes), read when it opens.
     var loadsDetailOnOpen = false
     var errorMessage: String? = nil

@@ -2033,7 +2033,6 @@
 "Follow and drive another Mac's tasks here. On that Mac, open Settings › Remote, choose Pair…, then Copy link, and paste the link below." = "Follow and drive another Mac's tasks here. On that Mac, open Settings › Remote, choose Pair…, then Copy link, and paste the link below.";
 "Its window closes and this Mac forgets it. When it can be reached now, it forgets this Mac too; otherwise remove this Mac in its Settings › Remote." = "Its window closes and this Mac forgets it. When it can be reached now, it forgets this Mac too; otherwise remove this Mac in its Settings › Remote.";
 "Loading…" = "Loading…";
-"Message %@ on %@" = "Message %@ on %@";
 "No other account can continue this task." = "No other account can continue this task.";
 "Not paired" = "Not paired";
 "Nothing is running." = "Nothing is running.";
@@ -2041,12 +2040,10 @@
 "Pair it again from File › Connect to Mac…." = "Pair it again from File › Connect to Mac….";
 "Paired Macs" = "Paired Macs";
 "Press Return to start the task" = "Press Return to start the task";
-"Queue for when this turn ends, or ⌘Return to send it now" = "Queue for when this turn ends, or ⌘Return to send it now";
 "Reconnecting…" = "Reconnecting…";
 "Remote Mac" = "Remote Mac";
 "Remove from This Mac" = "Remove from This Mac";
 "Remove…" = "Remove…";
-"Send into this turn, or ⌘Return to queue it" = "Send into this turn, or ⌘Return to queue it";
 "Slash commands run on %@." = "Slash commands run on %@.";
 "That isn't offered for this task now." = "That isn't offered for this task now.";
 "The file is too large to send." = "The file is too large to send.";
@@ -2065,7 +2062,6 @@
 "What should %@ work on?" = "What should %@ work on?";
 "Write a message first." = "Write a message first.";
 "Yardlet on %@ quit." = "Yardlet on %@ quit.";
-"the agent" = "the agent";
 "exit code %lld" = "exit code %lld";
 "Homebrew's answer could not be read" = "Homebrew's answer could not be read";
 "npm's answer could not be read" = "npm's answer could not be read";
