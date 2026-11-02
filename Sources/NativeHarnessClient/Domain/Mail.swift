@@ -14,6 +14,9 @@ struct MailAccount: Identifiable, Hashable, Sendable {
     let id: UUID
     let address: String
     let provider: MailProvider
+    /// The name the account's connector gives its tools (`gmail`, `gmail_dana`), by which an agent
+    /// reads the account's mail.
+    var connectorSlug: String? = nil
 
     /// The part of the address before the `@`, which tells accounts apart in a list of several.
     var shortName: String {

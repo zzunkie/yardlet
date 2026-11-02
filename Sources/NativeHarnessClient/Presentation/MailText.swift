@@ -2,6 +2,18 @@ import Foundation
 
 /// How the mailbox words names, subjects and times.
 enum MailText {
+    /// What "Ask an agent" puts in a new task's composer: the thread named so the agent can read it
+    /// with the account's connector, and no body, so nobody else's words reach the prompt as the
+    /// person's own. The person writes what to do after it.
+    static func handoff(_ thread: MailThread, account: MailAccount) -> String {
+        let sender = thread.summary.senders.first.map(MailComposition.formatted) ?? ""
+        let tool = account.connectorSlug.map { "`\($0)_get_thread`" } ?? account.provider.serviceName
+        return [L10n.format("Mail subject %@", subject(thread.summary.subject)),
+                L10n.format("Mail from %@", sender),
+                L10n.format("Mail handoff %@ %@ %@", account.address, thread.summary.id.threadID, tool)]
+            .joined(separator: "\n") + "\n\n"
+    }
+
     /// The thread's senders, newest first: the first two names, and how many messages when more than one.
     static func senders(_ thread: MailThreadSummary, me: String? = nil) -> String {
         let names = thread.senders.prefix(2).map { name($0, me: me) }.joined(separator: ", ")

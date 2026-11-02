@@ -435,7 +435,13 @@ struct MainWindow: View {
     }
 
     private var mailActions: MailActions {
-        MailActions(openOriginal: { url in model.openExternalLinks([url]) { NSWorkspace.shared.open($0) } },
+        MailActions(askAgent: { thread in
+                        guard let account = model.mailbox.account(thread.summary.id.accountID) else { return }
+                        newTaskDraft.takeMailThread(MailText.handoff(thread, account: account))
+                        showNewTask()
+                    },
+                    openOriginal: { url in model.openExternalLinks([url]) { NSWorkspace.shared.open($0) } },
+                    openLink: { url in model.openExternalLinks([url]) { NSWorkspace.shared.open($0) } },
                     openSettings: { presentSettings(.connectors) })
     }
 
