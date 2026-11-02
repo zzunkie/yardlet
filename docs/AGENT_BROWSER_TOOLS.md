@@ -261,7 +261,9 @@ keeps them behind tool search). The descriptions say only what each tool does, n
 
 Links to tasks (2026-10-28): a reply opens another task when it links to it, as the Claude app and the Codex app open
 theirs (`TaskLink`): `[title](#<task id>)` with the task ID in either case, or a harness session ID that is a UUID; the
-Claude app's `#local_<id>`; and the Codex app's `codex://threads/<id>`. Yardlet has no URL scheme of its own. Every
+Claude app's `#local_<id>`; and the Codex app's `codex://threads/<id>`. A click opens the task in the window, ⌘-click in a
+new tab; the link's menu also opens it in a new tab, a split view or the side panel, as the task's sidebar row's menu
+does, and copies it as the Markdown it was written in. Yardlet has no URL scheme of its own. Every
 session tool result that names an open task carries that link ready to write, so an agent copies a value rather than
 recalling a format: `link` in `list_tasks`, `read_task`, `wait_tasks` and `create_task` with `wait`, a `Link:` line in
 `create_task` without it, and `taskLink` in `list_task_runs` (`SessionToolText.link`). The title is the link's text on one

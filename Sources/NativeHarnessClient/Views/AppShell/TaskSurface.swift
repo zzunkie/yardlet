@@ -220,13 +220,14 @@ struct TaskDetail: View {
             .environment(\.conversationFind, workspaceState.conversationFind)
             // A web link opens in the task's browser; a file and the rest go where the window sends them.
             .environment(\.openURL, OpenURLAction { url in
-                if ConversationLinkRoute(url) == .taskBrowser {
+                if ConversationLinkKind(url) == .web {
                     openInTaskBrowser(url)
                 } else {
                     openURL(url)
                 }
                 return .handled
             })
+            .transformEnvironment(\.conversationLinkPlaces) { $0.browserPanel = openInTaskBrowser }
             .overlay(alignment: .topTrailing) {
                 ConversationFindBar(find: workspaceState.conversationFind)
                     .padding(.top, 8)

@@ -798,16 +798,22 @@ struct MainWindow: View {
     }
 
     /// A conversation's link to another task (`TaskLink`): that task, in a new tab on ⌘-click as a
-    /// sidebar row opens. A Codex thread Yardlet does not have opens in the Codex app; an anchor
-    /// to a task Yardlet does not have only beeps.
-    private func openLinkedTask(_ link: TaskLink, url: URL) {
-        let inNewTab = NSApp.currentEvent?.modifierFlags.contains(.command) == true
+    /// sidebar row opens, or where the link's menu chose (`place`), as the row's menu opens it; the side
+    /// panel is that of `sidePanelOwnerID`, the task whose area shows the conversation. A Codex thread Yardlet
+    /// does not have opens in the Codex app; an anchor to a task Yardlet does not have only beeps.
+    private func openLinkedTask(_ link: TaskLink, url: URL, place: TaskLinkPlace? = nil, sidePanelOwnerID: UUID? = nil) {
+        let place = place ?? (NSApp.currentEvent?.modifierFlags.contains(.command) == true ? .newTab : nil)
         Task {
             guard let task = await model.task(linkedBy: link) else {
                 if link.opensElsewhere { NSWorkspace.shared.open(url) } else { NSSound.beep() }
                 return
             }
-            if inNewTab { openInNewTab(.session(task.id)) } else { show(.session(task.id)) }
+            switch place {
+            case nil: show(.session(task.id))
+            case .newTab: openInNewTab(.session(task.id))
+            case .splitView: openInSplitView(task.id)
+            case .sidePanel: openInSidePanel(task.id, ownerID: sidePanelOwnerID)
+            }
         }
     }
 
@@ -1323,6 +1329,11 @@ struct MainWindow: View {
             owner.keyboardFocus.move(to: .files)
             return .handled
         })
+        // The menu of a link to another task also opens it beside this one: in a new tab, a split view, or
+        // the side panel of the task whose area shows the conversation.
+        .environment(\.conversationLinkPlaces, ConversationLinkPlaces(task: { link, url, place in
+            openLinkedTask(link, url: url, place: place, sidePanelOwnerID: filePanelOwnerID ?? session.id)
+        }))
         // A Codex suggested task's "Use suggestion" opens a new task holding its prompt.
         .environment(\.startSuggestedTask, { prompt in startSuggestedTask(prompt, from: session) })
         // An agent's suggested task (`spawn_task`) is a chip that starts it under this task, sends it
@@ -1412,10 +1423,11 @@ struct MainWindow: View {
     }
 
     /// A sidebar row's "Open in Side Panel": its conversation as a tab in the side panel of the task
-    /// the window shows (in a split view, the focused pane's), or of the new-task screen. With neither
-    /// shown, or for the task shown itself, there is nothing to put it beside.
-    private func openInSidePanel(_ id: UUID) {
-        guard let ownerID = panelOwnerID, ownerID != id,
+    /// the window shows (in a split view, the focused pane's), or of the new-task screen; a link's menu
+    /// names the task whose area shows its conversation (`ownerID`). With neither shown, or for the
+    /// task shown itself, there is nothing to put it beside.
+    private func openInSidePanel(_ id: UUID, ownerID: UUID? = nil) {
+        guard let ownerID = ownerID ?? panelOwnerID, ownerID != id,
               ownerID == TaskWorkspaceStore.draftID || sessionRecord(ownerID) != nil, sessionRecord(id) != nil
         else { return NSSound.beep() }
         let workspace = model.taskWorkspaces.state(for: ownerID)
@@ -1831,7 +1843,7 @@ struct MainWindow: View {
                     .environment(\.shellBusyTaskIDs, model.shellBusySessionIDs)
                     .environment(\.openWindowItemInNewTab, WindowItemNewTabAction(open: openInNewTab))
                     .environment(\.openTaskInSplitView, TaskSplitViewAction(open: openInSplitView))
-                    .environment(\.openTaskInSidePanel, TaskSidePanelAction(open: openInSidePanel))
+                    .environment(\.openTaskInSidePanel, TaskSidePanelAction(open: { openInSidePanel($0) }))
                     .environment(\.prefetchTaskConversation, TaskConversationPrefetch(model: model))
                     .environment(\.taskAttentionDetails, model.taskAttentionDetails)
                     .environment(\.scheduledTaskIDs, model.scheduledTasks.scheduledTaskIDs)
