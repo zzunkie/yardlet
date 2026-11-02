@@ -479,6 +479,108 @@ final class TerminalCommandHandoffTests: XCTestCase {
         XCTAssertFalse(Self.added(to: history).contains("B10-%s"), "A test's command reached ~/.zsh_history")
     }
 
+    // MARK: - Code blocks
+
+    /// Which of an answer's code blocks offer "Run in terminal", and what each runs: a shell block whole, the
+    /// command lines of a `$ ` session without the prompts and the output, a block without a language only
+    /// when every line reads as a command, and no block that hides a formatting character.
+    func testACodeBlockRunsWhatItsShellLanguageOrPromptsSay() {
+        func command(_ language: String?, _ code: String) -> String? {
+            TerminalCodeBlockCommand.command(language: language, code: code)
+        }
+        XCTAssertEqual(command("bash", "git status\nnpm test\n\n"), "git status\nnpm test")
+        XCTAssertEqual(command("zsh title=setup", "brew install jq"), "brew install jq", "the info string's first word")
+        XCTAssertEqual(command("console", "$ npm install\nadded 5 packages\n$ npm test\n> app@1.0.0 test\nok\n"),
+                       "npm install\nnpm test", "the prompts and the output are left out")
+        XCTAssertEqual(command("shell-session", "$ docker run \\\n  --rm hello\nHello from Docker!"),
+                       "docker run \\\n  --rm hello", "a line ending in a backslash goes on")
+        XCTAssertEqual(command("console", "$ echo 'a\n> b'\na\nb"), "echo 'a\nb'", "an open quote's > line goes on")
+        XCTAssertEqual(command("bash", "$ git pull\nAlready up to date."), "git pull", "a shell block in prompts")
+        XCTAssertNil(command("console", "added 5 packages"), "a session with no prompt runs nothing")
+        XCTAssertEqual(command(nil, "git status\nnpm install"), "git status\nnpm install")
+        XCTAssertEqual(command("text", "./scripts/test-fast.sh"), "./scripts/test-fast.sh")
+        XCTAssertEqual(command(nil, "$ git status"), "git status")
+        XCTAssertNil(command(nil, "npm install && npm test"), "no language and a shell operator")
+        XCTAssertNil(command(nil, "git status\nThen open the app."), "every line must read as a command")
+        XCTAssertNil(command("python", "print(1)"))
+        XCTAssertNil(command("swift", "git status"))
+        XCTAssertNil(command("bash", "git status\u{200B}"), "a zero-width space")
+        XCTAssertNil(command("bash", "echo \u{202E}txt.exe"), "a direction override")
+        XCTAssertNil(command("bash", "  \n"))
+    }
+
+    /// An answer's bash and console blocks in the task screen offer "Run in terminal" beside "Copy code";
+    /// the console block's runs its command lines in the task's terminal, Return and all, and its output
+    /// shows there; a conversation without a terminal offers it on no block. Review images:
+    /// `.build/terminal-handoff-qa/code-blocks-*.png`.
+    func testAnAnswersShellCodeBlockRunsInTheTasksTerminal() throws {
+        let history = Self.personalHistory()
+        let directory = try WindowlessRender.directory("terminal-handoff-qa")
+        let launch = ShellLaunchEnvironment.isolatedZsh(in: try temporaryFolder())
+        let workspaceURL = try temporaryFolder(named: "yardlet")
+        let answer = """
+            Install the tools, then run the check.
+
+            ```bash
+            brew install jq
+            jq --version
+            ```
+
+            Or in a terminal session:
+
+            ```console
+            $ printf 'B2C-%s\\n' ran
+            B2C-ran
+            ```
+            """
+        let fixture = HandoffFixture(name: "code-blocks", harness: .claudeCode, command: "", workspaceURL: workspaceURL,
+                                     entries: [TranscriptEntry(content: .user(text: "How do I check it?")),
+                                               TranscriptEntry(content: .assistant(text: answer, isStreaming: false))])
+        let workspace = TaskWorkspaceState()
+        for appearance in WindowlessRender.Appearance.allCases {
+            let host = WindowlessRender.Host(
+                TaskTerminalHost(fixture: fixture, workspace: workspace)
+                    .environment(\.terminalShellLaunch, launch)
+                    .environment(\.colorScheme, appearance.colorScheme)
+                    .frame(width: 1_000, height: 820)
+                    .background(ParityTheme.canvas),
+                size: NSSize(width: 1_000, height: 820), appearance: appearance
+            )
+            defer { host.close() }
+            host.settle()
+            let runs = host.accessibilityElements().filter { $0.label == L10n.string("Run in terminal") }
+            XCTAssertEqual(runs.count, 2, "\(host.accessibilityElements())")
+            if appearance == .light {
+                XCTAssertEqual(host.hosting.pressAccessibilityElements(labelled: L10n.string("Run in terminal"),
+                                                                       valueContaining: "console"), 1)
+                host.settle()
+                XCTAssertTrue(workspace.panels.isTerminalPresented, "the terminal opens")
+                var buffer = ""
+                let deadline = ContinuousClock.now + testWaitLimit
+                while ContinuousClock.now < deadline {
+                    host.settle(passes: 1, interval: 0.05)
+                    buffer = host.hosting.terminalText
+                    if buffer.components(separatedBy: "\n").contains(where: { $0.hasPrefix("B2C-ran") }) { break }
+                }
+                XCTAssertTrue(buffer.components(separatedBy: "\n").contains { $0.hasPrefix("B2C-ran") },
+                              "it ran: \(buffer)")
+                XCTAssertFalse(buffer.contains("$ printf"), "without the prompt: \(buffer)")
+                XCTAssertFalse(buffer.contains("brew"), "the other block stays where it is: \(buffer)")
+            }
+            try WindowlessRender.writePNG(Self.asShown(host, appearance: appearance),
+                                          to: directory.appending(path: "code-blocks-\(appearance.suffix).png"))
+        }
+        workspace.endTerminal()
+        XCTAssertFalse(Self.added(to: history).contains("B2C-"), "A test's command reached ~/.zsh_history")
+
+        // Without a terminal (a side chat), no block offers it.
+        let without = WindowlessRender.Host(fixture.conversation(actions: ConversationActions())
+            .frame(width: 760, height: 560), size: NSSize(width: 760, height: 560), appearance: .light)
+        defer { without.close() }
+        without.settle()
+        XCTAssertFalse(without.accessibilityElements().contains(label: L10n.string("Run in terminal")))
+    }
+
     /// "Run in terminal" types the command for the person to review: no Return, and a command over
     /// several lines as a bracketed paste when the shell asked for it, so no line runs on its own.
     func testAHandedOffCommandIsTypedForReviewNotRun() {
@@ -679,17 +781,22 @@ private extension NSView {
         terminalView?.getTerminal().unwrappedText ?? ""
     }
 
-    /// Presses every accessibility element under the view with this label, as an assistive app
-    /// would, and returns how many it pressed. SwiftUI builds its accessibility tree only while an
-    /// assistive app has announced itself (`AXEnhancedUserInterface`), which this sets and puts back.
-    func pressAccessibilityElements(labelled label: String) -> Int {
+    /// Presses every accessibility element under the view with this label (and a value holding
+    /// `value`, when given), as an assistive app would, and returns how many it pressed. SwiftUI builds
+    /// its accessibility tree only while an assistive app has announced itself (`AXEnhancedUserInterface`),
+    /// which this sets and puts back.
+    func pressAccessibilityElements(labelled label: String, valueContaining value: String? = nil) -> Int {
         WindowlessRender.withAccessibilityTree {
             var found: [AnyObject] = []
             var visited: Set<ObjectIdentifier> = []
             func visit(_ node: AnyObject) {
                 for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
                     guard visited.insert(ObjectIdentifier(child)).inserted else { continue }
-                    if (child.accessibilityLabel?() ?? nil) == label { found.append(child) }
+                    let read: Any? = (child.accessibilityValue?() as Any??) ?? nil
+                    let text = (read as? String) ?? (read as? NSAttributedString)?.string ?? ""
+                    if (child.accessibilityLabel?() ?? nil) == label, value.map({ text.contains($0) }) ?? true {
+                        found.append(child)
+                    }
                     visit(child)
                 }
             }

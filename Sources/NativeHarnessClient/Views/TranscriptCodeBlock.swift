@@ -13,6 +13,7 @@ struct TranscriptCodeBlock: View {
     @State private var fullCode: FullCode?
     @State private var focusBookmark: WindowFocusBookmark?
     @Environment(\.pauseTranscriptFollowing) private var pauseFollowing
+    @Environment(\.transcriptTerminalRun) private var terminalRun
 
     private struct FullCode: Identifiable {
         let id = UUID()
@@ -34,6 +35,9 @@ struct TranscriptCodeBlock: View {
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 12)
+                if let run = terminalRun.run, let command = TerminalCodeBlockCommand.command(language: language, code: text) {
+                    TranscriptRunInTerminalButton { run(command) }
+                }
                 TranscriptCopyButton(title: L10n.string("Copy code"), payload: copyPayload)
             }
             .padding(.horizontal, 12)

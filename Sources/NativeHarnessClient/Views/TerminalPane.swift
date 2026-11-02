@@ -284,16 +284,17 @@ struct TerminalPane: View {
         shell.restart()
     }
 
-    /// Puts a handed-off command at the shell's prompt without running it: the person reads it and
-    /// presses Return. A terminal that has not started starts, as the click asked for it; one whose
-    /// shell has exited starts a new shell, as Restart does without asking when nothing runs.
+    /// Puts a handed-off command at the shell's prompt: a command card's without running it, for the
+    /// person to read and run; a code block's run (`TerminalCommandRequest.runs`). A terminal that has not
+    /// started starts, as the click asked for it; one whose shell has exited starts a new shell, as Restart
+    /// does without asking when nothing runs.
     private func type(_ handoff: TerminalCommandRequest) async {
         if !hasStarted {
             hasStarted = true
         } else if !session.isRunning {
             session.restart()
         }
-        _ = await session.typeForReviewWhenReady(handoff.command)
+        _ = await session.typeForReviewWhenReady(handoff.command, runs: handoff.runs)
         guard !Task.isCancelled else { return }
         onHandoffDone(handoff.id)
     }
@@ -565,10 +566,12 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
     }
 
     /// Waits for the shell's prompt as `typeWhenReady` does, then types `command` for review, in the
-    /// paste mode the shell asked for by then.
-    func typeForReviewWhenReady(_ command: String) async -> Bool {
+    /// paste mode the shell asked for by then, and with `runs` presses Return after it: the shell runs
+    /// what it holds, all of a pasted block's lines.
+    func typeForReviewWhenReady(_ command: String, runs: Bool = false) async -> Bool {
         guard await waitUntilReady() else { return false }
         sendForReview(command)
+        if runs { send("\r") }
         return true
     }
 
