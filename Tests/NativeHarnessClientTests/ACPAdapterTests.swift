@@ -1,4 +1,5 @@
 import Foundation
+import os
 import XCTest
 @testable import NativeHarnessClient
 
@@ -41,7 +42,7 @@ final class ACPAdapterTests: XCTestCase {
         let advertising = ACPAdapter(
             kind: .hermes,
             executableURL: executable,
-            transport: FakeACPTransport(advertisesImagePrompts: true)
+            transportFactory: { FakeACPTransport(advertisesImagePrompts: true) }
         )
         let handle = try await advertising.createSession(
             CreateHarnessSessionRequest(
@@ -56,12 +57,15 @@ final class ACPAdapterTests: XCTestCase {
         await advertising.close(handle)
     }
 
-    func testUnsupportedInitializationStopsTheTransport() async throws {
+    /// A failed `initialize` stops its process and leaves the adapter able to try again: the
+    /// registry keeps the adapter, so the next attempt starts a process of its own.
+    func testFailedInitializationStopsTheTransportAndTheNextAttemptStartsANewOne() async throws {
         let transport = FakeACPTransport(protocolVersion: 2)
+        let next = FakeACPTransport()
         let adapter = ACPAdapter(
             kind: .grokBuild,
             executableURL: URL(filePath: "/tmp/fake-grok"),
-            transport: transport
+            transportFactory: transportSequence(transport, next)
         )
 
         do {
@@ -78,6 +82,18 @@ final class ACPAdapterTests: XCTestCase {
         }
         let stopCount = await transport.stopCount
         XCTAssertEqual(stopCount, 1)
+
+        let handle = try await adapter.createSession(
+            CreateHarnessSessionRequest(
+                localSessionID: UUID(),
+                workspaceURL: URL(filePath: "/tmp/acp-workspace"),
+                initialPrompt: nil
+            )
+        )
+        XCTAssertEqual(handle.providerSessionID, "acp-session-1")
+        let methods = await next.requestMethods
+        XCTAssertEqual(methods, ["initialize", "session/new"])
+        await adapter.close(handle)
     }
 
     func testResumeFailsClosedWhenRuntimeDoesNotAdvertiseSessionLoading() async throws {
@@ -85,7 +101,7 @@ final class ACPAdapterTests: XCTestCase {
         let adapter = ACPAdapter(
             kind: .kimiCode,
             executableURL: URL(filePath: "/tmp/fake-kimi"),
-            transport: transport
+            transportFactory: { transport }
         )
 
         do {
@@ -110,11 +126,12 @@ final class ACPAdapterTests: XCTestCase {
 
     func testCreateStreamPermissionInterruptAndResumeUseSharedACPContract() async throws {
         let transport = FakeACPTransport()
+        let next = FakeACPTransport()
         let adapter = ACPAdapter(
             kind: .hermes,
             executableURL: URL(filePath: "/tmp/fake-hermes"),
             launchArguments: ["acp"],
-            transport: transport
+            transportFactory: transportSequence(transport, next)
         )
         let localID = UUID()
         let handle = try await adapter.createSession(
@@ -211,26 +228,50 @@ final class ACPAdapterTests: XCTestCase {
         await transport.completePrompt()
 
         await adapter.close(handle)
+        collector.cancel()
+        let stopCount = await transport.stopCount
+        XCTAssertEqual(stopCount, 1)
 
-        let resumedAdapter = ACPAdapter(
-            kind: .openCode,
-            executableURL: URL(filePath: "/tmp/fake-opencode"),
-            launchArguments: ["acp"],
-            transport: FakeACPTransport()
-        )
-        let resumed = try await resumedAdapter.resumeSession(
+        // Closing the last session ended its process, and the registry keeps the adapter: the next
+        // session starts a new process and reads that one's updates.
+        let resumed = try await adapter.resumeSession(
             providerSessionID: "existing-session",
             localSessionID: UUID(),
             workspaceURL: URL(filePath: "/tmp/acp-workspace")
         )
         XCTAssertEqual(resumed.providerSessionID, "existing-session")
-        await resumedAdapter.close(resumed)
-        collector.cancel()
+        let restarted = await next.configuration
+        XCTAssertEqual(restarted?.arguments, ["acp"])
+        let resumedRecorder = ACPPayloadRecorder()
+        let resumedCollector = Task {
+            for await event in await adapter.events(for: resumed) {
+                await resumedRecorder.append(event.payload)
+            }
+        }
+        try await adapter.send("again", to: resumed)
+        try await waitUntil { await next.pendingPromptCount == 1 }
+        await next.emit(.object([
+            "jsonrpc": .string("2.0"),
+            "method": .string("session/update"),
+            "params": .object([
+                "sessionId": .string(resumed.providerSessionID),
+                "update": .object([
+                    "sessionUpdate": .string("agent_message_chunk"),
+                    "content": .object(["type": .string("text"), "text": .string("back")])
+                ])
+            ])
+        ]))
+        await next.completePrompt()
+        try await waitUntil { await resumedRecorder.payloads.contains(.turnCompleted) }
+        let resumedPayloads = await resumedRecorder.payloads
+        XCTAssertTrue(resumedPayloads.contains(.assistantDelta("back")))
+        await adapter.close(resumed)
+        resumedCollector.cancel()
     }
 
     func testSessionConfigOptionRoundTripsThroughAdapter() async throws {
         let transport = FakeACPTransport(exposesConfig: true)
-        let adapter = ACPAdapter(kind: .openCode, executableURL: URL(filePath: "/tmp/opencode"), transport: transport)
+        let adapter = ACPAdapter(kind: .openCode, executableURL: URL(filePath: "/tmp/opencode"), transportFactory: { transport })
         let handle = try await adapter.createSession(CreateHarnessSessionRequest(
             localSessionID: UUID(), workspaceURL: URL(filePath: "/tmp/project"), initialPrompt: nil
         ))
@@ -248,7 +289,7 @@ final class ACPAdapterTests: XCTestCase {
     func testAntigravityKeepsItsOptionNamesAndAnswersApprovalsByItsPermissionMode() async throws {
         let transport = FakeACPTransport(exposesAntigravity: true)
         let adapter = ACPAdapter(kind: .antigravityCLI, executableURL: URL(filePath: "/tmp/agy"),
-                                 launchArguments: ["acp"], transport: transport)
+                                 launchArguments: ["acp"], transportFactory: { transport })
         let localID = UUID()
         // A print-mode task that never ran a turn kept its local ID; it starts a conversation.
         let handle = try await adapter.resumeSession(providerSessionID: localID.uuidString.lowercased(),
@@ -332,7 +373,7 @@ final class ACPAdapterTests: XCTestCase {
         let adapter = ACPAdapter(
             kind: .grokBuild,
             executableURL: URL(filePath: "/tmp/fake-grok"),
-            transport: transport
+            transportFactory: { transport }
         )
         let handle = try await adapter.createSession(CreateHarnessSessionRequest(
             localSessionID: UUID(),
@@ -424,7 +465,7 @@ final class ACPAdapterTests: XCTestCase {
             adapter: ACPAdapter(
                 kind: .grokBuild,
                 executableURL: URL(filePath: "/tmp/fake-grok"),
-                transport: transport
+                transportFactory: { transport }
             ),
             manifest: HarnessProtocolCompatibilityManifest.acp(.grokBuild)
         )
@@ -481,7 +522,7 @@ final class ACPAdapterTests: XCTestCase {
     func testUsageUpdateReportsTheContextWindow() async throws {
         let transport = FakeACPTransport()
         let adapter = ACPAdapter(kind: .openCode, executableURL: URL(filePath: "/tmp/fake-opencode"),
-                                 transport: transport)
+                                 transportFactory: { transport })
         let handle = try await adapter.createSession(CreateHarnessSessionRequest(
             localSessionID: UUID(), workspaceURL: URL(filePath: "/tmp/acp-usage"), initialPrompt: nil))
         let recorder = ACPPayloadRecorder()
@@ -521,7 +562,7 @@ final class ACPAdapterTests: XCTestCase {
     func testReplayedHistoryAfterALoadIsNotATurn() async throws {
         let transport = FakeACPTransport()
         let adapter = ACPAdapter(kind: .kimiCode, executableURL: URL(filePath: "/tmp/fake-kimi"),
-                                 launchArguments: ["acp"], transport: transport)
+                                 launchArguments: ["acp"], transportFactory: { transport })
         let handle = try await adapter.resumeSession(providerSessionID: "saved", localSessionID: UUID(),
                                                      workspaceURL: URL(filePath: "/tmp/acp-workspace"))
         let recorder = ACPPayloadRecorder()
@@ -562,13 +603,13 @@ final class ACPAdapterTests: XCTestCase {
         let direct = ACPAdapter(
             kind: .openCode,
             executableURL: executable,
-            transport: directTransport
+            transportFactory: { directTransport }
         )
         let routed = YHPProviderCompatibilityAdapter(
             adapter: ACPAdapter(
                 kind: .openCode,
                 executableURL: executable,
-                transport: routedTransport
+                transportFactory: { routedTransport }
             ),
             manifest: HarnessProtocolCompatibilityManifest.acp(.openCode)
         )
@@ -738,6 +779,12 @@ final class ACPAdapterTests: XCTestCase {
         ])
     }
 
+    /// Gives the adapter `transports` in order, one for each process it starts, then fresh ones.
+    private func transportSequence(_ transports: FakeACPTransport...) -> @Sendable () -> any ACPTransport {
+        let queue = OSAllocatedUnfairLock(initialState: transports)
+        return { queue.withLock { $0.isEmpty ? FakeACPTransport() : $0.removeFirst() } }
+    }
+
     private func permissionOption(_ id: String, _ name: String, _ kind: String) -> JSONValue {
         .object([
             "optionId": .string(id),
@@ -800,6 +847,10 @@ actor FakeACPTransport: ACPTransport {
     var pendingPromptCount: Int { promptContinuations.count }
 
     func start(_ configuration: ACPLaunchConfiguration) async throws {
+        // Single-use, as `ACPProcessTransport` is.
+        guard stopCount == 0 else {
+            throw HarnessAdapterError.processExited(code: -1, message: "ACP transport cannot restart after being stopped")
+        }
         self.configuration = configuration
     }
 

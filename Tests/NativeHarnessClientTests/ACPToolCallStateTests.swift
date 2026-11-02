@@ -5,7 +5,7 @@ import Testing
 struct ACPToolCallStateTests {
     @Test func testAdapterPreservesCompletedStatusThroughLateOutputAndTurnCompletion() async throws {
         let transport = ToolPatchTransport()
-        let adapter = ACPAdapter(kind: .grokBuild, executableURL: URL(filePath: "/unused"), transport: transport)
+        let adapter = ACPAdapter(kind: .grokBuild, executableURL: URL(filePath: "/unused"), transportFactory: { transport })
         let session = try await adapter.createSession(CreateHarnessSessionRequest(
             localSessionID: UUID(), workspaceURL: FileManager.default.temporaryDirectory, initialPrompt: nil
         ))

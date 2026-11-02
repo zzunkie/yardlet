@@ -27,7 +27,10 @@ actor ACPAdapter:
     private let executableURL: URL
     private let launchArguments: [String]
     private let launchEnvironmentOverrides: [String: String]
-    private let transport: any ACPTransport
+    private let transportFactory: @Sendable () -> any ACPTransport
+    /// The process every open session shares. A stopped transport cannot start again, so stopping
+    /// it puts a new one in its place for the next session.
+    private var transport: any ACPTransport
     private let projector = ACPEventProjector()
     private let capabilityProjector = ACPCapabilityProjector()
 
@@ -70,7 +73,7 @@ actor ACPAdapter:
         executableURL: URL,
         launchArguments: [String]? = nil,
         launchEnvironmentOverrides: [String: String]? = nil,
-        transport: (any ACPTransport)? = nil
+        transportFactory: (@Sendable () -> any ACPTransport)? = nil
     ) {
         self.kind = kind
         self.executableURL = executableURL.standardizedFileURL
@@ -78,7 +81,9 @@ actor ACPAdapter:
             ?? HarnessCatalog.descriptor(for: kind)?.launchArguments
             ?? []
         self.launchEnvironmentOverrides = launchEnvironmentOverrides ?? [:]
-        self.transport = transport ?? ACPProcessTransport(executableURL: executableURL)
+        let transportFactory = transportFactory ?? { ACPProcessTransport(executableURL: executableURL) }
+        self.transportFactory = transportFactory
+        self.transport = transportFactory()
     }
 
     /// The project's other roots, held for the launch this session triggers. ACP `session/new`
@@ -167,7 +172,7 @@ actor ACPAdapter:
 
     func createSession(_ request: CreateHarnessSessionRequest) async throws
         -> HarnessSessionHandle {
-        try await ensureInitialized(
+        let transport = try await ensureInitialized(
             workspaceURL: request.workspaceURL,
             localSessionID: request.localSessionID
         )
@@ -200,7 +205,7 @@ actor ACPAdapter:
             }
             return handle
         } catch {
-            await stopTransportIfUnused()
+            await stopTransportIfUnused(transport)
             throw error
         }
     }
@@ -216,9 +221,9 @@ actor ACPAdapter:
             return try await createSession(CreateHarnessSessionRequest(
                 localSessionID: localSessionID, workspaceURL: workspaceURL, initialPrompt: nil))
         }
-        try await ensureInitialized(workspaceURL: workspaceURL, localSessionID: localSessionID)
+        let transport = try await ensureInitialized(workspaceURL: workspaceURL, localSessionID: localSessionID)
         guard canLoadSession else {
-            await stopTransportIfUnused()
+            await stopTransportIfUnused(transport)
             throw HarnessAdapterError.capabilityUnavailable(
                 L10n.format(
                     "%@ does not advertise ACP session loading",
@@ -250,7 +255,7 @@ actor ACPAdapter:
             return handle
         } catch {
             replayingProviderSessionIDs.remove(providerSessionID)
-            await stopTransportIfUnused()
+            await stopTransportIfUnused(transport)
             throw error
         }
     }
@@ -504,7 +509,7 @@ actor ACPAdapter:
     }
 
     func close(_ session: HarnessSessionHandle) async {
-        handles.removeValue(forKey: session.localSessionID)
+        let wasOpen = handles.removeValue(forKey: session.localSessionID) != nil
         localSessionIDByProviderID.removeValue(forKey: session.providerSessionID)
         replayingProviderSessionIDs.remove(session.providerSessionID)
         promptTasks.removeValue(forKey: session.localSessionID)?.cancel()
@@ -522,11 +527,10 @@ actor ACPAdapter:
         antigravityPermissionModeByLocalSessionID.removeValue(forKey: session.localSessionID)
         antigravityModelsByLocalSessionID.removeValue(forKey: session.localSessionID)
         eventChannel.close(session.localSessionID)
-        if handles.isEmpty {
-            messageTask?.cancel()
-            messageTask = nil
-            await transport.stop()
-            initialized = false
+        // Closing the last open session ends the process; closing a session again leaves alone a
+        // process started since.
+        if wasOpen, handles.isEmpty {
+            await stopTransport()
         }
     }
 
@@ -539,8 +543,11 @@ actor ACPAdapter:
         )
     }
 
-    private func ensureInitialized(workspaceURL: URL, localSessionID: UUID) async throws {
-        guard !initialized else { return }
+    /// Starts the shared process and runs `initialize` on it once, and returns the transport the
+    /// session's requests go to.
+    private func ensureInitialized(workspaceURL: URL, localSessionID: UUID) async throws -> any ACPTransport {
+        let transport = transport
+        guard !initialized else { return transport }
         do {
             try await transport.start(
                 ACPLaunchConfiguration(
@@ -549,8 +556,9 @@ actor ACPAdapter:
                     environmentOverrides: launchEnvironmentOverrides
                 )
             )
-            if messageTask == nil {
-                let stream = await transport.messages()
+            let stream = await transport.messages()
+            // Another call may have started reading this process, or stopped it, while this one waited.
+            if messageTask == nil, transport === self.transport {
                 messageTask = Task { [weak self] in
                     for await frame in stream {
                         guard !Task.isCancelled else { break }
@@ -565,6 +573,9 @@ actor ACPAdapter:
                     version: "ACP \(result["protocolVersion"]?.integerValue ?? -1)"
                 )
             }
+            guard transport === self.transport else {
+                throw HarnessAdapterError.processExited(code: -1, message: "ACP transport stopped")
+            }
             canLoadSession = result["agentCapabilities"]?["loadSession"]?.boolValue == true
             acceptsStdioMCPServers = ACPProtocol.acceptsStdioMCPServers(initializeResult: result)
             // Image prompts belong to the agent, not to the ACP family. Record what this agent
@@ -572,11 +583,10 @@ actor ACPAdapter:
             advertisesImagePrompts = result["agentCapabilities"]?["promptCapabilities"]?["image"]?
                 .boolValue == true
             initialized = true
+            return transport
         } catch {
-            messageTask?.cancel()
-            messageTask = nil
-            await transport.stop()
-            initialized = false
+            // One stopped while this call waited has been replaced already; the new one is not this call's.
+            if transport === self.transport { await stopTransport() }
             throw error
         }
     }
@@ -793,12 +803,23 @@ actor ACPAdapter:
         }
     }
 
-    private func stopTransportIfUnused() async {
-        guard handles.isEmpty else { return }
+    /// After a failed session request, ends the process if no session uses it. `used` is the
+    /// transport the request went to: one stopped and replaced while the request waited leaves the
+    /// new process to the sessions after it.
+    private func stopTransportIfUnused(_ used: any ACPTransport) async {
+        guard handles.isEmpty, used === transport else { return }
+        await stopTransport()
+    }
+
+    /// Ends the shared process and puts a new transport in its place, so the next session starts
+    /// one of its own.
+    private func stopTransport() async {
         messageTask?.cancel()
         messageTask = nil
-        await transport.stop()
         initialized = false
+        let stopping = transport
+        transport = transportFactory()
+        await stopping.stop()
     }
 
     private func takeRequestID() -> Int64 {

@@ -193,7 +193,7 @@ final class YardletInstructionsTests: XCTestCase {
     }
 
     private func routedACP(_ kind: HarnessKind, _ transport: RecordingACPTransport) -> any HarnessAdapter {
-        YHPProviderCompatibilityAdapter(adapter: ACPAdapter(kind: kind, executableURL: URL(filePath: "/tmp/acp"), transport: transport),
+        YHPProviderCompatibilityAdapter(adapter: ACPAdapter(kind: kind, executableURL: URL(filePath: "/tmp/acp"), transportFactory: { transport }),
                                         manifest: HarnessProtocolCompatibilityManifest.acp(kind))
     }
 

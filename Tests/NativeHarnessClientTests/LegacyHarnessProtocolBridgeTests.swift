@@ -1413,7 +1413,7 @@ final class LegacyHarnessProtocolBridgeTests: XCTestCase {
             kind: .openCode,
             executableURL: URL(filePath: "/tmp/fake-opencode"),
             launchArguments: ["acp"],
-            transport: transport
+            transportFactory: { transport }
         )
         let manifest = HarnessProtocolCompatibilityManifest.acp(.openCode)
         let bridge = LegacyHarnessProtocolBridge(adapter: adapter, manifest: manifest)

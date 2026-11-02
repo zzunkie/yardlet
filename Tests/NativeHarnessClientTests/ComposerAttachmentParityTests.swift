@@ -131,7 +131,7 @@ final class ComposerAttachmentParityTests: XCTestCase {
         let advertisingAdapter = ACPAdapter(
             kind: .grokBuild,
             executableURL: try makeExecutable("grok", version: "grok 1.0.30"),
-            transport: advertising
+            transportFactory: { advertising }
         )
         let advertisingHandle = try await advertisingAdapter.createSession(
             CreateHarnessSessionRequest(
@@ -168,7 +168,7 @@ final class ComposerAttachmentParityTests: XCTestCase {
         let silentAdapter = ACPAdapter(
             kind: .kimiCode,
             executableURL: URL(filePath: "/tmp/fake-kimi"),
-            transport: silent
+            transportFactory: { silent }
         )
         let silentHandle = try await silentAdapter.createSession(
             CreateHarnessSessionRequest(
@@ -372,7 +372,7 @@ final class ComposerAttachmentParityTests: XCTestCase {
         let silentAdapter = ACPAdapter(
             kind: .kimiCode,
             executableURL: URL(filePath: "/tmp/fake-kimi"),
-            transport: silent
+            transportFactory: { silent }
         )
         let silentHandle = try await silentAdapter.createSession(
             CreateHarnessSessionRequest(
@@ -406,7 +406,7 @@ final class ComposerAttachmentParityTests: XCTestCase {
         let advertisingAdapter = ACPAdapter(
             kind: .kimiCode,
             executableURL: URL(filePath: "/tmp/fake-kimi"),
-            transport: advertising
+            transportFactory: { advertising }
         )
         let advertisingHandle = try await advertisingAdapter.createSession(
             CreateHarnessSessionRequest(
@@ -444,7 +444,7 @@ final class ComposerAttachmentParityTests: XCTestCase {
             adapter: ACPAdapter(
                 kind: .kimiCode,
                 executableURL: URL(filePath: "/tmp/fake-kimi"),
-                transport: transport
+                transportFactory: { transport }
             ),
             manifest: HarnessProtocolCompatibilityManifest.acp(.kimiCode)
         )

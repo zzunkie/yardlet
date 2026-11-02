@@ -203,7 +203,7 @@ final class ProjectWorkspaceRootsTests: XCTestCase {
         let adapter = ACPAdapter(
             kind: .kimiCode,
             executableURL: URL(filePath: "/tmp/fake-kimi"),
-            transport: transport
+            transportFactory: { transport }
         )
         let localSessionID = UUID()
         let catalogArguments = try XCTUnwrap(

@@ -8,7 +8,7 @@ final class PermissionOptionTests: XCTestCase {
         let adapter = ACPAdapter(
             kind: .openCode,
             executableURL: URL(filePath: "/unused"),
-            transport: transport
+            transportFactory: { transport }
         )
         let handle = try await adapter.createSession(
             CreateHarnessSessionRequest(
@@ -62,7 +62,7 @@ final class PermissionOptionTests: XCTestCase {
         let adapter = ACPAdapter(
             kind: .openCode,
             executableURL: URL(filePath: "/unused"),
-            transport: transport
+            transportFactory: { transport }
         )
         let handle = try await adapter.createSession(
             CreateHarnessSessionRequest(

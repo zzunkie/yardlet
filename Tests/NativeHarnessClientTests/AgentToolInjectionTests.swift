@@ -246,7 +246,7 @@ final class AgentToolInjectionTests: XCTestCase {
     func testTheACPRouteTheAppShipsSendsTheServerOnNewAndLoad() async throws {
         let transport = MCPRecordingACPTransport(mcpCapabilities: .object(["http": .bool(false), "sse": .bool(false)]))
         let routed: any HarnessAdapter = YHPProviderCompatibilityAdapter(
-            adapter: ACPAdapter(kind: .openCode, executableURL: URL(filePath: "/tmp/opencode"), transport: transport),
+            adapter: ACPAdapter(kind: .openCode, executableURL: URL(filePath: "/tmp/opencode"), transportFactory: { transport }),
             manifest: HarnessProtocolCompatibilityManifest.acp(.openCode)
         )
         let configurable = try XCTUnwrap(routed as? any HarnessAgentToolConfiguring)
@@ -268,7 +268,7 @@ final class AgentToolInjectionTests: XCTestCase {
         XCTAssertTrue(ACPProtocol.acceptsStdioMCPServers(initializeResult: .object(["agentCapabilities": .object([:])])),
                       "ACP makes stdio servers mandatory, so silence means yes")
         let transport = MCPRecordingACPTransport(mcpCapabilities: .object(["stdio": .bool(false)]))
-        let adapter = ACPAdapter(kind: .kimiCode, executableURL: URL(filePath: "/tmp/kimi"), transport: transport)
+        let adapter = ACPAdapter(kind: .kimiCode, executableURL: URL(filePath: "/tmp/kimi"), transportFactory: { transport })
         let sessionID = UUID()
         await adapter.setAgentToolServer(launch(session: sessionID), for: sessionID)
         _ = try await adapter.createSession(CreateHarnessSessionRequest(localSessionID: sessionID, workspaceURL: workspace, initialPrompt: nil))
