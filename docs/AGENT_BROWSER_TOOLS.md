@@ -334,9 +334,16 @@ task, or one the person moved in the sidebar, gets them as another task's messag
     After the sentence comes a blank line, then for each quote "Yardlet found these words in the person's own message in
     task <id>, sent <ISO 8601>:" and `> ` lines (for a conversation without times, ", sent …" is left out). The sources
     are the `.userMessage`s of the sending task's `sessionToolPresentation` (newest first), not counting other tasks'
-    messages and background notices. `quote_latest_person_message: true` quotes the newest of them whole and is refused
-    when there is none. Each `person_quotes` entry is a phrase copied from one of them: both sides are compared in NFC
-    with every run of whitespace and line breaks as one space, and nothing else may differ. Yardlet quotes the message
+    messages and background notices. `quote_latest_person_message: true` quotes whole the one that started the turn the
+    call answers, or the newest before that turn when another task's message, a schedule or a notice started it, and is
+    refused when there is none. The turn is the sending task's latest, where a message the provider read into the running
+    turn stays (a Claude follow-up read mid-turn, a Codex steer); for a `run_agent` subagent it is the host task's turn
+    that was running when the subagent started, by the turns' start times, or the latest when they cannot place it.
+    What the person sent after that turn began is not passed on: the result says "Not quoted: the person sent … after
+    this turn began. To pass one on, give words from it in person_quotes." with each message's time and first 80
+    characters, unless a `person_quotes` phrase in the same call quoted it. Each `person_quotes` entry is a phrase
+    copied from one of them: both sides are compared in NFC with every run of whitespace and line breaks as one space,
+    and nothing else may differ. Yardlet quotes the message
     that holds the phrase as the person typed it (in NFC): whole up to 1,000 characters
     (`SessionToolPolicy.wholeQuotedMessageLength`), and past that the paragraphs (lines between blank lines) the phrase
     stands in. A phrase equal to a whole message takes the newest such message, however short; any other needs at least
