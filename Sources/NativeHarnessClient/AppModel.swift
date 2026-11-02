@@ -939,10 +939,7 @@ final class AppModel {
         let method = await branchMethod(for: parent)
         guard store.sessions.contains(where: { $0.id == parent.id }) else { return nil }
         if method == .savedConversation, !isVisualFixture {
-            guard let child = await forkSavedConversation(parent, selectsSession: false) else {
-                sideChatErrors[parent.id] = errorBySessionID[parent.id]
-                return nil
-            }
+            guard let child = await forkSavedConversation(parent, selectsSession: false) else { return nil }
             guard matchingSession(parent) != nil else { return nil }
             workspace.sideChatSessionID = child.id
             taskWorkspaces.persistNow()
@@ -3233,20 +3230,17 @@ final class AppModel {
         defer { forkingSessions.remove(source.id) }
         let selectedAtStart = store.selectedSessionID
         do {
-            guard let providerID = source.providerSessionID,
-                  source.status != .running, source.status != .waitingForApproval else {
-                throw HarnessAdapterError.capabilityUnavailable(L10n.string("The saved conversation cannot be forked."))
-            }
+            // A running task forks too, as in the Claude app: the point is where its last step ended.
+            guard let providerID = source.providerSessionID else { throw ClaudeSubagentTranscriptReader.noReply() }
             let reader = claudeSessionReader(for: source)
             let pending = source.inheritedContext?.nativeForkSource
             let snapshot = try await Task.detached(priority: .utility) {
                 if let saved = try reader.readSession(sessionID: providerID) { return saved }
                 if let pending, let saved = try reader.readSession(sessionID: pending.providerSessionID,
                     throughMessageID: pending.throughMessageID) { return saved }
-                throw HarnessAdapterError.capabilityUnavailable(L10n.string("The saved conversation cannot be forked."))
+                throw ClaudeSubagentTranscriptReader.noReply()
             }.value
-            guard let current = matchingSession(source), current.status != .running,
-                  current.status != .waitingForApproval else { return nil }
+            guard let current = matchingSession(source) else { return nil }
             let context = SideChatContext(source: current, entries: snapshot.transcript.entries,
                 nativeForkSource: snapshot.forkSource, isTruncated: snapshot.transcript.isTruncated)
             let child = try await store.createSession(
@@ -3269,7 +3263,9 @@ final class AppModel {
             if selectsSession, store.selectedSessionID == selectedAtStart { store.selectedSessionID = child.id }
             return child
         } catch {
-            if matchingSession(source) != nil { errorBySessionID[source.id] = error.localizedDescription }
+            guard matchingSession(source) != nil else { return nil }
+            if selectsSession { errorBySessionID[source.id] = error.localizedDescription }
+            else { sideChatErrors[source.id] = error.localizedDescription }
             return nil
         }
     }

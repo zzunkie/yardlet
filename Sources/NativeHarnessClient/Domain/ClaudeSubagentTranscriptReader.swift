@@ -43,6 +43,10 @@ struct ClaudeSubagentTranscriptReader: Sendable {
 
     /// Read the main transcript's current chain to pin a native fork. A missing file is different
     /// from a substituted/non-regular file: the latter must never trigger a fresh CLI fork.
+    ///
+    /// Without `throughMessageID` the point is Claude's last text that calls no tool. The CLI resumes
+    /// a fork through its point as it stands, so in a turn still running or waiting for approval a
+    /// later point would leave a call without its result.
     func readSession(sessionID: String, throughMessageID: String? = nil) throws -> SessionSnapshot? {
         guard let (chain, truncated) = try mainChain(sessionID: sessionID) else { return nil }
         let selected = chain.lastIndex { value in
@@ -50,9 +54,11 @@ struct ClaudeSubagentTranscriptReader: Sendable {
                 && value["isSidechain"]?.boolValue != true
                 && value["parent_tool_use_id"]?.stringValue?.isEmpty != false
                 && value["uuid"]?.stringValue.flatMap(UUID.init(uuidString:)) != nil
-                && (throughMessageID == nil || value["uuid"]?.stringValue == throughMessageID)
+                && (throughMessageID.map { value["uuid"]?.stringValue == $0 } ?? Self.isReply(value))
         }
-        guard let selected, let messageID = chain[selected]["uuid"]?.stringValue else { throw sessionUnavailable() }
+        guard let selected, let messageID = chain[selected]["uuid"]?.stringValue else {
+            throw throughMessageID == nil ? Self.noReply() : sessionUnavailable()
+        }
         return SessionSnapshot(forkSource: .init(providerSessionID: sessionID, throughMessageID: messageID),
             transcript: projectChain(Array(chain.prefix(selected + 1)), sessionID: sessionID, wasTruncated: truncated))
     }
@@ -874,6 +880,18 @@ struct ClaudeSubagentTranscriptReader: Sendable {
     private func empty() -> HarnessSubtaskTranscript { .init(entries: [], isTruncated: false) }
     private func sessionUnavailable() -> HarnessAdapterError {
         .capabilityUnavailable(L10n.string("The saved conversation cannot be forked."))
+    }
+    /// No point to fork from yet: the conversation has no text of Claude's that calls no tool.
+    static func noReply() -> HarnessAdapterError {
+        .capabilityUnavailable(L10n.string("Claude has not replied yet. Try again after its first reply."))
+    }
+    /// A record of Claude's whose text calls no tool.
+    private static func isReply(_ value: JSONValue) -> Bool {
+        guard let blocks = value["message"]?["content"]?.arrayValue else {
+            return value["message"]?["content"]?.stringValue != nil
+        }
+        return blocks.contains { $0["type"]?.stringValue == "text" }
+            && !blocks.contains { $0["type"]?.stringValue == "tool_use" }
     }
     private func unavailable() -> HarnessAdapterError {
         .capabilityUnavailable(L10n.string("The child conversation could not be read."))

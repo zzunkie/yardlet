@@ -1408,6 +1408,7 @@
 "Fork from here" = "여기서 분기";
 "This turn cannot be forked." = "이 턴에서는 분기할 수 없습니다.";
 "The saved conversation cannot be forked." = "저장된 대화에서 분기할 수 없습니다.";
+"Claude has not replied yet. Try again after its first reply." = "Claude가 아직 답하지 않았습니다. 첫 답이 온 뒤 다시 시도해 주세요.";
 "Start a new conversation from this chat." = "이 채팅에서 새 대화를 시작하세요.";
 "Start a new conversation without arguments or attachments." = "인자나 첨부 없이 새 대화를 시작하세요.";
 "Stop the current turn before starting a new conversation." = "새 대화를 시작하려면 현재 턴을 먼저 중단하세요.";

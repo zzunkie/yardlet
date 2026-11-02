@@ -222,7 +222,10 @@ run. Symlinks, FIFOs, files outside the scope and review results that changed ar
 
 **Native fork and reset.** Forking from a chosen Codex turn sends the original ID together with `lastTurnId` and creates
 a separate local record with a new provider thread ID. The source's history is not rolled back or reverted. A Claude fork
-uses the same account, scope and workspace as the parent and fixes the original assistant UUID. The new UUID and the
+uses the same account, scope and workspace as the parent and fixes the original assistant UUID: Claude's last text that
+calls no tool. A parent still running or waiting for approval forks too, as in the Claude app, through the steps it
+finished; the call in progress is left out, since the CLI resumes a fork through that point as it stands. The CLI forks
+a conversation another process holds (`--fork-session`). The new UUID and the
 original ID and point are stored together in the optional `nativeForkSource` of the `inherited_context` JSON. With a CLI
 that does not create the child file before the first input, a restart still prepares the native fork at the same
 boundary, and if the child's native file is stored, it resumes with that ID. If preparing the native fork fails, it does
