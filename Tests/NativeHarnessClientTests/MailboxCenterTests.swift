@@ -38,6 +38,23 @@ final class MailboxCenterTests: XCTestCase {
         XCTAssertTrue(center.threads.isEmpty)
     }
 
+    /// A list goes on from the page token its service gave, without repeating what was read.
+    func testTheInboxGoesOnPageByPage() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("MailboxPages")))
+        let transport = try XCTUnwrap(MailFixture().transports().first)
+        await transport.setPageSize(3)
+        let center = MailboxCenter(defaults: defaults)
+        center.setEnabled(true)
+        center.setAccounts([(transport.account, transport)])
+        await center.refresh()
+        XCTAssertEqual(center.threads.count, 3)
+        XCTAssertTrue(center.hasMore(.allInboxes))
+        await center.loadMore(.allInboxes)
+        XCTAssertEqual(center.threads.count, 4)
+        XCTAssertEqual(Set(center.threads.map(\.id)).count, 4)
+        XCTAssertFalse(center.hasMore(.allInboxes))
+    }
+
     /// A reply goes out through a draft once the undo time passes; Undo keeps it from leaving, and
     /// closing what was written keeps it in Drafts.
     func testAReplyIsSentAfterTheUndoTimeAndUndoKeepsItBack() async throws {
@@ -73,5 +90,12 @@ final class MailboxCenterTests: XCTestCase {
         window.close(in: center)
         try await waitUntil { await transport.drafts.count == 1 }
         XCTAssertNil(window.composition)
+
+        // An agent's draft sent as it is goes without being saved over, so its HTML stays.
+        let agentDraft = try XCTUnwrap(thread.messages.first { $0.isDraft })
+        window.sendDraft(agentDraft, in: thread, center: center)
+        try await waitUntil { await transport.sent.contains("draft-of-\(agentDraft.id)") }
+        let afterAgentDraft = await transport.drafts
+        XCTAssertEqual(afterAgentDraft.count, 1, "Nothing was saved for the agent's draft")
     }
 }

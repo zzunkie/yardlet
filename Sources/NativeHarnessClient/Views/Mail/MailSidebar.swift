@@ -53,6 +53,14 @@ struct MailSidebar: View {
                             }
                         }
                         if rows.isEmpty { emptyLine }
+                        // The list goes on as its end comes into view.
+                        if !rows.isEmpty, window.searchResults == nil, window.searchText.isEmpty,
+                           center.hasMore(window.mailbox) {
+                            HStack { Spacer(); ProgressView().controlSize(.mini); Spacer() }
+                                .frame(height: 32)
+                                .onAppear { Task { await center.loadMore(window.mailbox) } }
+                                .accessibilityLabel(L10n.string("Loading mail…"))
+                        }
                     }
                 }
                 .padding(.horizontal, SidebarMetrics.rowInset)
