@@ -24,7 +24,8 @@ struct ClaudeLaunchConfiguration: Equatable, Sendable {
     /// The model the task chose, passed as `--model`. Nil runs the account's own model.
     var model: String? = nil
     /// The CLI saves nothing of this session (`--no-session-persistence`, print mode only): no
-    /// conversation file for `--resume`, the Claude app or an import to find. For `run_agent`.
+    /// conversation file for `--resume`, the Claude app or an import to find. For `run_agent` and a
+    /// side chat, whose fork (`forkSource`) the CLI takes with it.
     var keepsNoHistory = false
     /// Yardlet instructions, passed as `--append-system-prompt`. Nil leaves the launch arguments unchanged.
     var appendSystemPrompt: String? = nil

@@ -199,7 +199,7 @@ actor ClaudeProcessTransport: ClaudeTransport {
         if let model = ClaudeLaunchOption.launchModel(configuration.model) {
             arguments.append(contentsOf: ["--model", model])
         }
-        // A subagent's session leaves no conversation file; a task's launches as it always did.
+        // A subagent's or side chat's session leaves no conversation file; a task's launches as it always did.
         if configuration.keepsNoHistory {
             arguments.append("--no-session-persistence")
         }

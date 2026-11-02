@@ -52,9 +52,9 @@ extension AppModel {
     /// The sidebar's lists as the window lays them out with no search and every row shown: what the
     /// menu bar menu and the phone read of it.
     var sidebarLists: SidebarProjection.Layout {
-        let groups = projects.visibleGroups(sessions: store.sessions)
+        let groups = projects.visibleGroups(sessions: store.listedSessions)
         return SidebarProjection.layout(
-            visibleGroups: groups, allGroups: groups, chats: projects.chats(sessions: store.sessions),
+            visibleGroups: groups, allGroups: groups, chats: projects.chats(sessions: store.listedSessions),
             splits: splits.splits, isFiltering: false, archivedParents: store.archivedParentIDs)
     }
 

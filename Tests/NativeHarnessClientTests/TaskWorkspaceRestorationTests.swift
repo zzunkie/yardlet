@@ -57,23 +57,29 @@ final class TaskWorkspaceRestorationTests: XCTestCase {
         secondBrowser.terminateForApplicationShutdown()
     }
 
-    func testSideChatLinkAndReadingPositionsSurviveClosingAndRestart() throws {
+    /// A side chat is temporary: closing its tab says so, and its link is never saved, while the
+    /// reading positions are. A snapshot saved with a side chat link reads as before without it.
+    func testReadingPositionsSurviveRestartAndASideChatLinkEndsWithItsTab() throws {
         let repository = repository()
         let workspaces = TaskWorkspaceStore(repository: repository)
+        var closed: [UUID] = []
+        workspaces.onSideChatClose = { closed.append($0) }
         let parent = UUID(), child = UUID()
         let state = workspaces.state(for: parent)
         state.sideChatSessionID = child
         state.setPanels(.init(trailingSurfaceID: "sideChat", isTerminalPresented: true))
         workspaces.state(for: child).codex.bookmark = .init(anchorID: "side-turn-3", fraction: 0.2, followsLatest: false)
+        XCTAssertEqual(closed, [])
         state.setPanels(.init(isTerminalPresented: true))
+        XCTAssertEqual(closed, [parent])
         workspaces.persistNow()
         let restarted = TaskWorkspaceStore(repository: repository)
-        XCTAssertEqual(restarted.state(for: parent).sideChatSessionID, child)
+        XCTAssertNil(restarted.state(for: parent).sideChatSessionID)
         XCTAssertNil(restarted.state(for: parent).panels.trailingSurfaceID)
         XCTAssertFalse(restarted.state(for: parent).terminalStartRequested)
         XCTAssertEqual(restarted.state(for: child).codex.bookmark.anchorID, "side-turn-3")
-        let oldJSON = Data("{\"version\":1,\"panels\":{\"isTerminalPresented\":false},\"layout\":{\"panelWidth\":420,\"terminalHeight\":240,\"isExpanded\":false},\"transcript\":{\"fraction\":0,\"followsLatest\":true},\"codex\":{\"fraction\":0,\"followsLatest\":true}}".utf8)
-        XCTAssertNil(try JSONDecoder().decode(TaskWorkspaceSnapshot.self, from: oldJSON).sideChatSessionID)
+        let savedWithLink = Data("{\"version\":1,\"panels\":{\"isTerminalPresented\":false,\"trailingTabs\":[\"diff\"]},\"layout\":{\"panelWidth\":420,\"terminalHeight\":240,\"isExpanded\":false},\"transcript\":{\"fraction\":0,\"followsLatest\":true},\"codex\":{\"fraction\":0,\"followsLatest\":true},\"sideChatSessionID\":\"\(child.uuidString)\"}".utf8)
+        XCTAssertEqual(try JSONDecoder().decode(TaskWorkspaceSnapshot.self, from: savedWithLink).panels.trailingTabs, ["diff"])
     }
 
     private func repository() -> UserDefaultsTaskWorkspaceRepository {

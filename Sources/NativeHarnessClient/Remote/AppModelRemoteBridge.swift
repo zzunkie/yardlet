@@ -52,7 +52,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     }
 
     static func snapshot(of model: AppModel) -> RemoteSnapshot {
-        let sessions = model.store.sessions
+        let sessions = model.store.listedSessions
         let sidebar = model.sidebarLists
         var snapshot = RemoteTaskProjection.snapshot(
             groups: model.projects.visibleGroups(sessions: sessions),

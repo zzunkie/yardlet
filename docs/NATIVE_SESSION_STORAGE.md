@@ -235,6 +235,18 @@ chats are not converted automatically. Reset creates an empty local record with 
 existing ID, history, draft and read state are preserved, and that native session is not cleared. The project/additional
 roots and stored options are kept as well.
 
+**Side chats.** A side chat is temporary, as the Codex app's side chat; Fork task is how a conversation is kept as a
+task. The index never holds a side chat's row (`SessionStore.isTemporary`), Yardlet writes no reading snapshot of its
+conversation, and the task's link to it (`TaskWorkspaceState.sideChatSessionID`) lasts for this launch only. The harness
+keeps none of it where it can (`HarnessHistoryFreeSessionConfiguring`): a Codex side chat forks the thread with
+`ephemeral: true`, a Claude Code side chat runs its fork (`--resume … --fork-session --resume-session-at`) with
+`--no-session-persistence`, and a Pi side chat runs with `--no-session`. Other harnesses (ACP agents, Antigravity CLI)
+start a session of their own with the side chat's context, which their own history may keep. Closing the side chat's
+tab, deleting or archiving its task, or quitting Yardlet ends it: its runtime closes and its draft, panels and
+conversation go as a deleted task's do, so nothing of it is there after a restart. While it is open its runtime is kept,
+since nothing else holds its conversation. A side chat made before side chats were temporary is a task in the index and
+stays one; a saved `sideChatSessionID` key is ignored and dropped on the task's next save.
+
 ## Reading subagent conversations
 
 With the provider session ID, account binding and scope stored on the parent task, Yardlet reads only the native
@@ -270,7 +282,7 @@ shows the archived tasks in place of the task list, most recently archived first
 harness, and restores them with **Unarchive**.
 
 - **Index:** the `archived` column is 0 (listed), 1 (archived) or 2 (deleted, or created and then discarded by a failed
-  fork, import or side chat). Archiving writes `archived_at` and `provider_archived` together. Rows written before these
+  fork or import, or a side chat from before side chats were temporary). Archiving writes `archived_at` and `provider_archived` together. Rows written before these
   two columns existed have no date and read as `provider_archived = 0`, and rows deleted or discarded at that time are
   also 1, so they show among the archived tasks too (there is no record to tell them apart).
 - **Unarchive:** sets the same row back to `archived = 0`. The provider session ID, storage scope, account binding,

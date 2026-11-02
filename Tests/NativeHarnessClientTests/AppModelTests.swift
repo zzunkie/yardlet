@@ -124,7 +124,8 @@ final class AppModelTests: XCTestCase {
             model.store.sessions.first(where: { $0.id == child.id })?.completionState == .completed
         }
         XCTAssertFalse(try XCTUnwrap(model.store.sessions.first(where: { $0.id == child.id })).hasUnreadUpdate)
-        workspace.setPanels(.init())
+        // The panel hidden, its side chat tab kept: the side chat goes on off screen.
+        workspace.setPanels(.init(trailingTabs: ["sideChat"]))
         XCTAssertFalse(model.isSessionVisible(child.id))
         XCTAssertTrue(model.isAttached(child.id))
         await adapter.emit(.error(message: "Side chat failed", recoverable: true), for: child.id, sequence: 11)
@@ -150,8 +151,9 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.store.sessions.count, 2)
         XCTAssertEqual(model.store.selectedSessionID, parent.id)
         XCTAssertEqual(model.composerDrafts.tasks.draft(for: parent.id).text, "Keep parent input")
+        // A side chat is temporary: it goes with its task.
         await model.delete(parent)
-        XCTAssertTrue(model.store.sessions.contains { $0.id == replacement?.id })
+        XCTAssertFalse(model.store.sessions.contains { $0.id == replacement?.id })
         await model.shutdown()
     }
 

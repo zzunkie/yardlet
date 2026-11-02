@@ -47,7 +47,15 @@ final class NativeSessionStorageTests: XCTestCase {
         XCTAssertNotEqual(child.providerSessionID, providerID)
         let events = try fixture.events()
         XCTAssertTrue(events.contains { $0["method"] == .string("thread/resume") && $0["threadId"] == .string(providerID) })
-        XCTAssertTrue(events.contains { $0["method"] == .string("thread/fork") })
+        // A side chat's thread is ephemeral, as the Codex app's: nothing of it is written to the home.
+        XCTAssertTrue(events.contains { $0["method"] == .string("thread/fork") && $0["ephemeral"] == .bool(true) })
+        let sideThread = try XCTUnwrap(child.providerSessionID)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.paths.nativeHomeURL
+            .appending(path: "fixture-sessions/\(sideThread).json").path()))
+        let forked = await reopened.branch(restored)
+        XCTAssertNotNil(forked)
+        XCTAssertTrue(try fixture.events().contains { $0["method"] == .string("thread/fork") && $0["ephemeral"] == .bool(false) },
+                      "A fork into a task is saved as always")
         XCTAssertTrue(events.allSatisfy { $0["home"]?.stringValue == fixture.paths.nativeHomeURL.path(percentEncoded: false) })
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.paths.runtimeHomeURL.path()))
         await reopened.shutdown()
