@@ -94,6 +94,39 @@ final class GmailMailTransportTests: XCTestCase {
         XCTAssertEqual(writes[2].body?["id"]?.stringValue, "d1")
     }
 
+    /// A draft opened to edit keeps its blind copies and files: saving it again reads the files from the
+    /// draft (attachment IDs are hundreds of characters long) and replaces it in place.
+    @MainActor
+    func testAnEditedDraftKeepsItsBlindCopiesAndFiles() async throws {
+        let gmail = FakeGmailThreads()
+        let account = MailAccount(id: UUID(), address: "dana@example.com", provider: .gmail)
+        let session = OAuthAPISession(id: account.id, credentials: InMemoryConnectorCredentialStore(), http: gmail,
+                                      now: { Date() })
+        await session.use(ConnectorCredential(kind: .oauth, accessToken: "token", expiresAt: .distantFuture))
+        let transport = GmailMailTransport(api: GmailAPI(base: URL(string: "https://gmail.googleapis.com/gmail/v1/")!,
+                                                         session: session), account: account)
+        let center = MailboxCenter(defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("MailboxEditDraft"))))
+        center.setAccounts([(account, transport)])
+        let thread = try await transport.thread("t-quote")
+        let draft = try XCTUnwrap(thread.messages.last)
+        XCTAssertTrue(draft.isDraft)
+
+        var edited = try await center.composition(editing: draft, in: thread)
+        XCTAssertEqual(edited.draftID, "d-q3")
+        XCTAssertEqual(edited.bcc, "boss@example.com")
+        XCTAssertTrue(edited.keepsDraftFiles)
+        edited.body = "금요일까지 회신드리겠습니다."
+        _ = try await transport.saveDraft(edited)
+
+        let write = try XCTUnwrap(gmail.requests.last)
+        XCTAssertEqual("\(write.method) \(write.path)", "PUT /upload/gmail/v1/users/me/drafts/d-q3", "Replaced in place, not deleted first")
+        XCTAssertFalse(gmail.requests.contains { $0.method == "DELETE" })
+        let mime = String(decoding: write.raw ?? Data(), as: UTF8.self)
+        XCTAssertTrue(mime.contains("Bcc: boss@example.com\r\n"))
+        XCTAssertTrue(mime.contains("filename=\"=?UTF-8?B?"), "The draft's file goes with it")
+        XCTAssertTrue(gmail.requests.contains { $0.path.hasSuffix("/attachments/" + FakeGmailThreads.longAttachmentID) })
+    }
+
     private static func decodedMIME(_ raw: String) -> String? {
         var base64 = raw.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         while base64.count % 4 != 0 { base64.append("=") }
@@ -117,6 +150,7 @@ private final class FakeGmailThreads: ConnectorHTTPTransport, @unchecked Sendabl
         var path: String
         var query: [String: [String]]
         var body: ToolJSON?
+        var raw: Data?
 
         func labels(_ key: String) -> [String] { body?[key]?.arrayValue?.compactMap(\.stringValue) ?? [] }
     }
@@ -132,7 +166,7 @@ private final class FakeGmailThreads: ConnectorHTTPTransport, @unchecked Sendabl
             query[item.name, default: []].append(item.value ?? "")
         }
         let body = request.httpBody.flatMap { try? JSONDecoder().decode(ToolJSON.self, from: $0) }
-        let call = Seen(method: request.httpMethod ?? "GET", path: url.path, query: query, body: body)
+        let call = Seen(method: request.httpMethod ?? "GET", path: url.path, query: query, body: body, raw: request.httpBody)
         lock.withLock { seen.append(call) }
         let answer: ToolJSON
         switch (call.method, url.path) {
@@ -147,6 +181,14 @@ private final class FakeGmailThreads: ConnectorHTTPTransport, @unchecked Sendabl
                              date: 1_762_050_000, snippet: "All checks passed")])])
         case ("POST", "/gmail/v1/users/me/drafts"):
             answer = .object(["id": .string("d1")])
+        case ("GET", "/gmail/v1/users/me/drafts"):
+            answer = .object(["drafts": .array([.object(["id": .string("d-q3"), "message": .object(["id": .string("q3")])])])])
+        case ("GET", "/gmail/v1/users/me/drafts/d-q3"):
+            answer = .object(["id": .string("d-q3"), "message": .object(["id": .string("q3")])])
+        case ("GET", "/gmail/v1/users/me/messages/q3"):
+            answer = Self.quote(full: true)[2]
+        case ("GET", "/gmail/v1/users/me/messages/q3/attachments/" + Self.longAttachmentID):
+            answer = .object(["data": .string(Data("%PDF-1.4".utf8).base64EncodedString())])
         case ("PUT", _):
             answer = .object(["id": .string(url.lastPathComponent)])
         case ("POST", _), ("DELETE", _):
@@ -157,6 +199,9 @@ private final class FakeGmailThreads: ConnectorHTTPTransport, @unchecked Sendabl
         return (try JSONEncoder().encode(answer), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
     }
 
+    /// Gmail's attachment IDs run to hundreds of characters.
+    static let longAttachmentID = String(repeating: "ANGjdJ8x", count: 50)
+
     private static func quote(full: Bool) -> [ToolJSON] {
         [message("q1", from: "김하늘 <haneul@example.com>", subject: "견적서 회신 부탁드립니다", labels: ["INBOX"],
                  date: 1_762_000_000, snippet: "견적서를 보내 드립니다", body: full ? "안녕하세요. 견적서를 보내 드립니다." : nil),
@@ -164,11 +209,13 @@ private final class FakeGmailThreads: ConnectorHTTPTransport, @unchecked Sendabl
                  date: 1_762_060_440, snippet: "수정본을 첨부합니다", body: full ? "수정본을 첨부합니다." : nil,
                  cc: #""Lee, Doyun" <doyun@example.com>"#, attachment: true),
          message("q3", from: "Dana Park <dana@example.com>", subject: "Re: 견적서 회신 부탁드립니다", labels: ["DRAFT"],
-                 date: 1_762_060_800, snippet: "잘 받았습니다", body: full ? "잘 받았습니다." : nil)]
+                 date: 1_762_060_800, snippet: "잘 받았습니다", body: full ? "잘 받았습니다." : nil,
+                 bcc: "boss@example.com", attachment: true, attachmentID: longAttachmentID)]
     }
 
     private static func message(_ id: String, from: String, subject: String, labels: [String], date: Int,
-                                snippet: String, body: String? = nil, cc: String? = nil, attachment: Bool = false) -> ToolJSON {
+                                snippet: String, body: String? = nil, cc: String? = nil, bcc: String? = nil,
+                                attachment: Bool = false, attachmentID: String = "att-1") -> ToolJSON {
         func header(_ name: String, _ value: String) -> ToolJSON {
             .object(["name": .string(name), "value": .string(value)])
         }
@@ -176,13 +223,14 @@ private final class FakeGmailThreads: ConnectorHTTPTransport, @unchecked Sendabl
                        header("Message-ID", "<\(id)@example.com>")]
         if id == "q2" { headers.append(header("References", "<q1@example.com>")) }
         if let cc { headers.append(header("Cc", cc)) }
+        if let bcc { headers.append(header("Bcc", bcc)) }
         var payload: [String: ToolJSON] = ["mimeType": .string(attachment ? "multipart/mixed" : "text/plain"),
                                            "headers": .array(headers)]
         if let body {
             let text = ToolJSON.object(["mimeType": .string("text/plain"),
                                         "body": .object(["data": .string(Data(body.utf8).base64EncodedString())])])
             let file = ToolJSON.object(["mimeType": .string("application/pdf"), "filename": .string("견적서_v3.pdf"),
-                                        "body": .object(["attachmentId": .string("att-1"), "size": .integer(186_400)])])
+                                        "body": .object(["attachmentId": .string(attachmentID), "size": .integer(186_400)])])
             payload["parts"] = .array(attachment ? [text, file] : [text])
         }
         return .object(["id": .string(id), "threadId": .string("t"), "labelIds": .array(labels.map { .string($0) }),

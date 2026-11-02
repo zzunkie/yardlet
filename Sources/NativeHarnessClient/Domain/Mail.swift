@@ -107,6 +107,8 @@ struct MailMessage: Identifiable, Hashable, Sendable {
     var from: MailAddress
     var to: [MailAddress]
     var cc: [MailAddress]
+    /// A draft's blind copies; a received message has none.
+    var bcc: [MailAddress] = []
     var date: Date
     var subject: String
     var snippet: String

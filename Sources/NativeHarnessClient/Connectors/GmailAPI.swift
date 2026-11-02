@@ -51,7 +51,7 @@ struct GmailAPI: Sendable {
     /// A message through the upload endpoint (`…/upload/gmail/v1/`, up to 35 MB), as a message
     /// with attachments goes: the metadata as JSON, then the message as `message/rfc822`
     /// (developers.google.com/workspace/gmail/api/guides/uploads).
-    func upload(_ path: String, metadata: ToolJSON, message: Data) async throws -> ToolJSON {
+    func upload(_ path: String, metadata: ToolJSON, message: Data, method: String = "POST") async throws -> ToolJSON {
         let boundary = "yardlet-\(UUID().uuidString)"
         var body = Data()
         func line(_ text: String) { body.append(Data((text + "\r\n").utf8)) }
@@ -69,15 +69,24 @@ struct GmailAPI: Sendable {
         var components = URLComponents(url: base.appending(path: path), resolvingAgainstBaseURL: false)!
         components.path = "/upload" + components.path
         components.queryItems = [URLQueryItem(name: "uploadType", value: "multipart")]
-        return try await send(method: "POST", url: components.url!, payload: body,
+        return try await send(method: method, url: components.url!, payload: body,
                               contentType: "multipart/related; boundary=\(boundary)", timeout: 120)
     }
 
     /// A Gmail ID as a path segment: message, thread, draft, and label IDs are letters, digits,
     /// `_`, `-`, `:`, and `.`.
     static func segment(_ id: String) throws -> String {
+        try segment(id, maxLength: 256)
+    }
+
+    /// An attachment ID as a path segment: the same characters, but several hundred of them.
+    static func attachmentSegment(_ id: String) throws -> String {
+        try segment(id, maxLength: 4096)
+    }
+
+    private static func segment(_ id: String, maxLength: Int) throws -> String {
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-:.")
-        guard !id.isEmpty, id.count <= 256, id.unicodeScalars.allSatisfy(allowed.contains) else {
+        guard !id.isEmpty, id.count <= maxLength, id.unicodeScalars.allSatisfy(allowed.contains) else {
             throw Failure.invalidID(id)
         }
         return id

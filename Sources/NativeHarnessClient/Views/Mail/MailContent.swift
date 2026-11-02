@@ -302,8 +302,8 @@ struct MailMessageView: View {
                     }
                     .font(.system(size: 12 * scale))
                 }
-                MailHTMLBody(html: html, allowsRemoteContent: showsRemoteContent, openLink: actions.openLink,
-                             height: $htmlHeight)
+                MailHTMLBody(html: html, fallbackText: message.text, allowsRemoteContent: showsRemoteContent,
+                             openLink: actions.openLink, height: $htmlHeight)
                     .frame(height: htmlHeight)
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
