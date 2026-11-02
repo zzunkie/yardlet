@@ -518,6 +518,12 @@ final class AppModel {
         followUps.seed(initialCodexQueues)
         // A finished bash command waits behind queued messages; with none left it may go.
         followUps.queueDidEmpty = { [weak self] sessionID in self?.scheduleShellDelivery(for: sessionID) }
+        // With the person's last queued message gone, what other tasks sent goes as after Resume; a
+        // running turn sends it when it ends.
+        followUps.pauseDidEnd = { [weak self] sessionID in
+            guard let self, !self.isRunning(sessionID) else { return }
+            self.scheduleFollowUpDrain(for: sessionID)
+        }
         codexCapabilitiesBySessionID = initialCodexCapabilities
         providerCapabilitiesBySessionID = initialProviderCapabilities
         providerUsageBySessionID = initialProviderUsage

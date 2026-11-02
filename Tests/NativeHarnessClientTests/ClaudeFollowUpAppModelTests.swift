@@ -439,6 +439,56 @@ import XCTest
         await restored.shutdown()
     }
 
+    /// A message another task sent waits in the queue too, out of the person's rows. An interrupt's
+    /// pause holds it only while one of the person's messages waits with it: once the person has
+    /// sent or removed each of theirs, it goes as after Resume, and no Resume row is left over an
+    /// empty list (2026-11-02).
+    func testThePausePassesWithThePersonsLastMessageAndWhatAnotherTaskSentGoesNext() async throws {
+        for ending in ["send", "remove"] {
+            let fixture = try await makeFixture()
+            let model = fixture.model, task = fixture.task, transport = fixture.transport
+            await model.send(HarnessUserInput(text: "Use Python instead"), to: task)
+            _ = await model.deliverTaskMessage(
+                TaskMessage(senderID: UUID().uuidString, senderName: "Child", body: "Tests pass"), to: task)
+            await model.send(HarnessUserInput(text: "Then update the README"), to: task)
+            await model.interrupt(task)
+            await transport.emit(try json(interruptedResult))
+            try await waitUntil { model.store.sessions.first?.status == .ready }
+            let persons = model.followUps.queue(for: task.id).filter { !$0.isFromAnotherTask }
+            XCTAssertEqual(persons.map(\.draft.text), ["Use Python instead", "Then update the README"])
+            XCTAssertEqual(model.followUps.queue(for: task.id).count, 3)
+            XCTAssertTrue(model.followUps.isPaused(task.id))
+            let sentAtStop = await transport.sentValues.count
+
+            await model.sendQueuedNow(persons[0].id, for: try XCTUnwrap(model.store.sessions.first))
+            await transport.emit(try json(result))
+            try await waitUntil { model.store.sessions.first?.status == .ready }
+            try await Task.sleep(for: .milliseconds(150))
+            XCTAssertTrue(model.followUps.isPaused(task.id), "One of the person's still waits: \(ending)")
+            let sentWhilePaused = await transport.sentValues.count
+            XCTAssertEqual(sentWhilePaused, sentAtStop + 1, "Only the person's message went")
+
+            let current = try XCTUnwrap(model.store.sessions.first)
+            if ending == "send" {
+                await model.sendQueuedNow(persons[1].id, for: current)
+            } else {
+                await model.removeQueued(persons[1].id, for: current)
+            }
+            XCTAssertFalse(model.followUps.isPaused(task.id), ending)
+            XCTAssertFalse(fixture.queueRepository.isPaused(for: task.id), ending)
+            XCTAssertEqual(model.followUps.queue(for: task.id).map(\.isFromAnotherTask), [true], ending)
+            if ending == "send" {
+                // The person's message runs first; the other task's goes when that turn ends.
+                let sent = try await lastSent(transport)
+                XCTAssertEqual(sent["message"]?["content"]?.stringValue, "Then update the README")
+                await transport.emit(try json(result))
+            }
+            try await waitUntil { model.followUps.queue(for: task.id).isEmpty }
+            let last = try await lastSent(transport)
+            XCTAssertNotNil(TaskMessage.parse(last["message"]?["content"]?.stringValue ?? ""), ending)
+        }
+    }
+
     // MARK: - Fixture
 
     private struct Fixture {

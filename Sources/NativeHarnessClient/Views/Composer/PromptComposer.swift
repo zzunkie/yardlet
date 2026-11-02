@@ -38,7 +38,7 @@ struct PromptComposer: View {
     let codexQueue: [CodexQueuedSubmission]
     /// The queue's messages the person wrote, without the ones other tasks sent.
     private var personQueue: [CodexQueuedSubmission] {
-        codexQueue.filter { TaskMessage.parse($0.draft.text) == nil }
+        codexQueue.filter { !$0.isFromAnotherTask }
     }
     let isCodexQueuePaused: Bool
     /// The task's folders, searched by a typed `@` mention.
@@ -346,7 +346,7 @@ struct PromptComposer: View {
             // the person's to manage, so it shows in the conversation once read, not in this list.
             if let followUp = options.followUp, !personQueue.isEmpty {
                 VStack(spacing: 4) {
-                    ForEach(Array(codexQueue.enumerated()).filter { TaskMessage.parse($0.element.draft.text) == nil },
+                    ForEach(Array(codexQueue.enumerated()).filter { !$0.element.isFromAnotherTask },
                             id: \.element.id) { index, item in
                         queueChip(item, chip: ComposerQueueChip.make(policy: followUp.policy, queue: codexQueue,
                                                                      at: index, canSend: actions.sendQueuedNow != nil),

@@ -36,9 +36,15 @@ final class FollowUpQueueStoreTests: XCTestCase {
         XCTAssertNil(store.sentItem(messageID: "m-3", in: task))
     }
 
-    func testAPauseHoldsOnlyAQueueWithMessagesUntilResumeOrItsLastMessageLeaves() {
+    func testAPauseHoldsOnlyAQueueWithThePersonsMessagesUntilResumeOrTheirLastLeaves() {
         let (store, repository, _) = makeStore()
+        var ended: [UUID] = []
+        store.pauseDidEnd = { ended.append($0) }
         XCTAssertFalse(store.pause(task), "Nothing to hold back")
+        // Another task's message is not the person's to manage, and is not listed with the pause.
+        let fromTask = queue(TaskMessage(senderID: UUID().uuidString, senderName: "Child", body: "Done").text(in: .yardlet),
+                             in: store)
+        XCTAssertFalse(store.pause(task), "None of the person's to hold back")
         let only = queue("held", in: store)
         XCTAssertTrue(store.pause(task))
         XCTAssertFalse(store.pause(task), "Already paused")
@@ -49,9 +55,29 @@ final class FollowUpQueueStoreTests: XCTestCase {
         XCTAssertFalse(store.resume(task))
         XCTAssertFalse(repository.isPaused(for: task))
 
+        // The person's last message leaving ends the pause; what another task sent goes on.
         store.pause(task)
         store.remove(only, from: task)
+        XCTAssertFalse(store.isPaused(task))
+        XCTAssertFalse(repository.isPaused(for: task))
+        XCTAssertEqual(ended, [task])
+        store.remove(fromTask, from: task)
+        XCTAssertEqual(ended, [task], "An empty queue has nothing to go on")
+
+        let only2 = queue("held", in: store)
+        store.pause(task)
+        store.remove(only2, from: task)
         XCTAssertFalse(store.isPaused(task), "The next queued message starts a fresh queue")
+        XCTAssertFalse(repository.isPaused(for: task))
+
+        // A pause an earlier build saved over another task's message alone is let go.
+        repository.save([QueuedFollowUp(draft: CodexComposerDraft(inputs: [.text(
+            TaskMessage(senderID: UUID().uuidString, senderName: "Child", body: "Done").text(in: .yardlet))]))], for: task)
+        repository.setPaused(true, for: task)
+        let relaunched = FollowUpQueueStore(repository: repository)
+        relaunched.load(for: [task])
+        XCTAssertEqual(relaunched.queue(for: task).count, 1)
+        XCTAssertFalse(relaunched.isPaused(task))
         XCTAssertFalse(repository.isPaused(for: task))
     }
 
