@@ -19,11 +19,27 @@ public struct RemoteRateBucket: Sendable {
 
     /// Takes one token when there is one.
     public mutating func take(now: Date = Date()) -> Bool {
-        tokens = min(capacity, tokens + max(0, now.timeIntervalSince(updatedAt)) * perSecond)
-        updatedAt = now
+        refill(now)
         guard tokens >= 1 else { return false }
         tokens -= 1
         return true
+    }
+
+    /// Some of the bucket is left, for a cost known only afterwards (`spend`).
+    public mutating func hasTokens(now: Date = Date()) -> Bool {
+        refill(now)
+        return tokens > 0
+    }
+
+    /// Takes `amount`, below zero when less is left: what comes next waits until it refills.
+    public mutating func spend(_ amount: Double, now: Date = Date()) {
+        refill(now)
+        tokens -= amount
+    }
+
+    private mutating func refill(_ now: Date) {
+        tokens = min(capacity, tokens + max(0, now.timeIntervalSince(updatedAt)) * perSecond)
+        updatedAt = now
     }
 }
 
@@ -103,6 +119,9 @@ public final class RemoteAuditLog: @unchecked Sendable {
     private let fileURL: URL
     private let queue = DispatchQueue(label: "yardlet.remote.audit")
     private let keptLines: Int
+    /// The size past which the file is read again to trim it (on `queue`): a file of long lines that is not yet
+    /// over its lines is read again only once it grew by a quarter, not on every line.
+    private var nextTrimCheck: UInt64 = 0
 
     public init(fileURL: URL, keptLines: Int = 2_000) {
         self.fileURL = fileURL
@@ -112,7 +131,7 @@ public final class RemoteAuditLog: @unchecked Sendable {
     public func record(device: String?, type: String, task: String?, schedule: String? = nil, file: String? = nil,
                        result: String, at: Date = Date()) {
         let entry = Entry(at: at, device: device, type: type, task: task, schedule: schedule, file: file, result: result)
-        queue.async { [fileURL, keptLines] in
+        queue.async { [self, fileURL, keptLines] in
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             encoder.outputFormatting = [.sortedKeys]
@@ -129,13 +148,16 @@ public final class RemoteAuditLog: @unchecked Sendable {
             _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: line)
             // Trim to the latest lines once the file holds a quarter more than it keeps.
-            if let size = try? handle.offset(), size > UInt64(keptLines * 200),
+            if let size = try? handle.offset(), size > max(UInt64(keptLines * 200), nextTrimCheck),
                let data = try? Data(contentsOf: fileURL) {
                 let lines = data.split(separator: 0x0A, omittingEmptySubsequences: true)
                 if lines.count > keptLines + keptLines / 4 {
                     let kept = lines.suffix(keptLines).joined(separator: [0x0A]) + [0x0A]
                     try? Data(kept).write(to: fileURL, options: .atomic)
                     try? manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+                    nextTrimCheck = 0
+                } else {
+                    nextTrimCheck = size + size / 4
                 }
             }
         }

@@ -25,7 +25,10 @@ public final class RemoteRelayClient: @unchecked Sendable {
     /// Bumped on every new socket, so callbacks from an old one are ignored.
     private var generation = 0
     private var streams: [UInt32: RemoteRelayStream] = [:]
-    private var outbox: [URLSessionWebSocketTask.Message] = []
+    /// What waits for the socket, in order, and the phone each message is for.
+    private var outbox: [(message: URLSessionWebSocketTask.Message, stream: UInt32?, bytes: Int)] = []
+    /// Bytes each phone has waiting in `outbox` or on its way into the socket.
+    private var unsent: [UInt32: Int] = [:]
     private var isSending = false
     private var pushWaiters: [String: CheckedContinuation<RemotePushResult, Never>] = [:]
     private var pushCounter = 0
@@ -168,7 +171,10 @@ public final class RemoteRelayClient: @unchecked Sendable {
                 streams[id] = stream
             case "closed":
                 guard let number = object["c"] as? NSNumber else { return }
-                streams.removeValue(forKey: number.uint32Value)?.secure?.transportClosed()
+                let id = number.uint32Value
+                outbox.removeAll { $0.stream == id }
+                unsent[id] = nil
+                streams.removeValue(forKey: id)?.secure?.transportClosed()
             case "pushed":
                 guard let id = object["id"] as? String, let waiter = pushWaiters.removeValue(forKey: id) else { return }
                 let ok = object["ok"] as? Bool ?? false
@@ -203,6 +209,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         outbox = []
+        unsent = [:]
         isSending = false
         for stream in streams.values { stream.secure?.transportClosed() }
         streams = [:]
@@ -218,21 +225,25 @@ public final class RemoteRelayClient: @unchecked Sendable {
 
     // MARK: - Sending (in order, one at a time)
 
-    private func enqueue(_ message: URLSessionWebSocketTask.Message, on task: URLSessionWebSocketTask) {
-        outbox.append(message)
+    private func enqueue(_ message: URLSessionWebSocketTask.Message, on task: URLSessionWebSocketTask,
+                         stream: UInt32? = nil, bytes: Int = 0) {
+        outbox.append((message, stream, bytes))
         pump(task)
     }
 
     private func pump(_ task: URLSessionWebSocketTask) {
         guard !isSending, task === self.task, !outbox.isEmpty else { return }
         isSending = true
-        let message = outbox.removeFirst()
+        let next = outbox.removeFirst()
         let current = generation
-        task.send(message) { [weak self] error in
+        task.send(next.message) { [weak self] error in
             guard let self else { return }
             self.queue.async {
                 guard current == self.generation else { return }
                 self.isSending = false
+                if let stream = next.stream, let left = self.unsent[stream] {
+                    self.unsent[stream] = left > next.bytes ? left - next.bytes : nil
+                }
                 if let error {
                     self.fail(error.localizedDescription)
                 } else {
@@ -247,7 +258,19 @@ public final class RemoteRelayClient: @unchecked Sendable {
             guard state == .connected, streams[id] != nil, let task else { return }
             var data = Data([UInt8(id >> 24 & 0xFF), UInt8(id >> 16 & 0xFF), UInt8(id >> 8 & 0xFF), UInt8(id & 0xFF)])
             data.append(frame)
-            enqueue(.data(data), on: task)
+            // A phone that asks and never reads would leave every answer here: past the limit its stream closes,
+            // and what it had waiting goes (§7).
+            let waiting = unsent[id, default: 0] + data.count
+            guard waiting <= RemoteProtocol.maxUnsentBytes else {
+                outbox.removeAll { $0.stream == id }
+                unsent[id] = nil
+                streams.removeValue(forKey: id)?.secure?.transportClosed()
+                enqueue(.string(Self.json(["t": "close", "c": Int(id), "code": Int(RemoteCloseCode.rateLimited.rawValue)])),
+                        on: task)
+                return
+            }
+            unsent[id] = waiting
+            enqueue(.data(data), on: task, stream: id, bytes: data.count)
         }
     }
 

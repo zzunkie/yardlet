@@ -198,12 +198,21 @@ public actor RemoteServer {
         var receivesTaskEvents = false
         /// It asked for `scheduledTasks`, so it is told when they change (§15.21).
         var receivesScheduleEvents = false
+        /// The file it read last (the path the Mac read) and where its next part starts (§15.22): a read that goes on
+        /// from there is not written to the audit log again.
+        var fileRead: FileRead?
         var subscriptions: [String: Subscription] = [:]
         var queue: [Data] = []
         var isDraining = false
 
         /// A paired device's connection, counted against `maxConnections`.
         var isEstablished: Bool { deviceID != nil && isProven }
+    }
+
+    struct FileRead: Equatable {
+        var taskID: String
+        var path: String
+        var next: Int
     }
 
     private struct Subscription {
@@ -264,6 +273,12 @@ public actor RemoteServer {
     /// The Mac's static public key, for link codes (§12.1); made the first time the remote is used.
     private var macKey: Data?
     private var uploads: RemoteUploadStore
+    /// What each device's file reads may still carry (§15.22), shared by its connections.
+    private var readBudgets: [String: RemoteRateBucket] = [:]
+    /// When each `readFile` line was last written, by device, task, file and result: the same line again within
+    /// `readAuditWindow` is not written, so repeating a request cannot flood the log.
+    private var auditedReads: [String: Date] = [:]
+    static let readAuditWindow: TimeInterval = 60
 
     public init(
         configuration: Configuration,
@@ -825,8 +840,8 @@ public actor RemoteServer {
             case let .success(outputs):
                 let listed = Array(outputs.prefix(RemoteProtocol.maxOutputs))
                 var response = RemoteResponse(re: envelope.id)
-                // Off this actor: a slow disk holds up no other connection.
-                response.outputs = await Task.detached { RemoteFileReader.sized(listed) }.value
+                // Off this actor and Swift's threads: a slow disk holds up no other connection.
+                response.outputs = await RemoteFileReader.perform { RemoteFileReader.sized(listed) }
                 respond(response, to: id)
             case let .failure(error):
                 respond(.failure(envelope.id, error), to: id)
@@ -912,21 +927,39 @@ public actor RemoteServer {
                       schedule: request.scheduleID, result: error?.code.rawValue ?? "ok", at: now())
     }
 
-    /// A part of one of the task's files (§15.22), read off this actor so a large file or a slow disk holds up no other
-    /// connection. The first part of each read is written to the audit log with the file's name, never its path, also
-    /// when it is refused.
+    /// A part of one of the task's files (§15.22), read off this actor and Swift's threads so a large file or a slow disk
+    /// holds up no other connection. A device reads at most `readFileBudgetBytes` per `readFileBudgetWindow`. The audit
+    /// log gets every read of a listed task that does not go on from the part before it on this connection, and every
+    /// refusal, by the file's name, never its path, the same line at most once a minute.
     private func readFile(_ requestID: String, taskID: String, path: String, offset: Int, on id: UUID) async {
-        let result: Result<RemoteFilePart, RemoteError>
-        switch await bridge.fileScope(taskID: taskID) {
-        case let .success(scope):
-            result = await Task.detached { RemoteFileReader.read(path, offset: offset, in: scope) }.value
-        case let .failure(error):
-            result = .failure(error)
+        // Kept for the audit line, also when the connection closes during the read.
+        let device = connections[id]?.deviceID
+        let budgetKey = device ?? id.uuidString
+        var budget = readBudgets[budgetKey] ?? RemoteRateBucket(
+            capacity: Double(RemoteProtocol.readFileBudgetBytes),
+            perSecond: Double(RemoteProtocol.readFileBudgetBytes) / RemoteProtocol.readFileBudgetWindow, now: now())
+        let hasRoom = budget.hasTokens(now: now())
+        readBudgets[budgetKey] = budget
+        guard hasRoom else {
+            respond(.failure(requestID, RemoteError(.rateLimited, "Files: at most 32 MiB per 10 s")), to: id)
+            return
         }
-        let name: String
-        let outcome: String
+        let scope: RemoteFileScope
+        switch await bridge.fileScope(taskID: taskID) {
+        case let .success(found):
+            scope = found
+        case let .failure(error):
+            // No such task: nothing a phone could read, and nothing for the log.
+            respond(.failure(requestID, error), to: id)
+            return
+        }
+        let result = await RemoteFileReader.perform { RemoteFileReader.read(path, offset: offset, in: scope) }
         switch result {
         case let .success(part):
+            // By the file read, not the path asked for: a link turned to another file between parts is another read.
+            let goesOn = connections[id]?.fileRead == FileRead(taskID: taskID, path: part.path, next: offset)
+            // Another connection of the device may have spent meanwhile.
+            readBudgets[budgetKey]?.spend(Double(part.data.count), now: now())
             var response = RemoteResponse(re: requestID)
             response.path = part.path
             response.name = part.name
@@ -936,14 +969,22 @@ public actor RemoteServer {
             response.data = part.data
             response.modifiedAt = part.modifiedAt
             respond(response, to: id)
-            (name, outcome) = (part.name, "ok")
+            connections[id]?.fileRead = FileRead(taskID: taskID, path: part.path, next: offset + part.data.count)
+            if !goesOn { auditRead(device: device, task: taskID, file: part.name, result: "ok") }
         case let .failure(error):
             respond(.failure(requestID, error), to: id)
-            (name, outcome) = (RemoteFileReader.auditName(path), error.code.rawValue)
+            connections[id]?.fileRead = nil
+            auditRead(device: device, task: taskID, file: RemoteFileReader.auditName(path), result: error.code.rawValue)
         }
-        guard offset == 0 else { return }
-        audit?.record(device: connections[id]?.deviceID, type: "readFile", task: taskID, file: name, result: outcome,
-                      at: now())
+    }
+
+    private func auditRead(device: String?, task: String, file: String, result: String) {
+        let time = now()
+        auditedReads = auditedReads.filter { time.timeIntervalSince($0.value) < Self.readAuditWindow }
+        let key = [device ?? "", task, file, result].joined(separator: "\u{0}")
+        guard auditedReads[key] == nil else { return }
+        auditedReads[key] = time
+        audit?.record(device: device, type: "readFile", task: task, file: file, result: result, at: time)
     }
 
     /// The finished uploads a message names (§15.20), sent by this connection's device.

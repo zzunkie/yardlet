@@ -246,8 +246,8 @@ final class RemoteServerTests: XCTestCase {
 
     /// A phone reads a task's file only from the task's folders and outputs. A path outside them, a `..` that climbs out,
     /// a link that points out, a folder, a FIFO, a folder whose name only starts like the task's and a file that is not
-    /// there all answer `notFound`, with no path in the answer, and the audit log keeps the first part of each read by
-    /// the file's name only.
+    /// there all answer `notFound`, with no path in the answer. The audit log keeps, by the file's name only, every read
+    /// of a listed task that does not go on from the part before it and every refusal, the same line once a minute.
     func testATasksFilesAreReadFromItsFoldersAndOutputsOnly() async throws {
         let files = try TaskFiles()
         defer { files.remove() }
@@ -318,14 +318,61 @@ final class RemoteServerTests: XCTestCase {
         let otherTask = try await read("notes.txt", task: "Z")
         XCTAssertEqual(otherTask.error?.code, .notFound)
 
+        // A file read in parts is one line; a read that starts elsewhere than where the last one ended is another.
+        let whole = Data(repeating: 7, count: RemoteProtocol.maxReadPartBytes + 10)
+        try whole.write(to: URL(filePath: files.folder + "/build.bin"))
+        let first = try await read("build.bin")
+        let second = try await read("build.bin", offset: first.data?.count ?? 0)
+        XCTAssertEqual((first.data ?? Data()) + (second.data ?? Data()), whole)
+        try whole.write(to: URL(filePath: files.folder + "/skipped.bin"))
+        let skipped = try await read("skipped.bin", offset: 1)
+        XCTAssertEqual(skipped.offset, 1)
+        XCTAssertEqual(skipped.data?.count, RemoteProtocol.maxReadPartBytes)
+
         let audit = harness.audit.entries().filter { $0.type == "readFile" }
-        XCTAssertEqual(audit.map(\.file), ["notes.txt", "report.md", "data.csv", "summary.pdf", "secret.txt", "secret.txt",
-                                           "escape.txt", "docs", "pipe", "missing.txt", "x.txt", "secret.txt", "passwd",
-                                           "notes.txt"], "Only the first part of each read, by the file's name")
-        XCTAssertEqual(audit.map(\.result), Array(repeating: "ok", count: 4) + Array(repeating: "notFound", count: 10))
-        XCTAssertEqual(audit.map(\.task), Array(repeating: "A", count: 13) + ["Z"])
+        XCTAssertEqual(audit.map(\.file), ["notes.txt", "report.md", "data.csv", "summary.pdf", "notes.txt", "secret.txt",
+                                           "escape.txt", "docs", "pipe", "missing.txt", "x.txt", "passwd", "build.bin",
+                                           "skipped.bin"],
+                       "By the file's name; the same refusal once; not for a task that is not there")
+        XCTAssertEqual(audit.map(\.result), Array(repeating: "ok", count: 4) + ["badRequest"]
+                       + Array(repeating: "notFound", count: 7) + ["ok", "ok"])
+        XCTAssertTrue(audit.allSatisfy { $0.task == "A" && $0.device != nil })
         let log = try String(contentsOf: harness.auditURL, encoding: .utf8)
         XCTAssertFalse(log.contains("remote-files-") || log.contains("outside") || log.contains("project"), log)
+    }
+
+    /// A device's file reads carry at most 32 MiB at once and then 32 MiB per 10 s; past that a read answers
+    /// `rateLimited` until the budget refills. The file is sparse, so nothing fills the disk.
+    func testFileReadsHaveAByteBudgetPerDevice() async throws {
+        let files = try TaskFiles()
+        defer { files.remove() }
+        let large = files.folder + "/large.mov"
+        XCTAssertTrue(FileManager.default.createFile(atPath: large, contents: nil))
+        let handle = try FileHandle(forWritingTo: URL(filePath: large))
+        try handle.truncate(atOffset: UInt64(RemoteProtocol.maxReadFileBytes))
+        try handle.close()
+        let clock = RemoteTestClock()
+        let harness = try await ServerHarness(clock: clock)
+        await harness.bridge.setFiles(files.scope, outputs: [], for: "A")
+        let phone = try await harness.authenticatedPhone()
+        let parts = RemoteProtocol.readFileBudgetBytes / RemoteProtocol.maxReadPartBytes
+        var offset = 0
+        func next(_ id: Int) async throws -> RemoteResponse {
+            await harness.send(#"{"id":"b\#(id)","type":"readFile","taskId":"A","path":"large.mov","offset":\#(offset)}"#, on: phone)
+            let response = try await phone.response("b\(id)")
+            offset += response.data?.count ?? 0
+            return response
+        }
+        for index in 0..<parts {
+            let part = try await next(index)
+            XCTAssertEqual(part.data?.count, RemoteProtocol.maxReadPartBytes, "Part \(index)")
+        }
+        let over = try await next(parts)
+        XCTAssertEqual(over.error?.code, .rateLimited)
+        XCTAssertEqual(offset, RemoteProtocol.readFileBudgetBytes)
+        clock.advance(by: RemoteProtocol.readFileBudgetWindow / 4)
+        let refilled = try await next(parts + 1)
+        XCTAssertEqual(refilled.data?.count, RemoteProtocol.maxReadPartBytes, "A quarter of the window refills 8 MiB")
     }
 
     /// A file is read in parts of at most 4 MiB that join into the whole file, up to 100 MiB; one byte more is too large.
@@ -386,6 +433,34 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertNil(code(files.summary, in: above), "An output")
         XCTAssertTrue(RemoteFileReader.isInside("/a/b/c", "/a/b"))
         XCTAssertFalse(RemoteFileReader.isInside("/a/bc", "/a/b"), "Whole path components")
+        XCTAssertFalse(RemoteFileReader.isInside("/a/caf\u{E9}/x", "/a/cafe\u{301}"), "Byte for byte, not as Swift's strings compare")
+        // The same home folder by the data volume's path, which `realpath` keeps.
+        let dataForm = "/System/Volumes/Data" + files.folder
+        if FileManager.default.fileExists(atPath: dataForm) {
+            let aliased = RemoteFileScope(folder: URL(filePath: dataForm, directoryHint: .isDirectory))
+            XCTAssertEqual(code(dataForm + "/notes.txt", in: aliased), .notFound, "The home folder by another path")
+        }
+    }
+
+    /// An output is the file the task wrote at its path, not what a link put there since points at, and its folder's
+    /// links are followed: the answer names the folder as resolved.
+    func testAnOutputIsReadInItsOwnPlaceOnly() throws {
+        let files = try TaskFiles()
+        defer { files.remove() }
+        let manager = FileManager.default
+        try manager.createSymbolicLink(atPath: files.root + "/linked", withDestinationPath: "outside")
+        let viaLink = files.root + "/linked/summary.pdf"
+        let swapped = files.root + "/outside/report.txt"
+        try manager.createSymbolicLink(atPath: swapped, withDestinationPath: "secret.txt")
+        let scope = RemoteFileScope(folder: URL(filePath: files.folder, directoryHint: .isDirectory),
+                                    outputs: [URL(filePath: viaLink), URL(filePath: swapped)])
+        let served = try RemoteFileReader.read(viaLink, offset: 0, in: scope).get()
+        XCTAssertEqual(served.path, files.summary)
+        guard case let .failure(error) = RemoteFileReader.read(swapped, offset: 0, in: scope) else { return XCTFail("A link was followed") }
+        XCTAssertEqual(error.code, .notFound)
+        XCTAssertEqual(RemoteFileReader.sized([RemoteOutput(path: viaLink, name: "summary.pdf"),
+                                               RemoteOutput(path: swapped, name: "report.txt")]).map(\.size),
+                       [9, nil], "Sizes follow no link in an output's place either")
     }
 
     func testRemovingADeviceDisconnectsItAndEndsItsPairing() async throws {

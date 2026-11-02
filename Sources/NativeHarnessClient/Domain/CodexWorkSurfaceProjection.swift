@@ -10,7 +10,10 @@ struct CodexChangeHandoff: Equatable, Identifiable, Sendable {
     let turnID: String
     let itemID: String
     let relativePath: String
+    /// The change's kind (`add`, `update`, `delete`).
     let status: String
+    /// The patch reached the files (its item completed); not one declined, failed or still waiting.
+    let isApplied: Bool
     let verifiedURL: URL?
     let line: Int64?
     let column: Int64?
@@ -77,6 +80,7 @@ struct CodexWorkSurfaceProjection: Sendable {
         let root = workspaceURL.standardizedFileURL
         return turn.items.flatMap { item -> [CodexChangeHandoff] in
             guard case let .fileChange(change) = item.content else { return [] }
+            let isApplied = CodexFileChangeCardProjection.state(for: change.status, isTurnFinished: false) == .applied
             return change.changes.enumerated().compactMap { index, value in
                 guard let path = value["path"]?.stringValue else { return nil }
                 return CodexChangeHandoff(
@@ -85,6 +89,7 @@ struct CodexWorkSurfaceProjection: Sendable {
                     itemID: item.id,
                     relativePath: CodexFileChangeDiff.displayPath(path, workspaceURL: root),
                     status: value["kind"]?["type"]?.stringValue ?? value["kind"]?.stringValue ?? change.status,
+                    isApplied: isApplied,
                     verifiedURL: verifiedURL(for: path, relativeTo: root),
                     line: value["line"]?.integerValue ?? value["lineNumber"]?.integerValue
                         ?? value["newLine"]?.integerValue,

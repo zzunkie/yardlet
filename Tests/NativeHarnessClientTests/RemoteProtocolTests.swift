@@ -182,6 +182,15 @@ final class RemoteProtocolTests: XCTestCase {
         // Protocol 1's requests are gone.
         XCTAssertEqual(failure(#"{"id":"7","type":"hello","token":"x"}"#), .init(id: "7", error: RemoteError(.unknownType, "Unknown type hello")))
         XCTAssertEqual(failure(#"{"id":"8","type":"revealLink","nonce":"AAAA"}"#)?.error.code, .badRequest)
+        // An ID longer than any the Mac makes, whatever the request (§7).
+        let task = String(repeating: "T", count: RemoteProtocol.maxOwnIDBytes)
+        XCTAssertNil(failure(#"{"id":"9","type":"readFile","taskId":"\#(task)","path":"a.txt","offset":0}"#))
+        XCTAssertEqual(failure(#"{"id":"9","type":"readFile","taskId":"\#(task)X","path":"a.txt","offset":0}"#)?.error,
+                       RemoteError(.badRequest, "taskId is too long"))
+        let request = String(repeating: "r", count: RemoteProtocol.maxProviderIDBytes + 1)
+        XCTAssertEqual(failure(#"{"id":"10","type":"answerApproval","taskId":"T","requestId":"\#(request)","answer":"deny"}"#)?.error,
+                       RemoteError(.badRequest, "requestId is too long"))
+        XCTAssertEqual(failure(#"{"id":"11","type":"snapshot","scheduleId":"\#(task)X"}"#)?.error.code, .badRequest)
     }
 
     // MARK: - Responses and events
