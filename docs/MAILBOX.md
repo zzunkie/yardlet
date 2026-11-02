@@ -44,7 +44,8 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
   indented. Labels hidden from Gmail's label list are left out. Each account and each account's labels
   fold. Unread counts come from Gmail for the inbox and spam; Drafts shows its count.
 - Choosing a folder lists it, read from Gmail when it is not an inbox (`users.threads.list` with its
-  label; All Mail with no label; Spam and Trash with `includeSpamTrash`).
+  label; All Mail with no label; Spam and Trash with `includeSpamTrash`). A list reads 50 threads at a
+  time; as its end comes into view the next page is read from the page token Gmail gave.
 - Typing in **Search mail** narrows the list at once; a pause of 0.4 seconds, or Return, asks Gmail's own
   search (Gmail's search syntax) of the account listed, or of every account for All inboxes. Older mail is
   found this way rather than kept here.
@@ -75,11 +76,14 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
   `Re:`, and it carries `In-Reply-To` and `References` and the quoted original. A forward carries the
   original's files.
 - What is written is saved to the account's Drafts ten seconds after the last change and when it is
-  closed; saves run one after another, so a message is one draft. **Discard** deletes that draft.
+  closed; saves run one after another, so a message is one draft. A message left as it was opened (a
+  reply opened and closed) is not saved. **Discard** deletes that draft.
 - **Send** waits five seconds, during which **Undo** takes the message back to the editor; then the draft
   is sent (`users.drafts.send`) and the thread is read again. The person's Send is the confirmation; an
   agent's sends still go through its harness's approval.
-- A draft in a thread, the person's or an agent's, offers **Send**, **Edit** and **Discard**.
+- A draft in a thread, the person's or an agent's, offers **Send**, **Edit** and **Discard**. Send on a
+  draft shows it with Undo and sends it as it was saved, without saving it over, so a draft an agent
+  wrote in HTML goes as it is. Edit continues it as text.
 
 ## New mail
 
