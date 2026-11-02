@@ -75,6 +75,9 @@ struct ConversationActions {
     /// The open and stop controls a subtask's card draws, which `TaskDetail` makes from
     /// `readSubtask` and `stopSubtask` with the panel state it owns.
     var subtaskControls: HarnessActivityActions? = nil
+    /// Reads what a line holds beyond its words when it opens (`ConversationTool.loadsDetailOnOpen`), by
+    /// the item's ID: another Mac's lines (docs/REMOTE_PROTOCOL.md §15.8). Nil where every line holds it.
+    var loadLineDetail: ((String) -> Void)? = nil
 
     /// What a read-only child conversation (a subtask shown beside its task) may do: nothing that
     /// would edit, restore or answer for the parent task. Limit notices still read the parent.

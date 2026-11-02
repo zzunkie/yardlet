@@ -387,6 +387,9 @@ final class AppModel {
     /// The phone remote (Settings › Remote, docs/REMOTE_PROTOCOL.md). The app sets it after restoring
     /// the index; nil in tests and fixtures.
     var remoteControl: RemoteControlService?
+    /// Opens a task of another Mac this one follows (`RemoteHostDirectory`), for a click on its notification:
+    /// the host's ID and the task's. Nil in tests and fixtures.
+    @ObservationIgnored var openRemoteTask: ((String, String) -> Void)?
     /// The display is kept on while tasks work ("Keep the screen unlocked while tasks work"), which
     /// the menu bar menu says (`RunningWorkActivity`).
     @ObservationIgnored var keepsScreenAwake = false

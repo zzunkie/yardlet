@@ -172,7 +172,8 @@ struct ConversationTurnView: View, Equatable {
     private func workLine(_ item: ConversationItem) -> ConversationWorkLine {
         ConversationWorkLine(item: item, harness: context.harness, workspaceURL: context.workspaceURL,
                              runInTerminal: context.actions.runInTerminal,
-                             subtaskControls: context.actions.subtaskControls)
+                             subtaskControls: context.actions.subtaskControls,
+                             loadDetail: context.actions.loadLineDetail)
     }
 
     /// The live line, drawn anew for each run it stands for so that each starts where its rule

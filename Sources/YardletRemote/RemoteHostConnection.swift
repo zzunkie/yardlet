@@ -116,7 +116,7 @@ public actor RemoteHostConnection {
         connectSoon(after: 0)
     }
 
-    /// Closes the connection and stops trying.
+    /// Closes the connection and stops trying; `inbound` ends.
     public func stop() {
         running = false
         loop?.cancel()
@@ -127,6 +127,7 @@ public actor RemoteHostConnection {
         socket = nil
         path = nil
         continuation.yield(.state(.stopped))
+        continuation.finish()
     }
 
     /// The network changed, or the person asked: try now rather than at the backoff's time, and try a

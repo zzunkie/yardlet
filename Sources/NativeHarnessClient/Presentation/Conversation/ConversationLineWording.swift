@@ -331,6 +331,8 @@ enum ConversationLineWording {
         if harness == .claudeCode, let words = claudeTool(tool, phase: phase, localize: localize) {
             return words
         }
+        // Already worded where it came from: shown as it is, as what the line is about.
+        if case let .worded(line) = tool.kind { return ConversationLineWords(verb: "", trailing: line) }
         let verb = tool.kind.label
         let subject = tool.name.isEmpty || tool.name == verb ? "" : relative(tool.name, to: workspaceURL)
         switch tool.kind {
@@ -573,6 +575,7 @@ extension ConversationTool.Kind {
         case .review: L10n.string("Review")
         case .hook: L10n.string("Hook")
         case let .unknown(type): type ?? L10n.string("Unknown item")
+        case let .worded(line): line
         }
     }
 }

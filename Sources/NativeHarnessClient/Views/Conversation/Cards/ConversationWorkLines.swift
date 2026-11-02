@@ -295,6 +295,8 @@ struct ConversationWorkLine: View, Equatable {
     var runInTerminal: ((String) -> Void)? = nil
     /// Stops a Claude Code shell task from its command's line, as the subagent card stops a task.
     var subtaskControls: HarnessActivityActions? = nil
+    /// Reads what a line holds beyond its words, by the item's ID, when the person opens it.
+    var loadDetail: ((String) -> Void)? = nil
     /// What the line draws from its closures, for telling an unchanged line apart.
     private let offers: Offers
 
@@ -309,12 +311,14 @@ struct ConversationWorkLine: View, Equatable {
     }
 
     init(item: ConversationItem, harness: HarnessKind, workspaceURL: URL?,
-         runInTerminal: ((String) -> Void)? = nil, subtaskControls: HarnessActivityActions? = nil) {
+         runInTerminal: ((String) -> Void)? = nil, subtaskControls: HarnessActivityActions? = nil,
+         loadDetail: ((String) -> Void)? = nil) {
         self.item = item
         self.harness = harness
         self.workspaceURL = workspaceURL
         self.runInTerminal = runInTerminal
         self.subtaskControls = subtaskControls
+        self.loadDetail = loadDetail
         let task: String? = if case let .command(command) = item.kind { command.task?.activityID } else { nil }
         offers = Offers(
             wording: harness, workspaceURL: workspaceURL, canRunInTerminal: runInTerminal != nil, canStop: subtaskControls?.stop != nil,
@@ -341,6 +345,7 @@ struct ConversationWorkLine: View, Equatable {
 
     private func record(_ isOpen: Bool) {
         choices?.record(item.id, isOpen: isOpen)
+        if isOpen, case let .tool(tool) = item.kind, tool.loadsDetailOnOpen { loadDetail?(item.id) }
     }
 
     var body: some View {
@@ -507,12 +512,16 @@ struct ConversationWorkLine: View, Equatable {
     private func toolLine(_ tool: ConversationTool) -> some View {
         let texts = [tool.input, tool.output, tool.detail, tool.errorMessage].compactMap { $0 }.filter { !$0.isEmpty }
         let images = tool.previewImages
+        let isLoading = tool.loadsDetailOnOpen && tool.output == nil && tool.diffs.isEmpty && tool.diff == nil
         return ConversationStatusLine(
             words: [ConversationLineWording.tool(tool, phase: item.phase, harness: harness, workspaceURL: workspaceURL)],
             phase: item.phase,
-            hasDetail: !texts.isEmpty || tool.mcpResult?.isEmpty == false || tool.diff != nil || !tool.images.isEmpty,
+            hasDetail: !texts.isEmpty || tool.mcpResult?.isEmpty == false || tool.diff != nil || !tool.diffs.isEmpty
+                || !tool.images.isEmpty || tool.loadsDetailOnOpen,
             startsOpen: startsOpen,
-            accessibilityLabel: tool.name.isEmpty ? tool.kind.label : tool.name, isHistoryMatch: item.isHistoryMatch,
+            accessibilityLabel: tool.name.isEmpty ? tool.kind.label : tool.name,
+            // A worded line whose output and changes were read opens for a review render, as a file change does.
+            opensForReview: tool.loadsDetailOnOpen && !isLoading, isHistoryMatch: item.isHistoryMatch,
             images: images, onToggle: record
         ) {
             if let connector = tool.connector {
@@ -556,6 +565,17 @@ struct ConversationWorkLine: View, Equatable {
                         rows: [ConversationFileChangeProjection.row(for: diff, phase: item.phase, workspaceURL: workspaceURL)],
                         handoffs: []
                     )
+                }
+                if !tool.diffs.isEmpty {
+                    CodexFileChangeRows(
+                        rows: tool.diffs.map { ConversationFileChangeProjection.row(for: $0, phase: item.phase, workspaceURL: workspaceURL) },
+                        handoffs: []
+                    )
+                }
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel(L10n.string("Loading"))
                 }
             }
         }

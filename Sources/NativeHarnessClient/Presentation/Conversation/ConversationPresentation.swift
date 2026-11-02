@@ -374,6 +374,9 @@ struct ConversationTool: Equatable, Sendable {
         case review
         case hook
         case unknown(type: String?)
+        /// A line that came worded: what another Mac's Yardlet shows for the call, in its words
+        /// (docs/REMOTE_PROTOCOL.md §6.4).
+        case worded(String)
     }
 
     var kind: Kind
@@ -384,6 +387,10 @@ struct ConversationTool: Equatable, Sendable {
     var input: String? = nil
     var output: String? = nil
     var diff: HarnessActivityDiff? = nil
+    /// The changes of a line that changed several files (a worded line's, §15.8); `diff` is a call's one.
+    var diffs: [HarnessActivityDiff] = []
+    /// The line holds more than it has here (a worded line's output and changes), read when it opens.
+    var loadsDetailOnOpen = false
     var errorMessage: String? = nil
     /// The provider keeps the call running after the turn.
     var isBackground: Bool = false

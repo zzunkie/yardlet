@@ -111,12 +111,12 @@ final class LoopbackStack: @unchecked Sendable {
     let listener: RemoteSecureListener
     let port: UInt16
 
-    init() async throws {
+    init(name: String = "Loopback", bridge: (any RemoteBridge)? = nil) async throws {
         identity = try RemoteIdentity(noisePrivateKey: Data(RemoteRandom.bytes(32)), relayPrivateKey: Data(RemoteRandom.bytes(32)))
         server = RemoteServer(
-            configuration: RemoteServer.Configuration(server: RemoteServerInfo(name: "Loopback", appVersion: "test"),
+            configuration: RemoteServer.Configuration(server: RemoteServerInfo(name: name, appVersion: "test"),
                                                       macKey: identity.noise.publicKey),
-            bridge: RemoteFixtureBridge(speed: 25), devices: devices)
+            bridge: bridge ?? RemoteFixtureBridge(speed: 25), devices: devices)
         await server.start()
         listener = RemoteSecureListener(server: server, staticKey: identity.noise, port: 0, advertisement: nil, loopbackOnly: true)
         listener.start()

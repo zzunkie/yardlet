@@ -26,6 +26,11 @@ extension AppModel {
         if let reveal = response.target.personalAgent { return revealPersonalAgent(reveal) }
         // So does a new mail's.
         if let thread = response.target.mailThread { return revealMailThread(thread) }
+        // And a task of another Mac, which opens in that Mac's window.
+        if let remote = response.target.remoteTask {
+            applicationAttention?.bringForward()
+            return openRemoteTask?(remote.hostID, remote.taskID) ?? ()
+        }
         guard !isRestoringIndex else {
             pendingNotificationResponses.append(response)
             return
