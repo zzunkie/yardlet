@@ -305,22 +305,25 @@ struct WorkSurfaceHeader<Trailing: View>: View {
         .animation(.easeOut(duration: 0.15), value: drag?.target)
     }
 
-    /// The shown tab; in the strip, the whole room the strip gives it.
+    /// The shown tab; in the strip, the whole room the strip gives it. It drags by all of it but its close button
+    /// (`TabDragHandle`).
     private func activeTab(fillsRoom: Bool) -> some View {
         PanelTabRoom(fills: fillsRoom) {
             HStack(spacing: 8) {
                 WorkSurfaceTabIcon(systemName: systemName, harness: harness, favicon: favicon, isLoading: isLoading)
                     .foregroundStyle(.secondary)
+                    .allowsHitTesting(false)
                 Text(title)
                     .font(.callout)
                     .lineLimit(1).truncationMode(.middle)
-                    .help(workspaceURL.path(percentEncoded: false))
+                    .allowsHitTesting(false)
                     .accessibilityValue(workspaceURL.lastPathComponent)
                 ParityIconButton(systemName: "xmark", help: L10n.string("Close tab"), action: onClose)
             }
             .padding(.leading, 10).padding(.trailing, 2)
             .frame(height: 30)
         }
+        .background { TabDragHandle().help(workspaceURL.path(percentEncoded: false)) }
         .background(ParityTheme.selectedFill, in: RoundedRectangle(cornerRadius: 9))
         .layoutPriority(1)
     }

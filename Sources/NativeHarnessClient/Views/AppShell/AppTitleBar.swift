@@ -204,9 +204,11 @@ struct IntegratedTitleBar: View {
         } else if let splitHeader {
             splitHeader.titleMenu(size: 12.5 * interfaceScale)
         } else {
+            // The tab drags by it, as by the rest of the tab.
             Text(L10n.string("New task"))
                 .font(.system(size: 12.5 * interfaceScale, weight: .medium))
                 .lineLimit(1)
+                .allowsHitTesting(false)
         }
     }
 

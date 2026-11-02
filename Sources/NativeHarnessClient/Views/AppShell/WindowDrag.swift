@@ -321,6 +321,24 @@ extension View {
     }
 }
 
+/// What the shown tab of a tab strip is pressed on, under what the tab shows: a button that does nothing, as the
+/// strip's other tabs are buttons. In the title bar's height AppKit takes a press on SwiftUI content that no button
+/// takes to move the window, at every press while the window is not the active app's key window, so the window moved
+/// in place of the tab. What the tab shows over the handle lets presses through to it.
+struct TabDragHandle: View {
+    var body: some View {
+        Button {} label: { Color.clear.contentShape(Rectangle()) }
+            .buttonStyle(TabDragHandleStyle())
+            .focusable(false)
+            .accessibilityHidden(true)
+    }
+}
+
+/// The tab looks the same while it is pressed and dragged.
+private struct TabDragHandleStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { configuration.label }
+}
+
 /// A sidebar task dragged over a tab strip (the window's tab bar, a side panel's tabs): the gap it would
 /// open in, and opening it there.
 struct TaskDropOnStrip: DropDelegate {
