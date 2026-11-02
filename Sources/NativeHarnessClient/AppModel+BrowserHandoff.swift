@@ -1,7 +1,7 @@
 import Foundation
 
 /// A browser tab the agent hands to the person (`browser_handoff`, docs/AGENT_BROWSER_TOOLS.md, "Tools"): the task's side panel shows the
-/// tab, with the agent's reason and Done and Decline in a bar over the page, and a notification tells the person; a
+/// tab, with the agent's reason and Done and Decline in a bar above the page, and a notification tells the person; a
 /// click opens the task with its panel on the tab. The notification goes when the handoff ends.
 extension AppModel: BrowserHandoffPresenting {
     func handoffStarted(session: UUID, tabKey: UUID?, reason: String, notice: String) {

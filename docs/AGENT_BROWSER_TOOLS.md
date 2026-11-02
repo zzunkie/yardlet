@@ -118,7 +118,7 @@ batch's, with its `action` number and `tool`; a batch that holds a picture keeps
   nothing and answer with a failure ("The click was not sent to tab 3." followed by the window's name and kind,
   `browser_handle_dialog` and `browser_handoff`). Reading tools and `browser_navigate` work as before.
 - **File chooser:** While one is open, the end of every result says so. A chooser the agent's input opened does not
-  open the system's window in the panel; it waits in a bar over the page for the agent to answer or the person to open.
+  open the system's window in the panel; it waits in a bar above the page for the agent to answer or the person to open.
   When the person chooses, the tools forget it ([BROWSER_HOST](BROWSER_HOST.md) section 3, "File choosers"). Paths are absolute or relative to the task's
   main folder, and after resolving `..` and symbolic links they must be inside the task's folders (the main folder and
   the project's other roots). Files, folders and save locations are checked per mode.
