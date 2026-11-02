@@ -443,7 +443,7 @@ struct SettingsCenterView: View {
                     settingsControlIcon("envelope")
                     VStack(alignment: .leading, spacing: 3) {
                         Text(L10n.string("Mailbox")).font(.callout.weight(.medium))
-                        Text(L10n.string("Show the inboxes of the Gmail accounts connected in Connectors beside your tasks. Mail is read from Gmail and kept in memory only."))
+                        Text(L10n.string("Show the inboxes of the Gmail and Outlook accounts connected in Connectors beside your tasks. Mail is read from the service and kept in memory only."))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -834,7 +834,7 @@ struct SettingsCenterView: View {
                     settingsControlIcon("envelope.badge")
                     VStack(alignment: .leading, spacing: 3) {
                         Text(L10n.string("New mail")).font(.callout.weight(.medium))
-                        Text(L10n.string("Notify when new mail reaches an inbox in the mailbox, for Gmail in its Primary tab"))
+                        Text(L10n.string("Notify when new mail reaches an inbox in the mailbox: in Gmail its Primary tab, in Outlook its Focused inbox"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)

@@ -27,7 +27,7 @@ struct MailContent: View {
                 MailComposeView(center: center, window: window)
             } else if center.accounts.isEmpty {
                 placeholder(systemName: "envelope", title: L10n.string("No accounts in the mailbox"),
-                            detail: L10n.string("Connect Gmail in Settings › Connectors, and its inbox shows here.")) {
+                            detail: L10n.string("Connect Gmail or Outlook in Settings › Connectors, and its inbox shows here.")) {
                     Button(L10n.string("Open Connectors"), action: actions.openSettings)
                 }
             } else if let thread = window.thread, let account = center.account(thread.summary.id.accountID) {

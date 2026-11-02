@@ -3428,7 +3428,7 @@
 "No mail in the inbox" = "받은편지함이 비어 있습니다";
 "(No subject)" = "(제목 없음)";
 "No accounts in the mailbox" = "메일함에 표시할 계정이 없습니다";
-"Connect Gmail in Settings › Connectors, and its inbox shows here." = "설정 › 커넥터에서 Gmail을 연결하면 받은편지함이 여기에 보입니다.";
+"Connect Gmail or Outlook in Settings › Connectors, and its inbox shows here." = "설정 › 커넥터에서 Gmail이나 Outlook을 연결하면 받은편지함이 여기에 보입니다.";
 "Open Connectors" = "커넥터 열기";
 "This message could not be read" = "메일을 읽지 못했습니다";
 "Choose a message on the left." = "왼쪽에서 메일을 고르세요.";
@@ -3476,9 +3476,9 @@
 "This message is in Spam. Check who sent it before opening its links or files." = "이 메일은 스팸함에 있습니다. 보낸 사람을 확인하기 전에는 링크나 첨부 파일을 열지 마세요.";
 "This message is in the Trash." = "이 메일은 휴지통에 있습니다.";
 "Mailbox" = "메일함";
-"Show the inboxes of the Gmail accounts connected in Connectors beside your tasks. Mail is read from Gmail and kept in memory only." = "커넥터에 연결한 Gmail 계정의 받은편지함을 작업 옆에 보여 줍니다. 메일은 Gmail에서 읽어 메모리에만 둡니다.";
+"Show the inboxes of the Gmail and Outlook accounts connected in Connectors beside your tasks. Mail is read from the service and kept in memory only." = "커넥터에 연결한 Gmail·Outlook 계정의 받은편지함을 작업 옆에 보여 줍니다. 메일은 서비스에서 읽어 메모리에만 둡니다.";
 "New mail" = "새 메일";
-"Notify when new mail reaches an inbox in the mailbox, for Gmail in its Primary tab" = "메일함의 받은편지함에 새 메일이 오면 알립니다. Gmail은 기본 탭의 메일만 알립니다.";
+"Notify when new mail reaches an inbox in the mailbox: in Gmail its Primary tab, in Outlook its Focused inbox" = "메일함의 받은편지함에 새 메일이 오면 알립니다. Gmail은 기본 탭, Outlook은 '포커스됨'의 메일만 알립니다.";
 "Images in this message are not loaded, so its sender cannot tell it was read." = "보낸 사람이 열람 여부를 알 수 없도록 이 메일의 이미지는 불러오지 않았습니다.";
 "Show images" = "이미지 보기";
 "Mail handoff %@ %@ %@" = "계정: %1$@ · 스레드 %2$@ (%3$@ 도구로 읽기)";
