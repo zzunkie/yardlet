@@ -53,6 +53,21 @@ final class MailboxCenterTests: XCTestCase {
         XCTAssertEqual(center.threads.count, 4)
         XCTAssertEqual(Set(center.threads.map(\.id)).count, 4)
         XCTAssertFalse(center.hasMore(.allInboxes))
+
+        // New mail reads the first page again without taking the list back to it, and a first read of
+        // the inbox that fails leaves the cursor where it was, so the mail is still told.
+        var told: [[MailThreadSummary]] = []
+        center.announce = { told.append($0) }
+        center.watchInterval = .milliseconds(20)
+        center.startWatching()
+        try await waitUntil { defaults.dictionary(forKey: MailboxPreference.cursorsKey)?.isEmpty == false }
+        await transport.failNextInboxRead()
+        await transport.deliver(MailFixture().single(MailFixture.work.id, "thread-late", from: MailAddress(address: "mina@acme.example"),
+                                                     date: .now, subject: "One more thing", text: "Before Friday.", isUnread: true))
+        try await waitUntil { !told.isEmpty }
+        XCTAssertEqual(told.first?.map(\.id.threadID), ["thread-late"])
+        XCTAssertEqual(center.threads.count, 5, "The thread read on the second page stays")
+        center.stopWatching()
     }
 
     /// A reply goes out through a draft once the undo time passes; Undo keeps it from leaving, and

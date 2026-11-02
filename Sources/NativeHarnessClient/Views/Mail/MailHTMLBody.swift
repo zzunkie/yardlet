@@ -8,6 +8,8 @@ import SwiftUI
 /// followed. The page is as tall as its content, so the thread scrolls it with everything else.
 struct MailHTMLBody: NSViewRepresentable {
     let html: String
+    /// The message's text, shown instead when the rules that block remote content cannot be made.
+    var fallbackText = ""
     /// The person asked for this message's images and other remote content.
     let allowsRemoteContent: Bool
     let openLink: (URL) -> Void
@@ -43,15 +45,31 @@ struct MailHTMLBody: NSViewRepresentable {
             || html.range(of: #"url\(\s*["']?https?:"#, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
-    /// The message's own markup after a style that fits it to the reading column.
-    static func document(_ html: String) -> String {
-        """
+    /// The message's own markup after a style that fits it to the reading column. Until remote content is
+    /// allowed, the policy lets nothing load but the message's own inline images and styles, and links
+    /// that would open a connection ahead of time are taken out.
+    static func document(_ html: String, allowsRemoteContent: Bool) -> String {
+        let policy = allowsRemoteContent
+            ? "default-src 'none'; img-src * data: cid:; style-src * 'unsafe-inline'; font-src * data:; media-src *"
+            : "default-src 'none'; img-src data: cid:; style-src 'unsafe-inline'; font-src data:"
+        let body = allowsRemoteContent ? html : html.replacingOccurrences(
+            of: #"<link\b[^>]*\brel\s*=\s*["']?(dns-prefetch|preconnect|prefetch|preload|prerender|modulepreload)[^>]*>"#,
+            with: "", options: [.regularExpression, .caseInsensitive])
+        return """
         <!doctype html><html><head><meta charset="utf-8">\
-        <meta http-equiv="Content-Security-Policy" content="script-src 'none'; object-src 'none'; frame-src 'none'">\
+        <meta http-equiv="Content-Security-Policy" content="\(policy)">\
+        <meta http-equiv="x-dns-prefetch-control" content="off">\
         <style>html,body{margin:0;padding:0;background:#fff;color:#1d1d1f;\
         font:14px -apple-system,BlinkMacSystemFont,sans-serif;overflow-wrap:anywhere}\
-        img,table{max-width:100%!important;height:auto}</style></head><body>\(html)</body></html>
+        img,table{max-width:100%!important;height:auto}</style></head><body>\(body)</body></html>
         """
+    }
+
+    /// Plain text as a page, for when the message's HTML cannot be shown safely.
+    static func textDocument(_ text: String) -> String {
+        let escaped = text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+        return document("<div style=\"white-space:pre-wrap\">\(escaped)</div>", allowsRemoteContent: false)
     }
 
     @MainActor
@@ -69,14 +87,21 @@ struct MailHTMLBody: NSViewRepresentable {
             let controller = view.configuration.userContentController
             controller.removeAllContentRuleLists()
             guard !parent.allowsRemoteContent else {
-                view.loadHTMLString(MailHTMLBody.document(html), baseURL: nil)
+                view.loadHTMLString(MailHTMLBody.document(html, allowsRemoteContent: true), baseURL: nil)
                 return
             }
+            let fallback = parent.fallbackText
             Task {
-                if let rules = await MailRemoteContentRules.blockingAll() { controller.add(rules) }
+                let rules = await MailRemoteContentRules.blockingAll()
                 // A later load replaced this one meanwhile.
                 guard loadedHTML == html, !loadedRemote else { return }
-                view.loadHTMLString(MailHTMLBody.document(html), baseURL: nil)
+                guard let rules else {
+                    // Without the rules nothing would stop a tracking pixel, so the text is shown instead.
+                    view.loadHTMLString(MailHTMLBody.textDocument(fallback), baseURL: nil)
+                    return
+                }
+                controller.add(rules)
+                view.loadHTMLString(MailHTMLBody.document(html, allowsRemoteContent: false), baseURL: nil)
             }
         }
 

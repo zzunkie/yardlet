@@ -226,7 +226,8 @@ actor FixtureMailTransport: MailAccountTransport {
     private let labels: [(id: String, path: String)]
     private(set) var changes: [(String, MailThreadChange)] = []
     private var history = 0
-    private var arrived: [String] = []
+    /// Threads mail arrived in, with the history step it arrived at.
+    private var arrivals: [(step: Int, thread: String)] = []
 
     init(account: MailAccount, threads: [MailThread], spam: [MailThread] = [], trash: [MailThread] = [],
          labels: [(id: String, path: String)] = []) {
@@ -262,8 +263,16 @@ actor FixtureMailTransport: MailAccountTransport {
 
     func setPageSize(_ size: Int) { pageSize = size }
 
+    private var failsNextInboxRead = false
+
+    func failNextInboxRead() { failsNextInboxRead = true }
+
     func inbox(pageToken: String?) async throws -> MailPage {
-        page(from: pageToken) { (places[$0.id.threadID] ?? "INBOX") == "INBOX" }
+        if failsNextInboxRead {
+            failsNextInboxRead = false
+            throw MailFailure(kind: .unavailable, message: "The inbox could not be read just now")
+        }
+        return page(from: pageToken) { (places[$0.id.threadID] ?? "INBOX") == "INBOX" }
     }
 
     func list(_ folder: MailFolder, pageToken: String?) async throws -> MailPage {
@@ -302,7 +311,7 @@ actor FixtureMailTransport: MailAccountTransport {
     func deliver(_ thread: MailThread) {
         threads[thread.summary.id.threadID] = thread
         history += 1
-        arrived.append(thread.summary.id.threadID)
+        arrivals.append((history, thread.summary.id.threadID))
     }
 
     func changeCursor() async throws -> String { String(history) }
@@ -326,10 +335,11 @@ actor FixtureMailTransport: MailAccountTransport {
 
     func draftID(forMessage messageID: String) async throws -> String { "draft-of-\(messageID)" }
 
+    /// What arrived after `cursor`, as Gmail's history answers it.
     func changes(since cursor: String) async throws -> MailChanges {
-        let changed = cursor != String(history)
-        defer { arrived = [] }
-        return MailChanges(cursor: String(history), changed: changed, arrivedThreadIDs: changed ? arrived : [])
+        let from = Int(cursor) ?? 0
+        return MailChanges(cursor: String(history), changed: from != history,
+                           arrivedThreadIDs: arrivals.filter { $0.step > from }.map(\.thread))
     }
 
     func change(_ threadID: String, _ change: MailThreadChange) async throws {

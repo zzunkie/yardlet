@@ -47,8 +47,8 @@ final class MailboxCenter {
     private(set) var folderNextPages: [MailboxSelection: String] = [:]
     @ObservationIgnored private var loadingMore: Set<MailboxSelection> = []
     @ObservationIgnored private var transports: [UUID: any MailAccountTransport] = [:]
-    /// Each account's inbox as its service listed it.
-    @ObservationIgnored private var inboxes: [UUID: [MailThreadSummary]] = [:]
+    /// Each account's inbox as its service listed it, the first page and any read after it.
+    private(set) var inboxes: [UUID: [MailThreadSummary]] = [:]
     /// Opened threads, the most recently opened last; the oldest go past `openedLimit`.
     @ObservationIgnored private var opened: [MailThreadKey: MailThread] = [:]
     @ObservationIgnored private var openedOrder: [MailThreadKey] = []
@@ -96,6 +96,7 @@ final class MailboxCenter {
         folderLists = folderLists.filter { $0.key.accountID.map(kept.contains) ?? false }
         inboxNextPages = inboxNextPages.filter { kept.contains($0.key) }
         folderNextPages = folderNextPages.filter { $0.key.accountID.map(kept.contains) ?? false }
+        loadingFolders = []
         for key in openedOrder where !kept.contains(key.accountID) { opened[key] = nil }
         openedOrder.removeAll { !kept.contains($0.accountID) }
         for (id, watch) in watches { watch.cancel(); watches[id] = nil }
@@ -114,7 +115,7 @@ final class MailboxCenter {
     /// What a selection's list holds: the inboxes merged, one account's inbox, or a folder as last read.
     func threads(for selection: MailboxSelection) -> [MailThreadSummary] {
         guard case let .folder(accountID, _) = selection else { return threads }
-        if folder(selection)?.role == .inbox { return threads.filter { $0.id.accountID == accountID } }
+        if folder(selection)?.role == .inbox { return inboxes[accountID] ?? [] }
         return folderLists[selection] ?? []
     }
 
@@ -196,8 +197,7 @@ final class MailboxCenter {
                 guard generation == self.generation else { continue }
                 switch result {
                 case let .success(page):
-                    inboxes[id] = page.threads
-                    inboxNextPages[id] = page.nextPageToken
+                    takeFirstPage(page, for: id)
                     failures[id] = nil
                 case let .failure(error):
                     failures[id] = Self.failure(error)
@@ -206,6 +206,24 @@ final class MailboxCenter {
         }
         guard generation == self.generation else { return }
         merge()
+        // A watch a refused sign-in stopped starts again once the account answers.
+        if isWatching {
+            for (id, transport) in transports where watches[id] == nil && failures[id] == nil { watches[id] = watch(id, transport) }
+        }
+    }
+
+    /// An inbox's first page over what was read of it: threads read further down stay, with the page
+    /// token past them, so new mail does not take the list back to its first page.
+    private func takeFirstPage(_ page: MailPage, for id: UUID) {
+        let existing = inboxes[id] ?? []
+        guard existing.count > page.threads.count, page.nextPageToken != nil, inboxNextPages[id] != page.nextPageToken,
+              let oldest = page.threads.last?.date else {
+            inboxes[id] = page.threads
+            inboxNextPages[id] = page.nextPageToken
+            return
+        }
+        let fresh = Set(page.threads.map(\.id))
+        inboxes[id] = page.threads + existing.filter { !fresh.contains($0.id) && $0.date < oldest }
     }
 
     /// Searches every account with its service's own search; nothing is kept once the search is left.
@@ -235,7 +253,10 @@ final class MailboxCenter {
         guard generation == self.generation else { return thread }
         remember(thread, for: key)
         if MailReadSync.marksOpenedThreadsRead, thread.summary.isUnread || summary(key)?.isUnread == true {
-            try? await apply(.read(true), to: key)
+            // Shown read at once; the request is its own, so choosing another thread does not stop it.
+            let previous = state(of: key)
+            update(key, with: .read(true))
+            Task { [weak self] in try? await self?.send(.read(true), to: key, restoring: previous) }
         }
         return opened[key] ?? thread
     }
@@ -243,18 +264,35 @@ final class MailboxCenter {
     /// Changes a thread on its service, showing the change at once and taking it back if the service
     /// refuses it.
     func apply(_ change: MailThreadChange, to key: MailThreadKey) async throws {
-        guard let transport = transports[key.accountID] else { return }
-        let before = inboxes[key.accountID]
-        let listsBefore = folderLists
-        let openedBefore = opened[key]
+        let previous = state(of: key)
         update(key, with: change)
+        try await send(change, to: key, restoring: previous)
+    }
+
+    /// The thread's read and star state as shown before a change.
+    private func state(of key: MailThreadKey) -> (isUnread: Bool, isStarred: Bool)? {
+        let summary = summary(key) ?? folderLists.values.lazy.compactMap { $0.first { $0.id == key } }.first
+            ?? opened[key]?.summary
+        return summary.map { ($0.isUnread, $0.isStarred) }
+    }
+
+    /// Asks the service for a change already shown. A refusal takes back only that thread's change: its
+    /// read or star state, or, for a move, its lists read again.
+    private func send(_ change: MailThreadChange, to key: MailThreadKey,
+                      restoring previous: (isUnread: Bool, isStarred: Bool)?) async throws {
+        guard let transport = transports[key.accountID] else { return }
+        let generation = generation
         do {
             try await transport.change(key.threadID, change)
         } catch {
-            inboxes[key.accountID] = before
-            folderLists = listsBefore
-            opened[key] = openedBefore
-            merge()
+            guard generation == self.generation else { throw Self.failure(error) }
+            switch change {
+            case .read: if let previous { update(key, with: .read(!previous.isUnread)) }
+            case .starred: if let previous { update(key, with: .starred(previous.isStarred)) }
+            case .archived, .notSpam, .untrash:
+                _ = await reread(key.accountID, arrived: [])
+                for selection in folderLists.keys where selection.accountID == key.accountID { await load(selection) }
+            }
             throw Self.failure(error)
         }
     }
@@ -282,12 +320,12 @@ final class MailboxCenter {
         return saved
     }
 
-    /// Sends what was written, through the draft it was saved as, and reads its thread again. A draft
-    /// sent as it was saved is not saved again, so a draft an agent wrote in HTML goes as it is.
-    func send(_ composition: MailComposition, saving: Bool = true) async throws {
-        guard let transport = transports[composition.accountID] else { return }
-        let draftID = saving || composition.draftID == nil ? try await save(composition).draftID : composition.draftID
-        try await transport.sendDraft(try savedDraftID(draftID))
+    /// Sends a saved draft and reads its thread again.
+    func sendDraft(_ draftID: String, of composition: MailComposition) async throws {
+        guard let transport = transports[composition.accountID] else {
+            throw MailFailure(kind: .unavailable, message: L10n.string("This account is no longer in the mailbox."))
+        }
+        try await transport.sendDraft(draftID)
         await afterWriting(composition)
     }
 
@@ -308,25 +346,23 @@ final class MailboxCenter {
         let draftID = try await transport.draftID(forMessage: message.id)
         let line = { (addresses: [MailAddress]) in addresses.map(MailComposition.formatted).joined(separator: ", ") }
         let answered = thread.messages.last { !$0.isDraft && $0.date <= message.date }
-        return MailComposition(accountID: key.accountID, kind: .reply, threadID: key.threadID, draftID: draftID,
-                               to: line(message.to), cc: line(message.cc), subject: message.subject, body: message.text,
-                               inReplyTo: answered?.messageID,
-                               references: [answered?.references, answered?.messageID].compactMap { $0 }.joined(separator: " "))
+        let references = [answered?.references, answered?.messageID].compactMap { $0 }.joined(separator: " ")
+        var composition = MailComposition(accountID: key.accountID, kind: .reply, threadID: key.threadID, draftID: draftID,
+                                          to: line(message.to), cc: line(message.cc), bcc: line(message.bcc),
+                                          subject: message.subject, body: message.text, inReplyTo: answered?.messageID,
+                                          references: references.isEmpty ? nil : references)
+        composition.keepsDraftFiles = !message.attachments.isEmpty
+        return composition
     }
 
-    /// The thread written in is read again, so a sent reply or a discarded draft shows in it.
-    private func afterWriting(_ composition: MailComposition) async {
+    /// The thread written in is read again, so a saved or sent reply, or a discarded draft, shows in it.
+    func afterWriting(_ composition: MailComposition) async {
         guard let thread = composition.threadID else { return }
         let key = MailThreadKey(accountID: composition.accountID, threadID: thread)
         if let transport = transports[key.accountID], let fresh = try? await transport.thread(thread) {
             remember(fresh, for: key)
         }
-        await reread(key.accountID, arrived: [])
-    }
-
-    private func savedDraftID(_ id: String?) throws -> String {
-        guard let id else { throw MailFailure(kind: .unavailable, message: L10n.string("This draft is no longer in the account.")) }
-        return id
+        _ = await reread(key.accountID, arrived: [])
     }
 
     /// A window shows the mailbox: what arrived until now has been seen.
@@ -370,8 +406,9 @@ final class MailboxCenter {
                     if let cursor = self.cursor(for: id) {
                         let changes = try await transport.changes(since: cursor)
                         guard !Task.isCancelled else { return }
-                        self.setCursor(changes.cursor, for: id)
-                        if changes.changed { await self.reread(id, arrived: changes.arrivedThreadIDs) }
+                        // The cursor moves on only once the inbox was read, so what arrived is told.
+                        let read = changes.changed ? await self.reread(id, arrived: changes.arrivedThreadIDs) : true
+                        if read { self.setCursor(changes.cursor, for: id) }
                     } else {
                         let cursor = try await transport.changeCursor()
                         guard !Task.isCancelled else { return }
@@ -383,6 +420,7 @@ final class MailboxCenter {
                     if case OAuthAPISession.Failure.signInRequired = error {
                         self.failures[id] = MailFailure(kind: .signInRequired,
                                                         message: L10n.string("Sign in to this account again in Settings › Connectors."))
+                        self.watches[id] = nil
                         return
                     }
                     wait = min(wait * 2, Self.longestWatchWait)
@@ -392,19 +430,22 @@ final class MailboxCenter {
         }
     }
 
-    /// Reads one account's inbox again after a change, and tells of the threads mail arrived in.
-    private func reread(_ id: UUID, arrived: [String]) async {
-        guard let transport = transports[id] else { return }
+    /// Reads one account's inbox again after a change, and tells of the threads mail arrived in;
+    /// false when the inbox could not be read.
+    @discardableResult
+    private func reread(_ id: UUID, arrived: [String]) async -> Bool {
+        guard let transport = transports[id] else { return false }
         let generation = generation
-        guard let page = try? await transport.inbox(pageToken: nil), generation == self.generation else { return }
-        inboxes[id] = page.threads
-        inboxNextPages[id] = page.nextPageToken
+        guard let page = try? await transport.inbox(pageToken: nil) else { return false }
+        guard generation == self.generation else { return true }
+        takeFirstPage(page, for: id)
         failures[id] = nil
         merge()
         let threads = page.threads.filter { arrived.contains($0.id.threadID) && $0.isUnread }
-        guard !threads.isEmpty else { return }
+        guard !threads.isEmpty else { return true }
         if !isShown { noteNewMail() }
         announce?(threads)
+        return true
     }
 
     private func cursor(for id: UUID) -> String? {
@@ -470,8 +511,13 @@ final class MailboxCenter {
         }
     }
 
+    /// Every inbox together, newest first. An account with more to read ends at the oldest thread read
+    /// of it, so other accounts' older threads wait until it is read that far too, and the list has no
+    /// gap in time.
     private func merge() {
-        let merged = accounts.flatMap { inboxes[$0.id] ?? [] }.sorted { $0.date > $1.date }
+        var merged = accounts.flatMap { inboxes[$0.id] ?? [] }.sorted { $0.date > $1.date }
+        let readTo = accounts.compactMap { inboxNextPages[$0.id] != nil ? inboxes[$0.id]?.last?.date : nil }.max()
+        if let readTo { merged.removeAll { $0.date < readTo } }
         if merged != threads { threads = merged }
     }
 
@@ -504,6 +550,8 @@ final class MailWindowState {
     var composition: MailComposition?
     /// When the message just sent leaves, unless the person takes it back first.
     private(set) var sendsAt: Date?
+    /// The undo time is over and the message is on its way: Undo is gone.
+    private(set) var isSending = false
     private(set) var isSaving = false
     private(set) var writingFailure: String?
 
@@ -575,6 +623,11 @@ final class MailWindowState {
                     self.composition?.draftID = saved.draftID
                 }
                 self.writingFailure = nil
+                // The thread shows the draft as it now is.
+                await center.afterWriting(saved)
+                if let thread = saved.threadID, self.selection == MailThreadKey(accountID: saved.accountID, threadID: thread) {
+                    self.thread = center.openedThread(MailThreadKey(accountID: saved.accountID, threadID: thread)) ?? self.thread
+                }
             } catch {
                 if self.composition?.id == snapshot.id { self.writingFailure = error.localizedDescription }
             }
@@ -585,14 +638,14 @@ final class MailWindowState {
 
     /// Closes the message, keeping it as a draft when anything was written.
     func close(in center: MailboxCenter) {
-        guard let current = composition else { return }
+        guard let current = composition, sendsAt == nil, !isSending else { return }
         composition = nil
         if isChanged(current) { enqueueSave(current, in: center) }
     }
 
     /// Throws the message away, with the draft it was saved as.
     func discard(in center: MailboxCenter) {
-        guard let current = composition else { return }
+        guard let current = composition, sendsAt == nil, !isSending else { return }
         composition = nil
         let previous = lastSave
         Task { [weak self] in
@@ -605,7 +658,7 @@ final class MailWindowState {
 
     /// Sends what is written after `undoWindow`, during which Undo takes it back.
     func send(in center: MailboxCenter) {
-        guard let current = composition, sendsAt == nil else { return }
+        guard let current = composition, sendsAt == nil, !isSending else { return }
         guard !MailComposition.recipients(current.to + "," + current.cc + "," + current.bcc).isEmpty else {
             writingFailure = L10n.string("Add at least one recipient.")
             return
@@ -616,23 +669,34 @@ final class MailWindowState {
         sending = Task { [weak self] in
             try? await Task.sleep(for: wait)
             guard let self, !Task.isCancelled, self.sendsAt != nil else { return }
+            // From here the message goes: Undo is gone and nothing takes it back.
+            self.sendsAt = nil
+            self.isSending = true
+            defer { self.isSending = false }
             await self.lastSave?.value
             var current = current
             if current.draftID == nil { current.draftID = self.draftIDs[current.id] }
             do {
-                try await center.send(current, saving: self.isChanged(current))
-                self.sendsAt = nil
-                self.composition = nil
+                // A draft sent as it was saved is not saved over, so a draft an agent wrote in HTML goes as it is.
+                if current.draftID == nil || self.isChanged(current) {
+                    let saved = try await center.save(current)
+                    self.draftIDs[current.id] = saved.draftID
+                    current.draftID = saved.draftID
+                    if self.composition?.id == current.id { self.composition?.draftID = saved.draftID }
+                }
+                guard let draftID = current.draftID else { return }
+                try await center.sendDraft(draftID, of: current)
+                if self.composition?.id == current.id { self.composition = nil }
                 if let key = self.selection { self.thread = center.openedThread(key) ?? self.thread }
             } catch {
-                self.sendsAt = nil
-                self.writingFailure = error.localizedDescription
+                if self.composition?.id == current.id { self.writingFailure = error.localizedDescription }
             }
         }
     }
 
     /// Takes back the message just sent, before it leaves.
     func undoSend() {
+        guard sendsAt != nil, !isSending else { return }
         sending?.cancel()
         sending = nil
         sendsAt = nil
@@ -685,8 +749,29 @@ final class MailWindowState {
         Task { await center.load(mailbox) }
     }
 
+    /// Forgets all the window read and wrote, as when the mailbox is turned off.
+    func reset() {
+        for task in [opening, searching, sending, lastSave] { task?.cancel() }
+        mailbox = .allInboxes
+        showsFolders = false
+        selection = nil
+        thread = nil
+        isOpening = false
+        failure = nil
+        searchText = ""
+        searchResults = nil
+        isSearching = false
+        composition = nil
+        sendsAt = nil
+        isSending = false
+        writingFailure = nil
+        draftIDs = [:]
+        openedContent = [:]
+    }
+
+    /// Shows a thread; choosing the one shown reads it again.
     func select(_ key: MailThreadKey?, in center: MailboxCenter) {
-        guard key != selection || (key != nil && thread == nil && !isOpening) else { return }
+        guard key != selection || (key != nil && !isOpening) else { return }
         opening?.cancel()
         selection = key
         failure = nil

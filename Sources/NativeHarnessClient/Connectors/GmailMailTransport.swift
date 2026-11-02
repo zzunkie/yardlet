@@ -120,6 +120,12 @@ struct GmailMailTransport: MailAccountTransport {
                                             data: try Data(contentsOf: url))
         }
         if let forwarded = composition.forwardedMessageID { message.attachments += try await files(of: forwarded) }
+        // An edited draft keeps its files: they are read from the draft as it is now.
+        if composition.keepsDraftFiles, let id = composition.draftID,
+           let current = try await api.get("users/me/drafts/\(try GmailAPI.segment(id))",
+                                           [URLQueryItem(name: "format", value: "minimal")])["message"]?["id"]?.stringValue {
+            message.attachments += try await files(of: current)
+        }
         let bytes = message.attachments.reduce(0) { $0 + $1.data.count }
         guard bytes <= GmailAttachmentFiles.limit else { throw GmailOutgoingMessage.Problem.attachmentsTooLarge(bytes: bytes) }
         var draft: [String: ToolJSON] = [:]
@@ -132,8 +138,12 @@ struct GmailMailTransport: MailAccountTransport {
             } else {
                 answer = try await api.post("users/me/drafts", .object(["message": .object(draft)]))
             }
+        } else if let id = composition.draftID {
+            // Replaced in place, so a failed upload leaves the draft as it was.
+            answer = try await api.upload("users/me/drafts/\(try GmailAPI.segment(id))",
+                                          metadata: .object(["id": .string(id), "message": .object(draft)]),
+                                          message: Data(message.mime.utf8), method: "PUT")
         } else {
-            if let id = composition.draftID { try await discardDraft(id) }
             answer = try await api.upload("users/me/drafts", metadata: .object(["message": .object(draft)]),
                                           message: Data(message.mime.utf8))
         }
@@ -173,7 +183,7 @@ struct GmailMailTransport: MailAccountTransport {
         for part in Self.attachmentParts(json["payload"]) {
             var content = part.data
             if content == nil, let attachment = part.id {
-                content = try await api.get("users/me/messages/\(id)/attachments/\(try GmailAPI.segment(attachment))")["data"]?.stringValue
+                content = try await api.get("users/me/messages/\(id)/attachments/\(try GmailAPI.attachmentSegment(attachment))")["data"]?.stringValue
             }
             guard let data = content.flatMap(Self.base64URL) else { throw GmailAPI.Failure.unreadableAnswer }
             files.append(GmailOutgoingMessage.Attachment(filename: part.name, mimeType: part.mimeType, data: data))
@@ -312,6 +322,7 @@ struct GmailMailTransport: MailAccountTransport {
             from: MailAddressList.parse(message.header("From") ?? "").first ?? MailAddress(address: ""),
             to: MailAddressList.parse(message.header("To") ?? ""),
             cc: MailAddressList.parse(message.header("Cc") ?? ""),
+            bcc: MailAddressList.parse(message.header("Bcc") ?? ""),
             date: message.internalDate ?? .distantPast,
             subject: message.header("Subject") ?? "",
             snippet: message.snippet ?? "",

@@ -27,6 +27,8 @@ struct MailComposition: Equatable, Sendable {
     var attachments: [URL]
     /// The message whose attachments a forward carries.
     var forwardedMessageID: String?
+    /// A draft opened to edit carries the files it already has.
+    var keepsDraftFiles = false
 
     init(accountID: UUID, kind: Kind = .new, threadID: String? = nil, draftID: String? = nil, to: String = "",
          cc: String = "", bcc: String = "", subject: String = "", body: String = "", inReplyTo: String? = nil,

@@ -2007,7 +2007,11 @@ struct MainWindow: View {
             showMail()
         }
         // A window leaves the mailbox when it is turned off.
-        .onChange(of: model.mailbox.isEnabled) { _, enabled in if !enabled, sidebarSection == .mail { selectSection(.tasks) } }
+        .onChange(of: model.mailbox.isEnabled) { _, enabled in
+            guard !enabled else { return }
+            mailWindow.reset()
+            if sidebarSection == .mail { selectSection(.tasks) }
+        }
         .onAppear { personalAgents.watch = model.personalAgentWatch }
         // A dot's notification was clicked: this window shows it, and no other window does too.
         .onChange(of: model.personalAgentReveal, initial: true) { _, reveal in

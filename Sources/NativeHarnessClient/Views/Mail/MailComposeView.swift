@@ -15,7 +15,7 @@ struct MailComposeView: View {
             VStack(spacing: 0) {
                 bar(composition)
                 Rectangle().fill(ParityTheme.separator).frame(height: 1)
-                if window.sendsAt != nil { undoStrip }
+                if window.sendsAt != nil || window.isSending { undoStrip }
                 if let failure = window.writingFailure {
                     Text(failure)
                         .font(.system(size: 12 * scale))
@@ -49,7 +49,7 @@ struct MailComposeView: View {
                 .padding(.horizontal, ParityTheme.conversationInset)
                 .padding(.top, 8)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .disabled(window.sendsAt != nil)
+                .disabled(window.sendsAt != nil || window.isSending)
             }
             // Saved to Drafts ten seconds after the last change.
             .task(id: composition.content) {
@@ -71,15 +71,19 @@ struct MailComposeView: View {
             } else if composition.draftID != nil {
                 Text(L10n.string("Saved to Drafts")).font(.system(size: 12 * scale)).foregroundStyle(.secondary)
             }
-            ParityIconButton(systemName: "paperclip", help: L10n.string("Attach files…"), action: attach)
-            ParityIconButton(systemName: "trash", help: L10n.string("Discard message")) { window.discard(in: center) }
-            ParityIconButton(systemName: "xmark", help: L10n.string("Close and keep as draft")) { window.close(in: center) }
+            let isGoing = window.sendsAt != nil || window.isSending
+            Group {
+                ParityIconButton(systemName: "paperclip", help: L10n.string("Attach files…"), action: attach)
+                ParityIconButton(systemName: "trash", help: L10n.string("Discard message")) { window.discard(in: center) }
+                ParityIconButton(systemName: "xmark", help: L10n.string("Close and keep as draft")) { window.close(in: center) }
+            }
+            .disabled(isGoing)
             Button { window.send(in: center) } label: {
                 Label(L10n.string("Send"), systemImage: "paperplane.fill")
             }
             .buttonStyle(MailPrimaryButtonStyle())
             .keyboardShortcut(.return, modifiers: .command)
-            .disabled(window.sendsAt != nil)
+            .disabled(isGoing)
         }
         .padding(.horizontal, 16)
         .frame(height: ParityTheme.paneToolbarHeight)
@@ -110,9 +114,11 @@ struct MailComposeView: View {
             ProgressView().controlSize(.mini)
             Text(L10n.string("Sending…")).font(.system(size: 12.5 * scale))
             Spacer(minLength: 8)
-            Button(L10n.string("Undo send")) { window.undoSend() }
-                .buttonStyle(.link)
-                .font(.system(size: 12.5 * scale, weight: .medium))
+            if window.sendsAt != nil {
+                Button(L10n.string("Undo send")) { window.undoSend() }
+                    .buttonStyle(.link)
+                    .font(.system(size: 12.5 * scale, weight: .medium))
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
