@@ -48,7 +48,8 @@ final class MailboxRenderingTests: XCTestCase {
                 try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "compose-\(name)"))
                 XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Close and keep as draft")))
                 await host.settle(until: { host.accessibilityElements().contains { $0.label == L10n.string("Ask an agent") } })
-                try await waitUntil { await !gmail.drafts.isEmpty }
+                let drafts = await gmail.drafts
+                XCTAssertTrue(drafts.isEmpty, "A reply closed as it was opened leaves no draft")
 
                 // Ask an agent: a new chat names the thread for the account's connector, without its body.
                 XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Ask an agent")))
@@ -256,8 +257,13 @@ actor FixtureMailTransport: MailAccountTransport {
         }
     }
 
+    /// Threads a list gives at once; the rest follow a page token.
+    var pageSize = 50
+
+    func setPageSize(_ size: Int) { pageSize = size }
+
     func inbox(pageToken: String?) async throws -> MailPage {
-        page { (places[$0.id.threadID] ?? "INBOX") == "INBOX" }
+        page(from: pageToken) { (places[$0.id.threadID] ?? "INBOX") == "INBOX" }
     }
 
     func list(_ folder: MailFolder, pageToken: String?) async throws -> MailPage {
@@ -271,8 +277,11 @@ actor FixtureMailTransport: MailAccountTransport {
         }
     }
 
-    private func page(_ include: (MailThreadSummary) -> Bool) -> MailPage {
-        MailPage(threads: threads.values.map(\.summary).filter(include).sorted { $0.date > $1.date }, nextPageToken: nil)
+    private func page(from token: String? = nil, _ include: (MailThreadSummary) -> Bool) -> MailPage {
+        let all = threads.values.map(\.summary).filter(include).sorted { $0.date > $1.date }
+        let start = token.flatMap(Int.init) ?? 0
+        let end = min(start + pageSize, all.count)
+        return MailPage(threads: Array(all[start..<end]), nextPageToken: end < all.count ? String(end) : nil)
     }
 
     func search(_ query: String, pageToken: String?) async throws -> MailPage {

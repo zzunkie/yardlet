@@ -42,6 +42,10 @@ final class MailboxCenter {
     /// New mail arrived since a window last showed the mailbox; the sidebar's word reads only this.
     private(set) var hasUnseenMail = false
 
+    /// Where each list goes on: each account's inbox, and each folder read.
+    private(set) var inboxNextPages: [UUID: String] = [:]
+    private(set) var folderNextPages: [MailboxSelection: String] = [:]
+    @ObservationIgnored private var loadingMore: Set<MailboxSelection> = []
     @ObservationIgnored private var transports: [UUID: any MailAccountTransport] = [:]
     /// Each account's inbox as its service listed it.
     @ObservationIgnored private var inboxes: [UUID: [MailThreadSummary]] = [:]
@@ -90,6 +94,8 @@ final class MailboxCenter {
         failures = failures.filter { kept.contains($0.key) }
         folders = folders.filter { kept.contains($0.key) }
         folderLists = folderLists.filter { $0.key.accountID.map(kept.contains) ?? false }
+        inboxNextPages = inboxNextPages.filter { kept.contains($0.key) }
+        folderNextPages = folderNextPages.filter { $0.key.accountID.map(kept.contains) ?? false }
         for key in openedOrder where !kept.contains(key.accountID) { opened[key] = nil }
         openedOrder.removeAll { !kept.contains($0.accountID) }
         for (id, watch) in watches { watch.cancel(); watches[id] = nil }
@@ -126,6 +132,45 @@ final class MailboxCenter {
         defer { if generation == self.generation { loadingFolders.remove(selection) } }
         guard let page = try? await transport.list(folder, pageToken: nil), generation == self.generation else { return }
         folderLists[selection] = page.threads
+        folderNextPages[selection] = page.nextPageToken
+    }
+
+    /// Whether a list goes on past what was read.
+    func hasMore(_ selection: MailboxSelection) -> Bool {
+        switch selection {
+        case .allInboxes: !inboxNextPages.isEmpty
+        case let .folder(accountID, _):
+            folder(selection)?.role == .inbox ? inboxNextPages[accountID] != nil : folderNextPages[selection] != nil
+        }
+    }
+
+    /// Reads the next page of a list: of each account's inbox for every inbox together.
+    func loadMore(_ selection: MailboxSelection) async {
+        guard !loadingMore.contains(selection) else { return }
+        loadingMore.insert(selection)
+        defer { loadingMore.remove(selection) }
+        let generation = generation
+        let inboxAccounts: [UUID]? = switch selection {
+        case .allInboxes: Array(inboxNextPages.keys)
+        case let .folder(accountID, _): folder(selection)?.role == .inbox ? [accountID] : nil
+        }
+        if let inboxAccounts {
+            for id in inboxAccounts {
+                guard let token = inboxNextPages[id], let transport = transports[id],
+                      let page = try? await transport.inbox(pageToken: token), generation == self.generation else { continue }
+                let known = Set((inboxes[id] ?? []).map(\.id))
+                inboxes[id, default: []] += page.threads.filter { !known.contains($0.id) }
+                inboxNextPages[id] = page.nextPageToken
+            }
+            merge()
+            return
+        }
+        guard let folder = folder(selection), let accountID = selection.accountID, let transport = transports[accountID],
+              let token = folderNextPages[selection],
+              let page = try? await transport.list(folder, pageToken: token), generation == self.generation else { return }
+        let known = Set((folderLists[selection] ?? []).map(\.id))
+        folderLists[selection, default: []] += page.threads.filter { !known.contains($0.id) }
+        folderNextPages[selection] = page.nextPageToken
     }
 
     /// Reads the first page of every account's inbox again, and its folders.
@@ -152,6 +197,7 @@ final class MailboxCenter {
                 switch result {
                 case let .success(page):
                     inboxes[id] = page.threads
+                    inboxNextPages[id] = page.nextPageToken
                     failures[id] = nil
                 case let .failure(error):
                     failures[id] = Self.failure(error)
@@ -236,11 +282,12 @@ final class MailboxCenter {
         return saved
     }
 
-    /// Sends what was written, through the draft it was saved as, and reads its thread again.
-    func send(_ composition: MailComposition) async throws {
+    /// Sends what was written, through the draft it was saved as, and reads its thread again. A draft
+    /// sent as it was saved is not saved again, so a draft an agent wrote in HTML goes as it is.
+    func send(_ composition: MailComposition, saving: Bool = true) async throws {
         guard let transport = transports[composition.accountID] else { return }
-        let saved = try await save(composition)
-        try await transport.sendDraft(try savedDraftID(saved.draftID))
+        let draftID = saving || composition.draftID == nil ? try await save(composition).draftID : composition.draftID
+        try await transport.sendDraft(try savedDraftID(draftID))
         await afterWriting(composition)
     }
 
@@ -351,6 +398,7 @@ final class MailboxCenter {
         let generation = generation
         guard let page = try? await transport.inbox(pageToken: nil), generation == self.generation else { return }
         inboxes[id] = page.threads
+        inboxNextPages[id] = page.nextPageToken
         failures[id] = nil
         merge()
         let threads = page.threads.filter { arrived.contains($0.id.threadID) && $0.isUnread }
@@ -463,6 +511,8 @@ final class MailWindowState {
     @ObservationIgnored private var searching: Task<Void, Never>?
     @ObservationIgnored private var sending: Task<Void, Never>?
     @ObservationIgnored private var lastSave: Task<Void, Never>?
+    /// What the message held when it was opened, so one left as it was is not saved as a draft.
+    @ObservationIgnored private var openedContent: [UUID: [String]] = [:]
     /// The draft each message being written was saved as.
     @ObservationIgnored private var draftIDs: [UUID: String] = [:]
 
@@ -474,25 +524,34 @@ final class MailWindowState {
     /// Starts a new message from `account`, or a reply, reply to all or forward of `message`.
     func write(_ kind: MailComposition.Kind, account: MailAccount, message: MailMessage? = nil, in thread: MailThread? = nil) {
         writingFailure = nil
-        if let message, let thread {
-            composition = .answering(message, in: thread, as: kind, from: account)
-        } else {
-            composition = MailComposition(accountID: account.id)
-        }
+        let started = message.flatMap { message in thread.map { MailComposition.answering(message, in: $0, as: kind, from: account) } }
+            ?? MailComposition(accountID: account.id)
+        open(started)
+    }
+
+    private func open(_ started: MailComposition) {
+        openedContent[started.id] = started.content
+        composition = started
+    }
+
+    /// Whether the message holds anything other than what it was opened with.
+    func isChanged(_ composition: MailComposition) -> Bool {
+        openedContent[composition.id].map { $0 != composition.content } ?? true
     }
 
     /// Opens a thread's draft to go on writing it.
     func edit(_ message: MailMessage, in thread: MailThread, center: MailboxCenter) {
         writingFailure = nil
         Task {
-            do { composition = try await center.composition(editing: message, in: thread) }
+            do { open(try await center.composition(editing: message, in: thread)) }
             catch { failure = error as? MailFailure ?? MailFailure(kind: .unavailable, message: error.localizedDescription) }
         }
     }
 
-    /// Saves what is written as a draft on the service, as the person writes and when they close it.
+    /// Saves what is written as a draft on the service, as the person writes and when they close it;
+    /// a message left as it was opened is not saved.
     func save(in center: MailboxCenter) async {
-        guard let current = composition, sendsAt == nil else { return }
+        guard let current = composition, sendsAt == nil, isChanged(current) else { return }
         await enqueueSave(current, in: center).value
     }
 
@@ -511,7 +570,10 @@ final class MailWindowState {
             do {
                 let saved = try await center.save(snapshot)
                 self.draftIDs[snapshot.id] = saved.draftID
-                if self.composition?.id == snapshot.id { self.composition?.draftID = saved.draftID }
+                self.openedContent[snapshot.id] = snapshot.content
+                if self.composition?.id == snapshot.id, self.composition?.draftID != saved.draftID {
+                    self.composition?.draftID = saved.draftID
+                }
                 self.writingFailure = nil
             } catch {
                 if self.composition?.id == snapshot.id { self.writingFailure = error.localizedDescription }
@@ -525,9 +587,7 @@ final class MailWindowState {
     func close(in center: MailboxCenter) {
         guard let current = composition else { return }
         composition = nil
-        let written = !current.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !current.to.isEmpty || !current.subject.isEmpty || !current.attachments.isEmpty
-        if written || current.draftID != nil || draftIDs[current.id] != nil { enqueueSave(current, in: center) }
+        if isChanged(current) { enqueueSave(current, in: center) }
     }
 
     /// Throws the message away, with the draft it was saved as.
@@ -560,7 +620,7 @@ final class MailWindowState {
             var current = current
             if current.draftID == nil { current.draftID = self.draftIDs[current.id] }
             do {
-                try await center.send(current)
+                try await center.send(current, saving: self.isChanged(current))
                 self.sendsAt = nil
                 self.composition = nil
                 if let key = self.selection { self.thread = center.openedThread(key) ?? self.thread }
@@ -582,7 +642,7 @@ final class MailWindowState {
     func sendDraft(_ message: MailMessage, in thread: MailThread, center: MailboxCenter) {
         Task {
             do {
-                composition = try await center.composition(editing: message, in: thread)
+                open(try await center.composition(editing: message, in: thread))
                 send(in: center)
             } catch {
                 failure = error as? MailFailure ?? MailFailure(kind: .unavailable, message: error.localizedDescription)

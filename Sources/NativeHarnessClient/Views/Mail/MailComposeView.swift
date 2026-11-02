@@ -52,7 +52,7 @@ struct MailComposeView: View {
                 .disabled(window.sendsAt != nil)
             }
             // Saved to Drafts ten seconds after the last change.
-            .task(id: composition) {
+            .task(id: composition.content) {
                 try? await Task.sleep(for: .seconds(10))
                 guard !Task.isCancelled else { return }
                 await window.save(in: center)

@@ -46,6 +46,11 @@ struct MailComposition: Equatable, Sendable {
         self.forwardedMessageID = forwardedMessageID
     }
 
+    /// What the person wrote, without where it was saved: what a save compares.
+    var content: [String] {
+        [accountID.uuidString, to, cc, bcc, subject, body] + attachments.map(\.path)
+    }
+
     /// A reply, a reply to all or a forward of `message`, written from `account`: its recipients and
     /// subject as mail apps set them, and the original quoted under an empty first line.
     static func answering(_ message: MailMessage, in thread: MailThread, as kind: Kind, from account: MailAccount) -> Self {
