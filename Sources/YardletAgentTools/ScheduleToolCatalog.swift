@@ -122,8 +122,8 @@ package enum ScheduleToolCatalog {
             + "\"2026-10-18T09:00:00+09:00\". Not with cronExpression."),
         Key.continueTaskID: property("string", "Each run is the next message of this task, \"self\" or a task id "
             + "from list_tasks, instead of a new task. Left out, each run is a new task."),
-        Key.harness: property("string", "Each new task's harness, such as claude-code or codex. Defaults to this "
-            + "task's."),
+        Key.harness: property("string", "Each new task's harness: an id such as claude-code, codex or "
+            + "antigravity-cli, or its name; list_accounts lists the ones set up in Yardlet. Defaults to this task's."),
         Key.project: property("string", "A project name or folder path for each new task. Defaults to this "
             + "task's folder. Not with chat."),
         Key.chat: property("boolean", "true starts each new task as a chat with no project, in a new folder of its "

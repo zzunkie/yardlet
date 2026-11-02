@@ -32,7 +32,7 @@ enum ConversationAgentRunProjection {
 
     static func subagent(arguments: JSONValue?, result: String?, isApproved: Bool) -> ConversationSubagent? {
         guard let prompt = arguments?["prompt"]?.stringValue, !prompt.isEmpty else { return nil }
-        let harness = arguments?["harness"]?.stringValue.map(HarnessKind.init(rawValue:))
+        let harness = arguments?["harness"]?.stringValue.map(harness(named:))
         let model = arguments?["model"]?.stringValue
         // Named by what it was asked, as the rail's Agents card names it, with its harness and model.
         return ConversationSubagent(
@@ -42,6 +42,12 @@ enum ConversationAgentRunProjection {
             isApproved: isApproved, kind: SessionToolCatalog.runAgent, input: prompt,
             output: result.map(answer(inResult:)), isBackground: false, model: model,
             harnessLabel: AgentRun.harnessLabel(harness: harness, model: model))
+    }
+
+    /// The harness a run_agent call named, as the tool read it: a name such as "Antigravity" is that
+    /// harness, and one Yardlet does not know stays as written.
+    static func harness(named name: String) -> HarnessKind {
+        HarnessCatalog.harness(named: name) ?? HarnessKind(rawValue: name)
     }
 
     /// The subagent the answer names.

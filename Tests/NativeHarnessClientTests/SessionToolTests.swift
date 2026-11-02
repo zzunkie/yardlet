@@ -518,8 +518,17 @@ final class SessionToolTests: XCTestCase {
         XCTAssertTrue(slashChild.isError)
         let slashAgent = await call(model, "run_agent", ["harness": "claude-code", "prompt": "/review"], from: fixture.caller)
         XCTAssertTrue(slashAgent.isError)
+        // A refused harness names the ones set up here, so an agent does not take two examples for the list;
+        // a harness's name is that harness.
+        let setUp = "Harness ids set up in Yardlet: codex (Codex), claude-code (Claude Code), opencode (OpenCode). Not set up: "
         let unknownHarness = await call(model, "run_agent", ["harness": "nope", "prompt": "Hi"], from: fixture.caller)
-        XCTAssertTrue(unknownHarness.text.contains("no harness"), unknownHarness.text)
+        XCTAssertTrue(unknownHarness.text.contains("no harness nope. " + setUp), unknownHarness.text)
+        XCTAssertTrue(unknownHarness.text.contains("antigravity-cli"), unknownHarness.text)
+        let notSetUp = await call(model, "create_task", ["prompt": "Review it", "harness": "Antigravity"], from: fixture.caller)
+        XCTAssertTrue(notSetUp.text.contains("Antigravity CLI is not set up in Yardlet. " + setUp), notSetUp.text)
+        let named = await call(model, "list_accounts", ["harness": "claude"], from: fixture.caller)
+        XCTAssertTrue(named.text.contains(#""harness":"claude-code","harnesses":[{"harness":"codex","name":"Codex"},"#
+            + #"{"harness":"claude-code","name":"Claude Code"},{"harness":"opencode","name":"OpenCode"}]"#), named.text)
         let tooMany = await call(model, "wait_tasks", ["ids": (0..<9).map { _ in UUID().uuidString }], from: fixture.caller)
         XCTAssertTrue(tooMany.text.contains("At most 8"), tooMany.text)
         await model.shutdown()
