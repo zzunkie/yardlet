@@ -1,6 +1,6 @@
 # Mailbox
 
-The mailbox shows the inboxes of the Gmail accounts connected in Settings › Connectors beside tasks and
+The mailbox shows the inboxes of the Gmail and Outlook Mail accounts connected in Settings › Connectors beside tasks and
 personal agents, as a third word under Scheduled tasks: **Tasks · Personal agents · Mail**. Threads are
 read in place, written to and answered there, and handed to an agent by name. Mail stays on the
 service: the mailbox reads it when it is shown and keeps it in memory only.
@@ -16,10 +16,13 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
 
 ## Accounts
 
-- Every Gmail connector that is connected is an account of the mailbox (`ConnectorCenter.mailAccounts`).
-  The mailbox uses the connector's own sign-in and session (`OAuthAPISession`), so a token is refreshed
-  one at a time for both and never leaves Yardlet. It asks Google for no scope beyond the connector's
-  `gmail.modify` (docs/CONNECTORS.md, "Google").
+- Every Gmail and Outlook Mail connector that is connected is an account of the mailbox
+  (`ConnectorCenter.mailAccounts`). The mailbox uses the connector's own sign-in and session
+  (`OAuthAPISession`), so a token is refreshed one at a time for both and never leaves Yardlet. It asks for
+  nothing beyond the connector's permissions: Gmail's `gmail.modify` (docs/CONNECTORS.md, "Google") and
+  Graph's `Mail.ReadWrite` and `Mail.Send` (docs/CONNECTORS.md, "Microsoft 365").
+- Each service is read the way it supports best: Gmail through the Gmail API, Microsoft 365 and
+  Outlook.com through Microsoft Graph. The sections below say where the two differ.
 - Connecting, disconnecting or removing a Gmail account in Settings › Connectors adds it to or removes
   it from the mailbox at once; what was read from a removed account is forgotten.
 
@@ -27,8 +30,8 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
 
 - In memory: each account's folders, the first page of each inbox, the folders a window opened, the
   last 30 threads opened, and a search's results until the search is cleared.
-- On disk: only, per account, the Gmail history ID it was last read up to
-  (`Yardlet.mailboxCursors` in Yardlet's defaults), so mail that came while Yardlet was closed is told once
+- On disk: only, per account, where its history was last read up to: the Gmail history ID, or Graph's
+  inbox delta link with the time it was taken (`Yardlet.mailboxCursors` in Yardlet's defaults), so mail that came while Yardlet was closed is told once
   it opens. No subject, address or word of a message is written to disk or to the log.
 - An HTML message's content rule list is compiled into the temporary folder, not the person's Library.
 
@@ -43,8 +46,10 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
 - **‹ Mailboxes** over the list shows the accounts and their folders in the list's place, as Mail does on
   a narrow screen: All inboxes, then for each account its Inbox, Starred, Sent, Drafts, All Mail, Spam and
   Trash in the order and with the names of Gmail's web app, then its labels by name, nested labels
-  indented. Labels hidden from Gmail's label list are left out. Each account and each account's labels
-  fold. Unread counts come from Gmail for the inbox and spam; Drafts shows its count.
+  indented. Labels hidden from Gmail's label list are left out. An Outlook account lists Inbox, Sent
+  Items, Drafts, Archive (when it has one), Junk Email and Deleted Items as Outlook names them in the
+  account's language, then its other top-level folders under **Folders**. Each account and each
+  account's labels or folders fold. Unread counts come from Gmail for the inbox and spam; Drafts shows its count.
 - Choosing a folder lists it, read from Gmail when it is not an inbox (`users.threads.list` with its
   label; All Mail with no label; Spam and Trash with `includeSpamTrash`). A list reads 50 threads at a
   time; as its end comes into view the next page is read from the page token Gmail gave. Reading the
@@ -52,6 +57,24 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
 - Typing in **Search mail** narrows the list at once; a pause of 0.4 seconds, or Return, asks Gmail's own
   search (Gmail's search syntax) of the account listed, or of every account for All inboxes. Older mail is
   found this way rather than kept here.
+
+## Outlook
+
+- A thread is an Outlook conversation (`conversationId`): a folder's newest messages
+  (`me/mailFolders/{id}/messages`, newest first, no body) are gathered into one line per conversation,
+  and opening one reads its messages in every folder (`me/messages?$filter=conversationId eq …`) with
+  their HTML and files. Search is Graph's (`$search`, KQL).
+- Outlook keeps read state per message, so marking a thread read or unread changes each message that
+  differs; Star flags the newest message and taking it away clears every flag; Archive, Not spam and Move
+  out of the Trash move the conversation's messages in the inbox, Junk Email or Deleted Items.
+- A reply, reply to all or forward starts from Graph's own (`createReply`, `createReplyAll`,
+  `createForward`), which threads it and carries a forward's files; what was written then replaces its
+  fields, as text. Chosen files are added once each, up to 3 MB a file.
+- New mail: the inbox's delta query, begun over the last day's mail and followed to its `deltaLink`,
+  every minute. Unread mail that came after the link was taken, not a draft and not in the Other inbox,
+  is told. A link Graph no longer knows (410) starts again.
+- **Open in Outlook** opens the newest message's `webLink` in the built-in browser. **Ask an agent** names
+  the newest message and the connector's `get_message`.
 
 ## Reading
 
@@ -123,12 +146,14 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
 |---|---|
 | `Domain/Mail.swift`, `Domain/MailComposition.swift` | Accounts, folders, threads and messages; the transport contract (`MailAccountTransport`); addresses (`MailAddressList`); what is being written and how a reply or forward is addressed |
 | `Connectors/GmailMailTransport.swift` | The Gmail API behind the contract: folders and labels, lists, threads, label changes, drafts, history |
+| `Connectors/OutlookMailTransport.swift` | Microsoft Graph behind the contract: folders, conversations, per-message changes, replies from Graph's own, the inbox's delta |
 | `Presentation/MailboxCenter.swift` | The app's mailbox (`MailboxCenter`: accounts, lists, opened threads, watch, writing) and a window's view of it (`MailWindowState`) |
 | `Presentation/MailText.swift` | Names, subjects, times and the hand-off text |
 | `AppModel+Mailbox.swift` | Following the setting and the connectors, notifications and their clicks |
 | `Views/Mail/` | The sidebar (`MailSidebar`, `MailFolderTree`), the thread (`MailContent`, `MailThreadView`), HTML (`MailHTMLBody`) and writing (`MailComposeView`) |
 
-Tests: `GmailMailTransportTests` (requests and answers against a fake Gmail), `MailboxCenterTests` (the
+Tests: `GmailMailTransportTests` and `OutlookMailTransportTests` (requests and answers against a fake Gmail and a
+fake Graph), `MailboxCenterTests` (the
 watch, sending, Undo and Drafts), `MailHTMLBodyTests` (no remote content before Show images) and
 `MailboxRenderingTests` (the list, a thread, writing, the hand-off, the folders and spam, drawn under
 `.build/mailbox-qa/` in both appearances at 1280×800 and 920×680).

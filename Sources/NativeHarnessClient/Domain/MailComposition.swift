@@ -20,6 +20,8 @@ struct MailComposition: Equatable, Sendable {
     var bcc: String
     var subject: String
     var body: String
+    /// The service's ID of the message a reply or forward answers (Graph replies from it).
+    var replyToMessageID: String?
     /// The message a reply answers, for `In-Reply-To` and `References`.
     var inReplyTo: String?
     var references: String?
@@ -63,6 +65,7 @@ struct MailComposition: Equatable, Sendable {
                 .map(Self.formatted).joined(separator: ", ")
         }
         var composition = Self(accountID: account.id, kind: kind, threadID: thread.summary.id.threadID)
+        composition.replyToMessageID = message.id
         switch kind {
         case .new:
             return composition

@@ -1784,14 +1784,23 @@ final class ConnectorCenter: ConnectorToolProviding {
     }
 
 
-    /// The mailbox's accounts: each connected Gmail account, read with the sign-in its connector uses,
-    /// so tokens stay here and refresh one at a time with the connector's.
+    /// The mailbox's accounts: each connected Gmail and Outlook Mail account, read with the sign-in its
+    /// connector uses, so tokens stay here and refresh one at a time with the connector's.
     func mailAccounts() -> [(MailAccount, any MailAccountTransport)] {
         connectors.compactMap { record in
-            guard record.localService == .gmail, record.status == .connected, let address = record.account else { return nil }
-            let account = MailAccount(id: record.credentialID, address: address, provider: .gmail, connectorSlug: record.slug)
-            let api = GmailAPI(base: environment.google.gmailAPI, session: accountSession(record.credentialID))
-            return (account, GmailMailTransport(api: api, account: account))
+            guard record.status == .connected, let address = record.account else { return nil }
+            switch record.localService {
+            case .gmail?:
+                let account = MailAccount(id: record.credentialID, address: address, provider: .gmail, connectorSlug: record.slug)
+                let api = GmailAPI(base: environment.google.gmailAPI, session: accountSession(record.credentialID))
+                return (account, GmailMailTransport(api: api, account: account))
+            case .outlookMail?:
+                let account = MailAccount(id: record.credentialID, address: address, provider: .outlook, connectorSlug: record.slug)
+                let api = GraphAPI(base: environment.microsoft.graph, session: accountSession(record.credentialID))
+                return (account, OutlookMailTransport(api: api, account: account))
+            default:
+                return nil
+            }
         }
     }
 

@@ -7,10 +7,16 @@ enum MailText {
     /// person's own. The person writes what to do after it.
     static func handoff(_ thread: MailThread, account: MailAccount) -> String {
         let sender = thread.summary.senders.first.map(MailComposition.formatted) ?? ""
-        let tool = account.connectorSlug.map { "`\($0)_get_thread`" } ?? account.provider.serviceName
+        // Gmail's tools read a thread by its ID; Outlook's read a message, so the newest is named.
+        let (id, tool) = switch account.provider {
+        case .outlook: (thread.messages.last { !$0.isDraft }?.id ?? thread.summary.id.threadID, "get_message")
+        default: (thread.summary.id.threadID, "get_thread")
+        }
+        let reads = account.connectorSlug.map { "`\($0)_\(tool)`" } ?? account.provider.serviceName
         return [L10n.format("Mail subject %@", subject(thread.summary.subject)),
                 L10n.format("Mail from %@", sender),
-                L10n.format("Mail handoff %@ %@ %@", account.address, thread.summary.id.threadID, tool)]
+                L10n.format(account.provider == .outlook ? "Mail handoff message %@ %@ %@" : "Mail handoff %@ %@ %@",
+                            account.address, id, reads)]
             .joined(separator: "\n") + "\n\n"
     }
 
