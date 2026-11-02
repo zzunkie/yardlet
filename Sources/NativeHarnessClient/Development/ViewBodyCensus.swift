@@ -12,6 +12,8 @@ enum ViewBodyCensus {
         case conversationTurn
         /// A conversation turn's hosting view made, not found kept with its task.
         case conversationTurnHosting
+        /// A row of the conversation (a turn or a part of one) laid out anew to measure its height.
+        case conversationRowLaidOut
         /// A dot's picture, which plays its pet on a layer without being worked out again.
         case personalAgentAvatar
         /// The conversation's timeline (`ConversationTimeline`), which projects and lays out its turns.
