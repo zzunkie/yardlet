@@ -26,6 +26,25 @@ final class TranscriptAutolinkTests: XCTestCase {
         XCTAssertEqual(links("Is it https://example.com/q?").map(\.text), ["https://example.com/q"])
     }
 
+    /// Korean puts no space after an address: a `)` closing a `(` written before it, a parenthesis right
+    /// after the domain and CJK punctuation are the sentence's, as a space would be.
+    func testAnAddressEndsWhereTheSentenceAroundItGoesOn() {
+        XCTAssertEqual(links("PR #403(https://github.com/owner/repo/pull/403)을 열었습니다.").map(\.url),
+                       ["https://github.com/owner/repo/pull/403"])
+        XCTAssertEqual(links("미리보기(http://127.0.0.1:5188/)는 켜 두었습니다.").map(\.text), ["http://127.0.0.1:5188/"])
+        XCTAssertEqual(links("임대(2026-09-01, https://example.com/news/1088003)가 없습니다.").map(\.text),
+                       ["https://example.com/news/1088003"])
+        XCTAssertEqual(links("(https://en.wikipedia.org/wiki/Swift_(language))를 보세요").map(\.text),
+                       ["https://en.wikipedia.org/wiki/Swift_(language)"])
+        XCTAssertEqual(links("[위키](https://en.wikipedia.org/wiki/Swift_(language))를 보세요").map(\.url),
+                       ["https://en.wikipedia.org/wiki/Swift_(language)"])
+        XCTAssertEqual(links("주소: https://example.com(고객 전용)").map(\.text), ["https://example.com"])
+        XCTAssertEqual(links("URL（https://example.com/reel/abc）をコピーします。").map(\.text), ["https://example.com/reel/abc"])
+        XCTAssertEqual(links("地圖：https://example.com/5iTRY8MW）。").map(\.text), ["https://example.com/5iTRY8MW"])
+        // With no `(` before it, GFM's own example keeps the `)` inside.
+        XCTAssertEqual(links("www.google.com/search?q=(business))+ok").map(\.text), ["www.google.com/search?q=(business))+ok"])
+    }
+
     func testWWWLocalhostAndEmail() {
         XCTAssertEqual(links("www.commonmark.org/help").map(\.url), ["http://www.commonmark.org/help"])
         XCTAssertEqual(links("open http://localhost:5173/admin/chat-history now").map(\.text),
@@ -57,5 +76,7 @@ final class TranscriptAutolinkTests: XCTestCase {
         let found = links("https://example.com/문서/한글")
         XCTAssertEqual(found.map(\.text), ["https://example.com/문서/한글"])
         XCTAssertEqual(found.first?.url, "https://example.com/%EB%AC%B8%EC%84%9C/%ED%95%9C%EA%B8%80")
+        XCTAssertEqual(links("출처: https://example.com/법령/도로교통법/제96조 , https://example.com/case/대법원/2011다18802").map(\.text),
+                       ["https://example.com/법령/도로교통법/제96조", "https://example.com/case/대법원/2011다18802"])
     }
 }
