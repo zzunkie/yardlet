@@ -2761,6 +2761,14 @@
 "Other passwords" = "Other passwords";
 "No matching passwords" = "No matching passwords";
 "No site" = "No site";
+"Passwords for %@" = "Passwords for %@";
+"Two-factor codes for %@" = "Two-factor codes for %@";
+"No password is saved for this site. Search for one saved elsewhere." = "No password is saved for this site. Search for one saved elsewhere.";
+"No two-factor code is saved for this site. Search for one saved elsewhere." = "No two-factor code is saved for this site. Search for one saved elsewhere.";
+"Other two-factor codes" = "Other two-factor codes";
+"No matching two-factor codes" = "No matching two-factor codes";
+"%@ and %lld more" = "%@ and %lld more";
+"No username" = "No username";
 "Choose Another Code…" = "Choose Another Code…";
 "Save %@ as the site of “%@”?" = "Save %@ as the site of “%@”?";
 "Also save %@ in “%@”?" = "Also save %@ in “%@”?";

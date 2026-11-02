@@ -52,6 +52,10 @@ struct VaultItem: Codable, Identifiable, Equatable, Sendable {
         ([username] + (fields ?? []).map(\.value)).filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
+    /// What the key button's list and the code bar's menu show first (design §16): the username, as Chrome's list
+    /// at a field names a sign-in, or the name for an item with none.
+    var accountTitle: String { username.isEmpty ? name : username }
+
     /// Whether a search finds the item, as a password manager's search does: each word of `query` is in its name,
     /// username, another field's value or one of its sites, apart from case and accents. An empty search finds every item.
     func matches(_ query: String) -> Bool {

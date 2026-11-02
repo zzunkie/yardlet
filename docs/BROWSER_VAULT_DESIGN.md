@@ -527,8 +527,9 @@ Touch ID (the same convention as the Chrome and Safari password screens). A pass
   as Chrome's save bubble; CEF has no such UI, so Yardlet draws it).
 - **Key button in the address bar:** shows at the right of the address bar on a site's page while the vault holds any
   item (Chrome's key in the address bar shows only on sites with saved passwords; Yardlet's also leads to the rest).
-  Clicking it opens a list of that site's items over a search of every item (section 16), and choosing one fills the
-  current form for the person. A fill for the person happens right away whatever the step (the person clicked); only a
+  Clicking it opens a list of that site's items over a search of every item (section 16): its sign-ins when the
+  page's field is a sign-in's, its two-factor codes when it is a code field. Choosing one fills the current form for
+  the person. A fill for the person happens right away whatever the step (the person clicked); only a
   password chosen for a site it is not saved for waits for Touch ID (section 16).
 - **Page right-click menu** (the existing CEF menu → `NSMenu`): "Add to Vault…" (an item sheet with the current site
   filled in) and "Make a Vault Passkey" (for 2 minutes, the next passkey registration on this tab goes into the Yardlet
@@ -1140,6 +1141,15 @@ confirmed from Apple's own pages.
 | Another site's password | A confirmation before it fills: "You will use your example.com password on example.de. Only use your password if you trust example.de." [Use Password]; no offer to add the site ([strings](https://github.com/chromium/chromium/blob/main/chrome/app/generated_resources.grd)) | A phishing warning on pasting into a site not saved; "Add website and autofill" on verified low-risk sites ([help](https://support.1password.com/browser-autofill-security/), [release notes](https://releases.1password.com/b5x/stable/)) | "Site doesn't match … Verify you're on a trusted site before autofilling." with "Autofill and save this site" and "Autofill only"; saving adds the page's address once the fill went in ([strings](https://github.com/bitwarden/clients/blob/main/apps/browser/src/_locales/en/messages.json), [help](https://bitwarden.com/help/auto-fill-browser/)) |
 | Codes from the list | Not in that list | Copied from the pop-up's item, filled by autofill ([help](https://support.1password.com/one-time-passwords/)) | Filled from the inline menu, copied from the pop-up; the clipboard clears after five minutes by default ([help](https://bitwarden.com/help/auto-fill-browser/)) |
 
+The list at a field, read from public sources on 2026-11-02 (a Codex subagent read the vendors' pages and Chromium's
+source on `main`; the ordering and row text were read again in the source):
+
+| | Chrome | Safari, Passwords | 1Password |
+|---|---|---|---|
+| What a field lists | A sign-in field lists the site's sign-ins and passkeys; one-time codes come only from a separate generator for fields marked `one-time-code` ([otp_suggestion_generator.cc](https://github.com/chromium/chromium/blob/main/components/autofill/core/browser/suggestions/one_time_passwords/otp_suggestion_generator.cc)) | Verification codes go to fields marked `autocomplete=one-time-code` ([developer page](https://developer.apple.com/documentation/AuthenticationServices/securing-logins-with-icloud-keychain-verification-codes)); a sign-in field lets the person "choose your user name" ([guide](https://support.apple.com/en-euro/guide/safari/ibrwf71ba236/27.0/mac/27)) | "1Password automatically fills your one-time password" into the code field ([help](https://support.1password.com/one-time-passwords/)) |
+| A row | The username first ("No username" when empty), the password masked below; a sign-in saved for a related domain adds that site; a passkey says "Passkey" and where it is kept; a code says "Verification code" ([password_suggestion_generator.cc](https://github.com/chromium/chromium/blob/main/components/password_manager/core/browser/password_suggestion_generator.cc), [strings](https://github.com/chromium/chromium/blob/main/components/password_manager_strings.grdp)) | Unconfirmed | The item's title above its username ([picture](https://support.1password.com/img/browser-item-view.png)); titles are the person's to tell accounts apart ([help](https://support.1password.com/save-fill-passwords/)) |
+| Order | The preferred sign-in (the best match, used last) first, the rest by username (`a.main_text.value < b.main_text.value`) | Unconfirmed | Unconfirmed |
+
 ### 16.2 Decisions
 
 - **Settings → Passwords:** a search field under the switch narrows the codes, the codes with no site and the items
@@ -1148,9 +1158,29 @@ confirmed from Apple's own pages.
 - **The key button:** it shows on every site's page while the vault holds an item, not only where the site has one, so
   that a site with nothing saved still leads to the list (7 of the refusals above). It opens a list under the address
   field, as 1Password's and Bitwarden's toolbar buttons open theirs: the search field takes the keyboard, the site's own
-  items come first (each with what it holds), and a search adds every other item it finds, by name (each with its
-  sites, or "No site"). Arrow keys move through the rows, Return chooses one. The list is drawn by Yardlet, not the
-  page, and is never in a tool: an agent still names an item and gets a refusal it can act on (section 5.1).
+  items come first, and a search adds every other item it finds (each with its first site and how many more, or "No
+  site"). Arrow keys move through the rows, Return chooses one. The list is drawn by Yardlet, not the page, and is
+  never in a tool: an agent still names an item and gets a refusal it can act on (section 5.1).
+- **What the list holds at a field (2026-11-02):** the request was that a sign-in on a cloud console, one registrable
+  domain holding a root user, IAM users of several accounts, their two-factor codes and a shopping account, listed
+  every item at every field, named each by the site it was saved from, and showed whether a row was a password or a
+  code only in small grey text. As the list opens, the panel reads the field a fill would go to
+  (`VaultPageScripts.personFieldKind`, the focused field, else the page's first password, username or code field): a
+  field that looks like a code field (the code bar's rule, section 14.3) lists only the items with a code ("Two-factor
+  codes for …"); a password field, a username or email field, or another field of a form with a password field (an AWS
+  account ID) lists only the sign-ins, with a password or passkey ("Passwords for …"). A page with no field, or a field
+  that says neither, lists every item as before, and so does a page that does not answer within half a second. The
+  code bar's "Choose Another Code…" lists codes. Search keeps to the same kind. A choice fills as before; from a list
+  of codes it fills the code alone.
+- **A row (2026-11-02):** as Chrome's list at a field, the account first: the username, or the item's name when it has
+  none. Beside it, what choosing it fills ("Password", "Passkey", "Verification code"; where the field says neither,
+  everything the item holds), and a symbol for it. Below, what tells it apart from the site's other rows: its other
+  fields' values (an AWS account ID, section 17), then its name, which for an item saved from a page is the host it was
+  saved from (`signin.aws.amazon.com` beside `amazon.com`), or "No username". The code bar's menu names its codes the
+  same way. Yardlet keeps no notes; the name is the person's to change in the item sheet.
+- **Order (2026-11-02):** the site's rows come as Chrome orders a site's sign-ins: the item used last first, the rest by
+  account and then name. The item filled on a sign-in's earlier step still comes before them (section 17). A fill by
+  the person now counts as a use, as an agent's does, so the item the person used last is the one first next time.
 - **What a choice fills:** a code with no password fills the page's code field with its current code, and is copied
   when the page has none (marked concealed and cleared after 90 seconds, as Settings → Passwords copies one; section
   5.3). Any other item fills as before: the sign-in into the form, or the code when the focus is in a code field. A
@@ -1165,7 +1195,8 @@ confirmed from Apple's own pages.
   beside its others (`VaultCenter.link`), and from then on the site's own list, code bar and agents' fills take it. The
   bar stays while the page is on that site, since a filled code often sends the page on at once.
 - **The code bar:** one code fills at once as before, and its arrow has "Choose Another Code…"; with several codes the
-  menu lists them and ends in the same item. It opens the key button's list keeping to items with a code.
+  menu lists them, account first, and ends in the same item. It opens the key button's list keeping to items with a
+  code.
 - **Several items on one site:** the person chooses from the list as before. An agent's fill is unchanged: it names
   one item by its name or username (section 5.1).
 
@@ -1208,6 +1239,13 @@ relayed code works for the attacker only within its 30 seconds, and the agents' 
   sign-in page, which has no code field, a code was copied to the run's own pasteboard, marked concealed, and the panel
   said so; and the code bar of the code page left did not stay over the sign-in page (it did before the fix in section
   8.3). The panel PNGs (`vault-panel-link-bar`, `-code-copied`, `-code-bar`) were checked by eye.
+- The list at a field (2026-11-02): `VaultTests.testThePersonFindsAnyItemAndAPasswordGoesToAnotherSiteOnlyAfterTouchID`
+  (a sign-in field's list and a code field's list on one site, the item used last first, a search's other items by
+  account) and `VaultSettingsRenderingTests.testTheKeyButtonsListKeepsToTheFieldsKind` (light and dark, checked by
+  eye: `vault-picker-aws-passwords`, `-codes`, `-any`, `-search`, on a made-up cloud console sign-in with a root user,
+  one IAM user name in two accounts, their codes, an item with no username and shopping accounts). Real CEF QA
+  (`com.zzunkie.yardlet.vaultqa` run as above, 102 checks passed): the QA server's `/vault/otp` code field reads as a
+  code field, and `/vault/iam`'s account ID and username fields as a sign-in's.
 
 ## 17. Sign-ins in steps and fields beside the username (2026-10-31)
 
@@ -1258,11 +1296,12 @@ and its file of websites with shared credential backends was removed in 2024
   puts each into the page's empty field of the same id, name or label (Bitwarden's matching), for the person and the
   agent alike, and leaves a field the page filled already (an AWS sign-in address names its account).
 - **Telling accounts apart:** an item's account is its username and then its other fields' values (`dev ·
-  111122223333`). The settings list shows it beside the name, the key button's list in its second line, the update bar
-  names it ("Update the saved password of dev · 111122223333 for signin.aws?"), and an agent's refusal lists it. A
-  sign-in is an item's when the username is the same and none of the item's fields holds another value for a field the
-  form had, so one IAM user name in two accounts saves two items. An agent names one by its name, its username or
-  another of its values, such as the account ID.
+  111122223333`). The settings list shows it beside the name, the key button's list as the row's username with the
+  other fields' values under it (section 16), the update bar names it ("Update the saved password of dev ·
+  111122223333 for signin.aws?"), and an agent's refusal lists it. A sign-in is an item's when the username is the
+  same and none of the item's fields holds another value for a field the form had, so one IAM user name in two
+  accounts saves two items. An agent names one by its name, its username or another of its values, such as the
+  account ID.
 - **Items saved without a username:** Yardlet changes none of them by itself. When a sign-in with a username uses the
   password of an item that has none, the bar asks "Add dev to the saved password for signin.aws?", and Save gives the
   item the username and the form's other fields; an item that lacks only a field the form had is asked the same way.

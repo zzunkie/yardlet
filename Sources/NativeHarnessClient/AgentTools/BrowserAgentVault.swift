@@ -612,6 +612,38 @@ enum VaultPageScripts {
         """
     }
 
+    /// What the person's fill from the key button would put into the page (design §16), by its target field
+    /// (`personTarget`): `code` for a field that looks like a one-time code field, `signIn` for a password field, a
+    /// username or email field, or another field of a form with a password field; nothing for a page with no field or
+    /// a field that says neither, where the list offers every item.
+    static func personFieldKind(_ cdp: any BrowserAgentCDP, timeout: Duration) async -> VaultPickerKind? {
+        let script = """
+            (() => {
+              \(codeFieldTests)
+              const target = \(personTarget(codeOnly: false));
+              if (!(target instanceof HTMLInputElement)) return '';
+              if (looksLikeCodeField(target)) return 'code';
+              const autocomplete = (target.getAttribute('autocomplete') || '').toLowerCase().split(/\\s+/);
+              const visible = e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+              const scope = target.form || target.closest('form') || document;
+              const signIn = target.type === 'password' || (window.__yardletWasPassword || new WeakSet()).has(target)
+                || target.type === 'email' || autocomplete.some(t => ['username', 'email', 'current-password'].includes(t))
+                || (!isCodeField(target) && Array.from(scope.querySelectorAll('input[type=password]')).some(visible));
+              return signIn ? 'signIn' : '';
+            })()
+            """
+        guard let frame = try? await mainFrame(cdp, timeout: timeout),
+              let context = try? await vaultWorld(cdp, frame: frame.id, timeout: timeout),
+              let found = try? await cdp.send("Runtime.evaluate", [
+                  "expression": .string(script), "contextId": .integer(context), "returnByValue": .bool(true)
+              ], timeout: timeout) else { return nil }
+        switch found["result"]?["value"]?.stringValue {
+        case "code": return .code
+        case "signIn": return .signIn
+        default: return nil
+        }
+    }
+
     /// The person's fill with the target field as `this`: the code into a code field when the item has
     /// one, else the sign-in into the field's form.
     static let personFillFunction = """

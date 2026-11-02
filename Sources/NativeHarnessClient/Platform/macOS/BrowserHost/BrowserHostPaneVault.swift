@@ -569,22 +569,32 @@ extension BrowserHostPaneController {
             && address.flatMap(VaultSite.origin(of:)) != nil
     }
 
-    /// Opens the key button's list with an empty search; `codes` keeps it to two-factor codes (the code bar's
-    /// "Choose Another Code…").
+    /// Opens the key button's list with an empty search, offering what the page's field takes, as a password manager's
+    /// list at a field offers its sign-ins or its codes; `codes` keeps it to two-factor codes (the code bar's "Choose
+    /// Another Code…"). A page that does not answer in half a second gets every item.
     func openVaultPicker(codes: Bool = false) {
-        vaultPickerCodes = codes
         vaultPickerQuery = ""
-        isVaultPickerShown = true
+        guard !codes, let tab else {
+            vaultPickerKind = codes ? .code : nil
+            isVaultPickerShown = true
+            return
+        }
+        Task { @MainActor [weak self] in
+            let kind = await VaultPageScripts.personFieldKind(tab.devTools, timeout: .milliseconds(500))
+            guard let self, self.tab === tab else { return }
+            self.vaultPickerKind = kind
+            self.isVaultPickerShown = true
+        }
     }
 
     /// The person chose an item from the key button's list: it fills now, whatever the item's agent policy. A code
-    /// with no password, and any item chosen from the code bar's list, fills the current code into the page's code
-    /// field, or is copied when the page has none; any other item fills the sign-in, or the code from a code field.
+    /// with no password, and any item chosen from a list of codes, fills the current code into the page's code field,
+    /// or is copied when the page has none; any other item fills the sign-in, or the code from a code field.
     func fillForPerson(_ item: VaultItem) {
         // What the item holds as saved now decides what fills.
         let item = vault.items.first { $0.id == item.id } ?? item
-        let codes = vaultPickerCodes
-        vaultPickerCodes = false
+        let codes = vaultPickerKind == .code
+        vaultPickerKind = nil
         isVaultPickerShown = false
         vaultPickerQuery = ""
         if codes { vaultCodeOffer = nil }
@@ -636,6 +646,7 @@ extension BrowserHostPaneController {
                 return self.showVaultNotice(codeOnly ? L10n.string("This page has no code field to fill.")
                                                      : L10n.string("This page has no sign-in field to fill."))
             }
+            self.vault.noteUsed(grant.item.id)
             // A sign-in in steps asks for the password next: the key button's list puts this item first there.
             if !codeOnly, let site = VaultSite.suggestion(for: frame.origin, suffixes: self.vault.suffixes) {
                 self.signInStep = BrowserVaultSignInStep(tab: tab.id, site: site, username: grant.username ?? item.username,

@@ -106,10 +106,10 @@ final class BrowserHostPaneController {
     @ObservationIgnored var dismissedWalletPages: Set<String> = []
     var walletSaveOffer: BrowserWalletSaveOffer?
     @ObservationIgnored var isScanningForCodes = false
-    /// The key button's list (§16): whether it is open, whether it keeps to two-factor codes (opened from the code
+    /// The key button's list (§16): whether it is open, what it offers (the page's field's kind, or codes from the code
     /// bar), and what its search holds; and an item it filled on a site it is not saved for, offered that site.
     var isVaultPickerShown = false
-    var vaultPickerCodes = false
+    var vaultPickerKind: VaultPickerKind?
     var vaultPickerQuery = ""
     var vaultLinkOffer: BrowserVaultLinkOffer?
     /// Where a code goes when the page has no field for it (QA fixtures put their own, not the person's clipboard).
@@ -1516,7 +1516,7 @@ struct BrowserHostPane: View {
         }
         .popover(isPresented: $controller.isVaultPickerShown, arrowEdge: .bottom) {
             VaultPickerView(vault: vault, origin: controller.tab?.currentURL.flatMap(VaultSite.origin(of:)),
-                            codes: controller.vaultPickerCodes,
+                            kind: controller.vaultPickerKind,
                             first: controller.vaultItemFromEarlierStep(on: controller.tab?.currentURL),
                             query: $controller.vaultPickerQuery) { item in
                 controller.fillForPerson(item)
@@ -1685,8 +1685,9 @@ struct BrowserHostPane: View {
                 .fixedSize()
             } else {
                 Menu(L10n.string("Fill Code")) {
+                    // Account first, as the key button's list names them.
                     ForEach(offer.items) { item in
-                        Button(item.username.isEmpty ? item.name : "\(item.name) · \(item.username)") {
+                        Button([item.accountTitle, item.accountDetail].filter { !$0.isEmpty }.joined(separator: " · ")) {
                             controller.fillCodeForPerson(item)
                         }
                     }
