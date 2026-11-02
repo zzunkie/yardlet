@@ -10,6 +10,8 @@ struct ServiceAccountList: View {
     @Binding var newAccountServices: Set<LocalConnectorService>
 
     private var canSignIn: Bool { center.canSignIn(with: provider) }
+    /// What a new sign-in can turn on: not Google Analytics or Ads with Yardlet's own Google app.
+    private var signInServices: [LocalConnectorService] { center.signInServices(provider) }
 
     private var signInTitle: String {
         switch provider {
@@ -47,13 +49,16 @@ struct ServiceAccountList: View {
             }
             HStack(spacing: 10) {
                 ForEach(provider.services) { service in
+                    let available = signInServices.contains(service)
                     Toggle(service.shortName, isOn: Binding(
-                        get: { newAccountServices.contains(service) },
+                        get: { available && newAccountServices.contains(service) },
                         set: { on in
                             if on { newAccountServices.insert(service) } else { newAccountServices.remove(service) }
                         }))
                         .toggleStyle(.checkbox)
                         .font(.caption)
+                        .disabled(!available)
+                        .help(available ? "" : L10n.string("Connects only with a Google OAuth app of your own"))
                 }
                 Spacer(minLength: 6)
                 Button {
@@ -63,7 +68,7 @@ struct ServiceAccountList: View {
                 }
                 .parityProminentButton()
                 .controlSize(.small)
-                .disabled(!canSignIn || newAccountServices.isEmpty)
+                .disabled(!canSignIn || newAccountServices.intersection(signInServices).isEmpty)
             }
             if !canSignIn {
                 Text(provider == .google ? L10n.string("Save the Google OAuth app first.") : L10n.string("Save the Microsoft app first."))
@@ -155,6 +160,7 @@ struct ServiceAccountList: View {
         let record = account.record(service)
         let state = record.map { ConnectorSettingsState.make($0, in: center) }
         let on = record != nil
+        let available = signInServices.contains(service)
         return Button {
             Task { await center.setService(service, on: !on, account: account.id) }
         } label: {
@@ -181,8 +187,10 @@ struct ServiceAccountList: View {
         }
         .buttonStyle(.plain)
         .parityPointer()
-        .disabled(!canSignIn && !on)
-        .help(on ? L10n.format("Turn %@ off for this account", service.name) : L10n.format("Turn %@ on for this account", service.name))
+        .disabled(!on && !(canSignIn && available))
+        .help(on ? L10n.format("Turn %@ off for this account", service.name)
+              : available ? L10n.format("Turn %@ on for this account", service.name)
+              : L10n.string("Connects only with a Google OAuth app of your own"))
         .accessibilityLabel(service.name)
         .accessibilityValue(on ? (state?.word ?? L10n.string("On")) : L10n.string("Off"))
     }

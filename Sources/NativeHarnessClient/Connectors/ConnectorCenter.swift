@@ -379,6 +379,17 @@ final class ConnectorCenter: ConnectorToolProviding {
         }
     }
 
+    /// The services a new sign-in can turn on: every one of the provider's, except that Yardlet's
+    /// own Google app signs in for Gmail, Calendar, and Drive only (`GoogleOAuth.BuiltInApp.services`).
+    func signInServices(_ provider: ConnectorAccountProvider) -> [LocalConnectorService] {
+        switch provider {
+        case .google:
+            GoogleOAuth.services(provider.services, clientID: googleAppClientID ?? googleBuiltInApp?.clientID,
+                                 builtIn: googleBuiltInApp)
+        case .microsoft: provider.services
+        }
+    }
+
     /// The code GitHub's device page asks for, per connector, while its sign-in waits for it.
     private(set) var deviceCodes: [UUID: String] = [:]
 
@@ -419,6 +430,38 @@ final class ConnectorCenter: ConnectorToolProviding {
         ConnectorToolLabels.shared.update(connectors)
         GmailDraftReader.shared.set { [weak self] tool, arguments in
             await self?.gmailDraftPreview(tool: tool, arguments: arguments)
+        }
+        holdServicesYardletsGoogleAppDoesNotServe()
+    }
+
+    /// An account that turned Analytics or Ads on with Yardlet's own Google app, from before that
+    /// app was kept to Gmail, Calendar, and Drive, keeps those three as they are; Analytics and Ads
+    /// wait, without tools, for an app of the person's own, as after a sign-in (`settleAccount`).
+    /// Only such accounts' sign-ins are read.
+    private func holdServicesYardletsGoogleAppDoesNotServe() {
+        guard environment.googleBuiltInApp != nil else { return }
+        let accounts = googleAccounts.filter { account in
+            account.services.contains { record in
+                record.status != .notConnected
+                    && record.localService.map { !GoogleOAuth.BuiltInApp.services.contains($0) } == true
+            }
+        }.map(\.id)
+        guard !accounts.isEmpty else { return }
+        Task { [weak self] in
+            for accountID in accounts {
+                guard let stored = try? await self?.store({ try $0.load(accountID) }), let self,
+                      let account = account(accountID) else { continue }
+                let held = ownAppOnly(.google, stored, of: account.services.compactMap(\.localService))
+                guard !held.isEmpty else { continue }
+                let reason = GoogleSignInError.needsOwnApp(held).errorDescription
+                for record in account.services where record.localService.map(held.contains) == true {
+                    update(record.id) {
+                        $0.status = .signInRequired
+                        $0.toolsUpdatedAt = nil
+                    }
+                    failures[record.id] = reason
+                }
+            }
         }
     }
 
@@ -585,7 +628,7 @@ final class ConnectorCenter: ConnectorToolProviding {
     func addAccount(services: Set<LocalConnectorService>) -> ServiceAccount? {
         guard let provider = services.compactMap(\.accountProvider).first,
               services.allSatisfy({ $0.accountProvider == provider }) else { return nil }
-        let chosen = provider.services.filter(services.contains)
+        let chosen = signInServices(provider).filter(services.contains)
         var accountID: UUID?
         for service in chosen {
             // The first service's own ID is the account's sign-in item, as a Gmail account's always was.
@@ -613,7 +656,7 @@ final class ConnectorCenter: ConnectorToolProviding {
         connectors.append(record)
         let stored = try? await store { try $0.load(accountID) }
         if var stored, stored.kind == .oauth, stored.refreshToken != nil,
-           granted(account.provider, stored.scope, of: [service]).contains(service), account.address != nil {
+           granted(account.provider, stored, of: [service]).contains(service), account.address != nil {
             if account.provider == .microsoft {
                 // Microsoft issues a refreshed token for what the refresh names, so it names this service too.
                 stored.refreshScope = MicrosoftOAuth.scope(for: account.enabled.union([service]))
@@ -659,13 +702,26 @@ final class ConnectorCenter: ConnectorToolProviding {
         )
     }
 
-    /// The services whose permissions a granted scope string holds, as the provider lists them.
-    private func granted(_ provider: ConnectorAccountProvider, _ scope: String?,
+    /// The services whose permissions a sign-in holds and may use, as the provider lists them: a
+    /// sign-in with Yardlet's own Google app uses only the services that app signs in for, whatever
+    /// Google granted it before.
+    private func granted(_ provider: ConnectorAccountProvider, _ credential: ConnectorCredential?,
                          of services: [LocalConnectorService]) -> Set<LocalConnectorService> {
         switch provider {
-        case .google: GoogleOAuth.grantedServices(scope, of: services)
-        case .microsoft: MicrosoftOAuth.grantedServices(scope, of: services)
+        case .google:
+            GoogleOAuth.grantedServices(credential?.scope, of: GoogleOAuth.services(
+                services, clientID: credential?.clientID, builtIn: environment.googleBuiltInApp))
+        case .microsoft: MicrosoftOAuth.grantedServices(credential?.scope, of: services)
         }
+    }
+
+    /// The services of an account that its sign-in cannot serve whatever Google grants: those
+    /// Yardlet's own Google app does not sign in for, when the account signed in with it.
+    private func ownAppOnly(_ provider: ConnectorAccountProvider, _ credential: ConnectorCredential?,
+                            of services: [LocalConnectorService]) -> [LocalConnectorService] {
+        guard provider == .google else { return [] }
+        let served = GoogleOAuth.services(services, clientID: credential?.clientID, builtIn: environment.googleBuiltInApp)
+        return services.filter { !served.contains($0) }
     }
 
     private func replaceCredential(_ credential: ConnectorCredential, for id: UUID) async throws {
@@ -957,13 +1013,18 @@ final class ConnectorCenter: ConnectorToolProviding {
         do {
             var credential = try await store { try $0.load(accountID) }
             var signedIn: ConnectorCredential?
+            // A sign-in is asked for a service the stored one lacks only when a new one could serve it.
+            let wanted = Set(signInServices(provider)).intersection(services)
             if signingInAgain || credential?.kind != .oauth || credential?.refreshToken == nil
-                || granted(provider, credential?.scope, of: services).count < Set(services).count {
+                || !wanted.isSubset(of: granted(provider, credential, of: services)) {
                 signedIn = try await signIn(provider, account: accountID, address: address, services: services)
                 credential = signedIn
             }
-            let granted = granted(provider, credential?.scope, of: services)
-            guard !granted.isEmpty else { throw Self.scopeNotGranted(provider, services) }
+            let granted = granted(provider, credential, of: services)
+            guard !granted.isEmpty else {
+                let held = ownAppOnly(provider, credential, of: services)
+                throw held.isEmpty ? Self.scopeNotGranted(provider, services) : GoogleSignInError.needsOwnApp(held)
+            }
             // A new sign-in is read on a session of its own and replaces the stored one only once
             // it is the account's: until then the earlier sign-in serves the account's tools, and
             // one as another account leaves it as it was.
@@ -986,7 +1047,7 @@ final class ConnectorCenter: ConnectorToolProviding {
                 try await store { try $0.save(signedIn, for: accountID) }
                 await session.use(signedIn)
             }
-            try await settleAccount(accountID, provider: provider, address: identity, scope: credential?.scope)
+            try await settleAccount(accountID, provider: provider, address: identity, credential: credential)
         } catch let error where Self.isCancellation(error) {
             // A first sign-in the person cancelled, in Yardlet or on the provider's page, leaves no
             // account behind.
@@ -1041,7 +1102,8 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// Names a new account by its address, or hands its services and sign-in to the account that
     /// already has that address. Each service is connected when the sign-in holds its
     /// permissions, and says so otherwise.
-    private func settleAccount(_ accountID: UUID, provider: ConnectorAccountProvider, address: String, scope: String?) async throws {
+    private func settleAccount(_ accountID: UUID, provider: ConnectorAccountProvider, address: String,
+                               credential: ConnectorCredential?) async throws {
         let records = accountRecords(accountID)
         var target = accountID
         if records.allSatisfy({ $0.account == nil }),
@@ -1063,7 +1125,9 @@ final class ConnectorCenter: ConnectorToolProviding {
             }
             target = existing.id
         }
-        let granted = granted(provider, scope, of: accountRecords(target).compactMap(\.localService))
+        let services = accountRecords(target).compactMap(\.localService)
+        let granted = granted(provider, credential, of: services)
+        let held = ownAppOnly(provider, credential, of: services)
         for record in accountRecords(target) {
             guard let service = record.localService else { continue }
             let firstSignIn = record.account == nil
@@ -1071,9 +1135,12 @@ final class ConnectorCenter: ConnectorToolProviding {
                 $0.account = $0.account ?? address
                 $0.status = granted.contains(service) ? .connected : .signInRequired
                 if granted.contains(service) { $0.toolsUpdatedAt = environment.now() }
+                // Tools the sign-in cannot serve leave the list until an app of the person's own signs in.
+                if held.contains(service) { $0.toolsUpdatedAt = nil }
             }
-            failures[record.id] = granted.contains(service)
-                ? nil : (Self.scopeNotGranted(provider, [service]) as? LocalizedError)?.errorDescription
+            let reason: Error? = granted.contains(service) ? nil
+                : held.contains(service) ? GoogleSignInError.needsOwnApp(held) : Self.scopeNotGranted(provider, [service])
+            failures[record.id] = (reason as? LocalizedError)?.errorDescription
             // A second account's tools are named after it (`gmail_work_…`), the first keeps `gmail_…`.
             if firstSignIn, record.slug != service.slugBase {
                 let local = address.split(separator: "@").first.map(String.init) ?? address
@@ -1104,7 +1171,10 @@ final class ConnectorCenter: ConnectorToolProviding {
             } else {
                 throw GoogleSignInError.noApp
             }
-            plan = GoogleOAuth.plan(scope: GoogleOAuth.scope(for: services), endpoints: environment.google)
+            // Yardlet's own app asks only for the scopes of the services it signs in for.
+            let asked = GoogleOAuth.services(services, clientID: app.id, builtIn: environment.googleBuiltInApp)
+            guard !asked.isEmpty else { throw GoogleSignInError.needsOwnApp(services) }
+            plan = GoogleOAuth.plan(scope: GoogleOAuth.scope(for: asked), endpoints: environment.google)
             client = ConnectorOAuth.registeredClient(id: app.id, secret: app.secret, server: plan.server)
             parameters = GoogleOAuth.authorizationParameters(account: address)
         case .microsoft:
@@ -1142,7 +1212,7 @@ final class ConnectorCenter: ConnectorToolProviding {
         // Microsoft issues a refreshed token for the permissions a refresh names, so it names the
         // ones this sign-in asked for.
         if provider == .microsoft { credential.refreshScope = plan.scope }
-        guard !granted(provider, credential.scope, of: services).isEmpty else {
+        guard !granted(provider, credential, of: services).isEmpty else {
             throw Self.scopeNotGranted(provider, services)
         }
         return credential

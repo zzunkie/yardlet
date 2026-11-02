@@ -613,12 +613,18 @@ also provides tools that read and edit the structure inside Docs, Sheets and Sli
   build, else none (`noApp`). `canSignInWithGoogle` turns on the sign-in, add-account and connect buttons. An account's
   credentials keep the client it signed in with, so after the app changes, accounts already signed in keep refreshing
   with their own client (if the old client is deleted in Google Cloud, they become "Needs sign-in").
+- **What the app in the build signs in for:** Gmail, Calendar and Drive only (`GoogleOAuth.BuiltInApp.services`), so
+  its sign-ins ask for the six scopes of those services and nothing else. Google Analytics and Google Ads need an app of
+  the user's own. The rule follows the client ID (`GoogleOAuth.services(_:clientID:builtIn:)`): an app saved under the
+  same client ID as the build's counts as the build's. `ConnectorCenter.signInServices(.google)` is what a new sign-in
+  can turn on, and `addAccount` keeps to it.
 - **Google page:** when the build has an app and the user has none, there is one step, "Sign in with each Google
-  account", with service checkboxes and "Sign in with Google". Below it are a note about the warning shown for an app
-  Google has not verified and a "Use a Google OAuth app of your own…" link, which opens the seven steps (see "Your own
-  Google app"). Once the user saves an app, that app is used; removing it brings back the app in the build. When an app
-  is saved, the steps fold into one line ("Google OAuth app saved in your keychain · client ID", with Setup steps and
-  Change…).
+  account", with service checkboxes and "Sign in with Google". The Analytics and Ads checkboxes and chips cannot be
+  turned on there. Below it are a note about the warning shown for an app Google has not verified, a line saying that
+  Google Analytics and Google Ads connect only with a Google OAuth app of your own, and a "Use a Google OAuth app of
+  your own…" link, which opens the seven steps (see "Your own Google app"). Once the user saves an app, that app is
+  used; removing it brings back the app in the build. When an app is saved, the steps fold into one line ("Google OAuth
+  app saved in your keychain · client ID", with Setup steps and Change…).
 - **Google's policies (official docs):** an app that requests sensitive or restricted scopes shows the "Google hasn't
   verified this app" screen on each account's first sign-in until Google verifies it, and is limited to 100 new users.
   Refresh tokens of an external app whose publishing status is "Testing" expire after 7 days. "In production" has no
@@ -635,7 +641,16 @@ also provides tools that read and edit the structure inside Docs, Sheets and Sli
   `https://www.googleapis.com/calendar/v3/`, `…/drive/v3/`, `https://analyticsadmin.googleapis.com/v1beta/` and
   `https://googleads.googleapis.com/v26/`.
 - A new account starts with Gmail, Calendar and Drive (`LocalConnectorService.googleDefaults`). Analytics and Ads ask for
-  more, so their scopes are asked for only when the person turns them on for an account.
+  more, so their scopes are asked for only when the person turns them on for an account, and only with an app of the
+  person's own (see "Google app").
+- **Analytics and Ads on an account signed in with the app in the build** (turned on before that app was kept to
+  Gmail, Calendar and Drive): the account's Gmail, Calendar and Drive stay as they are. Analytics and Ads become
+  "Needs sign-in" with the reason "Yardlet's Google app does not sign in for Google Analytics. Save a Google OAuth app of
+  your own, then reconnect this account.", and their tools leave the list. The center checks this when it starts,
+  reading the sign-in only of accounts that have either service on, and again after every sign-in
+  (`settleAccount`), whatever scopes Google lists as granted from before (`include_granted_scopes`). Once an app of the
+  person's own is saved, Reconnect signs the account in with it, and Analytics and Ads connect. Turning Analytics or
+  Ads on for such an account while no such app is saved opens no sign-in and leaves the same reason.
 - **One account, one connector per service:** each service of a Google account is its own `ConnectorRecord` (the
   per-task switch, tool rows and reconnect are per service), and they share one sign-in:
   `ConnectorRecord.accountSignInID` (the Keychain item of that account's sign-in; saved as `googleAccountID`, its name
@@ -675,7 +690,8 @@ also provides tools that read and edit the structure inside Docs, Sheets and Sli
 - **Reconnect and remove:** reconnecting a Google service signs in the whole account again. Remove removes only that
   service, and "Remove this Google account" removes the whole account. Yardlet does not ask Google to revoke tokens.
 - Google account row: the address, five service chips (on or off, and state), and Reconnect and `…` when needed. Below
-  them is "What Yardlet asks Google for" (the scopes and their classes).
+  them is "What Yardlet asks Google for" (the scopes and their classes, and "your own app only" on the Analytics and
+  Ads scopes while new sign-ins use the app in the build).
 
 ### Scopes
 
@@ -691,6 +707,8 @@ also provides tools that read and edit the structure inside Docs, Sheets and Sli
 | Analytics, Ads | `userinfo.email` | non-sensitive | The address of an account that has none of Gmail, Calendar and Drive |
 | Ads | `adwords` | restricted | Google Ads has no narrower scope; Yardlet only lists customers and runs GAQL `SELECT`s |
 
+- The app in the build asks for the first six only. The last three are asked for only with an app of the person's own;
+  "What Yardlet asks Google for" marks them "your own app only" while new sign-ins use the app in the build.
 - Google's public lists do not name the class of `analytics.readonly`; the table follows the Cloud console's Data Access
   page, which is where to check it. Google's Ads guide lists `adwords` as restricted
   (developers.google.com/google-ads/api/docs/productionize/secure-credentials). It also covers changing campaigns and
@@ -883,8 +901,9 @@ none is sent:
 
 ### Your own Google app
 
-Someone whose build has no Google app, or who wants to use their own app, creates one OAuth app in Google Cloud. Google
-under "Set up in one go" in Settings → Connectors opens the steps below in order.
+Someone whose build has no Google app, who wants Google Analytics or Google Ads, or who wants to use their own app,
+creates one OAuth app in Google Cloud. Google under "Set up in one go" in Settings → Connectors opens the steps below in
+order.
 
 1. **New Project** (console.cloud.google.com/projectcreate): create a project.
 2. **Enable APIs**: on one page
@@ -1276,7 +1295,7 @@ Tests:
 | `Tests/NativeHarnessClientTests/ConnectorTests.swift` | The whole flow with fake authorization and MCP servers, names, the broker, loopback, refresh (retrying temporary failures, refresh token rotation, refresh by another copy), a call's time limit and what goes again, Keychain (opt-in `NHC_KEYCHAIN_LIVE=1`) |
 | `Tests/NativeHarnessClientTests/ConnectorDirectoryTests.swift` | The directory, discovery with real metadata shapes, your own client, public clients and the key in the address, the per-task switch, duplicate exclusion and standing in for Claude harness servers (`--settings`), settings parsing (fake values), import, the claude.ai environment, injection documents, tool rows |
 | `Tests/NativeHarnessClientTests/ConnectorLiveToolsTests.swift` | `list_changed` and list refresh with a fake MCP client, `tools/watch` over the socket, per-task changes in a real `ConnectorCenter`, clients that re-read and clients that do not, notification at the end of a turn, per-harness text |
-| `Tests/NativeHarnessClientTests/GmailConnectorTests.swift`, `GoogleCalendarDriveConnectorTests.swift`, `GoogleBuiltInAppTests.swift`, `GoogleAnalyticsAdsConnectorTests.swift` | With a fake Google (`FakeGoogle`, `FakeGoogleWorkspace`, `FakeAnalyticsAds`): sign-in, scopes, accounts, and the requests and asking for each tool; the app in the build; Analytics reports and Ads reading only |
+| `Tests/NativeHarnessClientTests/GmailConnectorTests.swift`, `GoogleCalendarDriveConnectorTests.swift`, `GoogleBuiltInAppTests.swift`, `GoogleAnalyticsAdsConnectorTests.swift` | With a fake Google (`FakeGoogle`, `FakeGoogleWorkspace`, `FakeAnalyticsAds`): sign-in, scopes, accounts, and the requests and asking for each tool; the app in the build and the six scopes it asks for; Analytics reports and Ads reading only |
 | `Tests/NativeHarnessClientTests/MicrosoftConnectorTests.swift` | With a fake identity platform and Graph (`FakeMicrosoft`): the public-client sign-in, a tenant of the person's app, rotated refresh tokens, the requests of mail, calendar, OneDrive and Teams tools, and a request card |
 | `Tests/NativeHarnessClientTests/AppleConnectorTests.swift` | The whole flow with a fake App Store Connect (checking the token signature on every request), a fake Mac store and a fake `mcpbridge`: team key and individual key tokens, the key only in Keychain, the request and reply for each tool, refused keys, asking only for writes and the card text, Mac permissions and calendars, reminders and contacts, finding, connecting, restarting and removing Xcode, stdio with a real shell process |
 | `Tests/NativeHarnessClientTests/GitHubDeviceSignInTests.swift` | Device code request, waiting, refusal and expiry, sending it to MCP as a bearer token |
