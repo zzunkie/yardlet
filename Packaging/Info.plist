@@ -69,6 +69,18 @@
                 <string>https</string>
             </array>
         </dict>
+        <!-- A connection link another Mac's Settings › Remote copies (docs/REMOTE_PROTOCOL.md §12): it opens
+             File › Connect to Mac… with the link filled in, and nothing pairs until the person chooses Connect. -->
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>Yardlet connection link</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>yardlet-remote</string>
+            </array>
+        </dict>
     </array>
     <key>CFBundleDocumentTypes</key>
     <array>

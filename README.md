@@ -47,6 +47,10 @@ several agents and accounts every day, and it is shared for anyone who doesn't h
   (see [Personal agents](docs/PERSONAL_AGENTS.md) for current limits).
 - **Scheduled tasks** that run while Yardlet is open, and session tools that let one task read,
   message or start another.
+- **Another Mac's tasks.** Pair Yardlet on another Mac once with a link from Settings › Remote, then
+  follow and drive that Mac's tasks in a window of their own (File › Connect to Mac…), on the same
+  network, over Tailscale or through the end-to-end encrypted relay. Sign-ins and sessions stay on
+  the Mac that runs them.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/review-dark.png">
@@ -111,7 +115,7 @@ Settings > General > Login Items & Extensions**. To remove Yardlet's own data as
 
 Yardlet has no analytics and no server that receives your work. Task metadata, drafts and reading
 caches live under `~/.yardlet`; agent sessions stay in each agent's own store. If you pair a phone
-with the phone remote and it is away from your network, its end-to-end encrypted messages pass
+or another Mac with the remote and it is away from your network, its end-to-end encrypted messages pass
 through Yardlet's relay at `relay.yardlet.app`, which cannot read them and stores none
 ([relay/README.md](relay/README.md)). Connector sign-ins are kept in the
 macOS Keychain, and connector calls go straight from your Mac to the service. What an agent reads

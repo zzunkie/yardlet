@@ -10,7 +10,8 @@ it streams), sends a message to a task, answers a pending approval (allow once o
 turn, and marks a task read. It also answers questions and plan reviews, starting a task (on a
 harness, model and worktree the phone picks), images, a line's output and diffs, suggested and queued messages,
 continuing a task a plan limit stopped under another account, answering a browser handoff, and push
-notifications. Nothing else: no settings, connectors, file browsing or terminals.
+notifications. Nothing else: no settings, connectors, file browsing or terminals. Yardlet on another
+computer is a client of the same protocol, as a phone is (§18).
 
 **One version.** The JSON messages of §2 and §4–§8 travel inside a Noise IK channel (§11–§16), over any
 path: the same network (port 47616 on every interface, found with Bonjour), Tailscale, or the Yardlet relay.
@@ -613,7 +614,8 @@ phone also keeps the direct addresses of §13.3.
 
 ## 12. v2 pairing
 
-Settings › Remote › "Pair a phone" shows a QR code holding:
+Settings › Remote › "Pair a device" shows a QR code holding the link below, and Copy link puts the same link on
+the clipboard for Yardlet on another computer (§18):
 
 ```
 yardlet-remote://pair?v=2&k=<Mac static public key>&s=<secret>&n=MacBook%20Pro&h=192.168.1.20:47616&h=100.64.12.34:47616&r=wss://relay.example.test&i=<room>
@@ -1348,3 +1350,32 @@ device's push key, associated data the UTF-8 bytes of `yardlet-push/1`, over the
   copied byte for byte into the phone app's tests): the public-domain cacophony vector for
   `Noise_IK_25519_ChaChaPoly_SHA256`, and a Yardlet vector with this protocol's prologue, a pairing
   payload, message 2's payload and a chunked transport message.
+
+## 18. Yardlet as a client
+
+Yardlet on another Mac follows a Mac's tasks over this protocol, unchanged: File › Connect to Mac… pairs with a
+link from §12 (copied on the host, pasted or opened as a `yardlet-remote` link; nothing pairs until the person
+chooses Connect), and each paired host opens in a window of its own. The host lists it among its devices with the
+`platform` `macos` it sends in message 1, and removes it as it removes a phone.
+
+- **What it does:** what a phone does (§4–§6, §15), on a larger screen: the host's sidebar and its marks, a task's
+  conversation in Yardlet's own timeline, a line's output and diffs when it opens (§15.8), every answer the host's
+  card gives (§15.19; one that leaves a rule behind is asked about once more), questions and plan reviews, the
+  queue's actions, the plan limit's actions, Stop, Pin and Archive, new tasks with the host's choices (§15.16), and
+  pictures and files (§15.14, §15.20). Settings, slash commands, changing an existing task's model, editing a
+  message, the side panels and scheduled tasks stay on the host.
+- **Paths:** as §11.4, without Bonjour: the direct addresses the host named last (kept across networks, at most 8)
+  at once, the relay 0.7 s later. While on the relay it tries the direct addresses again every minute. It pings
+  every 25 s, takes a connection that heard nothing for 60 s for gone, and connects again with backoff from 1 s to
+  30 s. After every new connection it reads the snapshot and its open conversations again.
+- **Order:** responses and events are applied in the order they arrive, so a subscription's page comes before the
+  changes to it (§5.3). It keeps at most 6 conversations subscribed, letting go of the one shown longest ago.
+- **What stays on the client:** `~/.yardlet/remote/hosts.json` (each host's name, static key, direct addresses,
+  relay room and device ID; removed with the last host) and one Keychain item per host for its private key. Nothing
+  listens and nothing runs while no host window is open. Removing a host sends `forgetDevice` (§15.6) when the host
+  can be reached and deletes both. Conversations stay in memory while the window is open.
+- **Notifications:** while a host's window is open, a task that starts waiting, finishes or fails posts a notification
+  named after the host, which opens the task there.
+- **Host settings:** Settings › Remote's "Keep this Mac awake on power" (off unless turned on) holds off idle sleep
+  while remote connections are allowed and the Mac is on power, so a device elsewhere can reach it.
+
