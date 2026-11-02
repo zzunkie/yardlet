@@ -295,6 +295,50 @@ final class SessionForkAndResetTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// A side chat opens on a task whose turn is still running, as in the Claude app, through Claude's
+    /// last text that calls no tool, so the fork holds no call without its result. With no such text
+    /// yet the side chat says so, and the task's own error stays clear.
+    func testAClaudeSideChatOpensOnARunningTaskThroughItsLastTextWithoutACall() async throws {
+        let fixture = try ForkFixture()
+        defer { fixture.cleanup() }
+        let id = try XCTUnwrap(fixture.parent.providerSessionID)
+        let requestID = UUID().uuidString.lowercased(), textID = UUID().uuidString.lowercased()
+        func row(_ type: String, _ uuid: String, after parent: String?, _ content: Any, in session: String? = nil) throws -> Data {
+            try JSONSerialization.data(withJSONObject: ["type": type, "sessionId": session ?? id, "uuid": uuid,
+                "parentUuid": parent.map { $0 as Any } ?? NSNull(), "message": ["role": type, "content": content]]) + Data([10])
+        }
+        let call = [["type": "tool_use", "id": "toolu_running", "name": "Bash", "input": ["command": "ls"]]]
+        let handle = try FileHandle(forWritingTo: fixture.parentFile)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: row("user", requestID, after: fixture.answerID, "Check the files")
+            + row("assistant", textID, after: requestID, [["type": "text", "text": "Checking them now"]])
+            + row("assistant", UUID().uuidString.lowercased(), after: textID, call))
+        try handle.close()
+        let model = try fixture.model(ForkRecordingAdapter())
+        try await model.store.updateSession(id: fixture.parent.id, status: .running)
+        let running = try XCTUnwrap(model.store.sessions.first)
+        let opened = await model.branch(running, placement: .sidePanel)
+        XCTAssertEqual(try XCTUnwrap(opened).inheritedContext?.nativeForkSource?.throughMessageID, textID)
+        XCTAssertNil(model.sideChatErrors[running.id])
+        await model.shutdown()
+
+        let firstTurn = try ForkFixture()
+        defer { firstTurn.cleanup() }
+        let firstID = try XCTUnwrap(firstTurn.parent.providerSessionID)
+        let firstRequestID = UUID().uuidString.lowercased()
+        try (row("user", firstRequestID, after: nil, "Check the files", in: firstID)
+            + row("assistant", UUID().uuidString.lowercased(), after: firstRequestID, call, in: firstID))
+            .write(to: firstTurn.parentFile)
+        let waiting = try firstTurn.model(ForkRecordingAdapter())
+        try await waiting.store.updateSession(id: firstTurn.parent.id, status: .running)
+        let unopened = await waiting.branch(try XCTUnwrap(waiting.store.sessions.first), placement: .sidePanel)
+        XCTAssertNil(unopened)
+        XCTAssertEqual(waiting.sideChatErrors[firstTurn.parent.id],
+                       L10n.string("Claude has not replied yet. Try again after its first reply."))
+        XCTAssertNil(waiting.errorBySessionID[firstTurn.parent.id])
+        await waiting.shutdown()
+    }
+
     func testMaterializedClaudeForkResumesItsOwnHistoryInsteadOfReforkingTheParent() async throws {
         let fixture = try ForkFixture()
         defer { fixture.cleanup() }

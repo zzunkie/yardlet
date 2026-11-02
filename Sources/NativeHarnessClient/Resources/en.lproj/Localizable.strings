@@ -1413,6 +1413,7 @@
 "Fork from here" = "Fork from here";
 "This turn cannot be forked." = "This turn cannot be forked.";
 "The saved conversation cannot be forked." = "The saved conversation cannot be forked.";
+"Claude has not replied yet. Try again after its first reply." = "Claude has not replied yet. Try again after its first reply.";
 "Start a new conversation from this chat." = "Start a new conversation from this chat.";
 "Start a new conversation without arguments or attachments." = "Start a new conversation without arguments or attachments.";
 "Stop the current turn before starting a new conversation." = "Stop the current turn before starting a new conversation.";
