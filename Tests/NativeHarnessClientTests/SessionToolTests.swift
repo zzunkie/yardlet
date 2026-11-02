@@ -651,7 +651,8 @@ final class SessionToolTests: XCTestCase {
     /// long, the paragraphs around the phrase; spaces, line breaks and Unicode composition may differ,
     /// nothing else. A phrase in different messages, or too short to tell, is refused with how to fix it,
     /// and only what the person typed is a source: not the agent's answer, a tool's output or another
-    /// task's message. `quote_latest_person_message` passes on the person's latest message whole.
+    /// task's message. `quote_latest_person_message` passes on whole the person's message that started the
+    /// turn, not one they sent into it after, which the result names instead.
     func testPersonQuotesPassOnTheMessageAPhraseIsFromAsThePersonTypedIt() async throws {
         let background = "Background: " + String(repeating: "The staging cluster keeps a copy of last week's data. ",
                                                   count: 12)
@@ -673,6 +674,8 @@ final class SessionToolTests: XCTestCase {
         builder.appendUser(typed.decomposedStringWithCanonicalMapping)
         builder.apply(.turnCompleted)
         builder.appendUser("ㄱㄱ")
+        builder.apply(.assistantMessageCompleted("Running them now."))
+        builder.appendUser("Also bump the version first.", joinsRunningTurn: true)
         builder.apply(.turnCompleted)
         let fixture = try Fixture(callerTranscript: builder.entries)
         defer { fixture.tearDown() }
@@ -704,8 +707,16 @@ final class SessionToolTests: XCTestCase {
         // A whole message goes as before, a short one too; the latest message goes whole, and once.
         let whole = try await quotes(["person_quotes": ["Run the retry tests on staging first.", "ㄱㄱ"]])
         XCTAssertEqual(whole.quotes, ["Run the retry tests on staging first.", "ㄱㄱ"])
+        // The latest is the message that started the turn; one sent into the turn after is named, not passed on,
+        // unless a phrase asks for it.
         let latest = try await quotes(["quote_latest_person_message": true, "person_quotes": ["ㄱㄱ", "로그인은 다 해놨어"]])
         XCTAssertEqual(latest.quotes, ["ㄱㄱ", typed])
+        XCTAssertTrue(latest.result.contains("\nNot quoted: the person sent a message after this turn began. To pass "
+            + "one on, give words from it in person_quotes.\n- sent "), latest.result)
+        XCTAssertTrue(latest.result.hasSuffix(": \"Also bump the version first.\""), latest.result)
+        let asked = try await quotes(["quote_latest_person_message": true, "person_quotes": ["bump the version"]])
+        XCTAssertEqual(asked.quotes, ["ㄱㄱ", "Also bump the version first."])
+        XCTAssertFalse(asked.result.contains("Not quoted"), asked.result)
         let delivered = await fixture.codexAdapter.codexSubmissions.count
 
         // Refused, and nothing sent: a phrase in two messages, one too short to tell, and words the person did not

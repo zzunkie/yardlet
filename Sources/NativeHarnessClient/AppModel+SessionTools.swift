@@ -310,30 +310,29 @@ extension AppModel: SessionToolHandling {
         guard target.id != caller.hostTaskID else {
             return .failure("Not sent: that is this task.", .invalidArguments, retry: .withChanges)
         }
-        let quotes: [TaskMessage.Quote]
+        let quoted: PersonQuotes
         switch personQuotes(arguments, caller: caller) {
-        case let .success(found): quotes = found
+        case let .success(found): quoted = found
         case let .failure(error): return error.result("Not sent")
         }
         if let reason = await sessionToolMessageApproval(to: target, message: message, caller: caller) {
             return .failure("Not sent: \(reason)", .refused, retry: .no)
         }
         let sender = TaskMessage(senderID: caller.hostTaskID.uuidString, senderName: caller.title, body: message,
-                                 quotes: quotes)
+                                 quotes: quoted.quotes)
         let title = target.title.isEmpty ? "" : " (\(target.title))"
-        let quoted = Self.quotedLines(quotes)
         switch await deliverTaskMessage(sender, to: target) {
         case .delivered:
-            return .text("Delivered to task \(target.id.uuidString)\(title); it started a turn on the message." + quoted)
+            return .text("Delivered to task \(target.id.uuidString)\(title); it started a turn on the message." + quoted.lines)
         case .steered:
             return .text("Delivered to task \(target.id.uuidString)\(title) while it works: it reads the message at its "
-                + "next step, in the same turn. wait_tasks or read_task show what it did." + quoted)
+                + "next step, in the same turn. wait_tasks or read_task show what it did." + quoted.lines)
         case .queued:
             return .text("Queued for task \(target.id.uuidString)\(title): it runs when that task's current turn "
-                + "ends. wait_tasks or read_task show what it did." + quoted)
+                + "ends. wait_tasks or read_task show what it did." + quoted.lines)
         case .afterStart:
             return .text("Queued for task \(target.id.uuidString)\(title): that task is queued, and this follows its "
-                + "first message when it starts. wait_tasks waits for it." + quoted)
+                + "first message when it starts. wait_tasks waits for it." + quoted.lines)
         case let .undelivered(reason):
             return .error("Not delivered to task \(target.id.uuidString)\(title): \(reason)")
         }
@@ -547,9 +546,9 @@ extension AppModel: SessionToolHandling {
             return .error("Not created: the prompt must be words, not a slash command, and at most "
                 + "\(SessionToolCatalog.maximumMessageLength) characters.")
         }
-        let quotes: [TaskMessage.Quote]
+        let quoted: PersonQuotes
         switch personQuotes(arguments, caller: caller) {
-        case let .success(found): quotes = found
+        case let .success(found): quoted = found
         case let .failure(error): return error.result("Not created")
         }
         let harness: HarnessKind
@@ -626,7 +625,7 @@ extension AppModel: SessionToolHandling {
         sessionTools.noteStarted(child.id, by: caller.id)
         accountAssignments.record(account.assignment, for: child.id)
         let first = TaskMessage(senderID: caller.hostTaskID.uuidString, senderName: caller.title, body: prompt,
-                                relation: .parent, quotes: quotes).text(in: .yardlet)
+                                relation: .parent, quotes: quoted.quotes).text(in: .yardlet)
         let wait = Self.bool(arguments["wait"]) == true
         let notifies = Self.bool(arguments["notify"]) == true
         guard admitSessionToolStart(child.id, callerID: caller.id) else {
@@ -636,11 +635,11 @@ extension AppModel: SessionToolHandling {
             })
             if notifies { watchForNotification(child.id, caller: caller) }
             let queued = "Queued task \(child.id.uuidString) (\(child.title)), \(createdTaskPlacement(parentTaskID, caller: caller)); it starts when "
-                + "there is room. wait_tasks with this id waits for it." + Self.quotedLines(quotes) + "\n"
+                + "there is room. wait_tasks with this id waits for it." + quoted.lines + "\n"
                 + Self.createdTaskLinkLine(child) + account.assignment.toolLine
             guard wait else { return .text(queued) }
             let ended = await waitForAny([child.id], timeout: caller.remaining)
-            return createdChildResult(child.id, ended: ended, quotes: quotes)
+            return createdChildResult(child.id, ended: ended, quoted: quoted)
         }
         sessionTools.starting.insert(child.id)
         await startHeldTask(child, text: first)
@@ -651,12 +650,12 @@ extension AppModel: SessionToolHandling {
         if notifies { watchForNotification(child.id, caller: caller) }
         guard wait else {
             return .text("Created task \(child.id.uuidString) (\(child.title)), \(createdTaskPlacement(parentTaskID, caller: caller)); its first "
-                + "turn is running. wait_tasks or read_task show its answer." + Self.quotedLines(quotes) + "\n"
+                + "turn is running. wait_tasks or read_task show its answer." + quoted.lines + "\n"
                 + Self.createdTaskLinkLine(child)
                 + account.assignment.toolLine)
         }
         let ended = await waitForAny([child.id], timeout: caller.remaining)
-        return createdChildResult(child.id, ended: ended, quotes: quotes)
+        return createdChildResult(child.id, ended: ended, quoted: quoted)
     }
 
     /// Where `create_task` nests the new task: under the caller, under the open task `parent_task_id`
@@ -691,12 +690,12 @@ extension AppModel: SessionToolHandling {
 
     /// What `create_task` with `wait` answers: the child's state and latest answer, and that it goes
     /// on when the call's time ran out first.
-    private func createdChildResult(_ id: UUID, ended: Bool, quotes: [TaskMessage.Quote]) -> AgentToolResult {
+    private func createdChildResult(_ id: UUID, ended: Bool, quoted: PersonQuotes) -> AgentToolResult {
         let note = ended ? "" : sessionTools.isQueued(id)
             ? " It is queued and starts when there is room; wait_tasks with this id waits for it."
             : " It is still running; wait_tasks with this id waits again."
         let account = accountAssignments.assignment(for: id).map { "\n" + $0.toolLine } ?? ""
-        return .text("Created task \(id.uuidString).\(note)\(Self.quotedLines(quotes))\(account)\n"
+        return .text("Created task \(id.uuidString).\(note)\(quoted.lines)\(account)\n"
             + SessionToolText.json(sessionToolOutcome(of: id)))
     }
 
@@ -1636,10 +1635,13 @@ extension AppModel: SessionToolHandling {
     // MARK: - The person's words
 
     /// The person's own messages a call passes on, from the calling task's conversation, with when they
-    /// sent each: the latest whole with `quote_latest_person_message`, and for each `person_quotes`
-    /// phrase the message that holds it (`personQuote`). Each part of a message goes once; an error
-    /// names the first phrase that places none.
-    private func personQuotes(_ arguments: JSONValue, caller: SessionToolCaller) -> Result<[TaskMessage.Quote], SessionToolError> {
+    /// sent each: with `quote_latest_person_message` the message that started the turn the call answers
+    /// (`turnOfCall`), or the person's latest before it when another task's message or a schedule started
+    /// it, whole; and for each `person_quotes` phrase the message that holds it (`personQuote`). What the
+    /// person sent after the turn began is not what the call answers: the latest leaves it out and the
+    /// result names it, for `person_quotes`. Each part of a message goes once; an error names the first
+    /// phrase that places none.
+    private func personQuotes(_ arguments: JSONValue, caller: SessionToolCaller) -> Result<PersonQuotes, SessionToolError> {
         let latest = Self.bool(arguments["quote_latest_person_message"]) == true
         var phrases: [String] = []
         if let value = arguments["person_quotes"], value != .null {
@@ -1653,23 +1655,37 @@ extension AppModel: SessionToolHandling {
             return .failure(SessionToolError(message: "at most \(SessionToolCatalog.maximumPersonQuotes) person_quotes.",
                                              failure: AgentToolFailure(.invalidArguments, retry: .withChanges)))
         }
-        guard latest || !phrases.isEmpty else { return .success([]) }
+        guard latest || !phrases.isEmpty else { return .success(PersonQuotes()) }
         guard let session = store.sessions.first(where: { $0.id == caller.hostTaskID }) else {
             return .failure(SessionToolError(message: "this task's conversation is not open in Yardlet.",
                                              failure: AgentToolFailure(.refused, retry: .no)))
         }
+        let time = ISO8601DateFormatter()
+        time.formatOptions = [.withInternetDateTime]
+        time.timeZone = .current
+        let turns = sessionToolPresentation(of: session).turns
         // Read as Unicode composes them (NFC), which draws and compares as typed, so a phrase matches
         // however either side composed its characters.
-        let messages = personMessages(in: session).map {
-            (text: $0.text.precomposedStringWithCanonicalMapping, sentAt: $0.sentAt)
+        let messages = Self.personMessages(in: turns).map {
+            PersonMessage(text: $0.text.precomposedStringWithCanonicalMapping, sentAt: $0.sentAt, turn: $0.turn,
+                          opensTurn: $0.opensTurn)
+        }
+        func whole(_ index: Int) -> TaskMessage.Quote {
+            TaskMessage.Quote(text: messages[index].text.trimmingCharacters(in: .whitespacesAndNewlines),
+                              sentAt: messages[index].sentAt.map(time.string(from:)))
         }
         var parts: [QuotedPart] = []
+        var later: [Int] = []
         if latest {
-            guard let message = messages.first else {
-                return .failure(SessionToolError(message: "the person has sent no message in this task.",
-                                                 failure: AgentToolFailure(.refused, retry: .withChanges)))
+            let turn = turnOfCall(caller, in: turns)
+            let isLater = { (message: PersonMessage) in message.turn > turn || (message.turn == turn && !message.opensTurn) }
+            later = messages.indices.filter { isLater(messages[$0]) }
+            guard let index = messages.firstIndex(where: { !isLater($0) }) else {
+                let message = later.isEmpty ? "the person has sent no message in this task."
+                    : "the person sent no message in this task before this turn began." + Self.laterLines(later.map(whole))
+                return .failure(SessionToolError(message: message, failure: AgentToolFailure(.refused, retry: .withChanges)))
             }
-            parts.append(QuotedPart(message: 0, range: message.text.startIndex..<message.text.endIndex))
+            parts.append(QuotedPart(message: index, range: messages[index].text.startIndex..<messages[index].text.endIndex))
         }
         for phrase in phrases {
             let part: QuotedPart
@@ -1681,14 +1697,33 @@ extension AppModel: SessionToolHandling {
             parts.removeAll { part.covers($0) }
             parts.append(part)
         }
-        let time = ISO8601DateFormatter()
-        time.formatOptions = [.withInternetDateTime]
-        time.timeZone = .current
-        return .success(parts.map { part in
-            let message = messages[part.message]
-            return TaskMessage.Quote(text: message.text[part.range].trimmingCharacters(in: .whitespacesAndNewlines),
-                                     sentAt: message.sentAt.map(time.string(from:)))
-        })
+        let quotes = parts.map { part in
+            TaskMessage.Quote(text: messages[part.message].text[part.range].trimmingCharacters(in: .whitespacesAndNewlines),
+                              sentAt: messages[part.message].sentAt.map(time.string(from:)))
+        }
+        let unquoted = later.filter { index in !parts.contains { $0.message == index } }
+        return .success(PersonQuotes(quotes: quotes, later: unquoted.map(whole)))
+    }
+
+    /// The person's words a call passes on, and those it left out.
+    struct PersonQuotes {
+        var quotes: [TaskMessage.Quote] = []
+        /// The person's messages, latest first, sent after the turn began whose request
+        /// `quote_latest_person_message` passed on, and not quoted otherwise.
+        var later: [TaskMessage.Quote] = []
+
+        /// The lines a result adds for them.
+        @MainActor var lines: String { AppModel.quotedLines(quotes) + AppModel.laterLines(later) }
+    }
+
+    /// The place in the host task's `turns` of the turn a call from `caller` answers: the latest, the one
+    /// running, for the task itself; for a subagent, the one that was running when it started, so that a
+    /// turn the person started after that is not taken for the one it answers. A subagent the turns'
+    /// start times cannot place answers the latest, as its task does.
+    private func turnOfCall(_ caller: SessionToolCaller, in turns: [ConversationTurn]) -> Int {
+        let latest = turns.count - 1
+        guard caller.id != caller.hostTaskID, let started = sessionTools.run(caller.id)?.startedAt else { return latest }
+        return turns.lastIndex { $0.timing.startedAt.map { $0 <= started } == true } ?? latest
     }
 
     /// Part of one of the person's messages, by its place in `personMessages` (latest first).
@@ -1769,24 +1804,50 @@ extension AppModel: SessionToolHandling {
     /// The lines a result adds for the person's messages it passed on: how each starts and when it was sent.
     private static func quotedLines(_ quotes: [TaskMessage.Quote]) -> String {
         quotes.map { quote in
-            let flat = quoteKey(quote.text)
-            let shown = flat.count > 80 ? String(flat.prefix(80)) + "…" : flat
-            return "\nQuoted the person's message" + (quote.sentAt.map { " sent \($0)" } ?? "") + ": \"\(shown)\""
+            "\nQuoted the person's message" + (quote.sentAt.map { " sent \($0)" } ?? "") + ": \"\(quoteStart(quote.text))\""
         }.joined()
     }
 
-    /// What the person typed in a task, latest first, with when they sent it: not another task's
-    /// message, a background command's notice or a schedule's.
-    func personMessages(in session: SessionRecord) -> [(text: String, sentAt: Date?)] {
-        var messages: [(text: String, sentAt: Date?)] = []
-        for turn in sessionToolPresentation(of: session).turns {
-            for item in turn.prompt + turn.work {
+    /// The lines a result adds for the person's messages after the turn began that it did not pass on,
+    /// oldest first: how each starts and when it was sent, and how to pass one on.
+    private static func laterLines(_ later: [TaskMessage.Quote]) -> String {
+        guard !later.isEmpty else { return "" }
+        return "\nNot quoted: the person sent " + (later.count == 1 ? "a message" : "\(later.count) messages")
+            + " after this turn began. To pass one on, give words from it in person_quotes."
+            + later.reversed().map { quote in
+                "\n- " + (quote.sentAt.map { "sent \($0): " } ?? "") + "\"\(quoteStart(quote.text))\""
+            }.joined()
+    }
+
+    /// How a quoted message starts, on one line: its first 80 characters.
+    private static func quoteStart(_ text: String) -> String {
+        let flat = quoteKey(text)
+        return flat.count > 80 ? String(flat.prefix(80)) + "…" : flat
+    }
+
+    /// One of the person's messages in a conversation (`personMessages`).
+    struct PersonMessage {
+        var text: String
+        var sentAt: Date?
+        /// Its turn's place in the conversation's turns.
+        var turn: Int
+        /// It is the turn's request, rather than a message the person sent into the running turn.
+        var opensTurn: Bool
+    }
+
+    /// What the person typed in a conversation, latest first, with when they sent it and the turn it is
+    /// in: not another task's message, a background command's notice or a schedule's.
+    static func personMessages(in turns: [ConversationTurn]) -> [PersonMessage] {
+        var messages: [PersonMessage] = []
+        for (index, turn) in turns.enumerated() {
+            for (item, opensTurn) in turn.prompt.map({ ($0, true) }) + turn.work.map({ ($0, false) }) {
                 guard case let .userMessage(text, _) = item.kind, item.taskMessage == nil,
                       item.backgroundTaskNotice == nil else { continue }
                 let sentAt: Date? = if case let .transcript(entry) = item.source { entry.createdAt } else {
                     turn.timing.startedAt
                 }
-                messages.append((text.replacingOccurrences(of: "\r\n", with: "\n"), sentAt))
+                messages.append(PersonMessage(text: text.replacingOccurrences(of: "\r\n", with: "\n"), sentAt: sentAt,
+                                              turn: index, opensTurn: opensTurn))
             }
         }
         return messages.reversed()
