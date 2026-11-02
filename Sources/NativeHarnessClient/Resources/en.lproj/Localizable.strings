@@ -2318,6 +2318,16 @@
 "Create" = "Create";
 "Delete scheduled task?" = "Delete scheduled task?";
 "“%@” will not run again. The tasks its runs started stay in the sidebar." = "“%@” will not run again. The tasks its runs started stay in the sidebar.";
+"Every %@" = "Every %@";
+"Ran %@" = "Ran %@";
+"No scheduled task will run." = "No scheduled task will run.";
+"Off scheduled tasks group" = "Off";
+"Completed scheduled tasks group" = "Completed";
+"%lld scheduled tasks" = "%lld scheduled tasks";
+"%@ options" = "%@ options";
+"Delete All…" = "Delete All…";
+"Delete %lld completed scheduled tasks?" = "Delete %lld completed scheduled tasks?";
+"They ran once and will not run again. The tasks their runs started stay in the sidebar." = "They ran once and will not run again. The tasks their runs started stay in the sidebar.";
 "Write what each run asks." = "Write what each run asks.";
 "Choose a harness." = "Choose a harness.";
 "Choose the task to continue." = "Choose the task to continue.";

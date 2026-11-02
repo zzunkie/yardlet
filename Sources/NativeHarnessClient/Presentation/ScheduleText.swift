@@ -91,6 +91,44 @@ enum ScheduleText {
         return L10n.format("Next run %@", moment(nextRun, relativeTo: now, calendar: calendar))
     }
 
+    /// How a schedule repeats in a few words, beside its next run in the list: "Every day", "Weekdays",
+    /// "Every Mon, Wed", "Every 3 hours", "Once".
+    static func cadence(_ trigger: ScheduleTrigger, calendar: Calendar = .autoupdatingCurrent) -> String {
+        switch trigger {
+        case .daily:
+            return L10n.string("Every day")
+        case let .weekly(days, _):
+            if days == ScheduleWeekday.everyDay { return L10n.string("Every day") }
+            if days == ScheduleWeekday.weekdays { return L10n.string("Weekdays") }
+            return L10n.format("Every %@", dayList(days, calendar: calendar))
+        case let .interval(hours, _, _):
+            return hours == 1 ? L10n.string("Every hour") : L10n.format("Every %lld hours", Int64(hours))
+        case .once:
+            return L10n.string("Once")
+        }
+    }
+
+    /// The line under a schedule's name in the list, as both apps' rows pair the next run with a readable
+    /// schedule: "Tomorrow at 9:00 AM · Every day". A schedule that is off says why, a paused one keeps
+    /// how it repeats, and a one-off that ran says when it ran.
+    static func row(_ schedule: ScheduledTask, nextRun: Date?, isStarting: Bool, now: Date = Date(),
+                    calendar: Calendar = .autoupdatingCurrent) -> String {
+        if isStarting { return L10n.string("Starting a run…") }
+        let cadence = cadence(schedule.trigger, calendar: calendar)
+        switch schedule.state.stopReason {
+        case .finished?:
+            return schedule.state.lastRunAt.map { L10n.format("Ran %@", moment($0, relativeTo: now, calendar: calendar)) }
+                ?? L10n.string("Ran once")
+        case .repeatedFailures?, .expired?:
+            return status(schedule, nextRun: nil, isStarting: false, now: now, calendar: calendar)
+        case nil:
+            break
+        }
+        guard schedule.isEnabled else { return "\(L10n.string("Paused")) · \(cadence)" }
+        guard let nextRun else { return "\(L10n.string("No next run")) · \(cadence)" }
+        return "\(moment(nextRun, relativeTo: now, calendar: calendar)) · \(cadence)"
+    }
+
     static func lastRun(_ schedule: ScheduledTask, now: Date = Date(), calendar: Calendar = .autoupdatingCurrent) -> String? {
         schedule.state.lastRunAt.map { lastRun(at: $0, now: now, calendar: calendar) }
     }

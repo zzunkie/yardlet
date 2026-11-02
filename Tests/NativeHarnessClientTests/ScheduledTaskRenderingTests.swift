@@ -134,6 +134,8 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         let state = ScheduledTasksWindowState()
         state.isShowing = true
         state.selection = morning.id
+        // Both folded groups open, so the drawing shows each kind of row.
+        state.expandedSections = [.off, .finished]
         return Fixture(model: model, state: state, project: project, releaseTask: releaseTask,
                        schedules: ["morning": morning, "release": release, "nightly": nightly],
                        switchedRun: (yesterdayRun, switched))
@@ -186,7 +188,14 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         XCTAssertTrue(shows(window, "Morning check"))
         XCTAssertTrue(shows(window, L10n.string("Paused")), "Branch cleanup is paused")
         XCTAssertTrue(shows(window, L10n.format("Turned off after %lld failed starts", Int64(3))))
-        XCTAssertTrue(shows(window, L10n.string("Ran once")))
+        let ran = try XCTUnwrap(window.first { $0.label == "One-off migration check" })
+        XCTAssertTrue(ran.value.contains(L10n.format("Ran %@", "").trimmingCharacters(in: .whitespaces)), ran.description)
+        let paused = try XCTUnwrap(window.first { $0.label == "Branch cleanup" })
+        XCTAssertTrue(paused.value.contains("\(L10n.string("Paused")) · \(L10n.string("Every day"))"), paused.description)
+        let morning = try XCTUnwrap(window.first { $0.label == "Morning check" })
+        XCTAssertTrue(morning.value.contains(" · \(L10n.string("Every day"))"), "The next run and how it repeats: \(morning)")
+        let heartbeat = try XCTUnwrap(window.first { $0.label == "Release heartbeat" })
+        XCTAssertTrue(heartbeat.value.contains(L10n.string("Each run continues a task.")), heartbeat.description)
         XCTAssertTrue(shows(window, L10n.string("Skipped: the previous run is still going")))
         XCTAssertTrue(shows(window, L10n.string("Missed, ran late")))
         XCTAssertTrue(shows(window, L10n.format("Switched to %@: %@ was nearly out of its limit",
@@ -222,7 +231,7 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         let center = fixture.model.scheduledTasks
         let list = try render("list-session-schedules", size: NSSize(width: 280, height: 820)) { _ in
             ScheduledTaskList(schedules: center.schedules, sessionJobs: jobs, selection: nil, startingIDs: [],
-                              now: now, nextRun: { center.nextRun(of: $0) }, onBack: {},
+                              now: now, nextRun: { center.nextRun(of: $0) }, expandedSections: .constant([]), onBack: {},
                               actions: ScheduledTaskActions())
         }
         XCTAssertTrue(shows(list, L10n.string("Session schedules")))
@@ -230,6 +239,11 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         XCTAssertTrue(shows(list, L10n.format("Every %lld minutes", Int64(15))))
         XCTAssertTrue(shows(list, L10n.string("Loop wakeup")))
         XCTAssertTrue(shows(list, "Morning check"), "Yardlet's own schedules stay above")
+        XCTAssertFalse(shows(list, "Branch cleanup"), "A paused schedule waits in the folded group")
+        let labels = list.map(\.label)
+        let sessionHeader = try XCTUnwrap(labels.firstIndex(of: L10n.string("Session schedules")))
+        let offHeader = try XCTUnwrap(labels.firstIndex(of: L10n.string("Off scheduled tasks group")))
+        XCTAssertLessThan(sessionHeader, offHeader, "Session schedules run, so they come before the folded groups")
 
         fixture.state.selection = fixture.schedules["release"]?.id
         let release = try render("detail-imported-continuing", size: NSSize(width: 900, height: 640), appearances: [.light]) { _ in
@@ -248,6 +262,90 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         }
         XCTAssertTrue(shows(empty, L10n.string("Import Schedules from Other Apps…")))
         await fixture.model.shutdown()
+    }
+
+    /// Many schedules, as agents leave them: recurring ones, one-offs still ahead, one-offs that ran, and a few off.
+    private func manySchedules(now: Date, calendar: Calendar) -> [ScheduledTask] {
+        let today = calendar.startOfDay(for: now)
+        func at(_ days: Int, _ hour: Int, _ minute: Int = 0) -> Date {
+            calendar.date(byAdding: .day, value: days, to: today)!.addingTimeInterval(Double(hour * 3_600 + minute * 60))
+        }
+        let target = UUID()
+        func schedule(_ name: String, _ trigger: ScheduleTrigger, _ harness: HarnessKind = .claudeCode,
+                      continues: Bool = false) -> ScheduledTask {
+            ScheduledTask(name: name, prompt: "\(name).", trigger: trigger, destination: ScheduleDestination(
+                mode: continues ? .continueTask : .newTask, harness: harness, workspacePath: continues ? nil : "/tmp/yardlet",
+                targetTaskID: continues ? target : nil), createdAt: now)
+        }
+        var schedules = [
+            schedule("Morning check", .daily(ScheduleTime(hour: 9, minute: 0))),
+            schedule("Standup notes", .weekly(days: ScheduleWeekday.weekdays, time: ScheduleTime(hour: 9, minute: 30)), .codex),
+            schedule("Release heartbeat", .interval(hours: 2, anchor: at(0, 8), days: []), .codex, continues: true),
+            schedule("Weekly instructions review", .weekly(days: [.monday], time: ScheduleTime(hour: 10, minute: 0))),
+            schedule("Inbox triage", .weekly(days: ScheduleWeekday.weekdays, time: ScheduleTime(hour: 8, minute: 0)),
+                     continues: true),
+        ]
+        for (index, pr) in [377, 381, 384, 386].enumerated() {
+            schedules.append(schedule("Check CI on PR #\(pr)", .once(at(0, 11 + index, 15)), continues: true))
+        }
+        schedules.append(schedule("Follow up on the release notes", .once(at(1, 14)), .codex))
+        schedules.append(schedule("Look at the nightly crash report", .once(at(3, 9))))
+        for (index, pr) in (340...357).enumerated() {
+            let moment = at(-1 - index / 4, 10 + index % 4 * 2)
+            var ran = schedule("Check CI on PR #\(pr)", .once(moment), continues: index % 3 != 0)
+            ran.isEnabled = false
+            ran.state.stopReason = .finished
+            ran.state.lastRunAt = moment
+            ran.state.lastSlot = moment
+            schedules.append(ran)
+        }
+        var paused = schedule("Branch cleanup", .daily(ScheduleTime(hour: 18, minute: 0)), .openCode)
+        paused.isEnabled = false
+        var failing = schedule("Nightly sweep", .daily(ScheduleTime(hour: 23, minute: 0)))
+        failing.isEnabled = false
+        failing.state.stopReason = .repeatedFailures
+        var expired = schedule("Check the migration finished", .once(at(-9, 14)))
+        expired.isEnabled = false
+        expired.state.stopReason = .expired
+        schedules += [paused, failing, expired]
+        // Made in no particular order, as the file keeps them.
+        var generator = SystemRandomNumberGenerator()
+        return schedules.shuffled(using: &generator)
+    }
+
+    func testManySchedulesPutTheOnesThatRunFirstAndFoldTheRest() async throws {
+        let calendar = Calendar.autoupdatingCurrent
+        let now = calendar.startOfDay(for: Date()).addingTimeInterval(10.5 * 3_600)
+        let schedules = manySchedules(now: now, calendar: calendar)
+        let center = ScheduledTaskCenter(repository: InMemoryScheduledTaskRepository(snapshot: ScheduleSnapshot(schedules: schedules)))
+        center.now = { now }
+        func list(_ expanded: Set<ScheduleListSections.Section>, selection: UUID? = nil) -> some View {
+            ScheduledTaskList(schedules: center.schedules, selection: selection, startingIDs: [], now: now,
+                              nextRun: { center.nextRun(of: $0) }, expandedSections: .constant(expanded), onBack: {},
+                              actions: ScheduledTaskActions())
+                .background(ParityTheme.sidebar)
+        }
+        let folded = try render("list-many", size: NSSize(width: 280, height: 820)) { _ in list([]) }
+        let rows = folded.map(\.label).filter { label in schedules.contains { $0.name == label } }
+        XCTAssertEqual(rows.prefix(5), ["Check CI on PR #377", "Release heartbeat", "Check CI on PR #381",
+                                        "Check CI on PR #384", "Check CI on PR #386"], "Soonest first, whatever repeats")
+        XCTAssertEqual(rows.count, 11, "Only the schedules that will run")
+        XCTAssertFalse(shows(folded, "Check CI on PR #340"), "One-offs that ran are folded away")
+        XCTAssertFalse(shows(folded, "Branch cleanup"), "So are the schedules that are off")
+        let completed = try XCTUnwrap(folded.first { $0.label == L10n.string("Completed scheduled tasks group") })
+        XCTAssertTrue(completed.value.contains(L10n.format("%lld scheduled tasks", Int64(18))), completed.description)
+        XCTAssertTrue(completed.value.contains(L10n.string("Collapsed")), completed.description)
+        let off = try XCTUnwrap(folded.first { $0.label == L10n.string("Off scheduled tasks group") })
+        XCTAssertTrue(off.value.contains(L10n.format("%lld scheduled tasks", Int64(3))), off.description)
+        let labels = folded.map(\.label)
+        XCTAssertLessThan(try XCTUnwrap(labels.firstIndex(of: off.label)), try XCTUnwrap(labels.firstIndex(of: completed.label)))
+
+        let open = try render("list-many-open", size: NSSize(width: 280, height: 1_900)) { _ in list([.off, .finished]) }
+        XCTAssertTrue(shows(open, "Branch cleanup"))
+        XCTAssertTrue(shows(open, "Check CI on PR #340"))
+        let openLabels = open.map(\.label)
+        XCTAssertLessThan(try XCTUnwrap(openLabels.firstIndex(of: "Check CI on PR #340")),
+                          try XCTUnwrap(openLabels.firstIndex(of: "Check CI on PR #357")), "The latest one that ran first")
     }
 
     func testTheSidebarEntrySitsUnderNewTaskAndRunsWearAClock() throws {

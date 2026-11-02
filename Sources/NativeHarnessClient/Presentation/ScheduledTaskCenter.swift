@@ -89,8 +89,10 @@ final class ScheduledTaskCenter {
         persist()
     }
 
-    func delete(_ id: UUID) {
-        schedules.removeAll { $0.id == id }
+    /// Deletes schedules; the tasks their runs started stay.
+    func delete(_ ids: Set<UUID>) {
+        guard schedules.contains(where: { ids.contains($0.id) }) else { return }
+        schedules.removeAll { ids.contains($0.id) }
         persist()
     }
 

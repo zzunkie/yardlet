@@ -1207,7 +1207,8 @@ and deleting schedules stay on the Mac.
      "lastRun": {"at": 1792158000000, "outcome": "started", "taskId": "4C1F…", "line": "Last run today at 9:00 AM"}}]}
   ```
 
-  In the order of the Mac's list, at most 200. `when` is the Mac's own line for when it runs and `status` its status
+  In the order of the Mac's list, at most 200: the ones that will run, soonest first, then those that are off, then
+  the one-offs that ran, the latest first. `when` is the Mac's own line for when it runs and `status` its status
   line (absent when it shows none), both in the Mac's language as the Mac shows them. `enabled` is false while it is
   paused, and also once it stopped itself (a one-off that ran or expired, repeated failed starts), which `status`
   then says. `canResume: true` on one that is off and that Resume turns on again: paused, or a repeating one that

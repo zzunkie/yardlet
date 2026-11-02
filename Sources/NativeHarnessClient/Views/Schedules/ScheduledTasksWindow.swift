@@ -15,10 +15,14 @@ final class ScheduledTasksWindowState {
     var selection: UUID?
     var editor: EditorRequest?
     var pendingDelete: UUID?
+    /// The one-offs that ran, which "Delete All…" asks about.
+    var pendingDeleteCompleted: Set<UUID>?
     var isImporting = false
     var importListing: ScheduleImportListing?
+    /// The list's folded groups that are open, kept while the window leaves the list and comes back.
+    var expandedSections: Set<ScheduleListSections.Section> = []
 
-    var hasModal: Bool { editor != nil || pendingDelete != nil || isImporting }
+    var hasModal: Bool { editor != nil || pendingDelete != nil || pendingDeleteCompleted != nil || isImporting }
 }
 
 /// The sidebar's list for the window's schedules.
@@ -37,6 +41,7 @@ struct ScheduledTasksSidebar: View {
             startingIDs: center.startingIDs,
             now: center.displayNow,
             nextRun: { center.nextRun(of: $0) },
+            expandedSections: $state.expandedSections,
             onBack: onBack,
             actions: actions)
     }
@@ -107,8 +112,8 @@ struct ScheduledTasksMain: View {
             set: { if !$0 { state.pendingDelete = nil } })) {
             Button(L10n.string("Delete"), role: .destructive) {
                 if let id = state.pendingDelete {
-                    center.delete(id)
-                    if state.selection == id { state.selection = center.schedules.first?.id }
+                    center.delete([id])
+                    if state.selection == id { state.selection = center.sections.all.first?.id }
                 }
                 state.pendingDelete = nil
             }
@@ -116,6 +121,24 @@ struct ScheduledTasksMain: View {
         } message: {
             Text(L10n.format("“%@” will not run again. The tasks its runs started stay in the sidebar.",
                              state.pendingDelete.flatMap(center.schedule(id:))?.name ?? ""))
+        }
+        .alert(L10n.format("Delete %lld completed scheduled tasks?", Int64(state.pendingDeleteCompleted?.count ?? 0)),
+               isPresented: Binding(
+                get: { state.pendingDeleteCompleted != nil },
+                set: { if !$0 { state.pendingDeleteCompleted = nil } })) {
+            Button(L10n.string("Delete"), role: .destructive) {
+                if let ids = state.pendingDeleteCompleted {
+                    // Only those that are still done: one given a new time meanwhile runs again and stays.
+                    center.delete(ids.filter { center.schedule(id: $0).map(ScheduleListSections.section(of:)) == .finished })
+                    if let selection = state.selection, center.schedule(id: selection) == nil {
+                        state.selection = center.sections.all.first?.id
+                    }
+                }
+                state.pendingDeleteCompleted = nil
+            }
+            Button(L10n.string("Cancel"), role: .cancel) { state.pendingDeleteCompleted = nil }
+        } message: {
+            Text(L10n.string("They ran once and will not run again. The tasks their runs started stay in the sidebar."))
         }
     }
 
@@ -159,6 +182,9 @@ extension ScheduledTasksWindowState {
                 self?.editor = EditorRequest(draft: ScheduleDraft(editing: schedule, now: center.now()), existing: schedule)
             },
             delete: { [weak self] id in self?.pendingDelete = id },
+            deleteCompleted: { [weak self] in
+                self?.pendingDeleteCompleted = Set(center.sections.finished.map(\.id))
+            },
             openTask: openTask)
     }
 }
