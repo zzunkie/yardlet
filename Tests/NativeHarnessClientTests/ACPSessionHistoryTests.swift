@@ -27,6 +27,11 @@ final class ACPSessionHistoryTests: XCTestCase {
                        try Date("2026-11-01T08:00:00Z", strategy: .iso8601).addingTimeInterval(0.25))
         XCTAssertEqual(page.conversations.first?.workspaceURL, workspace)
         XCTAssertEqual(page.nextCursor, "page-2")
+        // An agent that lists every folder's sessions (`agy acp` does) still shows only this folder's.
+        let everyFolder = ScriptedACPAgent(sessions: agent.sessions, replays: [:], listsEveryFolder: true)
+        let unfiltered = try await ACPSessionHistory(makeTransport: { _ in everyFolder.transport() }, timeout: .seconds(10))
+            .sessions(of: .kimiCode, executableURL: URL(filePath: "/tmp/kimi"), connection: kimi, in: workspace, cursor: nil)
+        XCTAssertEqual(unfiltered.conversations.map(\.providerSessionID), ["s-2", "s-1"])
 
         let entries = try await history.conversation(of: .kimiCode, executableURL: URL(filePath: "/tmp/kimi"),
             connection: kimi, providerSessionID: "s-2", workspaceURL: workspace)
@@ -55,7 +60,7 @@ final class ACPSessionHistoryTests: XCTestCase {
         let methods = await connections[0].methods + connections[1].methods
         XCTAssertEqual(methods, ["initialize", "session/list", "initialize", "session/load"])
         let list = await connections[0].sent.first { $0["method"]?.stringValue == "session/list" }
-        XCTAssertEqual(list?["params"]?["cwd"]?.stringValue, workspace.path(percentEncoded: false))
+        XCTAssertEqual(list?["params"]?["cwd"]?.stringValue, "/tmp/acp-history-project", "The folder as `pwd` gives it")
         XCTAssertEqual(list?["params"]?["cursor"]?.stringValue, "page-1")
         let load = await connections[1].sent.first { $0["method"]?.stringValue == "session/load" }
         XCTAssertEqual(load?["params"]?["mcpServers"], .array([]))
@@ -123,7 +128,9 @@ final class ACPSessionHistoryTests: XCTestCase {
     // MARK: - Fixtures
 
     static func session(_ id: String, _ title: String?, in folder: URL, updatedAt: String?) -> JSONValue {
-        var session: [String: JSONValue] = ["sessionId": .string(id), "cwd": .string(folder.path(percentEncoded: false))]
+        // The folder as a CLI started there saves it: its real path, without a trailing slash.
+        let saved = CanonicalPath.resolve(ACPProtocol.cwd(folder)) ?? ACPProtocol.cwd(folder)
+        var session: [String: JSONValue] = ["sessionId": .string(id), "cwd": .string(saved)]
         if let title { session["title"] = .string(title) }
         if let updatedAt { session["updatedAt"] = .string(updatedAt) }
         return .object(session)
@@ -165,13 +172,17 @@ final class ScriptedACPAgent: @unchecked Sendable {
     let sessions: [JSONValue]
     let replays: [String: [JSONValue]]
     let listsSessions: Bool
+    /// Lists every session whatever `cwd` asks, as `agy acp` does.
+    let listsEveryFolder: Bool
     private let lock = NSLock()
     private var made: [Connection] = []
 
-    init(sessions: [JSONValue], replays: [String: [JSONValue]], listsSessions: Bool = true) {
+    init(sessions: [JSONValue], replays: [String: [JSONValue]], listsSessions: Bool = true,
+         listsEveryFolder: Bool = false) {
         self.sessions = sessions
         self.replays = replays
         self.listsSessions = listsSessions
+        self.listsEveryFolder = listsEveryFolder
     }
 
     var connections: [Connection] { lock.withLock { made } }
@@ -213,7 +224,10 @@ final class ScriptedACPAgent: @unchecked Sendable {
                 answer(id, .object(["protocolVersion": .integer(1), "agentCapabilities": .object([
                     "loadSession": .bool(true), "sessionCapabilities": .object(sessionCapabilities)])]))
             case "session/list":
-                answer(id, .object(["sessions": .array(agent.sessions), "nextCursor": .string("page-2")]))
+                // As OpenCode does, a `cwd` lists the sessions saved in exactly that folder.
+                let folder = agent.listsEveryFolder ? nil : value["params"]?["cwd"]?.stringValue
+                let sessions = agent.sessions.filter { folder == nil || $0["cwd"]?.stringValue == folder }
+                answer(id, .object(["sessions": .array(sessions), "nextCursor": .string("page-2")]))
             case "session/load":
                 let sessionID = value["params"]?["sessionId"]?.stringValue ?? ""
                 write(.object(["jsonrpc": .string("2.0"), "id": .string("agent-request"),

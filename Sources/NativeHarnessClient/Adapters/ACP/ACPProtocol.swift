@@ -74,9 +74,11 @@ enum ACPProtocol {
     }
 
     /// The agent's saved sessions in `workspaceURL`, a page at a time from `cursor`
-    /// (`sessionCapabilities.list`).
+    /// (`sessionCapabilities.list`). The folder is its real path, as `getcwd` gives it to a CLI
+    /// started there and as the CLI saves a session started in a terminal (`/private/tmp/…` for
+    /// `/tmp/…`, links resolved), since the agent compares the two character for character.
     static func listSessions(id: Int64, workspaceURL: URL, cursor: String? = nil) -> JSONValue {
-        var params: [String: JSONValue] = ["cwd": .string(workspaceURL.standardizedFileURL.path(percentEncoded: false))]
+        var params: [String: JSONValue] = ["cwd": .string(CanonicalPath.resolve(cwd(workspaceURL)) ?? cwd(workspaceURL))]
         if let cursor { params["cursor"] = .string(cursor) }
         return request(id: id, method: "session/list", params: .object(params))
     }
@@ -149,9 +151,17 @@ enum ACPProtocol {
         ])
     }
 
+    /// A folder as ACP's `cwd`: its absolute path without a trailing slash, as a shell's `pwd` gives
+    /// it. An agent can compare it with the folder it saved a session in character for character
+    /// (OpenCode's `session/list` lists nothing for `/project/` when its sessions are in `/project`).
+    static func cwd(_ folder: URL) -> String {
+        let path = folder.standardizedFileURL.path(percentEncoded: false)
+        return path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
+    }
+
     private static func sessionParams(workspaceURL: URL, mcpServers: [JSONValue]) -> JSONValue {
         .object([
-            "cwd": .string(workspaceURL.standardizedFileURL.path(percentEncoded: false)),
+            "cwd": .string(cwd(workspaceURL)),
             "mcpServers": .array(mcpServers)
         ])
     }
