@@ -19,6 +19,7 @@ enum AntigravityUsage {
                       let remaining = bucket["remaining_fraction"]?.doubleValue, remaining.isFinite else { return nil }
                 let left = min(max(remaining, 0), 1)
                 let minutes = windowMinutes(bucket["window"]?.stringValue)
+                    ?? windowMinutes(id.split(separator: "-").last.map(String.init))
                 let window = HarnessAccountBroker.usageWindowLabel(
                     minutes: minutes, fallback: bucket["name"]?.stringValue ?? L10n.string("Usage"))
                 return AccountUsageMetric(
@@ -45,11 +46,21 @@ enum AntigravityUsage {
         return String(trimmed.dropLast(" models".count))
     }
 
+    /// A window's length from a word that names it: "weekly", "daily", or a count and a unit ("5h",
+    /// "7d"). A bucket's `window` is one, and so is the end of its ID ("gemini-weekly", "gemini-5h"),
+    /// which is read when the `window` is not.
     private static func windowMinutes(_ window: String?) -> Double? {
+        guard let window = window?.lowercased() else { return nil }
         switch window {
-        case "weekly": 10_080
-        case "daily": 1_440
-        default: nil
+        case "weekly": return 10_080
+        case "daily": return 1_440
+        default: break
+        }
+        guard let count = Int(window.dropLast()), count > 0 else { return nil }
+        switch window.last {
+        case "h": return Double(count) * 60
+        case "d": return Double(count) * 1_440
+        default: return nil
         }
     }
 
