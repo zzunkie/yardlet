@@ -83,6 +83,12 @@ final class NewTaskDraft {
 
     /// A prompt a suggestion or a new-task row offers, in the draft: words already there stay,
     /// before it, and a prompt already there is not added twice. Nothing is sent.
+    /// "Ask an agent" on a mail thread: a chat whose draft names the thread (`MailText.handoff`).
+    func takeMailThread(_ reference: String) {
+        chooseChat()
+        insertPrompt(reference)
+    }
+
     func insertPrompt(_ prompt: String) {
         guard !prompt.isEmpty, !text.contains(prompt) else { return }
         let kept = text.trimmingCharacters(in: .whitespacesAndNewlines)

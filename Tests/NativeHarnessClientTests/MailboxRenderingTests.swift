@@ -41,6 +41,18 @@ final class MailboxRenderingTests: XCTestCase {
                 host.settle(passes: 4)
                 try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "thread-\(name)"))
 
+                // Ask an agent: a new chat names the thread for the account's connector, without its body.
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Ask an agent")))
+                let draft = { model.composerDrafts.home.text }
+                await host.settle(until: { draft().contains(MailFixture.quoteThread) })
+                XCTAssertTrue(draft().contains("견적서 회신 부탁드립니다") && draft().contains("gmail_get_thread"), draft())
+                XCTAssertFalse(draft().contains("수정본을 첨부합니다"), "The message's words stay out of the prompt")
+                host.settle(passes: 6)
+                try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "handoff-\(name)"))
+                model.composerDrafts.home.text = ""
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Mail")))
+                await host.settle(until: { host.accessibilityElements().contains { $0.label == L10n.string("Mailboxes") } })
+
                 // The accounts and their folders, in the list's place.
                 XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Mailboxes")))
                 let labelsRow = { host.accessibilityElements().contains { $0.label == "거래처" } }
@@ -86,9 +98,9 @@ final class MailboxRenderingTests: XCTestCase {
 /// Two fictional accounts and their inboxes, dated from now so the list shows today's times.
 struct MailFixture {
     static let work = MailAccount(id: UUID(uuidString: "6D3B0A6E-1F7A-4C52-9C55-6A2B8F0D1E01")!,
-                                  address: "dana@acme.example", provider: .gmail)
+                                  address: "dana@acme.example", provider: .gmail, connectorSlug: "gmail")
     static let personal = MailAccount(id: UUID(uuidString: "6D3B0A6E-1F7A-4C52-9C55-6A2B8F0D1E02")!,
-                                      address: "dana.park@example.com", provider: .gmail)
+                                      address: "dana.park@example.com", provider: .gmail, connectorSlug: "gmail_dana_park")
     static let me = MailAddress(name: "Dana Park", address: "dana@acme.example")
     static let haneul = MailAddress(name: "김하늘", address: "haneul@vendor.example")
     static let quoteThread = "thread-quote"

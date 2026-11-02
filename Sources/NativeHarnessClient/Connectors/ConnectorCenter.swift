@@ -1789,7 +1789,7 @@ final class ConnectorCenter: ConnectorToolProviding {
     func mailAccounts() -> [(MailAccount, any MailAccountTransport)] {
         connectors.compactMap { record in
             guard record.localService == .gmail, record.status == .connected, let address = record.account else { return nil }
-            let account = MailAccount(id: record.credentialID, address: address, provider: .gmail)
+            let account = MailAccount(id: record.credentialID, address: address, provider: .gmail, connectorSlug: record.slug)
             let api = GmailAPI(base: environment.google.gmailAPI, session: accountSession(record.credentialID))
             return (account, GmailMailTransport(api: api, account: account))
         }

@@ -172,6 +172,9 @@ struct SettingsCenterView: View {
     @AppStorage(RestartResumePreference.key) private var continuesWorkAfterRestart = true
     @AppStorage(KeepScreenAwakePreference.key) private var keepsScreenAwake = false
     @AppStorage(PersonalAgentNotificationPreference.key) private var notifiesPersonalAgentMessages = true
+    /// Followed by the app's mailbox as it changes (`AppModel.followMailbox`); off by default.
+    @AppStorage(MailboxPreference.key) private var showsMailbox = false
+    @AppStorage(MailboxPreference.notificationsKey) private var notifiesNewMail = true
     /// Read by the browser host client as it changes and by each memory check (`MemorySaverPreference`).
     @AppStorage(MemorySaverPreference.key) private var savesMemory = true
     @AppStorage(MemorySaverPreference.levelKey) private var memorySaverLevel = BrowserMemorySaver.Level.balanced
@@ -430,6 +433,23 @@ struct SettingsCenterView: View {
                     }
                     Spacer(minLength: 8)
                     Toggle(L10n.string("Show Yardlet in the menu bar"), isOn: $showsInMenuBar)
+                        .labelsHidden()
+                        .toggleStyle(.paritySwitch)
+                        .controlSize(.small)
+                }
+                .padding(.vertical, 14)
+                Divider().padding(.leading, Self.dividerLeading)
+                HStack(spacing: 12) {
+                    settingsControlIcon("envelope")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(L10n.string("Mailbox")).font(.callout.weight(.medium))
+                        Text(L10n.string("Show the inboxes of the Gmail accounts connected in Connectors beside your tasks. Mail is read from Gmail and kept in memory only."))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Toggle(L10n.string("Mailbox"), isOn: $showsMailbox)
                         .labelsHidden()
                         .toggleStyle(.paritySwitch)
                         .controlSize(.small)
@@ -804,6 +824,25 @@ struct SettingsCenterView: View {
                     .controlSize(.small)
             }
             .padding(.vertical, 6)
+            if showsMailbox {
+                Divider()
+                HStack(spacing: 12) {
+                    settingsControlIcon("envelope.badge")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(L10n.string("New mail")).font(.callout.weight(.medium))
+                        Text(L10n.string("Notify when new mail reaches an inbox in the mailbox, for Gmail in its Primary tab"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Toggle(L10n.string("New mail"), isOn: $notifiesNewMail)
+                        .labelsHidden()
+                        .toggleStyle(.paritySwitch)
+                        .controlSize(.small)
+                }
+                .padding(.vertical, 6)
+            }
         }
     }
 

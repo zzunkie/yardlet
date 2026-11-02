@@ -12,6 +12,8 @@ struct MailActions {
     var askAgent: (MailThread) -> Void = { _ in }
     /// The thread on the service's web mail, in the built-in browser.
     var openOriginal: (URL) -> Void = { _ in }
+    /// A link chosen in a message.
+    var openLink: (URL) -> Void = { _ in }
     var openSettings: () -> Void = {}
 }
 
@@ -224,6 +226,8 @@ struct MailMessageView: View {
     /// Folds it back to a line; nil for the message that stays open.
     var fold: (() -> Void)?
     @Environment(\.yardletInterfaceScale) private var scale
+    @State private var htmlHeight: CGFloat = 40
+    @State private var showsRemoteContent = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -248,11 +252,7 @@ struct MailMessageView: View {
                 .contentShape(Rectangle())
                 .onTapGesture { fold?() }
             }
-            Text(message.text)
-                .font(.system(size: 13.5 * scale))
-                .lineSpacing(4)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            body(of: message)
                 .padding(.leading, MailSenderInitial.size + 10)
             if !message.attachments.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
@@ -285,6 +285,35 @@ struct MailMessageView: View {
             }
         }
         .padding(.vertical, 16)
+    }
+
+    /// The HTML as sent, or the text when the message has no HTML.
+    @ViewBuilder private func body(of message: MailMessage) -> some View {
+        if let html = message.html, !html.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                if !showsRemoteContent, MailHTMLBody.hasRemoteContent(html) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "photo").foregroundStyle(.secondary)
+                        Text(L10n.string("Images in this message are not loaded, so its sender cannot tell it was read."))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button(L10n.string("Show images")) { showsRemoteContent = true }
+                            .buttonStyle(.link)
+                    }
+                    .font(.system(size: 12 * scale))
+                }
+                MailHTMLBody(html: html, allowsRemoteContent: showsRemoteContent, openLink: actions.openLink,
+                             height: $htmlHeight)
+                    .frame(height: htmlHeight)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+        } else {
+            Text(message.text)
+                .font(.system(size: 13.5 * scale))
+                .lineSpacing(4)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private var recipients: String {
