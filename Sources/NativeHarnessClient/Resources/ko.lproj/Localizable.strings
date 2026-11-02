@@ -2327,6 +2327,16 @@
 "Create" = "만들기";
 "Delete scheduled task?" = "예약된 작업을 삭제할까요?";
 "“%@” will not run again. The tasks its runs started stay in the sidebar." = "“%@”은(는) 더 이상 실행되지 않습니다. 실행으로 만든 작업은 사이드바에 그대로 남습니다.";
+"Every %@" = "매주 %@";
+"Ran %@" = "%@ 실행함";
+"No scheduled task will run." = "앞으로 실행될 예약된 작업이 없습니다.";
+"Off scheduled tasks group" = "꺼짐";
+"Completed scheduled tasks group" = "끝남";
+"%lld scheduled tasks" = "예약된 작업 %lld개";
+"%@ options" = "%@ 옵션";
+"Delete All…" = "모두 삭제…";
+"Delete %lld completed scheduled tasks?" = "끝난 예약된 작업 %lld개를 삭제할까요?";
+"They ran once and will not run again. The tasks their runs started stay in the sidebar." = "한 번 실행했고 다시 실행되지 않는 예약입니다. 실행으로 시작된 작업은 사이드바에 그대로 남습니다.";
 "Write what each run asks." = "실행마다 보낼 지시를 쓰세요.";
 "Choose a harness." = "하네스를 고르세요.";
 "Choose the task to continue." = "이어 갈 작업을 고르세요.";

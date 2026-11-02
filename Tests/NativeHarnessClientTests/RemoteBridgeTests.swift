@@ -425,9 +425,11 @@ final class RemoteBridgeTests: XCTestCase {
         let bridge = AppModelRemoteBridge(model: model)
         XCTAssertTrue(bridge.snapshot().scheduledTasks)
         let listed = try await bridge.scheduledTasks().get()
-        XCTAssertEqual(listed.map(\.id), [morning, weekly, screenshots, reminder].map(\.id.uuidString), "The Mac's list order")
+        // The Mac's list order: what will run, then what is off (here as old, so by name), then the one-offs that ran.
+        let order = [morning, screenshots, weekly, reminder]
+        XCTAssertEqual(listed.map(\.id), order.map(\.id.uuidString), "The Mac's list order")
         // The Mac's own words, in its language.
-        for (remote, schedule) in zip(listed, center.schedules) {
+        for (remote, schedule) in zip(listed, order) {
             let nextRun = center.nextRun(of: schedule)
             XCTAssertEqual(remote.when, ScheduleText.summary(schedule.trigger, calendar: center.calendar(), now: now))
             XCTAssertEqual(remote.status, ScheduleText.status(schedule, nextRun: nextRun, isStarting: false, now: now,
@@ -445,19 +447,19 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(listed[0].lastRun?.outcome, .started)
         XCTAssertEqual(listed[0].lastRun?.taskId, working.id.uuidString)
 
-        XCTAssertFalse(listed[1].enabled)
-        XCTAssertEqual(listed[1].status, L10n.string("Paused"))
-        XCTAssertNil(listed[1].nextRunAt)
-        XCTAssertEqual(listed[1].canResume, true)
-        XCTAssertFalse(listed[1].running, "The task its latest started run continued is idle")
-        XCTAssertEqual(listed[1].projectName, "remote-bridge-schedules", "The project of the task it continues")
-        XCTAssertEqual(listed[1].lastRun?.outcome, .skipped)
-        XCTAssertNil(listed[1].lastRun?.taskId)
-        XCTAssertEqual(listed[1].lastRun?.line.hasSuffix(ScheduleText.skipReason(.targetBusy)), true)
-
+        XCTAssertFalse(listed[2].enabled)
+        XCTAssertEqual(listed[2].status, L10n.string("Paused"))
+        XCTAssertNil(listed[2].nextRunAt)
         XCTAssertEqual(listed[2].canResume, true)
-        XCTAssertEqual(listed[2].lastRun?.outcome, .failed)
-        XCTAssertEqual(listed[2].lastRun?.line.hasSuffix(ScheduleText.couldNotStart("No simulator")), true)
+        XCTAssertFalse(listed[2].running, "The task its latest started run continued is idle")
+        XCTAssertEqual(listed[2].projectName, "remote-bridge-schedules", "The project of the task it continues")
+        XCTAssertEqual(listed[2].lastRun?.outcome, .skipped)
+        XCTAssertNil(listed[2].lastRun?.taskId)
+        XCTAssertEqual(listed[2].lastRun?.line.hasSuffix(ScheduleText.skipReason(.targetBusy)), true)
+
+        XCTAssertEqual(listed[1].canResume, true)
+        XCTAssertEqual(listed[1].lastRun?.outcome, .failed)
+        XCTAssertEqual(listed[1].lastRun?.line.hasSuffix(ScheduleText.couldNotStart("No simulator")), true)
 
         XCTAssertNil(listed[3].canResume, "A one-off that ran is edited, not resumed")
         XCTAssertNil(listed[3].projectName, "A chat")
@@ -478,6 +480,8 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(center.schedule(id: weekly.id)?.isEnabled, true)
         try await waitUntil { signals.changes.contains(.schedules) }
         let afterResuming = try await bridge.scheduledTasks().get()
+        XCTAssertEqual(Array(afterResuming.map(\.id).prefix(2)), [morning, weekly].map(\.id.uuidString),
+                       "Resumed, it runs again and joins the ones that run, by next run")
         XCTAssertEqual(afterResuming[1].enabled, true)
 
         // Run now while the task of its previous run works is recorded as a skip, as on the Mac.

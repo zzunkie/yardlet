@@ -209,7 +209,7 @@ final class ScheduleToolTests: XCTestCase {
         // List.
         let listed = try await call("list_scheduled_tasks", [:])
         XCTAssertFalse(listed.isError, listed.text)
-        let entries = try JSONDecoder().decode([Entry].self, from: Data(listed.text.utf8))
+        let entries = try JSONDecoder().decode(Listing.self, from: Data(listed.text.utf8)).scheduledTasks
         XCTAssertEqual(entries.map(\.scheduleId), [schedule.id.uuidString])
         XCTAssertEqual(entries.first?.harness, "opencode")
         XCTAssertEqual(entries.first?.eachRun, "new task")
@@ -280,6 +280,53 @@ final class ScheduleToolTests: XCTestCase {
                                                        arguments: try suggestionToolJSON(["prompt": "x", "fireAt": "2027-01-01T00:00:00Z"])))
         XCTAssertTrue(forged.isError, "A call without the task's token makes nothing")
         XCTAssertTrue(model.scheduledTasks.schedules.isEmpty)
+        await model.shutdown()
+    }
+
+    /// The list gives what will run first, soonest first, then what is off, with the start of each prompt;
+    /// the one-offs that ran only when asked, and a whole prompt for one schedule named by its id.
+    func testTheListGivesWhatRunsFirstAndLeavesOutTheOneOffsThatRanUnlessAsked() async throws {
+        func schedule(_ name: String, _ trigger: ScheduleTrigger, prompt: String? = nil) -> ScheduledTask {
+            ScheduledTask(name: name, prompt: prompt ?? "\(name).", trigger: trigger,
+                          destination: ScheduleDestination(harness: .openCode, workspacePath: root.path), createdAt: date(17, 20))
+        }
+        let long = String(repeating: "Read the failing job's log and say what broke. ", count: 20)
+        let digest = schedule("Digest", .daily(ScheduleTime(hour: 9, minute: 0)), prompt: long)
+        let soon = schedule("Check CI", .once(date(17, 21)))
+        var paused = schedule("Cleanup", .daily(ScheduleTime(hour: 18, minute: 0)))
+        paused.isEnabled = false
+        var ran = schedule("Check CI earlier", .once(date(17, 19)))
+        ran.isEnabled = false
+        ran.state.stopReason = .finished
+        ran.state.lastRunAt = date(17, 19)
+        let fixture = try Fixture(root: root, calendar: seoul, now: date(17, 20), repository: InMemoryScheduledTaskRepository(
+            snapshot: ScheduleSnapshot(schedules: [ran, paused, digest, soon])))
+        let model = fixture.model
+
+        let listed = try JSONDecoder().decode(Listing.self, from: Data(
+            await call(model, "list_scheduled_tasks", [:], from: fixture.caller).text.utf8))
+        XCTAssertEqual(listed.scheduledTasks.map(\.name), ["Check CI", "Digest", "Cleanup"])
+        XCTAssertEqual(listed.finishedNotListed, 1)
+        let cut = try XCTUnwrap(listed.scheduledTasks.first { $0.name == "Digest" }?.prompt)
+        XCTAssertEqual(cut, String(long.prefix(ScheduleToolCatalog.listedPromptLength)) + "…")
+        XCTAssertTrue(listed.note?.contains("scheduleId gives it whole") == true, listed.note ?? "")
+        XCTAssertEqual(listed.scheduledTasks.first?.prompt, "Check CI.", "A short prompt is whole")
+
+        let all = try JSONDecoder().decode(Listing.self, from: Data(
+            await call(model, "list_scheduled_tasks", ["includeFinished": true], from: fixture.caller).text.utf8))
+        XCTAssertEqual(all.scheduledTasks.map(\.name), ["Check CI", "Digest", "Cleanup", "Check CI earlier"])
+        XCTAssertEqual(all.scheduledTasks.last?.stoppedBecause, "it ran once")
+        XCTAssertNil(all.finishedNotListed)
+
+        let one = try JSONDecoder().decode(Listing.self, from: Data(
+            await call(model, "list_scheduled_tasks", ["scheduleId": digest.id.uuidString], from: fixture.caller).text.utf8))
+        XCTAssertEqual(one.scheduledTasks.map(\.prompt), [long])
+        XCTAssertNil(one.note)
+        let finished = try JSONDecoder().decode(Listing.self, from: Data(
+            await call(model, "list_scheduled_tasks", ["scheduleId": ran.id.uuidString], from: fixture.caller).text.utf8))
+        XCTAssertEqual(finished.scheduledTasks.map(\.name), ["Check CI earlier"], "Named by its id, a finished one is given")
+        let unknown = await call(model, "list_scheduled_tasks", ["scheduleId": UUID().uuidString], from: fixture.caller)
+        XCTAssertTrue(unknown.isError, unknown.text)
         await model.shutdown()
     }
 
@@ -702,11 +749,20 @@ final class ScheduleToolTests: XCTestCase {
 
     private struct Entry: Decodable {
         var scheduleId: String
+        var name: String = ""
         var harness: String
         var eachRun: String
         var cronExpression: String?
         var nextRunAt: String?
         var enabled: Bool
+        var stoppedBecause: String?
+        var prompt: String = ""
+    }
+
+    private struct Listing: Decodable {
+        var scheduledTasks: [Entry]
+        var finishedNotListed: Int?
+        var note: String?
     }
 
     private struct Runs: Decodable {

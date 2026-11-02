@@ -877,7 +877,9 @@ final class AppModelRemoteBridge: RemoteBridge {
         let projects = Dictionary(model.projects.projects.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
         let tasks = Dictionary(snapshot.tasks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let taskProjects = Dictionary(snapshot.projects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        return center.schedules.map { schedule in
+        // In the Mac's list order: the ones that will run, soonest first, then those that are off, then the one-offs that ran.
+        return center.sections.all.map { entry in
+            let schedule = entry.schedule
             let destination = schedule.destination
             let projectName: String?
             switch destination.mode {
@@ -888,7 +890,7 @@ final class AppModelRemoteBridge: RemoteBridge {
                 let project = destination.targetTaskID.flatMap { tasks[$0.uuidString]?.projectId }.flatMap { taskProjects[$0] }
                 projectName = project?.kind == .chats ? nil : project?.name
             }
-            return Self.schedule(schedule, nextRun: center.nextRun(of: schedule), isStarting: starting.contains(schedule.id),
+            return Self.schedule(schedule, nextRun: entry.nextRun, isStarting: starting.contains(schedule.id),
                                  now: now, calendar: calendar, projectName: projectName, tasks: tasks)
         }
     }

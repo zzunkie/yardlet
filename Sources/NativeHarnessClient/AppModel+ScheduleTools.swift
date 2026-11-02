@@ -30,7 +30,7 @@ extension AppModel: ScheduleToolHandling {
         }
         switch name {
         case ScheduleToolCatalog.create: return await createScheduleFromTool(arguments, caller: caller)
-        case ScheduleToolCatalog.list: return listSchedulesForTool()
+        case ScheduleToolCatalog.list: return listSchedulesForTool(arguments)
         case ScheduleToolCatalog.update: return await updateScheduleFromTool(arguments, caller: caller)
         case ScheduleToolCatalog.delete: return deleteScheduleFromTool(arguments)
         case ScheduleToolCatalog.run: return await runScheduleFromTool(arguments)
@@ -230,10 +230,29 @@ extension AppModel: ScheduleToolHandling {
 
     // MARK: - list_scheduled_tasks
 
-    private func listSchedulesForTool() -> AgentToolResult {
-        let entries = scheduledTasks.schedules.map(scheduleToolEntry)
-        guard !entries.isEmpty else { return .text("No scheduled tasks in Yardlet.") }
-        return .text(SessionToolText.json(entries))
+    /// In Scheduled tasks' order. Listing several gives the start of each prompt and leaves out the one-offs
+    /// that ran unless asked: whole prompts of every schedule agents left made a listing too long to read.
+    private func listSchedulesForTool(_ arguments: JSONValue) -> AgentToolResult {
+        if arguments[ScheduleToolCatalog.Key.scheduleID] != nil {
+            switch scheduleForTool(arguments) {
+            case let .success(schedule):
+                return .text(SessionToolText.json(ScheduleToolListing(scheduledTasks: [scheduleToolEntry(schedule)])))
+            case let .failure(error): return .error(error.message)
+            }
+        }
+        guard !scheduledTasks.schedules.isEmpty else { return .text("No scheduled tasks in Yardlet.") }
+        let sections = scheduledTasks.sections
+        let includesFinished = Self.bool(arguments[ScheduleToolCatalog.Key.includeFinished]) == true
+        let listed = sections.upcoming + sections.off + (includesFinished ? sections.finished : [])
+        let length = ScheduleToolCatalog.listedPromptLength
+        let entries = listed.map { scheduleToolEntry($0.schedule, promptLength: length) }
+        let isCut = listed.contains { $0.schedule.prompt.count > length }
+        return .text(SessionToolText.json(ScheduleToolListing(
+            scheduledTasks: entries,
+            finishedNotListed: includesFinished || sections.finished.isEmpty ? nil : sections.finished.count,
+            note: isCut ? "A prompt longer than \(length) characters is cut and ends "
+                + "in \"…\"; list_scheduled_tasks with its scheduleId gives it whole. Do not send a cut prompt back "
+                + "in update_scheduled_task." : nil)))
     }
 
     // MARK: - update_scheduled_task
@@ -317,7 +336,7 @@ extension AppModel: ScheduleToolHandling {
         case let .success(value): schedule = value
         case let .failure(error): return error.result("Nothing was deleted")
         }
-        scheduledTasks.delete(schedule.id)
+        scheduledTasks.delete([schedule.id])
         return .text("Scheduled task \"\(ScheduleToolCatalog.oneLine(schedule.name))\" (scheduleId: "
             + "\(schedule.id.uuidString)) deleted. It will not run again; the tasks its runs started stay.")
     }
@@ -408,6 +427,13 @@ extension AppModel: ScheduleToolHandling {
         var prompt: String
     }
 
+    struct ScheduleToolListing: Encodable, Equatable {
+        var scheduledTasks: [ScheduleToolEntry]
+        /// The one-offs that ran, left out unless `includeFinished`.
+        var finishedNotListed: Int?
+        var note: String?
+    }
+
     struct ScheduleToolRun: Encodable, Equatable {
         var at: String
         var scheduledFor: String?
@@ -426,7 +452,8 @@ extension AppModel: ScheduleToolHandling {
         var runs: [ScheduleToolRun]
     }
 
-    func scheduleToolEntry(_ schedule: ScheduledTask) -> ScheduleToolEntry {
+    /// With `promptLength`, a longer prompt is cut there and ends in "…".
+    func scheduleToolEntry(_ schedule: ScheduledTask, promptLength: Int? = nil) -> ScheduleToolEntry {
         let destination = schedule.destination
         let calendar = scheduledTasks.calendar()
         var fireAt: String?
@@ -450,7 +477,8 @@ extension AppModel: ScheduleToolHandling {
             model: isNew ? destination.modelChoice?.model : nil,
             effort: isNew ? destination.modelChoice?.effort : nil,
             permissionMode: isNew ? destination.modelChoice?.permissionMode.map(Self.claudeAppMode) : nil,
-            prompt: schedule.prompt)
+            prompt: promptLength.map { schedule.prompt.count > $0 ? String(schedule.prompt.prefix($0)) + "…" : schedule.prompt }
+                ?? schedule.prompt)
     }
 
     /// Lines as the Claude app's create answer has them: the schedule, the next run, where each run

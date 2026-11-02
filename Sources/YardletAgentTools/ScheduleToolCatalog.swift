@@ -27,6 +27,9 @@ package enum ScheduleToolCatalog {
     /// `list_task_runs`: the Claude app's default and most.
     package static let defaultRunLimit = 10
     package static let maximumRunLimit = 50
+    /// `list_scheduled_tasks`: how much of each prompt a listing of several gives, as the Claude app's list
+    /// cuts a long description and points to the task's file for the rest.
+    package static let listedPromptLength = 200
 
     /// Argument names.
     package enum Key {
@@ -46,6 +49,7 @@ package enum ScheduleToolCatalog {
         package static let permissionMode = "permissionMode"
         package static let enabled = "enabled"
         package static let limit = "limit"
+        package static let includeFinished = "includeFinished"
 
         /// The arguments that say where each run goes.
         package static let destination = [continueTaskID, harness, project, chat, useWorktree, topLevel, model, effort,
@@ -156,9 +160,13 @@ package enum ScheduleToolCatalog {
         AgentToolDefinition(
             name: list,
             title: "List scheduled tasks",
-            description: "List Yardlet's scheduled tasks: scheduleId, name, schedule, cronExpression or fireAt, "
-                + "enabled, nextRunAt, lastRunAt, where each run goes, and prompt.",
-            inputSchema: object([:]),
+            description: "List Yardlet's scheduled tasks, those that will run first, soonest first: scheduleId, name, "
+                + "schedule, nextRunAt, lastRunAt, where each run goes and the start of the prompt. One-offs that ran "
+                + "are left out unless includeFinished.",
+            inputSchema: object([
+                Key.scheduleID: property("string", "Only this scheduled task, with its whole prompt."),
+                Key.includeFinished: property("boolean", "true also lists the one-off scheduled tasks that already ran.")
+            ]),
             readOnly: true,
             openWorld: false
         ),
