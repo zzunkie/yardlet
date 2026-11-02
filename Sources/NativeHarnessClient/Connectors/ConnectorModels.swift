@@ -69,6 +69,9 @@ struct ConnectorRecord: Codable, Equatable, Identifiable, Sendable {
     /// The program Yardlet runs on this Mac for the server (stdio), as the person confirmed it;
     /// nil for a server at an address. Absent in files from before.
     var program: ConnectorProgram?
+    /// A mail account's IMAP and SMTP servers and user names (`LocalConnectorService.imapMail`); not
+    /// secret, the password is in the secure store. Absent in files from before.
+    var mailServer: MailServerSettings?
 
     init(
         id: UUID = UUID(),
@@ -89,7 +92,8 @@ struct ConnectorRecord: Codable, Equatable, Identifiable, Sendable {
         accountSignInID: UUID? = nil,
         serverIcons: [MCPServerIcon]? = nil,
         tokenHeader: String? = nil,
-        program: ConnectorProgram? = nil
+        program: ConnectorProgram? = nil,
+        mailServer: MailServerSettings? = nil
     ) {
         self.id = id
         self.name = name
@@ -110,11 +114,12 @@ struct ConnectorRecord: Codable, Equatable, Identifiable, Sendable {
         self.serverIcons = serverIcons
         self.tokenHeader = tokenHeader
         self.program = program
+        self.mailServer = mailServer
     }
 
     enum CodingKeys: String, CodingKey {
         case id, name, slug, serverURL, authorization, status, tools, toolsUpdatedAt, presetID, oauthClientID, scope
-        case authorizationParameters, tokenQueryParameter, localService, account, serverIcons, tokenHeader, program
+        case authorizationParameters, tokenQueryParameter, localService, account, serverIcons, tokenHeader, program, mailServer
         case accountSignInID = "googleAccountID"
     }
 
@@ -219,6 +224,9 @@ enum LocalConnectorService: String, Codable, Sendable, CaseIterable, Identifiabl
     case appleContacts = "apple-contacts"
     /// Xcode's MCP server through `xcrun mcpbridge` (Xcode 26.3 and later).
     case xcode
+    /// A mail account without an API (iCloud, Naver, Daum, Kakao and others) through IMAP and SMTP,
+    /// signed in with the account's app password.
+    case imapMail = "imap-mail"
 
     /// Google's, signed in per Google account with one Google OAuth app.
     static let google: [LocalConnectorService] = [.gmail, .googleCalendar, .googleDrive, .googleAnalytics, .googleAds]
@@ -262,6 +270,7 @@ enum LocalConnectorService: String, Codable, Sendable, CaseIterable, Identifiabl
         case .appleReminders: "Apple Reminders"
         case .appleContacts: "Apple Contacts"
         case .xcode: "Xcode"
+        case .imapMail: "Mail (IMAP)"
         }
     }
 
@@ -282,6 +291,7 @@ enum LocalConnectorService: String, Codable, Sendable, CaseIterable, Identifiabl
         case .appleReminders: "apple_reminders"
         case .appleContacts: "apple_contacts"
         case .xcode: "xcode"
+        case .imapMail: "mail"
         }
     }
 
@@ -301,6 +311,8 @@ enum LocalConnectorService: String, Codable, Sendable, CaseIterable, Identifiabl
         case .appleReminders: URL(filePath: "/System/Applications/Reminders.app", directoryHint: .isDirectory)
         case .appleContacts: URL(filePath: "/System/Applications/Contacts.app", directoryHint: .isDirectory)
         case .xcode: XcodeBridge.defaultExecutable
+        // Each account's own server is its record's address.
+        case .imapMail: URL(string: "imaps://localhost")!
         }
     }
 
@@ -338,6 +350,7 @@ enum LocalConnectorService: String, Codable, Sendable, CaseIterable, Identifiabl
         case .appleReminders: MacRemindersToolCatalog.tools
         case .appleContacts: MacContactsToolCatalog.tools
         case .xcode: nil
+        case .imapMail: MailAccountToolCatalog.tools
         }
     }
 
@@ -355,6 +368,7 @@ enum LocalConnectorService: String, Codable, Sendable, CaseIterable, Identifiabl
         case .oneDrive: OneDriveToolCatalog.approvalRequired
         case .teams: TeamsToolCatalog.approvalRequired
         case .appStoreConnect: AppStoreConnectToolCatalog.approvalRequired
+        case .imapMail: MailAccountToolCatalog.approvalRequired
         case .appleCalendar: MacCalendarToolCatalog.approvalRequired
         case .appleReminders: MacRemindersToolCatalog.approvalRequired
         case .googleAnalytics, .googleAds, .appleContacts, .xcode: []
@@ -390,6 +404,8 @@ struct ConnectorCredential: Codable, Equatable, Sendable {
         case signingKey
         /// The arguments and environment a program on this Mac starts with (`ConnectorProgram`).
         case program
+        /// A mail account's password, in `accessToken` (`ConnectorCredential.password`).
+        case password
     }
 
     var kind: Kind
@@ -415,6 +431,12 @@ struct ConnectorCredential: Codable, Equatable, Sendable {
     var privateKey: String?
     /// A program's arguments and environment values. Absent in items from before.
     var program: ConnectorProgramSpec?
+
+    /// A mail account's password (an app password, as the services ask for), signed in with the user
+    /// names its record's `mailServer` keeps.
+    static func password(_ value: String) -> ConnectorCredential {
+        ConnectorCredential(kind: .password, accessToken: value)
+    }
 
     static func token(_ value: String) -> ConnectorCredential {
         ConnectorCredential(kind: .token, accessToken: value)

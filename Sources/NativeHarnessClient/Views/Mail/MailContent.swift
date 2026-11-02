@@ -27,7 +27,7 @@ struct MailContent: View {
                 MailComposeView(center: center, window: window)
             } else if center.accounts.isEmpty {
                 placeholder(systemName: "envelope", title: L10n.string("No accounts in the mailbox"),
-                            detail: L10n.string("Connect Gmail or Outlook in Settings › Connectors, and its inbox shows here.")) {
+                            detail: L10n.string("Connect Gmail, Outlook or another mail account in Settings › Connectors, and its inbox shows here.")) {
                     Button(L10n.string("Open Connectors"), action: actions.openSettings)
                 }
             } else if let thread = window.thread, let account = center.account(thread.summary.id.accountID) {
@@ -117,7 +117,7 @@ struct MailThreadView: View {
 
     private var bar: some View {
         HStack(spacing: 2) {
-            Text("\(account.address) · \(account.provider.serviceName)")
+            Text("\(account.address) · \(account.serviceName)")
                 .font(.system(size: 12 * scale))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)

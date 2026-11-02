@@ -1,6 +1,6 @@
 # Mailbox
 
-The mailbox shows the inboxes of the Gmail and Outlook Mail accounts connected in Settings › Connectors beside tasks and
+The mailbox shows the inboxes of the Gmail, Outlook Mail and IMAP mail accounts connected in Settings › Connectors beside tasks and
 personal agents, as a third word under Scheduled tasks: **Tasks · Personal agents · Mail**. Threads are
 read in place, written to and answered there, and handed to an agent by name. Mail stays on the
 service: the mailbox reads it when it is shown and keeps it in memory only.
@@ -11,18 +11,19 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
   is read and nothing is watched.
 - Turning it off stops the watch, closes what is open, forgets every list, thread, search and message
   being written in every window, and removes the history cursors (see "What is kept"). A window showing the mailbox goes back to
-  its tasks. The Gmail connectors and their Keychain items stay; they belong to Settings › Connectors.
+  its tasks. The mail connectors and their Keychain items stay; they belong to Settings › Connectors.
 - Settings › Notifications › **New mail**, on by default and shown while the mailbox is on.
 
 ## Accounts
 
-- Every Gmail and Outlook Mail connector that is connected is an account of the mailbox
+- Every Gmail, Outlook Mail and Mail (IMAP) connector that is connected is an account of the mailbox
   (`ConnectorCenter.mailAccounts`). The mailbox uses the connector's own sign-in and session
   (`OAuthAPISession`), so a token is refreshed one at a time for both and never leaves Yardlet. It asks for
   nothing beyond the connector's permissions: Gmail's `gmail.modify` (docs/CONNECTORS.md, "Google") and
   Graph's `Mail.ReadWrite` and `Mail.Send` (docs/CONNECTORS.md, "Microsoft 365").
 - Each service is read the way it supports best: Gmail through the Gmail API, Microsoft 365 and
-  Outlook.com through Microsoft Graph. The sections below say where the two differ.
+  Outlook.com through Microsoft Graph, and every other service over IMAP and SMTP with an app password
+  (see "Mail accounts over IMAP"). The sections below say where they differ.
 - Connecting, disconnecting or removing a Gmail account in Settings › Connectors adds it to or removes
   it from the mailbox at once; what was read from a removed account is forgotten.
 
@@ -30,8 +31,9 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
 
 - In memory: each account's folders, the first page of each inbox, the folders a window opened, the
   last 30 threads opened, and a search's results until the search is cleared.
-- On disk: only, per account, where its history was last read up to: the Gmail history ID, or Graph's
-  inbox delta link with the time it was taken (`Yardlet.mailboxCursors` in Yardlet's defaults), so mail that came while Yardlet was closed is told once
+- On disk: only, per account, where its history was last read up to: the Gmail history ID, Graph's
+  inbox delta link with the time it was taken, or an IMAP inbox's UIDVALIDITY, next UID and counts
+  (`Yardlet.mailboxCursors` in Yardlet's defaults), so mail that came while Yardlet was closed is told once
   it opens. No subject, address or word of a message is written to disk or to the log.
 - An HTML message's content rule list is compiled into the temporary folder, not the person's Library.
 
@@ -75,6 +77,72 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
   is told. A link Graph no longer knows (410) starts again.
 - **Open in Outlook** opens the newest message's `webLink` in the built-in browser. **Ask an agent** names
   the newest message and the connector's `get_message`.
+
+## Mail accounts over IMAP
+
+Services without an API Yardlet reads (Naver, Daum, Kakao, NAVER WORKS, iCloud, Yahoo, AOL, Zoho,
+Fastmail, Proton Mail through its Bridge, or any IMAP server) are added in Settings › Connectors › Add
+connector › **Mail (IMAP)**, as Apple Mail and Thunderbird add them.
+
+- **Adding.** The address picks the service (`MailServerPreset`): its IMAP and SMTP servers, the user name
+  (iCloud's is the part before the `@`) and what the person does first on the service's website, each step
+  with a link: turn on two-step verification, make an app password, and turn on IMAP where the service has
+  a switch for it (Naver, Daum, Kakao, Zoho). **Other IMAP server** takes the servers, ports, TLS or
+  STARTTLS and the user name by hand. A Gmail or Outlook.com address is pointed to its own connector.
+  **Connect** signs in to the IMAP server and to the SMTP server once and out again, reading and sending
+  nothing; only then is the account added. A refused sign-in says to check the app password and the steps.
+
+  | Service | IMAP | SMTP |
+  |---|---|---|
+  | Naver Mail | `imap.naver.com:993` | `smtp.naver.com:465` |
+  | Daum Mail | `imap.daum.net:993` | `smtp.daum.net:465` |
+  | Kakao Mail | `imap.kakao.com:993` | `smtp.kakao.com:465` |
+  | NAVER WORKS | `imap.worksmobile.com:993` | `smtp.worksmobile.com:465` |
+  | iCloud Mail | `imap.mail.me.com:993` | `smtp.mail.me.com:587`, STARTTLS |
+  | Yahoo Mail | `imap.mail.yahoo.com:993` | `smtp.mail.yahoo.com:465` |
+  | AOL Mail | `imap.aol.com:993` | `smtp.aol.com:465` |
+  | Zoho Mail | `imap.zoho.com:993` (`imappro` for organizations) | `smtp.zoho.com:465` (`smtppro`) |
+  | Fastmail | `imap.fastmail.com:993` | `smtp.fastmail.com:465` |
+  | Proton Mail Bridge | `127.0.0.1:1143`, STARTTLS | `127.0.0.1:1025`, STARTTLS |
+
+- **What is kept.** The app password is in the Keychain under the connector, and nowhere else: not in a
+  file, the log or a command. The servers and the address, which are not secret, are in the connector's
+  record (`connectors.json`). Removing the connector deletes both; the app password stays valid at the
+  service until the person deletes it there.
+- **Connecting.** Every connection is TLS from the first byte or upgraded with STARTTLS before signing in,
+  and the server's certificate is checked against its name; a server that offers neither is not used.
+  Each account keeps one IMAP connection for the mailbox and its agent tools (`IMAPMailSession`), checked
+  with `NOOP` after two minutes unused and opened again when the server closed it. SMTP is signed in to
+  for each message sent.
+- **Folders.** The inbox, then the folders for sent mail, drafts, an archive, spam and the trash, found by
+  the server's special-use attributes (RFC 6154) or else by the names services give them in English and
+  Korean (보낸편지함, 임시보관함, 스팸편지함, 휴지통), then the person's own folders under **Folders**,
+  nested ones indented. Folder names in IMAP's modified UTF-7 are read as text. Unread counts come from
+  `STATUS` for the inbox and spam; Drafts shows its count.
+- **Lists and threads.** IMAP has no threads, so each message is a line of its own, newest first, 50 at a
+  time, with its first words from the start of its body. Opening one reads it whole up to 4 MB; a larger
+  message reads only its text and HTML and lists its files. Reading uses `BODY.PEEK`, so only the
+  mailbox's own read sync marks it read.
+- **Search** is the server's (`SEARCH TEXT`, any language as UTF-8) over the inbox, the archive and sent
+  mail.
+- **Changes.** Read and Star are the `\Seen` and `\Flagged` flags; Archive moves the message to the
+  archive folder, made as "Archive" the first time on an account without one, as Mail and Thunderbird
+  do; Not spam and Move out of the Trash move it to the inbox. There is no **Open in** button: these
+  services have no web address for one message.
+- **Writing and sending.** A draft is a message saved in the account's Drafts (`APPEND`, `\Draft`), with
+  its own `From`, `Date` and `Message-ID`; saving again saves a new one and deletes the one before.
+  Sending reads the draft as saved, sends it over SMTP to its To, Cc and Bcc with the Bcc line left out of
+  the message, keeps a copy in Sent unless the server already put one there (found by its `Message-ID`),
+  and deletes the draft. Once the SMTP server took the message, a failure after it does not fail the send.
+- **New mail.** The inbox's `STATUS` every minute (one command on the open connection): a new UIDVALIDITY
+  reads the inbox again, a higher next UID asks which messages after the old one are unread and not drafts,
+  and those are told. IMAP IDLE is not used; most services do not document it and a minute is what the
+  other accounts wait.
+- **Refused password.** A server that refuses the app password later marks the connector as needing the
+  account again and stops the account's watch; adding the same address again replaces the password.
+- **Agents** read and draft through the connector's tools (`mail_search_messages`, `mail_get_message`,
+  `mail_list_folders`, `mail_create_draft`, `mail_send_draft`), named like Outlook's; sending asks the
+  person each time through the harness's approval. **Ask an agent** names the message and `get_message`.
 
 ## Reading
 
@@ -147,13 +215,18 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
 | `Domain/Mail.swift`, `Domain/MailComposition.swift` | Accounts, folders, threads and messages; the transport contract (`MailAccountTransport`); addresses (`MailAddressList`); what is being written and how a reply or forward is addressed |
 | `Connectors/GmailMailTransport.swift` | The Gmail API behind the contract: folders and labels, lists, threads, label changes, drafts, history |
 | `Connectors/OutlookMailTransport.swift` | Microsoft Graph behind the contract: folders, conversations, per-message changes, replies from Graph's own, the inbox's delta |
+| `Connectors/IMAPMailTransport.swift` | IMAP and SMTP behind the contract: the account's connection (`IMAPMailSession`), folders by role, messages as threads, flags and moves, drafts in Drafts, sending and the Sent copy, the inbox's `STATUS` |
+| `Connectors/MailServerPreset.swift`, `Connectors/MailAccountTools.swift` | The services' servers and setup steps; the tools an IMAP account offers agents |
+| `Domain/IMAPClient.swift`, `Domain/IMAPResponse.swift`, `Domain/SMTPClient.swift`, `Domain/MIMEMessage.swift`, `Domain/MailSocket.swift` | The IMAP and SMTP clients, reading the server's responses, reading MIME, and the byte stream they use (`Platform/macOS/MacMailSocket.swift` on the Mac) |
+| `Views/AppShell/MailAccountSetupPage.swift` | Adding an IMAP account |
 | `Presentation/MailboxCenter.swift` | The app's mailbox (`MailboxCenter`: accounts, lists, opened threads, watch, writing) and a window's view of it (`MailWindowState`) |
 | `Presentation/MailText.swift` | Names, subjects, times and the hand-off text |
 | `AppModel+Mailbox.swift` | Following the setting and the connectors, notifications and their clicks |
 | `Views/Mail/` | The sidebar (`MailSidebar`, `MailFolderTree`), the thread (`MailContent`, `MailThreadView`), HTML (`MailHTMLBody`) and writing (`MailComposeView`) |
 
-Tests: `GmailMailTransportTests` and `OutlookMailTransportTests` (requests and answers against a fake Gmail and a
-fake Graph), `MailboxCenterTests` (the
+Tests: `GmailMailTransportTests`, `OutlookMailTransportTests` and `IMAPMailTransportTests` (requests and answers
+against a fake Gmail, a fake Graph and a scripted IMAP and SMTP server), `IMAPClientTests`, `SMTPClientTests` and
+`MIMEMessageTests`, `MailboxCenterTests` (the
 watch, sending, Undo and Drafts), `MailHTMLBodyTests` (no remote content before Show images) and
 `MailboxRenderingTests` (the list, a thread, writing, the hand-off, the folders and spam, drawn under
 `.build/mailbox-qa/` in both appearances at 1280×800 and 920×680).

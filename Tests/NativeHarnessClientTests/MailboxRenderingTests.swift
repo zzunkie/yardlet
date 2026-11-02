@@ -84,6 +84,55 @@ final class MailboxRenderingTests: XCTestCase {
         }
     }
 
+    /// An IMAP account through its own transport, against a fake Korean webmail server (`FakeMailState`):
+    /// its messages one per line, a message read with no Open in button, and its folders by role with the
+    /// person's own under Folders. Drawn as `imap-list-*`, `imap-thread-*` and `imap-folders-*`.
+    func testAnIMAPAccountShowsItsMessagesAndFolders() async throws {
+        let model = try makeWindowModel()
+        let directory = try WindowlessRender.directory("mailbox-qa")
+        let size = NSSize(width: 1280, height: 800)
+        for appearance in WindowlessRender.Appearance.allCases {
+            let state = FakeMailState()
+            let opener = FakeMailOpener(imap: { FakeIMAPServer(answer: state.answer) })
+            let id = UUID()
+            let account = MailAccount(id: id, address: "dana@naver.com", provider: .imap, connectorSlug: "mail",
+                                      service: L10n.string("Naver Mail"))
+            let naver = try XCTUnwrap(MailServerPreset.preset(id: "naver"))
+            let session = IMAPMailSession(id: id, address: account.address, settings: naver.settings(for: account.address),
+                                          credentials: InMemoryConnectorCredentialStore([id: .password("correct horse")]),
+                                          sockets: opener)
+            model.mailbox.setEnabled(true)
+            model.mailbox.setAccounts([(account, IMAPMailTransport(session: session, account: account))])
+            await model.mailbox.refresh()
+            let host = WindowlessRender.Host(MainWindow(model: model)
+                .environment(\.colorScheme, appearance.colorScheme)
+                .frame(width: size.width, height: size.height), size: size, appearance: appearance)
+            defer { host.close() }
+            host.settle()
+
+            XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Mail")))
+            let row = { host.accessibilityElements().first { $0.label.hasPrefix("김철수") } }
+            await host.settle(until: { row() != nil })
+            host.settle(passes: 6)
+            try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "imap-list-\(appearance.suffix).png"))
+
+            XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: try XCTUnwrap(row()).label))
+            await host.settle(until: { host.accessibilityElements().contains { $0.label == L10n.string("Ask an agent") } })
+            host.settle(passes: 6)
+            let labels = host.accessibilityElements().map(\.label)
+            XCTAssertFalse(labels.contains(L10n.string("Open in Gmail")) || labels.contains(L10n.string("Open in Outlook")),
+                           "An IMAP message has no web address to open")
+            try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "imap-thread-\(appearance.suffix).png"))
+
+            XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Mailboxes")))
+            await host.settle(until: { host.accessibilityElements().contains { $0.label == "거래처" } })
+            host.settle(passes: 6)
+            XCTAssertTrue(host.accessibilityElements().contains { $0.label == "임시보관함" })
+            try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "imap-folders-\(appearance.suffix).png"))
+            host.close()
+        }
+    }
+
     private func makeWindowModel() throws -> AppModel {
         let root = FileManager.default.temporaryDirectory.appending(path: "yardlet-mailbox-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

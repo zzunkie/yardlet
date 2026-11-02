@@ -268,6 +268,8 @@ final class ConnectorCenter: ConnectorToolProviding {
         var xcodeBridge: @Sendable () -> URL? = { nil }
         /// Starts a stdio MCP server (Xcode's bridge) at a path.
         var stdioLauncher: @Sendable (URL) -> any MCPStdioLaunching = { ProcessMCPStdioLauncher(executable: $0) }
+        /// Opens IMAP and SMTP connections for mail accounts added with a password.
+        var mailSockets: any MailSocketOpening = LiveMailSockets()
         /// Starts a program connector's server as the person confirmed it.
         var programLauncher: @Sendable (ConnectorProgramLaunch) -> any MCPStdioLaunching = {
             ProcessMCPStdioLauncher(executable: $0.executable, arguments: $0.arguments, environment: $0.environment,
@@ -410,6 +412,8 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// One session per Google or Microsoft account, which its services share.
     @ObservationIgnored private var accountSessions: [UUID: OAuthAPISession] = [:]
     @ObservationIgnored private var appStoreSessions: [UUID: AppStoreConnectSession] = [:]
+    /// Each IMAP mail account's connection, shared by the mailbox and the account's tools.
+    @ObservationIgnored private var imapSessions: [UUID: IMAPMailSession] = [:]
     /// Servers Yardlet runs as child processes: Xcode's bridge and program connectors.
     @ObservationIgnored private var stdioClients: [UUID: MCPStdioClient] = [:]
     @ObservationIgnored private var connectTasks: [UUID: Task<Void, Never>] = [:]
@@ -1362,9 +1366,82 @@ final class ConnectorCenter: ConnectorToolProviding {
         return record
     }
 
+    /// Adds a mail account reached over IMAP and SMTP with an app password, after signing in to both
+    /// servers once to check the address, the servers and the password; nothing is read or sent. The
+    /// password goes to the secure store and the servers to the connector's record. The same address
+    /// added again replaces its password and servers. Throws before storing anything when a server
+    /// refuses the sign-in or cannot be reached.
+    @discardableResult
+    func addMailAccount(address: String, password: String, settings: MailServerSettings, name: String) async throws -> ConnectorRecord {
+        try await IMAPMailSession.verify(settings, password: password, sockets: environment.mailSockets)
+        let credential = ConnectorCredential.password(password)
+        if let existing = connectors.first(where: { $0.localService == .imapMail && $0.account?.lowercased() == address.lowercased() }) {
+            try await replaceCredential(credential, for: existing.id)
+            closeLocalServer(existing.id)
+            update(existing.id) {
+                $0.name = name
+                $0.mailServer = settings
+                $0.serverURL = IMAPMailSession.address(settings)
+            }
+            connect(existing.id)
+            return existing
+        }
+        let service = LocalConnectorService.imapMail
+        let taken = Set(connectors.map(\.slug))
+        let base = taken.contains(service.slugBase)
+            ? "\(service.slugBase) \(address.split(separator: "@").first.map(String.init) ?? address)" : service.slugBase
+        let record = ConnectorRecord(
+            name: name,
+            slug: ConnectorToolNaming.slug(for: base, taken: taken),
+            serverURL: IMAPMailSession.address(settings),
+            authorization: .token,
+            presetID: service.presetID,
+            localService: service,
+            account: address,
+            mailServer: settings
+        )
+        let id = record.id
+        try await store { try $0.save(credential, for: id) }
+        connectors.append(record)
+        connect(id)
+        return record
+    }
+
+    /// The connection of an IMAP mail account, opened on first use.
+    private func imapSession(_ record: ConnectorRecord) -> IMAPMailSession? {
+        if let session = imapSessions[record.id] { return session }
+        guard let settings = record.mailServer, let address = record.account else { return nil }
+        let id = record.id
+        let session = IMAPMailSession(id: id, address: address, settings: settings, credentials: environment.credentials,
+                                      sockets: environment.mailSockets, refused: { @MainActor [weak self] in
+                                          self?.update(id) { $0.status = .signInRequired }
+                                          self?.failures[id] = L10n.string("The mail server refused the app password.")
+                                      }, now: environment.now)
+        imapSessions[record.id] = session
+        return session
+    }
+
+    private func callMailAccountTool(_ record: ConnectorRecord, tool: String, arguments: ToolJSON) async -> AgentToolResult {
+        guard let address = record.account, let session = imapSession(record) else {
+            return .error("\(record.name) has no mail server settings; the user can add the account again in Yardlet Settings → Connectors.")
+        }
+        let account = MailAccount(id: record.id, address: address, provider: .imap, connectorSlug: record.slug, service: record.name)
+        do {
+            return try await MailAccountToolRunner(transport: IMAPMailTransport(session: session, account: account), account: account)
+                .call(tool, arguments)
+        } catch where (error as? MailFailure)?.kind == .signInRequired {
+            return .error("\(record.displayName)'s mail server refused its app password: it was deleted or changed. The user can "
+                + "add the account again in Yardlet Settings → Connectors → Mail (IMAP).")
+        } catch let failure as MailFailure {
+            return .error("\(record.name): \(failure.message)")
+        } catch {
+            return .error("Could not reach \(record.name): \(error.localizedDescription)")
+        }
+    }
+
     /// Connects a service Yardlet serves itself that is not Google's: Xcode lists its tools through
-    /// its bridge, App Store Connect checks the key with one read, and the Mac's data asks macOS
-    /// once (its prompt shows only the first time).
+    /// its bridge, App Store Connect checks the key with one read, a mail account signs in to its
+    /// IMAP server, and the Mac's data asks macOS once (its prompt shows only the first time).
     private func performLocalConnect(_ id: UUID, service: LocalConnectorService) async {
         defer {
             connectTasks[id] = nil
@@ -1387,6 +1464,9 @@ final class ConnectorCenter: ConnectorToolProviding {
             case .appStoreConnect:
                 _ = try await appStoreConnectAPI(record).get(["v1", "apps"], [URLQueryItem(name: "limit", value: "1"),
                                                                               URLQueryItem(name: "fields[apps]", value: "name")])
+            case .imapMail:
+                guard let session = imapSession(record) else { throw MailFailure(kind: .unavailable, message: L10n.string("The account has no mail server settings.")) }
+                try await session.check()
             default:
                 guard let kind = MacDataToolRunner.kind(of: service) else { return }
                 guard let store = environment.macData else { throw MacDataError.notAllowed(kind, .unavailable) }
@@ -1423,9 +1503,11 @@ final class ConnectorCenter: ConnectorToolProviding {
         return AppStoreConnectAPI(base: record.serverURL, session: session)
     }
 
-    /// Ends what a local server holds open: Xcode's bridge, an App Store Connect key in memory.
+    /// Ends what a local server holds open: Xcode's bridge, an App Store Connect key in memory, a mail
+    /// account's IMAP connection.
     private func closeLocalServer(_ id: UUID) {
         appStoreSessions[id] = nil
+        if let session = imapSessions.removeValue(forKey: id) { Task { await session.close() } }
         if let client = stdioClients.removeValue(forKey: id) { Task { await client.close() } }
     }
 
@@ -1749,6 +1831,7 @@ final class ConnectorCenter: ConnectorToolProviding {
             return await callGoogleTool(record, tool: toolName, arguments: arguments, taskFolders: context.workspaceRoots)
         case let service? where service.isMicrosoft: return await callMicrosoftTool(record, tool: toolName, arguments: arguments)
         case .appStoreConnect?: return await callAppStoreConnectTool(record, tool: toolName, arguments: arguments)
+        case .imapMail?: return await callMailAccountTool(record, tool: toolName, arguments: arguments)
         case .xcode?: return await callXcodeTool(record, tool: toolName, arguments: arguments)
         case let service?: return await callMacTool(record, service: service, tool: toolName, arguments: arguments)
         case nil: break
@@ -1854,8 +1937,9 @@ final class ConnectorCenter: ConnectorToolProviding {
     }
 
 
-    /// The mailbox's accounts: each connected Gmail and Outlook Mail account, read with the sign-in its
-    /// connector uses, so tokens stay here and refresh one at a time with the connector's.
+    /// The mailbox's accounts: each connected Gmail, Outlook Mail and IMAP mail account, read with the
+    /// sign-in its connector uses, so tokens stay here and refresh one at a time with the connector's,
+    /// and an IMAP account keeps one connection for the mailbox and its tools.
     func mailAccounts() -> [(MailAccount, any MailAccountTransport)] {
         connectors.compactMap { record in
             guard record.status == .connected, let address = record.account else { return nil }
@@ -1868,6 +1952,11 @@ final class ConnectorCenter: ConnectorToolProviding {
                 let account = MailAccount(id: record.credentialID, address: address, provider: .outlook, connectorSlug: record.slug)
                 let api = GraphAPI(base: environment.microsoft.graph, session: accountSession(record.credentialID))
                 return (account, OutlookMailTransport(api: api, account: account))
+            case .imapMail?:
+                guard let session = imapSession(record) else { return nil }
+                let account = MailAccount(id: record.id, address: address, provider: .imap, connectorSlug: record.slug,
+                                          service: record.name)
+                return (account, IMAPMailTransport(session: session, account: account))
             default:
                 return nil
             }

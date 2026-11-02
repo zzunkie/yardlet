@@ -244,7 +244,7 @@ final class PlusConnectorsQARenderingTests: XCTestCase {
                         "stripe", "paypal", "square", "mercury", "webflow", "wix", "ramp", "brex", "paddle", "beancount-io", "hostinger",
                         "figma-desktop", "tavily", "exa", "huggingface", "context7", "deepwiki", "openai-docs",
                         "microsoft-learn", "aws-knowledge", "cloudflare-docs", "twilio-docs"])
-        XCTAssertEqual(ConnectorSetupGuide.Kind.key.presets.map(\.id), ["github", "browserbase", "app-store-connect"])
+        XCTAssertEqual(ConnectorSetupGuide.Kind.key.presets.map(\.id), ["github", "browserbase", "app-store-connect", "imap-mail"])
         XCTAssertEqual(ConnectorSetupGuide.Kind.ownApp.presets.map(\.id),
                        ["slack", "gmail", "google-calendar", "google-drive", "google-analytics", "google-ads", "outlook-mail",
                         "outlook-calendar", "onedrive", "microsoft-teams", "zoom-meetings", "zoom-team-chat", "zoom-docs"])

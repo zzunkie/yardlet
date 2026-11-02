@@ -30,6 +30,9 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
         case macPermission
         /// An app on this Mac serves the tools (Xcode, through `mcpbridge`); nothing to sign in to.
         case localApp
+        /// Yardlet's own server for a mail account over IMAP and SMTP, signed in with the account's
+        /// app password (`MailServerPreset`).
+        case mailPassword
     }
 
     var id: String
@@ -74,7 +77,8 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
     /// The service Yardlet serves itself: Google's, App Store Connect, the Mac's data, or Xcode.
     var localService: LocalConnectorService? {
         switch signIn {
-        case .googleAccount, .microsoftAccount, .appStoreConnectKey, .macPermission, .localApp: LocalConnectorService(presetID: id)
+        case .googleAccount, .microsoftAccount, .appStoreConnectKey, .macPermission, .localApp, .mailPassword:
+            LocalConnectorService(presetID: id)
         case .oauth, .registeredClient, .token, .none: nil
         }
     }
@@ -295,6 +299,10 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
                         signIn: .appStoreConnectKey, symbol: "app.badge",
                         setupURL: URL(string: "https://appstoreconnect.apple.com/access/integrations/api")!,
                         note: "An App Store Connect API key: its .p8 file, key ID, and, for a team key, the issuer ID."),
+        // A mail account without an API, over IMAP and SMTP with its app password, for the mailbox and agents.
+        ConnectorPreset(id: "imap-mail", name: "Mail (IMAP)", serverURL: LocalConnectorService.imapMail.address,
+                        signIn: .mailPassword, symbol: "envelope",
+                        note: "iCloud, Naver, Daum, Kakao, NAVER WORKS, Yahoo, Zoho, Fastmail or another IMAP account, with an app password."),
         ConnectorPreset(id: "gitlab", name: "GitLab", serverURL: URL(string: "https://gitlab.com/api/v4/mcp")!,
                         signIn: .oauth, symbol: "arrow.triangle.branch"),
         ConnectorPreset(id: "supabase", name: "Supabase", serverURL: URL(string: "https://mcp.supabase.com/mcp")!,

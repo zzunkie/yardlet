@@ -427,6 +427,8 @@ private struct ConnectorRow: View {
             parts.append(record.account ?? L10n.string("Not signed in yet"))
         case .appStoreConnect?:
             parts.append(L10n.format("Key %@", record.account ?? ""))
+        case .imapMail?:
+            parts.append([record.account, record.mailServer?.imapHost].compactMap { $0 }.joined(separator: " · "))
         case .xcode?:
             // Its tools answer only while Xcode is open with a project.
             parts.append(L10n.format("%@ · while it's open with a project", center.xcodeDescription ?? "Xcode"))
@@ -562,9 +564,10 @@ private struct ConnectorRow: View {
         record.localService?.accountProvider.map { !center.canSignIn(with: $0) } ?? false
     }
 
-    /// An App Store Connect key Apple refused: a new key is added on its page.
+    /// An App Store Connect key Apple refused, or an app password a mail server refused: a new one is
+    /// added on its page.
     private var needsNewKey: Bool {
-        record.localService == .appStoreConnect && record.status == .signInRequired
+        record.localService.map { [.appStoreConnect, .imapMail].contains($0) } == true && record.status == .signInRequired
     }
 
     private var actionTitle: String {
@@ -625,6 +628,9 @@ private struct ConnectorRow: View {
             }
             if record.localService == .appStoreConnect, let preset = record.preset {
                 Button(L10n.string("App Store Connect keys…")) { onSetUp(preset) }
+            }
+            if record.localService == .imapMail, let preset = record.preset {
+                Button(L10n.string("Mail accounts…")) { onSetUp(preset) }
             }
             if let kind = record.localService.flatMap(MacDataToolRunner.kind(of:)) {
                 Button(L10n.string("Open Privacy & Security…")) { NSWorkspace.shared.open(kind.privacySettingsURL) }

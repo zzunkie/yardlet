@@ -444,7 +444,7 @@ struct SettingsCenterView: View {
                     settingsControlIcon("envelope")
                     VStack(alignment: .leading, spacing: 3) {
                         Text(L10n.string("Mailbox")).font(.callout.weight(.medium))
-                        Text(L10n.string("Show the inboxes of the Gmail and Outlook accounts connected in Connectors beside your tasks. Mail is read from the service and kept in memory only."))
+                        Text(L10n.string("Show the inboxes of the mail accounts connected in Connectors (Gmail, Outlook and accounts over IMAP) beside your tasks. Mail is read from the service and kept in memory only."))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)

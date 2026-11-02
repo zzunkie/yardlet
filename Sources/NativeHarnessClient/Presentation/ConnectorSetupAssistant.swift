@@ -15,6 +15,7 @@ struct ConnectorSetupAssistant: Equatable {
         case slack
         case zoom
         case appStoreConnect
+        case mail
     }
 
     enum StepID: String, CaseIterable, Sendable {
@@ -28,6 +29,8 @@ struct ConnectorSetupAssistant: Equatable {
         case zoomCreate, zoomScopes, zoomCredentials, zoomSignIn
         // App Store Connect
         case ascCreateKey, ascKeyFile, ascConnect
+        // A mail account over IMAP: the service's own steps, then the address and app password
+        case mailService1, mailService2, mailService3, mailAccount, mailConnect
     }
 
     struct Link: Equatable {
@@ -238,6 +241,30 @@ struct ConnectorSetupAssistant: Equatable {
                  isDone: keyChosen),
             Step(id: .ascConnect, title: L10n.string("Connect"),
                  detail: L10n.string("Yardlet keeps the key in your keychain and reads your app list once to check it."),
+                 isDone: false)
+        ])
+    }
+
+    // MARK: Mail over IMAP
+
+    static let mailServiceSteps: [StepID] = [.mailService1, .mailService2, .mailService3]
+
+    /// A mail account's setup: what the chosen service asks first on its website (`MailServerPreset.steps`),
+    /// then the address and app password, then the check. A website step counts as done once its page
+    /// was opened or ticked, and every one once the account connected.
+    static func mail(_ preset: MailServerPreset?, opened: Set<StepID>, accountEntered: Bool) -> ConnectorSetupAssistant {
+        let serviceSteps = (preset?.steps ?? []).prefix(mailServiceSteps.count).enumerated().map { index, step in
+            let id = mailServiceSteps[index]
+            return Step(id: id, title: L10n.string(step.text), detail: nil,
+                        link: step.link.map { Link(title: L10n.string("Open"), url: $0) },
+                        isDone: opened.contains(id) || accountEntered)
+        }
+        return ConnectorSetupAssistant(service: .mail, steps: serviceSteps + [
+            Step(id: .mailAccount, title: L10n.string("Enter the address and the app password"),
+                 detail: L10n.string("The app password the service made, not the password you sign in to its website with."),
+                 isDone: accountEntered),
+            Step(id: .mailConnect, title: L10n.string("Connect"),
+                 detail: L10n.string("Yardlet signs in to the mail server once to check it, and keeps the password in your keychain."),
                  isDone: false)
         ])
     }
