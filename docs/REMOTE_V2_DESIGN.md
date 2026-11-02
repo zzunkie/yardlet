@@ -376,7 +376,8 @@ home screen's memory, disk and heat warnings (nothing to do about them from a ph
 changing a running task's model or permission mode (the Claude app has it; each harness changes it differently, so it is its
 own step); slash commands from the phone; a whole task's diff pane and diff line comments. Taking a photo with the camera
 and attaching files came later the same day (5.3). The scheduled task list, Run now, Pause and Resume came on 2026-11-02
-(REMOTE_PROTOCOL §15.21).
+(REMOTE_PROTOCOL §15.21), and opening what a task made, its outputs and the files in its folders, the same day
+(REMOTE_PROTOCOL §15.22).
 
 
 ### 5.3 Every answer from the phone, files and the camera (2026-10-27, later)
@@ -667,6 +668,7 @@ sidebar, and no boxed cards with badges or "01/02" number labels.
 | Lost phone | Removing it on the Mac cuts it off at once, Android screen lock, only the public version of notifications on the lock screen | Someone with a lost, unlocked phone can operate it until it is removed, unless app lock (section 5.2, off by default) is on |
 | The Mac's keys leak | Keys are in the keychain (open only to the app's signature) | Malware running with the same user's rights is a risk, as it is for other Yardlet data |
 | Notification content | Encrypted with the notification key, which travels only over the secure channel after pairing | Google and the relay know that a notification came and when |
+| A paired phone reads files on the Mac | Only a regular file of at most 100 MiB that, with symbolic links resolved, lies in the task's own folders or is one of its outputs; a folder that holds the home folder gives none of its own; anything else answers as a file that is not there; each file opened is in the audit log by name (REMOTE_PROTOCOL §15.22) | A phone that steers a task reads what is in that task's folders, a secret kept there (`.env`) included, as it could ask the task to show it |
 | Credentials, account tokens, environment values | Not sent | — |
 
 ## 11. What stays on the Mac
@@ -674,9 +676,9 @@ sidebar, and no boxed cards with badges or "01/02" number labels.
 - While it is on: the v2 listener, the Bonjour advertisement and one outgoing connection to the relay. Turning it off
   closes all three at once, and the relay room disappears from memory.
 - What always stays (Yardlet's own data): `~/.yardlet/remote/devices.json` (phones' public keys, names, times,
-  notification tokens and keys), `audit.log` (command kinds and task IDs, no content) and keychain
-  items (the Mac's Noise key and relay key, and the session token if signed in to an account). Nothing is written to
-  harnesses, provider accounts or repositories.
+  notification tokens and keys), `audit.log` (command kinds, task IDs and the names of files a phone opened, no
+  content) and keychain items (the Mac's Noise key and relay key, and the session token if signed in to an account).
+  Nothing is written to harnesses, provider accounts or repositories.
 - Preventing sleep and screen lock is a power assertion held by the process, so macOS releases it when Yardlet quits.
   System settings (`pmset`) are not changed.
 - Only while "Keep tasks working with the lid closed" is on: macOS's background item registration (removed when the

@@ -473,7 +473,7 @@ The provider's notices beside the turn (a model reroute, a warning) and context 
 | `unauthenticated` | a request before the connection is a device's (a link request waiting, §12.1) |
 | `pairingUnavailable` | no pairing is open (expired, used or cancelled) |
 | `pairingInvalid` | wrong pairing secret |
-| `notFound` | no listed task (or schedule, §15.21) with that ID |
+| `notFound` | no listed task (or schedule, §15.21) with that ID, or a file a phone may not read or that is not there (§15.22) |
 | `notSubscribed` | `loadOlder` for a task not subscribed |
 | `invalidCursor` | the cursor no longer names a place in the conversation |
 | `tooManySubscriptions` | more than 8 subscribed tasks |
@@ -482,7 +482,7 @@ The provider's notices beside the turn (a model reroute, a warning) and context 
 | `unavailable` | the task is not connected to its harness on the Mac |
 | `notRunning` | nothing to stop |
 | `emptyMessage` | `sendMessage.text` is empty |
-| `tooLarge` | `sendMessage.text` is too long |
+| `tooLarge` | `sendMessage.text` is too long, or a file is over 100 MiB (§15.22) |
 | `unsupportedCommand` | a slash command |
 | `busy` | the task cannot take it now (editing, switching account, held by another app), or a run of the schedule is starting |
 | `rateLimited` | over the rate limit |
@@ -520,7 +520,8 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
     `stopTurn` interrupts it; it starts streaming again 30 s after it stops or finishes.
   - A message sent to a running task waits as a `queued` item and is taken when the turn ends, which
     starts a reply turn.
-  - "Summarize the crash reports" (Codex) is finished and unread with 30 turns, for `loadOlder`.
+  - "Summarize the crash reports" (Codex) is finished and unread with 30 turns, for `loadOlder`. Its outputs
+    (§15.22) are a PDF beside its folder and a PNG in it, and its last answer names `reports/crash-notes.txt`.
   - "Fix the footer links" (Claude Code) is idle; `sendMessage` (to it or any idle task) starts a turn
     that reads and edits files, streams an answer and completes.
   - "Pick the release name" (Claude Code) waits on a question (no phone options, `moreOnMac`;
@@ -551,7 +552,8 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
 - 2026-10-27, not only additions: protocol 1 removed (§1); a link request commits to a nonce and reveals it
   (§12.1), and older link requests get `unsupportedVersion`; limits on connections that are still authenticating
   (§7, §13.1, §14.3).
-- 2026-11-02, v2 only: scheduled tasks, Run now, Pause and Resume, and their change event (§15.21).
+- 2026-11-02, v2 only: scheduled tasks, Run now, Pause and Resume, and their change event (§15.21); a task's outputs
+  and the files in its folders (§15.22).
 
 ## 11. v2 transport
 
@@ -1265,15 +1267,21 @@ task's own folders that the conversation names. Until now files went only from t
   ```
 
   Reads up to 4 MiB of one file from `offset`; the phone asks again from `offset` plus the bytes it got until it
-  has `size`, and starts over when `modifiedAt` or `size` changes between parts. `path` is absolute, or relative to
-  the task's folder as a conversation writes it; the answer gives the absolute path the Mac read. The Mac serves a
-  regular file only, at most 100 MiB, and only when it is one of the task's outputs (above) or, once symbolic links
-  are resolved, lies inside one of the task's own folders (its working folder or worktree and the project's other
-  folders). Anything else is refused, the same for a file that does not exist, so the phone learns nothing about
-  folders it may not read. `mediaType` is the Mac's guess from the file's type. Not a command. Errors: `badRequest`,
-  `notFound` (no such task, or a file it may not read or that does not exist), `tooLarge` (over 100 MiB).
-- The audit log (§4.4) records each `readFile` that starts at offset 0 with the task and the file's name (not its
-  path), so the person can see what a phone opened.
+  has `size`, and starts over when `modifiedAt` or `size` changes between parts. An answer at `offset` equal to
+  `size` carries no bytes. `path` is absolute, or relative to the task's folder as a conversation writes it; the
+  answer gives the absolute path the Mac read, with symbolic links resolved, and `name` is that path's last part.
+  The Mac serves a regular file only, at most 100 MiB, and only when it is one of the task's outputs (above) or,
+  once symbolic links are resolved, lies inside one of the task's own folders (its working folder or worktree and
+  the project's other folders, as the task was given them), by whole path components. A folder that is the Mac's
+  home folder or holds it (`/`, `/Users`) gives no files of its own: a task there serves only its outputs. Anything
+  else is refused, the same for a file that does not exist, so the phone learns nothing about folders it may not
+  read; no error names a path. `mediaType` is the Mac's guess from the file's extension, else `text/plain` for a
+  file that starts as UTF-8 text and `application/octet-stream` for anything else. Not a command. Errors:
+  `badRequest` (no `path`, no `offset` or one past `size`), `notFound` (no such task, or a file it may not read or
+  that does not exist), `tooLarge` (over 100 MiB).
+- The audit log (§4.4) records each `readFile` that starts at offset 0, served or refused, with the task and the
+  file's name in `file` (for a refusal, the last part of the path the phone asked for), never its path, so the
+  person can see what a phone opened.
 
 ## 16. Push notifications
 
@@ -1315,6 +1323,10 @@ device's push key, associated data the UTF-8 bytes of `yardlet-push/1`, over the
   turned itself off after three failed starts, and Run now fails again; "Weekend trip reminder" is a one-off in
   Chats that ran (no `canResume`). Run now starts or continues a task after a moment (`busy` meanwhile), and while
   that task works a second Run now records a skip.
+- Its tasks' files (§15.22) are in the fixture's own temporary folder, which it prints when it starts: each project's
+  tasks share a folder (`Yardlet`, `Website`, `Chats`). "Summarize the crash reports" lists `crash-summary.pdf`, in a
+  `Desktop` folder beside its own, and `reports/crash-chart.png`; its conversation names `reports/crash-notes.txt`.
+  `../Desktop/private-notes.txt` is neither, so it answers `notFound`.
 - Test vectors both implementations check (`Tests/NativeHarnessClientTests/Fixtures/RemoteNoiseVectors.json`,
   copied byte for byte into the phone app's tests): the public-domain cacophony vector for
   `Noise_IK_25519_ChaChaPoly_SHA256`, and a Yardlet vector with this protocol's prologue, a pairing

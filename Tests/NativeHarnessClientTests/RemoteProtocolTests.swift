@@ -55,7 +55,9 @@ final class RemoteProtocolTests: XCTestCase {
             .revealLink(nonce: Data(repeating: 9, count: 32)),
             .scheduledTasks,
             .runScheduledTask(scheduleID: "S"),
-            .setScheduledTaskEnabled(scheduleID: "S", enabled: false)
+            .setScheduledTaskEnabled(scheduleID: "S", enabled: false),
+            .taskOutputs(taskID: "T1"),
+            .readFile(taskID: "T1", path: "reports/crash-notes.txt", offset: 4_194_304)
         ]
         for (index, request) in requests.enumerated() {
             let envelope = RemoteRequestEnvelope(id: "\(index)", request: request)
@@ -109,6 +111,60 @@ final class RemoteProtocolTests: XCTestCase {
         // An outcome a later Mac adds reads as a failure.
         let later = try JSONDecoder().decode(RemoteSchedule.Run.self, from: Data(#"{"at": 1, "outcome": "deferred", "line": "x"}"#.utf8))
         XCTAssertEqual(later.outcome, .failed)
+    }
+
+    /// §15.22 as the contract writes it: both requests read and write back the same JSON and are not commands, and both
+    /// answers decode and encode back the same, the part's bytes as base64.
+    func testTheDocumentedTaskFilesDecode() throws {
+        let requests: [(String, RemoteRequest)] = [
+            (#"{"id": "34", "type": "taskOutputs", "taskId": "4C1F…"}"#, .taskOutputs(taskID: "4C1F…")),
+            (#"{"id": "35", "type": "readFile", "taskId": "4C1F…", "path": "/Users/example/Desktop/report.pdf", "offset": 0}"#,
+             .readFile(taskID: "4C1F…", path: "/Users/example/Desktop/report.pdf", offset: 0))
+        ]
+        for (json, request) in requests {
+            let envelope = try decode(json)
+            XCTAssertEqual(envelope.request, request)
+            XCTAssertFalse(envelope.request.isCommand, json)
+            XCTAssertEqual(envelope.request.taskID, "4C1F…")
+            let written = try XCTUnwrap(JSONSerialization.jsonObject(with: envelope.encoded()) as? NSDictionary)
+            XCTAssertEqual(written, try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? NSDictionary))
+        }
+        for json in [#"{"id":"36","type":"readFile","taskId":"T","offset":0}"#,
+                     #"{"id":"37","type":"readFile","taskId":"T","path":"","offset":0}"#,
+                     #"{"id":"38","type":"readFile","taskId":"T","path":"a.txt"}"#,
+                     #"{"id":"39","type":"readFile","taskId":"T","path":"a.txt","offset":-1}"#,
+                     #"{"id":"40","type":"taskOutputs"}"#] {
+            guard case let .failure(failure) = RemoteRequestEnvelope.decode(Data(json.utf8)) else { return XCTFail(json) }
+            XCTAssertEqual(failure.error.code, .badRequest, json)
+        }
+
+        let outputs = #"""
+        {"re": "34", "ok": true, "outputs": [
+          {"path": "/Users/example/Desktop/report.pdf", "name": "report.pdf", "size": 482113, "writtenAt": 1792158000000}]}
+        """#
+        let listing = try JSONDecoder().decode(RemoteResponse.self, from: Data(outputs.utf8))
+        XCTAssertEqual(listing.outputs, [RemoteOutput(path: "/Users/example/Desktop/report.pdf", name: "report.pdf",
+                                                      size: 482_113, writtenAt: 1_792_158_000_000)])
+        let listed = try XCTUnwrap(JSONSerialization.jsonObject(with: RemoteJSON.encoder.encode(listing)) as? NSDictionary)
+        XCTAssertEqual(listed, try XCTUnwrap(JSONSerialization.jsonObject(with: Data(outputs.utf8)) as? NSDictionary))
+
+        // The contract's placeholder stands for the part's bytes in base64.
+        let bytes = Data("%PDF-1.4\n".utf8)
+        let part = #"""
+        {"re": "35", "ok": true, "path": "/Users/example/Desktop/report.pdf", "name": "report.pdf",
+         "mediaType": "application/pdf", "size": 482113, "offset": 0, "data": "<base64 of up to 4 MiB>",
+         "modifiedAt": 1792158000000}
+        """#.replacingOccurrences(of: "<base64 of up to 4 MiB>", with: bytes.base64EncodedString())
+        let read = try JSONDecoder().decode(RemoteResponse.self, from: Data(part.utf8))
+        XCTAssertEqual(read.path, "/Users/example/Desktop/report.pdf")
+        XCTAssertEqual(read.name, "report.pdf")
+        XCTAssertEqual(read.mediaType, "application/pdf")
+        XCTAssertEqual(read.size, 482_113)
+        XCTAssertEqual(read.offset, 0)
+        XCTAssertEqual(read.data, bytes)
+        XCTAssertEqual(read.modifiedAt, 1_792_158_000_000)
+        let written = try XCTUnwrap(JSONSerialization.jsonObject(with: RemoteJSON.encoder.encode(read)) as? NSDictionary)
+        XCTAssertEqual(written, try XCTUnwrap(JSONSerialization.jsonObject(with: Data(part.utf8)) as? NSDictionary))
     }
 
     func testRequestsThatCannotBeReadSayWhy() {

@@ -39,6 +39,11 @@ public enum RemoteProtocol {
     public static let maxUploadPartBytes = 4 * 1024 * 1024
     /// The most schedules `scheduledTasks` lists (§15.21).
     public static let maxSchedules = 200
+    /// The most outputs `taskOutputs` lists, the largest file `readFile` serves and the most one part of it holds
+    /// (§15.22).
+    public static let maxOutputs = 50
+    public static let maxReadFileBytes = 100 * 1024 * 1024
+    public static let maxReadPartBytes = 4 * 1024 * 1024
 }
 
 // MARK: - Errors
@@ -217,10 +222,12 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var followUp: RemoteFollowUpMode?
     /// The bridge answers `scheduledTasks` (§15.21).
     public var scheduledTasks: Bool
+    /// The bridge answers `taskOutputs` and `readFile` (§15.22).
+    public var taskFiles: Bool
 
     public init(projects: [RemoteProject] = [], tasks: [RemoteTask] = [], newestRequestIDs: [String: String] = [:],
                 requestSummaries: [String: String] = [:], newTask: RemoteNewTask? = nil,
-                followUp: RemoteFollowUpMode? = nil, scheduledTasks: Bool = false) {
+                followUp: RemoteFollowUpMode? = nil, scheduledTasks: Bool = false, taskFiles: Bool = false) {
         self.projects = projects
         self.tasks = tasks
         self.newestRequestIDs = newestRequestIDs
@@ -228,6 +235,7 @@ public struct RemoteSnapshot: Equatable, Sendable {
         self.newTask = newTask
         self.followUp = followUp
         self.scheduledTasks = scheduledTasks
+        self.taskFiles = taskFiles
     }
 
     public static let empty = RemoteSnapshot()
@@ -703,6 +711,9 @@ public enum RemoteRequest: Equatable, Sendable {
     case scheduledTasks
     case runScheduledTask(scheduleID: String)
     case setScheduledTaskEnabled(scheduleID: String, enabled: Bool)
+    /// What a task made, and a part of one of its files (§15.22).
+    case taskOutputs(taskID: String)
+    case readFile(taskID: String, path: String, offset: Int)
 
     public var type: String {
         switch self {
@@ -738,6 +749,8 @@ public enum RemoteRequest: Equatable, Sendable {
         case .scheduledTasks: "scheduledTasks"
         case .runScheduledTask: "runScheduledTask"
         case .setScheduledTaskEnabled: "setScheduledTaskEnabled"
+        case .taskOutputs: "taskOutputs"
+        case .readFile: "readFile"
         }
     }
 
@@ -748,7 +761,8 @@ public enum RemoteRequest: Equatable, Sendable {
              let .answerApproval(id, _, _, _), let .stopTurn(id), let .markRead(id), let .answerQuestion(id, _, _),
              let .reviewPlan(id, _, _, _), let .itemDetail(id, _), let .actOnSuggestion(id, _, _), let .setPinned(id, _),
              let .archiveTask(id), let .limitAccounts(id), let .continueWithAccount(id, _), let .setAutoContinue(id, _),
-             let .actOnQueued(id, _, _), let .answerHandoff(id, _, _), let .chooseAnswer(id, _, _, _, _): id
+             let .actOnQueued(id, _, _), let .answerHandoff(id, _, _), let .chooseAnswer(id, _, _, _, _),
+             let .taskOutputs(id), let .readFile(id, _, _): id
         case .snapshot, .ping, .createTask, .newTaskOptions, .registerPush, .unregisterPush, .forgetDevice,
              .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled: nil
         }
@@ -827,6 +841,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var data: String?
         var nonce: String?
         var scheduleId: String?
+        var path: String?
     }
 
     private struct WireImage: Codable {
@@ -1023,6 +1038,15 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 return fail(.badRequest, "Missing scheduleId or enabled")
             }
             request = .setScheduledTaskEnabled(scheduleID: scheduleID, enabled: enabled)
+        case "taskOutputs":
+            guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
+            request = .taskOutputs(taskID: taskID)
+        case "readFile":
+            guard let taskID = required(wire.taskId), let path = required(wire.path) else {
+                return fail(.badRequest, "Missing taskId or path")
+            }
+            guard let offset = wire.offset, offset >= 0 else { return fail(.badRequest, "Missing or negative offset") }
+            request = .readFile(taskID: taskID, path: path, offset: offset)
         default:
             return fail(.unknownType, "Unknown type \(type)")
         }
@@ -1130,6 +1154,12 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         case let .setScheduledTaskEnabled(scheduleID, enabled):
             wire.scheduleId = scheduleID
             wire.enabled = enabled
+        case let .taskOutputs(taskID):
+            wire.taskId = taskID
+        case let .readFile(taskID, path, offset):
+            wire.taskId = taskID
+            wire.path = path
+            wire.offset = offset
         }
         return (try? RemoteJSON.encoder.encode(wire)) ?? Data()
     }
@@ -1198,6 +1228,19 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var scheduledTasks: Bool?
     /// `scheduledTasks` (§15.21).
     public var schedules: [RemoteSchedule]?
+    /// `snapshot` on v2: the Mac answers `taskOutputs` and `readFile` (§15.22).
+    public var taskFiles: Bool?
+    /// `taskOutputs` (§15.22).
+    public var outputs: [RemoteOutput]?
+    /// `readFile` (§15.22): the absolute path the Mac read, the file's name, type, size and modification time, and
+    /// the bytes from `offset` (base64).
+    public var path: String?
+    public var name: String?
+    public var mediaType: String?
+    public var size: Int?
+    public var offset: Int?
+    public var data: Data?
+    public var modifiedAt: Int64?
 
     public init(re: String, ok: Bool = true, error: RemoteError? = nil) {
         self.re = re
@@ -1381,6 +1424,23 @@ public struct RemoteSchedule: Codable, Equatable, Sendable {
         self.harnessName = harnessName
         self.lastRun = lastRun
         self.canResume = canResume
+    }
+}
+
+/// A file of the Mac's Outputs card for a task (§15.22).
+public struct RemoteOutput: Codable, Equatable, Sendable {
+    /// Absolute.
+    public var path: String
+    public var name: String
+    /// Absent for a file that is gone.
+    public var size: Int?
+    public var writtenAt: Int64?
+
+    public init(path: String, name: String, size: Int? = nil, writtenAt: Int64? = nil) {
+        self.path = path
+        self.name = name
+        self.size = size
+        self.writtenAt = writtenAt
     }
 }
 
