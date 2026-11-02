@@ -196,15 +196,21 @@ final class ProviderUsageTests: XCTestCase {
     }
 
     /// Antigravity CLI 1.4.12's `agy --print /usage --output-format json`: a row per bucket, named by
-    /// its model group, from what is left; an answer that failed, or none, is no rows.
+    /// its model group and its window's length, from what is left; an answer that failed, or none, is
+    /// no rows. The five-hour bucket is as an account check recorded it, which kept its ID and not its
+    /// `window`: the length comes from the ID, not from the bucket's English name.
     func testAntigravityUsageNamesEachBucketByItsGroupAndFailsClosed() throws {
-        let answer = #"{"conversation_id":"","status":"SUCCESS","response":"","num_turns":0,"command":{"name":"usage","data":{"groups":[{"name":"Gemini Models","buckets":[{"id":"gemini-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":0.75,"reset_time":"2026-11-02T14:06:40Z"}]},{"name":"Claude and GPT models","buckets":[{"id":"3p-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":1,"reset_time":"2026-11-08T18:59:05Z"}]}]}}}"#
-        let week = L10n.format("%.0f day limit", 7.0)
+        let answer = #"{"conversation_id":"","status":"SUCCESS","response":"","num_turns":0,"command":{"name":"usage","data":{"groups":[{"name":"Gemini Models","buckets":[{"id":"gemini-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":0.75,"reset_time":"2026-11-02T14:06:40Z"},{"id":"gemini-5h","name":"Five Hour Limit Remaining","remaining_fraction":0.5,"reset_time":"2026-11-02T14:37:17Z"}]},{"name":"Claude and GPT models","buckets":[{"id":"3p-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":1,"reset_time":"2026-11-08T18:59:05Z"}]}]}}}"#
+        let week = L10n.format("%.0f day limit", 7.0), fiveHours = L10n.format("%.0f hour limit", 5.0)
         XCTAssertEqual(AntigravityUsage.metrics(fromOutput: "A newer version is available.\n" + answer), [
             AccountUsageMetric(id: "antigravity:gemini-weekly", label: "Gemini · \(week)", usedFraction: 0.25,
                                detail: L10n.format("%.0f%% remaining", 75.0),
                                resetsAt: Date(timeIntervalSince1970: 1_793_628_400), evidence: .exactQuota,
                                windowMinutes: 10_080),
+            AccountUsageMetric(id: "antigravity:gemini-5h", label: "Gemini · \(fiveHours)", usedFraction: 0.5,
+                               detail: L10n.format("%.0f%% remaining", 50.0),
+                               resetsAt: Date(timeIntervalSince1970: 1_793_630_237), evidence: .exactQuota,
+                               windowMinutes: 300),
             AccountUsageMetric(id: "antigravity:3p-weekly", label: "Claude and GPT · \(week)", usedFraction: 0,
                                detail: L10n.format("%.0f%% remaining", 100.0),
                                resetsAt: Date(timeIntervalSince1970: 1_794_164_345), evidence: .exactQuota,

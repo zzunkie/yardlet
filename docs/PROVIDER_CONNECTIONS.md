@@ -216,9 +216,12 @@ When Antigravity CLI is signed in (its keychain item exists), Yardlet runs `agy 
 (`AntigravityUsage`). The CLI answers this command without a model turn and keeps no conversation for it (`num_turns`
 0, an empty `conversation_id`); like any `agy` run it writes its own log. The models share limits by group ("Gemini
 Models", "Claude and GPT models"), and each group lists buckets with the share left (`remaining_fraction`) and when it
-refills (`reset_time`). Each bucket is one row, named by its group without the word "models" and by its window
-("Gemini · 7 day limit"). An answer
-that is not `SUCCESS`, or none, shows no rows rather than 0. AI credits (`/credits`) are not read.
+refills (`reset_time`). Each bucket is one row, named by its group without the word "models" and by its window's
+length ("Gemini · 7 day limit", "Gemini · 5 hour limit"), as Claude's and Codex's windows are named. The length comes
+from the bucket's `window` (`weekly`, `daily`, or a count and a unit such as `5h`) or, when that is not one, from the
+end of its `id`, which names the window too (`gemini-weekly`, `gemini-5h`); a bucket whose length neither gives keeps
+the CLI's own name. An answer that is not `SUCCESS`, or none, shows no rows rather than 0. AI credits (`/credits`) are
+not read.
 
 ## Usage limit resets
 
