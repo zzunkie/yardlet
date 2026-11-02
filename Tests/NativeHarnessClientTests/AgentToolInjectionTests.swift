@@ -112,7 +112,7 @@ final class AgentToolInjectionTests: XCTestCase {
             providerSessionID: "s", workspaceURL: workspace, resumesExistingSession: true, chromeIntegration: true,
             agentToolConfigPath: file.path(percentEncoded: false)
         ))
-        XCTAssertEqual(Array(with.suffix(21)), ["--chrome", "--allowedTools", "mcp__yardlet__spawn_task",
+        XCTAssertEqual(Array(with.suffix(22)), ["--chrome", "--allowedTools", "mcp__yardlet__spawn_task",
                                                "mcp__yardlet__dismiss_task", "mcp__yardlet__list_tasks",
                                                "mcp__yardlet__read_task", "mcp__yardlet__send_message_to_task",
                                                "mcp__yardlet__wait_tasks", "mcp__yardlet__create_task",
@@ -121,7 +121,7 @@ final class AgentToolInjectionTests: XCTestCase {
                                                "mcp__yardlet__show_project", "mcp__yardlet__list_accounts",
                                                "mcp__yardlet__list_personal_agents", "mcp__yardlet__read_personal_agent",
                                                "mcp__yardlet__read_personal_agent_thread",
-                                               "mcp__yardlet__list_task_runs",
+                                               "mcp__yardlet__read_terminal", "mcp__yardlet__list_task_runs",
                                                "--mcp-config", file.path(percentEncoded: false)],
                        "The variadic flag goes last so nothing else is read as a config; the chip tools run unasked, "
                            + "and of the scheduled-task tools only list_task_runs, as in the Claude app")

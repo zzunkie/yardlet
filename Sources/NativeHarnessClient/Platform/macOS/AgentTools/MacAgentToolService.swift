@@ -17,6 +17,8 @@ final class MacAgentToolService: NativeSurfaceResource {
     let vault: VaultCenter
     private let directory: URL
     private var listener: UnixSocketListener?
+    private var sharesTerminal = true
+    private var terminalSharingObserver: NSObjectProtocol?
 
     /// The helper in the app bundle, or next to the executable in a development build.
     nonisolated static var executableURL: URL? {
@@ -87,8 +89,22 @@ final class MacAgentToolService: NativeSurfaceResource {
         vault = MacVault.makeCenter()
         broker.vault = vault
         vault.onToolsChanged = { [weak broker = self.broker] in broker?.toolsMayHaveChanged() }
+        // Sharing the terminal adds or takes away `read_terminal` in every task's list.
+        sharesTerminal = TerminalSharingPreference.isOn()
+        terminalSharingObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.terminalSharingMayHaveChanged() }
+        }
         broker.startEndpoint = { [unowned self] in try self.startListener() }
         NativeSurfaceResourceRegistry.shared.register(self)
+    }
+
+    private func terminalSharingMayHaveChanged() {
+        let shares = TerminalSharingPreference.isOn()
+        guard shares != sharesTerminal else { return }
+        sharesTerminal = shares
+        broker.toolsMayHaveChanged()
     }
 
     /// The keychain; a QA run with a temporary home has no login keychain, so it keeps

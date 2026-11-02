@@ -115,6 +115,10 @@ struct NewTaskWorkspace<Home: View>: View {
             folder: TerminalFolderContext(folders: [folder], restart: {
                 workspaceState.restartTerminal(in: folder, launch: terminalShellLaunch, taskID: nil)
             }),
+            onAttachSelection: { selection, title in
+                TerminalSelectionText.attach(selection, from: title, to: draft)
+                workspaceState.keyboardFocus.move(to: .chat)
+            },
             onClose: closeTerminal
         )
         .id(ObjectIdentifier(session))

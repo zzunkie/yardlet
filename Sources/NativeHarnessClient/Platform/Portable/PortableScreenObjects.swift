@@ -18,14 +18,23 @@ final class AccountLoginController {
 /// A terminal tab's shell: none starts here.
 @MainActor
 final class NativeTerminalSession {
+    let id = UUID()
+    let workspaceURL: URL
     private(set) var hasEnded = false
+    let hasShell = false
+    let isRunning = false
+    let exitCode: Int32? = nil
+    let terminationSignal: Int32? = nil
+    let bufferText = ""
     var name: String?
     var number = 1
     var onEnd: (() -> Void)?
     let isRunningProgram = false
     let isAtPrompt = false
 
-    init(workspaceURL: URL, launch: ShellLaunchEnvironment = .userLoginShell(), taskID: UUID? = nil) {}
+    init(workspaceURL: URL, launch: ShellLaunchEnvironment = .userLoginShell(), taskID: UUID? = nil) {
+        self.workspaceURL = workspaceURL
+    }
 
     func move(toTask id: UUID) {}
 

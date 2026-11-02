@@ -958,6 +958,11 @@
 "Restart terminal" = "Restart terminal";
 "This stops the terminal's running processes and clears its output." = "This stops the terminal's running processes and clears its output.";
 "New terminal" = "New terminal";
+"Share the terminal with agents" = "Share the terminal with agents";
+"A task's agent can read the task's terminal tabs, without typing in them, and a selection in the terminal can be attached to your message (⌘⇧L)." = "A task's agent can read the task's terminal tabs, without typing in them, and a selection in the terminal can be attached to your message (⌘⇧L).";
+"Attach Selection to Message" = "Attach Selection to Message";
+"Paste" = "Paste";
+"Terminal (%@):" = "Terminal (%@):";
 "Rename terminal" = "Rename terminal";
 "Close terminal?" = "Close terminal?";
 "Close %d terminals?" = "Close %d terminals?";

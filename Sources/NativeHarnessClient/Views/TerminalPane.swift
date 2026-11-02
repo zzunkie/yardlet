@@ -42,6 +42,8 @@ struct TerminalPane: View {
     let onClose: () -> Void
     var folder: TerminalFolderContext? = nil
     var tabs: TerminalTabsContext? = nil
+    /// Adds a selection in the terminal to the task's message, while the terminal is shared.
+    var onAttachSelection: ((_ selection: String, _ tabTitle: String) -> Void)? = nil
     @State private var session: NativeTerminalSession
     /// The task's workspace keeps the shell (`TaskWorkspaceState.terminal`), which goes on while no
     /// panel shows it; otherwise the panel's own shell ends with the panel.
@@ -58,6 +60,7 @@ struct TerminalPane: View {
     @Environment(\.taskKeyboardFocus) private var keyboardFocus
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @AppStorage(TerminalSharingPreference.key) private var sharesTerminal = true
 
     init(
         workspaceURL: URL,
@@ -83,9 +86,11 @@ struct TerminalPane: View {
         handoff: TerminalCommandRequest? = nil,
         startsAutomatically: Bool = true,
         folder: TerminalFolderContext? = nil,
+        onAttachSelection: ((_ selection: String, _ tabTitle: String) -> Void)? = nil,
         onHandoffDone: @escaping (TerminalCommandRequest.ID) -> Void = { _ in },
         onClose: @escaping () -> Void
     ) {
+        self.onAttachSelection = onAttachSelection
         self.handoff = handoff
         self.onHandoffDone = onHandoffDone
         self.onClose = onClose
@@ -124,7 +129,9 @@ struct TerminalPane: View {
             }
 
             if hasStarted {
-                SwiftTermHost(session: session, isDark: colorScheme == .dark, fontSize: 12 * interfaceScale)
+                SwiftTermHost(session: session, isDark: colorScheme == .dark, fontSize: 12 * interfaceScale,
+                              attachSelection: attachSelection(title: titles[ObjectIdentifier(session)]
+                                                                ?? workspaceURL.lastPathComponent))
                 .id(session.generation)
                 .padding(.horizontal, 10).padding(.bottom, 8)
                 .background(Color(nsColor: TerminalAppearance.background(isDark: colorScheme == .dark)))
@@ -203,6 +210,12 @@ struct TerminalPane: View {
                 isStartFocused = true
             }
         }
+    }
+
+    /// The selection goes to the message, and the keyboard with it, while the terminal is shared.
+    private func attachSelection(title: String) -> ((String) -> Void)? {
+        guard sharesTerminal, let onAttachSelection else { return nil }
+        return { selection in onAttachSelection(selection, title) }
     }
 
     /// The header's tab strip: the task's terminal tabs, each closing on its own, with a + for another.
@@ -310,26 +323,6 @@ struct TerminalPane: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(ParityTheme.subtleFill)
-    }
-}
-
-/// A terminal tab's title: the name the person gave it, else its folder's name, numbered from the
-/// second tab on in the order the tabs opened ("yardlet", "yardlet 2"), so each keeps its title while
-/// others open and close.
-@MainActor
-enum TerminalTabTitle {
-    static func defaultTitle(of shell: NativeTerminalSession) -> String {
-        let folder = shell.workspaceURL.lastPathComponent
-        return shell.number > 1 ? "\(folder) \(shell.number)" : folder
-    }
-
-    static func titles(for shells: [NativeTerminalSession]) -> [ObjectIdentifier: String] {
-        Dictionary(shells.map { (ObjectIdentifier($0), $0.name ?? defaultTitle(of: $0)) }, uniquingKeysWith: { first, _ in first })
-    }
-
-    /// The tab's id in the header's strip.
-    static func tabID(_ shell: NativeTerminalSession) -> String {
-        "terminal:" + shell.id.uuidString
     }
 }
 
@@ -672,6 +665,7 @@ private struct SwiftTermHost: NSViewRepresentable {
     let session: NativeTerminalSession
     let isDark: Bool
     let fontSize: CGFloat
+    var attachSelection: ((String) -> Void)?
 
     func makeNSView(context: Context) -> TerminalViewHost {
         let view = session.view {
@@ -687,11 +681,13 @@ private struct SwiftTermHost: NSViewRepresentable {
             return view
         }
         applyAppearance(to: view, coordinator: context.coordinator)
+        (view as? NativeTerminalView)?.attachSelection = attachSelection
         return TerminalViewHost(terminal: view)
     }
 
     func updateNSView(_ nsView: TerminalViewHost, context: Context) {
         applyAppearance(to: nsView.terminal, coordinator: context.coordinator)
+        (nsView.terminal as? NativeTerminalView)?.attachSelection = attachSelection
     }
 
     private func applyAppearance(to view: LocalProcessTerminalView, coordinator: Coordinator) {
@@ -769,12 +765,74 @@ extension EnvironmentValues {
 }
 
 /// The terminal panel's view: SwiftTerm's, telling its session when the shell prints, so a command
-/// handed to the terminal waits for the prompt (`NativeTerminalSession.typeWhenReady`).
+/// handed to the terminal waits for the prompt (`NativeTerminalSession.typeWhenReady`). While the
+/// terminal is shared (`TerminalSharingPreference`) its right-click menu and ⌘⇧L, the Claude app's
+/// "Attach selection as context" key, attach the selection to the person's message; otherwise it has
+/// no menu, as SwiftTerm's own view has none.
 final class NativeTerminalView: LocalProcessTerminalView {
     var onOutput: (() -> Void)?
+    /// Attaches the selected text to the task's message; nil while the terminal is not shared.
+    var attachSelection: ((String) -> Void)?
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
         super.dataReceived(slice: slice)
         onOutput?()
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard attachSelection != nil else { return super.menu(for: event) }
+        let menu = NSMenu()
+        let attach = NSMenuItem(title: L10n.string("Attach Selection to Message"),
+                                action: #selector(attachSelectionToMessage(_:)), keyEquivalent: "l")
+        attach.keyEquivalentModifierMask = [.command, .shift]
+        attach.target = self
+        menu.addItem(attach)
+        menu.addItem(.separator())
+        menu.addItem(withTitle: L10n.string("Copy"), action: #selector(copy(_:)), keyEquivalent: "c").target = self
+        menu.addItem(withTitle: L10n.string("Paste"), action: #selector(paste(_:)), keyEquivalent: "v").target = self
+        return menu
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if attachSelection != nil, window?.firstResponder === self,
+           event.modifierFlags.intersection(.deviceIndependentFlagsMask) == [.command, .shift],
+           event.charactersIgnoringModifiers?.lowercased() == "l" {
+            attachSelectionToMessage(nil)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(attachSelectionToMessage(_:)) { return selectionActive }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    /// The selection goes to the message; with nothing selected the key does nothing, as copy does.
+    @objc func attachSelectionToMessage(_ sender: Any?) {
+        guard let text = getSelection(), !text.isEmpty else { return NSSound.beep() }
+        attachSelection?(text)
+    }
+}
+
+/// What a terminal selection adds to the person's message: a fenced block under the tab's name, after
+/// what the message already says, for the person to read, edit or send with the rest.
+@MainActor
+enum TerminalSelectionText {
+    /// Adds the block to `draft`, with the caret after it for when the message takes the keyboard.
+    static func attach(_ selection: String, from title: String, to draft: some ComposerDraftEditing) {
+        let text = appending(selection, from: title, to: draft.text)
+        draft.text = text
+        draft.rememberSelection(NSRange(location: text.utf16.count, length: 0), in: text)
+    }
+
+    static func appending(_ selection: String, from title: String, to text: String) -> String {
+        let body = selection.trimmingCharacters(in: .newlines)
+        var fence = "```"
+        while body.contains(fence) { fence += "`" }
+        let block = L10n.format("Terminal (%@):", title) + "\n" + fence + "\n" + body + "\n" + fence + "\n"
+        let kept = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : text
+        guard !kept.isEmpty else { return block }
+        return kept + (kept.hasSuffix("\n\n") ? "" : kept.hasSuffix("\n") ? "\n" : "\n\n") + block
     }
 }

@@ -148,6 +148,26 @@ struct TaskWorkspaceSnapshot: Codable, Equatable {
     }
 }
 
+/// A terminal tab's title: the name the person gave it, else its folder's name, numbered from the
+/// second tab on in the order the tabs opened ("yardlet", "yardlet 2"), so each keeps its title while
+/// others open and close.
+@MainActor
+enum TerminalTabTitle {
+    static func defaultTitle(of shell: NativeTerminalSession) -> String {
+        let folder = shell.workspaceURL.lastPathComponent
+        return shell.number > 1 ? "\(folder) \(shell.number)" : folder
+    }
+
+    static func titles(for shells: [NativeTerminalSession]) -> [ObjectIdentifier: String] {
+        Dictionary(shells.map { (ObjectIdentifier($0), $0.name ?? defaultTitle(of: $0)) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// The tab's id in the header's strip.
+    static func tabID(_ shell: NativeTerminalSession) -> String {
+        "terminal:" + shell.id.uuidString
+    }
+}
+
 /// A command handed to a task's terminal to run once. Each click is its own request, so the same
 /// command handed twice runs twice.
 struct TerminalCommandRequest: Equatable, Identifiable, Sendable {
@@ -276,6 +296,9 @@ final class TaskWorkspaceState {
 
     /// The terminal's tabs in order, the shown one among them.
     var terminals: [NativeTerminalSession] { terminalTabs }
+
+    /// The tab the terminal panel shows, without opening one.
+    var shownTerminal: NativeTerminalSession? { shownTerminalTab }
 
     /// The terminal's + : a new tab in `folder`, shown, its shell started.
     @discardableResult
