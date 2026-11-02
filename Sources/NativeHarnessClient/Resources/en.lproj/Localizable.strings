@@ -3411,7 +3411,7 @@
 "No mail in the inbox" = "No mail in the inbox";
 "(No subject)" = "(No subject)";
 "No accounts in the mailbox" = "No accounts in the mailbox";
-"Connect Gmail in Settings › Connectors, and its inbox shows here." = "Connect Gmail in Settings › Connectors, and its inbox shows here.";
+"Connect Gmail or Outlook in Settings › Connectors, and its inbox shows here." = "Connect Gmail or Outlook in Settings › Connectors, and its inbox shows here.";
 "Open Connectors" = "Open Connectors";
 "This message could not be read" = "This message could not be read";
 "Choose a message on the left." = "Choose a message on the left.";
@@ -3459,9 +3459,9 @@
 "This message is in Spam. Check who sent it before opening its links or files." = "This message is in Spam. Check who sent it before opening its links or files.";
 "This message is in the Trash." = "This message is in the Trash.";
 "Mailbox" = "Mailbox";
-"Show the inboxes of the Gmail accounts connected in Connectors beside your tasks. Mail is read from Gmail and kept in memory only." = "Show the inboxes of the Gmail accounts connected in Connectors beside your tasks. Mail is read from Gmail and kept in memory only.";
+"Show the inboxes of the Gmail and Outlook accounts connected in Connectors beside your tasks. Mail is read from the service and kept in memory only." = "Show the inboxes of the Gmail and Outlook accounts connected in Connectors beside your tasks. Mail is read from the service and kept in memory only.";
 "New mail" = "New mail";
-"Notify when new mail reaches an inbox in the mailbox, for Gmail in its Primary tab" = "Notify when new mail reaches an inbox in the mailbox, for Gmail in its Primary tab";
+"Notify when new mail reaches an inbox in the mailbox: in Gmail its Primary tab, in Outlook its Focused inbox" = "Notify when new mail reaches an inbox in the mailbox: in Gmail its Primary tab, in Outlook its Focused inbox";
 "Images in this message are not loaded, so its sender cannot tell it was read." = "Images in this message are not loaded, so its sender cannot tell it was read.";
 "Show images" = "Show images";
 "Mail handoff %@ %@ %@" = "Account: %1$@ · thread %2$@, read with %3$@";
