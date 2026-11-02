@@ -446,6 +446,10 @@ struct SettingsCenterView: View {
                         .controlSize(.small)
                 }
                 .padding(.vertical, 14)
+                if let vault {
+                    Divider().padding(.leading, Self.dividerLeading)
+                    CredentialHidingRow(vault: vault, icon: settingsControlIcon("eye.slash"))
+                }
                 Divider().padding(.leading, Self.dividerLeading)
                 HStack(spacing: 12) {
                     settingsControlIcon("server.rack")
@@ -876,5 +880,39 @@ private struct SettingsSectionRow: View {
         .onHover { isHovering = $0 }
         .accessibilityLabel(item.title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+/// General's switch for hiding keys and tokens from agents (`VaultCenter.hidesCredentials`), which follows the vault as
+/// it changes; turning it off asks Touch ID or the login password.
+private struct CredentialHidingRow<Icon: View>: View {
+    @ObservedObject var vault: VaultCenter
+    let icon: Icon
+
+    var body: some View {
+        HStack(spacing: 12) {
+            icon
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L10n.string("Hide keys and tokens")).font(.callout.weight(.medium))
+                Text(L10n.string("Hides values that look like API keys, access tokens or private keys in what agents read in the browser. Turned off, agents read them as the page shows them, and they stay in the task's history."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !vault.isAllowedBuild {
+                    Text(L10n.string("Always on in a build that is not team-signed."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            Toggle(L10n.string("Hide keys and tokens"), isOn: Binding(
+                get: { vault.hidesCredentials }, set: { hides in Task { await vault.setHidesCredentials(hides) } }))
+                .labelsHidden()
+                .toggleStyle(.paritySwitch)
+                .controlSize(.small)
+                .disabled(!vault.isAllowedBuild)
+        }
+        .padding(.vertical, 14)
     }
 }

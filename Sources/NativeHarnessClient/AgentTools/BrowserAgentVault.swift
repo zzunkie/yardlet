@@ -66,11 +66,6 @@ struct VaultScrubList {
         return bytes.indices.contains { index in live.contains { Self.end(of: $0, in: bytes, at: index) != nil } }
     }
 
-    func scrub(_ result: AgentToolResult, now: Date = Date()) -> AgentToolResult {
-        guard entries.contains(where: { $0.until >= now }) else { return result }
-        return result.mappingText { scrub($0, now: now) }
-    }
-
     /// Where `spelling` ends when it starts at `start` in `text`, each byte as itself, as `%XX` or `%25XX`,
     /// and a space also as `+` or `%2B`.
     static func end(of spelling: [UInt8], in text: [UInt8], at start: Int) -> Int? {
@@ -975,10 +970,6 @@ enum VaultSetupText {
         guard text.range(of: "otpauth", options: .caseInsensitive) != nil else { return text }
         return address.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text),
                                                 withTemplate: "$1[saved value]")
-    }
-
-    static func scrub(_ result: AgentToolResult) -> AgentToolResult {
-        result.mappingText(scrub)
     }
 }
 

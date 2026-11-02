@@ -12,11 +12,16 @@ protocol VaultSecretStoring {
     /// The person's addresses and cards (design §18), one item beside the vault's; nil saves none.
     func loadWallet() throws -> VaultWallet?
     func saveWallet(_ wallet: VaultWallet?) throws
+    /// Whether the person turned off hiding keys and tokens from agents (`VaultCenter.hidesCredentials`). Not one of
+    /// the vault's items: emptying the vault leaves it.
+    func loadShowsCredentials() throws -> Bool
+    func saveShowsCredentials(_ shows: Bool) throws
 }
 
 final class InMemoryVaultSecretStore: VaultSecretStoring {
     private var secrets: [UUID: VaultSecret] = [:]
     private var wallet: VaultWallet?
+    private var showsCredentials = false
 
     init(_ secrets: [UUID: VaultSecret] = [:], wallet: VaultWallet? = nil) {
         self.secrets = secrets
@@ -32,6 +37,8 @@ final class InMemoryVaultSecretStore: VaultSecretStoring {
     }
     func loadWallet() throws -> VaultWallet? { wallet }
     func saveWallet(_ wallet: VaultWallet?) throws { self.wallet = wallet }
+    func loadShowsCredentials() throws -> Bool { showsCredentials }
+    func saveShowsCredentials(_ shows: Bool) throws { showsCredentials = shows }
 }
 
 /// One use of an item, as the usage log keeps it (design §6.3). No value is ever written here.
@@ -287,6 +294,10 @@ final class VaultCenter: ObservableObject {
         }
     }
     private var storedWallet: VaultWallet?
+    /// Whether browser tool results hide text shaped like keys and tokens (`CredentialText`). Only the person turns it
+    /// off, in Settings and after Touch ID or the login password, and the choice is kept in Yardlet's keychain item
+    /// rather than in its preferences, which a task's commands can write. A build that is not team-signed always hides.
+    @Published private(set) var hidesCredentials: Bool
     /// Whether a "while unlocked" item fills without asking. Touch ID unlocks it; the screen locking
     /// or the Mac sleeping locks it (design §6.4).
     private(set) var isUnlocked = false
@@ -304,6 +315,23 @@ final class VaultCenter: ObservableObject {
         items = environment.repository.loadItems()
         isEnabled = environment.defaults.object(forKey: Self.enabledKey) as? Bool ?? true
         isWalletEnabled = environment.defaults.object(forKey: Self.walletEnabledKey) as? Bool ?? true
+        hidesCredentials = !(environment.isAllowedBuild && (try? environment.secrets.loadShowsCredentials()) == true)
+    }
+
+    /// Hides keys and tokens again, or stops hiding them once the person at this Mac confirmed it.
+    func setHidesCredentials(_ hides: Bool) async {
+        guard hides != hidesCredentials, environment.isAllowedBuild else { return }
+        if hides {
+            try? environment.secrets.saveShowsCredentials(false)
+        } else {
+            guard await environment.confirm(L10n.string("turn off hiding keys and tokens from agents")),
+                  (try? environment.secrets.saveShowsCredentials(true)) != nil else {
+                // The switch the person moved goes back.
+                objectWillChange.send()
+                return
+            }
+        }
+        hidesCredentials = hides
     }
 
     var isAllowedBuild: Bool { environment.isAllowedBuild }

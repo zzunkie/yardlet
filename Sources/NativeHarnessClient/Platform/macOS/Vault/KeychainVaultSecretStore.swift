@@ -105,6 +105,40 @@ struct KeychainVaultSecretStore: VaultSecretStoring {
         }
     }
 
+    /// Whether the person stopped hiding keys and tokens from agents: an item of its own service, which emptying the
+    /// vault leaves, there only while they are shown. Yardlet's preferences would not do, since a task's commands
+    /// can write them.
+    private var showsCredentialsQuery: [CFString: Any] {
+        [kSecClass: kSecClassGenericPassword, kSecAttrService: "\(service).settings", kSecAttrAccount: "shows-credentials"]
+    }
+
+    func loadShowsCredentials() throws -> Bool {
+        var search = showsCredentialsQuery
+        search[kSecReturnData] = true
+        search[kSecMatchLimit] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(search as CFDictionary, &item)
+        switch status {
+        case errSecSuccess: return true
+        case errSecItemNotFound: return false
+        default: throw KeychainError(status: status)
+        }
+    }
+
+    func saveShowsCredentials(_ shows: Bool) throws {
+        guard shows else {
+            let status = SecItemDelete(showsCredentialsQuery as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError(status: status) }
+            return
+        }
+        var item = showsCredentialsQuery
+        item[kSecValueData] = Data("1".utf8)
+        item[kSecAttrLabel] = "Yardlet browser tools"
+        item[kSecAttrDescription] = "Keys and tokens shown to agents"
+        let status = SecItemAdd(item as CFDictionary, nil)
+        guard status == errSecSuccess || status == errSecDuplicateItem else { throw KeychainError(status: status) }
+    }
+
     /// Every item of this service, the wallet's too: on macOS a delete removes all that match.
     func deleteAll() throws {
         let status = SecItemDelete([kSecClass: kSecClassGenericPassword, kSecAttrService: service] as CFDictionary)

@@ -79,7 +79,8 @@ final class BrowserElementPicker {
 
     /// The clicked element's context and capture. The outline is off by then (`stop`), so the capture
     /// shows the page as the person sees it, with every typed value in it hidden while it is taken.
-    /// `scrub` takes out values the password manager filled, which no attachment may carry.
+    /// `scrub` takes out what no tool result carries (values the password manager filled, keys and tokens), and no
+    /// attachment either.
     static func describe(_ node: Int64, pageURL: String, on devTools: BrowserDevToolsClient,
                          scrub: (String) -> String) async throws -> BrowserPickedElement {
         let resolved = try await devTools.send("DOM.resolveNode", ["backendNodeId": .integer(node)], timeout: .seconds(10))

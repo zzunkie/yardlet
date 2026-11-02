@@ -70,7 +70,7 @@ batch's, with its `action` number and `tool`; a batch that holds a picture keeps
 | `browser_press_key` | `key` | Names such as `Enter`, `Shift+Tab` and `Meta+a` (US layout). macOS Chromium handles editing keys only as commands, so it also sends `commands` (`selectAll`, `deleteBackward` and so on) |
 | `browser_scroll` | `deltaX` and `deltaY` (+ `x` and `y`, or `ref`), or `ref` alone | A wheel event, or brings the element into view. Returns the new scroll position |
 | `browser_select_option` | `ref`, `values` | Picks by value or visible label in a `<select>` and sends `input` and `change`. When there is no match, an error with the list of options |
-| `browser_wait_for` | `text`, `textGone`, `time`, `timeout` | Checks every 200 ms (10 seconds by default, at most 60 seconds) whether the text is a part of the visible text (`innerText`) of the page and of its frames from the same origin that have a box, ignoring case and runs of whitespace, as Playwright's text matching reads it; a frame from another origin is not read. When the time runs out, the error names what it waited for and the rule, the page's address, title and whether it has loaded, and the page's text now: the first 1,000 characters for `text`, the 150 characters on each side of where it still is for `textGone` (scrubbed of the vault's values before the cut, and left out on a page that holds a password or code). When the text is in a frame from another origin (the first 10 frame sessions are read once), it says so and that `browser_snapshot` reads it. `time` is at most 30 seconds. `browser_handoff`'s `text` matches the same way |
+| `browser_wait_for` | `text`, `textGone`, `time`, `timeout` | Checks every 200 ms (10 seconds by default, at most 60 seconds) whether the text is a part of the visible text (`innerText`) of the page and of its frames from the same origin that have a box, ignoring case and runs of whitespace, as Playwright's text matching reads it; a frame from another origin is not read. When the time runs out, the error names what it waited for and the rule, the page's address, title and whether it has loaded, and the page's text now: the first 1,000 characters for `text`, the 150 characters on each side of where it still is for `textGone` (scrubbed of the vault's values and of keys and tokens before the cut, and left out on a page that holds a password or code). When the text is in a frame from another origin (the first 10 frame sessions are read once), it says so and that `browser_snapshot` reads it. `time` is at most 30 seconds. `browser_handoff`'s `text` matches the same way |
 | `browser_screenshot` | `ref`, `fullPage`, `format` | Image content (png or jpeg). One image pixel per CSS pixel, whatever the display scale. `fullPage` captures the whole page in one shot, but cuts it so that no side is over 16,384 device pixels and captures the top; then the result text gives the page's height ([BROWSER_HOST](BROWSER_HOST.md) section 3, "Full-page screenshots") |
 | `browser_console_messages` | `onlyErrors` | `Runtime.consoleAPICalled`, `exceptionThrown` and `Log.entryAdded`. The latest 200 |
 | `browser_evaluate` | `function`, `ref` | Runs one function and returns the result as JSON. With a reference, the element is the argument. An expression that is not a function returns its value as is. A promise it returns is awaited for up to 15 seconds; past that, when the renderer answers the check after it ("Pages that do not respond" below), the error says the function did not finish while the page answers other calls, so its renderer is not stuck. Cuts at 50,000 characters |
@@ -204,6 +204,22 @@ built into the server (`builtInTools`) either.
   `run(tool:arguments:sessionID:)`). The fill's `input` event does not carry the value. The
   snapshot also turns the dots of the same length that Chromium gives as a password field's value into `<redacted>`
   (always, whether or not the vault is used).
+- **Keys and tokens:** In the text of every browser tool result, and in an element the person picks for the composer,
+  text shaped like a key or token a service issues becomes its kind's prefix and `[hidden credential]`, wherever it
+  shows (a read-only field, a page's text, an address, a script's result; `CredentialText`): Slack tokens (`xoxb-`,
+  `xoxp-` and the other `xox…-` kinds, `xapp-`) and webhook addresses (`hooks.slack.com/services/…`), GitHub tokens
+  (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`), OpenAI and Anthropic keys (`sk-`, `sk-proj-`, `sk-ant-…`, with
+  32 characters or more after the kind), Stripe secret and restricted keys and webhook secrets (`sk_live_`, `rk_live_`,
+  their `_test_` kinds, `whsec_`), AWS access key IDs (`AKIA`, `ASIA`), Google API keys (`AIza`), and PEM, OpenSSH and
+  PGP private key blocks. A tool that cuts a page's text (a snapshot's names and values, `browser_wait_for`,
+  `browser_console_messages`, `browser_evaluate`) takes them out first (`BrowserAgentTools.scrub(_:)`). A secret with no
+  such prefix (a Slack signing secret, an AWS secret access key) is not found, a screenshot shows what the page shows,
+  and a script that changes a value before returning it gets past the shapes: this keeps keys out of a task's history
+  by accident, not from an agent set on reading one. "Hide keys and tokens" in Settings → General (on by default) turns
+  it off, in a team-signed build only and after Touch ID or the login password (`VaultCenter.setHidesCredentials`). No
+  tool changes it, and the choice is kept in a keychain item of Yardlet's own (service `‹bundle id›.vault.settings`,
+  there only while keys are shown) rather than in Yardlet's preferences, which a task's commands can write. The rules
+  for password fields and the vault's values above apply either way.
 - **Log and notifications:** Fills and refusals are logged in `~/.yardlet/vault/usage.jsonl` (no values) with the task,
   harness, site, kind and confirmation method. A notification goes out only when the person has something to do (waiting
   for Touch ID, or an item the agent named by its name refused because it is for another site). The panel header shows

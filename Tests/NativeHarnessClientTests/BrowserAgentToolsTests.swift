@@ -1059,6 +1059,84 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertFalse(after.text.contains("%40ss") || after.text.contains("%2540ss"), after.text)
     }
 
+    /// A key or token shows in no result, from a field that is not a password field too, and leaves no part of itself
+    /// where a long text is cut; agents read it only once the person at this Mac turned that off.
+    func testKeysAndTokensStayOutOfResultsUntilThePersonTurnsThatOff() async {
+        // Made up, and built from parts so that no secret scanner takes it for a real token.
+        let token = "xox" + "b-1111111111-2222222222222-" + String(repeating: "Fake", count: 6)
+        cdp.responders["Accessibility.getFullAXTree"] = { _ in
+            .object(["nodes": .array([
+                .object(["nodeId": .string("1"), "ignored": .bool(false), "role": .object(["value": .string("RootWebArea")]),
+                         "name": .object(["value": .string("OAuth & Permissions")]), "childIds": .array([.string("2")]),
+                         "backendDOMNodeId": .integer(1)]),
+                .object(["nodeId": .string("2"), "parentId": .string("1"), "ignored": .bool(false),
+                         "role": .object(["value": .string("textbox")]), "name": .object(["value": .string("Bot User OAuth Token")]),
+                         "properties": .array([.object(["name": .string("readonly"), "value": .object(["value": .bool(true)])])]),
+                         "value": .object(["value": .string(token)]), "childIds": .array([]), "backendDOMNodeId": .integer(12)])
+            ])])
+        }
+        let snapshot = await run(AgentToolCatalog.snapshot)
+        XCTAssertTrue(snapshot.text.contains("textbox \"Bot User OAuth Token\" [readonly]"), snapshot.text)
+        XCTAssertTrue(snapshot.text.contains(": \"xoxb-[hidden credential]\""), snapshot.text)
+        XCTAssertFalse(snapshot.text.contains("1111"), snapshot.text)
+
+        // The first 1,000 characters would end in the token's first digits, too few to read as one.
+        cdp.bodyTexts = [String(repeating: "a", count: 990) + " " + token]
+        let waited = await run(AgentToolCatalog.waitFor, ["text": .string("Saved"), "timeout": .number(0.05)])
+        XCTAssertTrue(waited.text.contains("xoxb-[hid"), waited.text)
+        XCTAssertFalse(waited.text.contains("1111"), waited.text)
+
+        cdp.responders["Runtime.evaluate"] = { _ in ScriptedCDP.value(.string(token)) }
+        let read = { await self.run(AgentToolCatalog.evaluate, ["function": .string("() => document.querySelector('input').value")]) }
+        let hidden = await read()
+        XCTAssertEqual(hidden.text, "\"xoxb-[hidden credential]\"")
+
+        let secrets = InMemoryVaultSecretStore()
+        func vault(confirming: Bool, teamSigned: Bool = true) -> VaultCenter {
+            VaultCenter(environment: VaultCenter.Environment(
+                secrets: secrets, repository: InMemoryVaultRepository(), hmac: MacVault.hmac,
+                isAllowedBuild: teamSigned, confirm: { _ in confirming }, defaults: .vaultTests()))
+        }
+        let refused = vault(confirming: false)
+        tools.vault = refused
+        await refused.setHidesCredentials(false)
+        XCTAssertTrue(refused.hidesCredentials, "not without the person's confirmation")
+        let stillHidden = await read()
+        XCTAssertEqual(stillHidden.text, hidden.text)
+        let confirmed = vault(confirming: true)
+        tools.vault = confirmed
+        await confirmed.setHidesCredentials(false)
+        XCTAssertFalse(confirmed.hidesCredentials)
+        let shown = await read()
+        XCTAssertEqual(shown.text, "\"\(token)\"")
+        XCTAssertFalse(vault(confirming: false).hidesCredentials, "kept for the next launch")
+        XCTAssertTrue(vault(confirming: true, teamSigned: false).hidesCredentials,
+                      "a build that is not team-signed always hides")
+    }
+
+    /// The kinds of keys the switch names, each with the prefix that tells its kind left, and words that only look a
+    /// little like one left alone.
+    func testCredentialTextHidesTheKeysServicesIssue() {
+        // Made up, and built from parts so that no secret scanner takes them for real keys.
+        let body = String(repeating: "A1b2", count: 10)
+        let keys = [
+            ("xox" + "b-123456789012-" + body, "xoxb-"), ("xox" + "e.xoxp-1-" + body, "xoxe.xoxp-"),
+            ("xap" + "p-1-A0123-" + body, "xapp-"),
+            ("https://hooks.slack" + ".com/services/T0000/B0000/" + body, "https://hooks.slack.com/services/"),
+            ("gh" + "p_" + body, "ghp_"), ("github" + "_pat_11AAAA_" + body, "github_pat_"),
+            ("sk" + "-proj-" + body, "sk-proj-"), ("sk" + "-ant-api03-" + body, "sk-ant-api03-"),
+            ("sk" + "_live_" + body, "sk_live_"), ("rk" + "_live_" + body, "rk_live_"),
+            ("AK" + "IA" + "ABCDEFGHIJ234567", "AKIA"), ("AI" + "za" + String(body.prefix(35)), "AIza")
+        ]
+        for (key, kind) in keys {
+            XCTAssertEqual(CredentialText.scrub("Key: \(key)."), "Key: \(kind)[hidden credential].", kind)
+        }
+        let pem = "-----BEGIN RSA PRIVATE" + " KEY-----\n\(body)\n\(body)\n-----END RSA PRIVATE KEY-----"
+        XCTAssertEqual(CredentialText.scrub(pem), "-----BEGIN RSA PRIVATE KEY-----[hidden credential]-----END RSA PRIVATE KEY-----")
+        let ordinary = "sk-learn, risk-assessment-2026-quarterly-report-final-v2, task_live_updates_2026, xoxo-hugs, AKIA."
+        XCTAssertEqual(CredentialText.scrub(ordinary), ordinary)
+    }
+
     func testEvaluateWithAReferencePassesTheElement() async {
         _ = await loadSnapshot()
         cdp.responders["DOM.resolveNode"] = { _ in .object(["object": .object(["objectId": .string("obj-15")])]) }

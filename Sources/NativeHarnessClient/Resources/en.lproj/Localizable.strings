@@ -1231,6 +1231,10 @@
 "shared .claude/settings.json" = "shared .claude/settings.json";
 "Claude Code user settings" = "Claude Code user settings";
 "Agent browser tools" = "Agent browser tools";
+"Hide keys and tokens" = "Hide keys and tokens";
+"Hides values that look like API keys, access tokens or private keys in what agents read in the browser. Turned off, agents read them as the page shows them, and they stay in the task's history." = "Hides values that look like API keys, access tokens or private keys in what agents read in the browser. Turned off, agents read them as the page shows them, and they stay in the task's history.";
+"turn off hiding keys and tokens from agents" = "turn off hiding keys and tokens from agents";
+"Always on in a build that is not team-signed." = "Always on in a build that is not team-signed.";
 
 /* In-window browser */
 "Web content" = "Web content";

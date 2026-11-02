@@ -159,7 +159,15 @@ final class BrowserAgentTools {
         } else {
             result = await runNamingTab(tool, arguments, sessionID: sessionID).result
         }
-        return VaultSetupText.scrub(vaultScrub.scrub(result))
+        return result.mappingText { VaultSetupText.scrub(scrub($0)) }
+    }
+
+    /// What no result may carry: the values the vault filled lately, and text shaped like a key or token
+    /// (`CredentialText`) unless the person turned that off. A tool that cuts a page's text scrubs it first, since a cut
+    /// could leave part of one.
+    func scrub(_ text: String) -> String {
+        let text = vaultScrub.scrub(text)
+        return vault?.hidesCredentials ?? true ? CredentialText.scrub(text) : text
     }
 
     /// A tab tool or a page tool, on the tab its `tabId` names now (`BrowserAgentTabDirectory.resolve`): a tab opened
@@ -733,7 +741,7 @@ final class BrowserAgentTools {
         }
         let read = try await readFrames(page)
         let names = page.referenceNames()
-        let rendered = BrowserAgentSnapshot.render(frames: read.frames, hidden: hidden, scrub: { [vaultScrub] in vaultScrub.scrub($0) },
+        let rendered = BrowserAgentSnapshot.render(frames: read.frames, hidden: hidden, scrub: { [unowned self] in self.scrub($0) },
                                                    named: names.named, nextNumber: names.next)
         page.replaceRefs(rendered.refs, frameOwners: read.owners, eventMark: mark, nextNumber: rendered.nextNumber)
         let location = try await pageLocation(page)
@@ -1041,8 +1049,8 @@ final class BrowserAgentTools {
         return wanted.isEmpty || pageText.range(of: wanted, options: .caseInsensitive) != nil
     }
 
-    /// A text wait that ran out, with what the page shows now: its address and whether it loaded, its text (scrubbed of
-    /// the vault's values, cut, and left out on a page that holds a password or code), and a frame from another origin
+    /// A text wait that ran out, with what the page shows now: its address and whether it loaded, its text (scrubbed
+    /// (`scrub(_:)`), cut, and left out on a page that holds a password or code), and a frame from another origin
     /// that shows the text, which the wait does not read.
     private func unmetWait(appears: String?, disappears: String?, after timeout: Double, text: String,
                            on page: BrowserAgentPage) async -> BrowserAgentToolError {
@@ -1055,8 +1063,7 @@ final class BrowserAgentTools {
             loaded = state[2] == "complete"
             lines.append("The page is at \(state[0]) (“\(state[1])”)" + (loaded ? " and has loaded." : ", still loading."))
         }
-        // Values the vault filled come out before the cut, which could leave part of one.
-        let shown = vaultScrub.scrub(text)
+        let shown = scrub(text)
         if vaultObservationRefusal(page, AgentToolCatalog.waitFor) != nil {
             lines.append("The page holds a password or code, so its text is not shown here.")
         } else if let disappears, let range = shown.range(of: Self.collapsed(disappears), options: .caseInsensitive) {
@@ -1340,8 +1347,7 @@ final class BrowserAgentTools {
         }
         let note = withheld == 0 ? "" : "\n(\(withheld) messages from pages that held a password or code are left out.)"
         guard !lines.isEmpty else { return .text((onlyErrors ? "No errors." : "No console messages.") + note) }
-        // Values the vault filled come out before the cut, which could leave part of one.
-        let recent = lines.suffix(200).map { vaultScrub.scrub($0) }.map { $0.count > 2_000 ? String($0.prefix(2_000)) + "…" : $0 }
+        let recent = lines.suffix(200).map(scrub).map { $0.count > 2_000 ? String($0.prefix(2_000)) + "…" : $0 }
         let header = lines.count > recent.count ? "Last \(recent.count) of \(lines.count) messages:\n" : ""
         return .text(header + recent.joined(separator: "\n") + note)
     }
@@ -1380,8 +1386,7 @@ final class BrowserAgentTools {
             let message = details["exception"]?["description"]?.stringValue ?? details["text"]?.stringValue ?? "The function threw."
             throw BrowserAgentToolError("The function threw: \(message)")
         }
-        // Values the vault filled come out before the cut, which could leave part of one.
-        let text = vaultScrub.scrub(Self.valueText(result["result"]))
+        let text = scrub(Self.valueText(result["result"]))
         return .text(text.count > 50_000 ? String(text.prefix(50_000)) + "\n… (cut at 50,000 characters)" : text)
     }
 

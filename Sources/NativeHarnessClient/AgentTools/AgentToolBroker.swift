@@ -172,9 +172,9 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         values.forEach { tools.vaultScrub.add($0) }
     }
 
-    /// Text from a page with the values the vault filled lately taken out, as tool results have them.
-    func scrubVaultValues(_ text: String) -> String {
-        tools.vaultScrub.scrub(text)
+    /// Text from a page scrubbed as tool results are (`BrowserAgentTools.scrub(_:)`).
+    func scrubPageText(_ text: String) -> String {
+        tools.scrub(text)
     }
 
     /// Whether text (an address, a title) carries a value the vault filled lately, in any spelling it scrubs.
