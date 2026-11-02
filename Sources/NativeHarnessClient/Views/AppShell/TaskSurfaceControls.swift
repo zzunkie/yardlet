@@ -33,6 +33,7 @@ struct TaskSurfaceControls: View {
     /// panel, and `⌘1`, `⌘3`, `⌘4` (the Claude app's New session header has Terminal, Browser and Files).
     var offersSessionRail = true
     @Environment(\.taskKeyboardFocus) private var keyboardFocus
+    @AppStorage(TerminalLocation.key) private var terminalLocation = TerminalLocation.bottom.rawValue
 
     private var toolbarSurfaces: [TaskSurface] {
         offersSessionRail ? [.diff, .terminal, .browser] : [.terminal, .browser]
@@ -154,7 +155,7 @@ struct TaskSurfaceControls: View {
     private func controlTitle(_ surface: TaskSurface) -> String {
         if surface == .diff { return L10n.string(showsSessionRail ? "Hide session rail" : "Show session rail") }
         if surface == .browser { return TaskCommandTitle.sidePanel(isShown: panelState.trailingSurfaceID != nil) }
-        if surface == .terminal { return TaskCommandTitle.terminal(isShown: panelState.isTerminalPresented) }
+        if surface == .terminal { return TaskCommandTitle.terminal(isShown: panelState.showsTerminal) }
         return surface.displayName
     }
 
@@ -174,7 +175,8 @@ struct TaskSurfaceControls: View {
 
     private func toggle(_ surface: TaskSurface) {
         panelState = TaskSurfaceNavigationProjection.toggledPanelState(
-            current: panelState, targetID: surface.rawValue
+            current: panelState, targetID: surface.rawValue,
+            terminalLocation: TerminalLocation(rawValue: terminalLocation) ?? .bottom
         )
         focusedSurface?.wrappedValue = nil
         keyboardFocus?.move(to: .destination(for: surface, panels: panelState))
@@ -194,7 +196,7 @@ struct TaskSurfaceControls: View {
         case .chat: panelState.trailingSurfaceID == nil && !panelState.isTerminalPresented
         case .diff: showsSessionRail
         case .browser: panelState.trailingSurfaceID != nil
-        case .terminal: panelState.isTerminalPresented
+        case .terminal: panelState.showsTerminal
         }
     }
 }

@@ -959,6 +959,13 @@
 "This stops the terminal's running processes and clears its output." = "This stops the terminal's running processes and clears its output.";
 "New terminal" = "New terminal";
 "Share the terminal with agents" = "Share the terminal with agents";
+"Terminal location" = "Terminal location";
+"Split Terminal" = "Split Terminal";
+"Unsplit Terminal" = "Unsplit Terminal";
+"Where the terminal opens: below the conversation, or as a tab of the side panel." = "Where the terminal opens: below the conversation, or as a tab of the side panel.";
+"Bottom" = "Bottom";
+"Right" = "Right";
+"A shell in the task's folder in the side panel." = "A shell in the task's folder in the side panel.";
 "A task's agent can read the task's terminal tabs, without typing in them, and a selection in the terminal can be attached to your message (⌘⇧L)." = "A task's agent can read the task's terminal tabs, without typing in them, and a selection in the terminal can be attached to your message (⌘⇧L).";
 "Attach Selection to Message" = "Attach Selection to Message";
 "Paste" = "Paste";

@@ -13,6 +13,8 @@ import XCTest
 /// `.build/terminal-handoff-qa/`.
 @MainActor
 final class TerminalCommandHandoffTests: XCTestCase {
+    private typealias Projection = TaskSurfaceNavigationProjection
+
     // MARK: - The cards
 
     /// Every harness's command card offers the action and hands over its own command; other calls
@@ -353,6 +355,103 @@ final class TerminalCommandHandoffTests: XCTestCase {
         }
     }
 
+    /// With Settings' terminal location on the right, a terminal shown below moves to the side panel as its
+    /// Terminal tab, beside the panel's other tabs, with its own tabs in a row under the panel's strip; Run in
+    /// terminal types there; and back at Bottom it shows below again. Review images:
+    /// `.build/terminal-tabs-qa/right-*.png`.
+    func testOnTheRightTheTerminalIsTheSidePanelsTerminalTab() throws {
+        let directory = try WindowlessRender.directory("terminal-tabs-qa")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("TerminalLocation")))
+        defaults.set(TerminalLocation.right.rawValue, forKey: TerminalLocation.key)
+        let launch = ShellLaunchEnvironment.isolatedZsh(in: try temporaryFolder())
+        let fixture = HandoffFixture.all(workspace: try temporaryFolder(named: "yardlet"))[0]
+        let workspace = TaskWorkspaceState()
+        workspace.setPanels(Projection.showing("files", in: .init(isTerminalPresented: true)))
+        for appearance in WindowlessRender.Appearance.allCases {
+            let host = WindowlessRender.Host(
+                TaskTerminalHost(fixture: fixture, workspace: workspace)
+                    .environment(\.terminalShellLaunch, launch)
+                    .environment(\.colorScheme, appearance.colorScheme)
+                    .defaultAppStorage(defaults)
+                    .frame(width: 1_200, height: 820)
+                    .background(ParityTheme.canvas),
+                size: NSSize(width: 1_200, height: 820), appearance: appearance
+            )
+            defer { host.close() }
+            host.settle()
+            XCTAssertFalse(workspace.panels.isTerminalPresented, "nothing below")
+            XCTAssertEqual(workspace.panels.trailingSurfaceID, "terminal")
+            XCTAssertEqual(workspace.panels.trailingTabs, ["files", "terminal"])
+            if appearance == .light {
+                let shell = workspace.terminal(in: fixture.workspaceURL, launch: launch, taskID: nil)
+                try waitUntilSettled(in: host) { shell.isAtPrompt && host.hosting.terminalText.contains("%") }
+                workspace.openTerminalTab(in: fixture.workspaceURL, launch: launch, taskID: nil).name = "server"
+                host.settle()
+                workspace.showTerminalTab(shell)
+                host.settle()
+                XCTAssertEqual(host.hosting.pressAccessibilityElements(labelled: L10n.string("Run in terminal")), 1)
+                try waitForText("B10-%s", in: host)
+                XCTAssertEqual(workspace.panels.trailingSurfaceID, "terminal", "Run in terminal shows it where it is")
+                XCTAssertFalse(workspace.panels.isTerminalPresented, "and not below as well")
+                host.settle(passes: 6, interval: 0.1)
+                XCTAssertEqual(host.hosting.terminalText.components(separatedBy: "B10-%s").count - 1, 1,
+                               "typed once: \(host.hosting.terminalText)")
+            }
+            host.settle(passes: 6, interval: 0.1)
+            try WindowlessRender.writePNG(Self.asShown(host, appearance: appearance),
+                                          to: directory.appending(path: "right-\(appearance.suffix).png"))
+            guard appearance == .dark else { continue }
+            defaults.set(TerminalLocation.bottom.rawValue, forKey: TerminalLocation.key)
+            host.settle()
+            XCTAssertTrue(workspace.panels.isTerminalPresented, "back below")
+            XCTAssertEqual(workspace.panels.trailingTabs, ["files"])
+        }
+        workspace.endTerminal()
+    }
+
+    /// Split: a second tab beside the shown one below the conversation, one above the other as the side
+    /// panel's Terminal tab, each half under its tab's name, its shell started. Review images:
+    /// `.build/terminal-tabs-qa/split-*.png`.
+    func testTheTerminalSplitsBelowAndInTheSidePanel() throws {
+        let directory = try WindowlessRender.directory("terminal-tabs-qa")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("TerminalSplit")))
+        let launch = ShellLaunchEnvironment.isolatedZsh(in: try temporaryFolder())
+        let fixture = HandoffFixture.all(workspace: try temporaryFolder(named: "yardlet"))[0]
+        for (location, appearances) in [(TerminalLocation.bottom, WindowlessRender.Appearance.allCases),
+                                        (TerminalLocation.right, [WindowlessRender.Appearance.light])] {
+            defaults.set(location.rawValue, forKey: TerminalLocation.key)
+            let workspace = TaskWorkspaceState()
+            workspace.setPanels(.init(isTerminalPresented: true))
+            for appearance in appearances {
+                let host = WindowlessRender.Host(
+                    TaskTerminalHost(fixture: fixture, workspace: workspace)
+                        .environment(\.terminalShellLaunch, launch)
+                        .environment(\.colorScheme, appearance.colorScheme)
+                        .defaultAppStorage(defaults)
+                        .frame(width: 1_200, height: 820)
+                        .background(ParityTheme.canvas),
+                    size: NSSize(width: 1_200, height: 820), appearance: appearance
+                )
+                defer { host.close() }
+                host.settle()
+                if workspace.splitTerminal == nil {
+                    let shown = workspace.terminal(in: fixture.workspaceURL, launch: launch, taskID: nil)
+                    try waitUntilSettled(in: host) { shown.isAtPrompt }
+                    XCTAssertEqual(host.hosting.pressAccessibilityElements(labelled: L10n.string("Split Terminal")), 1)
+                    host.settle()
+                }
+                let split = try XCTUnwrap(workspace.splitTerminal)
+                try waitUntilSettled(in: host) { split.isAtPrompt && split.bufferText.contains("%") }
+                XCTAssertEqual(workspace.terminals.count, 2)
+                host.settle(passes: 6, interval: 0.1)
+                try WindowlessRender.writePNG(Self.asShown(host, appearance: appearance),
+                                              to: directory.appending(path: "split-\(location.rawValue)-\(appearance.suffix).png"))
+            }
+            workspace.endTerminal()
+        }
+        defaults.removeObject(forKey: TerminalLocation.key)
+    }
+
     /// Three tabs, one renamed, in both appearances, for review: `.build/terminal-tabs-qa/`.
     func testTheTerminalDrawsItsTabs() throws {
         let directory = try WindowlessRender.directory("terminal-tabs-qa")
@@ -377,7 +476,7 @@ final class TerminalCommandHandoffTests: XCTestCase {
     /// The window as the screen shows it. A capture of the window draws neither SwiftTerm's default
     /// background, which it leaves to its layer, nor its text where it sits (drawn by an ancestor, the
     /// text lands to the right of the view): the capture is laid over the terminal's background, and
-    /// the terminal, captured on its own, is put back in its place.
+    /// each terminal, captured on its own, is put back in its place.
     private static func asShown(_ host: WindowlessRender.Host<some View>,
                                 appearance: WindowlessRender.Appearance) throws -> NSBitmapImageRep {
         let window = try host.capture().bitmap
@@ -389,7 +488,7 @@ final class TerminalCommandHandoffTests: XCTestCase {
         context.setFillColor(TerminalAppearance.background(isDark: appearance == .dark).cgColor)
         context.fill(CGRect(x: 0, y: 0, width: image.width, height: image.height))
         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        if let terminal = host.hosting.terminalView {
+        for terminal in host.hosting.terminalViews {
             let alone = try XCTUnwrap(WindowlessRender.capture(terminal).cgImage)
             let scale = CGFloat(image.width) / host.hosting.bounds.width
             let frame = host.hosting.convert(terminal.bounds, from: terminal)
@@ -665,6 +764,11 @@ private struct PaneHost: View {
 }
 
 private extension NSView {
+    /// Every terminal view under this one: both halves of a split terminal.
+    var terminalViews: [NativeTerminalView] {
+        ((self as? NativeTerminalView).map { [$0] } ?? []) + subviews.flatMap(\.terminalViews)
+    }
+
     /// The terminal panel's view under this one, if any.
     var terminalView: NativeTerminalView? {
         if let view = self as? NativeTerminalView { return view }

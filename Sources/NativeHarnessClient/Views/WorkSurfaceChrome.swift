@@ -73,6 +73,8 @@ enum TaskSidePanelTabs {
                            systemName: selectedFilePath == nil ? "folder" : "doc.text")
         case "sideChat":
             WorkSurfaceTab(id: id, title: L10n.string("Side chat"), systemName: "bubble.left.and.bubble.right")
+        case TaskSurfaceNavigationProjection.terminalID:
+            WorkSurfaceTab(id: id, title: L10n.string("Terminal"), systemName: "terminal")
         default:
             nil
         }
@@ -198,6 +200,8 @@ struct WorkSurfaceHeader<Trailing: View>: View {
     let status: String?
     let statusTint: Color
     let onClose: () -> Void
+    /// Off for a strip inside a panel whose own header has them (the terminal's tabs in the side panel).
+    var showsPanelControls = true
     @ViewBuilder let trailing: () -> Trailing
 
     init(
@@ -209,9 +213,11 @@ struct WorkSurfaceHeader<Trailing: View>: View {
         workspaceURL: URL,
         status: String? = nil,
         statusTint: Color = .secondary,
+        showsPanelControls: Bool = true,
         onClose: @escaping () -> Void,
         @ViewBuilder trailing: @escaping () -> Trailing
     ) {
+        self.showsPanelControls = showsPanelControls
         self.title = title
         self.systemName = systemName
         self.harness = harness
@@ -249,7 +255,7 @@ struct WorkSurfaceHeader<Trailing: View>: View {
                     .layoutPriority(-1)
             }
             trailing().fixedSize(horizontal: true, vertical: false)
-            WorkSurfacePanelControls(onClose: navigation?.closePanel ?? onClose)
+            if showsPanelControls { WorkSurfacePanelControls(onClose: navigation?.closePanel ?? onClose) }
         }
         .padding(.horizontal, 8)
         .frame(height: row?.height ?? 42)

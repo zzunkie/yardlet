@@ -1,5 +1,19 @@
 import Foundation
 
+/// Where the terminal opens (Settings › General › Terminal location): below the conversation, or as the
+/// side panel's Terminal tab, as the Codex app's "Default terminal location" (`bottom`, `right`) chooses
+/// where its terminal shortcut opens terminal tabs. The whole terminal goes there, its tabs with it.
+enum TerminalLocation: String, CaseIterable, Sendable {
+    case bottom
+    case right
+
+    static let key = "Yardlet.terminalLocation"
+
+    static func current(in defaults: UserDefaults = .yardlet) -> Self {
+        defaults.string(forKey: key).flatMap(Self.init(rawValue:)) ?? .bottom
+    }
+}
+
 /// Deterministic keyboard navigation for the task-owned surface picker.
 /// The projection operates on stable raw IDs so the view can keep its local enum private.
 enum TaskSurfaceNavigationProjection {
@@ -36,6 +50,11 @@ enum TaskSurfaceNavigationProjection {
             trailingTabs = try container.decodeIfPresent([String].self, forKey: .trailingTabs) ?? []
             recentTrailingTabs = try container.decodeIfPresent([String].self, forKey: .recentTrailingTabs) ?? []
         }
+
+        /// The terminal is on screen: below the conversation, or as the side panel's Terminal tab.
+        var showsTerminal: Bool {
+            isTerminalPresented || trailingSurfaceID == TaskSurfaceNavigationProjection.terminalID
+        }
     }
 
     enum Placement: Equatable {
@@ -57,6 +76,9 @@ enum TaskSurfaceNavigationProjection {
     static let defaultTrailingTabID = launcherID
     /// The title-bar control that shows or hides the whole side panel.
     static let sidePanelToggleID = "workspace"
+    /// The terminal, below the conversation (`PanelState.isTerminalPresented`) or, with the terminal set to
+    /// open on the right, as a side-panel tab of this id.
+    static let terminalID = "terminal"
     private static let taskTabPrefix = "task:"
     private static let browserTabPrefix = "browser:"
 
@@ -91,7 +113,7 @@ enum TaskSurfaceNavigationProjection {
 
     /// A surface that stays in the strip as a tab.
     static func isTab(_ id: String) -> Bool {
-        trailingTabIDs.contains(id) || taskID(inTab: id) != nil || browserKey(inTab: id) != nil
+        trailingTabIDs.contains(id) || id == terminalID || taskID(inTab: id) != nil || browserKey(inTab: id) != nil
     }
 
     static func focusedIndex(surfaceIDs: [String], focusedID: String?) -> Int? {
@@ -263,6 +285,44 @@ enum TaskSurfaceNavigationProjection {
         return reconciled(next)
     }
 
+    /// Shows the terminal where Settings put it: below the conversation, or as the side panel's Terminal
+    /// tab, shown in front.
+    static func showingTerminal(in state: PanelState, at location: TerminalLocation) -> PanelState {
+        switch location {
+        case .bottom:
+            var next = state
+            next.isTerminalPresented = true
+            return next
+        case .right:
+            var next = showing(terminalID, in: state)
+            next.isTerminalPresented = false
+            return next
+        }
+    }
+
+    /// Hides the terminal, its shells going on: the panel below closes, and the side panel's Terminal tab
+    /// closes as any tab does, the panel showing the tab used before it.
+    static func hidingTerminal(_ state: PanelState) -> PanelState {
+        var next = state
+        next.isTerminalPresented = false
+        return next.trailingTabs.contains(terminalID) ? closingTrailingTab(terminalID, in: next) : next
+    }
+
+    /// Moves the terminal to where Settings now put it: on screen below, it shows as the side panel's
+    /// Terminal tab; a Terminal tab leaves the side panel, and shows below when it was in front.
+    static func relocatingTerminal(_ state: PanelState, to location: TerminalLocation) -> PanelState {
+        switch location {
+        case .bottom:
+            guard state.trailingTabs.contains(terminalID) else { return state }
+            let wasShown = state.trailingSurfaceID == terminalID
+            var next = closingTrailingTab(terminalID, in: state)
+            if wasShown { next.isTerminalPresented = true }
+            return next
+        case .right:
+            return state.isTerminalPresented ? showingTerminal(in: state, at: .right) : state
+        }
+    }
+
     /// Returns to the conversation alone. Both panels hide; the side panel keeps its tabs.
     static func closingAllPanels(_ state: PanelState) -> PanelState {
         var next = hidingTrailing(state)
@@ -292,14 +352,14 @@ enum TaskSurfaceNavigationProjection {
     }
 
     /// - Parameter newBrowserKey: the browser tab `⌘4` opens when the task has none.
-    static func toggledPanelState(current: PanelState, targetID: String, newBrowserKey: UUID = UUID()) -> PanelState {
+    /// - Parameter terminalLocation: where the terminal opens.
+    static func toggledPanelState(current: PanelState, targetID: String, newBrowserKey: UUID = UUID(),
+                                  terminalLocation: TerminalLocation = .bottom) -> PanelState {
         switch targetID {
         case "chat":
             return closingAllPanels(current)
-        case "terminal":
-            var next = current
-            next.isTerminalPresented.toggle()
-            return next
+        case terminalID:
+            return current.showsTerminal ? hidingTerminal(current) : showingTerminal(in: current, at: terminalLocation)
         case sidePanelToggleID:
             return current.trailingSurfaceID == nil
                 ? showing(reopenedTrailingTab(in: current), in: current)

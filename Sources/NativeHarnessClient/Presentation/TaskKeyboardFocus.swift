@@ -14,12 +14,13 @@ enum TaskFocusTarget: Equatable {
         case .chat: return .chat
         case .diff where panels.trailingSurfaceID == "diff": return .diff
         case .browser where TaskSurfaceNavigationProjection.browserKey(inTab: panels.trailingSurfaceID) != nil: return .browser
-        case .terminal where panels.isTerminalPresented: return .terminal
+        case .terminal where panels.showsTerminal: return .terminal
         default: return visibleContent(in: panels)
         }
     }
 
     static func visibleContent(in panels: TaskSurfaceNavigationProjection.PanelState) -> Self {
+        if panels.trailingSurfaceID == TaskSurfaceNavigationProjection.terminalID { return .terminal }
         if panels.trailingSurfaceID == "files" { return .files }
         if panels.trailingSurfaceID == "sideChat" { return .sideChat }
         if TaskSurfaceNavigationProjection.browserKey(inTab: panels.trailingSurfaceID) != nil { return .browser }
