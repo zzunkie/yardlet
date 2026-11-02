@@ -4,20 +4,22 @@ import CoreImage.CIFilterBuiltins
 import SwiftUI
 import YardletRemote
 
-/// Settings › Remote: the switch that lets a phone follow and drive this Mac's tasks, the switch for
-/// connecting from outside through the Yardlet relay, the paths a phone can take now, pairing a phone
-/// (a QR code, once, for five minutes), a phone asking to link through the account, and the paired
-/// phones with how each is connected and a way to remove each (docs/REMOTE_PROTOCOL.md §11–§14).
-/// Rows follow Settings › General.
+/// Settings › Remote: the switch that lets a phone or Yardlet on another computer follow and drive this
+/// Mac's tasks, the switch for connecting from outside through the Yardlet relay, keeping the Mac awake on
+/// power, the paths a device can take now, pairing a device (a QR code or its link, once, for five
+/// minutes), a phone asking to link through the account, and the paired devices with how each is
+/// connected and a way to remove each (docs/REMOTE_PROTOCOL.md §11–§14). Rows follow Settings › General.
 struct RemoteSettingsView: View {
     let service: RemoteControlService
     @State private var deviceToRemove: RemoteDevice?
+    /// The pairing link was just copied, said beside the button for a moment.
+    @State private var copiedLink: URL?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(spacing: 0) {
                 row(icon: "iphone.radiowaves.left.and.right", title: L10n.string("Allow remote connections"),
-                    detail: L10n.string("Follow and drive this Mac's tasks from Yardlet on your phone.")) {
+                    detail: L10n.string("Follow and drive this Mac's tasks from Yardlet on your phone or another computer.")) {
                     Toggle(L10n.string("Allow remote connections"), isOn: Binding(
                         get: { service.isEnabled }, set: { service.setEnabled($0) }))
                         .labelsHidden()
@@ -35,6 +37,15 @@ struct RemoteSettingsView: View {
                                 .toggleStyle(.paritySwitch)
                                 .controlSize(.small)
                         }
+                    }
+                    divider
+                    row(icon: "powerplug", title: L10n.string("Keep this Mac awake on power"),
+                        detail: L10n.string("While it's plugged in, this Mac doesn't sleep on its own, so your devices can still reach it. The display can still turn off.")) {
+                        Toggle(L10n.string("Keep this Mac awake on power"), isOn: Binding(
+                            get: { service.keepsAwakeOnPower }, set: { service.setKeepsAwakeOnPower($0) }))
+                            .labelsHidden()
+                            .toggleStyle(.paritySwitch)
+                            .controlSize(.small)
                     }
                     divider
                     row(icon: "network", title: L10n.string("Connections"), detail: reachText,
@@ -157,19 +168,34 @@ struct RemoteSettingsView: View {
                         Text(L10n.string("Scan this code with Yardlet on your phone."))
                             .font(.callout.weight(.medium))
                             .fixedSize(horizontal: false, vertical: true)
+                        Text(L10n.string("On another computer, copy the link and open it in Yardlet there."))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                         TimelineView(.periodic(from: .now, by: 1)) { context in
                             Text(L10n.format("Works once for 5 minutes · %@ left", Self.remaining(until: pairing.expiresAt, now: context.date)))
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
-                        Button(L10n.string("Cancel")) { service.cancelPairing() }
-                            .controlSize(.small)
+                        HStack(spacing: 8) {
+                            if let url = pairing.url {
+                                Button(L10n.string("Copy link")) { copy(url) }
+                                    .controlSize(.small)
+                                if copiedLink == url {
+                                    Text(L10n.string("Copied"))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Button(L10n.string("Cancel")) { service.cancelPairing() }
+                                .controlSize(.small)
+                        }
                     }
                     Spacer(minLength: 0)
                 }
                 .padding(.vertical, 14)
             } else {
-                row(icon: "qrcode", title: L10n.string("Pair a phone"), detail: pairingDescription) {
+                row(icon: "qrcode", title: L10n.string("Pair a device"), detail: pairingDescription) {
                     Button(L10n.string("Pair…")) { Task { await service.startPairing() } }
                         .controlSize(.small)
                         .disabled(!canPair)
@@ -182,7 +208,22 @@ struct RemoteSettingsView: View {
 
     private var pairingDescription: String {
         if let name = service.pairedDeviceName { return L10n.format("%@ is paired.", name) }
-        return L10n.string("Shows a code to scan with your phone. It works once and expires after 5 minutes.")
+        return L10n.string("Shows a code to scan with your phone, and a link for Yardlet on another computer. It works once and expires after 5 minutes.")
+    }
+
+    /// The pairing link on the clipboard, for Yardlet on another computer: pasted there, or opened as a
+    /// link (Universal Clipboard, AirDrop, a note). It is the QR code's secret, so it is marked as one.
+    private func copy(_ url: URL) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(url.absoluteString, forType: .string)
+        // Clipboard managers that honor it keep no history of the secret.
+        pasteboard.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
+        copiedLink = url
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            if copiedLink == url { copiedLink = nil }
+        }
     }
 
     static func remaining(until date: Date, now: Date) -> String {
@@ -227,11 +268,11 @@ struct RemoteSettingsView: View {
 
     private var devicesCard: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(L10n.string("Paired phones"))
+            Text(L10n.string("Paired devices"))
                 .font(.callout.weight(.semibold))
                 .padding(.vertical, 12)
             if service.devices.isEmpty {
-                Text(L10n.string("No paired phones"))
+                Text(L10n.string("No paired devices"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.bottom, 14)
@@ -239,7 +280,7 @@ struct RemoteSettingsView: View {
             ForEach(Array(service.devices.enumerated()), id: \.element.id) { index, device in
                 if index > 0 { Divider().padding(.leading, 48) }
                 HStack(spacing: 12) {
-                    RemoteSettingsIcon(systemName: "smartphone")
+                    RemoteSettingsIcon(systemName: Self.icon(for: device))
                     VStack(alignment: .leading, spacing: 3) {
                         Text(device.name).font(.callout.weight(.medium))
                         Text(deviceDetail(device))
@@ -267,7 +308,16 @@ struct RemoteSettingsView: View {
             }
             Button(L10n.string("Cancel"), role: .cancel) { deviceToRemove = nil }
         } message: {
-            Text(L10n.string("The phone disconnects and has to pair again."))
+            Text(L10n.string("The device disconnects and has to pair again."))
+        }
+    }
+
+    /// A computer reads as one; anything else as the phone it most likely is.
+    static func icon(for device: RemoteDevice) -> String {
+        switch device.platform {
+        case "macos": "laptopcomputer"
+        case "windows": "pc"
+        default: "smartphone"
         }
     }
 

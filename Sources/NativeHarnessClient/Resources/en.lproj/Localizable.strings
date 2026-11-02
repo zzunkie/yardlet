@@ -1960,7 +1960,7 @@
 /* The phone remote: Settings › Remote (docs/REMOTE_PROTOCOL.md). */
 "Remote" = "Remote";
 "Allow remote connections" = "Allow remote connections";
-"Follow and drive this Mac's tasks from Yardlet on your phone." = "Follow and drive this Mac's tasks from Yardlet on your phone.";
+"Follow and drive this Mac's tasks from Yardlet on your phone or another computer." = "Follow and drive this Mac's tasks from Yardlet on your phone or another computer.";
 "Connect from outside" = "Connect from outside";
 "Through the Yardlet server. It is end-to-end encrypted, so the server can't read it." = "Through the Yardlet server. It is end-to-end encrypted, so the server can't read it.";
 "Same Wi-Fi" = "Same Wi-Fi";
@@ -1969,7 +1969,7 @@
 "Can't reach the Yardlet server" = "Can't reach the Yardlet server";
 "Scan this code with Yardlet on your phone." = "Scan this code with Yardlet on your phone.";
 "Works once for 5 minutes · %@ left" = "Works once for 5 minutes · %@ left";
-"Shows a code to scan with your phone. It works once and expires after 5 minutes." = "Shows a code to scan with your phone. It works once and expires after 5 minutes.";
+"Shows a code to scan with your phone, and a link for Yardlet on another computer. It works once and expires after 5 minutes." = "Shows a code to scan with your phone, and a link for Yardlet on another computer. It works once and expires after 5 minutes.";
 "%@ wants to connect to this Mac" = "%@ wants to connect to this Mac";
 "Link code" = "Link code";
 "Allow it if the phone shows the same number." = "Allow it if the phone shows the same number.";
@@ -1978,17 +1978,20 @@
 "The sign-in did not finish." = "The sign-in did not finish.";
 "Starting…" = "Starting…";
 "Can't listen for connections: %@" = "Can't listen for connections: %@";
-"Pair a phone" = "Pair a phone";
+"Pair a device" = "Pair a device";
 "Pair…" = "Pair…";
 "%@ is paired." = "%@ is paired.";
-"Paired phones" = "Paired phones";
-"No paired phones" = "No paired phones";
+"Paired devices" = "Paired devices";
+"No paired devices" = "No paired devices";
 "Remove %@" = "Remove %@";
 "Remove %@?" = "Remove %@?";
-"The phone disconnects and has to pair again." = "The phone disconnects and has to pair again.";
+"The device disconnects and has to pair again." = "The device disconnects and has to pair again.";
 "Never connected" = "Never connected";
 "Last connected %@" = "Last connected %@";
 "Pairing QR code" = "Pairing QR code";
+"Keep this Mac awake on power" = "Keep this Mac awake on power";
+"While it's plugged in, this Mac doesn't sleep on its own, so your devices can still reach it. The display can still turn off." = "While it's plugged in, this Mac doesn't sleep on its own, so your devices can still reach it. The display can still turn off.";
+"On another computer, copy the link and open it in Yardlet there." = "On another computer, copy the link and open it in Yardlet there.";
 "exit code %lld" = "exit code %lld";
 "Homebrew's answer could not be read" = "Homebrew's answer could not be read";
 "npm's answer could not be read" = "npm's answer could not be read";

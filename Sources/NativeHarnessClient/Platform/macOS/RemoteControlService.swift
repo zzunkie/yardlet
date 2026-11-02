@@ -2,6 +2,7 @@ import AuthenticationServices
 import Foundation
 import Network
 import Observation
+import YardletLidSleep
 import YardletRemote
 
 /// The phone remote on this Mac (docs/REMOTE_PROTOCOL.md): off until the person turns it on in
@@ -19,6 +20,9 @@ final class RemoteControlService {
     static let relayEnabledKey = "Yardlet.remote.relay"
     /// A relay other than the built-in one (development, self-hosting).
     static let relayURLKey = "Yardlet.remote.relayURL"
+    /// Keeps this Mac from sleeping on its own while remote connections are allowed and it is on power,
+    /// so a device elsewhere can still reach it; off unless the person turned it on.
+    static let keepAwakeKey = "Yardlet.remote.keepAwakeOnPower"
     static let relayURLEnvironmentKey = "YARDLET_REMOTE_RELAY_URL"
     /// The Yardlet relay a build carries, from `YardletRelayURL` in Info.plist (scripts/build-app.sh
     /// writes it from Packaging/RelayURL, which stays out of git; REMOTE_V2_DESIGN.md §12).
@@ -42,6 +46,7 @@ final class RemoteControlService {
 
     private(set) var isEnabled: Bool
     private(set) var isRelayEnabled: Bool
+    private(set) var keepsAwakeOnPower: Bool
     /// The v2 listener's state; a rendering test sets it where nothing listens.
     var secureState: RemoteSecureListener.State = .stopped
     /// The relay client's state; a rendering test sets it where nothing connects.
@@ -86,6 +91,10 @@ final class RemoteControlService {
     @ObservationIgnored private var nameLookup: Task<Void, Never>?
     /// The Tailscale address last looked up, so an address without a MagicDNS name is asked once.
     @ObservationIgnored private var lookedUpAddress: String?
+    /// Whether the Mac runs on power now (no battery, or charging); read again every minute while it matters.
+    @ObservationIgnored private let isOnPower: @MainActor () -> Bool
+    @ObservationIgnored private var awakeActivity: NSObjectProtocol?
+    @ObservationIgnored private var powerCheck: Timer?
 
     init(
         bridge: any RemoteBridge,
@@ -99,6 +108,7 @@ final class RemoteControlService {
         interfaces: @escaping @Sendable () -> [RemoteInterfaceAddress] = RemoteAddressSelection.systemInterfaces,
         resolveName: @escaping @Sendable (String) -> String? = RemoteAddressSelection.magicDNSName(for:),
         listens: Bool = true,
+        isOnPower: @escaping @MainActor () -> Bool = { !PowerConditions.current().onBattery },
         macName: String = Host.current().localizedName ?? "Mac",
         appVersion: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
     ) {
@@ -112,8 +122,10 @@ final class RemoteControlService {
         self.accountToken = accountToken
         self.webSignIn = webSignIn
         self.listens = listens
+        self.isOnPower = isOnPower
         isEnabled = defaults.bool(forKey: Self.enabledKey)
         isRelayEnabled = defaults.object(forKey: Self.relayEnabledKey) as? Bool ?? true
+        keepsAwakeOnPower = defaults.bool(forKey: Self.keepAwakeKey)
         let identity = (try? identityStore.load()) ?? nil
         self.identity = identity
         server = RemoteServer(
@@ -221,6 +233,7 @@ final class RemoteControlService {
         }
         await reloadDevices()
         if isEnabled { activate() }
+        refreshAwake()
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -231,6 +244,40 @@ final class RemoteControlService {
             activate()
         } else {
             deactivate(reason: "disabled")
+        }
+        refreshAwake()
+    }
+
+    func setKeepsAwakeOnPower(_ keepsAwake: Bool) {
+        guard keepsAwake != keepsAwakeOnPower else { return }
+        keepsAwakeOnPower = keepsAwake
+        defaults.set(keepsAwake, forKey: Self.keepAwakeKey)
+        refreshAwake()
+    }
+
+    /// The Mac is kept from sleeping on its own now, as Codex's "Keep this Mac awake" does: the remote is
+    /// on, the setting is on and the Mac is on power. The display may still sleep, and the hold ends with
+    /// Yardlet.
+    var isKeepingAwake: Bool { awakeActivity != nil }
+
+    private func refreshAwake() {
+        let wanted = started && isEnabled && keepsAwakeOnPower
+        let holds = wanted && isOnPower()
+        if holds, awakeActivity == nil {
+            awakeActivity = ProcessInfo.processInfo.beginActivity(
+                options: [.idleSystemSleepDisabled], reason: "Remote connections are allowed and this Mac stays awake on power")
+        } else if !holds, let awakeActivity {
+            ProcessInfo.processInfo.endActivity(awakeActivity)
+            self.awakeActivity = nil
+        }
+        // Plugged in or not is read again every minute while the setting wants it.
+        if wanted, powerCheck == nil {
+            powerCheck = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshAwake() }
+            }
+        } else if !wanted {
+            powerCheck?.invalidate()
+            powerCheck = nil
         }
     }
 
@@ -291,6 +338,8 @@ final class RemoteControlService {
     /// Closes every phone connection: Yardlet is quitting.
     func shutdown() async {
         guard started else { return }
+        started = false
+        refreshAwake()
         await server.shutdown(reason: "quitting")
         secureListener?.stop()
         relayClient?.stop()
