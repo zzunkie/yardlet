@@ -1109,15 +1109,10 @@ struct ConnectionCenterContent: View {
             .padding(.top, 16)
             .padding(.bottom, showsLoginDetails ? 10 : 18)
 
-            AccountLoginTerminalHost(
+            AccountLoginConsoleTerminal(
                 controller: model.loginController,
                 isVisible: showsLoginDetails
             )
-            .frame(maxWidth: .infinity)
-            .frame(height: showsLoginDetails ? 175 : 1)
-            .opacity(showsLoginDetails ? 1 : 0)
-            .clipped()
-            .allowsHitTesting(showsLoginDetails)
             .background(Color(nsColor: NativeTerminalSession.backgroundColor))
             .accessibilityHidden(!showsLoginDetails)
             .accessibilityLabel(L10n.string("Interactive CLI terminal"))
@@ -1232,6 +1227,25 @@ struct ConnectionCenterContent: View {
         case .signedOut, .actionRequired: .orange
         case .unavailable, .unknown: .secondary
         }
+    }
+}
+
+/// The login console's terminal. Hiding the CLI details only clips it: the CLI sizes its screen
+/// from this terminal, and one a single row tall leaves a full-screen sign-in picker nowhere to
+/// draw the prompt the console answers, so the sign-in would wait without showing why.
+struct AccountLoginConsoleTerminal: View {
+    let controller: AccountLoginController
+    let isVisible: Bool
+    private let height: CGFloat = 175
+
+    var body: some View {
+        AccountLoginTerminalHost(controller: controller, isVisible: isVisible)
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+            .frame(height: isVisible ? height : 1, alignment: .top)
+            .opacity(isVisible ? 1 : 0)
+            .clipped()
+            .allowsHitTesting(isVisible)
     }
 }
 

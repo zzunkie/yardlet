@@ -55,6 +55,11 @@ assume ChatGPT as the default provider. The default Pi connection and adding a n
 first. Pi's authentication method choice screen is also recognized as waiting for input.
 Pi's explicit provider sign-in keeps the existing
 `auth check --provider … --json --no-refresh` completion detection and the guard against cancellation and late replies.
+Antigravity CLI has no sign-in command: Yardlet starts `agy` itself, answers its login method picker with the default
+Google OAuth choice, and `agy` opens the browser. `agy` stays in its chat after signing in, so the console finishes when
+the keychain item appears, checked once a second without reading the credential, under the same guard as Pi. The
+console's terminal keeps its size while the CLI details are hidden, since a full-screen picker such as `agy`'s draws
+nothing in a terminal one row tall.
 
 ## Storage and process contract
 
@@ -89,7 +94,7 @@ sign-ins and saved accounts, `AccountReadingStatus` and the checking indicator, 
   that is running.
 - After the sign-in console ends or the runtime changes (`restart`), the answers of checks started before are
   discarded and a new check runs. Only the answers of checks or reads started later (Codex account notifications, the
-  Pi sign-in check) stay on screen.
+  Pi and Antigravity sign-in checks) stay on screen.
 - The Codex default sign-in is read in the same environment as the app's Codex tasks (`CodexEnvironmentManager`). The
   Codex account notification monitor runs on a single App Server, only while the account screen is open.
 

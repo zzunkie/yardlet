@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import SwiftTerm
+import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
@@ -137,8 +138,21 @@ final class NativeHarnessClientAppTests: XCTestCase {
                 usesPseudoTerminal: true
             )
         )
-        let terminal = attachLoginTerminal(to: controller)
-        defer { _ = terminal }
+        // As the Account Center starts a sign-in: with the CLI details hidden. The CLI still gets a
+        // screen its picker fits in; `agy` 1.4 draws its login method prompt on the tenth row, and
+        // nothing at all in a terminal one row tall.
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 300), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: VStack(spacing: 0) {
+            AccountLoginConsoleTerminal(controller: controller, isVisible: false)
+            Spacer(minLength: 0)
+        })
+        window.contentView?.layoutSubtreeIfNeeded()
+        defer { window.close() }
+        let terminal = try XCTUnwrap(window.contentView.flatMap(loginTerminal(in:)))
+        XCTAssertGreaterThanOrEqual(terminal.getTerminal().rows, 10)
 
         try await waitUntil { controller.output.contains("YARDLET_LOGIN_INPUT_OK") }
 
@@ -267,6 +281,10 @@ final class NativeHarnessClientAppTests: XCTestCase {
         XCTAssertFalse(controller.isRunning)
         try await waitUntil { !([processID] + descendants).contains(where: { Darwin.kill($0, 0) == 0 }) }
         XCTAssertTrue(([processID] + descendants).allSatisfy { Darwin.kill($0, 0) == -1 })
+    }
+
+    private func loginTerminal(in view: NSView) -> AccountLoginTerminalView? {
+        view as? AccountLoginTerminalView ?? view.subviews.lazy.compactMap(loginTerminal(in:)).first
     }
 
     private func attachLoginTerminal(
