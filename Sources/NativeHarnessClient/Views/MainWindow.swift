@@ -37,6 +37,8 @@ struct MainWindow: View {
     @Bindable var model: AppModel
     @State private var isSidebarVisible = true
     @State private var sidebarSection: ShellSection = .tasks
+    /// This window's thread, account and search in the mailbox.
+    @State private var mailWindow = MailWindowState()
     /// Where the task list was left while another list takes its place.
     @State private var sidebarListPlace = SidebarListPlace()
     /// This window's place in `AppModel.taskWindowIDs`: windows share one model, each says for itself
@@ -410,6 +412,31 @@ struct MainWindow: View {
     private func closePersonalAgents() {
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) { sidebarSection = .tasks }
         focusCurrentContent()
+    }
+
+    /// The sidebar's section words.
+    private func selectSection(_ section: ShellSection) {
+        switch section {
+        case .tasks: closePersonalAgents()
+        case .personalAgents: showPersonalAgents()
+        case .mail: showMail()
+        }
+    }
+
+    // MARK: - Mail
+
+    /// The mailbox in the task list's place, the chosen thread beside it. The tasks keep what they showed.
+    private func showMail() {
+        withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
+            isSidebarVisible = true
+            sidebarSection = .mail
+        }
+        model.mailbox.noteShown()
+    }
+
+    private var mailActions: MailActions {
+        MailActions(openOriginal: { url in model.openExternalLinks([url]) { NSWorkspace.shared.open($0) } },
+                    openSettings: { presentSettings(.connectors) })
     }
 
     // MARK: - Scheduled tasks
@@ -1741,9 +1768,20 @@ struct MainWindow: View {
                             PersonalAgentsSidebar(center: personalAgents, accounts: personalAccounts,
                                 accountID: $personalAccountID, accountMenu: accountMenu,
                                 onHome: showNewTask, onShowSchedules: showSchedules,
-                                onShowTasks: closePersonalAgents,
+                                onSelectSection: selectSection,
                                 onAccounts: { presentSettings(.harnesses) },
                                 onRefresh: reconnectPersonalAgents)
+                        }
+                    }
+                } else if isSidebarVisible, sidebarSection == .mail {
+                    SidebarColumn(state: sidebarWidth, windowWidth: knownWindowWidth) {
+                        VStack(spacing: 0) {
+                            sidebarTitleBar
+                            MailSidebar(center: model.mailbox, window: mailWindow, accountMenu: accountMenu,
+                                        onHome: showNewTask, onShowSchedules: showSchedules,
+                                        onSelectSection: selectSection,
+                                        onNewMessage: {},
+                                        onRefresh: { Task { await model.mailbox.refresh() } })
                         }
                     }
                 } else if isSidebarVisible, schedulesWindow.isShowing {
@@ -1783,7 +1821,7 @@ struct MainWindow: View {
                         searchText: $searchText,
                         onNewTask: showNewTask,
                         onShowSchedules: showSchedules,
-                        onShowPersonalAgents: showPersonalAgents,
+                        onSelectSection: selectSection,
                         onActivate: activateRow,
                         onNewTaskInProject: { workspaceURL in
                             let project = projects.ensureProject(forRoot: workspaceURL)
@@ -1856,6 +1894,11 @@ struct MainWindow: View {
                                                   onRetry: reconnectPersonalAgents,
                                                   onAccounts: { presentSettings(.harnesses) })
                         }
+                    } else if sidebarSection == .mail {
+                        VStack(spacing: 0) {
+                            titleBar(for: nil)
+                            MailContent(center: model.mailbox, window: mailWindow, actions: mailActions)
+                        }
                     } else if model.isRestoringIndex {
                         VStack(spacing: 0) {
                             titleBar(for: nil)
@@ -1920,6 +1963,21 @@ struct MainWindow: View {
         .onDisappear { Task { await personalAgents.disconnect() } }
         // The app's watch marks the dots with something new, and learns which dot this window shows.
         .environment(\.personalAgentWatch, model.personalAgentWatch)
+        .environment(\.mailbox, model.mailbox)
+        .onChange(of: sidebarSection, initial: true) { _, section in
+            model.mailbox.setVisible(section == .mail, window: windowID)
+        }
+        .onDisappear { model.mailbox.setVisible(false, window: windowID) }
+        // A new mail's notification was clicked: this window shows its thread.
+        .onChange(of: model.mailReveal, initial: true) { _, thread in
+            guard let thread else { return }
+            model.mailReveal = nil
+            mailWindow.show(.allInboxes, in: model.mailbox)
+            mailWindow.select(thread, in: model.mailbox)
+            showMail()
+        }
+        // A window leaves the mailbox when it is turned off.
+        .onChange(of: model.mailbox.isEnabled) { _, enabled in if !enabled, sidebarSection == .mail { selectSection(.tasks) } }
         .onAppear { personalAgents.watch = model.personalAgentWatch }
         // A dot's notification was clicked: this window shows it, and no other window does too.
         .onChange(of: model.personalAgentReveal, initial: true) { _, reveal in

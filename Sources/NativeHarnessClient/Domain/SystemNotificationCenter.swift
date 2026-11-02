@@ -38,6 +38,7 @@ struct SystemNotificationTarget: Equatable, Sendable {
     static let requestKey = "yardletRequestID"
     static let browserTabKey = "yardletBrowserTab"
     static let personalAgentKey = "yardletPersonalAgent"
+    static let mailThreadKey = "yardletMailThread"
 
     /// The task; nil for a personal agent's notification.
     let sessionID: UUID?
@@ -46,6 +47,8 @@ struct SystemNotificationTarget: Equatable, Sendable {
     /// The browser tab a notification is about (the task's side-panel tab key): a click shows it in the task's panel.
     var browserTab: UUID?
     var personalAgent: PersonalAgentReveal?
+    /// The mailbox thread a new-mail notification is about.
+    var mailThread: MailThreadKey?
 
     init(sessionID: UUID, requestID: String? = nil, browserTab: UUID? = nil) {
         self.sessionID = sessionID
@@ -58,11 +61,21 @@ struct SystemNotificationTarget: Equatable, Sendable {
         self.personalAgent = personalAgent
     }
 
+    init(mailThread: MailThreadKey) {
+        sessionID = nil
+        self.mailThread = mailThread
+    }
+
     /// Reads a target back from a delivered notification; nil for one Yardlet did not post.
     init?(userInfo: [AnyHashable: Any]) {
         if let text = userInfo[Self.personalAgentKey] as? String,
            let reveal = try? JSONDecoder().decode(PersonalAgentReveal.self, from: Data(text.utf8)) {
             self.init(personalAgent: reveal)
+            return
+        }
+        if let text = userInfo[Self.mailThreadKey] as? String,
+           let thread = try? JSONDecoder().decode(MailThreadKey.self, from: Data(text.utf8)) {
+            self.init(mailThread: thread)
             return
         }
         guard let text = userInfo[Self.sessionKey] as? String, let id = UUID(uuidString: text) else { return nil }
@@ -77,6 +90,9 @@ struct SystemNotificationTarget: Equatable, Sendable {
         if let browserTab { info[Self.browserTabKey] = browserTab.uuidString }
         if let personalAgent, let data = try? JSONEncoder().encode(personalAgent) {
             info[Self.personalAgentKey] = String(decoding: data, as: UTF8.self)
+        }
+        if let mailThread, let data = try? JSONEncoder().encode(mailThread) {
+            info[Self.mailThreadKey] = String(decoding: data, as: UTF8.self)
         }
         return info
     }

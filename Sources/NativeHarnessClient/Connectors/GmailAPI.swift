@@ -40,6 +40,10 @@ struct GmailAPI: Sendable {
         try await send(method: "POST", path: path, query: [], body: body)
     }
 
+    func put(_ path: String, _ body: ToolJSON) async throws -> ToolJSON {
+        try await send(method: "PUT", path: path, query: [], body: body)
+    }
+
     func delete(_ path: String) async throws {
         _ = try await send(method: "DELETE", path: path, query: [], body: nil)
     }

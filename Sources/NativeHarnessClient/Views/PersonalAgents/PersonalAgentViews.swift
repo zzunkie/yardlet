@@ -10,7 +10,8 @@ struct PersonalAgentsSidebar: View {
     /// switches the list back.
     let onHome: () -> Void
     var onShowSchedules: (() -> Void)?
-    let onShowTasks: () -> Void
+    /// Switches the list to the tasks or the mailbox.
+    let onSelectSection: (ShellSection) -> Void
     let onAccounts: () -> Void
     let onRefresh: () -> Void
     @Environment(\.yardletInterfaceScale) private var scale
@@ -18,7 +19,7 @@ struct PersonalAgentsSidebar: View {
     var body: some View {
         VStack(spacing: 0) {
             SidebarPlacesHeader(onHome: onHome, onShowSchedules: onShowSchedules, section: .personalAgents,
-                                onSelectSection: { if $0 == .tasks { onShowTasks() } })
+                                onSelectSection: onSelectSection)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: SidebarMetrics.rowSpacing) {

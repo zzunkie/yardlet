@@ -353,11 +353,19 @@ final class AppModel {
     /// A dot's notification asks a window to show Personal agents with that dot chosen. The window
     /// that takes it clears it; nothing in the background sets it.
     var personalAgentReveal: PersonalAgentReveal?
+    /// A new mail's notification asks a window to show that thread in the mailbox; the window that takes
+    /// it clears it.
+    var mailReveal: MailThreadKey?
     /// The app's watch on the dots the person last opened (`AppModel+PersonalAgentNotifications`).
     @ObservationIgnored let personalAgentWatch = PersonalAgentWatch()
     @ObservationIgnored var personalAgentPreferenceObserver: (any NSObjectProtocol)?
     /// The setting and account the watch last followed, so an unrelated setting changes nothing.
     @ObservationIgnored var personalAgentPreferenceState: [String?] = []
+    /// The app's one mailbox, while Settings › Mailbox has it on.
+    @ObservationIgnored let mailbox = MailboxCenter()
+    @ObservationIgnored var mailboxPreferenceObserver: (any NSObjectProtocol)?
+    /// Whether a change to the connectors will have the mailbox follow them again.
+    @ObservationIgnored var mailboxFollowsConnectors = false
     /// The main windows that show Tasks rather than another sidebar section. With none, no task
     /// counts as seen, so its updates stay unread and are announced.
     private(set) var taskWindowIDs = Set<UUID>()

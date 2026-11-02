@@ -219,7 +219,8 @@ struct TaskSidebar: View {
     /// Opens the scheduled tasks in the task list's place.
     var onShowSchedules: (() -> Void)? = nil
     /// Opens the personal agents in the task list's place.
-    var onShowPersonalAgents: (() -> Void)? = nil
+    /// Switches the list to personal agents or the mailbox; nil leaves the section words out.
+    var onSelectSection: ((ShellSection) -> Void)? = nil
     let onActivate: (WindowItem) -> Void
     let onNewTaskInProject: (URL) -> Void
     var onAddProject: (() -> Void)? = nil
@@ -276,13 +277,11 @@ struct TaskSidebar: View {
     var body: some View {
         VStack(spacing: 0) {
             SidebarPlacesHeader(onHome: onNewTask, onShowSchedules: onShowSchedules, section: .tasks,
-                                onSelectSection: onShowPersonalAgents.map { show -> (ShellSection) -> Void in
-                                    { section in if section == .personalAgents { show() } }
-                                })
+                                onSelectSection: onSelectSection)
 
             SidebarSearchField(placeholder: L10n.string("Search tasks"), text: $searchText)
                 .padding(.horizontal, SidebarMetrics.rowInset)
-            .padding(.top, onShowPersonalAgents == nil ? 8 : 4)
+            .padding(.top, onSelectSection == nil ? 8 : 4)
             .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 1)
 
             ScrollViewReader { proxy in
@@ -1269,19 +1268,33 @@ struct SidebarPlacesHeader: View {
     }
 }
 
-/// "Tasks | Personal agents": plain words, the shown list's in the primary color over a short rule.
+/// "Tasks | Personal agents | Mail": plain words, the shown list's in the primary color over a short rule.
+/// Mail is there only while the mailbox is on.
 struct SidebarSectionTabs: View {
     let selection: ShellSection
     let onSelect: (ShellSection) -> Void
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.personalAgentWatch) private var personalAgentWatch
+    @Environment(\.mailbox) private var mailbox
+
+    private var sections: [ShellSection] {
+        ShellSection.allCases.filter { $0 != .mail || mailbox?.isEnabled == true || selection == .mail }
+    }
+
+    private func title(_ section: ShellSection) -> String {
+        switch section {
+        case .tasks: L10n.string("Tasks")
+        case .personalAgents: L10n.string("Personal agents")
+        case .mail: L10n.string("Mail")
+        }
+    }
 
     var body: some View {
         HStack(spacing: 14 * interfaceScale) {
-            ForEach(ShellSection.allCases) { section in
+            ForEach(sections) { section in
                 let isSelected = section == selection
                 Button { if !isSelected { onSelect(section) } } label: {
-                    Text(L10n.string(section == .tasks ? "Tasks" : "Personal agents"))
+                    Text(title(section))
                         .font(.system(size: 12 * interfaceScale, weight: isSelected ? .semibold : .regular))
                         .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                         .lineLimit(1)
@@ -1293,6 +1306,8 @@ struct SidebarSectionTabs: View {
                         .overlay(alignment: .topTrailing) {
                             if section == .personalAgents, let personalAgentWatch {
                                 PersonalAgentUnreadMark(watch: personalAgentWatch).offset(x: 7 * interfaceScale, y: 4 * interfaceScale)
+                            } else if section == .mail, let mailbox {
+                                MailUnseenMark(mailbox: mailbox).offset(x: 7 * interfaceScale, y: 4 * interfaceScale)
                             }
                         }
                         .contentShape(Rectangle())
@@ -1300,7 +1315,8 @@ struct SidebarSectionTabs: View {
                 .buttonStyle(.plain)
                 .parityPointer()
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
-                .accessibilityValue(section == .personalAgents && personalAgentWatch?.hasUnread == true
+                .accessibilityValue((section == .personalAgents && personalAgentWatch?.hasUnread == true)
+                                    || (section == .mail && mailbox?.hasUnseenMail == true)
                                     ? L10n.string("Unread") : "")
             }
             Spacer(minLength: 0)

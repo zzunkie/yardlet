@@ -1784,6 +1784,17 @@ final class ConnectorCenter: ConnectorToolProviding {
     }
 
 
+    /// The mailbox's accounts: each connected Gmail account, read with the sign-in its connector uses,
+    /// so tokens stay here and refresh one at a time with the connector's.
+    func mailAccounts() -> [(MailAccount, any MailAccountTransport)] {
+        connectors.compactMap { record in
+            guard record.localService == .gmail, record.status == .connected, let address = record.account else { return nil }
+            let account = MailAccount(id: record.credentialID, address: address, provider: .gmail)
+            let api = GmailAPI(base: environment.google.gmailAPI, session: accountSession(record.credentialID))
+            return (account, GmailMailTransport(api: api, account: account))
+        }
+    }
+
     /// The draft a Gmail send or delete names, read for its request card (`GmailToolApproval`); nil
     /// when the tool is not a connected Gmail account's or Gmail did not answer.
     func gmailDraftPreview(tool name: String, arguments: [String: ToolJSON]) async -> GmailDraftPreview? {
