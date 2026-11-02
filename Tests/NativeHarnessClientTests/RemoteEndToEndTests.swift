@@ -106,6 +106,7 @@ final class RemoteEndToEndTests: XCTestCase {
 /// A server on 127.0.0.1 with the fixture tasks, run fast.
 final class LoopbackStack: @unchecked Sendable {
     let server: RemoteServer
+    let devices = RemoteDeviceStore(fileURL: nil)
     let identity: RemoteIdentity
     let listener: RemoteSecureListener
     let port: UInt16
@@ -115,7 +116,7 @@ final class LoopbackStack: @unchecked Sendable {
         server = RemoteServer(
             configuration: RemoteServer.Configuration(server: RemoteServerInfo(name: "Loopback", appVersion: "test"),
                                                       macKey: identity.noise.publicKey),
-            bridge: RemoteFixtureBridge(speed: 25), devices: RemoteDeviceStore(fileURL: nil))
+            bridge: RemoteFixtureBridge(speed: 25), devices: devices)
         await server.start()
         listener = RemoteSecureListener(server: server, staticKey: identity.noise, port: 0, advertisement: nil, loopbackOnly: true)
         listener.start()
