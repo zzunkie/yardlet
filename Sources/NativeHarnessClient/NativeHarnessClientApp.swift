@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import YardletRemote
 
 private struct YardletSettingsPresentedKey: FocusedValueKey {
     typealias Value = Binding<Bool>
@@ -166,6 +167,10 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
     }
     /// Links and HTML files opened with Yardlet before the window's model was ready, as when a link launched it.
     private var pendingLinks: [URL] = []
+    /// The other Macs this one follows (File › Connect to Mac…), for a `yardlet-remote` link opened with Yardlet.
+    var remoteHosts: RemoteHostDirectory? {
+        didSet { openPendingLinks() }
+    }
     let workActivity = RunningWorkActivity()
     /// The network path, for turns a lost connection cut off (`AppModel.networkPathChanged`).
     let networkWatch = NetworkWatch()
@@ -227,12 +232,18 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
     /// A link or an HTML file another app opened with Yardlet, the person's default browser (`AppModel.openExternalLinks`).
     /// An open main window takes them, so SwiftUI opens no window for them (`handlesExternalEvents(preferring:allowing:)`).
     func application(_ application: NSApplication, open urls: [URL]) {
-        pendingLinks += urls.filter { ["http", "https", "file"].contains($0.scheme?.lowercased() ?? "") }
+        pendingLinks += urls.filter { ["http", "https", "file", RemoteProtocol.pairingScheme].contains($0.scheme?.lowercased() ?? "") }
         openPendingLinks()
     }
 
     private func openPendingLinks() {
-        guard let model, !pendingLinks.isEmpty else { return }
+        // A connection link for another Mac goes to File › Connect to Mac…, where the person chooses to pair.
+        if let remoteHosts {
+            for link in pendingLinks where link.scheme?.lowercased() == RemoteProtocol.pairingScheme { remoteHosts.receive(link: link) }
+            pendingLinks.removeAll { $0.scheme?.lowercased() == RemoteProtocol.pairingScheme }
+        }
+        guard let model, !pendingLinks.isEmpty, !pendingLinks.contains(where: { $0.scheme?.lowercased() == RemoteProtocol.pairingScheme })
+        else { return }
         let links = pendingLinks
         pendingLinks = []
         model.openExternalLinks(links, elsewhere: OutsideBrowser.open)
@@ -436,6 +447,8 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
 struct NativeHarnessClientApp: App {
     @NSApplicationDelegateAdaptor(NativeHarnessClientAppDelegate.self) private var appDelegate
     @State private var model = Self.liveModel()
+    /// The other Macs this one follows, each in a window of its own; nothing connects until one opens.
+    @State private var remoteHosts = RemoteHostDirectory.live()
 
     /// The app's model, once what Yardlet kept of addresses that carried a vault password is gone: before the task
     /// workspaces and the browser host read it (`BrowserFilledValueCleanup`).
@@ -456,6 +469,7 @@ struct NativeHarnessClientApp: App {
                     }
                     .ignoresSafeArea(.container, edges: .top)
                     .imageViewerHost()
+                    .modifier(RemoteWindowOpening(directory: model.usesVisualFixture ? nil : remoteHosts))
             }
                 // A link another app opens with Yardlet goes to a tab of the window's task (`application(_:open:)`): an
                 // open window takes it, where SwiftUI would otherwise open a window for each one. A link that launches
@@ -478,6 +492,18 @@ struct NativeHarnessClientApp: App {
                 }
                 .task {
                     appDelegate.model = model
+                    if !model.usesVisualFixture {
+                        appDelegate.remoteHosts = remoteHosts
+                        model.openRemoteTask = { [remoteHosts] hostID, taskID in remoteHosts.reveal(hostID: hostID, taskID: taskID) }
+                        remoteHosts.onAttention = { [weak model] host, event in
+                            // The task shown in the window in front needs no notification.
+                            if NSApp.isActive, NSApp.keyWindow?.identifier?.rawValue.hasPrefix(RemoteHostWindow.sceneID) == true,
+                               host.selection == .task(event.taskId ?? "") { return }
+                            guard let model, let notice = RemoteAttentionNotice.notification(
+                                hostID: host.id, hostName: host.name, event: event) else { return }
+                            Task { await model.systemNotificationCenter.post(notice) }
+                        }
+                    }
                     if !model.usesVisualFixture, appDelegate.workActivity.lidHelper == nil {
                         let lidHelper = LidSleepHelper.live()
                         model.lidSleepHelper = lidHelper
@@ -634,7 +660,28 @@ struct NativeHarnessClientApp: App {
             YardletTabCommands()
             YardletConversationFindCommands()
             TaskResourceUsageCommands()
+            RemoteHostCommands(directory: remoteHosts)
         }
+
+        // Another Mac's Yardlet, one window per host (File › Connect to Mac…).
+        WindowGroup(L10n.string("Remote Mac"), id: RemoteHostWindow.sceneID, for: String.self) { $hostID in
+            YardletWindowPreferences(usesVisualFixture: model.usesVisualFixture) {
+                RemoteHostWindow(hostID: hostID, directory: remoteHosts)
+                    .imageViewerHost()
+            }
+        }
+        .defaultSize(width: 1180, height: 780)
+        .handlesExternalEvents(matching: [])
+        .commandsRemoved()
+
+        Window(L10n.string("Connect to Mac"), id: RemoteConnectWindow.sceneID) {
+            YardletWindowPreferences(usesVisualFixture: model.usesVisualFixture, appliesInterfaceSize: false) {
+                RemoteConnectWindow(directory: remoteHosts)
+            }
+        }
+        .windowResizability(.contentSize)
+        .handlesExternalEvents(matching: [])
+        .commandsRemoved()
 
         Window(L10n.string("Task Resource Usage"), id: TaskResourceUsageWindow.sceneID) {
             YardletWindowPreferences(usesVisualFixture: model.usesVisualFixture, appliesInterfaceSize: false) {
