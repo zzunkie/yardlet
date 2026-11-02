@@ -20,17 +20,27 @@ enum ChatWorkspaces {
 
     /// Whether `workspace` is a chat's folder: inside one of the roots, not the root itself.
     /// The sidebar asks this of every task on every redraw, so each answer is kept for the folder.
+    /// The folder's own path counts as well as where it leads, so a chat whose folder was later
+    /// replaced by a link to a project's folder stays in Chats instead of moving to a group named
+    /// after the old folder, and a root reached through a link still counts.
     static func isChat(_ workspace: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
         let key = home.path(percentEncoded: false) + "\u{0}" + workspace.path(percentEncoded: false)
         if let known = answers.value(for: key) { return known }
-        let path = workspace.standardizedFileURL.resolvingSymlinksInPath().path(percentEncoded: false)
+        let folder = workspace.standardizedFileURL
+        let resolved = folder.resolvingSymlinksInPath()
         let isChat = roots(home: home).contains { root in
-            let base = root.standardizedFileURL.resolvingSymlinksInPath().path(percentEncoded: false)
-            let prefix = base.hasSuffix("/") ? base : base + "/"
-            return path.hasPrefix(prefix) && path.count > prefix.count
+            let root = root.standardizedFileURL
+            return contains(root, folder) || contains(root.resolvingSymlinksInPath(), resolved)
         }
         answers.set(isChat, for: key)
         return isChat
+    }
+
+    private static func contains(_ root: URL, _ folder: URL) -> Bool {
+        let base = root.path(percentEncoded: false)
+        let prefix = base.hasSuffix("/") ? base : base + "/"
+        let path = folder.path(percentEncoded: false)
+        return path.hasPrefix(prefix) && path.count > prefix.count
     }
 
     /// The name a new chat's folder starts from, as the Codex app names its chats' folders.
