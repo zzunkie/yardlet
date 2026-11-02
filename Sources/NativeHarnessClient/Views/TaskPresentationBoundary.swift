@@ -21,7 +21,8 @@ struct TaskPresentationBoundary: View {
     /// The task's saved conversation is being read from the provider's own history.
     var isReadingSavedConversation = false
     let errorMessage: String?
-    let codexTaskState: CodexTaskState?
+    /// The task's Codex state, read where it is drawn (`TaskCodexStateReader`).
+    let codexTaskState: TaskCodexStateReader
     let codexHistorySelection: CodexHistorySearchSelection?
     let codexQueue: [CodexQueuedSubmission]
     var isCodexQueuePaused = false

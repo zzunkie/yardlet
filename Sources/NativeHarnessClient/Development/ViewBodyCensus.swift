@@ -8,6 +8,9 @@ enum ViewBodyCensus {
         case mainWindow
         case sidebarRow
         case composer
+        /// A task's views around its conversation (`TaskDetail`), which what the task streams leaves as
+        /// they are: the conversation, the composer and the rail read it in views of their own.
+        case taskSurface
         /// A conversation turn drawn again in its own hosting view (`ConversationTurnHosting`).
         case conversationTurn
         /// A conversation turn's hosting view made, not found kept with its task.

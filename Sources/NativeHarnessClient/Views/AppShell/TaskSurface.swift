@@ -30,7 +30,9 @@ struct TaskDetail: View {
     /// The task's saved conversation is being read from the provider's own history.
     var isReadingSavedConversation = false
     let errorMessage: String?
-    let codexTaskState: CodexTaskState?
+    /// The task's Codex state, which the conversation, the composer, the status panel and the rail each
+    /// read in a view of their own (`readCodexState()`), as they read the transcript.
+    let codexTaskState: TaskCodexStateReader
     let codexHistorySelection: CodexHistorySearchSelection?
     let codexQueue: [CodexQueuedSubmission]
     var isCodexQueuePaused = false
@@ -61,9 +63,13 @@ struct TaskDetail: View {
     /// here updates this view for every publication.
     private var entries: [TranscriptEntry] { transcript.read().entries }
 
+    /// The task's Codex state as it is now. The view whose body calls this is updated for every state
+    /// the App Server publishes, so it is called in the views that draw what it reads, not in this view.
+    private func readCodexState() -> CodexTaskState? { codexTaskState.read() }
+
     /// The Codex thread's newest turn usage, else what was read back for it.
     private var shownCodexTokenUsage: CodexThreadTokenUsage? {
-        codexTaskState?.thread?.turns.last(where: { $0.tokenUsage != nil })?.tokenUsage ?? restoredCodexTokenUsage
+        readCodexState()?.thread?.turns.last(where: { $0.tokenUsage != nil })?.tokenUsage ?? restoredCodexTokenUsage
     }
 
     private func restoreDraft(_ draft: CodexComposerDraft) {
@@ -72,6 +78,9 @@ struct TaskDetail: View {
     }
 
     var body: some View {
+#if DEBUG
+        let _ = ViewBodyCensus.note(.taskSurface)
+#endif
         Group {
             if conversationOnly, let activity = selectedSubtask, let onReadSubtask = conversationActions.readSubtask {
                 subtaskPane(activity, reader: onReadSubtask)
@@ -205,7 +214,7 @@ struct TaskDetail: View {
                     transcript: transcript,
                     sessionStatus: session.status,
                     latestTurnIsComplete: session.completionState == .completed,
-                    codexTaskState: codexTaskState,
+                    codexTaskState: readCodexState(),
                     codexHistorySelection: codexHistorySelection,
                     providerSessionID: session.providerSessionID,
                     transcriptReading: workspaceState.transcript,
@@ -247,7 +256,7 @@ struct TaskDetail: View {
 
             // The transcript is read only when there is an error to place.
             if let errorMessage, let notice = TaskErrorNotice.message(
-                errorMessage, harness: session.harness, entries: entries, codexTaskState: codexTaskState) {
+                errorMessage, harness: session.harness, entries: entries, codexTaskState: readCodexState()) {
                 TranscriptErrorCard(
                     harness: session.harness, message: notice, recoverable: true,
                     onShowHarnessSettings: session.harness == .codex
@@ -278,7 +287,7 @@ struct TaskDetail: View {
             }
 
             if session.harness == .codex, let codexStatus {
-                codexStatusPanel(codexStatus)
+                TaskObservationScope { codexStatusPanel(codexStatus) }
             }
 
             // The task's background agents and tasks while they run, on the composer rail — but for what
@@ -311,7 +320,7 @@ struct TaskDetail: View {
                     isRunning: session.status == .running
                         || session.status == .waitingForApproval,
                     canSteer: presentationPolicy.showsCodexComposerControls
-                        ? codexTaskState?.activeTurnID != nil
+                        ? readCodexState()?.activeTurnID != nil
                         : session.harness == .claudeCode && isProviderAttached,
                     prefilledDraft: editingDraft,
                     prefilledDraftID: editingDraftID,
@@ -387,7 +396,8 @@ struct TaskDetail: View {
 
     /// The Codex app's status panel, attached above the composer.
     private func codexStatusPanel(_ status: CodexStatusPanelState) -> some View {
-        CodexStatusPanel(
+        let codexTaskState = readCodexState()
+        return CodexStatusPanel(
             projection: CodexStatusProjection(
                 sessionID: codexTaskState?.thread?.sessionID,
                 threadID: session.providerSessionID,
@@ -433,11 +443,12 @@ struct TaskDetail: View {
 
     private func railHost(_ railServices: SessionRailServices, transcript: TranscriptTurns, isRaised: Bool) -> some View {
         let options = railOptions(transcript)
+        let codexTaskState = readCodexState()
         return SessionRailHost(
             services: railServices, session: session, entries: transcript.railEntries,
             codexPlan: codexTaskState?.thread?.turns.last(where: { $0.plan != nil })?.plan,
             codexState: codexTaskState,
-            codexChanges: codexChanges,
+            codexChanges: codexChanges(in: codexTaskState),
             options: options,
             connectors: ComposerConnectorList.make(options.connectors, connectors: composerConnectors?.records ?? [],
                                                    taskState: composerConnectors?.taskState ?? { _ in .on },
@@ -537,7 +548,7 @@ struct TaskDetail: View {
         case let .codexThread(threadID, title):
             CodexChildThreadPane(
                 threadID: threadID, title: title, workspaceURL: session.workspaceURL,
-                refreshKey: "\(codexTaskState?.activeTurnID ?? "")|\(codexTaskState?.thread?.turns.last?.items.count ?? 0)",
+                refreshKey: "\(readCodexState()?.activeTurnID ?? "")|\(readCodexState()?.thread?.turns.last?.items.count ?? 0)",
                 load: { [railServices] in
                     guard let railServices else {
                         throw HarnessAdapterError.capabilityUnavailable(L10n.string("The child conversation could not be read."))
@@ -585,7 +596,7 @@ struct TaskDetail: View {
 
     /// What a Codex command item printed, as the thread holds it.
     private func codexCommandOutput(_ itemID: String) -> String? {
-        for turn in (codexTaskState?.thread?.turns ?? []).reversed() {
+        for turn in (readCodexState()?.thread?.turns ?? []).reversed() {
             for item in turn.items where item.id == itemID {
                 if case let .commandExecution(command) = item.content { return command.aggregatedOutput }
             }
@@ -700,7 +711,7 @@ struct TaskDetail: View {
                 workspaceURL: session.workspaceURL,
                 additionalRootURLs: session.additionalRootURLs,
                 review: $workspaceState.review,
-                codexChanges: codexChanges,
+                codexChanges: codexChanges(in: readCodexState()),
                 lastTurn: presentationPolicy.usesCodexTimeline ? .offered(codexLastTurn) : transcriptLastTurn,
                 comments: Binding(get: { composerDraft.diffComments }, set: { composerDraft.diffComments = $0 }),
                 onClose: { closeSidePanelTab(TaskSurface.diff.rawValue) }
@@ -907,11 +918,11 @@ struct TaskDetail: View {
 
     private var canStartCodexTurn: Bool {
         session.status != .running && session.status != .waitingForApproval
-            && codexTaskState?.activeTurnID == nil
+            && readCodexState()?.activeTurnID == nil
             && composerDraft.editState == nil && codexQueue.isEmpty
     }
 
-    private var codexChanges: [CodexChangeHandoff] {
+    private func codexChanges(in codexTaskState: CodexTaskState?) -> [CodexChangeHandoff] {
         guard presentationPolicy.usesCodexTimeline, let codexTaskState else { return [] }
         return CodexWorkSurfaceProjection.changes(
             from: codexTaskState,
@@ -920,7 +931,7 @@ struct TaskDetail: View {
     }
 
     private var codexLastTurn: CodexLastTurnDiff? {
-        guard let codexTaskState else { return nil }
+        guard let codexTaskState = readCodexState() else { return nil }
         return CodexWorkSurfaceProjection.lastTurnDiff(from: codexTaskState, workspaceURL: session.workspaceURL)
     }
 
@@ -1042,6 +1053,27 @@ extension TaskTranscriptReader {
     init(_ entries: [TranscriptEntry]) {
         let transcript = TranscriptTurns(entries)
         read = { transcript }
+    }
+}
+
+/// How a task's views read its Codex state (`AppModel.codexPresentationBySessionID`). Whatever reads it
+/// is updated for every state the App Server publishes, a few each second while a turn streams, so the
+/// task's views read it where they draw it, as they read the transcript (`TaskTranscriptReader`): the
+/// conversation, the composer, the status panel and the rail, not the task's views around them.
+struct TaskCodexStateReader: ExpressibleByNilLiteral {
+    let read: @MainActor () -> CodexTaskState?
+
+    init(read: @escaping @MainActor () -> CodexTaskState?) {
+        self.read = read
+    }
+
+    /// A state as it is.
+    init(_ state: CodexTaskState?) {
+        read = { state }
+    }
+
+    init(nilLiteral: ()) {
+        read = { nil }
     }
 }
 

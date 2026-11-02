@@ -828,7 +828,7 @@ private struct TaskTerminalHost: View {
             session: fixture.session, composerDraft: draft, workspaceState: workspace,
             panelState: Binding(get: { workspace.panels }, set: { workspace.setPanels($0) }),
             focusedSurface: $focused, transcript: TaskTranscriptReader(fixture.entries), errorMessage: nil,
-            codexTaskState: fixture.codexTaskState, codexHistorySelection: nil, codexQueue: [],
+            codexTaskState: TaskCodexStateReader(fixture.codexTaskState), codexHistorySelection: nil, codexQueue: [],
             codexCapabilities: .empty, providerCapabilities: nil, providerUsage: nil, isProviderAttached: false,
             onShowCodexCapabilities: {}, conversationActions: ConversationActions(), composerActions: ComposerActions()
         )

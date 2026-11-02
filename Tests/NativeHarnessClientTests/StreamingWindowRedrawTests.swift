@@ -99,6 +99,38 @@ final class StreamingWindowRedrawTests: XCTestCase {
         XCTAssertTrue(Self.draws("word39", in: window.host.hosting), "Shown again, the task shows what streamed")
     }
 
+    /// A Codex task's turn publishes its thread's state a few times a second. Each state updates the
+    /// conversation, which draws it, and not the task's views around it (`TaskDetail`): the composer
+    /// and the rail read the state in views of their own. Before, every state drew the task's views
+    /// again, and with them every view of the task the window handed new values.
+    func testACodexTaskStreamingRedrawsItsConversationAndNotTheTaskAroundIt() throws {
+        let window = try ConversationBlankFrameTests.makeWindow([.codex("Codex", turns: 60)], for: self)
+        defer { window.close() }
+        window.show(0)
+        let request = "Please fix the next parser case."
+        func streamed(calls: Int, paragraphs: Int) -> CodexTaskState {
+            var turns = (57..<60).map { LongConversationFixture.codexTurn($0, tag: "Codex ") }
+            turns.append(LongConversationFixture.runningCodexTurn(60, request: request, calls: calls, paragraphs: paragraphs))
+            return LongConversationFixture.codex(threadID: "thread-0", turns: turns)
+        }
+        window.emitCodex(0, streamed(calls: 0, paragraphs: 0))
+        window.send(0, request)
+        window.emitCodex(0, streamed(calls: 0, paragraphs: 1))
+        window.probe.run("settle", for: 0.5)
+        ViewBodyCensus.isEnabled = true
+        ViewBodyCensus.reset()
+        defer {
+            ViewBodyCensus.isEnabled = false
+            ViewBodyCensus.reset()
+        }
+        for step in 1...12 { window.emitCodex(0, streamed(calls: min(step, 6), paragraphs: step + 1)) }
+        XCTAssertEqual(window.model.codexPresentationBySessionID[window.tasks[0].id]?.thread?.turns.last?.items.count, 8,
+                       "The states streamed")
+        XCTAssertGreaterThan(ViewBodyCensus[.conversationTimeline], 0, "The conversation drew the states")
+        XCTAssertEqual(ViewBodyCensus[.taskSurface], 0, "A state drew the task's views around its conversation")
+        XCTAssertEqual(ViewBodyCensus[.mainWindow], 0)
+    }
+
     private static func draws(_ text: String, in view: NSView) -> Bool {
         (view as? NSTextView)?.string.contains(text) == true || view.subviews.contains { draws(text, in: $0) }
     }
