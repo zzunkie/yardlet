@@ -218,6 +218,197 @@ final class ConversationStreamingCostTests: XCTestCase {
                       renderState.projection.counts.projected - projected, text.count)
     }
 
+    // MARK: - A card added
+
+    /// What a new card costs a streaming Codex turn at the end of a long conversation (20 finished
+    /// turns, the window's 10 drawn), alone and beside a list that scrolls. The cards come as the
+    /// bench's fake Codex streams them (scripts/perf-bench/fake-codex.py), through the App Server's
+    /// notifications and at its lengths: thinking of 40 fragments, a command of 160 lines of output, a
+    /// message of 120 fragments, a command of 80 lines and a message of 60, over and over. Where one
+    /// card settles and the next starts is one step, as the two arrive together. The turn is new (its
+    /// request and reasoning), or long: 30 commands and messages already, drawn in parts
+    /// (`ConversationTurnRows`). For each step, the main thread's time and the rows drawn again, laid
+    /// out anew and made; and the steps over 50 ms. `NHC_PERF_CYCLES` sets how many times the five
+    /// cards come (2).
+    func testBenchmarkACodexCardAddedToAStreamingTurn() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["NHC_PERF_BENCH"] == "1" else {
+            throw XCTSkip("Set NHC_PERF_BENCH=1 to run the streaming cost benchmark")
+        }
+        let cycles = environment["NHC_PERF_CYCLES"].flatMap(Int.init) ?? 2
+        var lines: [String] = []
+        for besideList in [false, true] {
+            for earlierCards in [0, 30] {
+                let turn = earlierCards == 0 ? "new" : "long"
+                let steps = measureCardsAdded(earlierCards: earlierCards, besideList: besideList, cycles: cycles)
+                lines.append("\(turn) turn\(besideList ? " beside a scrolling list" : ""):\n" + Self.describe(steps))
+                let added = steps.filter { $0.kind.addsCard }, fragments = steps.filter { !$0.kind.addsCard }
+                PerfBenchRecord.write("codex-card-added-\(turn)-turn\(besideList ? "-beside-a-list" : "")", [
+                    "cardAddedMedianMs": Self.median(added.map(\.cpu)) * 1000,
+                    "cardAddedMaxMs": (added.map(\.cpu).max() ?? 0) * 1000,
+                    "fragmentMedianMs": Self.median(fragments.map(\.cpu)) * 1000,
+                    "rowsLaidOutPerCardCount": Double(added.reduce(0) { $0 + $1.rowsLaidOut }) / Double(max(added.count, 1)),
+                    "stepsOver50MsCount": Double(steps.count { $0.wall > 0.05 })
+                ])
+            }
+        }
+        for line in lines { print("[codex-card-added] \(line)") }
+    }
+
+    struct CardStep {
+        enum Kind: Hashable {
+            /// A fragment of a card's text or output.
+            case fragment(String)
+            /// A card settled and the next started, by their kinds.
+            case added(after: String, card: String)
+
+            var addsCard: Bool { if case .added = self { true } else { false } }
+            var name: String {
+                switch self {
+                case let .fragment(card): "\(card) fragment"
+                case let .added(after, card): "\(card) after \(after)"
+                }
+            }
+        }
+        let kind: Kind
+        /// The main thread's time and the step's whole time.
+        let cpu: Double
+        let wall: Double
+        let rowsDrawn: Int
+        let rowsLaidOut: Int
+        let rowsMade: Int
+    }
+
+    private func measureCardsAdded(earlierCards: Int, besideList: Bool, cycles: Int) -> [CardStep] {
+        let finished = (0..<20).map { LongConversationFixture.codexTurn($0) }
+        let running = LongConversationFixture.runningCodexTurn(20, request: "Fix the parser", calls: 0, paragraphs: 0)
+        var state = LongConversationFixture.codex(threadID: "thread-cards", turns: finished + [running])
+        let threadID = state.thread!.id, turnID = state.thread!.turns.last!.id
+        let reducer = CodexTaskReducer()
+        var sequence: UInt64 = 0
+        typealias Notification = (method: String, params: [String: JSONValue])
+        func apply(_ notifications: [Notification], to state: inout CodexTaskState) {
+            for notification in notifications {
+                sequence += 1
+                var params = notification.params
+                params["threadId"] = .string(threadID)
+                params["turnId"] = .string(turnID)
+                reducer.applyNotification(method: notification.method, params: .object(params), sequence: sequence, to: &state)
+            }
+        }
+        // A card of the fake's: what it starts as, each fragment, and what it settles as.
+        func item(_ kind: String, _ id: String, _ written: String?) -> JSONValue {
+            switch kind {
+            case "reasoning":
+                .object(["id": .string(id), "type": .string(kind), "summary": .array(written.map { [.string($0)] } ?? []),
+                         "content": .array([])])
+            case "agentMessage":
+                .object(["id": .string(id), "type": .string(kind), "text": .string(written ?? "")])
+            default:
+                .object(["id": .string(id), "type": .string("commandExecution"), "command": .string("swift build"),
+                         "cwd": .string(LongConversationFixture.workspace.path),
+                         "status": .string(written == nil ? "inProgress" : "completed"),
+                         "aggregatedOutput": written.map(JSONValue.string) ?? .null,
+                         "exitCode": written == nil ? .null : .integer(0)])
+            }
+        }
+        func card(_ kind: String, _ id: String, fragments: Int) -> (start: Notification, fragments: [Notification], end: Notification) {
+            var written = ""
+            let deltas: [Notification] = (1...fragments).map { step in
+                let fragment = kind == "commandExecution"
+                    ? "[\(step)/400] Compiling Module\(step).swift and linking its objects\n"
+                    : step.isMultiple(of: 25) ? "\n\n- point \(step) " : "\(id)-\(step) streamed words, "
+                written += fragment
+                switch kind {
+                case "reasoning":
+                    return ("item/reasoning/summaryTextDelta", ["itemId": .string(id), "delta": .string(fragment),
+                                                                "summaryIndex": .integer(0)])
+                case "agentMessage":
+                    return ("item/agentMessage/delta", ["itemId": .string(id), "delta": .string(fragment)])
+                default:
+                    return ("item/commandExecution/outputDelta", ["itemId": .string(id), "delta": .string(fragment)])
+                }
+            }
+            return (("item/started", ["item": item(kind, id, nil)]), deltas, ("item/completed", ["item": item(kind, id, written)]))
+        }
+        let pattern = [("reasoning", 40), ("commandExecution", 160), ("agentMessage", 120), ("commandExecution", 80),
+                       ("agentMessage", 60)]
+        // The earlier cards of a long turn, short ones.
+        for index in 0..<earlierCards {
+            let earlier = card(index.isMultiple(of: 2) ? "commandExecution" : "agentMessage", "earlier-\(index)", fragments: 3)
+            apply([earlier.start] + earlier.fragments + [earlier.end], to: &state)
+        }
+
+        let feed = CodexFeed(state)
+        let renderState = ConversationRenderState()
+        let view: AnyView = besideList
+            ? AnyView(CodexBesideListHost(feed: feed, renderState: renderState))
+            : AnyView(CodexHost(feed: feed))
+        let size = besideList ? NSSize(width: 1338, height: 900) : NSSize(width: 900, height: 700)
+        let host = WindowlessRender.Host(view, size: size, appearance: .light)
+        defer { host.close() }
+        host.settle(passes: 20)
+        let list = besideList
+            ? Self.scrollViews(in: host.hosting).min { $0.convert($0.bounds, to: nil).minX < $1.convert($1.bounds, to: nil).minX }
+            : nil
+        var index = 0
+        var steps: [CardStep] = []
+        func step(_ kind: CardStep.Kind, _ notifications: [Notification], measured: Bool) {
+            ViewBodyCensus.reset()
+            let cpu = Self.mainThreadCPU(), start = CACurrentMediaTime()
+            apply(notifications, to: &feed.state)
+            if let list {
+                list.contentView.scroll(to: NSPoint(x: 0, y: CGFloat(index % 60) * 24))
+                list.reflectScrolledClipView(list.contentView)
+            }
+            index += 1
+            host.hosting.layoutSubtreeIfNeeded()
+            host.window.displayIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.002))
+            guard measured else { return }
+            steps.append(CardStep(kind: kind, cpu: Self.mainThreadCPU() - cpu, wall: CACurrentMediaTime() - start,
+                                  rowsDrawn: ViewBodyCensus[.conversationTurn],
+                                  rowsLaidOut: ViewBodyCensus[.conversationRowLaidOut],
+                                  rowsMade: ViewBodyCensus[.conversationTurnHosting]))
+        }
+        ViewBodyCensus.isEnabled = true
+        defer { ViewBodyCensus.isEnabled = false }
+        // The first cycle settles what drawing the first of anything costs.
+        var previous: (kind: String, end: Notification)?
+        for cycle in 0...cycles {
+            for (slot, (kind, fragments)) in pattern.enumerated() {
+                let next = card(kind, "card-\(cycle)-\(slot)", fragments: fragments)
+                let name = kind == "commandExecution" ? "command" : kind == "agentMessage" ? "message" : kind
+                step(.added(after: previous?.kind ?? "request", card: name), (previous.map { [$0.end] } ?? []) + [next.start],
+                     measured: cycle > 0)
+                for fragment in next.fragments { step(.fragment(name), [fragment], measured: cycle > 0) }
+                previous = (name, next.end)
+            }
+        }
+        return steps
+    }
+
+    private static func describe(_ steps: [CardStep]) -> String {
+        var kinds: [CardStep.Kind] = []
+        for step in steps where !kinds.contains(step.kind) { kinds.append(step.kind) }
+        let lines = kinds.map { kind in
+            let some = steps.filter { $0.kind == kind }
+            let count = Double(max(some.count, 1))
+            return String(format: "  %@: %.2f ms (max %.2f), rows drawn %.1f, laid out %.1f, made %.1f", kind.name,
+                          median(some.map(\.cpu)) * 1000, (some.map(\.cpu).max() ?? 0) * 1000,
+                          Double(some.reduce(0) { $0 + $1.rowsDrawn }) / count,
+                          Double(some.reduce(0) { $0 + $1.rowsLaidOut }) / count,
+                          Double(some.reduce(0) { $0 + $1.rowsMade }) / count)
+        }
+        return lines.joined(separator: "\n")
+            + String(format: "\n  longest step %.1f ms, %d of %d steps over 50 ms",
+                     (steps.map(\.wall).max() ?? 0) * 1000, steps.count { $0.wall > 0.05 }, steps.count)
+    }
+
+    private static func median(_ values: [Double]) -> Double {
+        values.isEmpty ? 0 : values.sorted()[values.count / 2]
+    }
+
     private static func scrollViews(in view: NSView) -> [NSScrollView] {
         (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrollViews)
     }

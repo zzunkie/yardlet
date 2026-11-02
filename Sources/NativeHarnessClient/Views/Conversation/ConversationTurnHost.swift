@@ -141,6 +141,9 @@ final class ConversationTurnHosting {
 
     func size(forWidth width: CGFloat) -> CGSize {
         if let height = heights[width] { return CGSize(width: width, height: height) }
+#if DEBUG
+        ViewBodyCensus.note(.conversationRowLaidOut)
+#endif
         let size = controller.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude))
         let height = ceil(size.height)
         heights[width] = height
