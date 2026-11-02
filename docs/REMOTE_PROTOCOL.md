@@ -1180,6 +1180,49 @@ in parts first, then a message or a new task names it.
   or has expired), `notAllowed` (the harness takes no files).
 - Over the relay each part is ordinary encrypted chunks (§13.2): the relay sees only their size and timing.
 
+### 15.21 Scheduled tasks
+
+Added on 2026-11-02. The phone lists the Mac's scheduled tasks (Yardlet's own, the Mac's Scheduled tasks list), runs
+one now and pauses or resumes one, through the same paths as the Mac's Run now, Pause and Resume. Creating, editing
+and deleting schedules stay on the Mac.
+
+- The snapshot carries `scheduledTasks: true` when the Mac answers the requests below. A phone shows schedules only then.
+- ```json
+  {"id": "31", "type": "scheduledTasks"}
+  ```
+
+  ```json
+  {"re": "31", "ok": true, "schedules": [
+    {"id": "6B0E…", "name": "Morning check", "when": "Every day at 9:00 AM", "enabled": true, "running": false,
+     "nextRunAt": 1792200000000, "status": "Next run tomorrow at 9:00 AM", "projectName": "acme-web",
+     "harnessName": "Codex",
+     "lastRun": {"at": 1792158000000, "outcome": "started", "taskId": "4C1F…", "line": "Last run today at 9:00 AM"}}]}
+  ```
+
+  In the order of the Mac's list, at most 200. `when` is the Mac's own line for when it runs and `status` its status
+  line (absent when it shows none), both in the Mac's language as the Mac shows them. `enabled` is false while it is
+  paused, and also once it stopped itself (a one-off that ran or expired, repeated failed starts), which `status`
+  then says. `running`: the task its latest run started or continued is still working or waiting on the person.
+  `nextRunAt` (milliseconds since 1970) is absent when it will not run again on its own. `projectName` is absent for
+  a chat. `lastRun` is absent before its first run: `at`, `outcome` (`started`, `skipped`, `failed`; unknown values
+  are read as `failed`), `taskId` when the run started or continued a task the snapshot lists, and `line`, the Mac's
+  own line for it. Not a command. Errors: `unavailable`.
+- ```json
+  {"id": "32", "type": "runScheduledTask", "scheduleId": "6B0E…"}
+  ```
+
+  A command: runs it now, as Run now on the Mac does, also while it is paused. The run is recorded like any other
+  (a skip when its previous run's task is still busy, a failure when it cannot start). Errors: `notFound`, `busy`
+  (a run of it is starting).
+- ```json
+  {"id": "33", "type": "setScheduledTaskEnabled", "scheduleId": "6B0E…", "enabled": false}
+  ```
+
+  A command: Pause (`false`) or Resume (`true`), as on the Mac. Errors: `notFound`.
+- `{"event": "schedulesChanged"}` goes to a connection that asked for `scheduledTasks` since it connected, when a
+  schedule is added, changed or removed, runs, or the task of its latest run changes state; batched like
+  `tasksChanged`. It carries nothing; the phone asks for `scheduledTasks` again.
+
 ## 16. Push notifications
 
 The Mac pushes to a device that registered (§15.6) and **has no open v2 connection**, for these
