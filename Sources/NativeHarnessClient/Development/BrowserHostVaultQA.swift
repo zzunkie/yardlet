@@ -1410,7 +1410,13 @@ final class BrowserHostVaultQA {
               iamItems.map(\.identity).joined(separator: ", "))
         guard let second = iamItems.first(where: { $0.identity.hasSuffix("444455556666") }),
               let form = await open(iam + "vault/iam?fill") else { return }
+        _ = await page(form, "document.getElementById('account').focus()")
+        let accountKind = await VaultPageScripts.personFieldKind(form.devTools, timeout: .seconds(5))
         _ = await page(form, "document.getElementById('username').focus()")
+        let usernameKind = await VaultPageScripts.personFieldKind(form.devTools, timeout: .seconds(5))
+        check("panel: the key button's list keeps to sign-ins at a sign-in's account ID and username fields",
+              accountKind == .signIn && usernameKind == .signIn,
+              "account \(String(describing: accountKind)), username \(String(describing: usernameKind))")
         controller.fillForPerson(second)
         let filled = await waitUntilAsync(.seconds(5)) {
             await page(form, "window.qa.values().join(' ')") == .string("444455556666 dev")
@@ -1583,6 +1589,9 @@ final class BrowserHostVaultQA {
         guard let codes = await open(base + "vault/otp") else { return }
         controller.vaultCodeOffer = nil
         _ = await page(codes, "document.getElementById('code').focus()")
+        let codeKind = await VaultPageScripts.personFieldKind(codes.devTools, timeout: .seconds(5))
+        check("panel: the key button's list keeps to two-factor codes at a code field", codeKind == .code,
+              String(describing: codeKind))
         controller.fillForPerson(account)
         let accountFilled = await waitUntilAsync(.seconds(5)) {
             await page(codes, "document.getElementById('code').value.length")?.integerValue == 6

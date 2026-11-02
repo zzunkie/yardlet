@@ -17,6 +17,8 @@ import XCTest
 /// - `settings-vault-wallet-*`, `vault-card-*`, `vault-address-*`, `vault-wallet-bars-*`: addresses and cards.
 /// - `vault-picker-*`, `vault-picker-search-*`, `vault-picker-codes-*`, `vault-picker-empty-*`: the browser panel's
 ///   key button list on a site's page, searched, searched for a code from the code bar, and on a site with nothing.
+/// - `vault-picker-aws-passwords-*`, `-codes-*`, `-any-*`, `-search-*`: the list on a cloud console's sign-in at a
+///   password field, at a code field, with no field, and searched.
 @MainActor
 final class VaultSettingsRenderingTests: XCTestCase {
     private static let github = VaultItem(
@@ -152,7 +154,8 @@ final class VaultSettingsRenderingTests: XCTestCase {
              [L10n.string("Nothing is saved for this site. Search for a sign-in or code saved elsewhere.")])
         ]
         for picker in pickers {
-            let content = VaultPickerView(vault: vault, origin: picker.origin, codes: picker.codes, query: .constant(picker.query),
+            let content = VaultPickerView(vault: vault, origin: picker.origin, kind: picker.codes ? .code : nil,
+                                          query: .constant(picker.query),
                                           onPick: { _ in })
                 .frame(width: pickerSize.width, height: pickerSize.height, alignment: .top)
             let captures = try WindowlessRender.hostedInBothAppearances(picker.name, in: directory, size: pickerSize) {
@@ -169,6 +172,66 @@ final class VaultSettingsRenderingTests: XCTestCase {
             }
             XCTAssertFalse(spoken.contains { $0.contains("not-a-real-password") }, "A secret reached the list: \(spoken)")
         }
+    }
+
+    /// The key button's list on a cloud console's sign-in (design §16, §17): one registrable domain holding a root user,
+    /// one IAM user name in two accounts, their two-factor codes, an item saved without a username and a shopping
+    /// account. A password field lists only the sign-ins and a code field only the codes, each row naming its account
+    /// first, what it fills, and what tells it apart (the account ID, the name it was saved under).
+    func testTheKeyButtonsListKeepsToTheFieldsKind() throws {
+        let directory = try WindowlessRender.directory("vault-qa")
+        let account = { (value: String) in
+            [VaultFormField(id: "account", name: "account", label: "Account ID (12 digits) or account alias", value: value)]
+        }
+        let items = [
+            VaultItem(name: "signin.aws.amazon.com", sites: ["amazon.com"], username: "ops@example.test", hasPassword: true),
+            VaultItem(name: "Amazon Web Services", sites: ["amazon.com"], username: "root-account-mfa-device@111122223333",
+                      hasOneTimeCode: true),
+            VaultItem(name: "ap-northeast-2.signin.aws.amazon.com", sites: ["amazon.com"], username: "notebook",
+                      hasPassword: true, lastUsedAt: Date().addingTimeInterval(-3600), fields: account("111122223333")),
+            VaultItem(name: "Amazon Web Services", sites: ["amazon.com"], username: "notebook@111122223333", hasOneTimeCode: true),
+            VaultItem(name: "ap-northeast-2.signin.aws.amazon.com", sites: ["amazon.com"], username: "notebook",
+                      hasPassword: true, fields: account("444455556666")),
+            VaultItem(name: "signin.aws.amazon.com", sites: ["signin.aws.amazon.com"], username: "", hasPassword: true),
+            VaultItem(name: "amazon.com", sites: ["amazon.com"], username: "ops@example.test", hasPassword: true, hasPasskey: true),
+            VaultItem(name: "Amazon Europe", sites: ["amazon.de", "amazon.fr", "amazon.it"], username: "ops@example.test",
+                      hasPassword: true),
+            VaultItem(name: "Amazon Web Services (notebook@444455556666)", sites: [], username: "notebook@444455556666",
+                      hasOneTimeCode: true)
+        ]
+        let vault = vault(items: [Self.github] + items)
+        let size = NSSize(width: 340, height: 360)
+        let lists: [(name: String, query: String, kind: VaultPickerKind?, shown: [String], hidden: [String])] = [
+            ("vault-picker-aws-passwords", "", .signIn,
+             [L10n.format("Passwords for %@", "signin.aws.amazon.com"), "notebook \(L10n.string("Password")), 111122223333",
+              "notebook \(L10n.string("Password")), 444455556666", L10n.string("No username")],
+             ["root-account-mfa-device", L10n.string("Verification code")]),
+            ("vault-picker-aws-codes", "", .code,
+             [L10n.format("Two-factor codes for %@", "signin.aws.amazon.com"),
+              "notebook@111122223333 \(L10n.string("Verification code")), Amazon Web Services"],
+             ["notebook \(L10n.string("Password"))", "ops@example.test"]),
+            ("vault-picker-aws-any", "", nil, [L10n.format("Saved for %@", "signin.aws.amazon.com"), "root-account-mfa-device"], []),
+            ("vault-picker-aws-search", "amazon", .signIn,
+             [L10n.string("Other passwords"), L10n.format("%@ and %lld more", "amazon.de", Int64(2))], [])
+        ]
+        for list in lists {
+            let content = VaultPickerView(vault: vault, origin: "https://signin.aws.amazon.com", kind: list.kind,
+                                          query: .constant(list.query), onPick: { _ in })
+                .frame(width: size.width, height: size.height, alignment: .top)
+            let captures = try WindowlessRender.hostedInBothAppearances(list.name, in: directory, size: size) { appearance in
+                content.environment(\.colorScheme, appearance.colorScheme).background(.background)
+            }
+            for capture in captures { XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6)) }
+            let host = WindowlessRender.Host(content, size: size)
+            host.settle()
+            let spoken = host.accessibilityElements().map { "\($0.label) \($0.value)" }
+            host.close()
+            for text in list.shown { XCTAssertTrue(spoken.contains { $0.contains(text) }, "\(list.name): no \(text) in \(spoken)") }
+            for text in list.hidden { XCTAssertFalse(spoken.contains { $0.contains(text) }, "\(list.name): \(text) in \(spoken)") }
+        }
+        // The account used last comes first among the sign-ins.
+        XCTAssertEqual(vault.pickerItems(for: "https://signin.aws.amazon.com", matching: "", kind: .signIn).here.first?.id,
+                       items[2].id)
     }
 
     func testAnUnsignedBuildShowsTheVaultOff() throws {

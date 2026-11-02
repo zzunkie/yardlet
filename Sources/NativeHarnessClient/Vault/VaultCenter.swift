@@ -166,6 +166,26 @@ enum VaultFillKind: String, Sendable {
     case newPassword = "new_password"
 }
 
+/// What the key button's list offers (design §16): what a fill into the page's field puts there.
+enum VaultPickerKind: Sendable {
+    /// A password or username field: the sign-ins.
+    case signIn
+    /// A one-time code field: the two-factor codes.
+    case code
+}
+
+extension VaultItem {
+    /// Whether the item has what a list of this kind offers: a password or passkey for a sign-in, a code for a code
+    /// field. Every item, for a page whose field says neither.
+    func offers(_ kind: VaultPickerKind?) -> Bool {
+        switch kind {
+        case .signIn: hasPassword || hasPasskey
+        case .code: hasOneTimeCode
+        case nil: true
+        }
+    }
+}
+
 private extension VaultItem {
     /// Whether the item has what a fill of this kind needs.
     func has(_ kind: VaultFillKind) -> Bool {
@@ -542,7 +562,13 @@ final class VaultCenter: ObservableObject {
     func record(_ grant: VaultFillGrant, for request: VaultFillRequest, filled kinds: [String], failure: String? = nil) {
         log(request, item: grant.item, kinds: kinds, outcome: failure == nil ? .filled : .refused,
             reason: failure, confirmedBy: grant.confirmedBy)
-        guard failure == nil, let index = items.firstIndex(where: { $0.id == grant.item.id }) else { return }
+        if failure == nil { noteUsed(grant.item.id) }
+    }
+
+    /// Counts an item as used now, by an agent's fill or the person's: the key button's list puts the one used last
+    /// first, as Chrome's list at a field does.
+    func noteUsed(_ itemID: UUID) {
+        guard let index = items.firstIndex(where: { $0.id == itemID }) else { return }
         items[index].lastUsedAt = environment.now()
         environment.repository.saveItems(items)
     }
@@ -735,19 +761,24 @@ final class VaultCenter: ObservableObject {
     }
 
     /// The key button's list for a page (design §16): the page's own items and, for a search, every other item it
-    /// finds by name, username or site. `codes` keeps to the items with a two-factor code (the code bar's list).
-    /// The list is the person's: no tool gives it to an agent.
-    func pickerItems(for origin: String?, matching query: String, codes: Bool = false, first: UUID? = nil)
+    /// finds by name, username or site. `kind` keeps to the items that give what the page's field takes, a sign-in or
+    /// a two-factor code (the code bar's list). The page's items come as Chrome orders a site's sign-ins: the one used
+    /// last first, the rest by account (`VaultItem.accountTitle`); the item the person filled on the sign-in's earlier
+    /// step comes before them (design §17). The list is the person's: no tool gives it to an agent.
+    func pickerItems(for origin: String?, matching query: String, kind: VaultPickerKind? = nil, first: UUID? = nil)
         -> (here: [VaultItem], elsewhere: [VaultItem]) {
         guard environment.isAllowedBuild, isEnabled else { return ([], []) }
         let searching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let found = items.filter { (!codes || $0.hasOneTimeCode) && $0.matches(query) }
+        let byAccount: (VaultItem, VaultItem) -> Bool = { a, b in
+            let order = a.accountTitle.localizedStandardCompare(b.accountTitle)
+            return order == .orderedSame ? a.name.localizedStandardCompare(b.name) == .orderedAscending : order == .orderedAscending
+        }
+        let found = items.filter { $0.offers(kind) && $0.matches(query) }.sorted(by: byAccount)
         let site = origin.map { origin in found.filter { $0.sites.contains { VaultSite.matches($0, origin: origin) } } } ?? []
-        // The item filled on the sign-in's earlier step comes first (design §17).
-        let here = site.filter { $0.id == first } + site.filter { $0.id != first }
+        let lead = site.first { $0.id == first } ?? site.max { ($0.lastUsedAt ?? .distantPast) < ($1.lastUsedAt ?? .distantPast) }
+        let here = site.filter { $0.id == lead?.id } + site.filter { $0.id != lead?.id }
         guard searching else { return (here, []) }
         let elsewhere = found.filter { item in !here.contains { $0.id == item.id } }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         return (here, elsewhere)
     }
 

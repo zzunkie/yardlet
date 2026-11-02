@@ -2761,6 +2761,14 @@
 "Other passwords" = "다른 비밀번호";
 "No matching passwords" = "일치하는 비밀번호가 없습니다";
 "No site" = "사이트 없음";
+"Passwords for %@" = "%@의 비밀번호";
+"Two-factor codes for %@" = "%@의 인증 코드";
+"No password is saved for this site. Search for one saved elsewhere." = "이 사이트에 저장된 비밀번호가 없습니다. 다른 사이트에 저장한 비밀번호를 검색하세요.";
+"No two-factor code is saved for this site. Search for one saved elsewhere." = "이 사이트에 저장된 인증 코드가 없습니다. 다른 사이트에 저장한 인증 코드를 검색하세요.";
+"Other two-factor codes" = "다른 인증 코드";
+"No matching two-factor codes" = "일치하는 인증 코드가 없습니다";
+"%@ and %lld more" = "%@ 외 %lld곳";
+"No username" = "사용자 이름 없음";
 "Choose Another Code…" = "다른 코드 고르기…";
 "Save %@ as the site of “%@”?" = "“%2$@”에 %1$@ 사이트를 저장할까요?";
 "Also save %@ in “%@”?" = "“%2$@”에 %1$@ 사이트도 저장할까요?";

@@ -230,7 +230,8 @@ final class VaultTests: XCTestCase {
     }
 
     /// The person's own fills (design §16): a search finds items by each word of a name, username or site; the key
-    /// button's list puts the page's items first and the rest only for a search; a sign-in with no code gives the
+    /// button's list puts the page's items first and the rest only for a search, keeps to the sign-ins or the codes
+    /// the page's field takes, and puts the item used last first; a sign-in with no code gives the
     /// code of its account's one code item on the page; a password chosen for a site it is not saved for goes only
     /// after Touch ID, while a code needs none, as copying it from Settings does.
     func testThePersonFindsAnyItemAndAPasswordGoesToAnotherSiteOnlyAfterTouchID() async throws {
@@ -256,8 +257,11 @@ final class VaultTests: XCTestCase {
         XCTAssertEqual(plain.here.map(\.id), [northwind.id, northwindCode.id])
         XCTAssertEqual(plain.elsewhere, [])
         let searched = center.pickerItems(for: page, matching: "ada")
-        XCTAssertEqual(searched.elsewhere.map(\.id), [stripe.id, fabrikam.id])
-        XCTAssertEqual(center.pickerItems(for: page, matching: "a", codes: true).elsewhere.map(\.id), [fabrikam.id])
+        XCTAssertEqual(searched.elsewhere.map(\.id), [fabrikam.id, stripe.id])
+        XCTAssertEqual(center.pickerItems(for: page, matching: "a", kind: .code).elsewhere.map(\.id), [fabrikam.id])
+        // At a field the list keeps to what the field takes.
+        XCTAssertEqual(center.pickerItems(for: page, matching: "", kind: .signIn).here.map(\.id), [northwind.id])
+        XCTAssertEqual(center.pickerItems(for: page, matching: "", kind: .code).here.map(\.id), [northwindCode.id])
 
         let now = center.code(for: key)
         let own = await center.valuesForPerson(northwind, origin: page)
@@ -287,11 +291,13 @@ final class VaultTests: XCTestCase {
         XCTAssertEqual(linked?.item.sites, ["fabrikam.test"])
         XCTAssertEqual(notices, 0, "a saved site read as a change made outside Yardlet")
 
-        // A second code of the account leaves which one to the person.
-        try center.save(VaultItem(name: "Northwind (2)", sites: ["northwind.test"], username: "ada@example.test"),
-                        secret: VaultSecret(oneTimeCode: key))
+        // A second code of the account leaves which one to the person; the list puts the one used last first.
+        let second = VaultItem(name: "Northwind (2)", sites: ["northwind.test"], username: "ada@example.test")
+        try center.save(second, secret: VaultSecret(oneTimeCode: key))
         let two = await center.valuesForPerson(northwind, origin: page)
         XCTAssertNil(two?.code)
+        center.noteUsed(second.id)
+        XCTAssertEqual(center.pickerItems(for: page, matching: "", kind: .code).here.map(\.id), [second.id, northwindCode.id])
         center.isEnabled = false
         let off = await center.valuesForPerson(northwind, origin: page)
         XCTAssertNil(off)
