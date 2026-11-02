@@ -374,7 +374,7 @@ final class TerminalCommandHandoffTests: XCTestCase {
     }
 
     private func waitUntilSettled(in host: WindowlessRender.Host<some View>, _ condition: () -> Bool) throws {
-        let deadline = ContinuousClock.now + .seconds(15)
+        let deadline = ContinuousClock.now + testWaitLimit
         while ContinuousClock.now < deadline {
             host.settle(passes: 1, interval: 0.05)
             if condition() { return }

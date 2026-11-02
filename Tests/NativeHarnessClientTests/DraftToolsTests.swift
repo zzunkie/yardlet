@@ -196,9 +196,9 @@ final class DraftToolsTests: XCTestCase {
         let exited = workspace.terminal(in: folder, launch: launch, taskID: nil)
         defer { exited.stop() }
         _ = exited.view { Self.terminalView() }
-        exited.send("exit\n")
-        let deadline = ContinuousClock.now + .seconds(5)
-        while exited.isRunning, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(25)) }
+        let typed = await exited.typeWhenReady("exit\n", limit: testWaitLimit)
+        XCTAssertTrue(typed, "the shell reached its prompt")
+        try await waitUntil { !exited.isRunning }
         XCTAssertFalse(exited.isRunning)
         exited.panelAppeared()
         exited.panelDisappeared()
