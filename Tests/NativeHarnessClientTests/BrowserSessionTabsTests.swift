@@ -112,18 +112,23 @@ final class BrowserSessionTabsTests: XCTestCase {
         XCTAssertTrue(client.tabs(forSession: session).isEmpty)
         XCTAssertEqual(client.rememberedTabs(forSession: session),
                        BrowserRememberedTabs(addresses: ["https://a.test/", "https://c.test/"], keys: [first.key, third.key],
-                                             fronted: 1),
+                                             titles: ["", ""], favicons: [nil, nil], fronted: 1),
                        "tabs that showed no page are not kept")
         XCTAssertEqual(client.lastAddress(forSession: session), "https://c.test/")
 
         connection.sent = []
         let fronted = try XCTUnwrap(client.restoreTabs(forSession: session, viewport: .offscreenDefault))
-        XCTAssertEqual(opened(), ["https://a.test/", "https://c.test/"])
+        XCTAssertEqual(opened(), ["https://c.test/"], "only the tab in front loads its page, as Chrome restores tabs")
         XCTAssertTrue(client.tabs(forSession: session).last === fronted)
         XCTAssertEqual(client.tabs(forSession: session).map(\.key), [first.key, third.key],
                        "they are the same side-panel tabs")
         XCTAssertNil(client.rememberedTabs(forSession: session))
         XCTAssertNil(try client.restoreTabs(forSession: session, viewport: .offscreenDefault), "restored once")
+        let waiting = try XCTUnwrap(client.tabs(forSession: session).first)
+        XCTAssertEqual(waiting.pendingAddress, "https://a.test/")
+        client.noteAgentActivity(on: waiting)
+        XCTAssertEqual(opened(), ["https://c.test/", "https://a.test/"], "the other loads as the agent uses it")
+        XCTAssertNil(waiting.pendingAddress)
 
         // The address field's history: each page a tab commits once, typed only from the address field.
         for (tab, url) in zip(client.tabs(forSession: session), ["https://a.test/", "https://c.test/"]) {
@@ -294,11 +299,21 @@ final class BrowserSessionTabsTests: XCTestCase {
     func testTabsSavedWithTheTaskOpenOnlyWhenItHasNone() throws {
         let client = makeClient()
         let session = UUID()
-        client.rememberTabs(BrowserRememberedTabs(addresses: ["https://a.test/", "https://b.test/"], fronted: 7), forSession: session)
+        client.rememberTabs(BrowserRememberedTabs(addresses: ["https://a.test/", "https://b.test/"], titles: ["A", "B"],
+                                                  fronted: 7), forSession: session)
         XCTAssertEqual(client.rememberedTabs(forSession: session)?.fronted, 1, "an out-of-range front is clamped")
         let fronted = try XCTUnwrap(client.restoreTabs(forSession: session, viewport: .offscreenDefault))
-        XCTAssertEqual(opened(), ["https://a.test/", "https://b.test/"])
+        XCTAssertEqual(opened(), ["https://b.test/"])
         XCTAssertTrue(client.tabs(forSession: session).last === fronted)
+        // The other waits in the strip as it was, a page not loaded, until it is shown or used.
+        let waiting = try XCTUnwrap(client.tabs(forSession: session).first)
+        XCTAssertEqual([waiting.lastPageURL, waiting.title], ["https://a.test/", "A"])
+        XCTAssertTrue(waiting.isDiscarded)
+        client.isMemorySaverOn = true
+        client.isMemorySaverOn = false
+        XCTAssertEqual(opened(), ["https://b.test/"], "turning the saver off loads only the pages it discarded")
+        client.requestClose(waiting)
+        XCTAssertFalse(client.tabs(forSession: session).contains { $0 === waiting }, "with no page to ask, it closes at once")
         client.rememberTabs(BrowserRememberedTabs(addresses: ["https://c.test/"], fronted: 0), forSession: session)
         XCTAssertNil(client.rememberedTabs(forSession: session), "a task with open tabs keeps them")
     }

@@ -53,18 +53,20 @@ extension TaskWorkspaceState {
     }
 
     /// The panel's browser tabs whose pages were saved, for the engine to open again together when the
-    /// task has none open and none lost with the host.
+    /// task has none open and none lost with the host: the one shown loads, the others with their titles
+    /// and icons wait to be shown (`BrowserHostClient.restoreTabs`).
     func rememberSavedBrowserTabs() {
         guard let link = browserLink, link.client.tabs(forSession: link.session).isEmpty,
               link.client.rememberedTabs(forSession: link.session) == nil else { return }
-        let saved = Navigation.browserKeys(in: panels).compactMap { key -> (UUID, String)? in
-            guard let address = browserTabs.tab(key)?.address, !address.isEmpty else { return nil }
-            return (key, address)
+        let saved = Navigation.browserKeys(in: panels).compactMap { key -> (key: UUID, tab: TaskBrowserTabs.Tab)? in
+            guard let tab = browserTabs.tab(key), !tab.address.isEmpty else { return nil }
+            return (key, tab)
         }
         guard !saved.isEmpty else { return }
         let latest = Navigation.browserKey(inTab: Navigation.latestBrowserTab(in: panels))
-        link.client.rememberTabs(BrowserRememberedTabs(addresses: saved.map(\.1), keys: saved.map(\.0),
-                                                       fronted: saved.firstIndex { $0.0 == latest } ?? 0),
+        link.client.rememberTabs(BrowserRememberedTabs(addresses: saved.map { $0.tab.address }, keys: saved.map { $0.key },
+                                                       titles: saved.map { $0.tab.title }, favicons: saved.map { $0.tab.favicon },
+                                                       fronted: saved.firstIndex { $0.key == latest } ?? 0),
                                  forSession: link.session)
     }
 
@@ -213,7 +215,8 @@ extension TaskWorkspaceState {
         if client.tabs(forSession: link.session).isEmpty {
             rememberSavedBrowserTabs()
             if client.rememberedTabs(forSession: link.session) != nil {
-                try client.restoreTabs(forSession: link.session, viewport: viewport)
+                // The tab the panel shows is the one that loads.
+                try client.restoreTabs(forSession: link.session, viewport: viewport, fronting: key)
             }
             if let tab = client.tab(key: key, forSession: link.session) {
                 client.show(tab)

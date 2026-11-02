@@ -394,25 +394,33 @@ final class BrowserHostClient {
     /// Tabs to open again for a session with none (saved with the task before Yardlet restarted).
     func rememberTabs(_ saved: BrowserRememberedTabs, forSession session: UUID) {
         guard tabs(forSession: session).isEmpty, remembered[session] == nil, !saved.addresses.isEmpty else { return }
-        remembered[session] = BrowserRememberedTabs(addresses: saved.addresses, keys: saved.keys,
-                                                    fronted: min(max(0, saved.fronted), saved.addresses.count - 1))
+        var kept = saved
+        kept.fronted = min(max(0, saved.fronted), saved.addresses.count - 1)
+        remembered[session] = kept
     }
 
-    /// Opens the session's tabs lost with the host again, fronting the one that was fronted. Nil when
-    /// the session has open tabs or nothing to restore.
+    /// Opens the session's tabs lost with the host again, fronting the one that was fronted, or the one `key` names.
+    /// Only the fronted tab loads its page, as Chrome loads a restored tab once it is selected: the others are in the
+    /// strip with their addresses, titles and icons, and load as a panel shows them or the agent uses them
+    /// (`BrowserTab.pendingAddress`). Nil when the session has open tabs or nothing to restore.
     @discardableResult
-    func restoreTabs(forSession session: UUID, viewport: BrowserViewport) throws -> BrowserTab? {
+    func restoreTabs(forSession session: UUID, viewport: BrowserViewport, fronting key: UUID? = nil) throws -> BrowserTab? {
         guard tabs(forSession: session).isEmpty, let saved = remembered[session] else { return nil }
         remembered[session] = nil
+        let addresses = Array(saved.addresses.prefix(Self.maxTabsPerSession))
+        let asked = key.flatMap { key in addresses.indices.first { saved.key(at: $0) == key } }
+        let front = asked ?? (addresses.indices.contains(saved.fronted) ? saved.fronted : 0)
         var opened: [BrowserTab] = []
-        for (index, address) in saved.addresses.prefix(Self.maxTabsPerSession).enumerated() {
-            let tab = try open(url: address, viewport: viewport, session: session, key: saved.key(at: index), after: nil)
+        for (index, address) in addresses.enumerated() {
+            let tab = try open(url: address, viewport: viewport, session: session, key: saved.key(at: index), after: nil,
+                               loads: index == front)
+            if index != front { tab.holdUntilShown(address, title: saved.title(at: index), favicon: saved.favicon(at: index)) }
             // A restored page is no new visit.
             tab.visitedAddress = address
             opened.append(tab)
         }
-        if let fronted = opened.indices.contains(saved.fronted) ? opened[saved.fronted] : opened.first {
-            frontedTabs[session] = fronted.id
+        if opened.indices.contains(front) {
+            frontedTabs[session] = opened[front].id
         }
         reschedule()
         notifySession(session)
@@ -643,7 +651,8 @@ final class BrowserHostClient {
     /// attached, which every Yardlet tab is (`ShouldIgnoreUnresponsiveRenderer`).
     func requestClose(_ tab: BrowserTab) {
         guard tabs[tab.id] === tab, !tab.isClosing else { return }
-        guard let connection else { return close(tab, as: .closedByPerson) }
+        // A restored tab that has not loaded has no page to ask.
+        guard let connection, tab.pendingAddress == nil else { return close(tab, as: .closedByPerson) }
         tab.isClosing = true
         tab.closeRequests += 1
         let request = tab.closeRequests
@@ -742,7 +751,8 @@ final class BrowserHostClient {
             guard isMemorySaverOn != oldValue else { return }
             memorySaverTask?.cancel()
             memorySaverTask = nil
-            if isMemorySaverOn { runMemorySaver() } else { tabs.values.forEach(wake) }
+            // A restored tab not shown yet is not the saver's: it loads when shown or used either way.
+            if isMemorySaverOn { runMemorySaver() } else { tabs.values.filter { $0.pendingAddress == nil }.forEach(wake) }
         }
     }
     /// Whether this Mac's memory is critical now (macOS's memory pressure), when Chrome discards a tab every few
@@ -794,14 +804,28 @@ final class BrowserHostClient {
     private func wake(_ tab: BrowserTab) {
         guard tab.isDiscarded, let connection else { return }
         tab.beginRestore()
-        connection.send(.navigation(tab: tab.id, action: .reload))
+        if let address = tab.takePendingAddress() {
+            // A restored tab loads its page for the first time: the host opens it now, hidden if it is.
+            let profile = tab.session.flatMap { (openingProfileForSession ?? profileForSession)?($0) }
+            connection.send(.open(tab: tab.id, url: address, viewport: tab.viewport ?? .offscreenDefault, profile: profile))
+            if !tab.isShown { connection.send(.visibility(tab: tab.id, isHidden: true)) }
+        } else {
+            connection.send(.navigation(tab: tab.id, action: .reload))
+        }
         if let session = tab.session { notifySession(session) }
+    }
+
+    /// Opens a restored tab that has not loaded (`BrowserTab.pendingAddress`), for a use that needs its page.
+    fileprivate func openIfPending(_ tab: BrowserTab) {
+        guard tab.pendingAddress != nil, tabs[tab.id] === tab else { return }
+        wake(tab)
     }
 
     // MARK: Internals
 
+    /// `loads`: false for a restored tab that waits to be shown (`restoreTabs`), which the host opens on `wake`.
     private func open(url: String, viewport: BrowserViewport, session: UUID?, key: UUID, after: BrowserTabID?,
-                      at position: Int? = nil) throws -> BrowserTab {
+                      at position: Int? = nil, loads: Bool = true) throws -> BrowserTab {
         idleTask?.cancel()
         idleTask = nil
         let connection = try currentConnection()
@@ -818,6 +842,7 @@ final class BrowserHostClient {
             else { order.append(tab.id) }
             sessionOrder[session] = order
         }
+        guard loads else { return tab }
         let profile = session.flatMap { (openingProfileForSession ?? profileForSession)?($0) }
         connection.send(.open(tab: tab.id, url: url, viewport: viewport, profile: profile))
         return tab
@@ -965,6 +990,8 @@ final class BrowserHostClient {
         remembered[session] = BrowserRememberedTabs(
             addresses: kept.compactMap(\.lastPageURL),
             keys: kept.map(\.key),
+            titles: kept.map(\.title),
+            favicons: kept.map(\.favicon),
             fronted: kept.firstIndex { $0 === fronted } ?? 0
         )
     }
@@ -1001,7 +1028,9 @@ final class BrowserHostClient {
         guard tab.session != nil, tab.visiblePanelCount == 0 else { return nil }
         // A tab the agent opened without a panel is shown from its opening; once a panel has shown
         // the tab, only the agent's use does (a panel's own tab hides as soon as the panel is off screen).
-        guard let since = tab.lastAgentActivity ?? (tab.wasPanelAttached ? nil : tab.openedAt) else { return nil }
+        // A restored tab that waits to be shown is shown by neither: only the agent's use or a panel loads it.
+        guard let since = tab.lastAgentActivity ?? (tab.wasPanelAttached || tab.pendingAddress != nil ? nil : tab.openedAt)
+        else { return nil }
         return max(since, tab.openedAt) + agentVisibleWindow
     }
 
@@ -1232,6 +1261,9 @@ final class BrowserTab {
     private(set) var currentURL: String?
     /// The last address that was a page (not empty, not about:blank), to open again.
     private(set) var lastPageURL: String?
+    /// A restored tab that has not loaded: the address it opens at when a panel shows it or the agent uses it
+    /// (`BrowserHostClient.restoreTabs`). The host has no page for it until then; it reads as discarded.
+    private(set) var pendingAddress: String?
     /// The size the tab was opened or last resized at, for the tabs its page opens.
     fileprivate(set) var viewport: BrowserViewport?
     /// The screen size the page is shown at instead of its view's own, and who chose it; nil while the page
@@ -1385,6 +1417,8 @@ final class BrowserTab {
     private(set) lazy var devTools: BrowserDevToolsClient = {
         let devTools = BrowserDevToolsClient { [weak self] message in
             guard let self, !self.isClosed, self.openFailure == nil else { return false }
+            // A restored tab that has not loaded has no page yet: it opens first, and the call follows on the same connection.
+            if self.pendingAddress != nil { self.client?.openIfPending(self) }
             self.client?.send(.devTools(tab: self.id, message: message))
             return self.client?.isHostRunning == true
         }
@@ -1715,6 +1749,24 @@ final class BrowserTab {
             revisits: revisits, unseenAgentIdle: unseenAgentIdle)
     }
 
+    /// A restored tab waits to be shown: hidden, its page not loaded, with the address, title and icon it had.
+    fileprivate func holdUntilShown(_ address: String, title: String, favicon: Data?) {
+        pendingAddress = address
+        currentURL = address
+        lastPageURL = address
+        self.title = title
+        self.favicon = favicon
+        faviconHost = URL(string: address)?.host()
+        isDiscarded = true
+        isShown = false
+    }
+
+    /// The address a restored tab opens at, once (`BrowserHostClient.wake`).
+    fileprivate func takePendingAddress() -> String? {
+        defer { pendingAddress = nil }
+        return pendingAddress
+    }
+
     /// The memory saver loads the discarded page again (`BrowserHostClient.wake`).
     fileprivate func beginRestore() {
         isDiscarded = false
@@ -1953,10 +2005,21 @@ struct BrowserRememberedTabs: Equatable, Sendable {
     var addresses: [String]
     /// One per address; an address without one opens as a new side-panel tab.
     var keys: [UUID] = []
+    /// The pages' titles and icons, for the tabs that wait to be shown (`BrowserHostClient.restoreTabs`).
+    var titles: [String] = []
+    var favicons: [Data?] = []
     var fronted: Int
 
     func key(at index: Int) -> UUID {
         keys.indices.contains(index) ? keys[index] : UUID()
+    }
+
+    func title(at index: Int) -> String {
+        titles.indices.contains(index) ? titles[index] : ""
+    }
+
+    func favicon(at index: Int) -> Data? {
+        favicons.indices.contains(index) ? favicons[index] : nil
     }
 }
 
