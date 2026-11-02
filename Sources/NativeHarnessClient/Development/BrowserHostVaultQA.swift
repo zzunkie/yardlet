@@ -1000,8 +1000,9 @@ final class BrowserHostVaultQA {
             _ = try? await tab.devTools.send("Input.insertText", ["text": .string(text)], timeout: .seconds(10))
         }
         func press(_ tab: BrowserTab, _ id: String) async {
-            let point = await page(tab, "(() => { const r = document.getElementById('\(id)').getBoundingClientRect(); "
-                + "return [r.left + r.width / 2, r.top + r.height / 2]; })()")?.arrayValue
+            // In view first, as a person's click and the agent's are: a bar takes its room from the page.
+            let point = await page(tab, "(() => { const e = document.getElementById('\(id)'); e.scrollIntoView({block: 'nearest'}); "
+                + "const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()")?.arrayValue
             guard let x = point?.first?.doubleValue, let y = point?.last?.doubleValue else {
                 return check("panel: \(id) is on the page to click", false, "\(String(describing: point))")
             }
@@ -1180,8 +1181,9 @@ final class BrowserHostVaultQA {
             return result?["result"]?["value"]
         }
         func press(_ tab: BrowserTab, _ id: String) async {
-            let point = await page(tab, "(() => { const r = document.getElementById('\(id)').getBoundingClientRect(); "
-                + "return [r.left + r.width / 2, r.top + r.height / 2]; })()")?.arrayValue
+            // In view first, as a person's click and the agent's are: a bar takes its room from the page.
+            let point = await page(tab, "(() => { const e = document.getElementById('\(id)'); e.scrollIntoView({block: 'nearest'}); "
+                + "const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()")?.arrayValue
             guard let x = point?.first?.doubleValue, let y = point?.last?.doubleValue else {
                 return check("panel: \(id) is on the page to click", false, "\(String(describing: point))")
             }
@@ -1306,8 +1308,9 @@ final class BrowserHostVaultQA {
             _ = try? await tab.devTools.send("Input.insertText", ["text": .string(text)], timeout: .seconds(10))
         }
         func press(_ tab: BrowserTab, _ id: String) async {
-            let point = await page(tab, "(() => { const r = document.getElementById('\(id)').getBoundingClientRect(); "
-                + "return [r.left + r.width / 2, r.top + r.height / 2]; })()")?.arrayValue
+            // In view first, as a person's click and the agent's are: a bar takes its room from the page.
+            let point = await page(tab, "(() => { const e = document.getElementById('\(id)'); e.scrollIntoView({block: 'nearest'}); "
+                + "const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()")?.arrayValue
             guard let x = point?.first?.doubleValue, let y = point?.last?.doubleValue else { return }
             for (kind, buttons) in [("mouseMoved", 0), ("mousePressed", 1), ("mouseReleased", 0)] {
                 var event: [String: JSONValue] = ["type": .string(kind), "x": .number(x), "y": .number(y), "buttons": .integer(Int64(buttons))]

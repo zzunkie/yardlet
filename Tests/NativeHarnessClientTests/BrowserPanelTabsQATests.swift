@@ -1,4 +1,5 @@
 import AppKit
+@preconcurrency import IOSurface
 import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
@@ -114,9 +115,9 @@ final class BrowserPanelTabsQATests: XCTestCase {
         return Fixture(model: model, task: task, legacy: legacy, host: { host }, client: client)
     }
 
-    private func window(_ fixture: Fixture, _ appearance: WindowlessRender.Appearance) -> some View {
+    private func window(_ fixture: Fixture, _ appearance: WindowlessRender.Appearance, size: NSSize = size) -> some View {
         MainWindow(model: fixture.model)
-            .frame(width: Self.size.width, height: Self.size.height)
+            .frame(width: size.width, height: size.height)
             .environment(\.colorScheme, appearance.colorScheme)
     }
 
@@ -249,7 +250,7 @@ final class BrowserPanelTabsQATests: XCTestCase {
     }
 
     /// A page that does not respond (Chromium's hang monitor, read by the host): Chrome's "Page
-    /// Unresponsive" with Wait and Reload over the page, "Not responding" first in the header; Wait waits,
+    /// Unresponsive" with Wait and Reload above the page, "Not responding" first in the header; Wait waits,
     /// Reload opens the page again in its place under the same side-panel tab.
     func testAPageThatDoesNotRespond() throws {
         for appearance in [WindowlessRender.Appearance.light, .dark] {
@@ -271,14 +272,14 @@ final class BrowserPanelTabsQATests: XCTestCase {
             standIn.load(tab.id, "http://localhost:3100/erp/review", title: "ERPNext review")
             host.settle(passes: 8, interval: 0.03)
 
-            // The page keeps its size through a load, a notice and the bar: each resize lays it out again.
+            // The page keeps its size through a load: each resize lays it out again.
             func resizes() -> Int { standIn.sent.filter { if case .resize = $0 { true } else { false } }.count }
             let resized = resizes()
             standIn.eventHandler?(.loading(tab: tab.id, isLoading: true, canGoBack: false, canGoForward: false))
             host.settle(passes: 6, interval: 0.03)
             standIn.eventHandler?(.loading(tab: tab.id, isLoading: false, canGoBack: false, canGoForward: false))
-            standIn.eventHandler?(.navigationBlocked(tab: tab.id, url: "x-other://open"))
             host.settle(passes: 6, interval: 0.03)
+            XCTAssertEqual(resizes(), resized, "before, the loading row resized the page")
 
             standIn.eventHandler?(.responsiveness(tab: tab.id, isResponsive: false))
             host.settle(passes: 10, interval: 0.03)
@@ -292,9 +293,9 @@ final class BrowserPanelTabsQATests: XCTestCase {
             let sentBefore = standIn.sent.count
             XCTAssertTrue(WindowlessRender.withAccessibilityTree { wait.object.accessibilityPerformPress?() ?? false })
             host.settle(passes: 10, interval: 0.03)
-            XCTAssertEqual(standIn.sent.dropFirst(sentBefore).last, .unresponsive(tab: tab.id, action: .wait))
+            // The page takes the bar's room back as the bar goes, so a resize follows.
+            XCTAssertTrue(standIn.sent.dropFirst(sentBefore).contains(.unresponsive(tab: tab.id, action: .wait)))
             XCTAssertNil(barButton(L10n.string("Wait")), "Wait hides it for 15 seconds")
-            XCTAssertEqual(resizes(), resized, "before, the loading row, the notice and the bar each resized the page")
 
             standIn.eventHandler?(.responsiveness(tab: tab.id, isResponsive: true))
             standIn.eventHandler?(.responsiveness(tab: tab.id, isResponsive: false))
@@ -312,6 +313,173 @@ final class BrowserPanelTabsQATests: XCTestCase {
             host.settle(passes: 8, interval: 0.03)
             try draw(host, "page-reloaded", appearance)
         }
+    }
+
+    /// The panel's bars (the agent's handoff, a site's permission question, the password manager's offers, the panel's
+    /// notice) sit above the page and take their room from it, as Chrome's infobars do: the top of a sign-in page, with
+    /// its Sign in button, stays in view and takes the clicks with one bar and with six, in a window of the usual height
+    /// and of the least, where six take half the room and scroll (`bars-*`, light and dark, and `bars.md`). The notice
+    /// closes. Until 2026-11-02 the bars lay over the page's top.
+    func testBarsTakeTheirRoomAboveThePage() throws {
+        report = ["# Bars above the browser page", ""]
+        for appearance in [WindowlessRender.Appearance.light, .dark] {
+            recordsReport = appearance == .light
+            try bars(appearance, size: Self.size, name: "bars")
+            // MainWindow's least height.
+            try bars(appearance, size: NSSize(width: Self.size.width, height: 560), name: "bars-short")
+        }
+        try report.joined(separator: "\n")
+            .write(to: try WindowlessRender.directory(Self.folder).appending(path: "bars.md"), atomically: true, encoding: .utf8)
+    }
+
+    private func bars(_ appearance: WindowlessRender.Appearance, size: NSSize, name: String) throws {
+        let fixture = try makeFixture()
+        let model = fixture.model, task = fixture.task, client = fixture.client
+        let workspace = model.taskWorkspaces.state(for: task.id)
+        model.splits.activate(.session(task.id))
+        let host = WindowlessRender.Host(window(fixture, appearance, size: size), size: size, appearance: appearance)
+        orderIn(host)
+        defer { host.close() }
+        XCTAssertTrue(press(TaskCommandTitle.sidePanel(isShown: false), in: host))
+        XCTAssertTrue(press(L10n.string("Browser"), in: host))
+        let key = try XCTUnwrap(Navigation.browserKey(inTab: workspace.panels.trailingSurfaceID))
+        XCTAssertTrue(waitUntil(host) { client.tab(key: key, forSession: task.id) != nil })
+        let tab = try XCTUnwrap(client.tab(key: key, forSession: task.id))
+        let standIn = try XCTUnwrap(fixture.host())
+        let address = "https://console.example.test/signin"
+        standIn.load(tab.id, address, title: "Sign in")
+        host.settle(passes: 8, interval: 0.03)
+        let page = try XCTUnwrap(browserView(in: host.hosting))
+        let controller = try XCTUnwrap(BrowserHostPaneController.current)
+
+        /// The page's frame in the window, from its top left.
+        func pageFrame() -> NSRect {
+            let frame = page.convert(page.bounds, to: nil)
+            return NSRect(x: frame.minX, y: size.height - frame.maxY, width: frame.width, height: frame.height)
+        }
+        func lastViewportHeight() -> Double? {
+            standIn.sent.reversed().lazy.compactMap { if case .resize(_, let viewport) = $0 { viewport.height } else { nil } }.first
+        }
+        /// A click at this point of the page (from its top left) reaches the page.
+        func reaches(_ point: NSPoint, in frame: NSRect) -> Bool {
+            let inWindow = NSPoint(x: frame.minX + point.x, y: size.height - (frame.minY + point.y))
+            var hit = host.hosting.hitTest(host.hosting.superview?.convert(inWindow, from: nil) ?? inWindow)
+            while let view = hit, view !== page { hit = view.superview }
+            return hit != nil
+        }
+        let barLabels = ["I'm done", "Decline", "Wait", "Block", "Allow", "Not Now", "Use Strong Password", "Save"]
+            .map(L10n.string)
+        var sequence: UInt64 = 0
+        func state(_ state: String) throws -> (page: NSRect, bars: [Control]) {
+            host.settle(passes: 10, interval: 0.03)
+            sequence += 1
+            showSignInPage(in: page, sequence: sequence)
+            host.settle(passes: 2, interval: 0.03)
+            try draw(host, "\(name)-\(state)", appearance)
+            let frame = pageFrame()
+            // The bars' buttons in view: those a short window's bars scroll away lie under the bars' bottom edge.
+            let shown = controls(in: host).filter { barLabels.contains($0.label) && $0.frame.minX >= frame.minX && $0.frame.minY < frame.minY }
+            // The page's top row and its Sign in button take the clicks.
+            let top = [0.05, 0.5, 0.95].map { NSPoint(x: frame.width * $0, y: 2) } + [NSPoint(x: frame.width - 62, y: 28)]
+            let reached = top.filter { reaches($0, in: frame) }.count
+            describe("\(name) \(Int(size.height)) pt, \(state)", shown, notes: [
+                "page top \(Int(frame.minY)) pt, height \(Int(frame.height)) pt, viewport sent \(lastViewportHeight().map { Int($0) } ?? 0) pt",
+                "clicks at the page's top row and its Sign in button that reach the page: \(reached) of \(top.count)"
+            ])
+            XCTAssertEqual(reached, top.count, "\(name)-\(state): something lies over the page's top")
+            XCTAssertEqual(lastViewportHeight(), frame.height.rounded(), "\(name)-\(state): the page is told its size")
+            return (frame, shown)
+        }
+
+        let none = try state("none")
+        _ = tab.handOff(reason: "Sign in to the console with your security key, then press I'm done.")
+        let one = try state("one")
+        XCTAssertLessThan(one.page.height, none.page.height, "\(name): the handoff bar takes its room from the page")
+        XCTAssertEqual(Set(one.bars.map(\.label)), Set(["I'm done", "Decline"].map(L10n.string)))
+
+        standIn.eventHandler?(.responsiveness(tab: tab.id, isResponsive: false))
+        standIn.eventHandler?(.permissionPrompt(tab: tab.id, prompt: BrowserPermissionPrompt(
+            id: 1, origin: "https://console.example.test", permissions: ["notifications"])))
+        controller.vaultPasswordOffer = BrowserVaultPasswordOffer(origin: "https://console.example.test", page: address)
+        controller.walletSaveOffer = BrowserWalletSaveOffer(address: VaultAddress(
+            name: "Jordan Park", street: "100 Example Street", city: "Springfield", region: "IL", postalCode: "62701", country: "US"))
+        controller.showVaultNotice(L10n.string("The next passkey this site makes is saved in the password manager."),
+                                   for: .seconds(120))
+        let several = try state("several")
+        XCTAssertLessThan(several.page.height, one.page.height, "\(name): each bar takes its room from the page")
+        let half = (none.page.height / 2).rounded(.down)
+        XCTAssertGreaterThanOrEqual(several.page.height, none.page.height - half, "\(name): the bars leave the page half the room")
+        if size.height < Self.size.height {
+            XCTAssertEqual(several.page.height, none.page.height - half, "\(name): six bars take half the room and scroll")
+        }
+        // In the order they come, the agent's handoff first.
+        XCTAssertEqual(several.bars.min { $0.frame.minY < $1.frame.minY }.map(\.label), L10n.string("Decline"))
+
+        // The notice, the last bar, closes, and the page takes its room back.
+        if let close = controls(in: host).filter({ $0.label == L10n.string("Close") && $0.frame.minX >= several.page.minX })
+            .max(by: { $0.frame.minY < $1.frame.minY }) {
+            XCTAssertTrue(WindowlessRender.withAccessibilityTree { close.object.accessibilityPerformPress?() ?? false })
+            let closed = try state("notice-closed")
+            XCTAssertNil(controller.notice)
+            XCTAssertGreaterThanOrEqual(closed.page.height, several.page.height)
+        } else {
+            XCTFail("\(name): the notice has no Close")
+        }
+
+        controller.answerHandoff(.done)
+        standIn.eventHandler?(.responsiveness(tab: tab.id, isResponsive: true))
+        standIn.eventHandler?(.permissionPromptDismissed(tab: tab.id, prompt: 1))
+        controller.vaultPasswordOffer = nil
+        controller.walletSaveOffer = nil
+        let after = try state("answered")
+        XCTAssertEqual(after.page, none.page, "\(name): with the bars gone the page has its room back")
+    }
+
+    /// A sign-in page as the host would draw it at the page's size: a header with Sign in at its top right, a heading,
+    /// a field and Next, so a render shows whether anything lies over the page's top.
+    private func showSignInPage(in view: BrowserHostView, sequence: UInt64) {
+        let scale = view.window?.backingScaleFactor ?? 2
+        let width = Int(view.bounds.width * scale), height = Int(view.bounds.height * scale)
+        guard width > 0, height > 0, let surface = IOSurfaceCreate([
+            kIOSurfaceWidth: width, kIOSurfaceHeight: height, kIOSurfaceBytesPerElement: 4,
+            kIOSurfacePixelFormat: 0x4247_5241
+        ] as CFDictionary) else { return }
+        IOSurfaceLock(surface, [], nil)
+        defer { IOSurfaceUnlock(surface, [], nil) }
+        guard let context = CGContext(
+            data: IOSurfaceGetBaseAddress(surface), width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: IOSurfaceGetBytesPerRow(surface), space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        ) else { return }
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: scale, y: -scale)
+        let previous = NSGraphicsContext.current
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        defer { NSGraphicsContext.current = previous }
+        let pageWidth = view.bounds.width
+        NSColor.white.setFill()
+        NSRect(x: 0, y: 0, width: pageWidth, height: view.bounds.height).fill()
+        NSColor(red: 0.14, green: 0.18, blue: 0.24, alpha: 1).setFill()
+        NSRect(x: 0, y: 0, width: pageWidth, height: 56).fill()
+        func text(_ string: String, _ point: NSPoint, size: CGFloat, color: NSColor, weight: NSFont.Weight = .regular) {
+            NSAttributedString(string: string, attributes: [.font: NSFont.systemFont(ofSize: size, weight: weight),
+                                                            .foregroundColor: color]).draw(at: point)
+        }
+        text("Example Console", NSPoint(x: 16, y: 18), size: 15, color: .white, weight: .semibold)
+        NSColor(red: 1, green: 0.6, blue: 0, alpha: 1).setFill()
+        NSBezierPath(roundedRect: NSRect(x: pageWidth - 108, y: 12, width: 92, height: 32), xRadius: 6, yRadius: 6).fill()
+        text("Sign in", NSPoint(x: pageWidth - 88, y: 19), size: 14, color: .black, weight: .semibold)
+        text("Sign in to the console", NSPoint(x: 32, y: 88), size: 24, color: .black, weight: .semibold)
+        NSColor.gray.setStroke()
+        NSBezierPath(roundedRect: NSRect(x: 32, y: 136, width: min(pageWidth - 64, 360), height: 36), xRadius: 6, yRadius: 6).stroke()
+        text("Account ID or alias", NSPoint(x: 44, y: 145), size: 14, color: .gray)
+        NSColor.systemBlue.setFill()
+        NSBezierPath(roundedRect: NSRect(x: 32, y: 188, width: 120, height: 36), xRadius: 6, yRadius: 6).fill()
+        text("Next", NSPoint(x: 76, y: 197), size: 14, color: .white, weight: .semibold)
+        context.flush()
+        view.frameDisplay.show(BrowserFrame(layer: .view, surface: sequence, pixelWidth: width, pixelHeight: height,
+                                            sequence: sequence, paintedAt: DispatchTime.now().uptimeNanoseconds,
+                                            source: "software"), surface: surface)
     }
 
     private func browserTabs(_ appearance: WindowlessRender.Appearance) throws {

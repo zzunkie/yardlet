@@ -199,7 +199,7 @@ final class BrowserHostPersonFirstQA {
         let ref = Self.ref(in: snapshot.text, role: "button", name: "Choose File") ?? Self.ref(in: snapshot.text, role: "button", name: "파일 선택")
         let clicked = await call(AgentToolCatalog.click, ["tabId": .string(String(behind.id)), "ref": .string(ref ?? "@e1")])
         let barred = await waitUntil(.seconds(5)) { controller.fileDialog != nil && controller.fileDialogByAgent }
-        check("file chooser: one the agent's click opened waits in a bar over the shown tab, the system's panel unopened",
+        check("file chooser: one the agent's click opened waits in a bar above the shown tab, the system's panel unopened",
               barred && chooser.presentations.count == 2, "bar \(barred), presentations \(chooser.presentations.count); "
                 + clicked.text.prefix(300))
         let uploaded = await call(AgentToolCatalog.fileUpload, ["tabId": .string(String(behind.id)),
