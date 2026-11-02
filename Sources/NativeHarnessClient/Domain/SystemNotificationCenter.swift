@@ -39,6 +39,8 @@ struct SystemNotificationTarget: Equatable, Sendable {
     static let browserTabKey = "yardletBrowserTab"
     static let personalAgentKey = "yardletPersonalAgent"
     static let mailThreadKey = "yardletMailThread"
+    static let remoteHostKey = "yardletRemoteHost"
+    static let remoteTaskKey = "yardletRemoteTask"
 
     /// The task; nil for a personal agent's notification.
     let sessionID: UUID?
@@ -49,6 +51,8 @@ struct SystemNotificationTarget: Equatable, Sendable {
     var personalAgent: PersonalAgentReveal?
     /// The mailbox thread a new-mail notification is about.
     var mailThread: MailThreadKey?
+    /// A task of another Mac this one follows, by the host's ID here and the task's ID there.
+    var remoteTask: RemoteTaskReveal?
 
     init(sessionID: UUID, requestID: String? = nil, browserTab: UUID? = nil) {
         self.sessionID = sessionID
@@ -66,6 +70,11 @@ struct SystemNotificationTarget: Equatable, Sendable {
         self.mailThread = mailThread
     }
 
+    init(remoteTask: RemoteTaskReveal) {
+        sessionID = nil
+        self.remoteTask = remoteTask
+    }
+
     /// Reads a target back from a delivered notification; nil for one Yardlet did not post.
     init?(userInfo: [AnyHashable: Any]) {
         if let text = userInfo[Self.personalAgentKey] as? String,
@@ -76,6 +85,10 @@ struct SystemNotificationTarget: Equatable, Sendable {
         if let text = userInfo[Self.mailThreadKey] as? String,
            let thread = try? JSONDecoder().decode(MailThreadKey.self, from: Data(text.utf8)) {
             self.init(mailThread: thread)
+            return
+        }
+        if let host = userInfo[Self.remoteHostKey] as? String, let task = userInfo[Self.remoteTaskKey] as? String {
+            self.init(remoteTask: RemoteTaskReveal(hostID: host, taskID: task))
             return
         }
         guard let text = userInfo[Self.sessionKey] as? String, let id = UUID(uuidString: text) else { return nil }
@@ -94,8 +107,18 @@ struct SystemNotificationTarget: Equatable, Sendable {
         if let mailThread, let data = try? JSONEncoder().encode(mailThread) {
             info[Self.mailThreadKey] = String(decoding: data, as: UTF8.self)
         }
+        if let remoteTask {
+            info[Self.remoteHostKey] = remoteTask.hostID
+            info[Self.remoteTaskKey] = remoteTask.taskID
+        }
         return info
     }
+}
+
+/// A task of another Mac a notification leads to: the host as this Mac saved it, and the task's ID there.
+struct RemoteTaskReveal: Equatable, Sendable {
+    let hostID: String
+    let taskID: String
 }
 
 /// The dot a notification leads to, and the account choice its watch read it under.

@@ -9,6 +9,9 @@ enum ConversationSource {
     case transcript(
         TranscriptTurns, harness: HarnessKind, status: SessionStatus, latestTurnIsComplete: Bool
     )
+    /// Turns another Mac's Yardlet sent, projected where they arrived (`RemoteConversationModel`): only
+    /// the turns that changed are projected again there, so it is drawn as it is.
+    case presented(ConversationPresentation)
 
     /// A shared transcript given as its entries.
     static func transcript(
@@ -299,6 +302,8 @@ struct ConversationTimeline: View {
             )
             // The provider's file holds turns before the ones read from it.
             if actions.readEarlierHistory != nil { presentation.earlier = .providerFile }
+        case let .presented(presented):
+            presentation = presented
         }
         presentation.appendHeldRequests(actions.heldRequests)
         return presentation
@@ -478,6 +483,8 @@ struct ConversationTimeline: View {
                 }
             }
             handlers.fork = actions.forkCodexTurn.map { fork in { fork(turnID) } }
+        case .presented:
+            break
         case .transcript:
             // A transcript request goes back to the composer only where the task can take it.
             handlers.edit = actions.restoreDraft

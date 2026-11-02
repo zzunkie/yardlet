@@ -42,7 +42,8 @@ struct ConversationItemView: View {
         case .reasoning, .command, .fileChange, .tool:
             ConversationWorkLine(item: item, harness: context.harness, workspaceURL: context.workspaceURL,
                                  runInTerminal: context.actions.runInTerminal,
-                                 subtaskControls: context.actions.subtaskControls)
+                                 subtaskControls: context.actions.subtaskControls,
+                                 loadDetail: context.actions.loadLineDetail)
                 .equatable()
         case let .subagent(subagent):
             ConversationSubagentCard(subagent: subagent, phase: item.phase, actions: context.actions,
