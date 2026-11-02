@@ -172,14 +172,10 @@ enum TerminalTabTitle {
 struct TerminalCommandRequest: Equatable, Identifiable, Sendable {
     let id: UUID
     let command: String
-    /// Return follows the command, as a code block's "Run in terminal" runs it (the Claude app's runs what
-    /// it types); a command card's leaves it at the prompt for the person to read and run.
-    var runs = false
 
-    init(id: UUID = UUID(), command: String, runs: Bool = false) {
+    init(id: UUID = UUID(), command: String) {
         self.id = id
         self.command = command
-        self.runs = runs
     }
 }
 
@@ -495,13 +491,12 @@ final class TaskWorkspaceState {
         frontShownBrowserTab()
     }
 
-    /// "Run in terminal" on a command card: the shown tab types `command` at its prompt for the person
-    /// to read and run, without Return. A tab where a program holds the terminal (a sign-in waiting, a
-    /// dev server) is left alone: another tab at its prompt shows, else a new tab opens in `folder`, as
-    /// the Claude app's terminal takes a tab at its prompt and leaves one where a command runs. The
-    /// click is the explicit gesture that may start a shell; the caller opens the terminal panel.
-    func handOffToTerminal(_ command: String, runs: Bool = false, in folder: URL, launch: ShellLaunchEnvironment,
-                           taskID: UUID?) {
+    /// "Run in terminal" on a command card or a code block: the shown tab runs `command` at its prompt, as
+    /// the Claude app's runs what it types. A tab where a program holds the terminal (a sign-in waiting, a
+    /// dev server) is left alone: another tab at its prompt shows, else a new tab opens in `folder`, as the
+    /// Claude app's terminal takes a tab at its prompt and leaves one where a command runs. The click is the
+    /// explicit gesture that may start a shell; the caller opens the terminal panel.
+    func handOffToTerminal(_ command: String, in folder: URL, launch: ShellLaunchEnvironment, taskID: UUID?) {
         if let shown = shownTerminalTab, shown.isRunningProgram {
             if let idle = terminalTabs.first(where: { $0 !== shown && $0.isAtPrompt }) {
                 showTerminalTab(idle)
@@ -509,7 +504,7 @@ final class TaskWorkspaceState {
                 openTerminalTab(in: folder, launch: launch, taskID: taskID)
             }
         }
-        terminalHandoff = TerminalCommandRequest(command: command, runs: runs)
+        terminalHandoff = TerminalCommandRequest(command: command)
         terminalStartRequested = true
     }
 

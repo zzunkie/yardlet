@@ -4,9 +4,9 @@ import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// "Run in terminal" on every harness's command card (plan B10): a Codex command, a Claude Code Bash
-/// call and a Claude bash-mode command each offer it, and it opens the task's terminal and puts the
-/// command at its prompt.
+/// "Run in terminal" on every harness's command card (plan B10) and on an answer's shell code block: a
+/// Codex command, a Claude Code Bash call and a Claude bash-mode command each offer it, and it opens the
+/// task's terminal and runs the command at its prompt, as the Claude app's runs what it types.
 ///
 /// The shells are zsh with a temporary `ZDOTDIR` (`ShellLaunchEnvironment.isolatedZsh`), the commands
 /// are `printf`, and nothing typed reaches the person's `~/.zsh_history`. Review images:
@@ -117,8 +117,8 @@ final class TerminalCommandHandoffTests: XCTestCase {
     }
 
     /// The whole path for each harness, in the task screen: pressing the card's "Run in terminal"
-    /// opens the task's terminal, starts its shell, and types the command at the prompt without
-    /// running it; the person's Return runs it, and the typed line shows once with its output after.
+    /// opens the task's terminal, starts its shell, and runs the command at the prompt: the command
+    /// line shows once, with its output after.
     func testRunInTerminalOpensTheTasksTerminalAndRunsTheCommandForEveryHarness() throws {
         let history = Self.personalHistory()
         let directory = try WindowlessRender.directory("terminal-handoff-qa")
@@ -142,13 +142,8 @@ final class TerminalCommandHandoffTests: XCTestCase {
             XCTAssertTrue(workspace.panels.isTerminalPresented, "\(fixture.name): the terminal opens")
 
             let output = "B10-\(fixture.name)"
-            try waitForText("B10-%s", in: host)
-            host.settle(passes: 6, interval: 0.1)
-            XCTAssertFalse(host.hosting.terminalText.components(separatedBy: "\n").contains { $0.hasPrefix(output) },
-                           "\(fixture.name): typed, not run: \(host.hosting.terminalText)")
-            host.hosting.terminalView?.send(txt: "\r")
             var buffer = ""
-            let deadline = ContinuousClock.now + .seconds(15)
+            let deadline = ContinuousClock.now + testWaitLimit
             while ContinuousClock.now < deadline {
                 host.settle(passes: 1, interval: 0.05)
                 buffer = host.hosting.terminalText
@@ -157,7 +152,7 @@ final class TerminalCommandHandoffTests: XCTestCase {
             XCTAssertTrue(buffer.components(separatedBy: "\n").contains { $0.hasPrefix(output) },
                           "\(fixture.name): \(buffer)")
             XCTAssertEqual(buffer.components(separatedBy: "B10-%s").count - 1, 1,
-                           "\(fixture.name): the command was typed at the prompt, once: \(buffer)")
+                           "\(fixture.name): the command went in at the prompt, once: \(buffer)")
             XCTAssertNil(workspace.terminalHandoff, "\(fixture.name): the terminal is done with it")
             // Drawn with the whole screen, SwiftTerm's text lands right of its view in an unshown
             // window (its frame is the panel's); drawn alone, it is where the terminal shows it.
@@ -540,7 +535,7 @@ final class TerminalCommandHandoffTests: XCTestCase {
     }
 
     /// A terminal waiting for "Start terminal" (a restored task) starts for a handoff; one whose shell
-    /// is running types the next handoff into the same shell; one whose shell has exited starts a new one.
+    /// is running runs the next handoff in the same shell; one whose shell has exited starts a new one.
     func testTheTerminalStartsRestartsOrReusesItsShellForAHandoff() throws {
         let history = Self.personalHistory()
         let launch = ShellLaunchEnvironment.isolatedZsh(in: try temporaryFolder())
@@ -556,21 +551,17 @@ final class TerminalCommandHandoffTests: XCTestCase {
         XCTAssertTrue(host.hosting.terminalText.isEmpty, "Waits for Start terminal")
 
         workspace.handOffToTerminal(#"export B10_SHELL=$$; printf 'B10-%s\n' first"#)
-        try pressReturnOnceTyped("printf 'B10-%s\\n' first", in: host)
         try waitForLine("B10-first", in: host)
         let firstShell = try XCTUnwrap(host.hosting.terminalView?.process.shellPid)
         workspace.handOffToTerminal(#"printf 'B10-%s-%s\n' same "$B10_SHELL""#)
-        try pressReturnOnceTyped("same \"$B10_SHELL\"", in: host)
         try waitForLine("B10-same-\(firstShell)", in: host)
 
         workspace.handOffToTerminal("exit")
-        try pressReturnOnceTyped("exit", in: host)
-        let exited = ContinuousClock.now + .seconds(5)
+        let exited = ContinuousClock.now + testWaitLimit
         while host.hosting.terminalView?.process.running == true, ContinuousClock.now < exited {
             host.settle(passes: 1, interval: 0.05)
         }
         workspace.handOffToTerminal(#"printf 'B10-%s-%s\n' new "${B10_SHELL:-unset}""#)
-        try pressReturnOnceTyped("new \"${B10_SHELL:-unset}\"", in: host)
         try waitForLine("B10-new-unset", in: host)
         XCTAssertNotEqual(host.hosting.terminalView?.process.shellPid, firstShell)
         try WindowlessRender.writePNG(host.capture().bitmap, to: WindowlessRender.directory("terminal-handoff-qa")
@@ -680,21 +671,16 @@ final class TerminalCommandHandoffTests: XCTestCase {
         XCTAssertFalse(without.accessibilityElements().contains(label: L10n.string("Run in terminal")))
     }
 
-    /// "Run in terminal" types the command for the person to review: no Return, and a command over
-    /// several lines as a bracketed paste when the shell asked for it, so no line runs on its own.
-    func testAHandedOffCommandIsTypedForReviewNotRun() {
-        XCTAssertEqual(NativeTerminalSession.reviewText("git status\n"), "git status")
-        XCTAssertEqual(NativeTerminalSession.reviewText("a &&\nb", bracketedPaste: true), "\u{1B}[200~a &&\nb\u{1B}[201~")
-        XCTAssertEqual(NativeTerminalSession.reviewText("a &&\nb", bracketedPaste: false), "a &&\nb")
+    /// "Run in terminal" pastes the command as the shell takes a paste before its Return: its trailing
+    /// line breaks left out, and a command over several lines as a bracketed paste when the shell asked
+    /// for it, so the one Return runs every line.
+    func testAHandedOffCommandGoesInAsAPaste() {
+        XCTAssertEqual(NativeTerminalSession.pasteText("git status\n"), "git status")
+        XCTAssertEqual(NativeTerminalSession.pasteText("a &&\nb", bracketedPaste: true), "\u{1B}[200~a &&\nb\u{1B}[201~")
+        XCTAssertEqual(NativeTerminalSession.pasteText("a &&\nb", bracketedPaste: false), "a &&\nb")
     }
 
     // MARK: - Helpers
-
-    /// Waits for the handed-off command to sit at the prompt, then presses Return as the person would.
-    private func pressReturnOnceTyped(_ text: String, in host: WindowlessRender.Host<some View>) throws {
-        try waitForText(text, in: host)
-        host.hosting.terminalView?.send(txt: "\r")
-    }
 
     private func waitUntilSettled(in host: WindowlessRender.Host<some View>, _ condition: () -> Bool) throws {
         let deadline = ContinuousClock.now + testWaitLimit

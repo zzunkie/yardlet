@@ -376,17 +376,16 @@ struct TerminalPane: View {
         shell.restart()
     }
 
-    /// Puts a handed-off command at the shell's prompt: a command card's without running it, for the
-    /// person to read and run; a code block's run (`TerminalCommandRequest.runs`). A terminal that has not
-    /// started starts, as the click asked for it; one whose shell has exited starts a new shell, as Restart
-    /// does without asking when nothing runs.
+    /// Runs a handed-off command at the shell's prompt. A terminal that has not started starts, as the
+    /// click asked for it; one whose shell has exited starts a new shell, as Restart does without asking
+    /// when nothing runs.
     private func type(_ handoff: TerminalCommandRequest) async {
         if !hasStarted {
             hasStarted = true
         } else if !session.isRunning {
             session.restart()
         }
-        _ = await session.typeForReviewWhenReady(handoff.command, runs: handoff.runs)
+        _ = await session.runWhenReady(handoff.command)
         guard !Task.isCancelled else { return }
         onHandoffDone(handoff.id)
     }
@@ -644,28 +643,22 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
         terminalView.send(source: terminalView, data: bytes[...])
     }
 
-    /// A command typed for the person to review and run: the text a shell takes as input without
-    /// executing it. Without a trailing Return a one-line command waits at the prompt. A command over
-    /// several lines goes as a bracketed paste when the shell asked for that mode (zsh's line editor
-    /// does), so its inner line breaks wait too; a shell that did not ask gets the lines as typed.
-    static func reviewText(_ command: String, bracketedPaste: Bool = true) -> String {
+    /// A command as the shell takes a paste: its trailing line breaks left out, and a command over several
+    /// lines as a bracketed paste when the shell asked for that mode (zsh's line editor does), so its inner
+    /// line breaks wait in the line editor and the Return after it runs every line, as a pasted block runs; a
+    /// shell that did not ask gets the lines as typed, each running as it comes.
+    static func pasteText(_ command: String, bracketedPaste: Bool = true) -> String {
         let trimmed = command.trimmingCharacters(in: .newlines)
         guard trimmed.contains(where: \.isNewline), bracketedPaste else { return trimmed }
         return "\u{1B}[200~" + trimmed + "\u{1B}[201~"
     }
 
-    /// Types a command for review, as `reviewText`, using the shell's own paste mode.
-    private func sendForReview(_ command: String) {
-        send(Self.reviewText(command, bracketedPaste: terminalView?.getTerminal().bracketedPasteMode ?? false))
-    }
-
-    /// Waits for the shell's prompt as `typeWhenReady` does, then types `command` for review, in the
-    /// paste mode the shell asked for by then, and with `runs` presses Return after it: the shell runs
-    /// what it holds, all of a pasted block's lines.
-    func typeForReviewWhenReady(_ command: String, runs: Bool = false) async -> Bool {
+    /// Waits for the shell's prompt as `typeWhenReady` does, then pastes `command` (`pasteText`, in the
+    /// paste mode the shell asked for by then) and presses Return, as the Claude app's Run in terminal runs
+    /// what it types.
+    func runWhenReady(_ command: String) async -> Bool {
         guard await waitUntilReady() else { return false }
-        sendForReview(command)
-        if runs { send("\r") }
+        send(Self.pasteText(command, bracketedPaste: terminalView?.getTerminal().bracketedPasteMode ?? false) + "\r")
         return true
     }
 
