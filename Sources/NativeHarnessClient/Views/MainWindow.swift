@@ -1303,7 +1303,7 @@ struct MainWindow: View {
             transcript: TaskTranscriptReader { [model] in model.transcript(for: session.id) },
             isReadingSavedConversation: model.isReadingSavedConversation(session.id),
             errorMessage: model.errorBySessionID[session.id],
-            codexTaskState: model.codexPresentationBySessionID[session.id],
+            codexTaskState: TaskCodexStateReader { [model] in model.codexPresentationBySessionID[session.id] },
             codexHistorySelection: model.codexHistorySelectionBySessionID[session.id],
             codexQueue: model.followUps.queue(for: session.id),
             isCodexQueuePaused: model.followUps.isPaused(session.id),
