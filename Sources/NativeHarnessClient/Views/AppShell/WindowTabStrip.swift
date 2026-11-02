@@ -190,17 +190,16 @@ private struct WindowTabButton<SelectedTitle: View>: View {
     var body: some View {
         ZStack(alignment: .trailing) {
             if isSelected {
-                // The shown item's title opens its actions; the rest of the tab is its handle.
+                // The shown item's title opens its actions; the rest of the tab is its handle (`TabDragHandle`).
                 HStack(spacing: 7) {
-                    mark.frame(width: 16, height: 16)
+                    mark.frame(width: 16, height: 16).allowsHitTesting(false)
                     selectedTitle()
                     Spacer(minLength: 2)
                 }
                 .padding(.leading, 9)
                 .padding(.trailing, showsClose ? 26 : 7)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .help(helpText)
+                .background { TabDragHandle().help(helpText) }
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel(tab.title)
                 .accessibilityAddTraits(.isSelected)

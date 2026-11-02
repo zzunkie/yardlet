@@ -86,11 +86,20 @@ enum WindowlessRender {
 
         /// - Parameter appearance: the window's AppKit appearance. Leave it out to keep the
         ///   window's default and rely on the content's own `colorScheme` environment.
-        init(_ content: Content, size: NSSize, appearance: Appearance? = nil) {
+        /// - Parameter titled: the main window's hidden title bar (`.hiddenTitleBar`) in place of no
+        ///   border, for what AppKit does with a press in the title bar's height. The content reaches
+        ///   the window's top where it ignores the top safe area, as the app's does.
+        init(_ content: Content, size: NSSize, appearance: Appearance? = nil, titled: Bool = false) {
             _ = NSApplication.shared
             hosting = NSHostingView(rootView: content)
-            window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless],
+            window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
+                              styleMask: titled ? [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+                                  : [.borderless],
                               backing: .buffered, defer: false)
+            if titled {
+                window.titlebarAppearsTransparent = true
+                window.titleVisibility = .hidden
+            }
             window.isReleasedWhenClosed = false
             if let appearance { window.appearance = NSAppearance(named: appearance.appKitName) }
             window.contentView = hosting

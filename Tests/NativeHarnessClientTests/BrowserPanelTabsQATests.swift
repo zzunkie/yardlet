@@ -675,6 +675,85 @@ final class BrowserPanelTabsQATests: XCTestCase {
             .write(to: try WindowlessRender.directory(Self.folder).appending(path: "long-titles.md"), atomically: true, encoding: .utf8)
     }
 
+    /// A tab pressed in the title bar's height drags along its strip and the window stays: the shown browser tab and
+    /// the window's shown tab, as the tabs not shown, which are buttons. The strip's room between its tabs still moves
+    /// the window. The window has the app's title bar and is not the active app's, as a test's never is; there a press
+    /// on a shown tab's own content moved the window every time (`TabDragHandle`). The window's moves are counted, not
+    /// made.
+    func testATabDragsFromTheTitleBarWithoutMovingTheWindow() throws {
+        let fixture = try makeFixture()
+        let model = fixture.model, task = fixture.task, client = fixture.client
+        let workspace = model.taskWorkspaces.state(for: task.id)
+        model.splits.activate(.session(task.id))
+        model.splits.openInNewTab(.session(fixture.legacy.id))
+        model.splits.selectTab(.session(task.id))
+        let host = WindowlessRender.Host(window(fixture, .light).ignoresSafeArea(.container, edges: .top),
+                                         size: Self.size, appearance: .light, titled: true)
+        orderIn(host)
+        defer { host.close() }
+        XCTAssertTrue(press(TaskCommandTitle.sidePanel(isShown: false), in: host))
+        XCTAssertTrue(press(L10n.string("Browser"), in: host))
+        let first = try XCTUnwrap(Navigation.browserKey(inTab: workspace.panels.trailingSurfaceID))
+        XCTAssertTrue(waitUntil(host) { client.tab(key: first, forSession: task.id) != nil })
+        let standIn = try XCTUnwrap(fixture.host())
+        let docs = try XCTUnwrap(client.tab(key: first, forSession: task.id))
+        let status = try client.newTab(forSession: task.id, url: "about:blank", viewport: .offscreenDefault, select: false)
+        standIn.load(docs.id, "https://docs.test/", title: "Docs")
+        standIn.load(status.id, "https://status.test/", title: "Status")
+        host.settle(passes: 12, interval: 0.03)
+
+        var moves = 0
+        let performDrag = try XCTUnwrap(class_getInstanceMethod(NSWindow.self, #selector(NSWindow.performDrag(with:))))
+        let original = method_getImplementation(performDrag)
+        let counted: @convention(block) (NSWindow, NSEvent) -> Void = { _, _ in moves += 1 }
+        method_setImplementation(performDrag, imp_implementationWithBlock(counted))
+        defer { method_setImplementation(performDrag, original) }
+
+        /// A press at `point` (from the window's top-left) moved right by `distance` and let go. The moves wait in the
+        /// app's queue, as the window server's do, for whatever tracks the press.
+        func drag(from point: CGPoint, by distance: CGFloat) throws {
+            func event(_ type: NSEvent.EventType, x: CGFloat) throws -> NSEvent {
+                try XCTUnwrap(NSEvent.mouseEvent(
+                    with: type, location: NSPoint(x: x, y: host.window.frame.height - point.y), modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: host.window.windowNumber, context: nil,
+                    eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1))
+            }
+            for step in 1...8 {
+                NSApp.postEvent(try event(.leftMouseDragged, x: point.x + distance * CGFloat(step) / 8), atStart: false)
+            }
+            NSApp.postEvent(try event(.leftMouseUp, x: point.x + distance), atStart: false)
+            host.window.sendEvent(try event(.leftMouseDown, x: point.x))
+            while let next = NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp], until: Date(),
+                                             inMode: .default, dequeue: true) {
+                host.window.sendEvent(next)
+                host.settle(passes: 1, interval: 0.01)
+            }
+            host.settle(passes: 8, interval: 0.03)
+        }
+        let titleBar = controls(in: host).filter { $0.frame.maxY <= ParityTheme.titleBarHeight }
+        let close = try XCTUnwrap(titleBar.first { $0.label == L10n.string("Close tab") }, "the shown browser tab's close")
+        let statusTab = try XCTUnwrap(titleBar.first { $0.label == "Status" })
+        let otherWindowTab = try XCTUnwrap(titleBar.first { $0.label == fixture.legacy.title })
+        let y: CGFloat = 16
+        XCTAssertLessThan(y, host.window.frame.height - host.window.contentLayoutRect.height, "in the title bar's height")
+
+        try drag(from: CGPoint(x: statusTab.frame.minX - PanelTabMetrics.spacing / 2, y: y), by: 40)
+        XCTAssertEqual(moves, 1, "the room between two tabs moves the window")
+
+        // The shown browser tab, by the room between its title and its close button, past the middle of the next.
+        let shownStart = CGPoint(x: close.frame.midX - 21, y: y)
+        try drag(from: shownStart, by: statusTab.frame.midX + 10 - shownStart.x)
+        XCTAssertEqual(moves, 1, "the shown browser tab moved the window")
+        XCTAssertEqual(Navigation.browserKeys(in: workspace.panels), [status.key, docs.key], "the shown browser tab moved")
+
+        // The window's shown tab, by its mark (the window's two tabs are as wide), past the middle of the other.
+        let shownWindowTab = otherWindowTab.frame.offsetBy(dx: -otherWindowTab.frame.width - WindowTabMetrics.spacing, dy: 0)
+        let markStart = CGPoint(x: shownWindowTab.minX + 17, y: y)
+        try drag(from: markStart, by: otherWindowTab.frame.midX + 10 - markStart.x)
+        XCTAssertEqual(moves, 1, "the window's shown tab moved the window")
+        XCTAssertEqual(model.splits.tabs, [.session(fixture.legacy.id), .session(task.id)], "the window's shown tab moved")
+    }
+
     /// A Claude adapter that starts sessions and sends nothing.
     private actor Recorder: HarnessAdapter {
         nonisolated let kind = HarnessKind.claudeCode
