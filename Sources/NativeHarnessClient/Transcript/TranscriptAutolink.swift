@@ -6,6 +6,17 @@ import Foundation
 /// list extensions to cmark, so its text keeps them as plain text; this marks them afterwards, on the
 /// rendered text, so an address cmark split into several text nodes (at `_` or `*`) is still one link.
 /// Text already in a link or in code stays as it is.
+///
+/// GFM runs an address on to the next space, which Korean, Japanese and Chinese text do not put after
+/// it: GitHub and the Codex app link `(https://…/pull/403)을` through `)을`. Here an address ends where
+/// the address ends, and otherwise follows GFM:
+/// - a `)` that closes a `(` written before the address belongs to the sentence (GFM drops such a `)`
+///   only at the very end), so `(https://…/pull/403)을` and `(see https://…_(language))를` link the
+///   address alone, while `www.google.com/search?q=(business))+ok`, with no `(` before it, stays whole;
+/// - after the domain an address goes on only with a port, path, query or fragment, so in
+///   `https://example.com(설명)` the parenthesis is the sentence's;
+/// - CJK punctuation such as `（`, `）`, `：` and `。` separates words as a space does.
+/// Korean, Japanese and Chinese letters in a path stay in it (`https://example.com/법령/도로교통법/제96조`).
 enum TranscriptAutolink {
     static func apply(to text: AttributedString) -> AttributedString {
         let characters = Array(text.characters)
@@ -13,8 +24,15 @@ enum TranscriptAutolink {
         let indices = Array(text.characters.indices) + [text.endIndex]
         var result = text
         var position = 0
+        // `(` outside addresses so far that no `)` has closed.
+        var openParentheses = 0
         while position < characters.count {
-            guard let found = address(in: characters, at: position) else {
+            guard let found = address(in: characters, at: position, insideParentheses: openParentheses > 0) else {
+                if characters[position] == "(" {
+                    openParentheses += 1
+                } else if characters[position] == ")", openParentheses > 0 {
+                    openParentheses -= 1
+                }
                 position += 1
                 continue
             }
@@ -38,19 +56,20 @@ enum TranscriptAutolink {
         return text.contains("://") || text.contains("www.") || text.contains("@")
     }
 
-    private static func address(in characters: [Character], at start: Int) -> Found? {
-        if let found = urlAddress(in: characters, at: start) { return found }
+    private static func address(in characters: [Character], at start: Int, insideParentheses: Bool) -> Found? {
+        if let found = urlAddress(in: characters, at: start, insideParentheses: insideParentheses) { return found }
         return emailAddress(in: characters, at: start)
     }
 
-    /// GFM: an autolink starts at the beginning of a line, after whitespace, or after `*`, `_`, `~` or `(`.
+    /// GFM: an autolink starts at the beginning of a line, after whitespace, or after `*`, `_`, `~` or `(`;
+    /// and here after CJK punctuation, as GitHub and the Codex app also link `（https://…`.
     private static func startsAfterBoundary(_ characters: [Character], _ start: Int) -> Bool {
         guard start > 0 else { return true }
         let previous = characters[start - 1]
-        return previous.isWhitespace || "*_~(".contains(previous)
+        return previous.isWhitespace || "*_~(".contains(previous) || isCJKPunctuation(previous)
     }
 
-    private static func urlAddress(in characters: [Character], at start: Int) -> Found? {
+    private static func urlAddress(in characters: [Character], at start: Int, insideParentheses: Bool) -> Found? {
         guard startsAfterBoundary(characters, start) else { return nil }
         let rest = characters[start...]
         let prefix: String
@@ -69,9 +88,8 @@ enum TranscriptAutolink {
         while domainEnd < characters.count, isDomainCharacter(characters[domainEnd]) { domainEnd += 1 }
         let domain = String(characters[domainStart..<domainEnd])
         guard validDomain(domain, needsPeriod: isWWW) else { return nil }
-        var end = domainEnd
-        while end < characters.count, !characters[end].isWhitespace, characters[end] != "<" { end += 1 }
-        end = trimmedEnd(characters, start: start, end: end)
+        let end = trimmedEnd(characters, start: start,
+                              end: pathEnd(characters, domainEnd: domainEnd, insideParentheses: insideParentheses))
         guard end > domainStart else { return nil }
         let matched = String(characters[start..<end])
         let destination = isWWW ? "http://" + matched : matched
@@ -117,6 +135,37 @@ enum TranscriptAutolink {
         guard !trimmed.isEmpty, !segments.contains(where: \.isEmpty) else { return false }
         if needsPeriod, segments.count < 2 { return false }
         return !segments.suffix(2).contains { $0.contains("_") }
+    }
+
+    /// Where the port, path, query and fragment after the domain stop, before GFM's trailing rules: at
+    /// whitespace, `<` or CJK punctuation, or at a `)` that closes a `(` before the address.
+    private static func pathEnd(_ characters: [Character], domainEnd: Int, insideParentheses: Bool) -> Int {
+        guard domainEnd < characters.count, ":/?#".contains(characters[domainEnd]) else { return domainEnd }
+        var end = domainEnd
+        var depth = 0
+        while end < characters.count {
+            let character = characters[end]
+            if character.isWhitespace || character == "<" || isCJKPunctuation(character) { break }
+            if character == "(" {
+                depth += 1
+            } else if character == ")" {
+                if depth > 0 {
+                    depth -= 1
+                } else if insideParentheses {
+                    break
+                }
+            }
+            end += 1
+        }
+        return end
+    }
+
+    /// Punctuation in CJK Symbols and Punctuation and in the full-width and half-width forms (`（`, `）`,
+    /// `：`, `、`, `。`, `「`), which Korean, Japanese and Chinese text puts where English puts ASCII
+    /// punctuation and spaces.
+    private static func isCJKPunctuation(_ character: Character) -> Bool {
+        guard !character.isLetter, !character.isNumber, let scalar = character.unicodeScalars.first else { return false }
+        return (0x3000...0x303F).contains(scalar.value) || (0xFF00...0xFFEF).contains(scalar.value)
     }
 
     /// GFM's trailing rules: `?`, `!`, `.`, `,`, `:`, `*`, `_`, `~` and quotes are not part of the link,
