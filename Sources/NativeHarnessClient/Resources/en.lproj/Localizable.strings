@@ -3510,3 +3510,7 @@
 "Undo send" = "Undo";
 "Folders" = "Folders";
 "Mail handoff message %@ %@ %@" = "Account: %1$@ · message %2$@, read with %3$@";
+"Moving to %@ after this turn" = "Moving to %@ after this turn";
+"Moving to %@ when its background work ends" = "Moving to %@ when its background work ends";
+"Cancel account change" = "Cancel account change";
+"%@ no longer shares this task's conversation history, so the task stays on its account." = "%@ no longer shares this task's conversation history, so the task stays on its account.";

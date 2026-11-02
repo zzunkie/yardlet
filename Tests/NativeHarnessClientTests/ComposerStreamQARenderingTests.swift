@@ -5,7 +5,8 @@ import XCTest
 
 /// The task composer as the person sees it while working (2026-10-16): one "+" for adding files,
 /// folders, commands and connectors; while a turn runs, the placeholder that says where Return
-/// and ⌘Return send a message, and queue chips that say where each queued message goes. Images go
+/// and ⌘Return send a message (and that Return queues while the task waits to move to another
+/// account), and queue chips that say where each queued message goes. Images go
 /// to `.build/composer-stream-qa/` in both appearances, with each composer's accessibility row.
 @MainActor
 final class ComposerStreamQARenderingTests: XCTestCase {
@@ -20,6 +21,8 @@ final class ComposerStreamQARenderingTests: XCTestCase {
     private static let waitingQueue = [
         CodexQueuedSubmission(draft: CodexComposerDraft(inputs: [.text("Then deploy it")]))
     ]
+    /// A task that moves to another account when its turn ends.
+    private static let accountMove = TaskAccountMoveNotice(accountName: "work@example.test · Example Team", cancel: {})
 
     private static var scenarios: [ComposerUnificationFixtures.Scenario] {
         [
@@ -47,6 +50,17 @@ final class ComposerStreamQARenderingTests: XCTestCase {
                 AnyView(PromptComposer(harness: .antigravityCLI, composerDraft: F.draft(""),
                     providerSession: F.session(.antigravityCLI, status: .running), isProviderAttached: true,
                     isRunning: true, codexQueue: waitingQueue, workspaceURL: F.workspace, actions: F.claudeActions))
+            },
+            .init(name: "composer-claude-moving-account", size: NSSize(width: 760, height: 220)) {
+                AnyView(VStack(spacing: 8) {
+                    TaskAccountMoveLine(notice: accountMove)
+                    PromptComposer(harness: .claudeCode, composerDraft: F.draft(""),
+                        providerSession: F.session(.claudeCode, status: .running),
+                        providerCapabilities: F.claudeLiveCapabilities, providerUsage: F.providerUsage,
+                        isProviderAttached: true, isRunning: true, canSteer: true, codexQueue: waitingQueue,
+                        workspaceURL: F.workspace, actions: F.claudeActions)
+                }
+                .environment(\.taskAccountMove, accountMove))
             }
         ]
     }
@@ -107,6 +121,13 @@ final class ComposerStreamQARenderingTests: XCTestCase {
         XCTAssertTrue(labels("composer-codex-running").contains(
             L10n.format("↩ %@ · ⌘↩ %@", L10n.string("Add to the running task"), after)))
         XCTAssertTrue(labels("composer-antigravity-running").contains(L10n.format("↩ %@", after)))
+        // A task about to move to another account says so above the composer, and Return queues
+        // what is sent meanwhile for after the move.
+        XCTAssertTrue(labels("composer-claude-moving-account").contains(
+            L10n.format("↩ %@ · ⌘↩ %@", after, L10n.string("Deliver at the next step"))), "\(labels("composer-claude-moving-account"))")
+        XCTAssertTrue(values("composer-claude-moving-account").contains(
+            L10n.format("Moving to %@ after this turn", Self.accountMove.accountName)))
+        XCTAssertTrue(labels("composer-claude-moving-account").contains(L10n.string("Cancel account change")))
         // Each chip says where its message goes.
         let claudeChips = (rows["composer-claude-running"] ?? []).filter { $0.label.hasPrefix(L10n.string("Queue") + ", ") }
         XCTAssertEqual(claudeChips.map(\.label), [

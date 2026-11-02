@@ -122,13 +122,15 @@ struct PromptComposer: View {
     @FocusState private var focusedComposerControl: ComposerFocus?
     @Environment(\.claudeShellCommands) private var shellCommands
     @Environment(\.composerConnectors) private var yardletConnectors
+    @Environment(\.taskAccountMove) private var accountMove
     /// What Return sends while a turn runs; ⌘Return sends the other way.
     @AppStorage(FollowUpMode.preferenceKey) private var followUpModeValue = FollowUpMode.steer.rawValue
     /// Whether the empty composer shows the suggested next message as its faint text, for Tab or →.
     @AppStorage(NextMessageSuggestionPreference.key) private var showsNextMessageSuggestions = true
 
     private var followUpMode: FollowUpMode {
-        FollowUpMode(rawValue: followUpModeValue) ?? .steer
+        // A task about to move to another account queues on Return, to send after the move.
+        accountMove != nil ? .queue : FollowUpMode(rawValue: followUpModeValue) ?? .steer
     }
 
     /// The queue and steering a message typed now can take: while the turn runs, outside bash mode

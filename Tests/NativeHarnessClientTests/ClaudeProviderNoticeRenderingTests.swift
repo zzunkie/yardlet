@@ -8,7 +8,8 @@ import XCTest
 /// them.
 @MainActor
 final class ClaudeProviderNoticeRenderingTests: XCTestCase {
-    /// The limit cards, compaction markers and the lines above the composer, in both appearances.
+    /// The limit cards, compaction markers and the lines above the composer (a limit warning, and a
+    /// task moving to another account in its turn and after it), in both appearances.
     /// Rendered without a window into `.build/claude-provider-notices-qa`.
     func testLimitCardsCompactionMarkersAndNoticeLinesRender() throws {
         let directory = try WindowlessRender.directory("claude-provider-notices-qa")
@@ -61,6 +62,9 @@ final class ClaudeProviderNoticeRenderingTests: XCTestCase {
                 CompactionMarker(compaction: HarnessContextCompaction(phase: .failed,
                     message: "Conversation too long to summarize"))
                 ProviderNoticeLines(notices: notices)
+                TaskAccountMoveLine(notice: TaskAccountMoveNotice(accountName: "work@example.test", cancel: {}))
+                TaskAccountMoveLine(notice: TaskAccountMoveNotice(accountName: "work@example.test", isInTurn: false,
+                                                                  cancel: {}))
             }
             .padding(20)
             .frame(width: 720)

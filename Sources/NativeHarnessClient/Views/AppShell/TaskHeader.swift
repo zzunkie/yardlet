@@ -65,7 +65,6 @@ struct TaskTitleMenu: View {
             }
             if TaskAccountSwitch.supports(session.harness), let onChooseAccount = actions.onChooseAccount {
                 Button(L10n.string("Choose account…")) { onChooseAccount(session) }
-                    .disabled(session.status == .running || session.status == .waitingForApproval)
                 Divider()
             }
             Button(L10n.string("Rename task")) { actions.onRename(session) }
