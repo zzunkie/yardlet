@@ -9,8 +9,8 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
 
 - Settings › General › **Mailbox**, off by default. While it is off the Mail word is not shown, nothing
   is read and nothing is watched.
-- Turning it off stops the watch, closes what is open, forgets every list, thread and search read so
-  far, and removes the history cursors (see "What is kept"). A window showing the mailbox goes back to
+- Turning it off stops the watch, closes what is open, forgets every list, thread, search and message
+  being written in every window, and removes the history cursors (see "What is kept"). A window showing the mailbox goes back to
   its tasks. The Gmail connectors and their Keychain items stay; they belong to Settings › Connectors.
 - Settings › Notifications › **New mail**, on by default and shown while the mailbox is on.
 
@@ -34,7 +34,9 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
 
 ## The sidebar
 
-- The list starts with **All inboxes**, every account's inbox newest first. A row shows an unread dot, the
+- The list starts with **All inboxes**, every account's inbox newest first. An account with more to read
+  ends at the oldest thread read of it, and other accounts' older threads wait until it is read that far
+  too, so the list has no gap in time. A row shows an unread dot, the
   senders (the account itself as "me") and the number of messages, the time (today's time, this week's
   day, else the date), the subject (after an orange **Draft** when the thread holds one), and, with
   several accounts, the account before the first words.
@@ -45,7 +47,8 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
   fold. Unread counts come from Gmail for the inbox and spam; Drafts shows its count.
 - Choosing a folder lists it, read from Gmail when it is not an inbox (`users.threads.list` with its
   label; All Mail with no label; Spam and Trash with `includeSpamTrash`). A list reads 50 threads at a
-  time; as its end comes into view the next page is read from the page token Gmail gave.
+  time; as its end comes into view the next page is read from the page token Gmail gave. Reading the
+  first page again after new mail keeps the threads read further down.
 - Typing in **Search mail** narrows the list at once; a pause of 0.4 seconds, or Return, asks Gmail's own
   search (Gmail's search syntax) of the account listed, or of every account for All inboxes. Older mail is
   found this way rather than kept here.
@@ -54,10 +57,14 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
 
 - Choosing a thread reads it in full (`users.threads.get`, `format=full`); lists read headers only
   (`format=metadata`). Opening an unread thread marks it read in Gmail too, as mail apps do
-  (`MailReadSync`). Messages an agent reads through its tools stay as they are.
+  (`MailReadSync`); the request goes on when another thread is chosen, and a change Gmail refuses takes
+  back only that thread's change. Messages an agent reads through its tools stay as they are.
 - Earlier messages fold to a line; the newest stays open. A message's HTML is drawn with page scripts off,
   no cookies or storage (a non-persistent data store), and nothing fetched from the network until
-  **Show images** is chosen for that message, so a tracking pixel does not tell the sender it was read.
+  **Show images** is chosen for that message, so a tracking pixel does not tell the sender it was read:
+  a content rule blocks every `http` and `https` load, the page's policy allows only inline images and
+  styles, and links that would connect ahead of time are taken out. If the rule cannot be made, the
+  message's text is shown instead of its HTML.
   A chosen link opens as a link another app hands Yardlet does. The page is as tall as its content and
   scrolls with the thread. A message without HTML shows its text.
 - The thread's bar: **Ask an agent**, Archive (in an inbox), Mark as read or unread, Star, and
@@ -78,20 +85,23 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
 - What is written is saved to the account's Drafts ten seconds after the last change and when it is
   closed; saves run one after another, so a message is one draft. A message left as it was opened (a
   reply opened and closed) is not saved. **Discard** deletes that draft.
-- **Send** waits five seconds, during which **Undo** takes the message back to the editor; then the draft
-  is sent (`users.drafts.send`) and the thread is read again. The person's Send is the confirmation; an
+- **Send** waits five seconds, during which **Undo** takes the message back to the editor and Discard and
+  Close are off. Then Undo goes and the message is on its way: it is saved if it changed, the draft is
+  sent (`users.drafts.send`) and the thread is read again. A failure leaves the message open with why. The person's Send is the confirmation; an
   agent's sends still go through its harness's approval.
 - A draft in a thread, the person's or an agent's, offers **Send**, **Edit** and **Discard**. Send on a
   draft shows it with Undo and sends it as it was saved, without saving it over, so a draft an agent
-  wrote in HTML goes as it is. Edit continues it as text.
+  wrote in HTML goes as it is. Edit continues it as text with its recipients, blind copies and files; a
+  draft with files is replaced in place through the upload endpoint, its files read from it again.
 
 ## New mail
 
 - While Yardlet runs and the mailbox is on, each account is asked every minute what changed in its inbox
   (`users.history.list` from the cursor, 2 quota units). No model is asked anything. A change reads that
-  inbox's first page again. A cursor Gmail no longer has (a week or more old) reads the inbox again
+  inbox's first page again, and the cursor moves on only once it was read, so what arrived is still told
+  after a failed read. A cursor Gmail no longer has (a week or more old) reads the inbox again
   without telling anything. A failure waits twice as long each time, up to ten minutes; a refused sign-in
-  shows on the account and stops its watch until it changes in Connectors.
+  shows on the account and stops its watch until the account answers a refresh again.
 - Unread mail that came into the inbox, not sent or drafted by the account and in Gmail's Primary
   category, is told as a system notification through the same permission as task notifications: the
   sender (and the account with several) and the subject with its first words, or one count for more than
