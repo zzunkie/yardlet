@@ -224,6 +224,64 @@ final class MailboxCenter {
         if !hasUnseenMail { hasUnseenMail = true }
     }
 
+    // MARK: - Writing
+
+    /// Saves what is being written as a draft on its account's service; the draft's ID comes back on it.
+    func save(_ composition: MailComposition) async throws -> MailComposition {
+        guard let transport = transports[composition.accountID] else {
+            throw MailFailure(kind: .unavailable, message: L10n.string("This account is no longer in the mailbox."))
+        }
+        var saved = composition
+        saved.draftID = try await transport.saveDraft(composition)
+        return saved
+    }
+
+    /// Sends what was written, through the draft it was saved as, and reads its thread again.
+    func send(_ composition: MailComposition) async throws {
+        guard let transport = transports[composition.accountID] else { return }
+        let saved = try await save(composition)
+        try await transport.sendDraft(try savedDraftID(saved.draftID))
+        await afterWriting(composition)
+    }
+
+    /// Removes the draft a composition was saved as, if it was.
+    func discard(_ composition: MailComposition) async throws {
+        guard let id = composition.draftID, let transport = transports[composition.accountID] else { return }
+        try await transport.discardDraft(id)
+        await afterWriting(composition)
+    }
+
+    /// A thread's draft, from the person or an agent, opened to edit: its recipients, subject and words
+    /// over the draft it is on the service.
+    func composition(editing message: MailMessage, in thread: MailThread) async throws -> MailComposition {
+        let key = thread.summary.id
+        guard let transport = transports[key.accountID] else {
+            throw MailFailure(kind: .unavailable, message: L10n.string("This account is no longer in the mailbox."))
+        }
+        let draftID = try await transport.draftID(forMessage: message.id)
+        let line = { (addresses: [MailAddress]) in addresses.map(MailComposition.formatted).joined(separator: ", ") }
+        let answered = thread.messages.last { !$0.isDraft && $0.date <= message.date }
+        return MailComposition(accountID: key.accountID, kind: .reply, threadID: key.threadID, draftID: draftID,
+                               to: line(message.to), cc: line(message.cc), subject: message.subject, body: message.text,
+                               inReplyTo: answered?.messageID,
+                               references: [answered?.references, answered?.messageID].compactMap { $0 }.joined(separator: " "))
+    }
+
+    /// The thread written in is read again, so a sent reply or a discarded draft shows in it.
+    private func afterWriting(_ composition: MailComposition) async {
+        guard let thread = composition.threadID else { return }
+        let key = MailThreadKey(accountID: composition.accountID, threadID: thread)
+        if let transport = transports[key.accountID], let fresh = try? await transport.thread(thread) {
+            remember(fresh, for: key)
+        }
+        await reread(key.accountID, arrived: [])
+    }
+
+    private func savedDraftID(_ id: String?) throws -> String {
+        guard let id else { throw MailFailure(kind: .unavailable, message: L10n.string("This draft is no longer in the account.")) }
+        return id
+    }
+
     /// A window shows the mailbox: what arrived until now has been seen.
     func noteShown() {
         if hasUnseenMail { hasUnseenMail = false }
@@ -394,10 +452,156 @@ final class MailWindowState {
     private(set) var isOpening = false
     private(set) var failure: MailFailure?
 
+    /// What the person is writing, shown in the thread's place while it is.
+    var composition: MailComposition?
+    /// When the message just sent leaves, unless the person takes it back first.
+    private(set) var sendsAt: Date?
+    private(set) var isSaving = false
+    private(set) var writingFailure: String?
+
     @ObservationIgnored private var opening: Task<Void, Never>?
     @ObservationIgnored private var searching: Task<Void, Never>?
+    @ObservationIgnored private var sending: Task<Void, Never>?
+    @ObservationIgnored private var lastSave: Task<Void, Never>?
+    /// The draft each message being written was saved as.
+    @ObservationIgnored private var draftIDs: [UUID: String] = [:]
+
+    /// How long Undo stays after Send.
+    @ObservationIgnored var undoWindow: Duration = .seconds(5)
 
     init() {}
+
+    /// Starts a new message from `account`, or a reply, reply to all or forward of `message`.
+    func write(_ kind: MailComposition.Kind, account: MailAccount, message: MailMessage? = nil, in thread: MailThread? = nil) {
+        writingFailure = nil
+        if let message, let thread {
+            composition = .answering(message, in: thread, as: kind, from: account)
+        } else {
+            composition = MailComposition(accountID: account.id)
+        }
+    }
+
+    /// Opens a thread's draft to go on writing it.
+    func edit(_ message: MailMessage, in thread: MailThread, center: MailboxCenter) {
+        writingFailure = nil
+        Task {
+            do { composition = try await center.composition(editing: message, in: thread) }
+            catch { failure = error as? MailFailure ?? MailFailure(kind: .unavailable, message: error.localizedDescription) }
+        }
+    }
+
+    /// Saves what is written as a draft on the service, as the person writes and when they close it.
+    func save(in center: MailboxCenter) async {
+        guard let current = composition, sendsAt == nil else { return }
+        await enqueueSave(current, in: center).value
+    }
+
+    /// Saves one after another, so a save that is under way when the person closes or sends gives its
+    /// draft to the next, and no message ends up as two drafts.
+    @discardableResult
+    private func enqueueSave(_ snapshot: MailComposition, in center: MailboxCenter) -> Task<Void, Never> {
+        let previous = lastSave
+        let task = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            var snapshot = snapshot
+            if snapshot.draftID == nil { snapshot.draftID = self.draftIDs[snapshot.id] }
+            self.isSaving = true
+            defer { self.isSaving = false }
+            do {
+                let saved = try await center.save(snapshot)
+                self.draftIDs[snapshot.id] = saved.draftID
+                if self.composition?.id == snapshot.id { self.composition?.draftID = saved.draftID }
+                self.writingFailure = nil
+            } catch {
+                if self.composition?.id == snapshot.id { self.writingFailure = error.localizedDescription }
+            }
+        }
+        lastSave = task
+        return task
+    }
+
+    /// Closes the message, keeping it as a draft when anything was written.
+    func close(in center: MailboxCenter) {
+        guard let current = composition else { return }
+        composition = nil
+        let written = !current.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !current.to.isEmpty || !current.subject.isEmpty || !current.attachments.isEmpty
+        if written || current.draftID != nil || draftIDs[current.id] != nil { enqueueSave(current, in: center) }
+    }
+
+    /// Throws the message away, with the draft it was saved as.
+    func discard(in center: MailboxCenter) {
+        guard let current = composition else { return }
+        composition = nil
+        let previous = lastSave
+        Task { [weak self] in
+            await previous?.value
+            var current = current
+            if current.draftID == nil { current.draftID = self?.draftIDs[current.id] }
+            try? await center.discard(current)
+        }
+    }
+
+    /// Sends what is written after `undoWindow`, during which Undo takes it back.
+    func send(in center: MailboxCenter) {
+        guard let current = composition, sendsAt == nil else { return }
+        guard !MailComposition.recipients(current.to + "," + current.cc + "," + current.bcc).isEmpty else {
+            writingFailure = L10n.string("Add at least one recipient.")
+            return
+        }
+        writingFailure = nil
+        let wait = undoWindow
+        sendsAt = .now.addingTimeInterval(Double(wait.components.seconds))
+        sending = Task { [weak self] in
+            try? await Task.sleep(for: wait)
+            guard let self, !Task.isCancelled, self.sendsAt != nil else { return }
+            await self.lastSave?.value
+            var current = current
+            if current.draftID == nil { current.draftID = self.draftIDs[current.id] }
+            do {
+                try await center.send(current)
+                self.sendsAt = nil
+                self.composition = nil
+                if let key = self.selection { self.thread = center.openedThread(key) ?? self.thread }
+            } catch {
+                self.sendsAt = nil
+                self.writingFailure = error.localizedDescription
+            }
+        }
+    }
+
+    /// Takes back the message just sent, before it leaves.
+    func undoSend() {
+        sending?.cancel()
+        sending = nil
+        sendsAt = nil
+    }
+
+    /// Sends a thread's draft as it is, as its Send button does.
+    func sendDraft(_ message: MailMessage, in thread: MailThread, center: MailboxCenter) {
+        Task {
+            do {
+                composition = try await center.composition(editing: message, in: thread)
+                send(in: center)
+            } catch {
+                failure = error as? MailFailure ?? MailFailure(kind: .unavailable, message: error.localizedDescription)
+            }
+        }
+    }
+
+    /// Discards a thread's draft.
+    func discardDraft(_ message: MailMessage, in thread: MailThread, center: MailboxCenter) {
+        Task {
+            do {
+                let draft = try await center.composition(editing: message, in: thread)
+                try await center.discard(draft)
+                if selection == thread.summary.id { self.thread = center.openedThread(thread.summary.id) }
+            } catch {
+                failure = error as? MailFailure ?? MailFailure(kind: .unavailable, message: error.localizedDescription)
+            }
+        }
+    }
 
     /// The rows the list shows: the search's answer while there is one, else the mailbox's threads,
     /// narrowed at once to what the typed words match.

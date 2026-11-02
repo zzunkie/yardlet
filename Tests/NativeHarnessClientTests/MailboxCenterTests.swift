@@ -37,4 +37,41 @@ final class MailboxCenterTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: MailboxPreference.cursorsKey), "Turning the mailbox off forgets the cursors")
         XCTAssertTrue(center.threads.isEmpty)
     }
+
+    /// A reply goes out through a draft once the undo time passes; Undo keeps it from leaving, and
+    /// closing what was written keeps it in Drafts.
+    func testAReplyIsSentAfterTheUndoTimeAndUndoKeepsItBack() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("MailboxWrite")))
+        let transport = try XCTUnwrap(MailFixture().transports().first)
+        let center = MailboxCenter(defaults: defaults)
+        center.setEnabled(true)
+        center.setAccounts([(transport.account, transport)])
+        let thread = try await transport.thread(MailFixture.quoteThread)
+        let message = try XCTUnwrap(thread.messages.last { !$0.isDraft })
+        let window = MailWindowState()
+        window.undoWindow = .milliseconds(50)
+
+        window.write(.reply, account: MailFixture.work, message: message, in: thread)
+        XCTAssertEqual(window.composition?.to, "김하늘 <haneul@vendor.example>")
+        let quoted = window.composition?.body ?? ""
+        window.composition?.body = "목요일까지 회신드리겠습니다." + quoted
+        window.send(in: center)
+        window.undoSend()
+        try await Task.sleep(for: .milliseconds(150))
+        let keptBack = await transport.sent
+        XCTAssertTrue(keptBack.isEmpty, "Undo keeps the message from leaving")
+        XCTAssertNotNil(window.composition)
+
+        window.send(in: center)
+        try await waitUntil { await !transport.sent.isEmpty }
+        try await waitUntil { window.composition == nil }
+        let drafts = await transport.drafts
+        XCTAssertTrue(drafts.isEmpty, "The draft it went through left with it")
+
+        window.write(.new, account: MailFixture.work)
+        window.composition?.to = "jordan@acme.example"
+        window.close(in: center)
+        try await waitUntil { await transport.drafts.count == 1 }
+        XCTAssertNil(window.composition)
+    }
 }
