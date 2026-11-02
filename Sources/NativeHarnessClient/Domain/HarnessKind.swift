@@ -224,4 +224,17 @@ enum HarnessCatalog {
     static func descriptor(for id: HarnessKind) -> HarnessDescriptor? {
         descriptorsByID[id]
     }
+
+    /// The built-in harness a name written for it means: its id, or, in any case, its display name, short
+    /// name or executable ("Antigravity", "agy"), as an agent may write one for a session tool. A name
+    /// that fits more than one harness, or none, means none.
+    static func harness(named name: String) -> HarnessKind? {
+        let name = name.trimmingCharacters(in: .whitespaces)
+        if descriptor(for: HarnessKind(rawValue: name)) != nil { return HarnessKind(rawValue: name) }
+        let matches = builtIns.filter { descriptor in
+            [descriptor.displayName, descriptor.shortName, descriptor.executableName]
+                .contains { $0.caseInsensitiveCompare(name) == .orderedSame }
+        }
+        return matches.count == 1 ? matches[0].id : nil
+    }
 }

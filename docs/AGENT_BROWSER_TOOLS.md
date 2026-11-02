@@ -242,7 +242,10 @@ Codex app's `codex_app` tools (`list_threads`, `read_thread`, `wait_threads`, `s
 and `set_thread_archived`) into Yardlet's words. All have `openWorldHint: false`, and the eight that read (including
 `list_projects`, `list_accounts` and the three personal-agent tools) have `readOnlyHint: true`. There is no `_meta` `anthropic/alwaysLoad` (Claude Code
 keeps them behind tool search). The descriptions say only what each tool does, not when to call it. Inputs have
-`additionalProperties: false`.
+`additionalProperties: false`. A `harness` argument takes a harness's ID (`claude-code`, `antigravity-cli`) or, in
+any case, its name, short name or executable (`Antigravity`, `agy`) when only one harness has it
+(`HarnessCatalog.harness(named:)`). One Yardlet does not know, or one with no runtime chosen, is refused with the IDs
+set up in Yardlet and the rest, so an agent does not take the description's examples for the list.
 
 | Tool | Arguments | Behavior |
 |---|---|---|
@@ -256,7 +259,7 @@ keeps them behind tool search). The descriptions say only what each tool does, n
 | `list_projects` | none | The projects in sidebar order, then the hidden projects. JSON `{projects:[{projectId, name, folder, otherFolders, tasks, pinned, hidden, containsThisTask}], note}` (flags only when true). With no projects, "No projects in Yardlet; every task is a chat." |
 | `hide_project` | `project` (required: a name, folder path or `projectId`) | `ProjectStore.hide`, the same as the sidebar's "Remove project". The folder, tasks and schedules stay, and its tasks leave the sidebar with it. It does not touch the selection or the new task screen. No card (the description says to call it only when the person asked). For a shared name the visible project comes first, and if several still match, an error asks for `projectId`. When it is already hidden, "already hidden", not an error. Argument errors are `Nothing was hidden: …` |
 | `show_project` | `project` (required: a name, folder path or `projectId`) | `ProjectStore.reveal`. For a shared name the hidden project comes first. When it is already visible, "already in the sidebar". Argument errors are `Nothing was shown: …` |
-| `list_accounts` | `harness` (the calling task's by default), `model` (for the limit of one model; the calling task's by default) | That harness's accounts (the same as the account list of the new task screen), after the account list's check (`.ifStale`, at most 8 seconds), as JSON `{harness, model, accounts:[{account, name, signedIn, automaticAssignment, newTaskAccount, runningTasks, checkedAt, limits:[{name, usedPercent, resetsAt, model}]}], automaticChoice, automaticReason}`. Times are ISO 8601 in this Mac's time zone. No model turn |
+| `list_accounts` | `harness` (the calling task's by default), `model` (for the limit of one model; the calling task's by default) | That harness's accounts (the same as the account list of the new task screen), after the account list's check (`.ifStale`, at most 8 seconds), as JSON `{harness, model, accounts:[{account, name, signedIn, automaticAssignment, newTaskAccount, runningTasks, checkedAt, limits:[{name, usedPercent, resetsAt, model}]}], automaticChoice, automaticReason, harnesses:[{harness, name}]}`, `harnesses` being every harness set up in Yardlet. Times are ISO 8601 in this Mac's time zone. No model turn |
 | `list_personal_agents`, `read_personal_agent`, `read_personal_agent_thread` | none; `agent` (a reference or name) and `cursor`; `agent`, `thread_id` and `cursor` | Read the person's ChatGPT dots, not Yardlet tasks, through the app's watch of the account Personal agents follows (docs/PERSONAL_AGENTS.md, "Agents reading the dots"): the dots with their Activity and bound threads as JSON, a conversation page as text, a thread's turns as `read_task`'s compact text. Read-only; a thread the transport did not list for that dot is refused. No model turn |
 
 Links to tasks (2026-10-28): a reply opens another task when it links to it, as the Claude app and the Codex app open

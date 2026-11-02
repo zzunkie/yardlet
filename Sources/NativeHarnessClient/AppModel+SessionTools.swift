@@ -1244,16 +1244,34 @@ extension AppModel: SessionToolHandling {
         guard let raw = value?.stringValue?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else {
             return .success(fallback)
         }
-        let harness = HarnessKind(rawValue: raw)
-        guard HarnessCatalog.descriptor(for: harness) != nil else {
-            return .failure(SessionToolError(message: "no harness \(raw). Use an id such as claude-code or codex.",
+        guard let harness = HarnessCatalog.harness(named: raw) else {
+            return .failure(SessionToolError(message: "no harness \(raw). \(sessionToolHarnessChoices)",
                                              failure: AgentToolFailure(.invalidArguments, retry: .withChanges)))
         }
         guard runtimeSelections.selectedURL(for: harness) != nil else {
-            return .failure(SessionToolError(message: "\(harness.displayName) is not set up in Yardlet.",
-                                             failure: AgentToolFailure(.refused, retry: .no)))
+            return .failure(SessionToolError(
+                message: "\(harness.displayName) is not set up in Yardlet. \(sessionToolHarnessChoices)",
+                failure: AgentToolFailure(.refused, retry: .no)))
         }
         return .success(harness)
+    }
+
+    /// The harnesses a session tool can start a task or subagent on: the built-in ones with a runtime
+    /// chosen in Yardlet, in the catalog's order.
+    var sessionToolHarnesses: [HarnessKind] {
+        HarnessCatalog.builtIns.map(\.id).filter { runtimeSelections.selectedURL(for: $0) != nil }
+    }
+
+    /// What a refused harness argument says next, so the agent's next call names one that runs here
+    /// rather than taking the refusal for the list.
+    private var sessionToolHarnessChoices: String {
+        let setUp = sessionToolHarnesses
+        let others = HarnessCatalog.builtIns.map(\.id).filter { !setUp.contains($0) }
+        var text = setUp.isEmpty ? "No harness is set up in Yardlet."
+            : "Harness ids set up in Yardlet: " + setUp.map { "\($0.rawValue) (\($0.displayName))" }
+                .joined(separator: ", ") + "."
+        if !others.isEmpty { text += " Not set up: " + others.map(\.rawValue).joined(separator: ", ") + "." }
+        return text + " list_accounts with an id shows its accounts and whether each is signed in."
     }
 
     /// What a child or subagent on the caller's own harness starts with: the caller's model, effort

@@ -382,7 +382,7 @@ struct SessionRailAgents: Equatable {
             case .stopped: .stopped
             }
             let call = Call(agentID: agentID.flatMap(UUID.init(uuidString:)), prompt: prompt,
-                            harness: arguments?["harness"]?.stringValue.map(HarnessKind.init(rawValue:)),
+                            harness: arguments?["harness"]?.stringValue.map(ConversationAgentRunProjection.harness(named:)),
                             model: arguments?["model"]?.stringValue, phase: status, startedAt: entry.createdAt)
             // The same call reported again (its result) replaces what it said while it ran.
             if let index = calls.lastIndex(where: { $0.prompt == prompt && ($0.agentID == nil || $0.agentID == call.agentID) }),
