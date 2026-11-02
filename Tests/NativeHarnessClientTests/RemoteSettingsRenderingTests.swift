@@ -7,9 +7,9 @@ import XCTest
 /// Settings › Remote drawn offscreen (never shown) in both appearances into `.build/remote-qa`:
 ///
 /// - `remote-off-*.png`: the switch off, nothing else.
-/// - `remote-pairing-*.png`: on, reachable on the same Wi-Fi, Tailscale and the Yardlet server, a pairing
-///   open with its QR code and time left, and two paired phones: one connected now, one last seen
-///   yesterday.
+/// - `remote-pairing-*.png`: on, kept awake on power, reachable on the same Wi-Fi, Tailscale and the Yardlet
+///   server, a pairing open with its QR code, its link to copy and time left, and two paired devices: a phone
+///   connected now and a Mac last seen yesterday.
 /// - `remote-link-*.png`: a phone asking to link through the account, with its number.
 /// - `remote-paired-*.png`: after the pairing and the link, with the paired phone named.
 ///
@@ -17,6 +17,8 @@ import XCTest
 /// the test. Its preferences live in a throwaway suite and its keys in memory.
 @MainActor
 final class RemoteSettingsRenderingTests: XCTestCase {
+    private var onPower = true
+
     func testTheRemoteSectionDrawsOffPairingAndPaired() async throws {
         let directory = try WindowlessRender.directory("remote-qa")
         let size = NSSize(width: 820, height: 820)
@@ -25,9 +27,19 @@ final class RemoteSettingsRenderingTests: XCTestCase {
         try render("remote-off", service: service, in: directory, size: size)
         let offElements = elements(service, size: size)
         XCTAssertTrue(offElements.contains { $0.label == L10n.string("Allow remote connections") }, offElements.description)
-        XCTAssertFalse(offElements.contains { $0.label == L10n.string("Pair a phone") })
+        XCTAssertFalse(offElements.contains { $0.label == L10n.string("Pair a device") })
+        XCTAssertFalse(offElements.contains { $0.label == L10n.string("Keep this Mac awake on power") })
 
+        // Kept awake only while the remote is on, the setting is on and the Mac is on power.
+        service.setKeepsAwakeOnPower(true)
+        XCTAssertFalse(service.isKeepingAwake)
+        onPower = false
         service.setEnabled(true)
+        XCTAssertFalse(service.isKeepingAwake)
+        onPower = true
+        service.setKeepsAwakeOnPower(false)
+        service.setKeepsAwakeOnPower(true)
+        XCTAssertTrue(service.isKeepingAwake)
         service.secureState = .ready(port: RemoteProtocol.securePort)
         service.relayState = .connected
         XCTAssertEqual(service.reach, .init(direct: true, tailscale: true, relay: .connected, directFailure: nil))
@@ -57,6 +69,8 @@ final class RemoteSettingsRenderingTests: XCTestCase {
         let pairingElements = elements(service, size: size)
         XCTAssertTrue(pairingElements.contains { $0.label == L10n.string("Pairing QR code") }, pairingElements.description)
         XCTAssertTrue(pairingElements.contains { $0.label == L10n.format("Remove %@", "Pixel 9") })
+        XCTAssertTrue(pairingElements.contains { $0.label == L10n.string("Copy link") }, pairingElements.description)
+        XCTAssertTrue(pairingElements.contains { $0.label == L10n.string("Keep this Mac awake on power") })
 
         // A phone pairs with the QR's secret: the pairing closes and the new phone is named.
         let tablet = try await PipePhone.connect(
@@ -74,10 +88,11 @@ final class RemoteSettingsRenderingTests: XCTestCase {
         await service.answerLink(approve: true)
         _ = try await linking.event(.linked)
         try await waitUntil { service.linkRequest == nil && service.devices.count == 4 }
-        XCTAssertEqual(service.devices.map(\.name), ["Work phone", "Pixel 9", "Galaxy Tab", "Pixel 10"])
+        XCTAssertEqual(service.devices.map(\.name), ["MacBook Air", "Pixel 9", "Galaxy Tab", "Pixel 10"])
         try render("remote-paired", service: service, in: directory, size: size)
 
         service.setEnabled(false)
+        XCTAssertFalse(service.isKeepingAwake)
         try await phone.waitUntilClosed(.unavailable)
     }
 
@@ -88,8 +103,8 @@ final class RemoteSettingsRenderingTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defaults.set("wss://relay.example.test", forKey: RemoteControlService.relayURLKey)
         let store = RemoteDeviceStore(fileURL: nil)
-        // A phone paired before, last seen yesterday.
-        _ = await store.addSecure(name: "Work phone", publicKey: Data(repeating: 3, count: 32), platform: "android",
+        // Yardlet on a laptop paired before, last seen yesterday.
+        _ = await store.addSecure(name: "MacBook Air", publicKey: Data(repeating: 3, count: 32), platform: "macos",
                                   now: Date().addingTimeInterval(-86_400))
         let identity = RemoteIdentity.generate()
         let service = RemoteControlService(
@@ -101,7 +116,7 @@ final class RemoteSettingsRenderingTests: XCTestCase {
                  RemoteInterfaceAddress(interface: "utun4", address: "fd7a:115c:a1e0::1234", family: .ipv6)]
             },
             resolveName: { _ in "macbook.tail1234.ts.net" },
-            listens: false, macName: "MacBook Pro", appVersion: "test")
+            listens: false, isOnPower: { [unowned self] in onPower }, macName: "MacBook Pro", appVersion: "test")
         await service.start()
         XCTAssertFalse(service.isEnabled)
         return (service, identity)

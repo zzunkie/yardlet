@@ -1973,7 +1973,7 @@
 /* The phone remote: Settings › Remote (docs/REMOTE_PROTOCOL.md). */
 "Remote" = "원격 연결";
 "Allow remote connections" = "원격 연결 허용";
-"Follow and drive this Mac's tasks from Yardlet on your phone." = "휴대폰의 Yardlet으로 이 Mac의 작업을 보고 조작합니다.";
+"Follow and drive this Mac's tasks from Yardlet on your phone or another computer." = "휴대폰이나 다른 컴퓨터의 Yardlet으로 이 Mac의 작업을 보고 조작합니다.";
 "Connect from outside" = "밖에서도 연결";
 "Through the Yardlet server. It is end-to-end encrypted, so the server can't read it." = "Yardlet 서버를 거칩니다. 종단 간 암호화되어 서버는 내용을 읽을 수 없습니다.";
 "Same Wi-Fi" = "같은 Wi-Fi";
@@ -1982,7 +1982,7 @@
 "Can't reach the Yardlet server" = "Yardlet 서버에 닿지 않음";
 "Scan this code with Yardlet on your phone." = "휴대폰의 Yardlet으로 이 QR 코드를 찍으세요.";
 "Works once for 5 minutes · %@ left" = "5분 동안 한 번 쓸 수 있습니다 · %@ 남음";
-"Shows a code to scan with your phone. It works once and expires after 5 minutes." = "휴대폰으로 찍을 코드를 보여 줍니다. 한 번만 쓸 수 있고 5분 뒤 만료됩니다.";
+"Shows a code to scan with your phone, and a link for Yardlet on another computer. It works once and expires after 5 minutes." = "휴대폰으로 찍을 코드와 다른 컴퓨터의 Yardlet에서 열 링크를 보여 줍니다. 한 번만 쓸 수 있고 5분 뒤 만료됩니다.";
 "%@ wants to connect to this Mac" = "%@ 기기가 이 Mac에 연결하려 합니다";
 "Link code" = "확인 숫자";
 "Allow it if the phone shows the same number." = "휴대폰에 같은 숫자가 보이면 허용하세요.";
@@ -1991,17 +1991,20 @@
 "The sign-in did not finish." = "로그인이 끝나지 않았습니다.";
 "Starting…" = "시작하는 중…";
 "Can't listen for connections: %@" = "연결을 받을 수 없습니다: %@";
-"Pair a phone" = "휴대폰 연결";
+"Pair a device" = "기기 연결";
 "Pair…" = "연결…";
 "%@ is paired." = "%@ 기기를 연결했습니다.";
-"Paired phones" = "연결된 휴대폰";
-"No paired phones" = "연결된 휴대폰이 없습니다";
+"Paired devices" = "연결된 기기";
+"No paired devices" = "연결된 기기가 없습니다";
 "Remove %@" = "%@ 제거";
 "Remove %@?" = "%@을(를) 제거할까요?";
-"The phone disconnects and has to pair again." = "휴대폰 연결이 끊기고, 다시 연결하려면 페어링부터 해야 합니다.";
+"The device disconnects and has to pair again." = "기기 연결이 끊기고, 다시 연결하려면 페어링부터 해야 합니다.";
 "Never connected" = "접속한 적 없음";
 "Last connected %@" = "마지막 접속 %@";
 "Pairing QR code" = "연결 QR 코드";
+"Keep this Mac awake on power" = "전원이 연결된 동안 이 Mac을 깨어 있게 유지";
+"While it's plugged in, this Mac doesn't sleep on its own, so your devices can still reach it. The display can still turn off." = "전원이 연결되어 있으면 이 Mac이 스스로 잠자기에 들어가지 않아 다른 기기에서 계속 연결할 수 있습니다. 화면은 꺼질 수 있습니다.";
+"On another computer, copy the link and open it in Yardlet there." = "다른 컴퓨터에서는 링크를 복사해 그 컴퓨터의 Yardlet에서 여세요.";
 "exit code %lld" = "종료 코드 %lld";
 "Homebrew's answer could not be read" = "Homebrew의 응답을 읽을 수 없습니다";
 "npm's answer could not be read" = "npm의 응답을 읽을 수 없습니다";
