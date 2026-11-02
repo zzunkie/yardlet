@@ -110,7 +110,7 @@ actor HarnessRegistry {
             return adapter
         }
         // The task keeps the runtime path it recorded; only the process started for it changes.
-        let started = runtimeOverrides?.executable(for: harness, requested: key.executableURL) ?? key.executableURL
+        let started = startedExecutable(for: harness, requested: key.executableURL)
         let antigravityPrintMode = factory == nil && harness == .antigravityCLI
             ? !(await servesACP(.antigravityCLI, executableURL: started)) : false
         // Another request may have made it while the version was read.
@@ -135,9 +135,14 @@ actor HarnessRegistry {
     func servesACP(_ harness: HarnessKind, executableURL: URL) async -> Bool {
         guard HarnessCatalog.descriptor(for: harness)?.transport == .acp else { return false }
         guard harness == .antigravityCLI else { return true }
-        let started = runtimeOverrides?.executable(for: harness, requested: executableURL.standardizedFileURL)
-            ?? executableURL.standardizedFileURL
+        let started = startedExecutable(for: harness, requested: executableURL)
         return AntigravityTransport.servesACP(version: await versions?.version(of: started))
+    }
+
+    /// The CLI a request for `requested` starts: the earlier version Yardlet holds while an update
+    /// failed its check (`CLIRuntimeOverrides`), else `requested` itself.
+    func startedExecutable(for harness: HarnessKind, requested: URL) -> URL {
+        runtimeOverrides?.executable(for: harness, requested: requested.standardizedFileURL) ?? requested.standardizedFileURL
     }
 
     func invalidateAll() {
@@ -222,7 +227,7 @@ actor HarnessRegistry {
         }
         if HarnessCatalog.descriptor(for: harness)?.transport == .acp, !antigravityPrintMode {
             let legacy = ACPAdapter(kind: harness, executableURL: executableURL,
-                launchArguments: (HarnessCatalog.descriptor(for: harness)?.launchArguments ?? []) + (connection?.launchArguments ?? []),
+                launchArguments: ACPLaunchConfiguration.arguments(for: harness, connection: connection),
                 launchEnvironmentOverrides: connection?.environment)
             switch routingPolicy.route(for: harness) {
             case .legacy:

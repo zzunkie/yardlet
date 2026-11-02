@@ -296,6 +296,12 @@ final class AppModel {
     /// stamp read, and whether the conversation shown is that log (rather than Yardlet's own cache).
     @ObservationIgnored private var antigravityHistoryReads = Set<UUID>()
     @ObservationIgnored private var antigravityHistoryShown: [UUID: AntigravityHistoryShown] = [:]
+    /// The other ACP agents' saved conversations, listed and replayed over a connection of each read's
+    /// own (`ACPSessionHistory`).
+    @ObservationIgnored var acpSessionHistory = ACPSessionHistory.live
+    /// Detached ACP tasks whose conversation the agent replayed this launch, by the provider session
+    /// replayed: an agent process starts once per conversation that has nothing to show.
+    @ObservationIgnored private var acpConversationsReplayed: [UUID: String] = [:]
     @ObservationIgnored private var codexItemPageLoads = Set<String>()
     let isVisualFixture: Bool
     /// A DEBUG fixture whose tasks talk to a fake CLI through the real adapters (`--ui-fixture=lifecycle`, and
@@ -1004,6 +1010,8 @@ final class AppModel {
         do {
             await refreshNativeClaudeConversation(for: session)
             await refreshNativeAntigravityConversation(for: session)
+            // The replay's own agent process ends before the task's loads the same conversation.
+            await replayACPConversation(for: session)
             guard matchingSession(session) != nil else { return }
             try await attach(session, resumesExistingSession: session.providerSessionID != nil)
         } catch {
@@ -2901,6 +2909,7 @@ final class AppModel {
             latestTurns.removeValue(forKey: session.id)
             claudeTranscriptTails.removeValue(forKey: session.id)
             antigravityHistoryShown.removeValue(forKey: session.id)
+            acpConversationsReplayed.removeValue(forKey: session.id)
             errorBySessionID.removeValue(forKey: session.id)
             codexCapabilitiesBySessionID.removeValue(forKey: session.id)
             codexStatusBySessionID.removeValue(forKey: session.id)
@@ -3334,7 +3343,7 @@ final class AppModel {
     /// nothing and starts no turn.
     private func readSavedConversation(of id: UUID) {
         guard !isVisualFixture, let session = store.sessions.first(where: { $0.id == id }),
-              [.claudeCode, .codex, .antigravityCLI].contains(session.harness),
+              [.claudeCode, .codex, .antigravityCLI].contains(session.harness) || ACPSessionHistory.reads(session.harness),
               handlesBySessionID[id] == nil, session.providerSessionID != nil else { return }
         // Loading from the frame the task opens in, not from when the read gets going.
         beginSavedConversationRead(id)
@@ -3342,7 +3351,8 @@ final class AppModel {
             switch session.harness {
             case .claudeCode: await self?.refreshNativeClaudeConversation(for: session)
             case .codex: await self?.readDetachedCodexThread(for: session)
-            default: await self?.refreshNativeAntigravityConversation(for: session)
+            case .antigravityCLI: await self?.refreshNativeAntigravityConversation(for: session)
+            default: await self?.replayACPConversation(for: session)
             }
             self?.endSavedConversationRead(id)
         }
@@ -3353,7 +3363,9 @@ final class AppModel {
     /// behind a link is fetched on hover. A task already showing something reads again when opened.
     func prefetchSavedConversation(of id: UUID) {
         guard !isReadingSavedConversation(id), (transcriptBySessionID[id] ?? []).isEmpty,
-              codexPresentationBySessionID[id]?.thread?.turns.isEmpty != false else { return }
+              codexPresentationBySessionID[id]?.thread?.turns.isEmpty != false,
+              // Replaying an ACP conversation starts its agent; only opening the task does that.
+              !(store.sessions.first { $0.id == id }.map { ACPSessionHistory.reads($0.harness) } ?? false) else { return }
         readSavedConversation(of: id)
     }
 
@@ -3479,6 +3491,48 @@ final class AppModel {
             publishTranscript(for: session.id)
         } catch {
             // The cache and the binding stay. The CLI still owns its conversation.
+        }
+    }
+
+    /// Shows a detached ACP task's conversation that Yardlet has nothing of, an imported or
+    /// unarchived one, as the agent replays it when the session loads (`ACPSessionHistory`): its
+    /// own process under the task's account, CLI and folder, stopped once the replay is read. A
+    /// conversation is replayed once a launch, whether or not it had anything; a task that shows
+    /// anything keeps it. Nothing is sent, attached or written to the agent's record.
+    func replayACPConversation(for source: SessionRecord) async {
+        await readSavedConversationOnce("acp|\(source.id)", afterChange: false) {
+            await self.readReplayedACPConversation(for: source)
+        }
+    }
+
+    private func readReplayedACPConversation(for source: SessionRecord) async {
+        guard !isVisualFixture, let session = matchingSession(source), ACPSessionHistory.reads(session.harness),
+              handlesBySessionID[session.id] == nil, session.status != .running,
+              session.status != .waitingForApproval, !sessionMutations.contains(session.id),
+              let providerID = session.providerSessionID, acpConversationsReplayed[session.id] != providerID,
+              (transcriptBuilders[session.id]?.entries ?? []).isEmpty else { return }
+        acpConversationsReplayed[session.id] = providerID
+        beginSavedConversationRead(session.id)
+        defer { endSavedConversationRead(session.id) }
+        let history = acpSessionHistory
+        let executable = await registry.startedExecutable(for: session.harness, requested: session.runtimeExecutableURL)
+        do {
+            let entries = try await Task.detached(priority: .utility) {
+                try await history.conversation(of: session.harness, executableURL: executable,
+                    connection: session.connection, providerSessionID: providerID, workspaceURL: session.workspaceURL)
+            }.value
+            guard !entries.isEmpty, matchingSession(session) != nil else { return }
+            // What the person sent while the agent replayed comes after the conversation it continues.
+            mutateTranscript(for: session.id, publishImmediately: true) { builder in
+                guard let first = builder.entries.first else {
+                    builder = TranscriptBuilder(entries: entries, limit: Self.claudeEntryLimit(holding: entries.count))
+                    return
+                }
+                builder.raiseLimit(to: Self.claudeEntryLimit(holding: builder.entries.count + entries.count))
+                builder.replaceEntries(before: first.id, with: entries)
+            }
+        } catch {
+            // The task, its binding and the agent's own record stay; it continues on the next send.
         }
     }
 
@@ -3872,6 +3926,22 @@ final class AppModel {
             return ImportableConversationPage(conversations: query.isEmpty ? conversations : conversations.filter {
                 $0.title.localizedCaseInsensitiveContains(query)
             })
+        case let harness where ACPSessionHistory.reads(harness):
+            // The agent's own `session/list` under the chosen account, from a process of the read's own.
+            guard !isVisualFixture else { return ImportableConversationPage(conversations: []) }
+            guard let runtime = runtimeSelections.selectedURL(for: harness) else {
+                throw HarnessAdapterError.capabilityUnavailable(L10n.format("%@ is not installed.", harness.displayName))
+            }
+            try connection?.validate(for: harness)
+            let history = acpSessionHistory
+            let executable = await registry.startedExecutable(for: harness, requested: runtime)
+            let page = try await Task.detached(priority: .userInitiated) {
+                try await history.sessions(of: harness, executableURL: executable, connection: connection,
+                                           in: workspaceURL, cursor: cursor)
+            }.value
+            return query.isEmpty ? page : ImportableConversationPage(conversations: page.conversations.filter {
+                $0.title.localizedCaseInsensitiveContains(query)
+            }, nextCursor: page.nextCursor)
         default:
             return ImportableConversationPage(conversations: [])
         }
@@ -4666,6 +4736,7 @@ final class AppModel {
         await prepareComposerModel(for: session)
         await refreshNativeClaudeConversation(for: session)
         await refreshNativeAntigravityConversation(for: session)
+        await replayACPConversation(for: session)
         await refreshProviderTitle(for: session)
         guard !Task.isCancelled, store.sessions.contains(where: { $0.id == session.id }) else { return }
         if session.harness == .codex {
@@ -6043,6 +6114,9 @@ final class AppModel {
         // The memory saver's close of the task's last runtime ends before another starts: it clears the task's state in
         // the adapter.
         if let closing = memorySaverClosings[session.id] { await closing.value }
+        // An ACP agent replaying the conversation for the view (`replayACPConversation`) has its own
+        // process load it; that one ends before the task's loads the same conversation.
+        if let replay = savedConversationReadTasks["acp|\(session.id)"] { await replay.value }
         if handlesBySessionID[session.id] != nil { return }
         // Two processes must not continue one Claude conversation: one another app still holds
         // is followed read-only until it lets the conversation go.
