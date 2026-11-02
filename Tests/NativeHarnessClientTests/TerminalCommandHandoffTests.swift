@@ -262,28 +262,40 @@ final class TerminalCommandHandoffTests: XCTestCase {
             workspace.openTerminalTab(in: fixture.workspaceURL, launch: launch, taskID: nil)
             try waitUntilSettled(in: host) { host.hosting.terminalText.contains("%") }
             host.settle(passes: 6, interval: 0.1)
-            try WindowlessRender.writePNG(Self.overTerminalBackground(host.capture().bitmap, appearance: appearance),
+            try WindowlessRender.writePNG(Self.asShown(host, appearance: appearance),
                                           to: directory.appending(path: "tabs-\(appearance.suffix).png"))
             workspace.endTerminal()
         }
     }
 
-    /// SwiftTerm leaves its default background to its layer, which a capture of the window does not
-    /// draw: the capture laid over the terminal's background, as the screen shows it.
-    private static func overTerminalBackground(_ bitmap: NSBitmapImageRep,
-                                               appearance: WindowlessRender.Appearance) throws -> NSBitmapImageRep {
-        let flat = try XCTUnwrap(NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: bitmap.pixelsWide, pixelsHigh: bitmap.pixelsHigh, bitsPerSample: 8,
-            samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
-        flat.size = bitmap.size
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: flat)
-        TerminalAppearance.background(isDark: appearance == .dark).setFill()
-        NSRect(origin: .zero, size: bitmap.size).fill()
-        bitmap.draw(in: NSRect(origin: .zero, size: bitmap.size), from: .zero, operation: .sourceOver, fraction: 1,
-                    respectFlipped: true, hints: nil)
-        NSGraphicsContext.restoreGraphicsState()
-        return flat
+    /// The window as the screen shows it. A capture of the window draws neither SwiftTerm's default
+    /// background, which it leaves to its layer, nor its text where it sits (drawn by an ancestor, the
+    /// text lands to the right of the view): the capture is laid over the terminal's background, and
+    /// the terminal, captured on its own, is put back in its place.
+    private static func asShown(_ host: WindowlessRender.Host<some View>,
+                                appearance: WindowlessRender.Appearance) throws -> NSBitmapImageRep {
+        let window = try host.capture().bitmap
+        let image = try XCTUnwrap(window.cgImage)
+        let context = try XCTUnwrap(CGContext(
+            data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(TerminalAppearance.background(isDark: appearance == .dark).cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        if let terminal = host.hosting.terminalView {
+            let alone = try XCTUnwrap(WindowlessRender.capture(terminal).cgImage)
+            let scale = CGFloat(image.width) / host.hosting.bounds.width
+            let frame = host.hosting.convert(terminal.bounds, from: terminal)
+            let bottom = host.hosting.isFlipped ? host.hosting.bounds.height - frame.maxY : frame.minY
+            let place = CGRect(x: frame.minX * scale, y: bottom * scale,
+                               width: frame.width * scale, height: frame.height * scale)
+            context.fill(place)
+            context.draw(alone, in: place)
+        }
+        let shown = NSBitmapImageRep(cgImage: try XCTUnwrap(context.makeImage()))
+        shown.size = window.size
+        return shown
     }
 
     private static func taskHost(_ fixture: HandoffFixture, _ workspace: TaskWorkspaceState, launch: ShellLaunchEnvironment,
