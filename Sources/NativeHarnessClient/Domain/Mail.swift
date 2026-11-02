@@ -6,6 +6,15 @@ enum MailProvider: String, Codable, Hashable, Sendable {
     case gmail
     case outlook
     case imap
+
+    /// The service's name as people know it.
+    var serviceName: String {
+        switch self {
+        case .gmail: "Gmail"
+        case .outlook: "Outlook"
+        case .imap: "IMAP"
+        }
+    }
 }
 
 /// One mailbox shown in the mailbox: an account Yardlet already signs in to for its connectors. `id` is

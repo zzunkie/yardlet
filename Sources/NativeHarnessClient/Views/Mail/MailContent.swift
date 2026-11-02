@@ -388,14 +388,3 @@ struct MailPrimaryButtonStyle: ButtonStyle {
             .parityPointer()
     }
 }
-
-extension MailProvider {
-    /// The service's name as people know it.
-    var serviceName: String {
-        switch self {
-        case .gmail: "Gmail"
-        case .outlook: "Outlook"
-        case .imap: "IMAP"
-        }
-    }
-}
