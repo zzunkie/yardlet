@@ -27,18 +27,25 @@ struct YardletInstructionsDelivery: Hashable, Sendable {
 /// - Pi 0.84.1 — `--append-system-prompt <text>` (repeatable) on the `pi --mode rpc` launch. It
 ///   replaces the APPEND_SYSTEM.md Pi would find, so Yardlet passes the global one ahead of its
 ///   text and leaves a project that has its own unchanged.
+/// - Antigravity CLI 1.4.12 — `agy acp` advertises `_meta.antigravity.systemPrompt` `{"append": true}`
+///   in `initialize` and takes `{"append": "<text>"}` there on `session/new`, `session/load` and
+///   `session/resume`, at the end of its own system prompt, after the GEMINI.md and AGENTS.md rules.
+///   Undocumented: read from the CLI's own log messages and checked with short Gemini Flash turns on
+///   2026-11-02. The CLI keeps the text a conversation started with in that conversation and sends it
+///   on every later turn, and a text given on `session/load` comes on top of it for that process, so
+///   Yardlet sends it on `session/new` only and a loaded conversation has the text it began with, once.
+///   Print mode, before 1.4.11, has no such flag, and its `--add-dir` route was removed on purpose.
 /// - None: OpenCode (`opencode acp` has no option; its per-process `OPENCODE_CONFIG_CONTENT` would
 ///   do, but one OpenCode process serves the tasks of every folder and reads it once, so it could
 ///   follow neither a project's text nor its switch), `muse serve` (only an internal evaluation
 ///   variable), `kimi acp` (no options), `hermes acp` (its ephemeral prompt is read by the TUI and
-///   gateway only), `cursor-agent`, and `agy` (print mode has no such flag and its `--add-dir` route
-///   was removed on purpose; `agy acp` advertises `_meta.antigravity.systemPrompt` in `initialize`
-///   but documents no shape for it).
+///   gateway only) and `cursor-agent`.
 enum YardletInstructionsRoute: String, CaseIterable, Sendable {
     case claudeAppendSystemPrompt
     case codexDeveloperInstructions
     case grokSessionRules
     case piAppendSystemPrompt
+    case antigravitySystemPrompt
 
     static func route(for harness: HarnessKind) -> YardletInstructionsRoute? {
         switch harness {
@@ -46,6 +53,7 @@ enum YardletInstructionsRoute: String, CaseIterable, Sendable {
         case .codex: .codexDeveloperInstructions
         case .grokBuild: .grokSessionRules
         case .pi: .piAppendSystemPrompt
+        case .antigravityCLI: .antigravitySystemPrompt
         default: nil
         }
     }
@@ -91,6 +99,12 @@ enum YardletInstructionsLaunch {
     static func grokSessionMeta(_ text: String?) -> JSONValue? {
         guard let text, !text.isEmpty else { return nil }
         return .object(["rules": .string(text)])
+    }
+
+    /// Antigravity's ACP `session/new` `_meta`.
+    static func antigravitySessionMeta(_ text: String?) -> JSONValue? {
+        guard let text, !text.isEmpty else { return nil }
+        return .object(["antigravity": .object(["systemPrompt": .object(["append": .string(text)])])])
     }
 
     static let piAgentDirectoryVariable = "PI_CODING_AGENT_DIR"
