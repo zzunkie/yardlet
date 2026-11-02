@@ -177,6 +177,9 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         tools.scrub(text)
     }
 
+    /// Whether a page's keys and tokens are covered in a picture of it (`BrowserAgentTools.hidesCredentials`).
+    var hidesCredentials: Bool { tools.hidesCredentials }
+
     /// Whether text (an address, a title) carries a value the vault filled lately, in any spelling it scrubs.
     func carriesVaultValue(_ text: String) -> Bool {
         tools.vaultScrub.carries(text)

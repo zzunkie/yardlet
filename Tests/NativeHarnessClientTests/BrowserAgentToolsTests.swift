@@ -1,4 +1,5 @@
 import Foundation
+import JavaScriptCore
 import XCTest
 @testable import NativeHarnessClient
 @testable import YardletAgentTools
@@ -1060,7 +1061,8 @@ final class BrowserAgentToolsTests: XCTestCase {
     }
 
     /// A key or token shows in no result, from a field that is not a password field too, and leaves no part of itself
-    /// where a long text is cut; agents read it only once the person at this Mac turned that off.
+    /// where a long text is cut; a screenshot is taken with it covered in each frame and the page put back after. Agents
+    /// read it only once the person at this Mac turned that off.
     func testKeysAndTokensStayOutOfResultsUntilThePersonTurnsThatOff() async {
         // Made up, and built from parts so that no secret scanner takes it for a real token.
         let token = "xox" + "b-1111111111-2222222222222-" + String(repeating: "Fake", count: 6)
@@ -1086,6 +1088,38 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertTrue(waited.text.contains("xoxb-[hid"), waited.text)
         XCTAssertFalse(waited.text.contains("1111"), waited.text)
 
+        // The main frame shows the token and the frame in it shows none: the main frame's cover is released after.
+        cdp.responders["Page.getLayoutMetrics"] = { _ in
+            .object(["cssVisualViewport": .object(["clientWidth": .number(800), "clientHeight": .number(600)])])
+        }
+        cdp.responders["Page.captureScreenshot"] = { _ in .object(["data": .string("iVBORw0KGgo=")]) }
+        cdp.responders["Page.getFrameTree"] = { _ in
+            .object(["frameTree": .object(["frame": .object(["id": .string("main")]),
+                                           "childFrames": .array([.object(["frame": .object(["id": .string("ad")])])])])])
+        }
+        cdp.responders["Page.createIsolatedWorld"] = { params in
+            XCTAssertEqual(params["worldName"], .string(BrowserAgentTools.vaultWorldName))
+            return .object(["executionContextId": .integer(params["frameId"] == .string("main") ? 7 : 8)])
+        }
+        cdp.responders["Runtime.evaluate"] = { params in
+            ScriptedCDP.value(params["contextId"].map { .integer($0 == .integer(7) ? 1 : 0) } ?? .number(1))
+        }
+        var mark = cdp.sent.count
+        let captures = { [unowned self] in
+            cdp.sent[mark...].compactMap { call -> String? in
+                if call.method == "Page.captureScreenshot" { return "capture" }
+                guard let context = call.params["contextId"]?.integerValue,
+                      let expression = call.params["expression"]?.stringValue else { return nil }
+                return (expression.contains(CredentialText.coverScript) ? "cover " : "release ") + String(context)
+            }
+        }
+        let shot = await run(AgentToolCatalog.screenshot)
+        XCTAssertFalse(shot.isError, shot.text)
+        XCTAssertEqual(captures(), ["cover 7", "cover 8", "capture", "release 7"])
+        XCTAssertTrue(cdp.params(of: "Runtime.evaluate").contains {
+            $0["expression"]?.stringValue?.hasSuffix("(\(CredentialText.pageShapes), 60000)") == true
+        }, "the page takes the same shapes, and puts itself back if no release comes")
+
         cdp.responders["Runtime.evaluate"] = { _ in ScriptedCDP.value(.string(token)) }
         let read = { await self.run(AgentToolCatalog.evaluate, ["function": .string("() => document.querySelector('input').value")]) }
         let hidden = await read()
@@ -1109,6 +1143,11 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertFalse(confirmed.hidesCredentials)
         let shown = await read()
         XCTAssertEqual(shown.text, "\"\(token)\"")
+        cdp.responders["Runtime.evaluate"] = { _ in ScriptedCDP.value(.number(1)) }
+        mark = cdp.sent.count
+        let shownShot = await run(AgentToolCatalog.screenshot)
+        XCTAssertFalse(shownShot.isError, shownShot.text)
+        XCTAssertEqual(captures(), ["capture"])
         XCTAssertFalse(vault(confirming: false).hidesCredentials, "kept for the next launch")
         XCTAssertTrue(vault(confirming: true, teamSigned: false).hidesCredentials,
                       "a build that is not team-signed always hides")
@@ -1116,7 +1155,7 @@ final class BrowserAgentToolsTests: XCTestCase {
 
     /// The kinds of keys the switch names, each with the prefix that tells its kind left, and words that only look a
     /// little like one left alone.
-    func testCredentialTextHidesTheKeysServicesIssue() {
+    func testCredentialTextHidesTheKeysServicesIssue() throws {
         // Made up, and built from parts so that no secret scanner takes them for real keys.
         let body = String(repeating: "A1b2", count: 10)
         let keys = [
@@ -1135,6 +1174,20 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertEqual(CredentialText.scrub(pem), "-----BEGIN RSA PRIVATE KEY-----[hidden credential]-----END RSA PRIVATE KEY-----")
         let ordinary = "sk-learn, risk-assessment-2026-quarterly-report-final-v2, task_live_updates_2026, xoxo-hugs, AKIA."
         XCTAssertEqual(CredentialText.scrub(ordinary), ordinary)
+
+        // A screenshot's page finds them with the same expressions in JavaScript (`CredentialText.pageShapes`).
+        let context = try XCTUnwrap(JSContext())
+        let holds = context.evaluateScript("""
+            (() => {
+              const shapes = \(CredentialText.pageShapes).map(([anchors, source]) => [anchors, new RegExp(source)]);
+              return text => shapes.some(([anchors, pattern]) => anchors.some(a => text.includes(a)) && pattern.test(text));
+            })()
+            """)
+        XCTAssertNil(context.exception, context.exception?.toString() ?? "")
+        for (key, kind) in keys + [(pem, "PEM")] {
+            XCTAssertEqual(holds?.call(withArguments: ["Key: \(key)."])?.toBool(), true, kind)
+        }
+        XCTAssertEqual(holds?.call(withArguments: [ordinary])?.toBool(), false)
     }
 
     func testEvaluateWithAReferencePassesTheElement() async {

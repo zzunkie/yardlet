@@ -74,8 +74,8 @@ address bar, and the vault on by default.
 - **One tool:** `browser_fill_credential` (item name, input field reference, kind). The result has no values and says
   only which fields were filled on which site (section 5.1).
 - **Leak paths:** `browser_evaluate` is refused on a document once a value is filled into it, until a navigation or a
-  reload opens another document. Screenshots mask filled fields, and every text result has used values scrubbed, as
-  written and in their common encodings (section 5.3).
+  reload opens another document. Screenshots are refused on that document too, and every text result has used values
+  scrubbed, as written and in their common encodings (section 5.3).
 - **Person confirmation step:** per item, "Always (including while away)", "While unlocked" or "Every time (Touch ID)".
   New items default to "Always" (section 6).
 - **Binding to sites:** the registrable domain (for `github.com`, also `www.github.com` and `gist.github.com`) must

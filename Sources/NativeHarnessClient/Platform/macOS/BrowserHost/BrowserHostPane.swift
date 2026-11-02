@@ -776,7 +776,8 @@ final class BrowserHostPaneController {
             do {
                 let found = try await BrowserElementPicker.describe(
                     node, pageURL: tab.currentURL ?? "", on: tab.devTools,
-                    scrub: MacAgentToolService.shared.broker.scrubPageText)
+                    scrub: MacAgentToolService.shared.broker.scrubPageText,
+                    hidesCredentials: MacAgentToolService.shared.broker.hidesCredentials)
                 var comment = found.comment
                 if let png = found.png {
                     comment.image = await Task.detached(priority: .userInitiated) {
