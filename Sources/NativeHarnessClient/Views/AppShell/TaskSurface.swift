@@ -691,15 +691,18 @@ struct TaskDetail: View {
             )
             .id(session.id)
         case .terminal:
-            // The task's workspace keeps the shell: a shell the new-task screen opened goes on here.
+            // The task's workspace keeps the tabs: the ones the new-task screen opened go on here.
             let _ = workspaceState.terminalRevision
             let shell = workspaceState.terminal(in: session.workspaceURL, launch: terminalShellLaunch, taskID: session.id)
             TerminalPane(
                 session: shell,
+                tabs: TerminalTabsContext(workspace: workspaceState, folder: session.workspaceURL,
+                                          launch: terminalShellLaunch, taskID: session.id),
                 handoff: workspaceState.terminalHandoff,
                 startsAutomatically: workspaceState.terminalStartRequested,
-                folder: TerminalFolderContext(folders: [session.workspaceURL] + session.additionalRootURLs,
-                                              restart: { workspaceState.restartTerminal() }),
+                folder: TerminalFolderContext(folders: [session.workspaceURL] + session.additionalRootURLs, restart: {
+                    workspaceState.restartTerminal(in: session.workspaceURL, launch: terminalShellLaunch, taskID: session.id)
+                }),
                 onHandoffDone: { workspaceState.finishTerminalHandoff($0) },
                 onClose: closeTerminal
             )
@@ -772,9 +775,11 @@ struct TaskDetail: View {
         workspaceState.keyboardFocus.move(to: .browser)
     }
 
-    /// "Run in terminal" on any harness's command card: the task's terminal opens and runs it.
+    /// "Run in terminal" on any harness's command card: the task's terminal opens and types it at a
+    /// tab's prompt.
     private func runInTerminal(_ command: String) {
-        workspaceState.handOffToTerminal(command)
+        workspaceState.handOffToTerminal(command, in: session.workspaceURL, launch: terminalShellLaunch,
+                                         taskID: session.id)
         openSurface(.terminal)
     }
 

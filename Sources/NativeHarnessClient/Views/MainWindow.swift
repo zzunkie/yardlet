@@ -1117,9 +1117,9 @@ struct MainWindow: View {
         return commands
     }
 
-    /// View › Show/Hide side panel (⌘⌥B) and terminal (⌘J), and the command palette, for the shown
-    /// task or the new-task screen: what the title bar's buttons do from the keyboard, so focus moves
-    /// to what they show.
+    /// View › Show/Hide side panel (⌘⌥B) and terminal (⌘J, and the Codex app's Control-`), and the
+    /// command palette, for the shown task or the new-task screen: what the title bar's buttons do from
+    /// the keyboard, so focus moves to what they show.
     private func toggleTaskPanel(_ targetID: String) {
         guard let id = panelOwnerID else { return }
         let workspace = panelWorkspace(id)
@@ -2320,6 +2320,9 @@ struct MainWindow: View {
         .focusedSceneValue(\.yardletRefreshFromOtherApps, refreshFromOtherApps)
         .focusedSceneValue(\.yardletSplitCommands, splitCommands)
         .focusedSceneValue(\.yardletTaskCommands, taskCommands)
+        .background(TerminalToggleKey(isEnabled: !hasPresentedModal && panelOwnerID != nil) {
+            toggleTaskPanel(TaskSurface.terminal.rawValue)
+        })
         .focusedSceneValue(\.yardletConversationFind, conversationFind)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await model.refreshVisibleProviderTitles() }

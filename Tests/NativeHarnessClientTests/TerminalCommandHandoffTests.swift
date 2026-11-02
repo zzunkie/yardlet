@@ -91,6 +91,7 @@ final class TerminalCommandHandoffTests: XCTestCase {
         let first = state.terminalHandoff
         XCTAssertEqual(first?.command, "ls")
         XCTAssertTrue(state.terminalStartRequested, "The click may start a shell")
+        XCTAssertTrue(state.terminals.isEmpty, "A tab opens with the panel")
         state.handOffToTerminal("ls")
         XCTAssertNotEqual(state.terminalHandoff?.id, first?.id, "Twice is twice")
 
@@ -165,6 +166,136 @@ final class TerminalCommandHandoffTests: XCTestCase {
                 path: "task-terminal-\(fixture.name)-terminal-only-light.png"))
         }
         XCTAssertFalse(Self.added(to: history).contains("B10-%s"), "A test's command reached ~/.zsh_history")
+    }
+
+    /// "Run in terminal" never types into a program that holds a tab's terminal (here `cat`, as a
+    /// sign-in waiting for its code would): the shown tab takes the command only at its prompt, else
+    /// another tab at its prompt shows and takes it, else a new tab opens for it, as the Claude app's
+    /// terminal takes a tab at its prompt. Closing asks first only for the tab where `cat` runs.
+    func testRunInTerminalLeavesATabWhereAProgramRuns() throws {
+        let history = Self.personalHistory()
+        let launch = ShellLaunchEnvironment.isolatedZsh(in: try temporaryFolder())
+        let fixture = HandoffFixture.all(workspace: try temporaryFolder(named: "yardlet"))[0]
+        let workspace = TaskWorkspaceState()
+        let host = Self.taskHost(fixture, workspace, launch: launch, appearance: .light)
+        defer { host.close() }
+        host.settle()
+        func runInTerminal() {
+            XCTAssertEqual(host.hosting.pressAccessibilityElements(labelled: L10n.string("Run in terminal")), 1)
+            host.settle()
+        }
+
+        runInTerminal()
+        try waitForText("B10-%s", in: host)
+        let busy = try XCTUnwrap(workspace.terminals.first)
+        busy.send("\u{15}cat\r")
+        try waitUntilSettled(in: host) { busy.isRunningProgram }
+        XCTAssertFalse(busy.isAtPrompt)
+
+        runInTerminal()
+        XCTAssertEqual(workspace.terminals.count, 2, "a new tab, not the one where cat runs")
+        let idle = workspace.terminals[1]
+        try waitForText("B10-%s", in: host)
+        XCTAssertTrue(workspace.terminal(in: fixture.workspaceURL, launch: launch, taskID: nil) === idle)
+        try waitUntilSettled(in: host) { workspace.terminalHandoff == nil }
+        XCTAssertFalse(busy.bufferText.components(separatedBy: "cat").dropFirst().joined().contains("B10-%s"),
+                       "nothing reached cat: \(busy.bufferText)")
+        XCTAssertTrue(idle.isAtPrompt)
+        XCTAssertFalse(idle.isRunningProgram, "closing it asks nothing")
+
+        idle.send("\u{15}")
+        workspace.showTerminalTab(busy)
+        host.settle()
+        runInTerminal()
+        XCTAssertEqual(workspace.terminals.count, 2, "the other tab at its prompt, not a third")
+        XCTAssertTrue(workspace.terminal(in: fixture.workspaceURL, launch: launch, taskID: nil) === idle)
+        try waitUntilSettled(in: host) { workspace.terminalHandoff == nil }
+        XCTAssertEqual(TerminalCloseQuestion.message(closing: [busy], titles: TerminalTabTitle.titles(for: workspace.terminals)),
+                       L10n.format("A command is still running in %@. Closing the terminal stops it.", "yardlet"))
+        busy.send("\u{4}")
+        workspace.endTerminal()
+        XCTAssertFalse(Self.added(to: history).contains("B10-%s"), "A test's command reached ~/.zsh_history")
+    }
+
+    /// The Codex app's Control-` shows and hides the terminal as ⌘J does, with the terminal focused too,
+    /// whose shell would read it as Control-@.
+    func testControlBacktickTogglesTheTerminalWithTheTerminalFocused() throws {
+        var toggles = 0
+        let workspace = TaskWorkspaceState()
+        let host = WindowlessRender.Host(
+            PaneHost(folder: try temporaryFolder(), workspace: workspace,
+                     launch: .isolatedZsh(in: try temporaryFolder()), startsAutomatically: true)
+                .background(TerminalToggleKey(isEnabled: true) { toggles += 1 })
+                .frame(width: 800, height: 360),
+            size: NSSize(width: 800, height: 360), appearance: .light
+        )
+        defer { host.close() }
+        try waitUntilSettled(in: host) { host.hosting.terminalText.contains("%") }
+        let terminal = try XCTUnwrap(host.hosting.terminalView)
+        XCTAssertTrue(host.window.makeFirstResponder(terminal))
+        func press(_ characters: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags = .control) throws {
+            NSApp.sendEvent(try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+                windowNumber: host.window.windowNumber, context: nil, characters: "\u{0}",
+                charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode)))
+        }
+        try press("`", keyCode: 50)
+        XCTAssertEqual(toggles, 1)
+        try press("₩", keyCode: 50)
+        XCTAssertEqual(toggles, 2, "the same key where the layout gives it another character")
+        try press("`", keyCode: 50, modifiers: [.control, .shift])
+        XCTAssertEqual(toggles, 2, "Control-Shift-` is not it")
+    }
+
+    /// Three tabs, one renamed, in both appearances, for review: `.build/terminal-tabs-qa/`.
+    func testTheTerminalDrawsItsTabs() throws {
+        let directory = try WindowlessRender.directory("terminal-tabs-qa")
+        let launch = ShellLaunchEnvironment.isolatedZsh(in: try temporaryFolder())
+        let fixture = HandoffFixture.all(workspace: try temporaryFolder(named: "yardlet"))[0]
+        for appearance in WindowlessRender.Appearance.allCases {
+            let workspace = TaskWorkspaceState()
+            workspace.setPanels(.init(isTerminalPresented: true))
+            let host = Self.taskHost(fixture, workspace, launch: launch, appearance: appearance)
+            defer { host.close() }
+            host.settle()
+            workspace.openTerminalTab(in: fixture.workspaceURL, launch: launch, taskID: nil).name = "server"
+            workspace.openTerminalTab(in: fixture.workspaceURL, launch: launch, taskID: nil)
+            try waitUntilSettled(in: host) { host.hosting.terminalText.contains("%") }
+            host.settle(passes: 6, interval: 0.1)
+            try WindowlessRender.writePNG(Self.overTerminalBackground(host.capture().bitmap, appearance: appearance),
+                                          to: directory.appending(path: "tabs-\(appearance.suffix).png"))
+            workspace.endTerminal()
+        }
+    }
+
+    /// SwiftTerm leaves its default background to its layer, which a capture of the window does not
+    /// draw: the capture laid over the terminal's background, as the screen shows it.
+    private static func overTerminalBackground(_ bitmap: NSBitmapImageRep,
+                                               appearance: WindowlessRender.Appearance) throws -> NSBitmapImageRep {
+        let flat = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: bitmap.pixelsWide, pixelsHigh: bitmap.pixelsHigh, bitsPerSample: 8,
+            samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        flat.size = bitmap.size
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: flat)
+        TerminalAppearance.background(isDark: appearance == .dark).setFill()
+        NSRect(origin: .zero, size: bitmap.size).fill()
+        bitmap.draw(in: NSRect(origin: .zero, size: bitmap.size), from: .zero, operation: .sourceOver, fraction: 1,
+                    respectFlipped: true, hints: nil)
+        NSGraphicsContext.restoreGraphicsState()
+        return flat
+    }
+
+    private static func taskHost(_ fixture: HandoffFixture, _ workspace: TaskWorkspaceState, launch: ShellLaunchEnvironment,
+                                 appearance: WindowlessRender.Appearance) -> WindowlessRender.Host<some View> {
+        WindowlessRender.Host(
+            TaskTerminalHost(fixture: fixture, workspace: workspace)
+                .environment(\.terminalShellLaunch, launch)
+                .environment(\.colorScheme, appearance.colorScheme)
+                .frame(width: 1_000, height: 820)
+                .background(ParityTheme.canvas),
+            size: NSSize(width: 1_000, height: 820), appearance: appearance
+        )
     }
 
     /// The terminal offers no command of its own: the command card has the action. The terminal here
@@ -242,6 +373,15 @@ final class TerminalCommandHandoffTests: XCTestCase {
         host.hosting.terminalView?.send(txt: "\r")
     }
 
+    private func waitUntilSettled(in host: WindowlessRender.Host<some View>, _ condition: () -> Bool) throws {
+        let deadline = ContinuousClock.now + .seconds(15)
+        while ContinuousClock.now < deadline {
+            host.settle(passes: 1, interval: 0.05)
+            if condition() { return }
+        }
+        XCTFail("Timed out: \(host.hosting.terminalText)")
+    }
+
     private func waitForText(_ text: String, in host: WindowlessRender.Host<some View>) throws {
         let deadline = ContinuousClock.now + .seconds(15)
         while ContinuousClock.now < deadline {
@@ -262,10 +402,11 @@ final class TerminalCommandHandoffTests: XCTestCase {
         XCTFail("No line \(prefix): \(host.hosting.terminalText)")
     }
 
-    private func temporaryFolder() throws -> URL {
-        let folder = FileManager.default.temporaryDirectory.appending(path: "yardlet-handoff-test-\(UUID().uuidString)")
+    private func temporaryFolder(named name: String? = nil) throws -> URL {
+        let root = FileManager.default.temporaryDirectory.appending(path: "yardlet-handoff-test-\(UUID().uuidString)")
+        let folder = name.map { root.appending(path: $0) } ?? root
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         return folder
     }
 
@@ -280,6 +421,13 @@ final class TerminalCommandHandoffTests: XCTestCase {
         let after = personalHistory()
         let new = after.starts(with: before) ? after.dropFirst(before.count) : after[...]
         return String(decoding: new, as: UTF8.self)
+    }
+}
+
+private extension TaskWorkspaceState {
+    /// A handoff where a new tab, if one is needed, opens in a scratch folder with the person's shell.
+    func handOffToTerminal(_ command: String) {
+        handOffToTerminal(command, in: FileManager.default.temporaryDirectory, launch: .userLoginShell(), taskID: nil)
     }
 }
 
@@ -384,10 +532,11 @@ private struct PaneHost: View {
     let folder: URL
     let workspace: TaskWorkspaceState
     let launch: ShellLaunchEnvironment
+    var startsAutomatically = false
 
     var body: some View {
         TerminalPane(workspaceURL: folder, handoff: workspace.terminalHandoff, launch: launch,
-                     startsAutomatically: false, onHandoffDone: { workspace.finishTerminalHandoff($0) },
+                     startsAutomatically: startsAutomatically, onHandoffDone: { workspace.finishTerminalHandoff($0) },
                      onClose: {})
     }
 }

@@ -956,6 +956,15 @@
 "Restart terminal?" = "Restart terminal?";
 "Restart terminal" = "Restart terminal";
 "This stops the terminal's running processes and clears its output." = "This stops the terminal's running processes and clears its output.";
+"New terminal" = "New terminal";
+"Rename terminal" = "Rename terminal";
+"Close terminal?" = "Close terminal?";
+"Close %d terminals?" = "Close %d terminals?";
+"Close terminal" = "Close terminal";
+"Close terminals" = "Close terminals";
+"A command is still running in %@. Closing the terminal stops it." = "A command is still running in %@. Closing the terminal stops it.";
+"A command is still running in %@. Closing the terminals stops it." = "A command is still running in %@. Closing the terminals stops it.";
+"Commands are still running in %d terminals. Closing them stops them." = "Commands are still running in %d terminals. Closing them stops them.";
 "Run in terminal" = "Run in terminal";
 "Back to conversation" = "Back to conversation";
 "Resize side panel" = "Resize side panel";

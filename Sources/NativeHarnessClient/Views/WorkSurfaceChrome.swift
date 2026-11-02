@@ -128,10 +128,21 @@ struct WorkSurfaceNavigation: Sendable {
     var closePanel: @MainActor @Sendable () -> Void
     /// A browser tab's own items in its tab menu; nil leaves them out.
     var browserMenu: BrowserTabMenuActions? = nil
+    /// A + that opens another tab of the same kind at once, in place of the menu of `choices`: the
+    /// terminal's.
+    var newTab: WorkSurfaceNewTab? = nil
+    /// A terminal tab's own items in its tab menu; nil leaves them out.
+    var terminalMenu: TerminalTabMenuActions? = nil
     /// Whose panel it is (a task, or the new-task screen's `TaskWorkspaceStore.draftID`): its tabs drag
     /// along the strip, and another task's conversation drags out to a pane or the window's tabs
     /// (`WindowDragState`). Nil where the tabs do not drag.
     var owner: UUID? = nil
+}
+
+/// The strip's + for another tab of its kind, and what it says.
+struct WorkSurfaceNewTab: Sendable {
+    let help: String
+    let action: @MainActor @Sendable () -> Void
 }
 
 private struct WorkSurfaceNavigationKey: EnvironmentKey {
@@ -217,7 +228,9 @@ struct WorkSurfaceHeader<Trailing: View>: View {
         HStack(spacing: 4) {
             if let navigation {
                 tabStrip(navigation)
-                if !navigation.choices.isEmpty {
+                if let newTab = navigation.newTab {
+                    ParityIconButton(systemName: "plus", help: newTab.help, action: newTab.action)
+                } else if !navigation.choices.isEmpty {
                     WorkSurfaceOpenMenu(choices: navigation.choices, taskChoices: navigation.taskChoices,
                                         onSelect: navigation.open)
                 }

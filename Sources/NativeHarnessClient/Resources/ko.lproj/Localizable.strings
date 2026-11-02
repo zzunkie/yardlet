@@ -956,6 +956,15 @@
 "Restart terminal?" = "터미널을 다시 시작할까요?";
 "Restart terminal" = "터미널 다시 시작";
 "This stops the terminal's running processes and clears its output." = "터미널에서 실행 중인 프로세스를 중단하고 출력을 지웁니다.";
+"New terminal" = "새 터미널";
+"Rename terminal" = "터미널 이름 변경";
+"Close terminal?" = "터미널을 닫을까요?";
+"Close %d terminals?" = "터미널 %d개를 닫을까요?";
+"Close terminal" = "터미널 닫기";
+"Close terminals" = "터미널 닫기";
+"A command is still running in %@. Closing the terminal stops it." = "%@에서 명령이 아직 실행 중입니다. 터미널을 닫으면 멈춥니다.";
+"A command is still running in %@. Closing the terminals stops it." = "%@에서 명령이 아직 실행 중입니다. 터미널을 닫으면 멈춥니다.";
+"Commands are still running in %d terminals. Closing them stops them." = "터미널 %d개에서 명령이 아직 실행 중입니다. 닫으면 모두 멈춥니다.";
 "Run in terminal" = "터미널에서 실행";
 "Back to conversation" = "대화로 돌아가기";
 "Resize side panel" = "보조 패널 크기 조절";

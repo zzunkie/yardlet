@@ -15,16 +15,27 @@ final class AccountLoginController {
     func completeVerifiedConnection() {}
 }
 
-/// The terminal panel's shell: none starts here.
+/// A terminal tab's shell: none starts here.
 @MainActor
 final class NativeTerminalSession {
     private(set) var hasEnded = false
+    var name: String?
+    var number = 1
+    var onEnd: (() -> Void)?
+    let isRunningProgram = false
+    let isAtPrompt = false
 
     init(workspaceURL: URL, launch: ShellLaunchEnvironment = .userLoginShell(), taskID: UUID? = nil) {}
 
     func move(toTask id: UUID) {}
 
-    func end() { hasEnded = true }
+    func end() {
+        guard !hasEnded else { return }
+        hasEnded = true
+        let onEnd = onEnd
+        self.onEnd = nil
+        onEnd?()
+    }
 }
 
 /// Bash mode's shell: none starts here, so its commands end at once.

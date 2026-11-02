@@ -50,7 +50,7 @@ platform's layer has to provide:
 | `ShellLaunchEnvironment.userLoginShell` | The person's login shell | the user database |
 | `ClaudeConversationCatalog.runningSessionIDs` | Which Claude Code sessions run elsewhere | `kill(pid, 0)`, `sysctl` |
 | `HarnessAccountBroker.antigravityCredentialState` | Whether Antigravity is signed in | Keychain |
-| `AccountLoginController`, `NativeTerminalSession`, `TaskShellProcess` | The sign-in terminal, the terminal panel's shell, bash mode's shell | SwiftTerm and a PTY |
+| `AccountLoginController`, `NativeTerminalSession`, `TaskShellProcess` | The sign-in terminal, each terminal tab's shell, bash mode's shell | SwiftTerm and a PTY |
 | `BrowserPreviewModel`, `ConversationRenderState` | A tab's preview page, the conversation's cached turn views | WebKit, AppKit |
 | `RemoteControlService`, `LidSleepHelper` | The phone remote, the lid helper | Network.framework, XPC |
 
