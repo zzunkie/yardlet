@@ -84,14 +84,16 @@ public enum RemoteHandshakeAdmission {
     #endif
 }
 
-/// A local record of what remote devices did: when, which device, the request's type, its task and
-/// the result. Never a message's text. One JSON object per line, trimmed to the latest lines.
+/// A local record of what remote devices did: when, which device, the request's type, its task or
+/// schedule and the result. Never a message's text. One JSON object per line, trimmed to the latest lines.
 public final class RemoteAuditLog: @unchecked Sendable {
     public struct Entry: Codable, Equatable, Sendable {
         public var at: Date
         public var device: String?
         public var type: String
         public var task: String?
+        /// The schedule a schedule's command named (§15.21).
+        public var schedule: String?
         public var result: String
     }
 
@@ -104,8 +106,9 @@ public final class RemoteAuditLog: @unchecked Sendable {
         self.keptLines = keptLines
     }
 
-    public func record(device: String?, type: String, task: String?, result: String, at: Date = Date()) {
-        let entry = Entry(at: at, device: device, type: type, task: task, result: result)
+    public func record(device: String?, type: String, task: String?, schedule: String? = nil, result: String,
+                       at: Date = Date()) {
+        let entry = Entry(at: at, device: device, type: type, task: task, schedule: schedule, result: result)
         queue.async { [fileURL, keptLines] in
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601

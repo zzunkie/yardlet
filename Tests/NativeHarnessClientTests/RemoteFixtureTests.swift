@@ -7,7 +7,7 @@ import XCTest
 /// stop button applies) and stopping it expires the request, a waiting task's attention carries a
 /// short summary, and a message sent to a running task waits as a queued item until the turn ends.
 /// The phone app's QA runs against it, so what it offers since 2026-10-27 (§15.13–§15.18) answers as
-/// the contract says.
+/// the contract says, and so do its scheduled tasks (§15.21), through the server.
 final class RemoteFixtureTests: XCTestCase {
     func testWaitingTasksRunAndStoppingExpiresTheirRequest() async throws {
         let fixture = RemoteFixtureBridge(speed: 50)
@@ -135,5 +135,114 @@ final class RemoteFixtureTests: XCTestCase {
         let filed = await fixture.perform(.sendMessage(taskID: RemoteFixtureBridge.ID.idle, text: "Read this",
                                                        files: [RemoteFile(url: URL(filePath: "/tmp/x/report.pdf"), name: "report.pdf")]))
         XCTAssertNil(filed)
+    }
+
+    /// §15.21 through the server: the list in the Mac's order and words, Pause and Resume, Run now (a skip while
+    /// the task of its previous run works, `busy` while a run starts, then the run's own task), each command
+    /// audited by its schedule, and the change event only on the connection that asked for the list.
+    func testScheduledTasksRoundTripThroughTheServer() async throws {
+        typealias ID = RemoteFixtureBridge.ID
+        let clock = RemoteTestClock()
+        let harness = try await ServerHarness(clock: clock, serving: RemoteFixtureBridge())
+        let phone = try await harness.authenticatedPhone()
+        let other = try await harness.authenticatedPhone()
+        var sent = 0
+        func ask(_ type: String, _ fields: String = "") async throws -> RemoteResponse {
+            sent += 1
+            // Time enough for the rate limits to let each request through.
+            clock.advance(by: 3)
+            await harness.send(#"{"id":"r\#(sent)","type":"\#(type)"\#(fields)}"#, on: phone)
+            return try await phone.response("r\(sent)")
+        }
+
+        let snapshot = try await ask("snapshot")
+        XCTAssertEqual(snapshot.scheduledTasks, true)
+        let listing = try await ask("scheduledTasks")
+        let listed = try XCTUnwrap(listing.schedules)
+        XCTAssertEqual(listed.map(\.id), [ID.morningSchedule, ID.footerSchedule, ID.screenshotsSchedule, ID.reminderSchedule])
+        let morning = listed[0]
+        // The system's own time format, as the Mac's (it may put a narrow space before AM).
+        XCTAssertTrue(morning.when.hasPrefix("Every day at 9:00"), morning.when)
+        XCTAssertTrue(morning.enabled)
+        XCTAssertFalse(morning.running)
+        XCTAssertEqual(morning.status?.hasPrefix("Next run "), true)
+        XCTAssertNotNil(morning.nextRunAt)
+        XCTAssertEqual(morning.projectName, "Website")
+        XCTAssertEqual(morning.harnessName, "Codex")
+        XCTAssertNil(morning.canResume)
+        XCTAssertEqual(morning.lastRun?.outcome, .started)
+        XCTAssertEqual(morning.lastRun?.taskId, ID.history)
+        XCTAssertEqual(morning.lastRun?.line.hasPrefix("Last run "), true)
+        let footer = listed[1]
+        XCTAssertEqual(footer.status, "Paused")
+        XCTAssertEqual(footer.canResume, true)
+        XCTAssertNil(footer.nextRunAt)
+        XCTAssertEqual(footer.projectName, "Website", "The project of the task it continues")
+        XCTAssertEqual(footer.harnessName, "Claude Code")
+        let screenshots = listed[2]
+        XCTAssertFalse(screenshots.enabled)
+        XCTAssertEqual(screenshots.status, "Turned off after 3 failed starts")
+        XCTAssertEqual(screenshots.canResume, true)
+        XCTAssertEqual(screenshots.lastRun?.outcome, .failed)
+        XCTAssertNil(screenshots.lastRun?.taskId)
+        let reminder = listed[3]
+        XCTAssertEqual(reminder.status, "Ran once")
+        XCTAssertNil(reminder.canResume, "A one-off that ran is edited on the Mac, not resumed")
+        XCTAssertNil(reminder.projectName, "A chat")
+        XCTAssertEqual(reminder.lastRun?.taskId, ID.chat)
+
+        let unknown = try await ask("runScheduledTask", #","scheduleId":"nope""#)
+        XCTAssertEqual(unknown.error?.code, .notFound)
+        let ended = try await ask("setScheduledTaskEnabled", #","scheduleId":"\#(ID.reminderSchedule)","enabled":true"#)
+        XCTAssertEqual(ended.error?.code, .notAllowed)
+
+        // Resume: the phone that asked for the list hears of it, and the list says it runs again.
+        let resumed = try await ask("setScheduledTaskEnabled", #","scheduleId":"\#(ID.footerSchedule)","enabled":true"#)
+        XCTAssertTrue(resumed.ok)
+        var seq = try await phone.event(.schedulesChanged).seq ?? 0
+        let afterResuming = try await ask("scheduledTasks")
+        let running = try XCTUnwrap(afterResuming.schedules?[1])
+        XCTAssertTrue(running.enabled)
+        XCTAssertNil(running.canResume)
+        XCTAssertEqual(running.status?.hasPrefix("Next run "), true)
+
+        // Run now while the task of its previous run works: a skip, as on the Mac.
+        let busy = try await ask("sendMessage", #","taskId":"\#(ID.history)","text":"Summarize the newest one too""#)
+        XCTAssertTrue(busy.ok)
+        let skip = try await ask("runScheduledTask", #","scheduleId":"\#(ID.morningSchedule)""#)
+        XCTAssertTrue(skip.ok)
+        let afterSkipping = try await ask("scheduledTasks")
+        let skipped = try XCTUnwrap(afterSkipping.schedules?.first)
+        XCTAssertEqual(skipped.lastRun?.outcome, .skipped)
+        XCTAssertNil(skipped.lastRun?.taskId)
+        XCTAssertEqual(skipped.lastRun?.line.hasSuffix(" · Skipped: the previous run is still going"), true)
+        XCTAssertTrue(skipped.running, "The task of its latest started run works")
+
+        // Run now that starts a task: busy while it starts, then the run's task is listed with it.
+        let start = try await ask("runScheduledTask", #","scheduleId":"\#(ID.reminderSchedule)""#)
+        XCTAssertTrue(start.ok)
+        let again = try await ask("runScheduledTask", #","scheduleId":"\#(ID.reminderSchedule)""#)
+        XCTAssertEqual(again.error?.code, .busy)
+        var ran = reminder
+        while ran.lastRun?.outcome != .started || ran.lastRun?.taskId == ID.chat {
+            seq = try await phone.event(.schedulesChanged, after: seq).seq ?? seq
+            let listing = try await ask("scheduledTasks")
+            ran = try XCTUnwrap(listing.schedules?.last)
+        }
+        let task = try XCTUnwrap(ran.lastRun?.taskId)
+        let started = try await ask("snapshot").tasks?.first { $0.id == task }
+        XCTAssertEqual(started?.projectId, "chats")
+        XCTAssertEqual(ran.status, "Ran once", "Run now does not make a one-off run on its own again")
+
+        let audit = harness.audit.entries().filter { $0.type == "runScheduledTask" || $0.type == "setScheduledTaskEnabled" }
+        XCTAssertEqual(audit.map(\.schedule), ["nope", ID.reminderSchedule, ID.footerSchedule, ID.morningSchedule,
+                                               ID.reminderSchedule, ID.reminderSchedule])
+        XCTAssertEqual(audit.map(\.result), ["notFound", "notAllowed", "ok", "ok", "ok", "busy"])
+        XCTAssertTrue(audit.allSatisfy { $0.task == nil })
+        // The connection that never asked for the list heard nothing of it.
+        do {
+            let heard = try await other.event(.schedulesChanged, timeout: 0.3)
+            XCTFail("Unexpected \(heard)")
+        } catch is TestChannel.TimedOut {}
     }
 }

@@ -92,7 +92,23 @@ enum ScheduleText {
     }
 
     static func lastRun(_ schedule: ScheduledTask, now: Date = Date(), calendar: Calendar = .autoupdatingCurrent) -> String? {
-        schedule.state.lastRunAt.map { L10n.format("Last run %@", moment($0, relativeTo: now, calendar: calendar)) }
+        schedule.state.lastRunAt.map { lastRun(at: $0, now: now, calendar: calendar) }
+    }
+
+    /// "Last run Today at 9:00 AM".
+    static func lastRun(at date: Date, now: Date = Date(), calendar: Calendar = .autoupdatingCurrent) -> String {
+        L10n.format("Last run %@", moment(date, relativeTo: now, calendar: calendar))
+    }
+
+    /// A schedule's latest run in one line, for the phone (§15.21): when it was, and for a run that started
+    /// nothing, why, in the run history's words.
+    static func latestRun(_ run: ScheduledTaskRun, now: Date = Date(), calendar: Calendar = .autoupdatingCurrent) -> String {
+        let when = lastRun(at: run.at, now: now, calendar: calendar)
+        switch run.outcome {
+        case .started: return when
+        case .skipped: return "\(when) · \(skipReason(run.skipReason ?? .previousRunActive))"
+        case .failed: return "\(when) · \(couldNotStart(run.failure ?? ""))"
+        }
     }
 
     static func skipReason(_ reason: ScheduledTaskRun.SkipReason) -> String {
@@ -100,6 +116,10 @@ enum ScheduleText {
         case .previousRunActive: L10n.string("Skipped: the previous run is still going")
         case .targetBusy: L10n.string("Skipped: the task was busy")
         }
+    }
+
+    static func couldNotStart(_ message: String) -> String {
+        message.isEmpty ? L10n.string("Could not start") : L10n.format("Could not start: %@", message)
     }
 
     static func trigger(_ trigger: ScheduledTaskRun.Trigger) -> String {

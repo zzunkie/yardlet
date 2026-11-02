@@ -72,8 +72,7 @@ struct ScheduledRunRow: Identifiable, Equatable {
         case .completed: L10n.string("Run completed")
         case .failed: L10n.string("Run failed")
         case let .skipped(reason): ScheduleText.skipReason(reason)
-        case let .notStarted(message):
-            message.isEmpty ? L10n.string("Could not start") : L10n.format("Could not start: %@", message)
+        case let .notStarted(message): ScheduleText.couldNotStart(message)
         case .gone: L10n.string("Its task is no longer in the sidebar")
         }
     }
@@ -137,7 +136,7 @@ struct ScheduledTaskDetail: View {
             if schedule.isEnabled {
                 Button(L10n.string("Pause")) { actions.setEnabled(schedule.id, false) }
                     .parityPointer()
-            } else if schedule.trigger.isRecurring || schedule.state.stopReason == nil {
+            } else if schedule.canResume {
                 Button(L10n.string("Resume")) { actions.setEnabled(schedule.id, true) }
                     .parityPointer()
             }

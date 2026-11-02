@@ -12,6 +12,8 @@ public enum RemoteBridgeChange: Equatable, Sendable {
     case tasks
     /// A task's conversation changed.
     case conversation(String)
+    /// Something `scheduledTasks` reads may have changed: a schedule, a run, or the task of its latest run (§15.21).
+    case schedules
 }
 
 /// What a command asks of the Mac.
@@ -32,6 +34,9 @@ public enum RemoteCommand: Equatable, Sendable {
     case answerHandoff(taskID: String, requestID: String, answer: RemoteHandoffAnswer)
     case chooseAnswer(taskID: String, requestID: String, choice: String, note: String? = nil,
                       values: [String: RemoteFormValue] = [:])
+    /// Run now, Pause and Resume of a schedule (§15.21).
+    case runScheduledTask(scheduleID: String)
+    case setScheduledTaskEnabled(scheduleID: String, enabled: Bool)
 }
 
 /// The path a connection came over (§11.1), for Settings.
@@ -103,6 +108,8 @@ public protocol RemoteBridge: AnyObject, Sendable {
     func newTaskOptions(projectID: String?, harness: String?, settings: [String: String]) async -> Result<RemoteNewTaskOptions, RemoteError>
     /// The accounts a task a plan limit stopped may continue under (§15.17).
     func limitAccounts(taskID: String) async -> Result<[RemoteAccount], RemoteError>
+    /// The Mac's Scheduled tasks list (§15.21). A bridge that answers it says so in its snapshot (`scheduledTasks`).
+    func scheduledTasks() async -> Result<[RemoteSchedule], RemoteError>
 }
 
 extension RemoteBridge {
@@ -111,6 +118,10 @@ extension RemoteBridge {
     }
 
     public func limitAccounts(taskID: String) async -> Result<[RemoteAccount], RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+
+    public func scheduledTasks() async -> Result<[RemoteSchedule], RemoteError> {
         .failure(RemoteError(.unavailable))
     }
 }
@@ -172,6 +183,8 @@ public actor RemoteServer {
         var limiter: RemoteRateLimiter
         var seq = 0
         var receivesTaskEvents = false
+        /// It asked for `scheduledTasks`, so it is told when they change (§15.21).
+        var receivesScheduleEvents = false
         var subscriptions: [String: Subscription] = [:]
         var queue: [Data] = []
         var isDraining = false
@@ -212,6 +225,12 @@ public actor RemoteServer {
     private var tasksRefresh: Task<Void, Never>?
     private var tasksTimer: Task<Void, Never>?
     private var conversationTimers: [String: Task<Void, Never>] = [:]
+    /// The schedules the connections that follow them were last told of (§15.21), and the read they came from:
+    /// a read that returns after a newer one is dropped.
+    private var publishedSchedules: [RemoteSchedule]?
+    private var publishedScheduleRead = 0
+    private var scheduleReads = 0
+    private var schedulesTimer: Task<Void, Never>?
     private var fetchGeneration = 0
     private var watched: Set<String> = []
     private var sweeper: Task<Void, Never>?
@@ -762,6 +781,32 @@ public actor RemoteServer {
                 return await self.bridge.perform(.chooseAnswer(taskID: taskID, requestID: requestID, choice: choice, note: note,
                                                                values: values))
             }
+        case .scheduledTasks:
+            let read = await readSchedules()
+            switch read.result {
+            case let .success(schedules):
+                var response = RemoteResponse(re: envelope.id)
+                response.schedules = schedules
+                respond(response, to: id)
+                // The list later changes are told against, unless another connection that follows them has yet
+                // to hear of one.
+                let othersFollow = connections.contains { $0.key != id && $0.value.receivesScheduleEvents }
+                if publishedSchedules == nil || !othersFollow, read.number > publishedScheduleRead {
+                    publishedSchedules = schedules
+                    publishedScheduleRead = read.number
+                }
+                connections[id]?.receivesScheduleEvents = true
+            case let .failure(error):
+                respond(.failure(envelope.id, error), to: id)
+            }
+        case let .runScheduledTask(scheduleID):
+            await command(envelope.id, request: request, on: id) {
+                await self.bridge.perform(.runScheduledTask(scheduleID: scheduleID))
+            }
+        case let .setScheduledTaskEnabled(scheduleID, enabled):
+            await command(envelope.id, request: request, on: id) {
+                await self.bridge.perform(.setScheduledTaskEnabled(scheduleID: scheduleID, enabled: enabled))
+            }
         case let .uploadFile(part):
             guard let deviceID = connection.deviceID else { return }
             switch uploads.receive(part, from: deviceID, now: now()) {
@@ -785,6 +830,7 @@ public actor RemoteServer {
             response.tasks = published?.tasks ?? []
             response.newTask = published?.newTask
             response.followUp = published?.followUp
+            response.scheduledTasks = published?.scheduledTasks == true ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)
             connections[id]?.receivesTaskEvents = true
@@ -836,7 +882,7 @@ public actor RemoteServer {
         if error == nil { answer(&response) }
         respond(error.map { .failure(requestID, $0) } ?? response, to: id)
         audit?.record(device: connections[id]?.deviceID, type: request.type, task: request.taskID,
-                      result: error?.code.rawValue ?? "ok", at: now())
+                      schedule: request.scheduleID, result: error?.code.rawValue ?? "ok", at: now())
     }
 
     /// The finished uploads a message names (§15.20), sent by this connection's device.
@@ -1033,6 +1079,43 @@ public actor RemoteServer {
                 self.conversationTimers[taskID] = nil
                 await self.refreshConversation(taskID)
             }
+        case .schedules:
+            guard connections.values.contains(where: \.receivesScheduleEvents) else {
+                // Nobody follows them: the next `scheduledTasks` starts over.
+                publishedSchedules = nil
+                return
+            }
+            guard schedulesTimer == nil else { return }
+            let interval = configuration.tasksInterval
+            schedulesTimer = Task {
+                try? await Task.sleep(for: interval)
+                self.schedulesTimer = nil
+                await self.refreshSchedules()
+            }
+        }
+    }
+
+    // MARK: - Schedules (§15.21)
+
+    /// The bridge's schedules, at most `maxSchedules`, numbered by when the read began.
+    private func readSchedules() async -> (number: Int, result: Result<[RemoteSchedule], RemoteError>) {
+        scheduleReads += 1
+        let number = scheduleReads
+        let result = await bridge.scheduledTasks().map { Array($0.prefix(RemoteProtocol.maxSchedules)) }
+        return (number, result)
+    }
+
+    /// Reads the schedules again and tells the connections that follow them, when they changed. The event
+    /// carries nothing: a phone asks for `scheduledTasks` again.
+    private func refreshSchedules() async {
+        let read = await readSchedules()
+        guard case let .success(schedules) = read.result, read.number > publishedScheduleRead else { return }
+        let changed = schedules != publishedSchedules
+        publishedSchedules = schedules
+        publishedScheduleRead = read.number
+        guard changed else { return }
+        for (id, connection) in connections where connection.receivesScheduleEvents {
+            send(RemoteEvent(.schedulesChanged), to: id)
         }
     }
 

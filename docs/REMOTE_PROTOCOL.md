@@ -183,7 +183,7 @@ badge read (`TaskAttentionProjection`, `SidebarTaskIndicatorProjection`).
 ### 4.4 Commands
 
 Commands act through the same paths as the Mac's own controls. Every command is written to the Mac's
-local audit log with its type, task ID, device and result — never the message text. `ok: true`
+local audit log with its type, task ID (or schedule ID, §15.21), device and result — never the message text. `ok: true`
 means the Mac accepted the command; what happens next arrives as events.
 
 #### `sendMessage`
@@ -473,18 +473,18 @@ The provider's notices beside the turn (a model reroute, a warning) and context 
 | `unauthenticated` | a request before the connection is a device's (a link request waiting, §12.1) |
 | `pairingUnavailable` | no pairing is open (expired, used or cancelled) |
 | `pairingInvalid` | wrong pairing secret |
-| `notFound` | no listed task with that ID |
+| `notFound` | no listed task (or schedule, §15.21) with that ID |
 | `notSubscribed` | `loadOlder` for a task not subscribed |
 | `invalidCursor` | the cursor no longer names a place in the conversation |
 | `tooManySubscriptions` | more than 8 subscribed tasks |
 | `requestNotFound` | the request is not waiting any more |
-| `notAllowed` | that answer is not offered for the request |
+| `notAllowed` | that answer or action is not offered now |
 | `unavailable` | the task is not connected to its harness on the Mac |
 | `notRunning` | nothing to stop |
 | `emptyMessage` | `sendMessage.text` is empty |
 | `tooLarge` | `sendMessage.text` is too long |
 | `unsupportedCommand` | a slash command |
-| `busy` | the task cannot take it now (editing, switching account, held by another app) |
+| `busy` | the task cannot take it now (editing, switching account, held by another app), or a run of the schedule is starting |
 | `rateLimited` | over the rate limit |
 | `internal` | anything else |
 | `unknownDevice` | v2 handshake: the phone's key is not paired, or the device was removed (§13.1) |
@@ -551,6 +551,7 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
 - 2026-10-27, not only additions: protocol 1 removed (§1); a link request commits to a nonce and reveals it
   (§12.1), and older link requests get `unsupportedVersion`; limits on connections that are still authenticating
   (§7, §13.1, §14.3).
+- 2026-11-02, v2 only: scheduled tasks, Run now, Pause and Resume, and their change event (§15.21).
 
 ## 11. v2 transport
 
@@ -1202,11 +1203,18 @@ and deleting schedules stay on the Mac.
   In the order of the Mac's list, at most 200. `when` is the Mac's own line for when it runs and `status` its status
   line (absent when it shows none), both in the Mac's language as the Mac shows them. `enabled` is false while it is
   paused, and also once it stopped itself (a one-off that ran or expired, repeated failed starts), which `status`
-  then says. `running`: the task its latest run started or continued is still working or waiting on the person.
-  `nextRunAt` (milliseconds since 1970) is absent when it will not run again on its own. `projectName` is absent for
-  a chat. `lastRun` is absent before its first run: `at`, `outcome` (`started`, `skipped`, `failed`; unknown values
-  are read as `failed`), `taskId` when the run started or continued a task the snapshot lists, and `line`, the Mac's
-  own line for it. Not a command. Errors: `unavailable`.
+  then says. `canResume: true` on one that is off and that Resume turns on again: paused, or a repeating one that
+  stopped itself. A one-off that ran or whose time passed is not resumed (the Mac offers Edit instead), so a phone
+  shows Resume only with `canResume`. `running`: the task of its latest run that started or continued one is still
+  working or waiting on the person (the snapshot's `attention` `active` or `waiting`). `nextRunAt` (milliseconds
+  since 1970) is absent when it will not run again on its own. `projectName`: the project its runs start in, or for
+  a folder outside any project the folder's name (as the sidebar names it); for one that continues a task, that
+  task's project; absent for a chat. `harnessName` is the harness its runs start on. `lastRun` is the latest run,
+  absent before its first: `at`, `outcome` (`started`, `skipped`, `failed`; unknown values are read as `failed`),
+  `taskId` when the run started or continued a task the snapshot lists, and `line`, the Mac's own line for it in
+  the Mac's language: when it ran, and for a skip or a failed start why, as the run history says it ("Last run
+  today at 9:00 AM · Skipped: the previous run is still going"). The session schedules a Claude Code task's CLI
+  holds are not listed. Not a command. Errors: `unavailable`.
 - ```json
   {"id": "32", "type": "runScheduledTask", "scheduleId": "6B0E…"}
   ```
@@ -1218,10 +1226,14 @@ and deleting schedules stay on the Mac.
   {"id": "33", "type": "setScheduledTaskEnabled", "scheduleId": "6B0E…", "enabled": false}
   ```
 
-  A command: Pause (`false`) or Resume (`true`), as on the Mac. Errors: `notFound`.
+  A command: Pause (`false`) or Resume (`true`), as on the Mac; the one it is already in changes nothing. Errors:
+  `notFound`, `notAllowed` (Resume of a one-off that ran or whose time passed, which has no `canResume`).
 - `{"event": "schedulesChanged"}` goes to a connection that asked for `scheduledTasks` since it connected, when a
   schedule is added, changed or removed, runs, or the task of its latest run changes state; batched like
-  `tasksChanged`. It carries nothing; the phone asks for `scheduledTasks` again.
+  `tasksChanged`. It carries nothing; the phone asks for `scheduledTasks` again. It is sent only when the list a
+  phone would get differs from the one last read, so it also comes when the Mac's words change with the time
+  ("tomorrow" becoming "today").
+- The audit log (§4.4) names the schedule of `runScheduledTask` and `setScheduledTaskEnabled` in place of a task.
 
 ## 16. Push notifications
 
@@ -1258,6 +1270,11 @@ device's push key, associated data the UTF-8 bytes of `yardlet-push/1`, over the
   phones are told. `--approve-links` approves a link request (§12.1) three seconds after it arrives.
 - The fixture's v2 tasks add a plan review, an answerable question, a suggested task, lines with details,
   and taking `createTask`, `setPinned` and `archiveTask`.
+- Its scheduled tasks (§15.21): "Summarize new crash reports" runs every morning and its last run started "Summarize
+  the crash reports"; "Check the footer links" is paused and continues "Fix the footer links"; "Nightly screenshots"
+  turned itself off after three failed starts, and Run now fails again; "Weekend trip reminder" is a one-off in
+  Chats that ran (no `canResume`). Run now starts or continues a task after a moment (`busy` meanwhile), and while
+  that task works a second Run now records a skip.
 - Test vectors both implementations check (`Tests/NativeHarnessClientTests/Fixtures/RemoteNoiseVectors.json`,
   copied byte for byte into the phone app's tests): the public-domain cacophony vector for
   `Noise_IK_25519_ChaChaPoly_SHA256`, and a Yardlet vector with this protocol's prologue, a pairing

@@ -375,7 +375,8 @@ home screen's memory, disk and heat warnings (nothing to do about them from a ph
 (section 6.3, which needs screen streaming and input together); vault confirmation with phone biometrics (section 6.4);
 changing a running task's model or permission mode (the Claude app has it; each harness changes it differently, so it is its
 own step); slash commands from the phone; a whole task's diff pane and diff line comments. Taking a photo with the camera
-and attaching files came later the same day (5.3).
+and attaching files came later the same day (5.3). The scheduled task list, Run now, Pause and Resume came on 2026-11-02
+(REMOTE_PROTOCOL §15.21).
 
 
 ### 5.3 Every answer from the phone, files and the camera (2026-10-27, later)

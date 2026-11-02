@@ -37,6 +37,8 @@ public enum RemoteProtocol {
     public static let maxFiles = 20
     public static let maxFileBytes = 500 * 1024 * 1024
     public static let maxUploadPartBytes = 4 * 1024 * 1024
+    /// The most schedules `scheduledTasks` lists (§15.21).
+    public static let maxSchedules = 200
 }
 
 // MARK: - Errors
@@ -213,16 +215,19 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var newTask: RemoteNewTask?
     /// What Return does on the Mac while a turn runs (§15.15).
     public var followUp: RemoteFollowUpMode?
+    /// The bridge answers `scheduledTasks` (§15.21).
+    public var scheduledTasks: Bool
 
     public init(projects: [RemoteProject] = [], tasks: [RemoteTask] = [], newestRequestIDs: [String: String] = [:],
                 requestSummaries: [String: String] = [:], newTask: RemoteNewTask? = nil,
-                followUp: RemoteFollowUpMode? = nil) {
+                followUp: RemoteFollowUpMode? = nil, scheduledTasks: Bool = false) {
         self.projects = projects
         self.tasks = tasks
         self.newestRequestIDs = newestRequestIDs
         self.requestSummaries = requestSummaries
         self.newTask = newTask
         self.followUp = followUp
+        self.scheduledTasks = scheduledTasks
     }
 
     public static let empty = RemoteSnapshot()
@@ -694,6 +699,10 @@ public enum RemoteRequest: Equatable, Sendable {
     case answerLink(requestID: String, approve: Bool)
     /// A link request's first message: the nonce message 1 committed to (§12.1).
     case revealLink(nonce: Data)
+    /// The Mac's Scheduled tasks list, Run now, and Pause or Resume (§15.21).
+    case scheduledTasks
+    case runScheduledTask(scheduleID: String)
+    case setScheduledTaskEnabled(scheduleID: String, enabled: Bool)
 
     public var type: String {
         switch self {
@@ -726,6 +735,9 @@ public enum RemoteRequest: Equatable, Sendable {
         case .archiveTask: "archiveTask"
         case .answerLink: "answerLink"
         case .revealLink: "revealLink"
+        case .scheduledTasks: "scheduledTasks"
+        case .runScheduledTask: "runScheduledTask"
+        case .setScheduledTaskEnabled: "setScheduledTaskEnabled"
         }
     }
 
@@ -738,17 +750,25 @@ public enum RemoteRequest: Equatable, Sendable {
              let .archiveTask(id), let .limitAccounts(id), let .continueWithAccount(id, _), let .setAutoContinue(id, _),
              let .actOnQueued(id, _, _), let .answerHandoff(id, _, _), let .chooseAnswer(id, _, _, _, _): id
         case .snapshot, .ping, .createTask, .newTaskOptions, .registerPush, .unregisterPush, .forgetDevice,
-             .answerLink, .uploadFile, .revealLink: nil
+             .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled: nil
         }
     }
 
-    /// A command acts on a task through the Mac's own controls; its rate is limited apart and it is
-    /// written to the audit log.
+    /// The schedule a request names (§15.21).
+    public var scheduleID: String? {
+        switch self {
+        case let .runScheduledTask(id), let .setScheduledTaskEnabled(id, _): id
+        default: nil
+        }
+    }
+
+    /// A command acts on a task or a schedule through the Mac's own controls; its rate is limited apart and
+    /// it is written to the audit log.
     public var isCommand: Bool {
         switch self {
         case .sendMessage, .answerApproval, .stopTurn, .markRead, .answerQuestion, .reviewPlan, .createTask,
              .actOnSuggestion, .setPinned, .archiveTask, .answerLink, .continueWithAccount, .setAutoContinue, .actOnQueued,
-             .answerHandoff, .chooseAnswer: true
+             .answerHandoff, .chooseAnswer, .runScheduledTask, .setScheduledTaskEnabled: true
         default: false
         }
     }
@@ -806,6 +826,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var offset: Int?
         var data: String?
         var nonce: String?
+        var scheduleId: String?
     }
 
     private struct WireImage: Codable {
@@ -992,6 +1013,16 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 return fail(.badRequest, "Missing or invalid nonce")
             }
             request = .revealLink(nonce: nonce)
+        case "scheduledTasks":
+            request = .scheduledTasks
+        case "runScheduledTask":
+            guard let scheduleID = required(wire.scheduleId) else { return fail(.badRequest, "Missing scheduleId") }
+            request = .runScheduledTask(scheduleID: scheduleID)
+        case "setScheduledTaskEnabled":
+            guard let scheduleID = required(wire.scheduleId), let enabled = wire.enabled else {
+                return fail(.badRequest, "Missing scheduleId or enabled")
+            }
+            request = .setScheduledTaskEnabled(scheduleID: scheduleID, enabled: enabled)
         default:
             return fail(.unknownType, "Unknown type \(type)")
         }
@@ -1092,6 +1123,13 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             wire.approve = approve
         case let .revealLink(nonce):
             wire.nonce = RemoteEncoding.base64url(nonce)
+        case .scheduledTasks:
+            break
+        case let .runScheduledTask(scheduleID):
+            wire.scheduleId = scheduleID
+        case let .setScheduledTaskEnabled(scheduleID, enabled):
+            wire.scheduleId = scheduleID
+            wire.enabled = enabled
         }
         return (try? RemoteJSON.encoder.encode(wire)) ?? Data()
     }
@@ -1156,6 +1194,10 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     /// `uploadFile` (§15.20).
     public var uploadId: String?
     public var received: Int?
+    /// `snapshot` on v2: the Mac answers `scheduledTasks` (§15.21).
+    public var scheduledTasks: Bool?
+    /// `scheduledTasks` (§15.21).
+    public var schedules: [RemoteSchedule]?
 
     public init(re: String, ok: Bool = true, error: RemoteError? = nil) {
         self.re = re
@@ -1277,6 +1319,71 @@ public struct RemoteAccount: Codable, Equatable, Sendable {
     }
 }
 
+/// A schedule of the Mac's Scheduled tasks list (§15.21), with its words as the Mac shows them.
+public struct RemoteSchedule: Codable, Equatable, Sendable {
+    /// Its latest run.
+    public struct Run: Codable, Equatable, Sendable {
+        public enum Outcome: String, Codable, Sendable {
+            case started
+            case skipped
+            case failed
+
+            /// An outcome this side does not know reads as `failed`.
+            public init(from decoder: any Decoder) throws {
+                self = Outcome(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .failed
+            }
+        }
+
+        public var at: Int64
+        public var outcome: Outcome
+        /// The task it started or continued, when the snapshot lists it.
+        public var taskId: String?
+        /// The Mac's line for it.
+        public var line: String
+
+        public init(at: Int64, outcome: Outcome, taskId: String? = nil, line: String) {
+            self.at = at
+            self.outcome = outcome
+            self.taskId = taskId
+            self.line = line
+        }
+    }
+
+    public var id: String
+    public var name: String
+    /// When it runs, in the Mac's words.
+    public var when: String
+    /// Off while paused, and once it stopped itself.
+    public var enabled: Bool
+    /// The task its latest run started or continued is working or waiting on the person.
+    public var running: Bool
+    public var nextRunAt: Int64?
+    /// The Mac's status line.
+    public var status: String?
+    /// Nil for a chat.
+    public var projectName: String?
+    public var harnessName: String
+    public var lastRun: Run?
+    /// It is off and Resume turns it on again (a one-off that ran or whose time passed is not resumed).
+    public var canResume: Bool?
+
+    public init(id: String, name: String, when: String, enabled: Bool, running: Bool = false, nextRunAt: Int64? = nil,
+                status: String? = nil, projectName: String? = nil, harnessName: String, lastRun: Run? = nil,
+                canResume: Bool? = nil) {
+        self.id = id
+        self.name = name
+        self.when = when
+        self.enabled = enabled
+        self.running = running
+        self.nextRunAt = nextRunAt
+        self.status = status
+        self.projectName = projectName
+        self.harnessName = harnessName
+        self.lastRun = lastRun
+        self.canResume = canResume
+    }
+}
+
 /// What `itemDetail` answers with.
 public struct RemoteItemDetail: Equatable, Sendable {
     public var output: String?
@@ -1309,6 +1416,8 @@ public struct RemoteEvent: Codable, Equatable, Sendable {
         case linkRefused
         case linkRequest
         case linkResolved
+        // §15.21
+        case schedulesChanged
     }
 
     public var event: Name

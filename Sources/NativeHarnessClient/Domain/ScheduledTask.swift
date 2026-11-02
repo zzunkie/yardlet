@@ -63,6 +63,12 @@ struct ScheduledTask: Codable, Identifiable, Equatable, Sendable {
         guard !isEnabled else { return false }
         return state.stopReason == .repeatedFailures || state.stopReason == .expired
     }
+
+    /// Resume is offered: it is off, and it repeats or did not stop itself. A one-off that ran or whose time
+    /// passed runs again only once it is given a new moment.
+    var canResume: Bool {
+        !isEnabled && (trigger.isRecurring || state.stopReason == nil)
+    }
 }
 
 /// Where each run goes.

@@ -52,7 +52,10 @@ final class RemoteProtocolTests: XCTestCase {
             .setPinned(taskID: "T1", pinned: false),
             .archiveTask(taskID: "T1"),
             .answerLink(requestID: "L", approve: true),
-            .revealLink(nonce: Data(repeating: 9, count: 32))
+            .revealLink(nonce: Data(repeating: 9, count: 32)),
+            .scheduledTasks,
+            .runScheduledTask(scheduleID: "S"),
+            .setScheduledTaskEnabled(scheduleID: "S", enabled: false)
         ]
         for (index, request) in requests.enumerated() {
             let envelope = RemoteRequestEnvelope(id: "\(index)", request: request)
@@ -67,6 +70,45 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertEqual(answer.request, .answerApproval(taskID: "T", requestID: "toolu_01", answer: .allowOnce))
         let reveal = try decode(#"{"id":"1","type":"revealLink","nonce":"\#(RemoteEncoding.base64url(Data(repeating: 1, count: 32)))"}"#)
         XCTAssertEqual(reveal.request, .revealLink(nonce: Data(repeating: 1, count: 32)))
+
+        // §15.21's requests decode as written and encode back to the same JSON.
+        let schedules: [(String, RemoteRequest)] = [
+            (#"{"id": "31", "type": "scheduledTasks"}"#, .scheduledTasks),
+            (#"{"id": "32", "type": "runScheduledTask", "scheduleId": "6B0E…"}"#, .runScheduledTask(scheduleID: "6B0E…")),
+            (#"{"id": "33", "type": "setScheduledTaskEnabled", "scheduleId": "6B0E…", "enabled": false}"#,
+             .setScheduledTaskEnabled(scheduleID: "6B0E…", enabled: false))
+        ]
+        for (json, request) in schedules {
+            let envelope = try decode(json)
+            XCTAssertEqual(envelope.request, request)
+            XCTAssertTrue(envelope.request.isCommand == (request != .scheduledTasks), json)
+            let written = try XCTUnwrap(JSONSerialization.jsonObject(with: envelope.encoded()) as? NSDictionary)
+            XCTAssertEqual(written, try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? NSDictionary))
+        }
+        XCTAssertEqual(try? RemoteRequestEnvelope.decode(Data(#"{"id":"34","type":"setScheduledTaskEnabled","scheduleId":"S"}"#.utf8)).get(),
+                       nil, "enabled is required")
+    }
+
+    func testTheDocumentedScheduleListDecodes() throws {
+        let json = #"""
+        {"re": "31", "ok": true, "schedules": [
+          {"id": "6B0E…", "name": "Morning check", "when": "Every day at 9:00 AM", "enabled": true, "running": false,
+           "nextRunAt": 1792200000000, "status": "Next run tomorrow at 9:00 AM", "projectName": "acme-web",
+           "harnessName": "Codex",
+           "lastRun": {"at": 1792158000000, "outcome": "started", "taskId": "4C1F…", "line": "Last run today at 9:00 AM"}}]}
+        """#
+        let response = try JSONDecoder().decode(RemoteResponse.self, from: Data(json.utf8))
+        let schedule = try XCTUnwrap(response.schedules?.first)
+        XCTAssertEqual(schedule, RemoteSchedule(
+            id: "6B0E…", name: "Morning check", when: "Every day at 9:00 AM", enabled: true, running: false,
+            nextRunAt: 1_792_200_000_000, status: "Next run tomorrow at 9:00 AM", projectName: "acme-web", harnessName: "Codex",
+            lastRun: RemoteSchedule.Run(at: 1_792_158_000_000, outcome: .started, taskId: "4C1F…", line: "Last run today at 9:00 AM")))
+        // Written back, it is the same JSON.
+        let written = try XCTUnwrap(JSONSerialization.jsonObject(with: RemoteJSON.encoder.encode(response)) as? NSDictionary)
+        XCTAssertEqual(written, try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? NSDictionary))
+        // An outcome a later Mac adds reads as a failure.
+        let later = try JSONDecoder().decode(RemoteSchedule.Run.self, from: Data(#"{"at": 1, "outcome": "deferred", "line": "x"}"#.utf8))
+        XCTAssertEqual(later.outcome, .failed)
     }
 
     func testRequestsThatCannotBeReadSayWhy() {
@@ -124,7 +166,7 @@ final class RemoteProtocolTests: XCTestCase {
             XCTAssertTrue(document.contains("| `\(code.rawValue)` |"), "\(code.rawValue) is missing from the error table")
         }
         for name in ["tasksChanged", "attention", "conversation", "conversationReset", "conversationEnded", "revoked", "closing",
-                     "linked", "linkRefused", "linkRequest", "linkResolved"] {
+                     "linked", "linkRefused", "linkRequest", "linkResolved", "schedulesChanged"] {
             XCTAssertTrue(document.contains("\"event\": \"\(name)\""), name)
         }
         XCTAssertTrue(document.contains("port **\(RemoteProtocol.securePort)**"))

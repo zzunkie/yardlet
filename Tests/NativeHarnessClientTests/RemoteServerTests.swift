@@ -59,6 +59,11 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertEqual(snapshot.tasks?.map(\.id), ["A", "B"])
         XCTAssertEqual(snapshot.projects?.map(\.name), ["Yardlet"])
         XCTAssertEqual(snapshot.serverTime, RemoteJSON.milliseconds(RemoteTestClock().now), "The phone corrects for clock skew")
+        // A bridge without schedules says nothing of them, and answers no list (§15.21).
+        XCTAssertNil(snapshot.scheduledTasks)
+        await harness.send(#"{"id":"l","type":"scheduledTasks"}"#, on: phone)
+        let noSchedules = try await phone.response("l").error?.code
+        XCTAssertEqual(noSchedules, .unavailable)
 
         var next = FakeBridge.snapshot
         next.tasks[0].attention = .waiting
@@ -409,7 +414,8 @@ struct ServerHarness {
     let audit: RemoteAuditLog
     let auditURL: URL
 
-    init(clock: RemoteTestClock = RemoteTestClock()) async throws {
+    /// `serving` puts another bridge (the fixture's) behind the server in place of `bridge`.
+    init(clock: RemoteTestClock = RemoteTestClock(), serving other: (any RemoteBridge)? = nil) async throws {
         auditURL = FileManager.default.temporaryDirectory.appending(path: "remote-server-\(UUID().uuidString)/audit.log")
         audit = RemoteAuditLog(fileURL: auditURL)
         var configuration = RemoteServer.Configuration(server: RemoteServerInfo(name: "Test Mac", appVersion: "test"))
@@ -418,7 +424,7 @@ struct ServerHarness {
         configuration.sweepInterval = .seconds(3600)
         configuration.olderWait = 2
         configuration.windowLimits = .init(maxTurns: 10)
-        server = RemoteServer(configuration: configuration, bridge: bridge, devices: devices, audit: audit,
+        server = RemoteServer(configuration: configuration, bridge: other ?? bridge, devices: devices, audit: audit,
                               now: { clock.now })
         await server.start()
     }

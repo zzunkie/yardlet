@@ -227,7 +227,7 @@ struct ScheduledTaskMenuItems: View {
             .disabled(isStarting)
         if schedule.isEnabled {
             Button(L10n.string("Pause")) { actions.setEnabled(schedule.id, false) }
-        } else if schedule.trigger.isRecurring || schedule.state.stopReason == nil {
+        } else if schedule.canResume {
             Button(L10n.string("Resume")) { actions.setEnabled(schedule.id, true) }
         }
         Button(L10n.string("Edit…")) { actions.edit(schedule.id) }

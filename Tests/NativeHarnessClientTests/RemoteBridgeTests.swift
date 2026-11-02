@@ -379,6 +379,119 @@ final class RemoteBridgeTests: XCTestCase {
         await model.shutdown()
     }
 
+    // MARK: - Scheduled tasks (§15.21)
+
+    func testScheduledTasksAreTheMacsListAndActThroughItsMenu() async throws {
+        let now = Date(timeIntervalSince1970: 1_792_158_000)
+        let folder = URL(filePath: "/tmp/remote-bridge-schedules", directoryHint: .isDirectory)
+        let working = SessionRecord(harness: .codex, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/codex"),
+                                    title: "Morning check", status: .running, updatedAt: now)
+        let idle = SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                 title: "Weekly sync", status: .completed, updatedAt: now.addingTimeInterval(-60),
+                                 completionState: .completed)
+        func run(_ outcome: ScheduledTaskRun.Outcome, hoursAgo: Double, task: UUID? = nil,
+                 skip: ScheduledTaskRun.SkipReason? = nil, failure: String? = nil) -> ScheduledTaskRun {
+            ScheduledTaskRun(at: now.addingTimeInterval(-hoursAgo * 3_600), trigger: .scheduled, outcome: outcome,
+                             skipReason: skip, failure: failure, taskID: task)
+        }
+        // Made now, so no slot before it is due and each one's next run is its next slot.
+        let created = now
+        // Enabled, and the task its last run started still works.
+        var morning = ScheduledTask(name: "Morning check", prompt: "Check the inbox", trigger: .daily(ScheduleTime(hour: 9, minute: 0)),
+                                    destination: ScheduleDestination(harness: .codex, workspacePath: "/tmp/remote-schedules/acme-web"),
+                                    createdAt: created)
+        morning.state.runs = [run(.started, hoursAgo: 1, task: working.id)]
+        // Paused; it continues a task, and its last run was skipped while that task was busy.
+        var weekly = ScheduledTask(name: "Weekly sync", prompt: "Sync", trigger: .weekly(days: [.monday], time: ScheduleTime(hour: 10, minute: 0)),
+                                   destination: ScheduleDestination(mode: .continueTask, harness: .claudeCode, targetTaskID: idle.id),
+                                   isEnabled: false, createdAt: created)
+        weekly.state.runs = [run(.skipped, hoursAgo: 2, skip: .targetBusy), run(.started, hoursAgo: 26, task: idle.id)]
+        // Turned itself off after failed starts; a repeating schedule resumes.
+        var screenshots = ScheduledTask(name: "Nightly screenshots", prompt: "Shoot", trigger: .daily(ScheduleTime(hour: 2, minute: 0)),
+                                        destination: ScheduleDestination(harness: .claudeCode, workspacePath: "/tmp/remote-schedules/acme-web"),
+                                        isEnabled: false, createdAt: created)
+        screenshots.state.stopReason = .repeatedFailures
+        screenshots.state.consecutiveFailures = 3
+        screenshots.state.runs = [run(.failed, hoursAgo: 3, failure: "No simulator")]
+        // A one-off chat that ran, whose task is no longer in the sidebar.
+        var reminder = ScheduledTask(name: "Reminder", prompt: "Remind me", trigger: .once(now.addingTimeInterval(-86_400)),
+                                     destination: ScheduleDestination(harness: .claudeCode), isEnabled: false, createdAt: created)
+        reminder.state.stopReason = .finished
+        reminder.state.runs = [run(.started, hoursAgo: 24, task: UUID())]
+
+        let model = try Self.model(sessions: [working, idle], transcripts: [:], schedules: [morning, weekly, screenshots, reminder])
+        let center = model.scheduledTasks
+        center.now = { now }
+        let bridge = AppModelRemoteBridge(model: model)
+        XCTAssertTrue(bridge.snapshot().scheduledTasks)
+        let listed = try await bridge.scheduledTasks().get()
+        XCTAssertEqual(listed.map(\.id), [morning, weekly, screenshots, reminder].map(\.id.uuidString), "The Mac's list order")
+        // The Mac's own words, in its language.
+        for (remote, schedule) in zip(listed, center.schedules) {
+            let nextRun = center.nextRun(of: schedule)
+            XCTAssertEqual(remote.when, ScheduleText.summary(schedule.trigger, calendar: center.calendar(), now: now))
+            XCTAssertEqual(remote.status, ScheduleText.status(schedule, nextRun: nextRun, isStarting: false, now: now,
+                                                              calendar: center.calendar()))
+            XCTAssertEqual(remote.nextRunAt, nextRun.map(RemoteJSON.milliseconds))
+            XCTAssertEqual(remote.lastRun?.line, schedule.state.runs.first.map { ScheduleText.latestRun($0, now: now, calendar: center.calendar()) })
+            XCTAssertEqual(remote.lastRun?.at, schedule.state.runs.first.map { RemoteJSON.milliseconds($0.at) })
+        }
+        XCTAssertTrue(listed[0].enabled)
+        XCTAssertTrue(listed[0].running, "The task its last run started works")
+        XCTAssertNotNil(listed[0].nextRunAt)
+        XCTAssertNil(listed[0].canResume)
+        XCTAssertEqual(listed[0].projectName, "acme-web", "A folder outside any project, as the sidebar names it")
+        XCTAssertEqual(listed[0].harnessName, "Codex")
+        XCTAssertEqual(listed[0].lastRun?.outcome, .started)
+        XCTAssertEqual(listed[0].lastRun?.taskId, working.id.uuidString)
+
+        XCTAssertFalse(listed[1].enabled)
+        XCTAssertEqual(listed[1].status, L10n.string("Paused"))
+        XCTAssertNil(listed[1].nextRunAt)
+        XCTAssertEqual(listed[1].canResume, true)
+        XCTAssertFalse(listed[1].running, "The task its latest started run continued is idle")
+        XCTAssertEqual(listed[1].projectName, "remote-bridge-schedules", "The project of the task it continues")
+        XCTAssertEqual(listed[1].lastRun?.outcome, .skipped)
+        XCTAssertNil(listed[1].lastRun?.taskId)
+        XCTAssertEqual(listed[1].lastRun?.line.hasSuffix(ScheduleText.skipReason(.targetBusy)), true)
+
+        XCTAssertEqual(listed[2].canResume, true)
+        XCTAssertEqual(listed[2].lastRun?.outcome, .failed)
+        XCTAssertEqual(listed[2].lastRun?.line.hasSuffix(ScheduleText.couldNotStart("No simulator")), true)
+
+        XCTAssertNil(listed[3].canResume, "A one-off that ran is edited, not resumed")
+        XCTAssertNil(listed[3].projectName, "A chat")
+        XCTAssertEqual(listed[3].lastRun?.outcome, .started)
+        XCTAssertNil(listed[3].lastRun?.taskId, "Its task is not in the snapshot")
+        XCTAssertFalse(listed[3].running)
+
+        // Pause and Resume as the menu offers them; the change is told.
+        let signals = SignalRecorder()
+        bridge.setChangeHandler { change in signals.record(change) }
+        let unknown = await bridge.perform(.runScheduledTask(scheduleID: UUID().uuidString))
+        XCTAssertEqual(unknown?.code, .notFound)
+        let refused = await bridge.perform(.setScheduledTaskEnabled(scheduleID: reminder.id.uuidString, enabled: true))
+        XCTAssertEqual(refused?.code, .notAllowed)
+        XCTAssertEqual(center.schedule(id: reminder.id)?.isEnabled, false)
+        let resumed = await bridge.perform(.setScheduledTaskEnabled(scheduleID: weekly.id.uuidString, enabled: true))
+        XCTAssertNil(resumed)
+        XCTAssertEqual(center.schedule(id: weekly.id)?.isEnabled, true)
+        try await waitUntil { signals.changes.contains(.schedules) }
+        let afterResuming = try await bridge.scheduledTasks().get()
+        XCTAssertEqual(afterResuming[1].enabled, true)
+
+        // Run now while the task of its previous run works is recorded as a skip, as on the Mac.
+        let ran = await bridge.perform(.runScheduledTask(scheduleID: morning.id.uuidString))
+        XCTAssertNil(ran)
+        try await waitUntil { (try? await bridge.scheduledTasks().get().first?.lastRun?.outcome) == .skipped }
+        XCTAssertEqual(center.schedule(id: morning.id)?.state.runs.first?.skipReason, .previousRunActive)
+
+        // The run's task finishes: the list follows the task.
+        try await model.store.updateSession(id: working.id, status: .completed)
+        try await waitUntil { (try? await bridge.scheduledTasks().get().first?.running) == false }
+        await model.shutdown()
+    }
+
     // MARK: - Commands through the window's paths
 
     func testCommandsGoThroughTheComposerTheCardAndTheStopButton() async throws {
@@ -453,7 +566,7 @@ final class RemoteBridgeTests: XCTestCase {
     // MARK: - Helpers
 
     private static func model(sessions: [SessionRecord], transcripts: [UUID: [TranscriptEntry]],
-                              queues: [UUID: [QueuedFollowUp]] = [:]) throws -> AppModel {
+                              queues: [UUID: [QueuedFollowUp]] = [:], schedules: [ScheduledTask] = []) throws -> AppModel {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteBridgeTests")))
         return AppModel(
             store: SessionStore(sessions: sessions, repository: InMemorySessionRepository(sessions: sessions)),
@@ -461,6 +574,7 @@ final class RemoteBridgeTests: XCTestCase {
             initialTranscripts: transcripts,
             initialCodexQueues: queues,
             codexQueueRepository: InMemoryRemoteQueueRepository(),
+            scheduleRepository: InMemoryScheduledTaskRepository(snapshot: ScheduleSnapshot(schedules: schedules)),
             restoresIndexOnLaunch: false)
     }
 

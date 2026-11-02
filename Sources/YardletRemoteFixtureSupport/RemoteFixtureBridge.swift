@@ -14,7 +14,10 @@ import YardletRemote
 /// task picks its harness, model and worktree, a task a plan limit stopped continues under another
 /// account, and a task waits on a browser tab handed to the person. Later the same day (§15.19, §15.20) the
 /// approval offers every answer its card gives, one task waits on an MCP form and one on a question with a secret
-/// answer, and messages and new tasks carry files.
+/// answer, and messages and new tasks carry files. Since 2026-11-02 (§15.21) it lists scheduled tasks: one that runs
+/// every morning and whose last run started a task, a paused one that continues a task, one that turned itself off
+/// after failed starts, and a one-off that ran. Run now starts or continues a task, or records a skip while that task
+/// is busy and a failure for the one that cannot start; Pause and Resume act as on the Mac.
 /// Nothing is read from or written to the Mac.
 public actor RemoteFixtureBridge: RemoteBridge {
     public enum ID {
@@ -33,6 +36,11 @@ public actor RemoteFixtureBridge: RemoteBridge {
         public static let secret = "0F1E000D-0000-4000-8000-00000000000D"
         static let yardlet = "0F1E00A1-0000-4000-8000-0000000000A1"
         static let website = "0F1E00A2-0000-4000-8000-0000000000A2"
+        // Schedules (§15.21)
+        public static let morningSchedule = "0F1E5001-0000-4000-8000-000000005001"
+        public static let footerSchedule = "0F1E5002-0000-4000-8000-000000005002"
+        public static let screenshotsSchedule = "0F1E5003-0000-4000-8000-000000005003"
+        public static let reminderSchedule = "0F1E5004-0000-4000-8000-000000005004"
     }
 
     private struct Entry {
@@ -47,8 +55,53 @@ public actor RemoteFixtureBridge: RemoteBridge {
         var account = "fixture-home"
     }
 
+    /// A scheduled task as the Mac keeps it (§15.21): when, where its runs go, whether it is on, and its runs.
+    private struct Schedule {
+        enum When {
+            case daily(hour: Int, minute: Int)
+            case weekdays(hour: Int, minute: Int)
+            case once(Date)
+        }
+
+        enum Destination {
+            case newTask(project: String, harness: Harness)
+            case continueTask(String)
+        }
+
+        enum Stop {
+            case repeatedFailures
+            case finished
+        }
+
+        struct Run {
+            var at: Date
+            var outcome: RemoteSchedule.Run.Outcome
+            var taskID: String?
+            /// Why it started nothing, in the Mac's run history's words.
+            var reason: String?
+        }
+
+        var id: String
+        var name: String
+        var prompt: String
+        var when: When
+        var destination: Destination
+        var enabled = true
+        var stop: Stop?
+        var failures = 0
+        /// Why a start fails, for the schedule that cannot start.
+        var failure: String?
+        /// Newest first.
+        var runs: [Run] = []
+        var starting = false
+
+        /// The task its latest started run started or continued.
+        var latestTaskID: String? { runs.first { $0.outcome == .started && $0.taskID != nil }?.taskID }
+    }
+
     private var order: [String] = []
     private var tasks: [String: Entry] = [:]
+    private var schedules: [Schedule] = []
     private let projects: [RemoteProject]
     private var handler: (@Sendable (RemoteBridgeChange) -> Void)?
     private var scripts: [String: Task<Void, Never>] = [:]
@@ -101,6 +154,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
         entries = entries.map(Self.withState)
         order = entries.map(\.task.id)
         tasks = Dictionary(uniqueKeysWithValues: entries.map { ($0.task.id, $0) })
+        schedules = Self.schedules(now: now)
     }
 
     // MARK: - Bridge
@@ -128,7 +182,8 @@ public actor RemoteFixtureBridge: RemoteBridge {
         }
         return RemoteSnapshot(projects: projects, tasks: listed.map(\.task), newestRequestIDs: requests,
                               requestSummaries: summaries,
-                              newTask: RemoteNewTask(harness: "claude-code", harnessName: "Claude Code"), followUp: .steer)
+                              newTask: RemoteNewTask(harness: "claude-code", harnessName: "Claude Code"), followUp: .steer,
+                              scheduledTasks: true)
     }
 
     /// The task's turns, and the messages queued behind its running turn at the end of the last one.
@@ -303,6 +358,117 @@ public actor RemoteFixtureBridge: RemoteBridge {
                     reply: answer == .done ? "Thanks, the session is signed in. The release notes are published at github.com/acme/web/releases."
                         : "Okay, I left the release notes as a draft. Publish it from the Releases page when you can.")
             return nil
+        case let .runScheduledTask(scheduleID):
+            guard let index = schedules.firstIndex(where: { $0.id == scheduleID }) else { return RemoteError(.notFound) }
+            guard !schedules[index].starting else { return RemoteError(.busy, "A run of it is starting") }
+            // As the Mac's Run now: a skip while the task of its previous run (or the task it continues) is busy.
+            let (busyTask, reason): (String?, String) = switch schedules[index].destination {
+            case .newTask: (schedules[index].latestTaskID, "Skipped: the previous run is still going")
+            case let .continueTask(taskID): (taskID, "Skipped: the task was busy")
+            }
+            if let busyTask, tasks[busyTask]?.task.running == true {
+                record(Schedule.Run(at: Date(), outcome: .skipped, reason: reason), in: scheduleID)
+                return nil
+            }
+            schedules[index].starting = true
+            handler?(.schedules)
+            Task { await self.startRun(scheduleID) }
+            return nil
+        case let .setScheduledTaskEnabled(scheduleID, enabled):
+            guard let index = schedules.firstIndex(where: { $0.id == scheduleID }) else { return RemoteError(.notFound) }
+            let schedule = schedules[index]
+            if enabled, !schedule.enabled, Self.isOnce(schedule), schedule.stop != nil {
+                return RemoteError(.notAllowed, "A one-off that ran runs again once edited on the Mac")
+            }
+            guard schedule.enabled != enabled else { return nil }
+            schedules[index].enabled = enabled
+            if enabled {
+                schedules[index].stop = nil
+                schedules[index].failures = 0
+            }
+            handler?(.schedules)
+            return nil
+        }
+    }
+
+    public func scheduledTasks() async -> Result<[RemoteSchedule], RemoteError> {
+        let now = Date()
+        return .success(schedules.map { schedule in
+            let attention = schedule.latestTaskID.flatMap { tasks[$0]?.task.attention }
+            let next = Self.nextRun(of: schedule, after: now)
+            var remote = RemoteSchedule(
+                id: schedule.id, name: schedule.name, when: Self.whenText(schedule.when, now: now), enabled: schedule.enabled,
+                running: attention == .active || attention == .waiting, nextRunAt: next.map(RemoteJSON.milliseconds),
+                status: Self.status(schedule, next: next, now: now), harnessName: harness(of: schedule).name,
+                canResume: !schedule.enabled && (!Self.isOnce(schedule) || schedule.stop == nil) ? true : nil)
+            switch schedule.destination {
+            case let .newTask(project, _):
+                remote.projectName = project == "chats" ? nil : projects.first { $0.id == project }?.name
+            case let .continueTask(taskID):
+                let project = tasks[taskID]?.task.projectId
+                remote.projectName = project == "chats" ? nil : projects.first { $0.id == project }?.name
+            }
+            if let run = schedule.runs.first {
+                let when = "Last run \(Self.moment(run.at, now: now))"
+                remote.lastRun = RemoteSchedule.Run(
+                    at: RemoteJSON.milliseconds(run.at), outcome: run.outcome,
+                    taskId: run.outcome == .started ? run.taskID.flatMap { tasks[$0] == nil ? nil : $0 } : nil,
+                    line: run.reason.map { "\(when) · \($0)" } ?? when)
+            }
+            return remote
+        })
+    }
+
+    /// A run starting, as the Mac's new-task path or a continued task's next message takes a moment.
+    private func startRun(_ scheduleID: String) async {
+        await pause(0.6)
+        guard let index = schedules.firstIndex(where: { $0.id == scheduleID }) else { return }
+        schedules[index].starting = false
+        let schedule = schedules[index]
+        if let failure = schedule.failure {
+            record(Schedule.Run(at: Date(), outcome: .failed, reason: "Could not start: \(failure)"), in: scheduleID)
+            return
+        }
+        switch schedule.destination {
+        case let .newTask(project, harness):
+            let started = startTask(title: "\(schedule.name) · \(Self.moment(Date(), now: Date(), relative: false))",
+                                    text: schedule.prompt, project: project, parent: nil, harness: harness)
+            record(Schedule.Run(at: Date(), outcome: .started, taskID: started), in: scheduleID)
+        case let .continueTask(taskID):
+            guard tasks[taskID] != nil else {
+                record(Schedule.Run(at: Date(), outcome: .failed,
+                                    reason: "Could not start: The task this schedule continues is no longer in Yardlet."),
+                       in: scheduleID)
+                return
+            }
+            send(schedule.prompt, to: taskID)
+            record(Schedule.Run(at: Date(), outcome: .started, taskID: taskID), in: scheduleID)
+        }
+    }
+
+    /// A run recorded as the Mac records one: three failed starts in a row turn the schedule off.
+    private func record(_ run: Schedule.Run, in scheduleID: String) {
+        guard let index = schedules.firstIndex(where: { $0.id == scheduleID }) else { return }
+        schedules[index].runs.insert(run, at: 0)
+        switch run.outcome {
+        case .started:
+            schedules[index].failures = 0
+        case .failed:
+            schedules[index].failures += 1
+            if schedules[index].failures >= 3 {
+                schedules[index].enabled = false
+                schedules[index].stop = .repeatedFailures
+            }
+        case .skipped:
+            break
+        }
+        handler?(.schedules)
+    }
+
+    private func harness(of schedule: Schedule) -> Harness {
+        switch schedule.destination {
+        case let .newTask(_, harness): harness
+        case let .continueTask(taskID): tasks[taskID].flatMap { Harness(id: $0.task.harness) } ?? .claude
         }
     }
 
@@ -787,10 +953,116 @@ public actor RemoteFixtureBridge: RemoteBridge {
     private func changed(_ taskID: String) {
         handler?(.tasks)
         handler?(.conversation(taskID))
+        // A schedule shows whether the task of its latest run still works.
+        if schedules.contains(where: { $0.latestTaskID == taskID }) { handler?(.schedules) }
     }
 
     private func pause(_ seconds: Double) async {
         try? await Task.sleep(for: .seconds(seconds / speed))
+    }
+
+    // MARK: - Fixture schedules (§15.21)
+
+    /// Every morning, with a run that started the crash report task; a paused one that continues the footer task;
+    /// one that turned itself off after three failed starts; and a one-off that ran in Chats.
+    private static func schedules(now: Date) -> [Schedule] {
+        let calendar = Calendar.current
+        func latest(_ hour: Int, daysBack: Int = 0) -> Date {
+            let today = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: now) ?? now
+            let slot = today > now ? calendar.date(byAdding: .day, value: -1, to: today) ?? today : today
+            return calendar.date(byAdding: .day, value: -daysBack, to: slot) ?? slot
+        }
+        let failure = "The iOS Simulator runtime is not installed."
+        return [
+            Schedule(id: ID.morningSchedule, name: "Summarize new crash reports",
+                     prompt: "Summarize the crash reports that came in overnight.", when: .daily(hour: 9, minute: 0),
+                     destination: .newTask(project: ID.website, harness: .codex),
+                     runs: [Schedule.Run(at: latest(9), outcome: .started, taskID: ID.history)]),
+            Schedule(id: ID.footerSchedule, name: "Check the footer links", prompt: "Check the footer links again.",
+                     when: .weekdays(hour: 18, minute: 0), destination: .continueTask(ID.idle), enabled: false,
+                     runs: [Schedule.Run(at: latest(18, daysBack: 1), outcome: .started, taskID: ID.idle)]),
+            Schedule(id: ID.screenshotsSchedule, name: "Nightly screenshots", prompt: "Regenerate the App Store screenshots.",
+                     when: .daily(hour: 2, minute: 0), destination: .newTask(project: ID.website, harness: .claude), enabled: false,
+                     stop: .repeatedFailures, failures: 3, failure: failure,
+                     runs: (0..<3).map { Schedule.Run(at: latest(2, daysBack: $0), outcome: .failed, reason: "Could not start: \(failure)") }),
+            Schedule(id: ID.reminderSchedule, name: "Weekend trip reminder", prompt: "Remind me what is left for the weekend trip.",
+                     when: .once(latest(17, daysBack: 1)), destination: .newTask(project: "chats", harness: .claude),
+                     enabled: false, stop: .finished,
+                     runs: [Schedule.Run(at: latest(17, daysBack: 1), outcome: .started, taskID: ID.chat)])
+        ]
+    }
+
+    private static func isOnce(_ schedule: Schedule) -> Bool {
+        if case .once = schedule.when { return true }
+        return false
+    }
+
+    /// The next time it runs on its own: nil while it is off, and for a one-off whose moment passed.
+    private static func nextRun(of schedule: Schedule, after now: Date) -> Date? {
+        guard schedule.enabled else { return nil }
+        let calendar = Calendar.current
+        switch schedule.when {
+        case let .once(date):
+            return date > now ? date : nil
+        case let .daily(hour, minute):
+            return calendar.nextDate(after: now, matching: DateComponents(hour: hour, minute: minute), matchingPolicy: .nextTime)
+        case let .weekdays(hour, minute):
+            var next = now
+            for _ in 0..<8 {
+                guard let candidate = calendar.nextDate(after: next, matching: DateComponents(hour: hour, minute: minute),
+                                                        matchingPolicy: .nextTime) else { return nil }
+                if !calendar.isDateInWeekend(candidate) { return candidate }
+                next = candidate
+            }
+            return nil
+        }
+    }
+
+    /// The Mac's words for when it runs, in English.
+    private static func whenText(_ when: Schedule.When, now: Date) -> String {
+        func time(_ hour: Int, _ minute: Int) -> String {
+            let date = Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: now) ?? now
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US")
+            formatter.dateStyle = .none
+            formatter.timeStyle = .short
+            return formatter.string(from: date)
+        }
+        switch when {
+        case let .daily(hour, minute): return "Every day at \(time(hour, minute))"
+        case let .weekdays(hour, minute): return "Weekdays at \(time(hour, minute))"
+        case let .once(date): return "Once, \(moment(date, now: now))"
+        }
+    }
+
+    /// The Mac's status line: when it runs next, or why it does not.
+    private static func status(_ schedule: Schedule, next: Date?, now: Date) -> String {
+        if schedule.starting { return "Starting a run…" }
+        switch schedule.stop {
+        case .repeatedFailures?: return "Turned off after 3 failed starts"
+        case .finished?: return "Ran once"
+        case nil: break
+        }
+        guard schedule.enabled else { return "Paused" }
+        return next.map { "Next run \(moment($0, now: now))" } ?? "No next run"
+    }
+
+    /// "Today at 9:00 AM", "Sat 9:00 AM" within the week, else the date, as the Mac writes a moment.
+    private static func moment(_ date: Date, now: Date, relative: Bool = true) -> String {
+        let calendar = Calendar.current
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US")
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? 0
+        if relative, (-1...1).contains(days) {
+            formatter.doesRelativeDateFormatting = true
+            formatter.dateStyle = .medium
+            formatter.timeStyle = .short
+        } else if relative, (2...6).contains(days) {
+            formatter.setLocalizedDateFormatFromTemplate("EEE jmm")
+        } else {
+            formatter.setLocalizedDateFormatFromTemplate("MMMd jmm")
+        }
+        return formatter.string(from: date)
     }
 
     // MARK: - Fixture content

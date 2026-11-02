@@ -9,7 +9,8 @@ import YardletRemote
 ///
 /// Reads are cached until Observation says what they read changed, then the server is told
 /// (`RemoteBridgeChange`) and reads again when it needs to, so a task streaming in the background
-/// costs nothing until a phone follows it.
+/// costs nothing until a phone follows it. The scheduled tasks a phone lists (§15.21) are read the same
+/// way, from the schedules and from the snapshot's tasks.
 @MainActor
 final class AppModelRemoteBridge: RemoteBridge {
     private weak var model: AppModel?
@@ -19,6 +20,10 @@ final class AppModelRemoteBridge: RemoteBridge {
     private var projectionCaches: [UUID: ConversationProjectionCache] = [:]
     private var turnMemos: [UUID: [String: (turn: ConversationTurn, remote: RemoteTurn)]] = [:]
     private var watched: Set<UUID> = []
+    private var cachedSchedules: [RemoteSchedule]?
+    /// A read of the schedules is watched until they change; one watch at a time, since every read
+    /// reads the same properties.
+    private var watchesSchedules = false
 
     init(model: AppModel) {
         self.model = model
@@ -55,6 +60,7 @@ final class AppModelRemoteBridge: RemoteBridge {
             requestSummary: { requestSummary(of: $0, in: model) }
         )
         snapshot.newTask = newTaskHarness(in: model).map { RemoteNewTask(harness: $0.rawValue, harnessName: $0.displayName) }
+        snapshot.scheduledTasks = true
         let listed = Dictionary(model.sidebarSessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for index in snapshot.tasks.indices {
             guard let id = UUID(uuidString: snapshot.tasks[index].id), let session = listed[id] else { continue }
@@ -279,6 +285,18 @@ final class AppModelRemoteBridge: RemoteBridge {
     private func tasksChanged() {
         cachedSnapshot = nil
         changeHandler?(.tasks)
+        // A schedule's run reads its task from the snapshot.
+        if cachedSchedules != nil {
+            cachedSchedules = nil
+            changeHandler?(.schedules)
+        }
+    }
+
+    private func schedulesChanged() {
+        watchesSchedules = false
+        guard cachedSchedules != nil else { return }
+        cachedSchedules = nil
+        changeHandler?(.schedules)
     }
 
     private func conversationChanged(_ id: UUID) {
@@ -509,6 +527,24 @@ final class AppModelRemoteBridge: RemoteBridge {
             }
             if let error = await answer(request, in: session, by: route) { return error }
             if let note { Task { await model.send(HarnessUserInput(text: note), to: session) } }
+            return nil
+        case let .runScheduledTask(scheduleID):
+            let center = model.scheduledTasks
+            guard let id = UUID(uuidString: scheduleID), center.schedule(id: id) != nil else { return RemoteError(.notFound) }
+            guard !center.startingIDs.contains(id) else { return RemoteError(.busy, "A run of it is starting") }
+            // Run now in the list's menu and the detail: a skip while its task is busy, a failure when it cannot start.
+            Task { await center.runNow(id) }
+            return nil
+        case let .setScheduledTaskEnabled(scheduleID, enabled):
+            let center = model.scheduledTasks
+            guard let id = UUID(uuidString: scheduleID), let schedule = center.schedule(id: id) else {
+                return RemoteError(.notFound)
+            }
+            // Pause and Resume as the Mac offers them.
+            if enabled, !schedule.isEnabled, !schedule.canResume {
+                return RemoteError(.notAllowed, "A one-off that ran or whose time passed runs again once edited on the Mac")
+            }
+            center.setEnabled(enabled, for: id)
             return nil
         }
     }
@@ -800,6 +836,89 @@ final class AppModelRemoteBridge: RemoteBridge {
             Self.discard(stored)
             return .failure(RemoteError(.internal, error.localizedDescription))
         }
+    }
+
+    // MARK: - Scheduled tasks (§15.21)
+
+    /// Yardlet's own schedules as the Scheduled tasks list shows them, in its order and words. The session
+    /// schedules a CLI holds are not Yardlet's and are not listed.
+    func scheduledTasks() async -> Result<[RemoteSchedule], RemoteError> {
+        guard let model else { return .failure(RemoteError(.unavailable, "Yardlet is closing")) }
+        if let cachedSchedules { return .success(cachedSchedules) }
+        // The runs' tasks as the snapshot lists them. Reading the snapshot watches the tasks, and their
+        // changes reach `tasksChanged`.
+        let snapshot = snapshot()
+        let schedules: [RemoteSchedule]
+        if watchesSchedules {
+            schedules = Self.schedules(in: model, snapshot: snapshot)
+        } else {
+            watchesSchedules = true
+            schedules = withObservationTracking {
+                Self.schedules(in: model, snapshot: snapshot)
+            } onChange: { [weak self] in
+                Task { @MainActor in self?.schedulesChanged() }
+            }
+        }
+        cachedSchedules = schedules
+        return .success(schedules)
+    }
+
+    /// Reads the schedules, their starting runs, the projects they start in, and the time the list redraws by
+    /// (each look of the schedule loop), so "tomorrow" becomes "today" on the phone as on the Mac.
+    static func schedules(in model: AppModel, snapshot: RemoteSnapshot) -> [RemoteSchedule] {
+        let center = model.scheduledTasks
+        let now = center.displayNow
+        let calendar = center.calendar()
+        let starting = center.startingIDs
+        let projects = Dictionary(model.projects.projects.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let tasks = Dictionary(snapshot.tasks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let taskProjects = Dictionary(snapshot.projects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return center.schedules.map { schedule in
+            let destination = schedule.destination
+            let projectName: String?
+            switch destination.mode {
+            case .newTask:
+                // As the sidebar names the group its tasks join; a chat has none.
+                projectName = destination.projectID.flatMap { projects[$0] } ?? destination.workspaceURL?.lastPathComponent
+            case .continueTask:
+                let project = destination.targetTaskID.flatMap { tasks[$0.uuidString]?.projectId }.flatMap { taskProjects[$0] }
+                projectName = project?.kind == .chats ? nil : project?.name
+            }
+            return Self.schedule(schedule, nextRun: center.nextRun(of: schedule), isStarting: starting.contains(schedule.id),
+                                 now: now, calendar: calendar, projectName: projectName, tasks: tasks)
+        }
+    }
+
+    /// One schedule in the list's words (`ScheduleText`), its latest run, and how the task of its latest started
+    /// run stands in the snapshot.
+    static func schedule(_ schedule: ScheduledTask, nextRun: Date?, isStarting: Bool, now: Date, calendar: Calendar,
+                         projectName: String?, tasks: [String: RemoteTask]) -> RemoteSchedule {
+        func listed(_ id: UUID?) -> RemoteTask? { id.flatMap { tasks[$0.uuidString] } }
+        let attention = listed(schedule.latestStartedRun?.taskID)?.attention
+        var remote = RemoteSchedule(
+            id: schedule.id.uuidString,
+            name: RemoteText.capped(schedule.name, RemoteText.titleLimit).text,
+            when: RemoteText.capped(ScheduleText.summary(schedule.trigger, calendar: calendar, now: now), RemoteText.detailLimit).text,
+            enabled: schedule.isEnabled,
+            running: attention == .active || attention == .waiting,
+            nextRunAt: nextRun.map(RemoteJSON.milliseconds),
+            status: RemoteText.short(ScheduleText.status(schedule, nextRun: nextRun, isStarting: isStarting, now: now,
+                                                         calendar: calendar), RemoteText.detailLimit),
+            projectName: projectName,
+            harnessName: schedule.destination.harness.displayName,
+            canResume: schedule.canResume ? true : nil)
+        if let run = schedule.state.runs.first {
+            let outcome: RemoteSchedule.Run.Outcome = switch run.outcome {
+            case .started: .started
+            case .skipped: .skipped
+            case .failed: .failed
+            }
+            remote.lastRun = RemoteSchedule.Run(
+                at: RemoteJSON.milliseconds(run.at), outcome: outcome,
+                taskId: run.outcome == .started ? listed(run.taskID)?.id : nil,
+                line: RemoteText.capped(ScheduleText.latestRun(run, now: now, calendar: calendar), RemoteText.detailLimit).text)
+        }
+        return remote
     }
 
     func limitAccounts(taskID: String) async -> Result<[RemoteAccount], RemoteError> {
