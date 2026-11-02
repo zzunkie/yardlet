@@ -431,6 +431,13 @@ final class RemoteServerTests: XCTestCase {
                                     outputs: [URL(filePath: files.summary)])
         XCTAssertEqual(code("outside/secret.txt", in: above), .notFound, "A folder above the home folder")
         XCTAssertNil(code(files.summary, in: above), "An output")
+        // A path a conversation writes from the home folder (`~/…`) is read from it, within the same folders.
+        func fromHome(_ path: String) -> RemoteErrorCode? {
+            guard case let .failure(error) = RemoteFileReader.read(path, offset: 0, in: files.scope, home: files.root) else { return nil }
+            return error.code
+        }
+        XCTAssertNil(fromHome("~/other/data.csv"), "Another folder of the task's, under the home folder")
+        XCTAssertEqual(fromHome("~/outside/secret.txt"), .notFound, "Under the home folder, outside the task's folders")
         XCTAssertTrue(RemoteFileReader.isInside("/a/b/c", "/a/b"))
         XCTAssertFalse(RemoteFileReader.isInside("/a/bc", "/a/b"), "Whole path components")
         XCTAssertFalse(RemoteFileReader.isInside("/a/caf\u{E9}/x", "/a/cafe\u{301}"), "Byte for byte, not as Swift's strings compare")

@@ -1274,7 +1274,7 @@ task's own folders that the conversation names. Until now files went only from t
 
   Reads up to 4 MiB of one file from `offset`; the phone asks again from `offset` plus the bytes it got until it
   has `size`, and starts over when `modifiedAt` or `size` changes between parts. An answer at `offset` equal to
-  `size` carries no bytes. `path` is absolute, or relative to the task's folder as a conversation writes it, and
+  `size` carries no bytes. `path` is absolute, starts with `~/` for the home folder, or is relative to the task's folder as a conversation writes it, and
   `.` and `..` are taken out by its text; the answer gives the absolute path the Mac read, with its folders'
   symbolic links resolved, and `name` is that path's last part. The Mac serves a regular file only, at most 100 MiB,
   and only when it is one of the task's outputs (above) or, once symbolic links are resolved, lies inside one of the

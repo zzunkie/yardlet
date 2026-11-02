@@ -87,7 +87,10 @@ public enum RemoteFileReader {
         #if canImport(Darwin)
         let folder = scope.folder.path(percentEncoded: false)
         guard folder.hasPrefix("/") else { return .failure(refused()) }
-        let requested = lexical(path.hasPrefix("/") ? path : folder + "/" + path)
+        // A conversation writes the home folder as `~`; anything else not absolute is read from the task's folder.
+        let absolute = path == "~" || path.hasPrefix("~/") ? home + path.dropFirst()
+            : path.hasPrefix("/") ? path : folder + "/" + path
+        let requested = lexical(absolute)
         // The task's folders, each as written and with its links resolved.
         let realHome = realPath(home) ?? lexical(home)
         var written: [String] = []
