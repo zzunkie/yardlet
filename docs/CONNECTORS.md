@@ -1457,6 +1457,9 @@ Microsoft Teams (`TeamsToolCatalog`, `TeamsToolRunner`):
 - Codex and ACP: as for Google, from the annotations (`destructiveHint` on `update_message`, `update_event` and
   `delete_event`).
 
+- The mailbox (docs/MAILBOX.md) shows the inbox of each connected Outlook Mail account with the same sign-in
+  and session, and asks for no other permission.
+
 ### Turning off and removing
 
 - Per task with the switch; per account with the service chips on the Microsoft page; Remove deletes the record, and the

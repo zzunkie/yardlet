@@ -210,7 +210,7 @@ struct MailFolderTree: View {
             case let .folder(folder, account, depth):
                 row(folder, of: account, depth: depth)
             case let .labels(account, folded):
-                disclosure(L10n.string("Labels"), folded: folded, depth: 1) {
+                disclosure(L10n.string(account.provider == .gmail ? "Labels" : "Folders"), folded: folded, depth: 1) {
                     window.foldedLabels.formSymmetricDifference([account.id])
                 }
             case let .failure(_, message):
@@ -223,7 +223,8 @@ struct MailFolderTree: View {
     }
 
     private func row(_ folder: MailFolder, of account: MailAccount, depth: Int) -> some View {
-        row(title: folder.name, systemName: MailFolderIcon.name(folder.role, all: false), depth: depth,
+        row(title: folder.name, systemName: folder.role == .label && account.provider != .gmail ? "folder"
+                : MailFolderIcon.name(folder.role, all: false), depth: depth,
             count: folder.unreadCount, tint: folder.role.isSetAside ? .red : nil,
             selection: .folder(accountID: account.id, folderID: folder.id), detail: account.address)
     }

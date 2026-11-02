@@ -3498,3 +3498,5 @@
 "Sending…" = "Sending…";
 "The original's files go with it." = "The original's files go with it.";
 "Undo send" = "Undo";
+"Folders" = "Folders";
+"Mail handoff message %@ %@ %@" = "Account: %1$@ · message %2$@, read with %3$@";

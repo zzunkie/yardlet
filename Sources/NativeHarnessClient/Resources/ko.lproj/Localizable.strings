@@ -3498,3 +3498,5 @@
 "Sending…" = "보내는 중…";
 "The original's files go with it." = "원문의 첨부 파일도 함께 보냅니다.";
 "Undo send" = "보내기 취소";
+"Folders" = "폴더";
+"Mail handoff message %@ %@ %@" = "계정: %1$@ · 메시지 %2$@ (%3$@ 도구로 읽기)";
