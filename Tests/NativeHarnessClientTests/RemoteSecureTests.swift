@@ -364,6 +364,37 @@ final class RemoteSecureTests: XCTestCase {
         socket.close()
     }
 
+    /// A phone that asks and never reads: once more than 32 MiB of its answers wait at the Mac, the Mac drops the
+    /// connection rather than hold them (§7). File parts are the largest answers, and a device's budget lets 32 MiB of
+    /// them through at once (§15.22); the file is sparse, so nothing fills the disk.
+    func testAPhoneThatNeverReadsIsDroppedOverTheSecureListener() async throws {
+        let files = try TaskFiles()
+        defer { files.remove() }
+        let large = files.folder + "/large.mov"
+        XCTAssertTrue(FileManager.default.createFile(atPath: large, contents: nil))
+        let handle = try FileHandle(forWritingTo: URL(filePath: large))
+        try handle.truncate(atOffset: UInt64(RemoteProtocol.maxReadFileBytes))
+        try handle.close()
+        let harness = try await SecureHarness()
+        await harness.bridge.setFiles(files.scope, outputs: [], for: "A")
+        let connected = ConnectionCounts()
+        await harness.server.setStatusHandler { connected.record($0.connectedDeviceIDs.count) }
+        let ticket = await harness.server.openPairing()
+        let listener = RemoteSecureListener(server: harness.server, staticKey: harness.identity.noise, port: 0,
+                                            advertisement: nil, loopbackOnly: true)
+        listener.start()
+        defer { listener.stop() }
+        let port = try await Self.waitForPort(listener)
+        let socket = try await SocketPhone.connect(port: port, macKey: harness.identity.noise.publicKey,
+                                                   hello: RemoteHandshakeHello(name: "Pixel 9", pair: RemoteEncoding.base64url(ticket.secret)))
+        defer { socket.close() }
+        let parts = RemoteProtocol.readFileBudgetBytes / RemoteProtocol.maxReadPartBytes
+        for index in 0..<parts {
+            try await socket.send(#"{"id":"\#(index)","type":"readFile","taskId":"A","path":"large.mov","offset":\#(index * RemoteProtocol.maxReadPartBytes)}"#)
+        }
+        try await waitUntil { connected.wasConnectedThenNot }
+    }
+
     /// Through a relay running locally (`relay/`, `npx wrangler dev --local --port 8787`): the Mac opens
     /// its room with its signature, a phone comes in through the room and pairs, reads the list, and is
     /// told to close when the Mac removes it. Runs only with `YARDLET_REMOTE_RELAY_TEST=ws://127.0.0.1:8787`.
@@ -714,6 +745,22 @@ actor PushRecorder {
     }
 }
 
+/// How many devices the server said were connected, in order.
+final class ConnectionCounts: @unchecked Sendable {
+    private let lock = NSLock()
+    private var counts: [Int] = []
+
+    func record(_ count: Int) { lock.withLock { counts.append(count) } }
+
+    /// A device connected, and later none was.
+    var wasConnectedThenNot: Bool {
+        lock.withLock {
+            guard let first = counts.firstIndex(where: { $0 > 0 }) else { return false }
+            return counts[first...].contains(0)
+        }
+    }
+}
+
 /// A phone over a real WebSocket to the secure listener.
 final class SocketPhone: @unchecked Sendable {
     let task: URLSessionWebSocketTask
@@ -743,8 +790,13 @@ final class SocketPhone: @unchecked Sendable {
         return SocketPhone(task: task, reply: reply, send: send, receive: receive)
     }
 
-    func request(_ json: String) async throws -> RemoteResponse {
+    /// Sends a request and reads nothing.
+    func send(_ json: String) async throws {
         for frame in try RemoteNoiseFraming.seal(Data(json.utf8), with: &send) { try await task.send(.data(frame)) }
+    }
+
+    func request(_ json: String) async throws -> RemoteResponse {
+        try await send(json)
         var joiner = RemoteNoiseFraming.Joiner(limit: RemoteProtocol.maxServerMessageBytes)
         while true {
             guard case let .data(frame) = try await task.receive() else { continue }

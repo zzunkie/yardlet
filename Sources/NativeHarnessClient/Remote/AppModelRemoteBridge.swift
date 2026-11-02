@@ -10,8 +10,9 @@ import YardletRemote
 /// Reads are cached until Observation says what they read changed, then the server is told
 /// (`RemoteBridgeChange`) and reads again when it needs to, so a task streaming in the background
 /// costs nothing until a phone follows it. The scheduled tasks a phone lists (§15.21) are read the same
-/// way, from the schedules and from the snapshot's tasks. A task's outputs and folders (§15.22) are read
-/// when a phone asks; which of its files a phone may open is decided in `RemoteFileReader`.
+/// way, from the schedules and from the snapshot's tasks. A task's outputs (§15.22) are read when a phone
+/// asks and kept until the task's conversation changes, since a file comes in many parts; which of its
+/// files a phone may open is decided in `RemoteFileReader`.
 @MainActor
 final class AppModelRemoteBridge: RemoteBridge {
     private weak var model: AppModel?
@@ -22,6 +23,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     private var turnMemos: [UUID: [String: (turn: ConversationTurn, remote: RemoteTurn)]] = [:]
     private var watched: Set<UUID> = []
     private var cachedSchedules: [RemoteSchedule]?
+    private var cachedOutputs: [UUID: [SessionRailContent.Output]] = [:]
     /// A read of the schedules is watched until they change; one watch at a time, since every read
     /// reads the same properties.
     private var watchesSchedules = false
@@ -947,7 +949,7 @@ final class AppModelRemoteBridge: RemoteBridge {
 
     func taskOutputs(taskID: String) async -> Result<[RemoteOutput], RemoteError> {
         guard let model, let session = session(taskID) else { return .failure(RemoteError(.notFound)) }
-        return .success(Self.outputs(of: session, in: model).map { output in
+        return .success(outputs(of: session, in: model).map { output in
             RemoteOutput(path: output.url.path(percentEncoded: false), name: output.name,
                          writtenAt: output.writtenAt.map(RemoteJSON.milliseconds))
         })
@@ -958,7 +960,20 @@ final class AppModelRemoteBridge: RemoteBridge {
     func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError> {
         guard let model, let session = session(taskID) else { return .failure(RemoteError(.notFound)) }
         return .success(RemoteFileScope(folder: session.workspaceURL, otherFolders: session.additionalRootURLs,
-                                        outputs: Self.outputs(of: session, in: model).map(\.url)))
+                                        outputs: outputs(of: session, in: model).map(\.url)))
+    }
+
+    /// The task's outputs, read once and kept until what they are read from changes.
+    private func outputs(of session: SessionRecord, in model: AppModel) -> [SessionRailContent.Output] {
+        if let cached = cachedOutputs[session.id] { return cached }
+        let id = session.id
+        let outputs = withObservationTracking {
+            Self.outputs(of: session, in: model)
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.cachedOutputs[id] = nil }
+        }
+        cachedOutputs[id] = outputs
+        return outputs
     }
 
     /// The task's Outputs card, from what the task's rail reads: its transcript, and a Codex task's file changes.

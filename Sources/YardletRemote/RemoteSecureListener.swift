@@ -229,6 +229,8 @@ final class RemoteNWFrameChannel: RemoteFrameChannel, @unchecked Sendable {
     let acceptedAt = Date()
     var secure: RemoteSecureConnection?
     private var isClosing = false
+    /// Bytes handed to the connection that it has not passed to the network yet (on `queue`).
+    private var unsent = 0
 
     init(connection: NWConnection, queue: DispatchQueue, host: String) {
         self.connection = connection
@@ -242,9 +244,20 @@ final class RemoteNWFrameChannel: RemoteFrameChannel, @unchecked Sendable {
     func sendFrame(_ frame: Data) {
         queue.async { [self] in
             guard !isClosing else { return }
+            // A phone that asks and never reads would leave every answer here: past the limit the connection goes,
+            // with what it held (§7).
+            unsent += frame.count
+            guard unsent <= RemoteProtocol.maxUnsentBytes else {
+                isClosing = true
+                connection.forceCancel()
+                return
+            }
             let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
             let context = NWConnection.ContentContext(identifier: "binary", metadata: [metadata])
-            connection.send(content: frame, contentContext: context, isComplete: true, completion: .contentProcessed { _ in })
+            let count = frame.count
+            connection.send(content: frame, contentContext: context, isComplete: true, completion: .contentProcessed { [self] _ in
+                unsent -= count
+            })
         }
     }
 

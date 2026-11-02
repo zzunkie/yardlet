@@ -265,7 +265,8 @@ struct SessionRailContent: Equatable {
     }
 
     /// The files the task wrote, newest first, each once: completed calls that wrote a whole file
-    /// (Claude Code's `Write`, an ACP or Pi diff with no old text) and Codex's added files.
+    /// (Claude Code's `Write`, an ACP or Pi diff with no old text) and the files Codex added, once the
+    /// patch that added them was applied (a declined or failed one never wrote them).
     static func outputs(entries: [TranscriptEntry], codexChanges: [CodexChangeHandoff],
                         workspaceURL: URL) -> [Output] {
         let root = workspaceURL.standardizedFileURL.path(percentEncoded: false)
@@ -280,13 +281,15 @@ struct SessionRailContent: Equatable {
             result.append(Output(url: url, writtenAt: date))
         }
         for entry in entries.reversed() {
+            guard result.count < outputLimit else { return result }
             guard case let .activity(activity, .completed) = entry.content, let diff = activity.diff,
                   diff.oldText == nil, diff.newText != nil, !diff.path.isEmpty else { continue }
             let url = diff.path.hasPrefix("/") ? URL(filePath: diff.path)
                 : workspaceURL.appending(path: diff.path)
             add(url, at: entry.createdAt)
         }
-        for change in codexChanges.reversed() where change.status == "add" {
+        for change in codexChanges.reversed() where change.status == "add" && change.isApplied {
+            guard result.count < outputLimit else { break }
             if let url = change.verifiedURL { add(url, at: nil) }
         }
         return result

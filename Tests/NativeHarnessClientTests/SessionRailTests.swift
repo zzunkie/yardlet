@@ -401,10 +401,14 @@ final class SessionRailTests: XCTestCase {
         XCTAssertEqual(rail.rollup(.outputs), "3")
 
         let added = CodexChangeHandoff(id: "t:i:0", turnID: "t", itemID: "i", relativePath: "notes/plan.md", status: "add",
-                                       verifiedURL: folder.appending(path: "notes/plan.md"), line: nil, column: nil)
+                                       isApplied: true, verifiedURL: folder.appending(path: "notes/plan.md"), line: nil, column: nil)
         let updated = CodexChangeHandoff(id: "t:i:1", turnID: "t", itemID: "i", relativePath: "README.md", status: "update",
-                                         verifiedURL: folder.appending(path: "README.md"), line: nil, column: nil)
-        XCTAssertEqual(SessionRailContent.outputs(entries: [], codexChanges: [added, updated], workspaceURL: folder)
+                                         isApplied: true, verifiedURL: folder.appending(path: "README.md"), line: nil, column: nil)
+        // An addition declined, failed or still waiting never wrote the file: whatever is at its path is not the task's.
+        let declined = CodexChangeHandoff(id: "t:j:0", turnID: "t", itemID: "j", relativePath: "/Users/example/Documents/passport.pdf",
+                                          status: "add", isApplied: false,
+                                          verifiedURL: URL(filePath: "/Users/example/Documents/passport.pdf"), line: nil, column: nil)
+        XCTAssertEqual(SessionRailContent.outputs(entries: [], codexChanges: [added, updated, declined], workspaceURL: folder)
             .map(\.name), ["plan.md"])
     }
 

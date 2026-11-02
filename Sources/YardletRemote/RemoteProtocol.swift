@@ -44,6 +44,16 @@ public enum RemoteProtocol {
     public static let maxOutputs = 50
     public static let maxReadFileBytes = 100 * 1024 * 1024
     public static let maxReadPartBytes = 4 * 1024 * 1024
+    /// What one device's `readFile` answers may carry in all: up to 32 MiB at once, then 32 MiB per 10 s (§15.22).
+    public static let readFileBudgetBytes = 32 * 1024 * 1024
+    public static let readFileBudgetWindow: TimeInterval = 10
+    /// What the Mac may have handed a connection's transport that its phone has not taken yet; past it the connection
+    /// closes, so a phone that asks and never reads cannot fill the Mac's memory (§7).
+    public static let maxUnsentBytes = 32 * 1024 * 1024
+    /// The longest ID a request may carry: one of Yardlet's own (a task, project, schedule or account), and one a
+    /// harness made (a request, an item, a suggestion, an answer's choice) (§7).
+    public static let maxOwnIDBytes = 64
+    public static let maxProviderIDBytes = 256
 }
 
 // MARK: - Errors
@@ -878,6 +888,17 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             return value
         }
         guard let type = wire.type else { return fail(.badRequest, "Missing type") }
+        // Longer than any ID the Mac makes: refused before it reaches a lookup or the audit log.
+        let identifiers: [(name: String, value: String?, limit: Int)] = [
+            ("taskId", wire.taskId, RemoteProtocol.maxOwnIDBytes), ("projectId", wire.projectId, RemoteProtocol.maxOwnIDBytes),
+            ("scheduleId", wire.scheduleId, RemoteProtocol.maxOwnIDBytes), ("accountId", wire.accountId, RemoteProtocol.maxOwnIDBytes),
+            ("requestId", wire.requestId, RemoteProtocol.maxProviderIDBytes), ("itemId", wire.itemId, RemoteProtocol.maxProviderIDBytes),
+            ("suggestionId", wire.suggestionId, RemoteProtocol.maxProviderIDBytes),
+            ("choice", wire.choice, RemoteProtocol.maxProviderIDBytes)
+        ]
+        if let long = identifiers.first(where: { ($0.value?.utf8.count ?? 0) > $0.limit }) {
+            return fail(.badRequest, "\(long.name) is too long")
+        }
         let request: RemoteRequest
         switch type {
         case "snapshot":

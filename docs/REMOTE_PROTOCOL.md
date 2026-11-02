@@ -455,7 +455,12 @@ The provider's notices beside the turn (a model reroute, a warning) and context 
 - Client frame ≤ 65,536 bytes (1009 close). `sendMessage.text` ≤ 32,000 characters.
 - Requests: a burst of 30, then 10 per second per connection. Commands (`sendMessage`,
   `answerApproval`, `stopTurn`, `markRead`): a burst of 10, then one per 3 s. Over the limit a request
-  gets `rateLimited` and is dropped; 20 in a row closes the connection (4429).
+  gets `rateLimited` and is dropped; 20 in a row closes the connection (4429). File reads have a byte budget per
+  device besides (§15.22).
+- IDs a request carries: `taskId`, `projectId`, `scheduleId` and `accountId` at most 64 bytes; `requestId`,
+  `itemId`, `suggestionId` and `choice` at most 256. A longer one is `badRequest`.
+- A connection whose phone leaves more than 32 MiB of the Mac's messages untaken is closed, with what was waiting:
+  a direct socket is dropped, and over the relay the phone's stream closes with 4429.
 - At most 8 connections of paired devices at once; more are closed (4503). A v2 connection counts once the
   phone's first message after message 2 arrives (§13.1). Besides those, at most 8 connections may still be
   authenticating; a new one closes the oldest of them (4503). At most 8 subscriptions per connection.
@@ -485,7 +490,7 @@ The provider's notices beside the turn (a model reroute, a warning) and context 
 | `tooLarge` | `sendMessage.text` is too long, or a file is over 100 MiB (§15.22) |
 | `unsupportedCommand` | a slash command |
 | `busy` | the task cannot take it now (editing, switching account, held by another app), or a run of the schedule is starting |
-| `rateLimited` | over the rate limit |
+| `rateLimited` | over the rate limit, or a device's file budget (§15.22) |
 | `internal` | anything else |
 | `unknownDevice` | v2 handshake: the phone's key is not paired, or the device was removed (§13.1) |
 | `linkUnavailable` | v2 handshake: a link request to a Mac not signed in to an account (§12.1) |
@@ -1253,9 +1258,10 @@ task's own folders that the conversation names. Until now files went only from t
   ```
 
   The files the Mac's Outputs card shows for the task, in its order (newest first, at most 50): files the task
-  wrote whole, outside its folder of any kind and inside it only documents and media. `size` is absent for a file
-  that is gone; `writtenAt` (milliseconds since 1970) when the Mac knows it. Not a command. Errors: `notFound`
-  (no such task).
+  wrote whole, outside its folder of any kind and inside it only documents and media; a Codex addition counts once
+  its patch was applied, not while it waits or when it was declined or failed. `size` is absent for a file that is
+  gone or whose place now holds a symbolic link; `writtenAt` (milliseconds since 1970) when the Mac knows it. Not a
+  command. Errors: `notFound` (no such task).
 - ```json
   {"id": "35", "type": "readFile", "taskId": "4C1F…", "path": "/Users/example/Desktop/report.pdf", "offset": 0}
   ```
@@ -1268,20 +1274,27 @@ task's own folders that the conversation names. Until now files went only from t
 
   Reads up to 4 MiB of one file from `offset`; the phone asks again from `offset` plus the bytes it got until it
   has `size`, and starts over when `modifiedAt` or `size` changes between parts. An answer at `offset` equal to
-  `size` carries no bytes. `path` is absolute, or relative to the task's folder as a conversation writes it; the
-  answer gives the absolute path the Mac read, with symbolic links resolved, and `name` is that path's last part.
-  The Mac serves a regular file only, at most 100 MiB, and only when it is one of the task's outputs (above) or,
-  once symbolic links are resolved, lies inside one of the task's own folders (its working folder or worktree and
-  the project's other folders, as the task was given them), by whole path components. A folder that is the Mac's
-  home folder or holds it (`/`, `/Users`) gives no files of its own: a task there serves only its outputs. Anything
-  else is refused, the same for a file that does not exist, so the phone learns nothing about folders it may not
-  read; no error names a path. `mediaType` is the Mac's guess from the file's extension, else `text/plain` for a
-  file that starts as UTF-8 text and `application/octet-stream` for anything else. Not a command. Errors:
-  `badRequest` (no `path`, no `offset` or one past `size`), `notFound` (no such task, or a file it may not read or
-  that does not exist), `tooLarge` (over 100 MiB).
-- The audit log (§4.4) records each `readFile` that starts at offset 0, served or refused, with the task and the
-  file's name in `file` (for a refusal, the last part of the path the phone asked for), never its path, so the
-  person can see what a phone opened.
+  `size` carries no bytes. `path` is absolute, or relative to the task's folder as a conversation writes it, and
+  `.` and `..` are taken out by its text; the answer gives the absolute path the Mac read, with its folders'
+  symbolic links resolved, and `name` is that path's last part. The Mac serves a regular file only, at most 100 MiB,
+  and only when it is one of the task's outputs (above) or, once symbolic links are resolved, lies inside one of the
+  task's own folders (its working folder or worktree and the project's other folders, as the task was given them),
+  by whole path components compared byte for byte. An output is the file in its own place: its folder's links are
+  followed, but a symbolic link put where it was is not. Nothing a request names is looked up before its path, by
+  its text, is one of the outputs or under one of the folders. A folder that is the Mac's home folder or holds it
+  (`/`, `/Users`, by any path, `/System/Volumes/Data/Users` too) gives no files of its own: a task there serves
+  only its outputs. Anything else is refused, the same for a file that does not exist, so the phone learns nothing
+  about folders it may not read; no error names a path. `mediaType` is the Mac's guess from the file's extension,
+  else `text/plain` for a file that starts as UTF-8 text and `application/octet-stream` for anything else. A
+  device's reads carry at most 32 MiB of parts at once and then 32 MiB per 10 s, over all its connections; past
+  that `readFile` answers `rateLimited` until the budget refills. Not a command. Errors: `badRequest` (no `path`, no
+  `offset` or one past `size`), `notFound` (no such task, or a file it may not read or that does not exist),
+  `tooLarge` (over 100 MiB), `rateLimited`.
+- The audit log (§4.4) records, for a task the Mac lists, each `readFile` that does not go on from where the same
+  connection's last read of that file ended (a file read in parts from offset 0 is one line; a read that starts
+  anywhere else is another) and every refusal, with the task and the file's name in `file` (for a refusal, the last
+  part of the path the phone asked for), never its path, so the person can see what a phone opened. The same line
+  (device, task, file and result) is written at most once a minute.
 
 ## 16. Push notifications
 
