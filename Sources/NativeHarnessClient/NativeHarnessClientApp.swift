@@ -588,6 +588,8 @@ struct NativeHarnessClientApp: App {
                         await model.refreshNotificationPermission()
                         // The dots last opened are watched for new messages while their setting is on.
                         if !QABackground.isOn { model.startPersonalAgentWatch() }
+                        // The mailbox follows its setting and the connected mail accounts.
+                        if !QABackground.isOn { model.startMailbox() }
                         await model.linkTasksStartedInTheClaudeAppOnce()
                         // The Claude app's and Codex's lists, now that the index is loaded.
                         Task {

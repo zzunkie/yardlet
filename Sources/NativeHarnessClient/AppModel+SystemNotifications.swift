@@ -24,6 +24,8 @@ extension AppModel {
     func handleNotificationResponse(_ response: SystemNotificationResponse) async {
         // A dot's notification needs no task index.
         if let reveal = response.target.personalAgent { return revealPersonalAgent(reveal) }
+        // So does a new mail's.
+        if let thread = response.target.mailThread { return revealMailThread(thread) }
         guard !isRestoringIndex else {
             pendingNotificationResponses.append(response)
             return

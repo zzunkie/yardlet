@@ -3,7 +3,7 @@ import Foundation
 /// What a window's sidebar and content show: the coding tasks, or the personal agents, switched by the
 /// words below Scheduled tasks.
 enum ShellSection: String, CaseIterable, Identifiable {
-    case tasks, personalAgents
+    case tasks, personalAgents, mail
     var id: Self { self }
 }
 
