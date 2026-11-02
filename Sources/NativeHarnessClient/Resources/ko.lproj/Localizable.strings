@@ -959,6 +959,13 @@
 "This stops the terminal's running processes and clears its output." = "터미널에서 실행 중인 프로세스를 중단하고 출력을 지웁니다.";
 "New terminal" = "새 터미널";
 "Share the terminal with agents" = "에이전트와 터미널 공유";
+"Terminal location" = "터미널 위치";
+"Split Terminal" = "터미널 분할";
+"Unsplit Terminal" = "터미널 분할 해제";
+"Where the terminal opens: below the conversation, or as a tab of the side panel." = "터미널을 대화 아래에 열지, 보조 패널의 탭으로 열지 고릅니다.";
+"Bottom" = "아래";
+"Right" = "오른쪽";
+"A shell in the task's folder in the side panel." = "보조 패널에서 작업 폴더의 셸을 엽니다.";
 "A task's agent can read the task's terminal tabs, without typing in them, and a selection in the terminal can be attached to your message (⌘⇧L)." = "작업의 에이전트가 그 작업의 터미널 탭을 읽을 수 있고(입력은 하지 않습니다), 터미널에서 고른 부분을 메시지에 붙일 수 있습니다(⌘⇧L).";
 "Attach Selection to Message" = "선택 영역을 메시지에 붙이기";
 "Paste" = "붙여 넣기";

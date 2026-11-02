@@ -1170,7 +1170,8 @@ struct MainWindow: View {
     private func toggleTaskPanel(_ targetID: String) {
         guard let id = panelOwnerID else { return }
         let workspace = panelWorkspace(id)
-        workspace.setPanels(TaskSurfaceNavigationProjection.toggledPanelState(current: workspace.panels, targetID: targetID))
+        workspace.setPanels(TaskSurfaceNavigationProjection.toggledPanelState(
+            current: workspace.panels, targetID: targetID, terminalLocation: TerminalLocation.current()))
         focusedTaskSurface = nil
         if targetID == TaskSurface.terminal.rawValue {
             workspace.keyboardFocus.move(to: .destination(for: .terminal, panels: workspace.panels))
@@ -2839,8 +2840,9 @@ struct MainWindow: View {
                 ),
                 CommandPaletteItem(
                     id: "toggle-terminal",
-                    title: TaskCommandTitle.terminal(isShown: panels.isTerminalPresented),
-                    subtitle: L10n.string("A shell in the task's folder below the conversation."),
+                    title: TaskCommandTitle.terminal(isShown: panels.showsTerminal),
+                    subtitle: L10n.string(TerminalLocation.current() == .right ? "A shell in the task's folder in the side panel."
+                                                                               : "A shell in the task's folder below the conversation."),
                     systemName: "rectangle.bottomthird.inset.filled",
                     action: { toggleTaskPanel(TaskSurface.terminal.rawValue) }
                 )

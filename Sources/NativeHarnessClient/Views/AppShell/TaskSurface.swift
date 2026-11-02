@@ -4,6 +4,7 @@ struct TaskDetail: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.codexStatusPanel) private var codexStatus
     @Environment(\.terminalShellLaunch) private var terminalShellLaunch
+    @AppStorage(TerminalLocation.key) private var terminalLocation = TerminalLocation.bottom.rawValue
     @Environment(\.sessionRail) private var railServices
     @Environment(\.composerConnectors) private var composerConnectors
     @Environment(\.taskFolderMissing) private var folderMissing
@@ -152,6 +153,8 @@ struct TaskDetail: View {
                                   onClose: { closeSidePanelTab("files") })
                     } else if panelState.trailingSurfaceID == "sideChat", let sideChat {
                         sideChat
+                    } else if panelState.trailingSurfaceID == TaskSurfaceNavigationProjection.terminalID {
+                        terminalPane(inSidePanel: true)
                     } else if let id = panelState.trailingSurfaceID, let surface = TaskSurface(rawValue: id) {
                         auxiliarySurface(surface)
                     }
@@ -165,6 +168,12 @@ struct TaskDetail: View {
                 SessionRailRaisedLayer(onDismiss: railServices.window.dismissRaised) { railHost(isRaised: true) }
                     .padding(.top, areaHeader?.height ?? 0)
             }
+        }
+        // The terminal goes where Settings now put it.
+        .onChange(of: terminalLocation, initial: true) { _, raw in
+            let moved = TaskSurfaceNavigationProjection.relocatingTerminal(
+                panelState, to: TerminalLocation(rawValue: raw) ?? .bottom)
+            if moved != panelState { panelState = moved }
         }
         // Whether Review is offered is read again each time the side panel shows.
         .task(id: panelState.trailingSurfaceID != nil) {
@@ -697,30 +706,37 @@ struct TaskDetail: View {
             )
             .id(session.id)
         case .terminal:
-            // The task's workspace keeps the tabs: the ones the new-task screen opened go on here.
-            let _ = workspaceState.terminalRevision
-            let shell = workspaceState.terminal(in: session.workspaceURL, launch: terminalShellLaunch, taskID: session.id)
-            TerminalPane(
-                session: shell,
-                tabs: TerminalTabsContext(workspace: workspaceState, folder: session.workspaceURL,
-                                          launch: terminalShellLaunch, taskID: session.id),
-                handoff: workspaceState.terminalHandoff,
-                startsAutomatically: workspaceState.terminalStartRequested,
-                folder: TerminalFolderContext(folders: [session.workspaceURL] + session.additionalRootURLs, restart: {
-                    workspaceState.restartTerminal(in: session.workspaceURL, launch: terminalShellLaunch, taskID: session.id)
-                }),
-                onAttachSelection: { selection, title in
-                    TerminalSelectionText.attach(selection, from: title, to: composerDraft)
-                    workspaceState.keyboardFocus.move(to: .chat)
-                },
-                onHandoffDone: { workspaceState.finishTerminalHandoff($0) },
-                onClose: closeTerminal
-            )
-            .id(ObjectIdentifier(shell))
+            terminalPane(inSidePanel: false)
         case .browser:
             // Each browser tab is a side-panel tab of its own (`browserTabPane`).
             EmptyView()
         }
+    }
+
+    /// The terminal, below the conversation or as the side panel's Terminal tab (`TerminalLocation`).
+    @ViewBuilder
+    private func terminalPane(inSidePanel: Bool) -> some View {
+        // The task's workspace keeps the tabs: the ones the new-task screen opened go on here.
+        let _ = workspaceState.terminalRevision
+        let shell = workspaceState.terminal(in: session.workspaceURL, launch: terminalShellLaunch, taskID: session.id)
+        TerminalPane(
+            session: shell,
+            tabs: TerminalTabsContext(workspace: workspaceState, folder: session.workspaceURL,
+                                      launch: terminalShellLaunch, taskID: session.id),
+            handoff: workspaceState.terminalHandoff,
+            startsAutomatically: workspaceState.terminalStartRequested,
+            folder: TerminalFolderContext(folders: [session.workspaceURL] + session.additionalRootURLs, restart: {
+                workspaceState.restartTerminal(in: session.workspaceURL, launch: terminalShellLaunch, taskID: session.id)
+            }),
+            onAttachSelection: { selection, title in
+                TerminalSelectionText.attach(selection, from: title, to: composerDraft)
+                workspaceState.keyboardFocus.move(to: .chat)
+            },
+            onHandoffDone: { workspaceState.finishTerminalHandoff($0) },
+            isInSidePanel: inSidePanel,
+            onClose: closeTerminal
+        )
+        .id(ObjectIdentifier(shell))
     }
 
     /// One of the task's browser tabs. Bundles built with CEF show Chromium; a plain `swift run` build
@@ -749,7 +765,10 @@ struct TaskDetail: View {
     }
 
     private func openSurface(_ surface: TaskSurface) {
-        if surface == .terminal { panelState.isTerminalPresented = true }
+        if surface == .terminal {
+            panelState = TaskSurfaceNavigationProjection.showingTerminal(
+                in: panelState, at: TerminalLocation(rawValue: terminalLocation) ?? .bottom)
+        }
         else if surface == .browser { return showBrowserTab(nil) }
         else { panelState.trailingSurfaceID = surface.rawValue }
         workspaceState.keyboardFocus.move(to: .destination(for: surface, panels: panelState))
@@ -872,7 +891,7 @@ struct TaskDetail: View {
     }
 
     private func closeTerminal() {
-        panelState.isTerminalPresented = false
+        panelState = TaskSurfaceNavigationProjection.hidingTerminal(panelState)
         focusedSurface.wrappedValue = nil
         workspaceState.keyboardFocus.move(to: .destination(for: .terminal, panels: panelState))
     }

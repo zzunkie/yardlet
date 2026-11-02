@@ -28,6 +28,7 @@ final class NativeTerminalSession {
     let bufferText = ""
     var name: String?
     var number = 1
+    var focusesWhenShown = false
     var onEnd: (() -> Void)?
     let isRunningProgram = false
     let isAtPrompt = false

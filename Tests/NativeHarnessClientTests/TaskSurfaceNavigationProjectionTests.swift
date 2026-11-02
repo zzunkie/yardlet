@@ -214,10 +214,41 @@ final class TaskSurfaceNavigationProjectionTests: XCTestCase {
         let hidden = Projection.toggledPanelState(current: review, targetID: "diff")
         XCTAssertNil(hidden.trailingSurfaceID)
         XCTAssertEqual(toggleSidePanel(hidden).trailingSurfaceID, "diff")
-        // The terminal sits below the conversation and never becomes a side-panel tab.
+        // By default the terminal sits below the conversation and is no side-panel tab.
         let terminal = Projection.toggledPanelState(current: hidden, targetID: "terminal")
         XCTAssertTrue(terminal.isTerminalPresented)
         XCTAssertEqual(terminal.trailingTabs, [browser, "diff"])
+    }
+
+    /// Settings' terminal location (the Codex app's "Default terminal location"): on the right the terminal
+    /// is the side panel's Terminal tab, which its shortcut shows and hides as the tab used before comes back;
+    /// changing the setting moves a terminal on screen to the other place, and one hidden stays hidden.
+    func testTheTerminalOpensBelowOrAsTheSidePanelsTerminalTab() {
+        let review = Projection.showing("diff", in: .init())
+        let right = Projection.toggledPanelState(current: review, targetID: "terminal", terminalLocation: .right)
+        XCTAssertEqual(right.trailingSurfaceID, "terminal")
+        XCTAssertEqual(right.trailingTabs, ["diff", "terminal"])
+        XCTAssertFalse(right.isTerminalPresented)
+        XCTAssertTrue(right.showsTerminal)
+        let hidden = Projection.toggledPanelState(current: right, targetID: "terminal", terminalLocation: .right)
+        XCTAssertEqual(hidden.trailingSurfaceID, "diff", "the tab used before comes back")
+        XCTAssertEqual(hidden.trailingTabs, ["diff"])
+        XCTAssertFalse(hidden.showsTerminal)
+        XCTAssertFalse(Projection.toggledPanelState(current: Projection.showing("terminal", in: .init()),
+                                                    targetID: "terminal", terminalLocation: .right).showsTerminal)
+
+        let below = Projection.relocatingTerminal(right, to: .bottom)
+        XCTAssertTrue(below.isTerminalPresented, "on screen, it moves below")
+        XCTAssertEqual(below.trailingSurfaceID, "diff")
+        XCTAssertEqual(below.trailingTabs, ["diff"])
+        XCTAssertEqual(Projection.relocatingTerminal(below, to: .right), Projection.showing("terminal", in: review))
+        let behind = Projection.showing("diff", in: right)
+        XCTAssertEqual(Projection.relocatingTerminal(behind, to: .bottom).isTerminalPresented, false,
+                       "a Terminal tab not in front leaves without showing below")
+        XCTAssertEqual(Projection.relocatingTerminal(.init(), to: .right), .init(), "a hidden terminal stays hidden")
+        XCTAssertEqual(Projection.hidingTerminal(.init(isTerminalPresented: true)), .init())
+        XCTAssertEqual(TaskFocusTarget.visibleContent(in: right), .terminal)
+        XCTAssertEqual(TaskFocusTarget.destination(for: .terminal, panels: right), .terminal)
     }
 
     func testReturningToTheConversationHidesBothPanelsAndKeepsTheTabs() {

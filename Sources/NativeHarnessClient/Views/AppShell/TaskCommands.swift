@@ -188,7 +188,7 @@ struct YardletTaskCommands: Commands {
             }
             .keyboardShortcut(TaskCommandShortcut.toggleSidePanel)
             .disabled(task?.panels == nil)
-            Button(TaskCommandTitle.terminal(isShown: task?.panels?.isTerminalPresented == true)) {
+            Button(TaskCommandTitle.terminal(isShown: task?.panels?.showsTerminal == true)) {
                 task?.toggleTerminal()
             }
             .keyboardShortcut(TaskCommandShortcut.toggleTerminal)

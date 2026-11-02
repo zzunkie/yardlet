@@ -111,7 +111,7 @@ final class DraftToolsTests: XCTestCase {
     /// do: + opens one in the task's folder and shows it, each takes the lowest number no tab has for
     /// its title, and closing one shows the tab after it, else the one before. A tab whose shell ended
     /// leaves; with none left the panel hides, and the next opens a new tab.
-    func testATaskKeepsSeveralTerminalTabs() {
+    func testATaskKeepsSeveralTerminalTabs() throws {
         let workspace = TaskWorkspaceState()
         let folder = URL(filePath: "/tmp/yardlet")
         let first = workspace.terminal(in: folder, launch: .userLoginShell(), taskID: nil)
@@ -142,6 +142,25 @@ final class DraftToolsTests: XCTestCase {
         XCTAssertEqual(restarted.name, "server")
         XCTAssertEqual(restarted.number, 2)
         XCTAssertEqual(restarted.workspaceURL.path(percentEncoded: false), "/tmp/elsewhere")
+
+        // Split: a new tab beside the shown one; showing it changes the two sides; closing it ends the split.
+        workspace.showTerminalTab(first)
+        workspace.splitTerminal(in: folder, launch: .userLoginShell(), taskID: nil)
+        let beside = try XCTUnwrap(workspace.splitTerminal)
+        XCTAssertTrue(workspace.terminal(in: folder, launch: .userLoginShell(), taskID: nil) === first, "the shown tab stays")
+        XCTAssertTrue(beside.focusesWhenShown, "the new half takes the keyboard")
+        workspace.showTerminalTab(beside)
+        XCTAssertTrue(workspace.terminal(in: folder, launch: .userLoginShell(), taskID: nil) === beside)
+        XCTAssertTrue(workspace.splitTerminal === first, "the two change sides")
+        workspace.unsplitTerminal()
+        XCTAssertNil(workspace.splitTerminal)
+        XCTAssertFalse(first.hasEnded, "unsplit keeps the other shell as a tab")
+        workspace.splitTerminal(in: folder, launch: .userLoginShell(), taskID: nil)
+        let closing = try XCTUnwrap(workspace.splitTerminal)
+        XCTAssertTrue(workspace.closeTerminalTabs([closing]))
+        XCTAssertNil(workspace.splitTerminal, "closing the half ends the split")
+        XCTAssertTrue(workspace.closeTerminalTabs([beside]))
+        workspace.showTerminalTab(first)
 
         third.end()
         XCTAssertTrue(workspace.terminals.elementsEqual([first, restarted], by: ===), "a shell that ended leaves")

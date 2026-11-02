@@ -27,6 +27,35 @@ struct TerminalTabsContext {
     let taskID: UUID?
 }
 
+/// One half of a split terminal: the tab's name over its screen, with its close, so each half says which
+/// tab it shows; the strip above still lists every tab.
+private struct TerminalSplitHalf<Content: View>: View {
+    let session: NativeTerminalSession
+    let title: String
+    let onClose: () -> Void
+    @ViewBuilder let content: () -> Content
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "terminal").foregroundStyle(.secondary).accessibilityHidden(true)
+                Text(title).lineLimit(1).truncationMode(.middle)
+                if !session.isRunning {
+                    Text(session.statusText).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                ParityIconButton(systemName: "xmark", help: L10n.string("Close tab"), action: onClose)
+            }
+            .font(.caption)
+            .padding(.leading, 12).padding(.trailing, 4)
+            .frame(height: 26)
+            .background(Color(nsColor: TerminalAppearance.background(isDark: colorScheme == .dark)))
+            content()
+        }
+    }
+}
+
 /// What a terminal tab's menu adds to the side panel's tab menu (`WorkSurfaceTabMenu`).
 struct TerminalTabMenuActions: Sendable {
     var rename: @MainActor @Sendable (String) -> Void
@@ -42,6 +71,9 @@ struct TerminalPane: View {
     let onClose: () -> Void
     var folder: TerminalFolderContext? = nil
     var tabs: TerminalTabsContext? = nil
+    /// The terminal as the side panel's Terminal tab (`TerminalLocation.right`): the side panel's strip
+    /// above, the terminal's own tabs in a row below it.
+    var isInSidePanel = false
     /// Adds a selection in the terminal to the task's message, while the terminal is shared.
     var onAttachSelection: ((_ selection: String, _ tabTitle: String) -> Void)? = nil
     @State private var session: NativeTerminalSession
@@ -88,9 +120,11 @@ struct TerminalPane: View {
         folder: TerminalFolderContext? = nil,
         onAttachSelection: ((_ selection: String, _ tabTitle: String) -> Void)? = nil,
         onHandoffDone: @escaping (TerminalCommandRequest.ID) -> Void = { _ in },
+        isInSidePanel: Bool = false,
         onClose: @escaping () -> Void
     ) {
         self.onAttachSelection = onAttachSelection
+        self.isInSidePanel = isInSidePanel
         self.handoff = handoff
         self.onHandoffDone = onHandoffDone
         self.onClose = onClose
@@ -104,23 +138,14 @@ struct TerminalPane: View {
     var body: some View {
         let titles = TerminalTabTitle.titles(for: tabs?.workspace.terminals ?? [session])
         VStack(spacing: 0) {
-            WorkSurfaceHeader(
-                title: titles[ObjectIdentifier(session)] ?? workspaceURL.lastPathComponent,
-                systemName: "terminal",
-                workspaceURL: workspaceURL,
-                status: session.isRunning ? nil : session.statusText,
-                statusTint: session.exitCode.map({ $0 != 0 }) == true || session.terminationSignal != nil
-                    ? .red : .secondary,
-                onClose: tabs == nil ? onClose : { close([session]) }
-            ) {
-                EmptyView()
-
-            }
-            .environment(\.workSurfaceNavigation, tabs.map { navigation($0, titles: titles) })
-            .contextMenu {
-                if tabs == nil, hasStarted {
-                    Button(L10n.string("Restart")) { restart(session) }
-                }
+            if isInSidePanel {
+                // The side panel's strip, the terminal its Terminal tab, whose close hides the terminal.
+                WorkSurfaceHeader(title: L10n.string("Terminal"), systemName: "terminal", workspaceURL: workspaceURL,
+                                  onClose: onClose) { EmptyView() }
+                tabsHeader(titles: titles)
+                    .environment(\.workSurfaceHeaderRow, nil)
+            } else {
+                tabsHeader(titles: titles)
             }
 
             if let folder, let target = folder.folders.first, hasStarted, !folder.contains(workspaceURL),
@@ -129,12 +154,25 @@ struct TerminalPane: View {
             }
 
             if hasStarted {
-                SwiftTermHost(session: session, isDark: colorScheme == .dark, fontSize: 12 * interfaceScale,
-                              attachSelection: attachSelection(title: titles[ObjectIdentifier(session)]
-                                                                ?? workspaceURL.lastPathComponent))
-                .id(session.generation)
-                .padding(.horizontal, 10).padding(.bottom, 8)
-                .background(Color(nsColor: TerminalAppearance.background(isDark: colorScheme == .dark)))
+                if let split = tabs?.workspace.splitTerminal {
+                    // Side by side below the conversation, one above the other in the narrower side panel.
+                    let layout = isInSidePanel ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
+                    layout {
+                        TerminalSplitHalf(session: session, title: title(of: session, in: titles),
+                                          onClose: { close([session]) }) {
+                            terminalBody(session, titles: titles)
+                        }
+                        Divider()
+                        TerminalSplitHalf(session: split, title: title(of: split, in: titles),
+                                          onClose: { close([split]) }) {
+                            terminalBody(split, titles: titles)
+                        }
+                        .onAppear { split.panelAppeared() }
+                        .onDisappear { split.panelDisappeared() }
+                    }
+                } else {
+                    terminalBody(session, titles: titles)
+                }
             } else {
                 VStack(spacing: 10) {
                     Button(L10n.string("Start terminal")) {
@@ -208,6 +246,60 @@ struct TerminalPane: View {
             } else {
                 keyboardFocus?.consume(request)
                 isStartFocused = true
+            }
+        }
+    }
+
+    private func title(of shell: NativeTerminalSession, in titles: [ObjectIdentifier: String]) -> String {
+        titles[ObjectIdentifier(shell)] ?? TerminalTabTitle.defaultTitle(of: shell)
+    }
+
+    /// A tab's screen: the shell's view, which starts the shell the first time a panel shows it.
+    private func terminalBody(_ shell: NativeTerminalSession, titles: [ObjectIdentifier: String]) -> some View {
+        SwiftTermHost(session: shell, isDark: colorScheme == .dark, fontSize: 12 * interfaceScale,
+                      attachSelection: attachSelection(title: title(of: shell, in: titles)))
+        .id(shell.generation)
+        .padding(.horizontal, 10).padding(.bottom, 8)
+        .background(Color(nsColor: TerminalAppearance.background(isDark: colorScheme == .dark)))
+        .task {
+            guard shell.focusesWhenShown else { return }
+            shell.focusesWhenShown = false
+            await Task.yield()
+            _ = shell.focus()
+        }
+    }
+
+    /// The terminal's own header: its tabs, each closing its shell, and the panel's controls below the
+    /// conversation; in the side panel, whose header has them, only the tabs.
+    private func tabsHeader(titles: [ObjectIdentifier: String]) -> some View {
+        WorkSurfaceHeader(
+            title: titles[ObjectIdentifier(session)] ?? workspaceURL.lastPathComponent,
+            systemName: "terminal",
+            workspaceURL: workspaceURL,
+            status: session.isRunning ? nil : session.statusText,
+            statusTint: session.exitCode.map({ $0 != 0 }) == true || session.terminationSignal != nil
+                ? .red : .secondary,
+            showsPanelControls: !isInSidePanel,
+            onClose: tabs == nil ? onClose : { close([session]) }
+        ) {
+            if let tabs, hasStarted {
+                let isSplit = tabs.workspace.splitTerminal != nil
+                ParityIconButton(
+                    systemName: isSplit ? "rectangle" : isInSidePanel ? "rectangle.split.1x2" : "rectangle.split.2x1",
+                    help: L10n.string(isSplit ? "Unsplit Terminal" : "Split Terminal")
+                ) {
+                    if isSplit {
+                        tabs.workspace.unsplitTerminal()
+                    } else {
+                        tabs.workspace.splitTerminal(in: tabs.folder, launch: tabs.launch, taskID: tabs.taskID)
+                    }
+                }
+            }
+        }
+        .environment(\.workSurfaceNavigation, tabs.map { navigation($0, titles: titles) })
+        .contextMenu {
+            if tabs == nil, hasStarted {
+                Button(L10n.string("Restart")) { restart(session) }
             }
         }
     }
@@ -390,6 +482,8 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
     let workspaceURL: URL
     /// The name the person gave its tab; nil keeps the default (`TerminalTabTitle`).
     var name: String?
+    /// Takes the keyboard the next time a panel shows it: the tab a split opened.
+    @ObservationIgnored var focusesWhenShown = false
     /// Its place among the tabs its task opened, for its default title: the lowest a tab of the task
     /// does not have.
     var number = 1

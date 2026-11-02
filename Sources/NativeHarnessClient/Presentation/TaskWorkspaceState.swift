@@ -250,6 +250,8 @@ final class TaskWorkspaceState {
     @ObservationIgnored private var terminalTabs: [NativeTerminalSession] = []
     /// The tab the terminal panel shows.
     @ObservationIgnored private var shownTerminalTab: NativeTerminalSession?
+    /// The tab shown beside it while the terminal is split.
+    @ObservationIgnored private var splitTerminalTab: NativeTerminalSession?
     /// Changes when the terminal's tabs change other than by the panel drawing them: a tab opened,
     /// shown or closed, a shell that ended leaving its tab, a restart in the task's folder, or a task
     /// taking over the new-task screen's.
@@ -302,6 +304,30 @@ final class TaskWorkspaceState {
     /// The tab the terminal panel shows, without opening one.
     var shownTerminal: NativeTerminalSession? { shownTerminalTab }
 
+    /// The tab shown beside the shown one while the terminal is split.
+    var splitTerminal: NativeTerminalSession? {
+        guard let splitTerminalTab, splitTerminalTab !== shownTerminalTab,
+              terminalTabs.contains(where: { $0 === splitTerminalTab }) else { return nil }
+        return splitTerminalTab
+    }
+
+    /// Splits the terminal: a new tab in `folder` shows beside the shown one, its shell started.
+    func splitTerminal(in folder: URL, launch: ShellLaunchEnvironment, taskID: UUID?) {
+        let session = makeTerminal(in: folder, launch: launch, taskID: taskID)
+        session.focusesWhenShown = true
+        terminalTabs.append(session)
+        splitTerminalTab = session
+        terminalStartRequested = true
+        terminalRevision += 1
+    }
+
+    /// The terminal shows one tab again; the other's shell goes on as a tab.
+    func unsplitTerminal() {
+        guard splitTerminalTab != nil else { return }
+        splitTerminalTab = nil
+        terminalRevision += 1
+    }
+
     /// The terminal's + : a new tab in `folder`, shown, its shell started.
     @discardableResult
     func openTerminalTab(in folder: URL, launch: ShellLaunchEnvironment, taskID: UUID?) -> NativeTerminalSession {
@@ -313,8 +339,10 @@ final class TaskWorkspaceState {
         return session
     }
 
+    /// Shows a tab; the tab shown beside it while split takes the main place, the two changing sides.
     func showTerminalTab(_ session: NativeTerminalSession) {
         guard session !== shownTerminalTab, terminalTabs.contains(where: { $0 === session }) else { return }
+        if session === splitTerminalTab { splitTerminalTab = shownTerminalTab }
         shownTerminalTab = session
         terminalRevision += 1
     }
@@ -351,6 +379,7 @@ final class TaskWorkspaceState {
         let tabs = terminalTabs
         terminalTabs = []
         shownTerminalTab = nil
+        splitTerminalTab = nil
         for tab in tabs {
             tab.onEnd = nil
             tab.end()
@@ -380,6 +409,7 @@ final class TaskWorkspaceState {
         if shownTerminalTab === session {
             shownTerminalTab = terminalTabs.isEmpty ? nil : terminalTabs[min(index, terminalTabs.count - 1)]
         }
+        if splitTerminalTab === session || splitTerminalTab === shownTerminalTab { splitTerminalTab = nil }
         terminalRevision += 1
     }
 
@@ -407,9 +437,11 @@ final class TaskWorkspaceState {
             }
             terminalTabs = shells
             shownTerminalTab = shells.first { $0 === draft.shownTerminalTab } ?? shells[0]
+            splitTerminalTab = draft.splitTerminal
         }
         draft.terminalTabs = []
         draft.shownTerminalTab = nil
+        draft.splitTerminalTab = nil
         terminalRevision += 1
         draft.terminalRevision += 1
 
@@ -445,8 +477,8 @@ final class TaskWorkspaceState {
     func setPanels(_ value: TaskSurfaceNavigationProjection.PanelState) {
         let value = TaskSurfaceNavigationProjection.reconciled(value)
         guard value != panels else { return }
-        if value.isTerminalPresented && !panels.isTerminalPresented { terminalStartRequested = true }
-        if !value.isTerminalPresented {
+        if value.showsTerminal && !panels.showsTerminal { terminalStartRequested = true }
+        if !value.showsTerminal {
             terminalStartRequested = false
             terminalHandoff = nil
         }
@@ -624,7 +656,7 @@ final class TaskWorkspaceStore {
         let state = TaskWorkspaceState(snapshot: saved ?? .init(
             panels: TaskSurfaceNavigationProjection.initialPanelState(surfaceID: initialSurface)
         ), sizes: sizes)
-        if saved == nil, initialSurface != nil { state.terminalStartRequested = state.panels.isTerminalPresented }
+        if saved == nil, initialSurface != nil { state.terminalStartRequested = state.panels.showsTerminal }
         state.onChange = { [weak self] in self?.changed(id) }
         state.onSideChatClose = { [weak self] in self?.onSideChatClose?(id) }
         states[id] = state

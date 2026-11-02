@@ -158,6 +158,7 @@ struct SettingsCenterView: View {
     /// Read when a task starts or resumes, so a change applies from the next session on.
     @AppStorage(AgentToolPreference.browserToolsKey) private var agentBrowserTools = true
     @AppStorage(TerminalSharingPreference.key) private var sharesTerminal = true
+    @AppStorage(TerminalLocation.key) private var terminalLocation = TerminalLocation.bottom.rawValue
     @AppStorage(TaskServersPreference.key) private var showsTaskServers = true
     /// Read when a tab opens: its task's own profile, or the default profile every task shares.
     @AppStorage(BrowserTaskProfiles.storageKey) private var cookieStorage = BrowserTaskProfiles.Storage.perTask.rawValue
@@ -482,6 +483,27 @@ struct SettingsCenterView: View {
                         .labelsHidden()
                         .toggleStyle(.paritySwitch)
                         .controlSize(.small)
+                }
+                .padding(.vertical, 14)
+                Divider().padding(.leading, Self.dividerLeading)
+                HStack(spacing: 12) {
+                    settingsControlIcon("rectangle.split.2x1")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(L10n.string("Terminal location")).font(.callout.weight(.medium))
+                        Text(L10n.string("Where the terminal opens: below the conversation, or as a tab of the side panel."))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Picker(L10n.string("Terminal location"), selection: $terminalLocation) {
+                        Text(L10n.string("Bottom")).tag(TerminalLocation.bottom.rawValue)
+                        Text(L10n.string("Right")).tag(TerminalLocation.right.rawValue)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                    .controlSize(.small)
                 }
                 .padding(.vertical, 14)
                 if let vault {

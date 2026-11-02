@@ -17,6 +17,7 @@ struct NewTaskWorkspace<Home: View>: View {
     var sidePanelTasks: SidePanelTaskServices? = nil
     @ViewBuilder let home: () -> Home
     @Environment(\.terminalShellLaunch) private var terminalShellLaunch
+    @AppStorage(TerminalLocation.key) private var terminalLocation = TerminalLocation.bottom.rawValue
 
     private typealias Navigation = TaskSurfaceNavigationProjection
 
@@ -39,9 +40,13 @@ struct NewTaskWorkspace<Home: View>: View {
             chat: home,
             rail: { EmptyView() },
             trailing: { trailing.environment(\.workSurfaceNavigation, navigation) },
-            bottom: { terminal }
+            bottom: { terminal(inSidePanel: false) }
         )
         .onDisappear { workspaceState.leaveTerminal() }
+        // The terminal goes where Settings now put it.
+        .onChange(of: terminalLocation, initial: true) { _, raw in
+            workspaceState.setPanels(Navigation.relocatingTerminal(panels, to: TerminalLocation(rawValue: raw) ?? .bottom))
+        }
     }
 
     @ViewBuilder
@@ -71,6 +76,8 @@ struct NewTaskWorkspace<Home: View>: View {
                 .id(folder)
         } else if let key = Navigation.browserKey(inTab: shown) {
             browser(key)
+        } else if shown == Navigation.terminalID {
+            terminal(inSidePanel: true)
         } else if let shown {
             // What needs a task (Review, a side chat) is not offered here.
             Color.clear.onAppear { closeTab(shown) }
@@ -105,7 +112,8 @@ struct NewTaskWorkspace<Home: View>: View {
         workspaceState.keyboardFocus.move(to: .browser)
     }
 
-    private var terminal: some View {
+    /// The screen's terminal, below it or as the side panel's Terminal tab (`TerminalLocation`).
+    private func terminal(inSidePanel: Bool) -> some View {
         let _ = workspaceState.terminalRevision
         let session = workspaceState.terminal(in: folder, launch: terminalShellLaunch, taskID: nil)
         return TerminalPane(
@@ -119,6 +127,7 @@ struct NewTaskWorkspace<Home: View>: View {
                 TerminalSelectionText.attach(selection, from: title, to: draft)
                 workspaceState.keyboardFocus.move(to: .chat)
             },
+            isInSidePanel: inSidePanel,
             onClose: closeTerminal
         )
         .id(ObjectIdentifier(session))
@@ -161,8 +170,7 @@ struct NewTaskWorkspace<Home: View>: View {
         if next.trailingSurfaceID == Navigation.launcherID {
             next = Navigation.closingTrailingTab(Navigation.launcherID, in: next)
         }
-        next.isTerminalPresented = true
-        workspaceState.setPanels(next)
+        workspaceState.setPanels(Navigation.showingTerminal(in: next, at: TerminalLocation(rawValue: terminalLocation) ?? .bottom))
         workspaceState.keyboardFocus.move(to: .terminal)
     }
 
@@ -184,9 +192,7 @@ struct NewTaskWorkspace<Home: View>: View {
     }
 
     private func closeTerminal() {
-        var next = panels
-        next.isTerminalPresented = false
-        workspaceState.setPanels(next)
+        workspaceState.setPanels(Navigation.hidingTerminal(panels))
         focusedSurface.wrappedValue = nil
         workspaceState.keyboardFocus.move(to: .visibleContent(in: workspaceState.panels))
     }
