@@ -16,10 +16,12 @@
 #                              review      the review panel on the task's uncommitted changes
 #                              accounts    Settings › Accounts with each account's usage
 #                              connectors  Settings › Connectors
-#   playback-<appearance>.mp4  one round of the playback (`--ui-fixture-playback`): the request typed,
-#                              the turn streaming, its tools, changes and answer. About 17 s, H.264,
-#                              60 fps, no sound, starting and ending on the frames the next round
-#                              starts and ends on, so it loops. Its last frame is main-<appearance>.png.
+#   playback-<appearance>.mp4  one round of the playback (`--ui-fixture-playback`): beside the running
+#                              Claude Code task, a new task's request typed, the composer's account
+#                              list opened and the account with room left chosen, then the Codex
+#                              turn streaming, its tools, changes and answer while the Claude Code
+#                              task finishes. 17 s, H.264, 60 fps, no sound, from the round's first
+#                              frame to the finished tasks, which cut back to it, so it loops.
 #
 # Outside the window's rounded corners stills and videos alike are black, so a page shows both with
 # the window's corner radius.

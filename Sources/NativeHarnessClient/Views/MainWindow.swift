@@ -1644,7 +1644,10 @@ struct MainWindow: View {
             reply: NewTaskHomeReplyServices(
                 content: { session, hooks in AnyView(homeReplyContent(session, hooks: hooks)) },
                 isShownElsewhere: { model.splits.activeSplit?.pane(hosting: $0) != nil },
-                focus: { model.taskWorkspaces.state(for: $0).keyboardFocus.move(to: .chat) })
+                focus: { model.taskWorkspaces.state(for: $0).keyboardFocus.move(to: .chat) }),
+            // A visual fixture's screen names nothing of this Mac's own disk, memory or heat.
+            readMacConditions: model.usesVisualFixture
+                ? { @Sendable in [] } : { @Sendable in await MacConditionReader.notices() }
         )
         // The lists read the pull requests the sidebar rows read.
         .environment(model.pullRequests)

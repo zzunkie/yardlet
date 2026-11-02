@@ -9,6 +9,13 @@ extension AppModel {
         codexPresentations[sessionID] = state
     }
 
+    /// A visual fixture's next frame of a task whose conversation is a transcript
+    /// (`ShowcasePlayback`), as its provider's lines would leave it.
+    func showVisualFixtureTranscript(_ entries: [TranscriptEntry], for sessionID: UUID) {
+        guard isVisualFixture else { return }
+        transcripts[sessionID] = entries
+    }
+
     func updateWorkspaceReadingFixture(addTurn: Bool) {
         guard isVisualFixture, CommandLine.arguments.contains("--ui-fixture=workspace"),
               let session = store.selectedSession else { return }
