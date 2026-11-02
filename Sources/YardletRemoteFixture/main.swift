@@ -5,7 +5,8 @@ import YardletRemoteFixtureSupport
 
 // yardlet-remote-fixture: the phone remote's protocol on loopback, with fixture tasks instead of the
 // Mac's real ones (docs/REMOTE_PROTOCOL.md §9). It binds 127.0.0.1 only; the Android emulator reaches
-// it as 10.0.2.2. Its paired devices are kept in memory, its audit log in a temporary folder.
+// it as 10.0.2.2. Its paired devices are kept in memory; its audit log, the files phones send and its tasks'
+// folders and files (§15.22) in a temporary folder of its own.
 //
 //   swift run --build-system native yardlet-remote-fixture [--single-use-pairing] [--secure-port 47616]
 //       [--host 10.0.2.2:47616]… [--relay ws://127.0.0.1:8787] [--relay-public ws://10.0.2.2:8787]
@@ -42,7 +43,7 @@ func fixtureKey(_ label: String) -> Data { Data(SHA256.hash(data: Data(label.utf
 let identity = try RemoteIdentity(noisePrivateKey: fixtureKey("yardlet-fixture-noise"),
                                   relayPrivateKey: fixtureKey("yardlet-fixture-relay"))
 
-let bridge = RemoteFixtureBridge()
+let bridge = RemoteFixtureBridge(filesFolder: folder.appending(path: "files", directoryHint: .isDirectory))
 var configuration = RemoteServer.Configuration(server: RemoteServerInfo(name: "Yardlet fixture", appVersion: "fixture"),
                                                macKey: identity.noise.publicKey)
 // Files a phone sends stay in this run's own folder, apart from the app's (§15.20).
@@ -59,6 +60,7 @@ let pairingSecret = fixtureKey("yardlet-fixture-pairing")
 await server.openPairing(secret: pairingSecret, lifetime: lifetime, isSingleUse: singleUse)
 
 print("Audit log: \(folder.appending(path: "audit.log").path)")
+print("Task files: \(bridge.filesFolder.path)")
 do {
     let securePort = value(after: "--secure-port").flatMap(UInt16.init) ?? RemoteProtocol.securePort
     let secure = RemoteSecureListener(server: server, staticKey: identity.noise, port: securePort, advertisement: nil,

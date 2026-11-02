@@ -17,8 +17,10 @@ import YardletRemote
 /// answer, and messages and new tasks carry files. Since 2026-11-02 (§15.21) it lists scheduled tasks: one that runs
 /// every morning and whose last run started a task, a paused one that continues a task, one that turned itself off
 /// after failed starts, and a one-off that ran. Run now starts or continues a task, or records a skip while that task
-/// is busy and a failure for the one that cannot start; Pause and Resume act as on the Mac.
-/// Nothing is read from or written to the Mac.
+/// is busy and a failure for the one that cannot start; Pause and Resume act as on the Mac. Since then (§15.22) a phone
+/// opens what a task made: each project's tasks have a folder of their own in a temporary folder, and "Summarize the
+/// crash reports" lists two outputs, a PDF beside its folder and a PNG inside it, and names a text file in its folder;
+/// a file beside them that is neither is refused. Nothing else is read from or written to the Mac.
 public actor RemoteFixtureBridge: RemoteBridge {
     public enum ID {
         public static let approval = "0F1E0001-0000-4000-8000-000000000001"
@@ -110,9 +112,16 @@ public actor RemoteFixtureBridge: RemoteBridge {
     private var counter = 0
     /// How much faster than real time the scripts run (tests run them fast).
     private let speed: Double
+    /// Where the tasks' folders and files are (§15.22), made the first time a phone asks for them.
+    public nonisolated let filesFolder: URL
+    private var madeFiles = false
+    private let filesWrittenAt: Date
 
-    public init(speed: Double = 1) {
+    /// `filesFolder` holds the tasks' folders and files; by default a new folder in the temporary folder.
+    public init(speed: Double = 1, filesFolder: URL? = nil) {
         self.speed = max(0.01, speed)
+        self.filesFolder = filesFolder ?? FileManager.default.temporaryDirectory
+            .appending(path: "yardlet-remote-fixture-files-\(UUID().uuidString)", directoryHint: .isDirectory)
         projects = [
             RemoteProject(id: ID.yardlet, name: "Yardlet", kind: .project, canCreateTask: true),
             RemoteProject(id: ID.website, name: "Website", kind: .project, canCreateTask: true),
@@ -155,6 +164,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
         order = entries.map(\.task.id)
         tasks = Dictionary(uniqueKeysWithValues: entries.map { ($0.task.id, $0) })
         schedules = Self.schedules(now: now)
+        filesWrittenAt = now.addingTimeInterval(-6 * 60)
     }
 
     // MARK: - Bridge
@@ -183,7 +193,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
         return RemoteSnapshot(projects: projects, tasks: listed.map(\.task), newestRequestIDs: requests,
                               requestSummaries: summaries,
                               newTask: RemoteNewTask(harness: "claude-code", harnessName: "Claude Code"), followUp: .steer,
-                              scheduledTasks: true)
+                              scheduledTasks: true, taskFiles: true)
     }
 
     /// The task's turns, and the messages queued behind its running turn at the end of the last one.
@@ -418,6 +428,94 @@ public actor RemoteFixtureBridge: RemoteBridge {
             return remote
         })
     }
+
+    // MARK: - Files (§15.22)
+
+    public func taskOutputs(taskID: String) async -> Result<[RemoteOutput], RemoteError> {
+        guard tasks[taskID] != nil else { return .failure(RemoteError(.notFound)) }
+        let written = RemoteJSON.milliseconds(filesWrittenAt)
+        return .success(outputs(of: taskID).enumerated().map { index, url in
+            RemoteOutput(path: url.path(percentEncoded: false), name: url.lastPathComponent,
+                         writtenAt: written - Int64(index) * 60_000)
+        })
+    }
+
+    public func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError> {
+        guard let entry = tasks[taskID] else { return .failure(RemoteError(.notFound)) }
+        makeFiles()
+        let project = projects.first { $0.id == entry.task.projectId }?.name ?? "Chats"
+        return .success(RemoteFileScope(folder: filesFolder.appending(path: project, directoryHint: .isDirectory),
+                                        outputs: outputs(of: taskID)))
+    }
+
+    /// Newest first: the summary it saved on the "Desktop", beside its folder, and the chart inside it.
+    private func outputs(of taskID: String) -> [URL] {
+        guard taskID == ID.history else { return [] }
+        makeFiles()
+        return [filesFolder.appending(path: "Desktop/crash-summary.pdf"), filesFolder.appending(path: "Website/reports/crash-chart.png")]
+    }
+
+    /// Each project's folder, the crash task's files, and a file beside them a phone may not open.
+    private func makeFiles() {
+        guard !madeFiles else { return }
+        madeFiles = true
+        let manager = FileManager.default
+        for folder in ["Yardlet", "Website/reports", "Chats", "Desktop"] {
+            try? manager.createDirectory(at: filesFolder.appending(path: folder, directoryHint: .isDirectory),
+                                         withIntermediateDirectories: true)
+        }
+        let files: [(String, Data)] = [
+            ("Desktop/crash-summary.pdf", Self.pdf(["Crash summary", "30 reports, one cause: TaskSidebar.row(for:)",
+                                                    "reads a task the archive already removed."])),
+            ("Website/reports/crash-chart.png", Data(base64Encoded: Self.chartPNG) ?? Data()),
+            ("Website/reports/crash-notes.txt", Data(Self.crashNotes.utf8)),
+            ("Desktop/private-notes.txt", Data("Not one of the task's files.\n".utf8))
+        ]
+        for (path, data) in files {
+            try? data.write(to: filesFolder.appending(path: path))
+        }
+    }
+
+    /// A one-page PDF with a line of text each.
+    private static func pdf(_ lines: [String]) -> Data {
+        var text = "BT /F1 14 Tf 72 720 Td 18 TL"
+        for line in lines {
+            let escaped = line.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "(", with: "\\(")
+                .replacingOccurrences(of: ")", with: "\\)")
+            text += " (\(escaped)) Tj T*"
+        }
+        text += " ET"
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Length \(text.utf8.count) >>\nstream\n\(text)\nendstream"
+        ]
+        var pdf = "%PDF-1.4\n"
+        var offsets: [Int] = []
+        for (index, object) in objects.enumerated() {
+            offsets.append(pdf.utf8.count)
+            pdf += "\(index + 1) 0 obj\n\(object)\nendobj\n"
+        }
+        let table = pdf.utf8.count
+        pdf += "xref\n0 \(objects.count + 1)\n0000000000 65535 f \n"
+        for offset in offsets { pdf += String(format: "%010d 00000 n \n", offset) }
+        pdf += "trailer\n<< /Size \(objects.count + 1) /Root 1 0 R >>\nstartxref\n\(table)\n%%EOF\n"
+        return Data(pdf.utf8)
+    }
+
+    /// A small bar chart.
+    private static let chartPNG = "iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAATElEQVR42u3YMQ0AIAxE0bpiJ4jCAI5wUxvdwUHZ4BL+zwl489kSywC9A8W0ZIAA/QyqI5IBAgQIkAbIW0kGCBAgQIAA3QR1sTgbTm2R8Ia3mL5g4AAAAABJRU5ErkJggg=="
+
+    private static let crashNotes = """
+    Crash notes
+
+    - 30 reports, all in TaskSidebar.row(for:) while a task was being archived.
+    - The row reads the task after the archive removed it.
+    - Fix: read the row's task once, before the archive starts.
+
+    """
 
     /// A run starting, as the Mac's new-task path or a continued task's next message takes a moment.
     private func startRun(_ scheduleID: String) async {
@@ -1463,7 +1561,9 @@ public actor RemoteFixtureBridge: RemoteBridge {
         command.exitCode = 0
         return RemoteTurn(id: turnID, items: [
             user(turnID, "Summarize crash report \(number)"), header, command,
-            answer(turnID, "Crash \(number): a nil dereference in `TaskSidebar.row(for:)` while a task was being archived.")
+            answer(turnID, "Crash \(number): a nil dereference in `TaskSidebar.row(for:)` while a task was being archived."
+                   + (number == 30 ? " I put the summary in crash-summary.pdf on the Desktop, the chart in "
+                      + "`reports/crash-chart.png` and my notes in `reports/crash-notes.txt`." : ""))
         ])
     }
 

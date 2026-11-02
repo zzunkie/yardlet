@@ -10,7 +10,8 @@ import YardletRemote
 /// Reads are cached until Observation says what they read changed, then the server is told
 /// (`RemoteBridgeChange`) and reads again when it needs to, so a task streaming in the background
 /// costs nothing until a phone follows it. The scheduled tasks a phone lists (§15.21) are read the same
-/// way, from the schedules and from the snapshot's tasks.
+/// way, from the schedules and from the snapshot's tasks. A task's outputs and folders (§15.22) are read
+/// when a phone asks; which of its files a phone may open is decided in `RemoteFileReader`.
 @MainActor
 final class AppModelRemoteBridge: RemoteBridge {
     private weak var model: AppModel?
@@ -61,6 +62,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         )
         snapshot.newTask = newTaskHarness(in: model).map { RemoteNewTask(harness: $0.rawValue, harnessName: $0.displayName) }
         snapshot.scheduledTasks = true
+        snapshot.taskFiles = true
         let listed = Dictionary(model.sidebarSessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for index in snapshot.tasks.indices {
             guard let id = UUID(uuidString: snapshot.tasks[index].id), let session = listed[id] else { continue }
@@ -939,6 +941,35 @@ final class AppModelRemoteBridge: RemoteBridge {
                 current: choice.connection == session.connection ? true : nil,
                 available: AccountListProjection.canChoose(choice, mode: mode) ? true : nil)
         })
+    }
+
+    // MARK: - Files (§15.22)
+
+    func taskOutputs(taskID: String) async -> Result<[RemoteOutput], RemoteError> {
+        guard let model, let session = session(taskID) else { return .failure(RemoteError(.notFound)) }
+        return .success(Self.outputs(of: session, in: model).map { output in
+            RemoteOutput(path: output.url.path(percentEncoded: false), name: output.name,
+                         writtenAt: output.writtenAt.map(RemoteJSON.milliseconds))
+        })
+    }
+
+    /// The task's own folders as its harness was given them (its working folder or worktree, and the project's
+    /// other folders) and its outputs.
+    func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError> {
+        guard let model, let session = session(taskID) else { return .failure(RemoteError(.notFound)) }
+        return .success(RemoteFileScope(folder: session.workspaceURL, otherFolders: session.additionalRootURLs,
+                                        outputs: Self.outputs(of: session, in: model).map(\.url)))
+    }
+
+    /// The task's Outputs card, from what the task's rail reads: its transcript, and a Codex task's file changes.
+    static func outputs(of session: SessionRecord, in model: AppModel) -> [SessionRailContent.Output] {
+        var codexChanges: [CodexChangeHandoff] = []
+        if HarnessPresentationPolicy(harness: session.harness).usesCodexTimeline,
+           let state = model.codexPresentationBySessionID[session.id] {
+            codexChanges = CodexWorkSurfaceProjection.changes(from: state, workspaceURL: session.workspaceURL)
+        }
+        return SessionRailContent.outputs(entries: model.transcriptBySessionID[session.id] ?? [], codexChanges: codexChanges,
+                                          workspaceURL: session.workspaceURL)
     }
 
     func itemDetail(taskID: String, itemID: String) async -> Result<RemoteItemDetail, RemoteError> {

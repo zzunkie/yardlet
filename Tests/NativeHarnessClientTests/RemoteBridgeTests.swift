@@ -492,6 +492,43 @@ final class RemoteBridgeTests: XCTestCase {
         await model.shutdown()
     }
 
+    // MARK: - Files (§15.22)
+
+    /// A task's outputs are its Outputs card, in its order, and a phone's reads are checked against the folders the task
+    /// was given and those outputs.
+    func testATasksOutputsAreItsOutputsCardAndItsFoldersAreItsOwn() async throws {
+        let folder = URL(filePath: "/tmp/remote-bridge-files", directoryHint: .isDirectory)
+        let session = SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                    title: "Write the report", additionalRoots: ["/tmp/remote-bridge-files-docs"])
+        func written(_ path: String, at seconds: TimeInterval) -> TranscriptEntry {
+            TranscriptEntry(createdAt: Date(timeIntervalSince1970: seconds), content: .activity(HarnessActivity(
+                id: "write-\(seconds)", kind: "Write", title: "Write", diff: HarnessActivityDiff(path: path, newText: "x")),
+                state: .completed))
+        }
+        // A source file it wrote inside its folder is a change, not an output.
+        let entries = [written("/tmp/elsewhere/summary.pdf", at: 100), written("docs/chart.png", at: 200),
+                       written("Sources/Parser.swift", at: 300)]
+        let model = try Self.model(sessions: [session], transcripts: [session.id: entries])
+        let bridge = AppModelRemoteBridge(model: model)
+        XCTAssertTrue(bridge.snapshot().taskFiles)
+        let card = SessionRailContent.outputs(entries: entries, codexChanges: [], workspaceURL: folder)
+        let outputs = try await bridge.taskOutputs(taskID: session.id.uuidString).get()
+        XCTAssertEqual(outputs.map(\.path), card.map { $0.url.path(percentEncoded: false) })
+        XCTAssertEqual(outputs.map(\.name), ["chart.png", "summary.pdf"])
+        XCTAssertEqual(outputs.map(\.writtenAt), [200_000, 100_000])
+        XCTAssertEqual(outputs.compactMap(\.size), [], "The server reads the sizes")
+        let scope = try await bridge.fileScope(taskID: session.id.uuidString).get()
+        XCTAssertEqual(scope.folder, session.workspaceURL)
+        XCTAssertEqual(scope.otherFolders, session.additionalRootURLs)
+        XCTAssertEqual(scope.outputs, card.map(\.url))
+        if case let .failure(error) = await bridge.fileScope(taskID: UUID().uuidString) {
+            XCTAssertEqual(error.code, .notFound)
+        } else {
+            XCTFail("A task the sidebar does not list has no files")
+        }
+        await model.shutdown()
+    }
+
     // MARK: - Commands through the window's paths
 
     func testCommandsGoThroughTheComposerTheCardAndTheStopButton() async throws {

@@ -110,6 +110,11 @@ public protocol RemoteBridge: AnyObject, Sendable {
     func limitAccounts(taskID: String) async -> Result<[RemoteAccount], RemoteError>
     /// The Mac's Scheduled tasks list (§15.21). A bridge that answers it says so in its snapshot (`scheduledTasks`).
     func scheduledTasks() async -> Result<[RemoteSchedule], RemoteError>
+    /// The files the Mac's Outputs card lists for a task, in its order (§15.22); the server reads their sizes. A bridge
+    /// that answers it and `fileScope` says so in its snapshot (`taskFiles`).
+    func taskOutputs(taskID: String) async -> Result<[RemoteOutput], RemoteError>
+    /// The task's folders and outputs, which a `readFile` of the task is checked against (§15.22).
+    func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError>
 }
 
 extension RemoteBridge {
@@ -122,6 +127,14 @@ extension RemoteBridge {
     }
 
     public func scheduledTasks() async -> Result<[RemoteSchedule], RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+
+    public func taskOutputs(taskID: String) async -> Result<[RemoteOutput], RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+
+    public func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError> {
         .failure(RemoteError(.unavailable))
     }
 }
@@ -807,6 +820,19 @@ public actor RemoteServer {
             await command(envelope.id, request: request, on: id) {
                 await self.bridge.perform(.setScheduledTaskEnabled(scheduleID: scheduleID, enabled: enabled))
             }
+        case let .taskOutputs(taskID):
+            switch await bridge.taskOutputs(taskID: taskID) {
+            case let .success(outputs):
+                let listed = Array(outputs.prefix(RemoteProtocol.maxOutputs))
+                var response = RemoteResponse(re: envelope.id)
+                // Off this actor: a slow disk holds up no other connection.
+                response.outputs = await Task.detached { RemoteFileReader.sized(listed) }.value
+                respond(response, to: id)
+            case let .failure(error):
+                respond(.failure(envelope.id, error), to: id)
+            }
+        case let .readFile(taskID, path, offset):
+            await readFile(envelope.id, taskID: taskID, path: path, offset: offset, on: id)
         case let .uploadFile(part):
             guard let deviceID = connection.deviceID else { return }
             switch uploads.receive(part, from: deviceID, now: now()) {
@@ -831,6 +857,7 @@ public actor RemoteServer {
             response.newTask = published?.newTask
             response.followUp = published?.followUp
             response.scheduledTasks = published?.scheduledTasks == true ? true : nil
+            response.taskFiles = published?.taskFiles == true && RemoteFileReader.isSupported ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)
             connections[id]?.receivesTaskEvents = true
@@ -883,6 +910,40 @@ public actor RemoteServer {
         respond(error.map { .failure(requestID, $0) } ?? response, to: id)
         audit?.record(device: connections[id]?.deviceID, type: request.type, task: request.taskID,
                       schedule: request.scheduleID, result: error?.code.rawValue ?? "ok", at: now())
+    }
+
+    /// A part of one of the task's files (§15.22), read off this actor so a large file or a slow disk holds up no other
+    /// connection. The first part of each read is written to the audit log with the file's name, never its path, also
+    /// when it is refused.
+    private func readFile(_ requestID: String, taskID: String, path: String, offset: Int, on id: UUID) async {
+        let result: Result<RemoteFilePart, RemoteError>
+        switch await bridge.fileScope(taskID: taskID) {
+        case let .success(scope):
+            result = await Task.detached { RemoteFileReader.read(path, offset: offset, in: scope) }.value
+        case let .failure(error):
+            result = .failure(error)
+        }
+        let name: String
+        let outcome: String
+        switch result {
+        case let .success(part):
+            var response = RemoteResponse(re: requestID)
+            response.path = part.path
+            response.name = part.name
+            response.mediaType = part.mediaType
+            response.size = part.size
+            response.offset = part.offset
+            response.data = part.data
+            response.modifiedAt = part.modifiedAt
+            respond(response, to: id)
+            (name, outcome) = (part.name, "ok")
+        case let .failure(error):
+            respond(.failure(requestID, error), to: id)
+            (name, outcome) = (RemoteFileReader.auditName(path), error.code.rawValue)
+        }
+        guard offset == 0 else { return }
+        audit?.record(device: connections[id]?.deviceID, type: "readFile", task: taskID, file: name, result: outcome,
+                      at: now())
     }
 
     /// The finished uploads a message names (§15.20), sent by this connection's device.

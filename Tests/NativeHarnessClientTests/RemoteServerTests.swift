@@ -64,6 +64,14 @@ final class RemoteServerTests: XCTestCase {
         await harness.send(#"{"id":"l","type":"scheduledTasks"}"#, on: phone)
         let noSchedules = try await phone.response("l").error?.code
         XCTAssertEqual(noSchedules, .unavailable)
+        // Nor of a task's files (§15.22).
+        XCTAssertNil(snapshot.taskFiles)
+        await harness.send(#"{"id":"o","type":"taskOutputs","taskId":"A"}"#, on: phone)
+        let noOutputs = try await phone.response("o").error?.code
+        XCTAssertEqual(noOutputs, .unavailable)
+        await harness.send(#"{"id":"f","type":"readFile","taskId":"A","path":"notes.txt","offset":0}"#, on: phone)
+        let noFiles = try await phone.response("f").error?.code
+        XCTAssertEqual(noFiles, .unavailable)
 
         var next = FakeBridge.snapshot
         next.tasks[0].attention = .waiting
@@ -234,6 +242,152 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertEqual(awaited20, .rateLimited)
     }
 
+    // MARK: - Files (§15.22)
+
+    /// A phone reads a task's file only from the task's folders and outputs. A path outside them, a `..` that climbs out,
+    /// a link that points out, a folder, a FIFO, a folder whose name only starts like the task's and a file that is not
+    /// there all answer `notFound`, with no path in the answer, and the audit log keeps the first part of each read by
+    /// the file's name only.
+    func testATasksFilesAreReadFromItsFoldersAndOutputsOnly() async throws {
+        let files = try TaskFiles()
+        defer { files.remove() }
+        let clock = RemoteTestClock()
+        let harness = try await ServerHarness(clock: clock)
+        var snapshot = FakeBridge.snapshot
+        snapshot.taskFiles = true
+        await harness.bridge.setSnapshot(snapshot)
+        let gone = files.root + "/outside/gone.pdf"
+        await harness.bridge.setFiles(files.scope, outputs: [RemoteOutput(path: files.summary, name: "summary.pdf", writtenAt: 1),
+                                                             RemoteOutput(path: gone, name: "gone.pdf")], for: "A")
+        let phone = try await harness.authenticatedPhone()
+        var sent = 0
+        func ask(_ type: String, _ fields: String = "") async throws -> RemoteResponse {
+            sent += 1
+            // Time enough for the rate limits to let each request through.
+            clock.advance(by: 1)
+            await harness.send(#"{"id":"r\#(sent)","type":"\#(type)"\#(fields)}"#, on: phone)
+            return try await phone.response("r\(sent)")
+        }
+        func read(_ path: String, offset: Int = 0, task: String = "A") async throws -> RemoteResponse {
+            try await ask("readFile", #","taskId":"\#(task)","path":"\#(path)","offset":\#(offset)"#)
+        }
+
+        let listed = try await ask("snapshot")
+        XCTAssertEqual(listed.taskFiles, true)
+        let outputs = try await ask("taskOutputs", #","taskId":"A""#)
+        XCTAssertEqual(outputs.outputs, [RemoteOutput(path: files.summary, name: "summary.pdf", size: 9, writtenAt: 1),
+                                         RemoteOutput(path: gone, name: "gone.pdf")], "A file that is gone has no size")
+        let noTask = try await ask("taskOutputs", #","taskId":"Z""#)
+        XCTAssertEqual(noTask.error?.code, .notFound)
+
+        // In the task's folder by a relative path, through a link that stays in it, in the project's other folder, and
+        // an output outside both.
+        let notes = try await read("notes.txt")
+        XCTAssertEqual(notes.data, Data("notes".utf8))
+        XCTAssertEqual(notes.path, files.folder + "/notes.txt")
+        XCTAssertEqual(notes.name, "notes.txt")
+        XCTAssertEqual(notes.mediaType, "text/plain")
+        XCTAssertEqual(notes.size, 5)
+        XCTAssertEqual(notes.offset, 0)
+        XCTAssertNotNil(notes.modifiedAt)
+        let linked = try await read("latest.md")
+        XCTAssertEqual(linked.path, files.folder + "/docs/report.md", "The path the Mac read")
+        XCTAssertEqual(linked.name, "report.md")
+        XCTAssertEqual(linked.mediaType, "text/markdown")
+        let other = try await read(files.root + "/other/data.csv")
+        XCTAssertEqual(other.mediaType, "text/csv")
+        let output = try await read(files.summary)
+        XCTAssertEqual(output.data, Data("%PDF-1.4\n".utf8))
+        XCTAssertEqual(output.mediaType, "application/pdf")
+        let rest = try await read("notes.txt", offset: 2)
+        XCTAssertEqual(rest.data, Data("tes".utf8))
+        XCTAssertEqual(rest.offset, 2)
+        let past = try await read("notes.txt", offset: 6)
+        XCTAssertEqual(past.error?.code, .badRequest)
+
+        // Anything else answers as a file that is not there would, and says nothing of where it looked.
+        let refused = ["../outside/secret.txt", files.root + "/outside/secret.txt", "escape.txt", "docs", "pipe", "missing.txt",
+                       files.root + "/project2/x.txt", "docs/../../outside/secret.txt", "/etc/passwd"]
+        for path in refused {
+            let answer = try await read(path)
+            XCTAssertEqual(answer.error?.code, .notFound, path)
+            XCTAssertNil(answer.data, path)
+            let message = try XCTUnwrap(answer.error?.message)
+            XCTAssertFalse(message.contains("/") || message.contains("secret"), message)
+        }
+        let otherTask = try await read("notes.txt", task: "Z")
+        XCTAssertEqual(otherTask.error?.code, .notFound)
+
+        let audit = harness.audit.entries().filter { $0.type == "readFile" }
+        XCTAssertEqual(audit.map(\.file), ["notes.txt", "report.md", "data.csv", "summary.pdf", "secret.txt", "secret.txt",
+                                           "escape.txt", "docs", "pipe", "missing.txt", "x.txt", "secret.txt", "passwd",
+                                           "notes.txt"], "Only the first part of each read, by the file's name")
+        XCTAssertEqual(audit.map(\.result), Array(repeating: "ok", count: 4) + Array(repeating: "notFound", count: 10))
+        XCTAssertEqual(audit.map(\.task), Array(repeating: "A", count: 13) + ["Z"])
+        let log = try String(contentsOf: harness.auditURL, encoding: .utf8)
+        XCTAssertFalse(log.contains("remote-files-") || log.contains("outside") || log.contains("project"), log)
+    }
+
+    /// A file is read in parts of at most 4 MiB that join into the whole file, up to 100 MiB; one byte more is too large.
+    /// The large files are sparse, so nothing fills the disk.
+    func testAFileIsReadInPartsUpTo100MiB() throws {
+        let files = try TaskFiles()
+        defer { files.remove() }
+        let whole = Data((0..<(2 * RemoteProtocol.maxReadPartBytes + 1_234)).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ $0 >> 12) })
+        try whole.write(to: URL(filePath: files.folder + "/build.bin"))
+        var joined = Data()
+        var parts: [RemoteFilePart] = []
+        while joined.count < whole.count {
+            let part = try RemoteFileReader.read("build.bin", offset: joined.count, in: files.scope).get()
+            XCTAssertLessThanOrEqual(part.data.count, RemoteProtocol.maxReadPartBytes)
+            XCTAssertEqual(part.size, whole.count)
+            parts.append(part)
+            joined += part.data
+        }
+        XCTAssertEqual(joined, whole)
+        XCTAssertEqual(parts.map(\.offset), [0, RemoteProtocol.maxReadPartBytes, 2 * RemoteProtocol.maxReadPartBytes])
+        XCTAssertEqual(Set(parts.map(\.modifiedAt)).count, 1, "Unchanged between parts")
+        XCTAssertEqual(parts.first?.mediaType, "application/octet-stream")
+        XCTAssertEqual(try RemoteFileReader.read("build.bin", offset: whole.count, in: files.scope).get().data, Data())
+
+        func sparse(_ name: String, size: Int) throws -> String {
+            let path = files.folder + "/" + name
+            XCTAssertTrue(FileManager.default.createFile(atPath: path, contents: nil))
+            let handle = try FileHandle(forWritingTo: URL(filePath: path))
+            try handle.truncate(atOffset: UInt64(size))
+            try handle.close()
+            return path
+        }
+        let largest = try RemoteFileReader.read(sparse("largest.mov", size: RemoteProtocol.maxReadFileBytes), offset: 0,
+                                                in: files.scope).get()
+        XCTAssertEqual(largest.size, RemoteProtocol.maxReadFileBytes)
+        XCTAssertEqual(largest.data.count, RemoteProtocol.maxReadPartBytes)
+        XCTAssertEqual(largest.mediaType, "video/quicktime")
+        let over = try sparse("over.mov", size: RemoteProtocol.maxReadFileBytes + 1)
+        guard case let .failure(error) = RemoteFileReader.read(over, offset: 0, in: files.scope) else { return XCTFail("Read") }
+        XCTAssertEqual(error.code, .tooLarge)
+    }
+
+    /// A folder that is the person's home folder or holds it gives no files of its own; the task's outputs are still
+    /// served, and so is another folder of the task's below it.
+    func testAFolderHoldingTheHomeFolderServesOnlyOutputs() throws {
+        let files = try TaskFiles()
+        defer { files.remove() }
+        let home = files.folder
+        func code(_ path: String, in scope: RemoteFileScope) -> RemoteErrorCode? {
+            guard case let .failure(error) = RemoteFileReader.read(path, offset: 0, in: scope, home: home) else { return nil }
+            return error.code
+        }
+        XCTAssertEqual(code("notes.txt", in: files.scope), .notFound, "The home folder itself")
+        XCTAssertNil(code(files.root + "/other/data.csv", in: files.scope), "Another folder, beside the home folder")
+        let above = RemoteFileScope(folder: URL(filePath: files.root, directoryHint: .isDirectory),
+                                    outputs: [URL(filePath: files.summary)])
+        XCTAssertEqual(code("outside/secret.txt", in: above), .notFound, "A folder above the home folder")
+        XCTAssertNil(code(files.summary, in: above), "An output")
+        XCTAssertTrue(RemoteFileReader.isInside("/a/b/c", "/a/b"))
+        XCTAssertFalse(RemoteFileReader.isInside("/a/bc", "/a/b"), "Whole path components")
+    }
+
     func testRemovingADeviceDisconnectsItAndEndsItsPairing() async throws {
         let harness = try await ServerHarness()
         let ticket = await harness.server.openPairing()
@@ -376,6 +530,8 @@ actor FakeBridge: RemoteBridge {
     private(set) var preparedTasks: [String] = []
     private(set) var createdTasks: [(projectID: String, text: String)] = []
     private var details: [String: RemoteItemDetail] = [:]
+    private var fileScopes: [String: RemoteFileScope] = [:]
+    private var outputs: [String: [RemoteOutput]] = [:]
 
     func setChangeHandler(_ handler: @escaping @Sendable (RemoteBridgeChange) -> Void) { self.handler = handler }
     func snapshot() -> RemoteSnapshot { current }
@@ -399,12 +555,60 @@ actor FakeBridge: RemoteBridge {
         details["\(taskID)/\(itemID)"].map { .success($0) } ?? .failure(RemoteError(.notFound))
     }
 
+    /// Until a task is given files, the bridge answers no files at all (§15.22).
+    func taskOutputs(taskID: String) -> Result<[RemoteOutput], RemoteError> {
+        guard !fileScopes.isEmpty else { return .failure(RemoteError(.unavailable)) }
+        return outputs[taskID].map { .success($0) } ?? .failure(RemoteError(.notFound))
+    }
+    func fileScope(taskID: String) -> Result<RemoteFileScope, RemoteError> {
+        guard !fileScopes.isEmpty else { return .failure(RemoteError(.unavailable)) }
+        return fileScopes[taskID].map { .success($0) } ?? .failure(RemoteError(.notFound))
+    }
+
     func setDetail(_ detail: RemoteItemDetail, task: String, item: String) { details["\(task)/\(item)"] = detail }
+    func setFiles(_ scope: RemoteFileScope, outputs: [RemoteOutput], for taskID: String) {
+        fileScopes[taskID] = scope
+        self.outputs[taskID] = outputs
+    }
     func setSnapshot(_ snapshot: RemoteSnapshot) { current = snapshot }
     func setConversation(_ conversation: RemoteConversation?, for taskID: String) { conversations[taskID] = conversation }
     func setEarlier(_ conversation: RemoteConversation, for taskID: String) { earlier[taskID] = conversation }
     func failNext(_ error: RemoteError) { nextFailure = error }
     func signal(_ change: RemoteBridgeChange) { handler?(change) }
+}
+
+/// A task's folders on disk (§15.22): `project` is its folder, `other` the project's other folder and
+/// `outside/summary.pdf` its output. Beside them: a secret, a folder whose name starts like the task's, a link out
+/// and a FIFO.
+struct TaskFiles {
+    /// With every link resolved: the temporary folder is behind one (/var is /private/var).
+    let root: String
+    var folder: String { root + "/project" }
+    var summary: String { root + "/outside/summary.pdf" }
+    var scope: RemoteFileScope {
+        RemoteFileScope(folder: URL(filePath: folder, directoryHint: .isDirectory),
+                        otherFolders: [URL(filePath: root + "/other", directoryHint: .isDirectory)],
+                        outputs: [URL(filePath: summary)])
+    }
+
+    init() throws {
+        let made = FileManager.default.temporaryDirectory.appending(path: "remote-files-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: made, withIntermediateDirectories: true)
+        root = try XCTUnwrap(RemoteFileReader.realPath(made.path(percentEncoded: false)))
+        for (path, text) in [("project/notes.txt", "notes"), ("project/docs/report.md", "# Report"), ("other/data.csv", "a,b\n1,2\n"),
+                             ("outside/secret.txt", "secret"), ("outside/summary.pdf", "%PDF-1.4\n"), ("project2/x.txt", "beside")] {
+            let url = URL(filePath: root + "/" + path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: url)
+        }
+        try FileManager.default.createSymbolicLink(atPath: root + "/project/latest.md", withDestinationPath: "docs/report.md")
+        try FileManager.default.createSymbolicLink(atPath: root + "/project/escape.txt", withDestinationPath: "../outside/secret.txt")
+        XCTAssertEqual(mkfifo(root + "/project/pipe", 0o600), 0)
+    }
+
+    func remove() {
+        try? FileManager.default.removeItem(atPath: root)
+    }
 }
 
 struct ServerHarness {

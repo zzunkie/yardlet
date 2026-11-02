@@ -7,7 +7,7 @@ import XCTest
 /// stop button applies) and stopping it expires the request, a waiting task's attention carries a
 /// short summary, and a message sent to a running task waits as a queued item until the turn ends.
 /// The phone app's QA runs against it, so what it offers since 2026-10-27 (§15.13–§15.18) answers as
-/// the contract says, and so do its scheduled tasks (§15.21), through the server.
+/// the contract says, and so do its scheduled tasks (§15.21) and a task's files (§15.22), through the server.
 final class RemoteFixtureTests: XCTestCase {
     func testWaitingTasksRunAndStoppingExpiresTheirRequest() async throws {
         let fixture = RemoteFixtureBridge(speed: 50)
@@ -244,5 +244,53 @@ final class RemoteFixtureTests: XCTestCase {
             let heard = try await other.event(.schedulesChanged, timeout: 0.3)
             XCTFail("Unexpected \(heard)")
         } catch is TestChannel.TimedOut {}
+    }
+
+    /// §15.22 through the server: "Summarize the crash reports" lists a PDF it saved beside its folder and a PNG inside
+    /// it, both read whole, and the text file its conversation names is read by the path the conversation writes; a file
+    /// beside them that is neither, and another task's, are refused.
+    func testATasksFilesOpenThroughTheServer() async throws {
+        typealias ID = RemoteFixtureBridge.ID
+        let fixture = RemoteFixtureBridge()
+        defer { try? FileManager.default.removeItem(at: fixture.filesFolder) }
+        let clock = RemoteTestClock()
+        let harness = try await ServerHarness(clock: clock, serving: fixture)
+        let phone = try await harness.authenticatedPhone()
+        var sent = 0
+        func ask(_ type: String, _ fields: String = "") async throws -> RemoteResponse {
+            sent += 1
+            clock.advance(by: 1)
+            await harness.send(#"{"id":"r\#(sent)","type":"\#(type)"\#(fields)}"#, on: phone)
+            return try await phone.response("r\(sent)")
+        }
+        func read(_ path: String, offset: Int = 0, task: String = ID.history) async throws -> RemoteResponse {
+            try await ask("readFile", #","taskId":"\#(task)","path":"\#(path)","offset":\#(offset)"#)
+        }
+
+        let snapshot = try await ask("snapshot")
+        XCTAssertEqual(snapshot.taskFiles, true)
+        let listing = try await ask("taskOutputs", #","taskId":"\#(ID.history)""#)
+        let outputs = try XCTUnwrap(listing.outputs)
+        XCTAssertEqual(outputs.map(\.name), ["crash-summary.pdf", "crash-chart.png"])
+        XCTAssertTrue(outputs.allSatisfy { $0.size != nil && $0.writtenAt != nil })
+        let pdf = try await read(outputs[0].path)
+        XCTAssertEqual(pdf.mediaType, "application/pdf")
+        XCTAssertEqual(pdf.data?.count, outputs[0].size)
+        XCTAssertEqual(pdf.data?.prefix(5), Data("%PDF-".utf8))
+        let png = try await read(outputs[1].path)
+        XCTAssertEqual(png.mediaType, "image/png")
+        XCTAssertEqual(png.data?.prefix(8), Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
+        let notes = try await read("reports/crash-notes.txt")
+        XCTAssertEqual(notes.mediaType, "text/plain")
+        XCTAssertEqual(notes.data.map { String(decoding: $0, as: UTF8.self) }?.hasPrefix("Crash notes"), true)
+
+        let beside = try await read("../Desktop/private-notes.txt")
+        XCTAssertEqual(beside.error?.code, .notFound)
+        let elsewhere = try await read(outputs[0].path, task: ID.idle)
+        XCTAssertEqual(elsewhere.error?.code, .notFound, "Another task's output")
+        let none = try await ask("taskOutputs", #","taskId":"\#(ID.idle)""#)
+        XCTAssertEqual(none.outputs, [])
+        let unknown = try await ask("taskOutputs", #","taskId":"nope""#)
+        XCTAssertEqual(unknown.error?.code, .notFound)
     }
 }
