@@ -445,6 +445,10 @@ nothing to show while it is read shows as loading instead of "Start a conversati
     this is `ConversationEarlierTurns.providerFile`, and the marker disappears once the read reaches the start.
   - If the saved reading position is an entry that was visible last time but lies outside the newest part, Yardlet reads
     further back until that entry comes in (up to 8 MiB, `placeBytes`).
+  - If the newest part holds fewer turns than a conversation draws when it opens (10,
+    `ConversationTurnWindow.initialTurnCount`), as when its turns saved screenshots or other large outputs, Yardlet reads
+    further back until it holds them (up to 8 MiB). Shown in place of the read cache, the newest part alone could be
+    shorter than the conversation's view.
   - Following and reopening (`refreshConversation`) rereads only the newest 1 MiB, and if the request of its first turn
     is among the visible entries, replaces from that point (turns loaded earlier and the window stay). If it does not
     meet them at a request, it reads further up to 8 MiB, and if it still does not meet them, it starts over from the

@@ -213,7 +213,11 @@ struct ClaudeSubagentTranscriptReader: Sendable {
     /// earlier turns the person brought in stay (following another app's writes, or opening the task
     /// again). When the newest part meets none of them (the window is new, the file was replaced, or
     /// more was written than a read takes), the read starts over from the newest part, going back
-    /// as far as `ClaudeTranscriptTail.placeBytes` to hold `place`, the entry the person was reading.
+    /// as far as `ClaudeTranscriptTail.placeBytes` to hold `place`, the entry the person was reading,
+    /// and the turns a conversation draws when it opens (`ConversationTurnWindow.initialTurnCount`).
+    /// Turns that saved large outputs, such as screenshots, can fill the newest part with a few
+    /// turns or part of one; shown in place of the reading cache, that drew a conversation shorter
+    /// than its view, its latest message well above the composer.
     func refreshConversation(sessionID: String, window: ClaudeTranscriptWindow?, shown: [TranscriptEntry],
                              keeping place: String?) throws -> ClaudeTranscriptRead? {
         guard var read = try readNewest(sessionID: sessionID, bytes: ClaudeTranscriptTail.initialBytes) else { return nil }
@@ -234,6 +238,7 @@ struct ClaudeSubagentTranscriptReader: Sendable {
             } while try readFurtherBack()
         }
         while let place, !read.entries.contains(where: { $0.id.uuidString == place }), try readFurtherBack() {}
+        while read.entries.count(where: \.opensTurn) < ConversationTurnWindow.initialTurnCount, try readFurtherBack() {}
         return read
     }
 

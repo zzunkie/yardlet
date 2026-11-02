@@ -1,18 +1,20 @@
 import Foundation
 
 /// How much of a Claude task's saved transcript Yardlet has read (docs/NATIVE_SESSION_STORAGE.md): the
-/// newest `initialBytes` of the file first, which is enough for the newest turns, so opening a long
-/// conversation does not wait on its whole history. Each time the person asks for earlier turns
-/// (scrolling to the top, or the rail's "Load more history") the read reaches further back: the
-/// budget doubles up to `stepBytes`, then grows by it, until the file's start. Only the newly
-/// covered bytes are parsed (`ClaudeTranscriptWindow`), so a request costs the same however much
-/// was read before it. Following the file as another app writes it reads the newest part again.
+/// newest `initialBytes` of the file first, which is enough for the newest turns unless they saved
+/// large outputs (then up to `placeBytes`), so opening a long conversation does not wait on its whole
+/// history. Each time the person asks for earlier turns (scrolling to the top, or the rail's "Load
+/// more history") the read reaches further back: the budget doubles up to `stepBytes`, then grows
+/// by it, until the file's start. Only the newly covered bytes are parsed (`ClaudeTranscriptWindow`),
+/// so a request costs the same however much was read before it. Following the file as another app
+/// writes it reads the newest part again.
 struct ClaudeTranscriptTail: Equatable, Sendable {
     static let initialBytes = 1 << 20
     /// The most one request for earlier turns parses.
     static let stepBytes = 8 << 20
-    /// How far back a read goes to keep a place the person was reading, or to meet the turns shown
-    /// when following: the most a read took before the window could grow.
+    /// How far back a read goes to keep a place the person was reading, to meet the turns shown when
+    /// following, or to hold the turns a conversation draws when it opens: the most a read took
+    /// before the window could grow.
     static let placeBytes = 8 << 20
 
     /// The conversation the reads belong to; another one (a new chat, an edit's branch) starts over.
