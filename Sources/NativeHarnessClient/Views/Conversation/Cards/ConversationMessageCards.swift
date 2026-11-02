@@ -222,6 +222,7 @@ struct ConversationSentMessage: View {
                 .buttonStyle(.plain)
                 .help(L10n.string("Open the task that sent this message"))
                 .accessibilityHint(L10n.string("Opens the task that sent this message"))
+                .conversationLinkMenu(TaskLink.url(id), text: message.senderName) { open(id) }
         } else {
             label
         }

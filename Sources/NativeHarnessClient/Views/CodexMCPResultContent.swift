@@ -65,6 +65,7 @@ private struct CodexMCPResultLink: View {
                         .parityPointer()
                         .help(link.uri)
                         .accessibilityLabel(L10n.format("Open %@", link.label))
+                        .conversationLinkMenu(url, text: link.label)
                     } else {
                         Text(verbatim: link.label)
                             .textSelection(.enabled)

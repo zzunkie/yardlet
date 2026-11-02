@@ -201,6 +201,7 @@ struct CodexReviewCommentsCard: View {
         .parityPointer()
         .help(comment.body)
         .accessibilityLabel(L10n.format("View %@ in %@", comment.title, location))
+        .conversationLinkMenu(comment.link(relativeTo: workspaceURL))
     }
 
     private func toggle(hidden: Int) -> some View {

@@ -185,7 +185,7 @@ private struct FileNotice: View {
 
 /// The file in its own app and in Finder, for what the panel does not do. A program is only shown in
 /// Finder: its own app would run it.
-private struct FileElsewhereButtons: View {
+struct FileElsewhereButtons: View {
     let url: URL
 
     var body: some View {

@@ -38,6 +38,11 @@ enum TaskLink: Equatable, Sendable {
         self = .codexThread(id)
     }
 
+    /// The anchor that links to a Yardlet task, as agents write one (`[title](#<UUID>)`).
+    static func url(_ id: UUID) -> URL {
+        URL(string: "#\(id.uuidString)")!
+    }
+
     /// Whether another app opens the link when Yardlet has no such task: the Codex app opens its
     /// threads. An anchor names nothing outside the conversation.
     var opensElsewhere: Bool {

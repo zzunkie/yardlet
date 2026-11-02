@@ -175,18 +175,6 @@ struct TranscriptPlainText: View {
     }
 }
 
-/// Where a link in a conversation opens: a web page in the task's own browser panel, as the Codex
-/// app opens one in its browser (decision of 2026-10-22: the Yardlet browser is the default); a file
-/// in the task's files; anything else (mail, other apps' links) where the system sends it.
-enum ConversationLinkRoute: Equatable {
-    case taskBrowser
-    case outside
-
-    init(_ url: URL) {
-        self = ["http", "https"].contains(url.scheme?.lowercased() ?? "") ? .taskBrowser : .outside
-    }
-}
-
 private struct TranscriptCopyDetailsKey: EnvironmentKey {
     static let defaultValue: String? = nil
 }

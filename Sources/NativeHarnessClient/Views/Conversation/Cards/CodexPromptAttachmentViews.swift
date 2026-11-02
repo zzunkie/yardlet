@@ -27,6 +27,7 @@ struct CodexPromptAttachmentRow: View {
                 .parityPointer()
                 .help(file.path)
                 .accessibilityLabel(file.lineInfo.map { "\(file.name) \($0)" } ?? file.name)
+                .conversationLinkMenu(file.link)
             }
             ForEach(Array(attachments.uploads.enumerated()), id: \.offset) { _, name in
                 CodexPromptChip(symbol: "doc", title: name)
