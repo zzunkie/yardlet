@@ -259,7 +259,6 @@ final class TerminalCommandHandoffTests: XCTestCase {
         let workspace = TaskWorkspaceState()
         workspace.setPanels(.init(isTerminalPresented: true))
         let draft = TaskComposerDraft()
-        draft.text = "Why does this fail?"
         for appearance in WindowlessRender.Appearance.allCases {
             let host = WindowlessRender.Host(
                 TaskTerminalHost(fixture: fixture, workspace: workspace, draft: draft)
@@ -272,7 +271,18 @@ final class TerminalCommandHandoffTests: XCTestCase {
             )
             defer { host.close() }
             host.settle()
+            // The command and its output, as the person drags across them.
+            func selectCommandAndOutput(in terminal: NativeTerminalView) throws {
+                let buffer = terminal.getTerminal()
+                let output = try XCTUnwrap((0..<buffer.rows).first {
+                    buffer.getLine(row: $0)?.translateToString(trimRight: true) == "B2-selected"
+                })
+                terminal.selection.setSelection(start: Position(col: 0, row: output - 1),
+                                                end: Position(col: buffer.cols, row: output))
+            }
             if appearance == .dark {
+                try selectCommandAndOutput(in: try XCTUnwrap(host.hosting.terminalView))
+                host.settle()
                 try WindowlessRender.writePNG(Self.asShown(host, appearance: appearance),
                                               to: directory.appending(path: "attach-dark.png"))
                 continue
@@ -283,7 +293,7 @@ final class TerminalCommandHandoffTests: XCTestCase {
             try waitForLine("B2-selected", in: host)
             let terminal = try XCTUnwrap(host.hosting.terminalView)
             XCTAssertTrue(host.window.makeFirstResponder(terminal))
-            terminal.selectAll(nil)
+            try selectCommandAndOutput(in: terminal)
             let click = try XCTUnwrap(NSEvent.mouseEvent(
                 with: .rightMouseDown, location: .zero, modifierFlags: [], timestamp: 0,
                 windowNumber: host.window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
@@ -294,10 +304,9 @@ final class TerminalCommandHandoffTests: XCTestCase {
             XCTAssertEqual(terminal.menu(for: click)?.items.first?.title, L10n.string("Attach Selection to Message"))
             XCTAssertTrue(terminal.performKeyEquivalent(with: key))
             host.settle()
-            let heading = "Why does this fail?\n\n" + L10n.format("Terminal (%@):", "yardlet") + "\n```\n"
-            XCTAssertTrue(draft.text.hasPrefix(heading), draft.text)
-            XCTAssertTrue(draft.text.contains("\nB2-selected\n"), draft.text)
-            XCTAssertTrue(draft.text.hasSuffix("\n```\n"), draft.text)
+            let heading = L10n.format("Terminal (%@):", "yardlet") + "\n```\n"
+            XCTAssertTrue(draft.text.hasPrefix(heading), "An empty message starts with the block: \(draft.text)")
+            XCTAssertTrue(draft.text.hasSuffix("printf 'B2-%s\\n' selected\nB2-selected\n```\n"), draft.text)
             XCTAssertEqual(draft.selection?.lowerBound, draft.text.endIndex, "the caret goes after the block")
             // A window never shown never becomes key, so the composer's own step that puts the caret back
             // (`ComposerEditor`, which reads the key window's field) leaves AppKit's select-all here; the
@@ -318,6 +327,13 @@ final class TerminalCommandHandoffTests: XCTestCase {
             host.settle()
         }
         workspace.endTerminal()
+        // After what the message says, one blank line apart.
+        let block = L10n.format("Terminal (%@):", "yardlet") + "\n```\nB2\n```\n"
+        XCTAssertEqual(TerminalSelectionText.appending("B2\n", from: "yardlet", to: "Why?"), "Why?\n\n" + block)
+        XCTAssertEqual(TerminalSelectionText.appending("B2", from: "yardlet", to: "Why?\n"), "Why?\n\n" + block)
+        XCTAssertEqual(TerminalSelectionText.appending("B2", from: "yardlet", to: " \n"), block)
+        XCTAssertEqual(TerminalSelectionText.appending("a ``` b", from: "t", to: ""),
+                       L10n.format("Terminal (%@):", "t") + "\n````\na ``` b\n````\n", "A longer fence around one inside")
 
         // The setting, below the browser tools' switch in Settings › General.
         for appearance in WindowlessRender.Appearance.allCases {
