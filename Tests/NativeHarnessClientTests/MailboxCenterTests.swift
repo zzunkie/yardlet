@@ -21,8 +21,10 @@ final class MailboxCenterTests: XCTestCase {
         center.startWatching()
         try await waitUntil { defaults.dictionary(forKey: MailboxPreference.cursorsKey)?.isEmpty == false }
 
+        // Newer than every fixture thread in any time zone, as new mail is.
         let arrived = fixture.single(MailFixture.work.id, "thread-new", from: MailAddress(name: "Mina", address: "mina@acme.example"),
-                                     date: .now, subject: "Lunch on Friday?", text: "Are you free on Friday?", isUnread: true)
+                                     date: .now.addingTimeInterval(2 * 86_400), subject: "Lunch on Friday?",
+                                     text: "Are you free on Friday?", isUnread: true)
         await transport.deliver(arrived)
         try await waitUntil { !told.isEmpty }
         XCTAssertEqual(told.map { $0.map(\.id.threadID) }, [["thread-new"]], "Only the thread mail arrived in is told")
@@ -63,7 +65,8 @@ final class MailboxCenterTests: XCTestCase {
         try await waitUntil { defaults.dictionary(forKey: MailboxPreference.cursorsKey)?.isEmpty == false }
         await transport.failNextInboxRead()
         await transport.deliver(MailFixture().single(MailFixture.work.id, "thread-late", from: MailAddress(address: "mina@acme.example"),
-                                                     date: .now, subject: "One more thing", text: "Before Friday.", isUnread: true))
+                                                     date: .now.addingTimeInterval(2 * 86_400), subject: "One more thing",
+                                                     text: "Before Friday.", isUnread: true))
         try await waitUntil { !told.isEmpty }
         XCTAssertEqual(told.first?.map(\.id.threadID), ["thread-late"])
         XCTAssertEqual(center.threads.count, 5, "The thread read on the second page stays")
