@@ -137,6 +137,11 @@ final class AppModel {
     /// Why continuing a limited task under another account was refused, for its limit card.
     private(set) var usageLimitSwitchErrorBySessionID: [UUID: String] = [:]
     @ObservationIgnored private var usageLimitAutoContinueTasks: [UUID: Task<Void, Never>] = [:]
+    /// Follows `UsageLimitAutoContinuePreference` once the setting has armed a continue.
+    @ObservationIgnored private var usageLimitAutoContinuePreferenceObserver: (any NSObjectProtocol)?
+    /// The armed continue the person's message took over, until the turn it started ends: a card that
+    /// turn ends on is armed in its place.
+    @ObservationIgnored private var usageLimitAutoContinueHandedOver: [UUID: UsageLimitAutoContinue] = [:]
     /// How long after a limit's reset the continue message waits, so the provider's own clock
     /// has passed it too.
     @ObservationIgnored var usageLimitResumeGrace: Duration = .seconds(10)
@@ -241,9 +246,6 @@ final class AppModel {
     @ObservationIgnored var accountMovePreferenceObserver: (any NSObjectProtocol)?
     /// The setting as followed from launch (`startAccountMoves`); nil until then.
     @ObservationIgnored var followedAccountMovePreference: Bool?
-    /// The resets whose continue Yardlet armed itself, by task, so turning the setting off disarms
-    /// only those.
-    @ObservationIgnored var accountMoveArmedContinues: [UUID: Date] = [:]
     private(set) var sideChatErrors: [UUID: String] = [:]
     private(set) var bootstrapError: String?
     /// Archived tasks being restored, and the last restore or listing failure, for the archived list.
@@ -1133,7 +1135,7 @@ final class AppModel {
             return
         }
         // Anything sent to the task takes over from a pending automatic continue.
-        cancelUsageLimitAutoContinue(for: session.id)
+        handOverUsageLimitAutoContinue(for: session.id)
         personActed(on: session.id)
         if usageLimitSwitchErrorBySessionID[session.id] != nil {
             usageLimitSwitchErrorBySessionID.removeValue(forKey: session.id)
@@ -1442,7 +1444,7 @@ final class AppModel {
             composerDrafts.tasks.draft(for: session.id).notice = L10n.string("Edited messages cannot be queued or steered.")
             return
         }
-        cancelUsageLimitAutoContinue(for: session.id)
+        handOverUsageLimitAutoContinue(for: session.id)
         let target = await runningFollowUpTarget(for: session)
         let mode: FollowUpMode = switch action {
         // While the task waits to move to another account, what is sent goes after the move.
@@ -1717,7 +1719,7 @@ final class AppModel {
     /// (Claude Code), it starts that turn itself, so the queue waits for it.
     private func drainFollowUps(for sessionID: UUID) async {
         guard let session = store.sessions.first(where: { $0.id == sessionID }), !followUps.isPaused(sessionID),
-              accountSwitchesAfterTurn[sessionID] == nil,
+              accountSwitchesAfterTurn[sessionID] == nil, usageLimitHold(of: sessionID) == nil,
               let delivery = followUpDelivery(for: session),
               case let queue = followUps.queue(for: sessionID),
               !queue.contains(where: { $0.state == .sent || followUps.isClaimed($0.id) }),
@@ -5309,7 +5311,6 @@ final class AppModel {
               connection != current.connection, TaskAccountSwitch.allows(connection, for: current) else { return }
         switchingAccounts.insert(current.id)
         defer { switchingAccounts.remove(current.id) }
-        cancelUsageLimitAutoContinue(for: current.id)
         do {
             try connection.validate(for: current.harness)
             // The task resumes under the target's own login, so that CLI must report one first.
@@ -5318,6 +5319,9 @@ final class AppModel {
             guard HarnessAccountBroker.commandAccountState(for: .claudeCode, result: status) == .signedIn
             else { throw ProviderConnectionError.signedOut }
             try await rebind(current, to: connection)
+            // The task goes on under the new account, not at the old one's reset; a switch refused
+            // above leaves it waiting there, with what waits for that continue.
+            cancelUsageLimitAutoContinue(for: current.id)
             // The previous account's warning and limits say nothing about the next one.
             rateLimitWarningBySessionID.removeValue(forKey: current.id)
             codexStatusBySessionID.removeValue(forKey: current.id)
@@ -5491,7 +5495,7 @@ final class AppModel {
         try await rebind(current, to: connection)
         guard let updated = store.sessions.first(where: { $0.id == current.id }) else { return }
         if let armed {
-            setUsageLimitAutoContinue(true, resetsAt: armed.resetsAt, for: updated)
+            setUsageLimitAutoContinue(true, resetsAt: armed.resetsAt, armedBy: armed.armedBy, for: updated)
         }
         guard hadRuntime else { return }
         do { try await attach(updated, resumesExistingSession: updated.providerSessionID != nil) }
@@ -5541,18 +5545,83 @@ final class AppModel {
 
     /// Arms or disarms the automatic continue for the task's limit card, the one naming `resetsAt`.
     /// Armed, the task sends the continue message once the limit has reset, unless it changed in the
-    /// meantime. A relaunch arms it again (`restoreUsageLimitAutoContinues`).
-    func setUsageLimitAutoContinue(_ enabled: Bool, resetsAt: Date, for session: SessionRecord) {
+    /// meantime. A relaunch arms it again (`restoreUsageLimitAutoContinues`). `armedBy` is nil for the
+    /// person's own choice on the card.
+    func setUsageLimitAutoContinue(_ enabled: Bool, resetsAt: Date, armedBy: UsageLimitAutoContinue.ArmedBy? = nil,
+                                   for session: SessionRecord) {
         cancelUsageLimitAutoContinue(for: session.id)
         guard enabled, let current = store.sessions.first(where: { $0.id == session.id }),
-              current.harness == .claudeCode else { return }
+              current.harness == .claudeCode else {
+            // What waited for the continue goes now, as it would have without it.
+            scheduleFollowUpDrain(for: session.id)
+            return
+        }
         arm(UsageLimitAutoContinue(resetsAt: resetsAt, providerSessionID: current.providerSessionID,
-            connection: current.connection), for: current.id)
+            connection: current.connection, armedBy: armedBy), for: current.id)
+    }
+
+    /// A limit that stopped a Claude Code task's turn arms its card's automatic continue as it comes:
+    /// the continue the person's message took over, when the turn it started hit the limit again, as
+    /// Claude Code keeps its wait when a message typed during it hits the limit again; else, while
+    /// the setting is on (`UsageLimitAutoContinuePreference`), one for a reset within a day. Not when
+    /// one waits for that reset already, and not for a card read back from saved history.
+    private func armAtUsageLimit(_ limit: HarnessRateLimit, for id: UUID) {
+        guard let resetsAt = limit.resetsAt, resetsAt > Date(), usageLimitAutoContinue[id]?.waits(for: resetsAt) != true,
+              let session = store.sessions.first(where: { $0.id == id }) else { return }
+        let settingArms = UsageLimitAutoContinuePreference.isOn(in: preferences)
+        if let previous = usageLimitAutoContinueHandedOver.removeValue(forKey: id),
+           settingArms || previous.armedBy != .setting {
+            setUsageLimitAutoContinue(true, resetsAt: resetsAt, armedBy: previous.armedBy, for: session)
+        } else if settingArms, resetsAt.timeIntervalSinceNow <= UsageLimitAutoContinuePreference.horizon {
+            setUsageLimitAutoContinue(true, resetsAt: resetsAt, armedBy: .setting, for: session)
+        }
+    }
+
+    /// The person's message takes over from an armed continue, which the turn it starts hands to
+    /// the card it ends on if it hits the limit again (`armAtUsageLimit`).
+    private func handOverUsageLimitAutoContinue(for sessionID: UUID) {
+        if let armed = usageLimitAutoContinue[sessionID] { usageLimitAutoContinueHandedOver[sessionID] = armed }
+        cancelUsageLimitAutoContinue(for: sessionID)
+    }
+
+    /// The reset a task waits for with its automatic continue armed, while it is ahead. What another
+    /// task, a schedule or auto-fix sends meanwhile waits in the task's queue and goes after the
+    /// continue, as Claude Code keeps what is queued during its wait for its continue: a turn started
+    /// now would only hit the limit again. The person's own message goes at once.
+    func usageLimitHold(of id: UUID) -> Date? {
+        usageLimitAutoContinue[id].map(\.resetsAt).flatMap { $0 > Date() ? $0 : nil }
+    }
+
+    /// Puts a message in the task's queue for after the continue while the task waits for its reset
+    /// (`usageLimitHold`), and says until when; nil when it does not wait.
+    func holdUntilUsageLimitResets(_ input: HarnessUserInput, for id: UUID) -> Date? {
+        guard let resetsAt = usageLimitHold(of: id) else { return nil }
+        followUps.append(QueuedFollowUp(draft: CodexComposerDraft(input)), to: id)
+        return resetsAt
+    }
+
+    /// Disarms the continues the setting armed once it is turned off, so that nothing it did is left
+    /// but the setting. Any setting's change posts the notification; only this one acts.
+    private func followUsageLimitAutoContinuePreference() {
+        guard usageLimitAutoContinuePreferenceObserver == nil else { return }
+        nonisolated(unsafe) let watched = preferences
+        usageLimitAutoContinuePreferenceObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: preferences, queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, !UsageLimitAutoContinuePreference.isOn(in: watched) else { return }
+                for (id, armed) in self.usageLimitAutoContinue where armed.armedBy == .setting {
+                    self.cancelUsageLimitAutoContinue(for: id)
+                    self.scheduleFollowUpDrain(for: id)
+                }
+            }
+        }
     }
 
     private func arm(_ armed: UsageLimitAutoContinue, for sessionID: UUID) {
         usageLimitAutoContinue[sessionID] = armed
         saveUsageLimitAutoContinues()
+        if armed.armedBy == .setting { followUsageLimitAutoContinuePreference() }
         let wait = Duration.seconds(max(0, armed.resetsAt.timeIntervalSinceNow)) + usageLimitResumeGrace
         usageLimitAutoContinueTasks[sessionID] = Task { [weak self] in
             // The continuous clock keeps counting while the Mac sleeps, so a reset that passed
@@ -5577,6 +5646,8 @@ final class AppModel {
         usageLimitAutoContinueTasks.removeValue(forKey: sessionID)
         saveUsageLimitAutoContinues()
         await sendContinueAfterReset(to: sessionID, leftAs: armed)
+        // What waited for the reset goes after the continue, or now if the task had moved on.
+        scheduleFollowUpDrain(for: sessionID)
     }
 
     /// The armed continues, written as they change, so that one armed before a quit, a crash or an
@@ -5590,10 +5661,13 @@ final class AppModel {
     /// Arms again, at launch, the continues armed before the last quit, for the tasks still on the same
     /// conversation and account; a reset that passed meanwhile continues the task now, within the day
     /// a cut-off turn continues in (`RestartResumePolicy.maxAge`). Whether the task still stands at
-    /// the card is checked when the message would go.
+    /// the card is checked when the message would go. Those a setting armed wait only while it is on.
     private func restoreUsageLimitAutoContinues(now: Date) {
+        let settingArms = UsageLimitAutoContinuePreference.isOn(in: preferences)
+        let movesArm = AccountMovePreference.isOn(in: preferences)
         for (id, armed) in UsageLimitAutoContinue.load(from: preferences)
-        where now < armed.resetsAt.addingTimeInterval(RestartResumePolicy.maxAge) {
+        where now < armed.resetsAt.addingTimeInterval(RestartResumePolicy.maxAge)
+            && (settingArms || armed.armedBy != .setting) && (movesArm || armed.armedBy != .accountMove) {
             guard let session = store.sessions.first(where: { $0.id == id }), session.harness == .claudeCode,
                   session.providerSessionID == armed.providerSessionID, session.connection == armed.connection,
                   usageLimitAutoContinue[id] == nil else { continue }
@@ -6889,6 +6963,7 @@ final class AppModel {
         case let .nextMessageSuggestion(text):
             acceptNextMessageSuggestion(text, for: event.localSessionID)
         case .turnCompleted:
+            usageLimitAutoContinueHandedOver.removeValue(forKey: event.localSessionID)
             // A turn that ended on its final error already failed and notified; it did not complete.
             let failed = store.sessions.first(where: { $0.id == event.localSessionID })?.status == .failed
             let shouldMarkUnread = !isSessionVisible(event.localSessionID)
@@ -6914,8 +6989,11 @@ final class AppModel {
             // switched to, so the composer's selectors follow it now rather than at turn end.
             await reloadAttachedProviderCapabilities(for: event.localSessionID)
             await keepAnnouncedPermissionMode(for: event.localSessionID)
-        case let .rateLimitUpdated(limit), let .usageLimitReached(limit):
+        case let .rateLimitUpdated(limit):
             recordRateLimit(limit, for: event.localSessionID)
+        case let .usageLimitReached(limit):
+            recordRateLimit(limit, for: event.localSessionID)
+            armAtUsageLimit(limit, for: event.localSessionID)
         case let .providerRetrying(retry):
             providerRetryBySessionID[event.localSessionID] = retry
         case let .usageUpdated(usage):

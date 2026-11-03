@@ -16,8 +16,13 @@ import XCTest
         model.composerDrafts.tasks.draft(for: task.id).text = "Keep my draft"
 
         let transport = try XCTUnwrap(fixture.transports.all.first)
-        for frame in limitFrames(resetsAt: Date().addingTimeInterval(3_600)) { await transport.emit(frame) }
+        let resetsAt = Date().addingTimeInterval(3_600)
+        for frame in limitFrames(resetsAt: resetsAt) { await transport.emit(frame) }
         let card = try await waitForLimitCard(in: model, task: task)
+        // Another task's message waits for the continue the default setting armed.
+        let held = await model.deliverTaskMessage(TaskMessage(senderID: UUID().uuidString, senderName: "Planner",
+            body: "Also check the docs"), to: task)
+        guard case .afterReset = held else { return XCTFail("Held for the continue: \(held)") }
         try await waitUntil { model.store.sessions.first?.status == .failed }
         XCTAssertFalse(model.transcriptBySessionID[task.id]?.contains {
             if case .error = $0.content { return true }
@@ -27,9 +32,10 @@ import XCTest
         XCTAssertEqual(Set(model.usageLimitAccounts(for: task)), [fixture.next, fixture.signedOut],
             "Only accounts sharing the history are offered, never the current one")
 
-        // A refused switch leaves the task where it was and says why on the card.
+        // A refused switch leaves the task where it was, still waiting for its reset, and says why on the card.
         await model.continueAfterUsageLimit(using: fixture.signedOut, for: task)
         XCTAssertEqual(model.store.sessions.first?.connection, fixture.first)
+        XCTAssertEqual(model.usageLimitAutoContinue[task.id]?.waits(for: resetsAt), true)
         XCTAssertEqual(model.usageLimitSwitchErrorBySessionID[task.id], ProviderConnectionError.signedOut.localizedDescription)
         let nothingSent = await transport.sentValues
         XCTAssertTrue(nothingSent.isEmpty)
@@ -49,6 +55,14 @@ import XCTest
         XCTAssertEqual(model.transcriptBySessionID[task.id]?.last?.content,
             .user(text: UsageLimitContinuation.afterAccountSwitch))
         XCTAssertNotEqual(model.transcriptBySessionID[task.id]?.last?.id, card)
+        XCTAssertNil(model.usageLimitAutoContinue[task.id])
+        // What waited for the continue follows it on the new account, as it does after an automatic move.
+        await resumedTransport.emit(try json(#"{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"s"}"#))
+        try await waitUntil { await resumedTransport.sentValues.count == 2 }
+        let followed = await resumedTransport.sentValues.last?["message"]?["content"]?.stringValue
+        XCTAssertTrue(followed?.contains("Also check the docs") == true, followed ?? "")
+        let old = await transport.sentValues
+        XCTAssertTrue(old.isEmpty, "Nothing went under the spent account")
     }
 
     func testTheAutomaticContinueWaitsForTheResetAndThenAsksClaudeToPickUp() async throws {
@@ -62,6 +76,15 @@ import XCTest
 
         model.setUsageLimitAutoContinue(true, resetsAt: resetsAt, for: task)
         XCTAssertEqual(model.usageLimitAutoContinue[task.id]?.resetsAt, resetsAt)
+        // What another task and a schedule's run (through auto-fix's delivery) send meanwhile waits for
+        // the continue, as Claude Code holds what is queued during its wait, instead of starting a turn
+        // the limit would stop again and taking the wait away.
+        let delivery = await model.deliverTaskMessage(TaskMessage(senderID: UUID().uuidString, senderName: "Planner",
+            body: "Also check the docs"), to: task)
+        XCTAssertEqual(delivery, .afterReset(resetsAt))
+        let scheduled = await model.deliverAutoFix("Run the nightly check", to: task.id)
+        XCTAssertTrue(scheduled)
+        XCTAssertEqual(model.usageLimitAutoContinue[task.id]?.resetsAt, resetsAt, "The wait stays armed")
         let early = await transport.sentValues.count
         XCTAssertEqual(early, 0, "Nothing is sent before the reset")
         try await waitUntil {
@@ -69,6 +92,57 @@ import XCTest
         }
         XCTAssertNil(model.usageLimitAutoContinue[task.id])
         XCTAssertEqual(model.transcriptBySessionID[task.id]?.last?.content, .user(text: UsageLimitContinuation.afterReset))
+        // They follow the continue, each as the turn before it ends.
+        for count in [2, 3] {
+            await transport.emit(try json(#"{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"s"}"#))
+            try await waitUntil { await transport.sentValues.count == count }
+        }
+        let sent = await transport.sentValues.compactMap { $0["message"]?["content"]?.stringValue }
+        XCTAssertEqual(sent.count, 3)
+        XCTAssertEqual(sent.first, UsageLimitContinuation.afterReset)
+        XCTAssertTrue(sent.dropFirst().first?.contains("Also check the docs") == true, "\(sent)")
+        XCTAssertEqual(sent.last, "Run the nightly check")
+    }
+
+    /// A limit that stops a task and resets within a day arms its continue as it comes, as Claude
+    /// Code's own "Continue automatically at usage limit" does unless turned off; one days out waits
+    /// for the person. Turned off, the setting disarms what it armed and leaves nothing of it but its
+    /// value, a new limit arms nothing, and the person's own choice on a card stands.
+    func testALimitThatResetsWithinADayContinuesByDefaultUntilTheSettingIsTurnedOff() async throws {
+        let soon = try makeFixture()
+        soon.model.usageLimitResumeGrace = .zero
+        // The CLI names the reset in whole seconds.
+        let task = try await limitedTask(in: soon, resetsAt: Date().addingTimeInterval(2))
+        let transport = try XCTUnwrap(soon.transports.all.first)
+        try await waitUntil { soon.model.usageLimitAutoContinue[task.id]?.armedBy == .setting }
+        try await waitUntil {
+            await transport.sentValues.contains { $0["message"]?["content"]?.stringValue == UsageLimitContinuation.afterReset }
+        }
+
+        let weekly = try makeFixture()
+        let later = try await limitedTask(in: weekly, resetsAt: Date().addingTimeInterval(3 * 86_400))
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertNil(weekly.model.usageLimitAutoContinue[later.id], "A reset days out waits for the person")
+
+        let off = try makeFixture()
+        let model = off.model
+        let stopped = try await limitedTask(in: off)
+        let resetsAt = try await limitCardReset(in: model, task: stopped)
+        try await waitUntil { model.usageLimitAutoContinue[stopped.id]?.armedBy == .setting }
+        off.defaults.set(false, forKey: UsageLimitAutoContinuePreference.key)
+        try await waitUntil { model.usageLimitAutoContinue[stopped.id] == nil }
+        XCTAssertNil(off.defaults.object(forKey: UsageLimitAutoContinue.preferenceKey), "Only the setting's value is left")
+        let offTransport = try XCTUnwrap(off.transports.all.first)
+        for frame in limitFrames(resetsAt: resetsAt) { await offTransport.emit(frame) }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertNil(model.usageLimitAutoContinue[stopped.id], "Off, a new limit arms nothing")
+
+        model.setUsageLimitAutoContinue(true, resetsAt: resetsAt, for: stopped)
+        off.defaults.set(true, forKey: UsageLimitAutoContinuePreference.key)
+        off.defaults.set(false, forKey: UsageLimitAutoContinuePreference.key)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertNotNil(model.usageLimitAutoContinue[stopped.id], "The person's own choice stands")
+        XCTAssertNil(model.usageLimitAutoContinue[stopped.id]?.armedBy)
     }
 
     /// Coming back after the reset, the card's Resume asks Claude to pick up under the task's own
@@ -117,13 +191,21 @@ import XCTest
         let afterChange = await transport.sentValues
         XCTAssertTrue(afterChange.isEmpty)
 
-        // A message the user sends takes over from an armed continue at once.
-        model.setUsageLimitAutoContinue(true, resetsAt: resetsAt, for: task)
+        // A message the person sends takes over from an armed continue at once, and goes now. If the
+        // turn it starts hits the limit again, the card it ends on is armed in its place, as Claude
+        // Code keeps its wait then; the setting, off here, has no part in it.
+        fixture.defaults.set(false, forKey: UsageLimitAutoContinuePreference.key)
+        let later = Date().addingTimeInterval(3_600)
+        model.setUsageLimitAutoContinue(true, resetsAt: later, for: task)
         await model.send(HarnessUserInput(text: "Use the other approach"), to: task)
         XCTAssertNil(model.usageLimitAutoContinue[task.id])
         try await Task.sleep(for: .milliseconds(600))
         let sent = await transport.sentValues.compactMap { $0["message"]?["content"]?.stringValue }
         XCTAssertEqual(sent, ["Use the other approach"])
+        for frame in limitFrames(resetsAt: later) { await transport.emit(frame) }
+        try await waitUntil { model.usageLimitAutoContinue[task.id] != nil }
+        XCTAssertEqual(model.usageLimitAutoContinue[task.id]?.waits(for: later), true)
+        XCTAssertNil(model.usageLimitAutoContinue[task.id]?.armedBy, "The person's own choice carries over")
     }
 
     /// An armed continue outlasts a relaunch, which Claude Code's own wait does not, and goes once the
@@ -196,7 +278,8 @@ import XCTest
 
     /// With Settings › Accounts' moves to an account with room on, a task a limit stopped whose limit
     /// resets after its cache would expire moves at the end of its turn to the account with room, keeps
-    /// its conversation and why it moved, and asks Claude to pick up there.
+    /// its conversation and why it moved, and asks Claude to pick up there. The continue the default
+    /// setting armed as the limit came stands aside for the move.
     func testALimitThatResetsAfterTheCacheExpiresMovesTheTaskToAnAccountWithRoom() async throws {
         let fixture = try makeFixture()
         let model = fixture.model
@@ -223,11 +306,13 @@ import XCTest
 
     /// A limit that resets before the task's cache expires keeps the task where it is, armed to
     /// continue at the reset, as is one with no account with room to go to; turning the setting off
-    /// disarms what Yardlet armed and leaves the card as it was.
+    /// disarms what it armed and leaves the card as it was. The default continue is off here, so the
+    /// move's own wait is the one armed.
     func testALimitThatResetsBeforeTheCacheExpiresWaitsForTheReset() async throws {
         for roomElsewhere in [true, false] {
             let fixture = try makeFixture()
             let model = fixture.model
+            fixture.defaults.set(false, forKey: UsageLimitAutoContinuePreference.key)
             read(fixture.first, used: 0.5, in: model)
             read(fixture.next, used: roomElsewhere ? 0.2 : 0.95, in: model)
             model.startAccountMoves()
@@ -236,6 +321,7 @@ import XCTest
             let card = try await waitForLimitCard(in: model, task: task)
 
             try await waitUntil { model.usageLimitAutoContinue[task.id]?.waits(for: resetsAt) == true }
+            XCTAssertEqual(model.usageLimitAutoContinue[task.id]?.armedBy, .accountMove)
             XCTAssertNotNil(UsageLimitAutoContinue.load(from: model.preferences)[task.id], "Kept as one the person armed is")
             XCTAssertEqual(model.store.sessions.first?.connection, fixture.first)
             XCTAssertEqual(fixture.transports.all.count, 1)

@@ -43,6 +43,9 @@ enum TaskMessageDelivery: Equatable {
     case queued
     /// The task waits for room to start; it follows the task's first message.
     case afterStart
+    /// A usage limit stopped the task, which continues once it resets at this time; the message goes
+    /// after that continue (`AppModel.usageLimitHold`).
+    case afterReset(Date)
     case undelivered(String)
 }
 
@@ -334,6 +337,10 @@ extension AppModel: SessionToolHandling {
         case .afterStart:
             return .text("Queued for task \(target.id.uuidString)\(title): that task is queued, and this follows its "
                 + "first message when it starts. wait_tasks waits for it." + quoted.lines)
+        case let .afterReset(resetsAt):
+            return .text("Queued for task \(target.id.uuidString)\(title): a usage limit stopped it, and it continues "
+                + "when the limit resets at \(resetsAt.ISO8601Format()); this message goes right after. wait_tasks or "
+                + "read_task show what it did." + quoted.lines)
         case let .undelivered(reason):
             return .error("Not delivered to task \(target.id.uuidString)\(title): \(reason)")
         }
@@ -413,6 +420,9 @@ extension AppModel: SessionToolHandling {
         let text = text(target)
         // A child task that waits for room gets it after its first message, when it starts.
         if sessionTools.appendMessage(text, toQueued: target.id) { return .afterStart }
+        if let resetsAt = holdUntilUsageLimitResets(HarnessUserInput(text: text), for: target.id) {
+            return .afterReset(resetsAt)
+        }
         let isRunning = target.status == .running || target.status == .waitingForApproval
         let previousError = errorBySessionID[target.id]
         let steers = FollowUpPolicy(harness: target.harness)?.steers == true

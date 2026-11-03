@@ -223,6 +223,28 @@ end of its `id`, which names the window too (`gemini-weekly`, `gemini-5h`); a bu
 the CLI's own name. An answer that is not `SUCCESS`, or none, shows no rows rather than 0. AI credits (`/credits`) are
 not read.
 
+## Continuing after a usage limit
+
+A Claude Code task a plan limit stopped ends its turn on a limit card. Settings › Accounts' **Continue automatically at
+usage limit**, on unless turned off as Claude Code 2.1.291's own setting of that name is, arms the card's
+"Auto-continue when limits reset" as the limit stops the turn, when the limit resets within a day. One that resets
+later, such as a weekly limit days out, waits for the person to turn it on on its card, as Claude Code does not wait past
+a day. Once the reset has passed the card offers Resume instead. Either sends the Claude app's own continue message under
+the task's own account, and only while the task still stands at that card.
+
+- An armed continue is saved and armed again after a relaunch, within a day of its reset. Claude Code drops its own wait
+  when it relaunches.
+- Turning the setting off disarms the continues it armed; a card the person armed keeps waiting. Nothing is left but
+  the setting's value.
+- While a continue waits for a reset still ahead, what another task (`send_message_to_task`), a schedule's run or CI
+  auto-fix sends waits in the task's queue and goes right after the continue, as Claude Code holds what comes during
+  its wait. The person's own message goes at once and takes over from the wait; if its turn hits the limit again, the
+  card it ends on is armed in its place.
+- A card read back from Claude's saved conversation takes its limit and reset from the CLI's words ("You've hit your
+  session limit · resets 3:50am (Asia/Seoul)"): the saved records keep no limit report.
+
+A Codex limit card names no reset and the Codex app offers no continue on it, so it has neither.
+
 ## Usage limit resets
 
 A Codex account can hold banked resets of its plan limits. The App Server reports them in the
@@ -264,8 +286,10 @@ cache has expired, the next request does that anyway, wherever the task is. So (
    move when the account leaves the list (`moveSettledTask`): a task without a runtime does not start its CLI.
 2. A task a limit stopped moves and continues on the new account (the same message as Continue with another account,
    `UsageLimitContinuation.afterAccountSwitch`), unless the limit resets before its cache expires: then it stays, and
-   its limit card is armed to continue at the reset, as if the person had turned on Auto-continue (kept the same way,
-   so it outlasts a relaunch). With no account with room it waits for the reset too, when the CLI named one.
+   its limit card is armed to continue at the reset, as "Continuing after a usage limit" above arms it (kept the same
+   way, so it outlasts a relaunch). With no account with room it waits for the reset too, when the CLI named one. It
+   waits only for a reset within a day, as Claude Code does; a continue the setting there already armed for that reset
+   stays as it is, and only one the person armed keeps a task from moving.
 3. A task whose cache lives stays on a nearly spent account until a limit stops it or its cache expires.
 
 A task waiting for its reset that moves under rule 1 continues on the new account at once. A move never cuts into a
@@ -286,7 +310,7 @@ scan.
 
 While the setting is on, a schedule's run that continues a task whose cache lives leaves it on its account (see
 [NATIVE_SESSION_STORAGE.md](NATIVE_SESSION_STORAGE.md), "Schedules and nearly spent accounts"). Turned off, Yardlet
-looks at nothing, cancels the moves it was waiting to make, disarms the continues it armed since Yardlet opened, and
+looks at nothing, cancels the moves it was waiting to make, disarms the continues it armed, also before a relaunch, and
 schedules move runs as they did before. Moving right after a compaction would also cost nothing, but a compaction happens inside a turn.
 
 Tests: `AccountRoutingTests.testATaskMovesOnlyWhenItsCacheIsLostAnywayOrALimitStoppedIt` (the rule),
