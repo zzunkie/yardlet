@@ -366,6 +366,8 @@ public struct RemoteItem: Codable, Equatable, Sendable {
     public var queued: Bool?
     /// Sending the queued message failed; it waits on the Mac.
     public var queueFailed: Bool?
+    /// Who sent a `user` item that is not the person's (§6.2).
+    public var sender: RemoteSender?
     public var role: String?
     public var streaming: Bool?
 
@@ -420,8 +422,6 @@ public struct RemoteItem: Codable, Equatable, Sendable {
     // A subscription's full detail only (§15.24): what the Mac's own cards draw beyond the phone's line.
     /// A sent message's images, as small previews.
     public var images: [RemoteImagePreview]?
-    /// Who sent a `user` item that is not the person's.
-    public var sender: RemoteSender?
     /// A subagent's card.
     public var subagent: RemoteSubagent?
     /// A context compaction's marker.
@@ -491,7 +491,7 @@ public struct RemoteImagePreview: Codable, Equatable, Sendable {
     }
 }
 
-/// Who sent a `user` item other than the person (§15.24); its words are the item's `text`.
+/// Who sent a `user` item other than the person (§6.2); its words are the item's `text`.
 public struct RemoteSender: Codable, Equatable, Sendable {
     /// One of the person's own messages the sending task passed on, and when the person sent it (ISO 8601).
     public struct Quote: Codable, Equatable, Sendable {

@@ -374,9 +374,17 @@ Unknown kinds: skip them. Text fields are capped (`truncated: true` when cut).
   `queued:…`; `queueFailed: true` when sending it failed (it waits on the Mac). When the provider
   takes the message, the queued item is removed and the message appears as an ordinary `user` item
   (another `id`) in the turn that reads it.
-- `text` ≤ 16,000 characters. `imageCount`: attached images (not sent). `scheduled: true`: a Codex
-  automation sent it on its schedule. `shell: true`: a Claude Code bash command (`text` is the
-  command). `diffCommentCount`: diff comments attached on the Mac (their text is not sent).
+- `text` ≤ 16,000 characters. `imageCount`: attached images (not sent). `scheduled: true`: a schedule
+  sent it, a Codex automation unless `sender` says otherwise. `shell: true`: a Claude Code bash command
+  (`text` is the command). `diffCommentCount`: diff comments attached on the Mac (their text is not sent).
+- `sender`: someone other than the person sent it, and `text` is their words, which the Mac draws apart from the
+  person's own messages: another task's message, `{"kind": "task", "name": "Fix the footer", "relation": "parent",
+  "quotes": [{"text": "…", "sentAt": "2026-11-03T09:12:00+09:00"}]}` (`relation` `task`, `parent`, the task this one
+  was started from, or `itself`, through a schedule its agent made; `quotes`, the person's own messages it passed on,
+  each ≤ 16,000 characters);
+  a background command's or agent's notice that opened the turn, `{"kind": "backgroundTask", "status": "failed"}`;
+  or, beside `scheduled: true`, a prompt Claude Code's own schedule sent, `{"kind": "claudeSchedule", "name":
+  "Morning check"}` (no `name` for a check-in). A client that does not read it draws the item as before.
 
 ### 6.3 `assistant`
 
@@ -546,7 +554,8 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
   - "Pick the release name" (Claude Code) waits on a question (no phone options, `moreOnMac`;
     `stopTurn` expires it, and the question comes back 30 s later).
   - "Plan the weekend trip" (a chat) has a to-do plan; "Check the footer on mobile" is nested under
-    "Fix the footer links"; "Regenerate the screenshots" failed.
+    "Fix the footer links", and after the person's request holds turns its parent's message, a background
+    command's notice and a scheduled check-in opened (§6.2 `sender`); "Regenerate the screenshots" failed.
 
 ## 10. Revisions
 
@@ -578,6 +587,8 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
   a subscription's full detail (§15.24), with the snapshot's `fullConversation`; a `conversation` event's changes may
   come in several events in a row (§5.3, §15.24).
 - 2026-11-03: a request's own words, `message` (§6.5), which the Mac's card shows above an MCP form's fields.
+- 2026-11-03: `sender` (§6.2) in every subscription, not only in full detail: who sent a message that is not the
+  person's, another task, a background command's notice or Claude Code's own schedule.
 - 2026-11-02, a rule restated: `parentTaskId` (§4.1) is the task the Mac's sidebar draws the task under, so a task
   whose parent is in another list, pinned apart or in a split view comes without one, as the sidebar lists it.
   Before, it was the task it was started from whenever that task was listed anywhere.
@@ -1472,19 +1483,13 @@ for what they read beyond §6's items. A phone keeps §6.
   A subscription asks for it once; its page, `loadOlder` pages and events then hold the same items in the same order,
   with the same IDs, as §6, and the fields below besides. Nothing else differs: lines still read their output and
   diffs with `itemDetail` (§15.8), and requests answer as §15.19.
-- **Longer text.** `text` of `user` and `assistant` items, a request's `text`, `detail`, `message` and `command`, and an
-  error's `message` (the provider's whole text, not its summary) are cut at 200,000 characters instead of §6's limits,
-  with `truncated: true` as before.
+- **Longer text.** `text` of `user` and `assistant` items, the `quotes` of a `user` item's `sender` (§6.2), a request's
+  `text`, `detail`, `message` and `command`, and an error's `message` (the provider's whole text, not its summary) are
+  cut at 200,000 characters instead of §6's limits, with `truncated: true` as before.
 - **`images`** on a `user` item: the pictures the message sent, as small previews the Mac makes once, `{"type":
   "image/jpeg", "data": "<base64>", "name": "login-page.png"}`, at most 480 pixels on the long side, in the message's
   order. A picture the Mac cannot read (or one on the web, which it never fetches) has none, and a preview being made
   arrives as a change once it is ready; `imageCount` still counts them all, so a client shows the rest by name.
-- **`sender`** on a `user` item someone other than the person sent, whose words are its `text`: another task's
-  message, `{"kind": "task", "name": "Fix the footer", "relation": "parent", "quotes": [{"text": "…", "sentAt":
-  "2026-11-03T09:12:00+09:00"}]}` (`relation` `task`, `parent` or `itself`; `quotes`, the person's own messages it
-  passed on); a background command's or agent's notice that opened the turn, `{"kind": "backgroundTask", "status":
-  "failed"}`; or, beside `scheduled: true`, a prompt Claude Code's own schedule sent, `{"kind": "claudeSchedule",
-  "name": "Morning check"}` (no `name` for a check-in). A `scheduled` item without it is a Codex automation's.
 - **`subagent`** on an `activity` item with `activity` `subagent`, the subagent card's own fields (its title and status
   are the item's):
 

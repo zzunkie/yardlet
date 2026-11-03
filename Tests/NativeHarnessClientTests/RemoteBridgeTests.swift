@@ -339,6 +339,49 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(answer.streaming, true)
     }
 
+    /// A message the person did not send says who sent it in either detail (§6.2), so a phone draws it apart from the
+    /// person's own: another task's with the person's words it passed on, cut as a message is, a background command's
+    /// notice, and a check-in Claude Code's own schedule sent.
+    func testMessagesThePersonDidNotSendSayWhoSentThemInEitherDetail() throws {
+        let quote = String(repeating: "Check the small phones too. ", count: 1_000)
+        let fromParent = TaskMessage(senderID: UUID().uuidString, senderName: "Fix the footer links",
+                                     body: "Check the footer at 320 pt as well.", relation: .parent,
+                                     quotes: [.init(text: quote, sentAt: "2026-11-03T09:12:00+09:00")])
+        let entries = [
+            TranscriptEntry(content: .user(text: "Check the footer at 375 pt")),
+            TranscriptEntry(content: .assistant(text: "It wraps cleanly.", isStreaming: false)),
+            TranscriptEntry(content: .user(text: fromParent.text(in: .yardlet))),
+            TranscriptEntry(content: .assistant(text: "Two links wrap.", isStreaming: false)),
+            TranscriptEntry(content: .user(text: "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n"
+                + "<summary>Background command \"Run the visual tests\" completed (exit code 0)</summary>\n</task-notification>")),
+            TranscriptEntry(content: .assistant(text: "The visual tests passed.", isStreaming: false)),
+            TranscriptEntry(content: .user(text: "Check the footer links again."), origin: .scheduled),
+            TranscriptEntry(content: .assistant(text: "Every link answers.", isStreaming: false))
+        ]
+        let presentation = TranscriptConversationProjection.presentation(
+            from: entries, harness: .claudeCode, status: .completed, latestTurnIsComplete: true)
+        let standard = RemoteConversationProjection.conversation(presentation, workspaceURL: nil)
+        let full = RemoteConversationProjection.conversation(presentation, workspaceURL: nil) {
+            RemoteConversationProjection.turn($0, harness: .claudeCode, workspaceURL: nil, full: .init())
+        }
+        for (conversation, isFull) in [(standard, false), (full, true)] {
+            let sent = conversation.turns.flatMap(\.items).filter { $0.kind == .user }
+            XCTAssertEqual(sent.map(\.text), ["Check the footer at 375 pt", "Check the footer at 320 pt as well.",
+                                              "Background command \"Run the visual tests\" completed (exit code 0)",
+                                              "Check the footer links again."])
+            XCTAssertNil(sent[0].sender)
+            XCTAssertEqual(sent[1].sender?.kind, "task")
+            XCTAssertEqual(sent[1].sender?.name, "Fix the footer links")
+            XCTAssertEqual(sent[1].sender?.relation, "parent")
+            let quoted = try XCTUnwrap(sent[1].sender?.quotes?.first?.text.count)
+            if isFull { XCTAssertGreaterThan(quoted, RemoteText.userLimit) } else { XCTAssertEqual(quoted, RemoteText.userLimit) }
+            XCTAssertEqual(sent[1].sender?.quotes?.first?.sentAt, "2026-11-03T09:12:00+09:00")
+            XCTAssertEqual(sent[2].sender, RemoteSender(kind: "backgroundTask", status: "completed"))
+            XCTAssertEqual(sent[3].scheduled, true)
+            XCTAssertEqual(sent[3].sender, RemoteSender(kind: "claudeSchedule"))
+        }
+    }
+
     /// Full detail (§15.24) on a long conversation: a sent picture's preview is made once, off the main actor, and
     /// projects again only the turn that holds it; a streaming answer projects only its turn, in each detail.
     func testAFullConversationProjectsOnlyTheTurnsAChangeTouches() async throws {
