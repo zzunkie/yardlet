@@ -38,6 +38,17 @@ final class RemoteServerTests: XCTestCase {
         _ = try await request("ack", .terminalOutputAck(taskID: "A", terminalID: terminal, sequence: try XCTUnwrap(first.sequence)), on: phone)
         let second = try await phone.event(.terminalOutput, after: first.seq ?? 0)
         XCTAssertEqual(second.data, Data("private command".utf8))
+        // Tiny PTY reads require more acknowledgements than the input-request burst permits.
+        let tinyBurst = Task { await harness.bridge.floodTerminal(terminal, totalBytes: 180, chunkBytes: 1) }
+        var prior = second
+        for index in 0..<180 {
+            let acknowledged = try await request("tiny-\(index)", .terminalOutputAck(
+                taskID: "A", terminalID: terminal, sequence: try XCTUnwrap(prior.sequence)), on: phone)
+            XCTAssertTrue(acknowledged.ok)
+            prior = try await phone.event(.terminalOutput, after: prior.seq ?? 0)
+            XCTAssertEqual(prior.data, Data([65]))
+        }
+        await tinyBurst.value
         await harness.bridge.holdNextTerminalInput()
         await harness.server.receive(RemoteRequestEnvelope(id: "stalled", request: .terminalInput(
             taskID: "A", terminalID: terminal, data: Data("wait".utf8))).encoded(), on: try XCTUnwrap(phone.id))
@@ -1476,11 +1487,11 @@ actor FakeBridge: RemoteBridge {
     }
     func terminalPermit(_ id: String) -> RemoteTerminalPermit? { terminalPermits[id] }
     private(set) var completedTerminalBursts = 0
-    func floodTerminal(_ id: String) async {
+    func floodTerminal(_ id: String, totalBytes: Int = 300 * 1024, chunkBytes: Int = 16 * 1024) async {
         defer { completedTerminalBursts += 1 }
-        var left = 300 * 1024
+        var left = totalBytes
         while left > 0, let sink = terminalSinks[id] {
-            let count = min(left, 16 * 1024)
+            let count = min(left, chunkBytes)
             await sink(.output(Data(repeating: 65, count: count)))
             left -= count
         }

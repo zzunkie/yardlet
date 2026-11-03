@@ -15,6 +15,15 @@ struct RemoteServerTerminal {
 }
 
 extension RemoteServer {
+    /// Acknowledging the single output chunk in flight cannot create more work than that chunk.
+    /// Invalid, duplicate, foreign and future acknowledgements keep the normal traffic budget.
+    func isExpectedTerminalAcknowledgement(_ request: RemoteRequest, on connection: UUID) -> Bool {
+        guard case let .terminalOutputAck(taskID, terminalID, sequence) = request,
+              let session = terminals[terminalID], session.connection == connection, session.taskID == taskID,
+              session.permit.isValid, session.sequence == sequence, session.sentBytes != nil else { return false }
+        return true
+    }
+
     func handleTerminal(_ requestID: String, request: RemoteRequest, on connection: UUID) async {
         let deviceID = connections[connection]?.deviceID
         if let error = await permissionError(.terminal, on: connection) {

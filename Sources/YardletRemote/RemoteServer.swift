@@ -1133,7 +1133,9 @@ public actor RemoteServer {
             envelope = value
         }
         let request = envelope.request
-        guard connections[id]?.limiter.admit(isCommand: request.isCommand, isTabTraffic: request.isTabTraffic, isTerminalTraffic: request.isTerminalTraffic, now: now()) == true else {
+        guard isExpectedTerminalAcknowledgement(request, on: id)
+                || connections[id]?.limiter.admit(isCommand: request.isCommand, isTabTraffic: request.isTabTraffic,
+                                                 isTerminalTraffic: request.isTerminalTraffic, now: now()) == true else {
             respond(.failure(envelope.id, RemoteError(.rateLimited)), to: id)
             if let refused = connections[id]?.limiter.refusedInARow, refused >= RemoteRateLimiter.refusalsBeforeClosing {
                 close(id, .rateLimited)

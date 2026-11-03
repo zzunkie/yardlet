@@ -1881,7 +1881,8 @@ bridge permit and ends the owned shell. Opening and input recheck permission aft
 the permit immediately before starting, writing or resizing a process. Reconnect creates a new session.
 
 Terminal traffic has its own bucket (120 requests initially, 60 per second), independent of conversation and browser
-requests. Existing message queue limits still apply. Each open, close and input batch writes an audit line with
+requests. A matching acknowledgement for the connection's one outstanding terminal output chunk is exempt;
+invalid, duplicate and foreign acknowledgements still consume that bucket. Existing message queue limits still apply. Each open, close and input batch writes an audit line with
 request type, task ID, device ID and result. Input additionally records `byteCount`; the bytes and their decoded text,
 output, environment and credentials never enter the audit log. Permission controls are available only on the host;
 a remote request cannot enable them. File-write and settings permissions grant no terminal access.
