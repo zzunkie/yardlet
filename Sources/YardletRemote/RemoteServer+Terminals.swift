@@ -1,5 +1,18 @@
 import Foundation
 
+struct RemoteTerminalInputAuditKey: Hashable {
+    var device: String?
+    var task: String?
+    var result: String
+}
+
+struct RemoteTerminalInputAudit {
+    var id = UUID()
+    var began: Date
+    var bytes: Int
+    var timer: Task<Void, Never>?
+}
+
 struct RemoteServerTerminal {
     let connection: UUID
     let deviceID: String
@@ -158,16 +171,23 @@ extension RemoteServer {
     }
 
     func endTerminals(deviceID: String, reason: String) {
-        for id in terminals.keys.filter({ terminals[$0]?.deviceID == deviceID }) { endTerminal(id, reason: reason) }
+        let owned = terminals.keys.filter { terminals[$0]?.deviceID == deviceID }
+        for id in owned { terminals[id]?.permit.revoke() }
+        flushTerminalInputAudits(deviceID: deviceID)
+        for id in owned { endTerminal(id, reason: reason) }
     }
 
     func endTerminals(on connection: UUID, reason: String) {
-        for id in terminals.keys.filter({ terminals[$0]?.connection == connection }) { endTerminal(id, reason: reason) }
+        let owned = terminals.keys.filter { terminals[$0]?.connection == connection }
+        for id in owned { terminals[id]?.permit.revoke() }
+        flushTerminalInputAudits()
+        for id in owned { endTerminal(id, reason: reason) }
     }
 
     func endTerminal(_ terminalID: String, reason: String, exitCode: Int32? = nil) {
         guard let session = terminals.removeValue(forKey: terminalID) else { return }
         session.permit.revoke()
+        flushTerminalInputAudits(deviceID: session.deviceID, taskID: session.taskID)
         session.timeout?.cancel()
         if session.opened {
             var event = RemoteEvent(.terminalClosed)
@@ -181,10 +201,47 @@ extension RemoteServer {
         Task { await bridge.closeTerminal(taskID: session.taskID, terminalID: terminalID) }
     }
 
-    private func auditTerminal(_ type: String, device: String?, task: String?, bytes: Int? = nil, result: String) {
-        guard ["openTerminal", "closeTerminal", "terminalInput"].contains(type) else { return }
-        audit?.record(device: device, type: type, task: task, byteCount: bytes, result: result, at: now())
+    /// Keystrokes and paste chunks are one short audit batch, never one line per byte or packet.
+    func auditTerminal(_ type: String, device: String?, task: String?, bytes: Int? = nil, result: String) {
+        guard let audit, ["openTerminal", "closeTerminal", "terminalInput"].contains(type) else { return }
+        guard type == "terminalInput", let bytes else {
+            audit.record(device: device, type: type, task: task, byteCount: bytes, result: result, at: now())
+            return
+        }
+        let key = RemoteTerminalInputAuditKey(device: device, task: task, result: result)
+        if terminalInputAudits[key] != nil {
+            terminalInputAudits[key]?.bytes += bytes
+            return
+        }
+        // Valid sessions need few keys; arbitrary rejected task IDs cannot grow this buffer without a bound.
+        if terminalInputAudits.count >= 128, let oldest = terminalInputAudits.min(by: { $0.value.began < $1.value.began }) {
+            flushTerminalInputAudit(oldest.key, generation: oldest.value.id)
+        }
+        var batch = RemoteTerminalInputAudit(began: now(), bytes: bytes)
+        let generation = batch.id
+        batch.timer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            await self?.flushTerminalInputAudit(key, generation: generation)
+        }
+        terminalInputAudits[key] = batch
     }
+
+    func flushTerminalInputAudits(deviceID: String? = nil, taskID: String? = nil) {
+        let selected = terminalInputAudits.filter {
+            (deviceID == nil || $0.key.device == deviceID) && (taskID == nil || $0.key.task == taskID)
+        }
+        for (key, batch) in selected { flushTerminalInputAudit(key, generation: batch.id) }
+    }
+
+    private func flushTerminalInputAudit(_ key: RemoteTerminalInputAuditKey, generation: UUID) {
+        guard let batch = terminalInputAudits[key], batch.id == generation else { return }
+        terminalInputAudits[key] = nil
+        batch.timer?.cancel()
+        audit?.record(device: key.device, type: "terminalInput", task: key.task, byteCount: batch.bytes,
+                      result: key.result, at: batch.began)
+    }
+
 }
 
 private extension RemoteRequest {

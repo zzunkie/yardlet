@@ -357,6 +357,7 @@ public actor RemoteServer {
     /// What each connection watches of a task's browser tabs (§15.25), in `RemoteServer+Tabs.swift`.
     var tabs = RemoteServerTabs()
     var terminals: [String: RemoteServerTerminal] = [:]
+    var terminalInputAudits: [RemoteTerminalInputAuditKey: RemoteTerminalInputAudit] = [:]
     private var pairing: RemotePairingTicket?
     /// Live authorization has one owner. Persistence never answers an authorization check.
     private let permissionSnapshot = RemotePermissionSnapshot()
@@ -1095,6 +1096,7 @@ public actor RemoteServer {
         permissionRequestsEnabled = false
         let devicesToEnd = Set(effectivePermissions.keys).union(connections.values.compactMap(\.deviceID))
         for device in devicesToEnd { notifyPermissionsChanged(device, permissions: RemoteDevicePermissions()) }
+        flushTerminalInputAudits()
         for id in connections.keys {
             var closing = RemoteEvent(.closing)
             closing.reason = reason

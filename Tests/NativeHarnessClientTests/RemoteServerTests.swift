@@ -62,8 +62,11 @@ final class RemoteServerTests: XCTestCase {
         try await waitUntil { await harness.bridge.closedTerminals.contains(terminal) }
         let refused = try await request("after", .terminalInput(taskID: "A", terminalID: terminal, data: Data([13])), on: phone)
         XCTAssertEqual(refused.error?.code, .notAllowed)
+        await harness.server.shutdown(reason: "test")
         let audit = harness.audit.entries().filter { $0.type == "terminalInput" }
-        XCTAssertEqual(audit.map(\.byteCount), [6, 15, 4, 1])
+        XCTAssertEqual(audit.filter { $0.result == "ok" }.compactMap(\.byteCount).reduce(0, +), 15)
+        XCTAssertEqual(audit.filter { $0.result == "notAllowed" }.compactMap(\.byteCount).reduce(0, +), 11)
+        XCTAssertLessThanOrEqual(audit.count, 3, "Input packets in a short window share a length-only audit entry")
         XCTAssertFalse(try String(contentsOf: harness.auditURL, encoding: .utf8).contains("private command"))
         XCTAssertFalse(try String(contentsOf: harness.auditURL, encoding: .utf8).contains("secret"))
     }
