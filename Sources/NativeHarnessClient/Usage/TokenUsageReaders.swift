@@ -55,10 +55,14 @@ enum TokenUsageLines {
     }
 
     static func contains(_ line: Data, _ needle: [UInt8]) -> Bool {
+        #if os(Windows)
+        line.range(of: Data(needle)) != nil
+        #else
         line.withUnsafeBytes { buffer in
             guard buffer.count >= needle.count else { return false }
             return memmem(buffer.baseAddress, buffer.count, needle, needle.count) != nil
         }
+        #endif
     }
 }
 

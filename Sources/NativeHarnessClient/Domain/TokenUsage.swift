@@ -161,16 +161,13 @@ enum TokenUsageFormat {
         return "$" + value.formatted(.number.precision(.fractionLength(digits)))
     }
 
-    /// How long until something, as "1 hr 30 min" or "2 days 5 hr": two units at most.
+    /// How long until something, as "1 hr, 30 min" or "2 days, 5 hr": two units at most.
     static func duration(_ interval: TimeInterval) -> String {
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = interval >= 86_400 ? [.day, .hour] : [.hour, .minute]
-        formatter.unitsStyle = .short
-        formatter.maximumUnitCount = 2
-        return formatter.string(from: max(60, interval)) ?? ""
+        let units: Set<Duration.UnitsFormatStyle.Unit> = interval >= 86_400 ? [.days, .hours] : [.hours, .minutes]
+        return Duration.seconds(max(60, interval)).formatted(.units(allowed: units, width: .abbreviated, maximumUnitCount: 2))
     }
 
-    /// "54.8억 tokens today · $2,124 API equivalent", as the Home band and the usage menus put it.
+    /// "5.48B tokens today · $2,124 API equivalent", as the Home band and the usage menus put it.
     static func today(_ amount: TokenUsageAmount) -> String {
         var parts = [L10n.format("%@ tokens today", tokens(amount.total))]
         if let cost = amount.cost { parts.append(L10n.format("%@ API equivalent", self.cost(cost))) }

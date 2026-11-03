@@ -246,7 +246,7 @@ struct TokenUsageHomeBand: View {
                     HStack(alignment: .top, spacing: NewTaskHomeLayout.columnSpacing) {
                         bars(overview).frame(width: columns > 2 ? 360 : 260)
                         if !limits.isEmpty {
-                            TokenUsageLimitRows(rows: limits, now: overview.updatedAt, isCompact: true)
+                            TokenUsageLimitRows(rows: limits, isCompact: true)
                                 .frame(maxWidth: 560, alignment: .leading)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -255,7 +255,7 @@ struct TokenUsageHomeBand: View {
                     VStack(alignment: .leading, spacing: 12) {
                         bars(overview)
                         if !limits.isEmpty {
-                            TokenUsageLimitRows(rows: limits, now: overview.updatedAt, isCompact: true)
+                            TokenUsageLimitRows(rows: limits, isCompact: true)
                         }
                     }
                 }
@@ -345,7 +345,7 @@ struct TokenUsagePage: View {
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             }
-            TokenUsageLimitRows(rows: TokenUsageLimitRows.accounts(overview.limits), now: overview.updatedAt)
+            TokenUsageLimitRows(rows: TokenUsageLimitRows.accounts(overview.limits))
         }
     }
 
