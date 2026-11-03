@@ -1794,15 +1794,27 @@ for editing device permissions or managing another device. Each operation protec
 must check the live device store and return `notAllowed` unless allowed. A handshake's device snapshot is not
 an authorization cache. Removing the device also denies access. Granting one permission does not grant the others.
 
-The host persists a change before publishing it; a failed save keeps the previous permission and shows an error. Device removal is published only after it has been saved. A failed save keeps the paired entry and shows a removal
+Grants are persisted before taking effect. Denials take effect immediately for the running host and notify every
+resource consumer before persistence is attempted. A failed denial save keeps access off, shows an error and offers
+Retry; retrying the same off value still saves it. The person is told to retry before restarting the host. Permission
+updates are scoped to the device and flag, so saving one flag does not interrupt an unrelated granted operation.
+Every request declares its required permission centrally; new request kinds must explicitly extend that declaration.
+
+A new QR or account-link registration resets an existing key's grants and notifies resource consumers. Only the
+bounded retry of the same spent pairing ticket preserves them. Independent consumers can subscribe to permission
+changes without replacing each other. Removal and shutdown notify them with all permissions off; changes completing
+after such a lifecycle boundary cannot publish an old grant.
+
+Device removal is published only after it has been saved. A failed save keeps the paired entry and shows a removal
 error. `forgetDevice` acknowledges success only after durable removal. A failed removal responds with `internal`
 and closes affected connections transiently, without announcing revocation; the retained pairing may reconnect.
 Outstanding work stays cancelled, and a removal still being saved returns `unavailable` to other connections.
 
-Each change writes an audit line with device ID, `type: "permission.terminal"` (or `.fileWrites` or `.settings`),
-and `result: "allowed"` or `"notAllowed"`; a failed save records `"failed"`. No device name, credential,
-command, file contents or settings values are recorded. Consumers of long-lived resources must end the affected
-access when its permission is removed, in addition to checking every new operation.
+Each permission change writes device ID, `type: "permission.terminal"` (or `.fileWrites` or `.settings`) and
+`result: "allowed"` or `"notAllowed"`; failed persistence records `"failed"`. A new registration resetting existing
+grants records `permissionReset`. Removal records `revoke` with `ok` only after persistence, or `failed`. No device
+name, credential, command, file contents or settings values are recorded. Repeated `watchTab` audit entries with the
+same device, task and result are coalesced for sixty seconds so refreshes do not displace important changes.
 
 These permissions reserve separate authorization for terminal sessions, direct file writes and host settings.
 They do not add file-writing or settings-changing requests by themselves, and do not change the existing paired

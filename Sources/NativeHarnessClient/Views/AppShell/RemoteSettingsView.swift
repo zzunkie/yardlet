@@ -308,7 +308,15 @@ struct RemoteSettingsView: View {
                 Text(error).font(.caption).foregroundStyle(.red).padding(.bottom, 12)
             }
             if let error = service.permissionError {
-                Text(error).font(.caption).foregroundStyle(.red).padding(.bottom, 12)
+                HStack {
+                    Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                    if service.canRetryPermissionChange {
+                        Button(L10n.string("Retry")) { Task { await service.retryPermissionChange() } }
+                            .controlSize(.small)
+                            .disabled(!service.updatingDevicePermissions.isEmpty)
+                    }
+                }
+                .padding(.bottom, 12)
             }
         }
         .padding(.horizontal, 12)
@@ -330,7 +338,11 @@ struct RemoteSettingsView: View {
 
     private func permissionToggle(_ permission: RemoteDevicePermission, title: String, device: RemoteDevice) -> some View {
         HStack {
-            Text(L10n.string(title))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L10n.string(title)).font(.callout)
+                Text(permissionDetail(permission)).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Spacer(minLength: 12)
             Toggle(L10n.string(title), isOn: Binding(
                 get: { device.permissions?[permission] ?? false },
@@ -340,9 +352,18 @@ struct RemoteSettingsView: View {
             .toggleStyle(.paritySwitch)
             .controlSize(.small)
             .accessibilityLabel(L10n.format("%@ for %@", L10n.string(title), device.name))
-            .disabled(service.updatingDevicePermissions.contains(device.id))
+            .disabled(service.updatingDevicePermissions[device.id]?.contains(permission) == true
+                      || service.removingDeviceIDs.contains(device.id))
         }
         .font(.caption)
+    }
+
+    private func permissionDetail(_ permission: RemoteDevicePermission) -> String {
+        switch permission {
+        case .terminal: L10n.string("Run shell commands as the host user.")
+        case .fileWrites: L10n.string("Save and discard changes in the task's workspace.")
+        case .settings: L10n.string("Change Yardlet settings on this Mac.")
+        }
     }
 
     /// A computer reads as one; anything else as the phone it most likely is.

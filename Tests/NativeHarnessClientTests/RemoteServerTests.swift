@@ -57,6 +57,39 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertNil(unchanged?.permissions)
     }
 
+    func testPermissionObserversAndIndependentChanges() async throws {
+        let harness = try await ServerHarness()
+        let phone = try await harness.authenticatedPhone()
+        let connection = try XCTUnwrap(phone.id)
+        let devices = await harness.devices.all()
+        let device = try XCTUnwrap(devices.first)
+        let first = PermissionEvents()
+        let second = PermissionEvents()
+        let token = await harness.server.addPermissionsChangedHandler { first.append($0, $1) }
+        _ = await harness.server.addPermissionsChangedHandler { second.append($0, $1) }
+        try await harness.server.setPermission(.terminal, allowed: true, for: device.id)
+        try await harness.server.setPermission(.fileWrites, allowed: true, for: device.id)
+        let gate = PermissionChangeGate()
+        let change = Task {
+            try await harness.server.withPermissionChange(.fileWrites, for: device.id) { await gate.wait() }
+        }
+        try await waitUntilAsync { await gate.isWaiting }
+        let terminal = await harness.server.permissionError(.terminal, on: connection)
+        let files = await harness.server.permissionError(.fileWrites, on: connection)
+        XCTAssertNil(terminal, "Saving another flag must not interrupt terminal access")
+        XCTAssertEqual(files?.code, .notAllowed)
+        await gate.release()
+        try await change.value
+        let filesAfter = await harness.server.permissionError(.fileWrites, on: connection)
+        XCTAssertNil(filesAfter)
+        XCTAssertEqual(first.values, second.values)
+        await harness.server.removePermissionsChangedHandler(token)
+        let firstCount = first.values.count
+        await harness.server.shutdown(reason: "test")
+        XCTAssertEqual(first.values.count, firstCount)
+        XCTAssertEqual(second.values.last?.permissions, RemoteDevicePermissions())
+    }
+
     func testUnprovenAndQuietConnectionsAreClosed() async throws {
         let clock = RemoteTestClock()
         let harness = try await ServerHarness(clock: clock)
@@ -722,6 +755,7 @@ final class RemoteServerTests: XCTestCase {
         try await waitUntilAsync { await !harness.bridge.watchedTabs.isEmpty }
         await harness.server.closed(try XCTUnwrap(phone.id))
         try await waitUntilAsync { await harness.bridge.watchedTabs.isEmpty }
+        XCTAssertEqual(harness.audit.entries().filter { $0.type == "watchTab" && $0.task == "A" && $0.result == "ok" }.count, 1)
     }
 
     private func waitUntilAsync(_ condition: () async -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
@@ -1115,4 +1149,22 @@ struct ServerHarness {
         }
         return phone
     }
+}
+
+/// Records notifications from the server actor without imposing a delivery queue of its own.
+final class PermissionEvents: @unchecked Sendable {
+    struct Value: Equatable { var device: String; var permissions: RemoteDevicePermissions }
+    private let lock = NSLock()
+    private var recorded: [Value] = []
+    var values: [Value] { lock.withLock { recorded } }
+    func append(_ device: String, _ permissions: RemoteDevicePermissions) {
+        lock.withLock { recorded.append(Value(device: device, permissions: permissions)) }
+    }
+}
+
+private actor PermissionChangeGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    var isWaiting: Bool { continuation != nil }
+    func wait() async { await withCheckedContinuation { continuation = $0 } }
+    func release() { continuation?.resume(); continuation = nil }
 }
