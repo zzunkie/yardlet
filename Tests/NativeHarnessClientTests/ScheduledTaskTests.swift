@@ -259,15 +259,18 @@ final class ScheduledTaskTests: XCTestCase {
         XCTAssertNil(old.modelChoice?.permissionMode)
         var codex = ScheduledTask(name: "Sweep", prompt: "Go.", trigger: .daily(ScheduleTime(hour: 2, minute: 0)),
                                   destination: old)
-        let selection = CodexModelSelection(model: "gpt-6", reasoningEffort: "high", serviceTier: nil).storedValue
-        XCTAssertEqual(try model.scheduledSubmission(for: codex, at: date(16, 22)).get().providerOptions,
-                       [CodexModelSelection.storageKey: try XCTUnwrap(selection)])
+        // The selection is kept as JSON, whose key order is not fixed, so it is compared as what it reads back as.
+        let selection = CodexModelSelection(model: "gpt-6", reasoningEffort: "high", serviceTier: nil)
+        let plain = try model.scheduledSubmission(for: codex, at: date(16, 22)).get().providerOptions
+        XCTAssertEqual(Set(plain.keys), [CodexModelSelection.storageKey])
+        XCTAssertEqual(CodexModelSelection.restored(from: plain), selection)
         codex.destination.modelChoice?.permissionMode = CodexRunLocation.dangerFullAccess.rawValue
         let reread = try JSONDecoder().decode(ScheduledTask.self, from: JSONEncoder().encode(codex))
         XCTAssertEqual(reread, codex)
-        XCTAssertEqual(try model.scheduledSubmission(for: reread, at: date(16, 22)).get().providerOptions,
-                       [CodexModelSelection.storageKey: try XCTUnwrap(selection),
-                        CodexRunLocation.storageKey: CodexRunLocation.dangerFullAccess.rawValue])
+        let full = try model.scheduledSubmission(for: reread, at: date(16, 22)).get().providerOptions
+        XCTAssertEqual(Set(full.keys), [CodexModelSelection.storageKey, CodexRunLocation.storageKey])
+        XCTAssertEqual(CodexModelSelection.restored(from: full), selection)
+        XCTAssertEqual(full[CodexRunLocation.storageKey], CodexRunLocation.dangerFullAccess.rawValue)
     }
 
     /// A Codex run's thread starts with the schedule's permission, in the requests the App Server takes:
