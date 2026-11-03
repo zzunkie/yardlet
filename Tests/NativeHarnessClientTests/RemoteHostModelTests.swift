@@ -134,7 +134,8 @@ final class RemoteHostModelTests: XCTestCase {
         browser.input(.text("cat"))
         browser.input(.key("Tab"))
         try await waitUntil { browser.watchedTab?.passwordField == true }
-        XCTAssertGreaterThan(try XCTUnwrap(browser.frame).number, first.number, "each frame follows the one the window took")
+        // Each frame follows the one the window took.
+        try await waitUntil { (browser.frame?.number ?? 0) > first.number }
         XCTAssertTrue(redrawn.changes.isEmpty, "frames and the list redraw only the browser panel")
         for _ in 0..<5 { browser.scroll(x: 10, y: 10, deltaX: 0, deltaY: 30) }
         browser.input(.text("hunter2"))
