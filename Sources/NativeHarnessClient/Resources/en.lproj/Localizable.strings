@@ -3705,6 +3705,7 @@
 "Waiting until the task is available" = "Waiting until the task is available";
 
 "Missed: the task was unavailable for 24 hours" = "Missed: the task was unavailable for 24 hours";
+
 "Update Yardlet on the host to use this panel." = "Update Yardlet on the host to use this panel.";
 
 "This repository is outside the task's folders." = "This repository is outside the task's folders.";

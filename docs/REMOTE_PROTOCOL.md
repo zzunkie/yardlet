@@ -576,6 +576,7 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
 Every revision of protocol 2 only adds optional fields or states a rule, except where it says otherwise.
 
 - 2026-11-04: §15.26 adds read-only Review, advertised by optional `reviewReading`; no mutation request is added.
+- 2026-11-04: workspace file listing (§15.27), with the existing bounded `readFile` requests for content.
 
 - 2026-10-16, after the first Android client build:
   - §5.3: `after` always names an item the phone holds once it has applied what came before in order;
@@ -1752,6 +1753,33 @@ a disallowed selection `notFound`, and a repository root outside those folders `
 answer `unavailable` without paths or command output. A response whose JSON encoding exceeds the server
 message limit answers `tooLarge`. Markdown renders on the client without resolving
 host-relative images or links against the client's filesystem. Last-turn provider changes use the host's existing projection after loading saved history without starting a model turn. Refresh reads them again; there is no new subscription.
+
+### 15.27 Workspace files
+
+A snapshot can carry `workspaceFiles: true`. Without it, clients keep the Files panel unavailable.
+This is an optional capability; existing clients ignore it and existing hosts need no changes.
+
+`{"id":"files-1","type":"workspaceFiles","taskId":"T"}` lists regular files in the task's primary
+working folder (the worktree when the task has one). The response carries `filePaths`, paths relative to
+that folder, sorted by name, `filesLimited`, a Boolean, and optional `workspaceRoot`, the host folder
+for the panel header. A client does not need to know that path before requesting the listing and never
+uses it for client filesystem access. It contains no file contents. Refresh requests
+list again; this request has the ordinary read-request rate limit. Unknown tasks answer `notFound`.
+
+The listing shares `readFile`'s folder boundary: a home folder or a folder containing home cannot be listed.
+Traversal uses directory descriptors, skips symbolic links and non-regular files, and does not enter
+`.git`, `.build`, `node_modules`, `.next`, `.venv`, `__pycache__`, or `.swiftpm`. It stops at 20,000 names,
+128 KiB of path bytes, 100,000 visited entries, or 64 directory levels; a stopped listing says
+`filesLimited: true`. Additional task folders and outputs outside the primary folder remain available
+through their existing links and Outputs card, rather than being enumerated here.
+
+Content uses `readFile` (§15.22), including its scope checks, size limit, rate budget and audit records.
+The desktop uses the same Files panel and reader as local files, with a remote provider that reads the
+host's file into the window's private temporary copies. It never resolves a host path against the
+client's filesystem. Image and PDF previews read those copies; text preserves its host-relative path.
+Read-only access is a provider permission, independent of the document's size and encoding; small source files
+keep the same syntax colors and layout. The remote panel has no editing or saving operation, shows Save disabled, and offers no client Finder
+or local-app actions for a host path. Copies are removed when the host window closes, as in §18.
 
 ## 16. Push notifications
 

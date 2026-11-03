@@ -214,7 +214,9 @@ final class WorkspaceFileTextView: NSTextView {
         style.maximumLineHeight = lineHeight
         attributes = [.font: font, .foregroundColor: NSColor.labelColor, .paragraphStyle: style]
         tokens = document.tokens
-        if document.isEditable {
+        // Read-only access does not make a small source file a large-file preview.
+        // Editable documents keep their full storage; read-only documents choose by size.
+        if document.isEditable || (!document.isPartial && document.utf16Length <= WorkspaceFileService.editableBytes) {
             lineWindow = nil
             isVerticallyResizable = true
             minSize = .zero

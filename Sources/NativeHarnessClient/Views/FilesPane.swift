@@ -22,6 +22,9 @@ struct FilesPane: View {
                     else { onClose() }
                 }
             ) {
+                if !state.isLocal {
+                    Button(L10n.string("Save")) {}.disabled(true)
+                }
                 if state.isDirty {
                     Button(L10n.string("Save")) { Task { await state.save(in: workspaceURL) } }.disabled(state.isSaving)
                     ParityIconButton(systemName: "arrow.uturn.backward", help: L10n.string("Discard changes")) { confirmsDiscard = true }
@@ -58,7 +61,7 @@ struct FilesPane: View {
         if let error = state.fileError {
             WorkSurfaceEmptyState(title: L10n.string("File unavailable"), message: error, systemName: "doc.badge.ellipsis") {
                 // A file the panel cannot show (an image, a folder, an app) is still a click away.
-                if let path = state.preferences.selectedPath {
+                if state.isLocal, let path = state.preferences.selectedPath {
                     FileElsewhereButtons(url: fileURL(path)).controlSize(.small)
                 }
             }
@@ -70,10 +73,10 @@ struct FilesPane: View {
                 }
                 WorkspaceFileMediaView(media: media).id(media.url)
             }
-            .loadsFileTasks(for: media.url, into: $fileTasks)
+            .loadsFileTasks(for: state.isLocal ? media.url : nil, into: $fileTasks)
         } else if let document = state.document {
             VStack(spacing: 0) {
-                FileNotice(document: document, url: fileURL(document.path))
+                FileNotice(document: document, url: fileURL(document.path), isLocal: state.isLocal)
                 if !fileTasks.isEmpty {
                     FileTasksLine(tasks: fileTasks).padding(.horizontal, 10).padding(.vertical, 7)
                     Divider()
@@ -83,10 +86,10 @@ struct FilesPane: View {
                     location: state.requestedLocation, navigationID: state.navigationID,
                     fontSize: 12 * interfaceScale, focus: keyboardFocus,
                     onBookmark: { state.preferences.bookmarks[document.path] = $0 },
-                    onNavigated: { state.didNavigate($0) }, onEdit: document.isEditable ? { state.edit($0) } : nil,
+                    onNavigated: { state.didNavigate($0) }, onEdit: state.isLocal && document.isEditable ? { state.edit($0) } : nil,
                     isSaving: state.isSaving)
             }
-            .loadsFileTasks(for: fileURL(document.path), into: $fileTasks)
+            .loadsFileTasks(for: state.isLocal ? fileURL(document.path) : nil, into: $fileTasks)
         } else if state.isLoading {
             ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
         } else { filePicker }
@@ -160,10 +163,11 @@ struct FilesPane: View {
 private struct FileNotice: View {
     let document: WorkspaceFileDocument
     let url: URL
+    var isLocal = true
 
     var body: some View {
         let isOutside = WorkspaceFileLocation(relativePath: document.path).isOutsideWorkspace
-        if document.isPartial || !document.isEditable {
+        if document.isPartial || document.isLossy || (isLocal && !document.isEditable) {
             HStack(spacing: 10) {
                 Text(L10n.string(document.isPartial ? "Large file: only its beginning is shown"
                                  : isOutside ? "Outside the task's folder: not editable here"
@@ -172,7 +176,7 @@ private struct FileNotice: View {
                     .lineLimit(1).truncationMode(.tail)
                     .help(isOutside ? document.path : "")
                 Spacer(minLength: 0)
-                if document.isPartial || isOutside || document.isLossy { FileElsewhereButtons(url: url) }
+                if isLocal && (document.isPartial || isOutside || document.isLossy) { FileElsewhereButtons(url: url) }
             }
             .buttonStyle(.borderless)
             .font(.caption).foregroundStyle(.secondary)
