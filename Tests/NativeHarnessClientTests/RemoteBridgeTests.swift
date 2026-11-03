@@ -1132,8 +1132,9 @@ final class RemoteBridgeTests: XCTestCase {
             .compactMap { $0.params["width"]?.integerValue }, [800, 410])
     }
 
-    /// The fourth review of §15.25's host: a frame showing a file outside the task's keeps the page from the remote, and
-    /// a frame that moves during a picture or between an input's steps stops it; the agent's acting on a page after a
+    /// The fourth review of §15.25's host: a frame showing a file outside the task's keeps the page from the remote, also
+    /// one that came and went while the page was pictured, and a frame that moves during a picture or between an input's
+    /// steps stops it; the agent's acting on a page after a
     /// remote device's input lets it download (its downloads are its own) while another app still asks; a tab a page
     /// opens as a blocked pop-up is the agent's when the agent drove that page; a held tab's title belongs to its
     /// address; a refused download's empty pop-up closes and its opener says so; a password field that took the
@@ -1187,6 +1188,16 @@ final class RemoteBridgeTests: XCTestCase {
         }
         let framed = await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 640, maxHeight: 640)
         guard case .failure = framed else { return XCTFail("A page whose frame moved during its picture was sent") }
+        // A frame that shows a file outside the task's and goes again while the page is pictured: the tree reads the
+        // same before and after, and the picture still does not go.
+        connection.onCall = { method in
+            guard method == "Page.captureScreenshot" else { return }
+            connection.eventHandler?(.devTools(tab: tab.id, message:
+                #"{"method":"Page.frameNavigated","params":{"frame":{"id":"brief","parentId":"main","loaderId":"B1","url":"file:///etc/hosts"}}}"#))
+        }
+        let passing = await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 640, maxHeight: 640)
+        guard case let .failure(passed) = passing else { return XCTFail("A page that showed an outside file during its picture was sent") }
+        XCTAssertEqual(passed.code, .notAllowed)
         connection.onCall = { method in
             if method == "Input.dispatchMouseEvent" { connection.frameTree = frames(child: notes, loader: "C3") }
         }

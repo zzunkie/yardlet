@@ -1658,7 +1658,7 @@ stays on the Mac.
   tab or in any of its frames (an iframe, an embed, a frame a link moved), is shown and driven only when `readFile`
   would serve it, or it is a folder inside the task's folders (§15.22), as the agent's tools hold them. It is checked
   for the very page pictured or driven: a picture during which the page or one of its frames moved, even away and back
-  to the same address, is not sent. Another is listed as `file://`, without its title, and the page the tab moves to
+  to the same address, or a frame showed a file outside the task's, even one that went again, is not sent. Another is listed as `file://`, without its title, and the page the tab moves to
   next shows no title until it names itself. Pictures show the page as it draws itself (a password field as dots) and
   are made only while watched; the Mac keeps none. The audit log (§4.4) records each `watchTab` and, at most once a
   minute per device, task, kind and result, a `tabInput`'s kind (`click`, `text`, …), never what was typed. Chromium's
