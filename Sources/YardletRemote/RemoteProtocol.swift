@@ -970,6 +970,7 @@ public enum RemoteRequest: Equatable, Sendable {
     /// What a task made, and a part of one of its files (§15.22).
     case taskOutputs(taskID: String)
     case readFile(taskID: String, path: String, offset: Int)
+    case workspaceFiles(taskID: String)
     /// A desktop in use, or no longer (§18): the Mac holds phone pushes meanwhile.
     case presence(active: Bool)
     /// A task's composer controls, its slash commands, and the edit and fork of its turns (§15.23). `prepare` reads
@@ -1022,6 +1023,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .setScheduledTaskEnabled: "setScheduledTaskEnabled"
         case .taskOutputs: "taskOutputs"
         case .readFile: "readFile"
+        case .workspaceFiles: "workspaceFiles"
         case .presence: "presence"
         case .taskSettings: "taskSettings"
         case .setTaskSetting: "setTaskSetting"
@@ -1044,7 +1046,7 @@ public enum RemoteRequest: Equatable, Sendable {
              let .reviewPlan(id, _, _, _), let .itemDetail(id, _), let .actOnSuggestion(id, _, _), let .setPinned(id, _),
              let .archiveTask(id), let .limitAccounts(id), let .continueWithAccount(id, _), let .setAutoContinue(id, _),
              let .actOnQueued(id, _, _), let .answerHandoff(id, _, _), let .chooseAnswer(id, _, _, _, _),
-             let .taskOutputs(id), let .readFile(id, _, _), let .taskSettings(id, _), let .setTaskSetting(id, _, _, _),
+             let .workspaceFiles(id), let .taskOutputs(id), let .readFile(id, _, _), let .taskSettings(id, _), let .setTaskSetting(id, _, _, _),
              let .composerCommands(id), let .runComposerCommand(id, _, _), let .editMessage(id, _, _), let .forkTask(id, _),
              let .watchTab(id, _, _, _, _), let .unwatchTab(id),
              let .tabFrameAck(id, _, _), let .tabInput(id, _, _): id
@@ -1367,6 +1369,9 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 return fail(.badRequest, "Missing scheduleId or enabled")
             }
             request = .setScheduledTaskEnabled(scheduleID: scheduleID, enabled: enabled)
+        case "workspaceFiles":
+            guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
+            request = .workspaceFiles(taskID: taskID)
         case "taskOutputs":
             guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
             request = .taskOutputs(taskID: taskID)
@@ -1535,6 +1540,8 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         case let .setScheduledTaskEnabled(scheduleID, enabled):
             wire.scheduleId = scheduleID
             wire.enabled = enabled
+        case let .workspaceFiles(taskID):
+            wire.taskId = taskID
         case let .taskOutputs(taskID):
             wire.taskId = taskID
         case let .readFile(taskID, path, offset):
@@ -1650,6 +1657,10 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var schedules: [RemoteSchedule]?
     /// `snapshot` on v2: the Mac answers `taskOutputs` and `readFile` (§15.22).
     public var taskFiles: Bool?
+    /// Workspace file names in the task folder (§15.27). Reads use `readFile`.
+    public var workspaceFiles: Bool?
+    public var filePaths: [String]?
+    public var filesLimited: Bool?
     /// `snapshot` on v2: the Mac answers `subscribeTask` with `"detail": "full"` (§15.24).
     public var fullConversation: Bool?
     /// `taskOutputs` (§15.22).

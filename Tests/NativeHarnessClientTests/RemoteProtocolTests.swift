@@ -57,6 +57,7 @@ final class RemoteProtocolTests: XCTestCase {
             .runScheduledTask(scheduleID: "S"),
             .setScheduledTaskEnabled(scheduleID: "S", enabled: false),
             .taskOutputs(taskID: "T1"),
+            .workspaceFiles(taskID: "T1"),
             .readFile(taskID: "T1", path: "reports/crash-notes.txt", offset: 4_194_304),
             .taskSettings(taskID: "T1"),
             .taskSettings(taskID: "T1", prepare: true),

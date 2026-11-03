@@ -203,20 +203,23 @@ final class WorkspaceFileReaderTests: XCTestCase {
 
     func testOnlyTheLinesInViewAreColoredUntilTheyComeIntoView() throws {
         let text = String(repeating: "let value = \"text\" // note\n", count: 40_000)
-        let document = WorkspaceFileDocument(path: "a.swift", text: text)
-        XCTAssertFalse(document.tokens.isEmpty)
-        let host = reader(document)
-        defer { host.close() }
-        let view = try textView(in: host)
-        let lastLine = document.lineStarts[document.lineStarts.count - 2]
-        XCTAssertEqual(color(at: 0, in: view), .systemPurple)
-        XCTAssertEqual(color(at: lastLine, in: view), .labelColor, "A line far below is not colored yet")
+        // Small read-only source files use the same viewport colors as editable ones.
+        for editable in [true, false] {
+            let document = WorkspaceFileDocument(path: "a.swift", text: text, isEditable: editable)
+            XCTAssertFalse(document.tokens.isEmpty)
+            let host = reader(document)
+            defer { host.close() }
+            let view = try textView(in: host)
+            let lastLine = document.lineStarts[document.lineStarts.count - 2]
+            XCTAssertEqual(color(at: 0, in: view), .systemPurple)
+            XCTAssertEqual(color(at: lastLine, in: view), .labelColor, "A line far below is not colored yet")
 
-        let clip = try XCTUnwrap(view.enclosingScrollView?.contentView)
-        clip.scroll(to: NSPoint(x: 0, y: try XCTUnwrap(view.lineTop(atUTF16Offset: lastLine)) - 100))
-        view.enclosingScrollView?.reflectScrolledClipView(clip)
-        host.settle(passes: 2)
-        XCTAssertEqual(color(at: lastLine, in: view), .systemPurple)
-        XCTAssertEqual(color(at: lastLine + 13, in: view), .systemGreen)
+            let clip = try XCTUnwrap(view.enclosingScrollView?.contentView)
+            clip.scroll(to: NSPoint(x: 0, y: try XCTUnwrap(view.lineTop(atUTF16Offset: lastLine)) - 100))
+            view.enclosingScrollView?.reflectScrolledClipView(clip)
+            host.settle(passes: 2)
+            XCTAssertEqual(color(at: lastLine, in: view), .systemPurple)
+            XCTAssertEqual(color(at: lastLine + 13, in: view), .systemGreen)
+        }
     }
 }

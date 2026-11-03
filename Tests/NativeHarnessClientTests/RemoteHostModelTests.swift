@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import Foundation
 import Observation
 import XCTest
@@ -11,6 +13,74 @@ import XCTest
 /// the change, and what a window showed shown again when it reopens.
 @MainActor
 final class RemoteHostModelTests: XCTestCase {
+    /// The client uses the same Files panel, reading from a real host workspace over the encrypted loopback.
+    func testWorkspaceFilesReadAndRenderTheHostsFilesWithoutWriting() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "remote-files-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let text = "import Foundation\n\nstruct Greeting {\n    let message = \"Hello from the host\"\n}\n"
+        try Data(text.utf8).write(to: root.appending(path: "Greeting.swift"))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteHostFiles")))
+        let host = AppModel(store: SessionStore(repository: InMemorySessionRepository()),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults),
+            registry: HarnessRegistry { _, _ in FakeHarnessAdapter(kind: .claudeCode) }, restoresIndexOnLaunch: false)
+        let created = await host.createSession(harness: .claudeCode, workspaceURL: root,
+            runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Read the workspace")
+        let session = try XCTUnwrap(created)
+        let stack = try await LoopbackStack(bridge: AppModelRemoteBridge(model: host), port: 47876)
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+            name: "Host", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+            hello: RemoteHandshakeHello(name: "Client", platform: "macos", appVersion: "test"))
+        let paired = try await directory.pair(link: link.absoluteString)
+        let client = try XCTUnwrap(directory.model(for: paired.id))
+        defer { directory.close(paired.id) }
+        try await waitUntil { client.hasSnapshot }
+        XCTAssertTrue(client.offersWorkspaceFiles)
+        let remote = WorkspaceFilesState(provider: RemoteWorkspaceFiles(model: client, taskID: session.id.uuidString))
+        let clientWorkspace = URL(filePath: "/remote-host/Workspace")
+        let local = WorkspaceFilesState()
+        await remote.loadIndex(in: clientWorkspace)
+        await local.loadIndex(in: root)
+        XCTAssertEqual(remote.index.paths, local.index.paths)
+        XCTAssertEqual(remote.index.paths, ["Greeting.swift"])
+        let directoryURL = try WindowlessRender.directory("remote-files-qa")
+        func render(_ name: String) throws {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let view = HStack(spacing: 1) {
+                    FilesPane(workspaceURL: root, state: local, onClose: {}).frame(width: 520)
+                    FilesPane(workspaceURL: clientWorkspace, state: remote, onClose: {}).frame(width: 520)
+                }.environment(\.colorScheme, appearance.colorScheme)
+                let rendered = WindowlessRender.Host(view, size: NSSize(width: 1041, height: 520), appearance: appearance)
+                defer { rendered.close() }
+                rendered.settle(passes: 8)
+                try WindowlessRender.writePNG(rendered.capture().bitmap,
+                    to: directoryURL.appending(path: "\(name)-local-remote-\(appearance.suffix).png"))
+            }
+        }
+        try render("list")
+        remote.open(.init(relativePath: "Greeting.swift"), in: clientWorkspace)
+        local.open(.init(relativePath: "Greeting.swift"), in: root)
+        try await waitUntil { !remote.isLoading && !local.isLoading }
+        XCTAssertEqual(remote.document?.text, text)
+        XCTAssertEqual(remote.document?.text, local.document?.text)
+        XCTAssertFalse(remote.canEdit)
+        XCTAssertNil(remote.document?.sourceDigest)
+        XCTAssertEqual(remote.document?.tokens, local.document?.tokens)
+        XCTAssertEqual(remote.document?.isEditable, false)
+        remote.edit("changed")
+        await remote.save(in: clientWorkspace)
+        XCTAssertEqual(try String(contentsOf: root.appending(path: "Greeting.swift"), encoding: .utf8), text)
+        try render("source")
+        let outside = await client.response(to: .readFile(taskID: session.id.uuidString, path: "../outside.txt", offset: 0))
+        XCTAssertEqual(outside.error?.code, .notFound)
+        let missing = await client.response(to: .workspaceFiles(taskID: UUID().uuidString))
+        XCTAssertEqual(missing.error?.code, .notFound)
+        await host.shutdown()
+    }
+
     func testAWindowPairsFollowsATaskAndAnswersItsApprovalAsTheHostsCard() async throws {
         let stack = try await LoopbackStack()
         defer { stack.stop() }
