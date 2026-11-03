@@ -24,6 +24,15 @@ extension RemoteHostModel {
         }
     }
 
+    /// A composer or rail menu's choice for the task, applied on the host; one the host's menu asks about first was asked
+    /// about here too (`ComposerPermissionControl`).
+    func chooseTaskSetting(_ taskID: String, _ choice: ComposerSessionChoice) {
+        guard case let .providerOption(id, value) = choice,
+              let setting = taskSettings[taskID]?.first(where: { $0.id == id }) else { return }
+        let confirmed = setting.role == "permission" && setting.choices.first { $0.value == value }?.confirm != nil
+        setTaskSetting(taskID, id: id, value: value, confirmed: confirmed)
+    }
+
     /// The task's slash commands that may run from here, or nil when the host could not say.
     func composerCommands(_ taskID: String) async -> [RemoteComposerCommand]? {
         guard taskControls, isConnected else { return nil }

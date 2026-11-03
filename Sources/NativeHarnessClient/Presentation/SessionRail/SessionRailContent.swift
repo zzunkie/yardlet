@@ -59,7 +59,8 @@ struct SessionRailContent: Equatable {
         /// The worktree's name when the task runs in one, nil for the folder itself.
         var worktreeName: String?
         var folderName: String
-        var folderURL: URL
+        /// The folder on this Mac, which the card reveals; nil for another Mac's task, whose folder is the host's.
+        var folderURL: URL?
         var additionalRoots: [String]
         var branch: String?
         var branchURL: URL?

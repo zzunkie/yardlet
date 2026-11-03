@@ -137,16 +137,20 @@ struct SessionRailEnvironmentCard: View {
                     Text(name).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                 }
             }
-            Button { actions.revealInFinder(environment.folderURL) } label: {
-                SessionRailRow(systemName: "folder", title: environment.folderName).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .parityPointer()
-            .help(environment.folderURL.path(percentEncoded: false))
-            .accessibilityHint(L10n.string("Show in Finder"))
-            .contextMenu {
-                Button(L10n.string("Show in Finder")) { actions.revealInFinder(environment.folderURL) }
-                Button(L10n.string("Copy path")) { Self.copy(environment.folderURL.path(percentEncoded: false)) }
+            if let folderURL = environment.folderURL {
+                Button { actions.revealInFinder(folderURL) } label: {
+                    SessionRailRow(systemName: "folder", title: environment.folderName).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .parityPointer()
+                .help(folderURL.path(percentEncoded: false))
+                .accessibilityHint(L10n.string("Show in Finder"))
+                .contextMenu {
+                    Button(L10n.string("Show in Finder")) { actions.revealInFinder(folderURL) }
+                    Button(L10n.string("Copy path")) { Self.copy(folderURL.path(percentEncoded: false)) }
+                }
+            } else {
+                SessionRailRow(systemName: "folder", title: environment.folderName)
             }
             if !environment.additionalRoots.isEmpty {
                 SessionRailRow(systemName: "folder.badge.plus", title: L10n.string("Additional folders")) {

@@ -2,47 +2,52 @@ import AppKit
 import SwiftUI
 import YardletRemote
 
-/// The session rail of a host's task: its Outputs card, as the local rail draws it (`SessionRailOutputsCard`
-/// in a `SessionRailCard`), with the files the host's Outputs card lists (docs/REMOTE_PROTOCOL.md §15.22).
-/// A file opens once read from the host: a click in this Mac's Quick Look, its menu in its own app or in
-/// Finder, each on the copy. The rail's other cards read the host's task as it stands there and stay on the
-/// host.
+/// The session rail of a host's task, drawn by the local rail (`SessionRailView`) from what the host says of the task:
+/// where it runs (its project and harness; the folder is the host's, so it is named and not opened here), its settings
+/// as the host's composer reads them (§15.23), chosen here through the host, and the files its Outputs card lists
+/// (§15.22). A file opens once read from the host: a click in this Mac's Quick Look, its menu in its own app or in
+/// Finder, each on the copy. Cards whose facts the host does not send yet (context, usage, changes, agents) stay out,
+/// as the local rail leaves out a card with nothing for it.
 struct RemoteTaskRail: View {
+    /// The host's task as the sidebar reads it (`RemoteSidebarMirror`).
+    let session: SessionRecord
+    let projectName: String
+    let options: ComposerSessionOptions?
     let outputs: [RemoteOutput]
+    let preferences: SessionRailPreferenceStore
+    @Binding var folds: SessionRailFolds
+    let choose: (ComposerSessionChoice) -> Void
+    let prepareSettings: () async -> Void
     let open: (URL) -> Void
     let openInItsApp: (URL) -> Void
     let revealInFinder: (URL) -> Void
-    @State private var isFolded = false
 
     var body: some View {
-        ScrollView(.vertical) {
-            VStack(spacing: SessionRailPlacement.cardSpacing) {
-                SessionRailCard(kind: .outputs, rollup: String(outputs.count), meter: nil, isFolded: isFolded,
-                                onToggle: { isFolded.toggle() }, menu: { EmptyView() }) {
-                    SessionRailOutputsCard(outputs: Self.rows(outputs), actions: actions)
-                }
-            }
-            .frame(width: SessionRailPlacement.width - 16)
-            .padding(.top, 12)
-            .padding(.bottom, 16)
-            .padding(.leading, 4)
-            .padding(.trailing, 12)
-        }
-        .scrollIndicators(.automatic)
-        .frame(width: SessionRailPlacement.width)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background(ParityTheme.canvas)
-        // A click on a row opens it as the conversation's links open the host's files.
-        .environment(\.openURL, OpenURLAction { url in
-            open(url)
-            return .handled
-        })
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(L10n.string("Session details"))
+        SessionRailView(content: content, folds: $folds, preferences: preferences, actions: actions)
+            // A click on an output opens it as the conversation's links open the host's files.
+            .environment(\.openURL, OpenURLAction { url in
+                open(url)
+                return .handled
+            })
+    }
+
+    private var content: SessionRailContent {
+        var content = SessionRailContent.make(
+            session: session, projectName: projectName,
+            instructionSources: TaskInstructionSources(origin: .detected, paths: []), git: nil,
+            options: options ?? ComposerSessionOptions(harnessName: session.harness.displayName,
+                                                       input: HarnessComposerInputPolicy(harness: session.harness),
+                                                       submission: .providerInput),
+            connectors: nil, account: nil, entries: [], codexPlan: nil, pullRequest: nil, pullRequestState: nil)
+        content.environment.folderURL = nil
+        content.outputs = Self.rows(outputs)
+        return content
     }
 
     private var actions: SessionRailActions {
         var actions = SessionRailActions()
+        actions.onChoose = choose
+        actions.onPrepareSettings = prepareSettings
         actions.openURL = openInItsApp
         actions.revealInFinder = revealInFinder
         return actions
