@@ -40,6 +40,11 @@ final class RemoteServerTests: XCTestCase {
         _ = try await store.setPermission(.settings, allowed: true, for: device.id)
         let saved = await RemoteDeviceStore(fileURL: file).device(device.id)
         XCTAssertEqual(saved?.permissions, RemoteDevicePermissions(settings: true))
+        _ = try await store.setPermission(.settings, allowed: false, for: device.id)
+        let replaced = await RemoteDeviceStore(fileURL: file).device(device.id)
+        XCTAssertEqual(replaced?.permissions, RemoteDevicePermissions())
+        let mode = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(mode?.intValue, 0o600)
         let partial = try JSONDecoder().decode(RemoteDevicePermissions.self, from: Data(#"{"terminal":true}"#.utf8))
         XCTAssertEqual(partial, RemoteDevicePermissions(terminal: true))
         // A failed save never grants a permission in memory.
