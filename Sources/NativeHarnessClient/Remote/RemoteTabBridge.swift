@@ -267,9 +267,14 @@ final class RemoteTabBridge {
             return .failure(RemoteError(.unavailable, "The page cannot be pictured now"))
         }
         // The page checked is the one pictured: one that moved meanwhile is not, also when it came back to the same
-        // address (`BrowserTab.navigations`).
+        // address (`BrowserTab.navigations`), nor one any of whose frames moved (`frameMark`).
         let page = tab.navigations
         if let refusal = await outsideFiles(tab.currentURL, taskID: taskID) { return .failure(refusal) }
+        let frames: String
+        switch await checkFrames(tab, taskID: taskID) {
+        case let .success(mark): frames = mark
+        case let .failure(refusal): return .failure(refusal)
+        }
         guard tab.navigations == page else { return .failure(RemoteError(.unavailable, "The page moved")) }
         do {
             let metrics = try await tab.devTools.send("Page.getLayoutMetrics", timeout: Self.captureTimeout)
@@ -293,8 +298,11 @@ final class RemoteTabBridge {
             guard let data = shot["data"]?.stringValue.flatMap({ Data(base64Encoded: $0) }) else {
                 return .failure(RemoteError(.internal, "The browser returned no image"))
             }
-            // The page went elsewhere while it was pictured, even if it came back: that picture is not sent.
-            guard tab.navigations == page else { return .failure(RemoteError(.unavailable, "The page moved")) }
+            // The page or one of its frames went elsewhere while it was pictured, even if it came back: that picture
+            // is not sent.
+            guard tab.navigations == page, try await frameMark(tab).mark == frames else {
+                return .failure(RemoteError(.unavailable, "The page moved"))
+            }
             return .success(RemoteTabFrame(image: data, mediaType: "image/jpeg", width: Int((width * fit).rounded()),
                                            height: Int((height * fit).rounded()), viewportWidth: width, viewportHeight: height))
         } catch {
@@ -411,12 +419,12 @@ final class RemoteTabBridge {
         return blocked(tab)
     }
 
-    /// The page an input goes to: checked against the task's files at its first step, and each step after goes only
-    /// while the tab shows that page (`BrowserTab.navigations`); after a move, even back to the same address, the rest
-    /// of the input is not sent.
+    /// The page an input goes to: checked against the task's files at its first step, its frames included, and each
+    /// step after goes only while the tab shows that page with those frames (`BrowserTab.navigations`, `frameMark`);
+    /// after a move, even back to the same address, the rest of the input is not sent.
     final class PageScope {
         let taskID: String
-        private var page: Int?
+        private var page: (navigations: Int, frames: String)?
 
         init(taskID: String) {
             self.taskID = taskID
@@ -424,13 +432,52 @@ final class RemoteTabBridge {
 
         @MainActor
         func check(_ tab: BrowserTab, bridge: RemoteTabBridge) async -> RemoteError? {
-            if let page { return tab.navigations == page ? nil : RemoteError(.notAllowed, "The page moved") }
             let navigations = tab.navigations
+            if let page {
+                guard navigations == page.navigations, (try? await bridge.frameMark(tab).mark) == page.frames,
+                      tab.navigations == navigations else { return RemoteError(.notAllowed, "The page moved") }
+                return nil
+            }
             if let refusal = await bridge.outsideFiles(tab.currentURL, taskID: taskID) { return refusal }
+            let frames: String
+            switch await bridge.checkFrames(tab, taskID: taskID) {
+            case let .success(mark): frames = mark
+            case let .failure(refusal): return refusal
+            }
             guard tab.navigations == navigations else { return RemoteError(.notAllowed, "The page moved") }
-            page = navigations
+            page = (navigations, frames)
             return nil
         }
+    }
+
+    /// The page's frames as Chromium has them now: the `file:` addresses they show, and a mark that changes when any
+    /// frame goes to another document or address (a frame's own link or script moves it without the tab's address).
+    fileprivate func frameMark(_ tab: BrowserTab) async throws -> (files: [String], mark: String) {
+        let tree = try await tab.devTools.send("Page.getFrameTree", [:], timeout: Self.captureTimeout)
+        var files: [String] = []
+        var mark: [String] = []
+        func visit(_ node: JSONValue) {
+            if let frame = node["frame"] {
+                let address = frame["url"]?.stringValue ?? ""
+                mark.append([frame["id"]?.stringValue ?? "", frame["loaderId"]?.stringValue ?? "", address].joined(separator: " "))
+                if address.lowercased().hasPrefix("file:") { files.append(address) }
+            }
+            node["childFrames"]?.arrayValue?.forEach(visit)
+        }
+        visit(tree["frameTree"] ?? .null)
+        return (files, mark.joined(separator: "\n"))
+    }
+
+    /// The page's frames when none shows a `file:` page outside the task's files (an iframe or an embed of one, or a
+    /// frame a link moved there), as the agent's tools hold them (`BrowserAgentPage.shownFiles`); their mark.
+    fileprivate func checkFrames(_ tab: BrowserTab, taskID: String) async -> Result<String, RemoteError> {
+        guard let frames = try? await frameMark(tab) else {
+            return .failure(RemoteError(.unavailable, "The page cannot be read now"))
+        }
+        for file in Set(frames.files) {
+            if let refusal = await outsideFiles(file, taskID: taskID) { return .failure(refusal) }
+        }
+        return .success(frames.mark)
     }
 
     /// What keeps the tab from a remote device now: it closed, a page's dialog waits, or one of Chromium's windows is up
@@ -454,7 +501,12 @@ final class RemoteTabBridge {
     /// Typing into a password field marks the page as one that holds a secret before the text goes in, so no script of
     /// the agent's reads it, as the panel's vault watch does; when that cannot be marked, nothing is typed.
     private func protectPassword(_ tab: BrowserTab) async -> RemoteError? {
-        guard tab.isPasswordFieldFocused, environment.marksTypedSecrets() else { return nil }
+        guard environment.marksTypedSecrets() else { return nil }
+        // The host says when a password field takes the keyboard, but a key that just moved the focus there (Tab) can
+        // come before that word does: the page is asked too.
+        let password = tab.isPasswordFieldFocused
+            ? true : await VaultPageScripts.focusMayBePassword(tab.devTools, timeout: Self.inputTimeout)
+        guard password else { return nil }
         let marked = await VaultPageScripts.noteSecretsShown([], on: tab.devTools, fills: tab.vaultFills)
         return marked ? nil : RemoteError(.unavailable, "The password field could not be protected")
     }

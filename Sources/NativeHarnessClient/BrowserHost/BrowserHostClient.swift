@@ -888,9 +888,10 @@ final class BrowserHostClient {
         if let session = opener.session {
             let behind = opensBehind(from: opener, session: session)
             let agentsOpener = agentTab(forSession: session) === opener
+            // The agent's click opened it, or a remote device's, as a pop-up the host adopts (`adoptPopup`).
             if let tab = try? newTab(forSession: session, url: url, viewport: opener.viewport ?? .offscreenDefault,
-                                     select: !background && !behind) {
-                tab.remoteOpener = opener.isDrivenByRemote
+                                     select: !background && !behind, byAgent: opener.isDrivenByAgent) {
+                tab.inherit(from: opener)
                 if !background { placeOpened(tab, behind: behind, agentsOpener: agentsOpener, session: session) }
                 opener.receive(.openedTab(tab: opener.id, newTab: tab.id, url: url))
                 return
@@ -919,7 +920,7 @@ final class BrowserHostClient {
         tab.viewport = opener.viewport
         // The agent's click opened it; or a remote device's, which the new tab's own requests answer to.
         tab.openedByAgent = opener.isDrivenByAgent
-        tab.remoteOpener = opener.isDrivenByRemote
+        tab.inherit(from: opener)
         tabs[id] = tab
         sessionOrder[session, default: []].append(id)
         if (!background && !behind) || frontedTabs[session].flatMap({ tabs[$0] }) == nil {
@@ -1184,6 +1185,17 @@ final class BrowserHostClient {
                 select(opener)
                 close(tab)
             }
+        case .remoteDownloadStopped(let id, let fileName):
+            guard let tab = tabs[id] else { return }
+            // A tab a page opened only for the refused download closes, as one whose download ended does, and its
+            // opener, which comes back, says so.
+            if tab.lastPageURL == nil, let opener = tabs.values.first(where: { $0.openedTabs.contains(tab.id) }) {
+                select(opener)
+                close(tab)
+                opener.receive(.remoteDownloadStopped(tab: opener.id, fileName: fileName))
+            } else {
+                tab.receive(event)
+            }
         case .closed(let id):
             // The page closed itself; a tab Yardlet closed is already gone. A host asked to end closes
             // every tab first: those are lost with it, as in a crash, and `.terminated` keeps them.
@@ -1377,10 +1389,12 @@ final class BrowserTab {
     fileprivate(set) var isRemotelyWatched = false
     /// When the person's last input came from a remote device (`notePersonInput(remote:)`).
     private var lastRemoteInput: ContinuousClock.Instant?
-    /// A page the remote device's input drove opened the tab (`BrowserHostClient.openWindow`, `adoptPopup`).
-    fileprivate(set) var remoteOpener = false {
-        didSet { tellDownloads() }
-    }
+    /// A page the remote device's input drove opened the tab (`inherit(from:)`).
+    fileprivate(set) var remoteOpener = false
+    /// The page that opened the tab had its downloads refused then (`inherit(from:)`).
+    private var openerRefusedDownloads = false
+    /// When the agent last acted on the page (a click, typing, a navigation …), not a read (`noteAgentInput`).
+    private var lastAgentInput: ContinuousClock.Instant?
     /// Whether the host was last told to refuse the tab's downloads (`refuseDownloads`).
     private var refusesDownloads = false
     /// What the tab's emulation was before a phone's (`sizeForRemote`); nil while no phone's holds.
@@ -1598,11 +1612,35 @@ final class BrowserTab {
         return remoteOpener && lastPersonInput == nil
     }
 
-    /// Tells the host to refuse the tab's downloads while a remote device drove it last, or to take them again once
-    /// someone here used it: sent before the input that changed it goes, so a download that input starts is refused
-    /// before it begins (the host also refuses those of a pop-up such a page opens).
+    /// The agent acted on the page (a click, typing, a navigation …), as opposed to reading it: what the page downloads
+    /// from now is the agent's, also after a remote device's input. Another app still opens only when someone here
+    /// chooses it (`isDrivenByRemote`).
+    func noteAgentInput() {
+        lastAgentInput = .now
+        client?.noteAgentActivity(on: self)
+        tellDownloads()
+    }
+
+    /// A tab a page opened answers to what drove that page: a remote device's input, and whether its downloads were
+    /// refused.
+    fileprivate func inherit(from opener: BrowserTab) {
+        remoteOpener = opener.isDrivenByRemote
+        openerRefusedDownloads = opener.refusesDownloads
+        tellDownloads()
+    }
+
+    /// Downloads are refused while a remote device's input is the last that drove the page: until someone here uses
+    /// it, or the agent acts on it, whose downloads are its own.
+    private var refusesDownloadsNow: Bool {
+        if let remote = lastRemoteInput, remote == lastPersonInput { return lastAgentInput.map { $0 < remote } ?? true }
+        return openerRefusedDownloads && lastPersonInput == nil && lastAgentInput == nil
+    }
+
+    /// Tells the host to refuse the tab's downloads (`refusesDownloadsNow`), or to take them again: sent before the
+    /// input that changed it goes, so a download that input starts is refused before it begins (the host also refuses
+    /// those of a pop-up such a page opens).
     private func tellDownloads() {
-        let refuses = isDrivenByRemote
+        let refuses = refusesDownloadsNow
         guard refuses != refusesDownloads else { return }
         refusesDownloads = refuses
         client?.send(.refuseDownloads(tab: id, isRefused: refuses))
@@ -1879,6 +1917,7 @@ final class BrowserTab {
         currentURL = address
         lastPageURL = address
         self.title = title
+        titleAddress = address
         self.favicon = favicon
         faviconHost = URL(string: address)?.host()
         isDiscarded = true

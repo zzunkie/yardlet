@@ -3688,4 +3688,4 @@
 "%@ › %@" = "%@ › %@";
 "Changed setting: %@" = "Changed setting: %@";
 "Open %@ in Settings" = "Open %@ in Settings";
-"%@ was not downloaded because this tab was last used from another device. Download it here to keep it." = "%@ was not downloaded because this tab was last used from another device. Download it here to keep it.";
+"%@ was not downloaded: it started after this tab was used from another device. Download it here to keep it." = "%@ was not downloaded: it started after this tab was used from another device. Download it here to keep it.";

@@ -1526,6 +1526,26 @@ static int CEF_CALLBACK download_can_download(cef_download_handler_t *self, cef_
     return 1;
 }
 
+// Downloads given no path (refused, or no downloads folder): CEF cancels them (Alloy style), and they keep no
+// callback in g_downloads, which holds only kMaximumPending, also when a progress report comes before or after.
+static int g_refused_downloads[kMaximumPending];
+static int g_next_refused_download = 0;
+
+static int download_refused(int id) {
+    for (int index = 0; index < kMaximumPending; index++) {
+        if (g_refused_downloads[index] == id) return 1;
+    }
+    return 0;
+}
+
+static void forget_download_callback(int id) {
+    PendingCallback *pending = pending_find(g_downloads, id);
+    if (pending == NULL) return;
+    cef_download_item_callback_t *stored = pending->callback;
+    pending->callback = NULL;
+    YARDLET_RELEASE(stored);
+}
+
 static int CEF_CALLBACK download_on_before_download(cef_download_handler_t *self,
                                                     cef_browser_t *browser,
                                                     cef_download_item_t *item,
@@ -1546,6 +1566,12 @@ static int CEF_CALLBACK download_on_before_download(cef_download_handler_t *self
             handled = 1;
         }
     }
+    if (!handled) {
+        int id = (int)item->get_id(item);
+        g_refused_downloads[g_next_refused_download] = id;
+        g_next_refused_download = (g_next_refused_download + 1) % kMaximumPending;
+        forget_download_callback(id);
+    }
     YARDLET_RELEASE(callback);
     YARDLET_RELEASE(item);
     YARDLET_RELEASE(browser);
@@ -1562,7 +1588,9 @@ static void CEF_CALLBACK download_on_download_updated(cef_download_handler_t *se
               : item->is_canceled(item) ? 3
               : item->is_interrupted(item) ? 4 : 1;
     PendingCallback *pending = pending_find(g_downloads, id);
-    if (state == 1 && pending == NULL) {
+    if (download_refused(id)) {
+        forget_download_callback(id);
+    } else if (state == 1 && pending == NULL) {
         pending = pending_free(g_downloads);
         if (pending) {
             pending->id = id;

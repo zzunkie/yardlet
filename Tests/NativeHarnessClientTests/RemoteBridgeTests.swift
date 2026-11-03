@@ -760,9 +760,9 @@ final class RemoteBridgeTests: XCTestCase {
         let unwatched = connection.calls.count
         let clicked = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .click(x: 320, y: 145), permit: RemoteTabPermit())
         XCTAssertNil(clicked)
-        XCTAssertEqual(connection.calls.dropFirst(unwatched).map(\.method), Array(repeating: "Input.dispatchMouseEvent", count: 3))
-        XCTAssertEqual(connection.calls.dropFirst(unwatched).compactMap { $0.params["type"]?.stringValue },
-                       ["mouseMoved", "mousePressed", "mouseReleased"])
+        let sent = connection.calls.dropFirst(unwatched).filter { $0.method.hasPrefix("Input.") }
+        XCTAssertEqual(sent.map(\.method), Array(repeating: "Input.dispatchMouseEvent", count: 3))
+        XCTAssertEqual(sent.compactMap { $0.params["type"]?.stringValue }, ["mouseMoved", "mousePressed", "mouseReleased"])
         XCTAssertEqual(connection.calls.last?.params["x"]?.doubleValue, 320)
         XCTAssertNotNil(signIn.lastPersonUse, "the remote's input is the person's")
         let backspace = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .key("Backspace"), permit: RemoteTabPermit())
@@ -1082,6 +1082,135 @@ final class RemoteBridgeTests: XCTestCase {
             .compactMap { $0.params["width"]?.integerValue }, [800, 410])
     }
 
+    /// The fourth review of §15.25's host: a frame showing a file outside the task's keeps the page from the remote, and
+    /// a frame that moves during a picture or between an input's steps stops it; the agent's acting on a page after a
+    /// remote device's input lets it download (its downloads are its own) while another app still asks; a tab a page
+    /// opens as a blocked pop-up is the agent's when the agent drove that page; a held tab's title belongs to its
+    /// address; a refused download's empty pop-up closes and its opener says so; a password field that took the
+    /// keyboard before the host said so is protected; and a page's dialog shows as what the tab waits on.
+    func testARemoteDeviceSeesNoFrameOutsideTheTaskAndLeavesTheAgentItsOwnDownloads() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "remote-tab-frames-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try Data("<iframe></iframe>".utf8).write(to: folder.appending(path: "report.html"))
+        try Data("<p>notes</p>".utf8).write(to: folder.appending(path: "notes.html"))
+        let page = folder.appending(path: "report.html").absoluteString
+        let notes = folder.appending(path: "notes.html").absoluteString
+        let task = SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                 title: "Report")
+        let other = SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                  title: "Held")
+        let model = try Self.model(sessions: [task, other], transcripts: [:])
+        let connection = AnsweringHostConnection()
+        let client = BrowserHostClient(idleGrace: .seconds(60), agentVisibleWindow: .milliseconds(20)) { connection }
+        let apps = RecordingExternalApps()
+        client.externalApps = apps
+        let bridge = AppModelRemoteBridge(model: model, browser: RemoteTabBridge.Environment(
+            client: { client }, usesMacEditingCommands: true, marksTypedSecrets: { true }))
+        let tab = try client.openTab(forSession: task.id, url: page, viewport: .offscreenDefault)
+        connection.eventHandler?(.address(tab: tab.id, url: page))
+        let taskID = task.id.uuidString, tabID = tab.key.uuidString
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: tabID)])
+        func frames(child: String, loader: String = "C1") -> String {
+            #"{"frameTree":{"frame":{"id":"main","loaderId":"L1","url":"\#(page)"},"#
+                + #""childFrames":[{"frame":{"id":"child","parentId":"main","loaderId":"\#(loader)","url":"\#(child)"}}]}}"#
+        }
+        func inputs(since mark: Int) -> Int { connection.calls.dropFirst(mark).filter { $0.method.hasPrefix("Input.") }.count }
+
+        // A frame of the task's page shows a file outside the task's: neither pictured nor driven.
+        connection.frameTree = frames(child: "file:///etc/hosts")
+        let embedded = await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 640, maxHeight: 640)
+        guard case let .failure(refused) = embedded else { return XCTFail("A page framing a file outside the task's was pictured") }
+        XCTAssertEqual(refused.code, .notAllowed)
+        var before = connection.calls.count
+        let drivenEmbedded = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .click(x: 5, y: 5), permit: RemoteTabPermit())
+        XCTAssertEqual(drivenEmbedded?.code, .notAllowed)
+        XCTAssertEqual(inputs(since: before), 0)
+
+        // Its frame shows one of the task's own: pictured. A frame that moves while pictured, or between a click's steps,
+        // stops it, though the tab's address stays.
+        connection.frameTree = frames(child: notes)
+        let own = await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 640, maxHeight: 640)
+        XCTAssertNotNil(try? own.get())
+        connection.onCall = { method in
+            if method == "Page.captureScreenshot" { connection.frameTree = frames(child: notes, loader: "C2") }
+        }
+        let framed = await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 640, maxHeight: 640)
+        guard case .failure = framed else { return XCTFail("A page whose frame moved during its picture was sent") }
+        connection.onCall = { method in
+            if method == "Input.dispatchMouseEvent" { connection.frameTree = frames(child: notes, loader: "C3") }
+        }
+        before = connection.calls.count
+        let movedFrame = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .click(x: 5, y: 5), permit: RemoteTabPermit())
+        XCTAssertEqual(movedFrame?.code, .notAllowed)
+        XCTAssertEqual(inputs(since: before), 1, "only the step before the frame moved")
+        connection.onCall = nil
+        connection.frameTree = nil
+        connection.eventHandler?(.address(tab: tab.id, url: "https://example.com/receipts"))
+
+        // After the remote click the tab's downloads are refused; the agent reading it keeps that, the agent acting on
+        // it lifts it before its input goes, and another app still asks.
+        XCTAssertTrue(connection.sent.contains(.refuseDownloads(tab: tab.id, isRefused: true)))
+        before = connection.sent.count
+        tab.noteAgentActivity()
+        XCTAssertFalse(connection.sent.dropFirst(before).contains(.refuseDownloads(tab: tab.id, isRefused: false)))
+        tab.noteAgentInput()
+        XCTAssertEqual(Array(connection.sent.dropFirst(before)), [.refuseDownloads(tab: tab.id, isRefused: false)])
+        connection.eventHandler?(.externalApp(tab: tab.id, request: BrowserExternalAppRequest(
+            url: "mailto:billing@example.test", origin: "https://example.com", userGesture: true, remembered: true)))
+        XCTAssertTrue(apps.opened.isEmpty, "another app still waits for the Mac")
+        XCTAssertNotNil(tab.externalAppQuestion)
+        tab.answerExternalApp(open: false, alwaysAllow: false)
+
+        // A blocked pop-up the agent's page opens as a tab is the agent's.
+        connection.eventHandler?(.newWindow(tab: tab.id, url: "https://example.com/receipt.pdf", background: false, userGesture: true))
+        let opened = try XCTUnwrap(client.tabs(forSession: task.id).last)
+        XCTAssertTrue(opened.openedByAgent)
+        XCTAssertFalse(connection.sent.contains(.refuseDownloads(tab: opened.id, isRefused: true)))
+
+        // A remote click again; its download, refused in an empty pop-up the page opened for it, closes that pop-up and
+        // says so on the tab.
+        let clicked = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .click(x: 5, y: 5), permit: RemoteTabPermit())
+        XCTAssertNil(clicked)
+        var told: [String] = []
+        tab.addEventObserver { if case let .remoteDownloadStopped(_, name) = $0 { told.append(name) } }
+        connection.eventHandler?(.popupOpened(tab: 95, opener: tab.id, url: "about:blank", background: false))
+        let blank = try XCTUnwrap(client.tabs(forSession: task.id).first { $0.id == 95 })
+        connection.eventHandler?(.remoteDownloadStopped(tab: blank.id, fileName: "receipt.pdf"))
+        XCTAssertNil(client.tabs(forSession: task.id).first { $0.id == 95 }, "the empty pop-up closed")
+        XCTAssertEqual(told, ["receipt.pdf"])
+
+        // A password field that took the keyboard (a Tab) before the host said so is protected before the text goes in.
+        XCTAssertFalse(tab.isPasswordFieldFocused)
+        connection.focusedField = "password"
+        before = connection.calls.count
+        let typed = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .text("hunter2"), permit: RemoteTabPermit())
+        XCTAssertNil(typed)
+        XCTAssertTrue(tab.vaultFills.holdShownDocument(in: []))
+        let typing = connection.calls.dropFirst(before).map(\.method)
+        XCTAssertLessThan(try XCTUnwrap(typing.firstIndex(of: "Runtime.evaluate")), try XCTUnwrap(typing.firstIndex(of: "Input.insertText")))
+
+        // A page's dialog is what the tab waits on, for the remote to say, and holds it from the remote.
+        connection.eventHandler?(.javaScriptDialog(tab: tab.id, dialog: BrowserJavaScriptDialog(
+            id: 3, kind: .confirm, message: "Leave?", defaultPrompt: "", origin: "https://example.com", isReload: false)))
+        let waiting = try await bridge.browserTabs(taskID: taskID).get()
+        XCTAssertEqual(waiting.first { $0.tabId == tabID }?.waiting, "javaScriptDialog")
+        let underDialog = await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 640, maxHeight: 640)
+        guard case let .failure(dialogRefusal) = underDialog else { return XCTFail("A page under its dialog was pictured") }
+        XCTAssertEqual(dialogRefusal.code, .notAllowed)
+
+        // A held tab's title is its address's: a file's does not name the page the tab moves to next.
+        client.rememberTabs(BrowserRememberedTabs(addresses: ["https://example.com", "file:///etc/hosts"], keys: [UUID(), UUID()],
+                                                  titles: ["Example", "hosts"], favicons: [nil, nil], fronted: 0),
+                            forSession: other.id)
+        _ = try await bridge.browserTabs(taskID: other.id.uuidString).get()
+        let held = try XCTUnwrap(client.tabs(forSession: other.id).last)
+        XCTAssertEqual(held.titleAddress, "file:///etc/hosts")
+        connection.eventHandler?(.address(tab: held.id, url: "https://example.com/next"))
+        let next = try await bridge.browserTabs(taskID: other.id.uuidString).get()
+        XCTAssertNil(next.last?.title)
+    }
+
     private static let frame = BrowserFrame(layer: .view, surface: 1, pixelWidth: 2560, pixelHeight: 1600, sequence: 1,
                                             paintedAt: 0, source: "accelerated")
 
@@ -1209,6 +1338,10 @@ final class AnsweringHostConnection: BrowserHostConnection {
     var layout = (width: 1280.0, height: 800.0, pageY: 0.0, ratio: 2.0)
     /// Off: the page does not say which document it shows, as when it is between documents.
     var answersFrameTree = true
+    /// The page's frames when set (`Page.getFrameTree`'s result), else one main frame.
+    var frameTree: String?
+    /// What the focused field is, as the vault's world reads it: `password`, `other` or `unknown`.
+    var focusedField = "other"
     /// Called with each DevTools method as it arrives, before it is answered.
     var onCall: ((String) -> Void)?
 
@@ -1222,6 +1355,10 @@ final class AnsweringHostConnection: BrowserHostConnection {
         let result: String = switch method {
         case "Page.getLayoutMetrics":
             #"{"cssVisualViewport":{"clientWidth":\#(layout.width),"clientHeight":\#(layout.height),"pageX":0,"pageY":\#(layout.pageY)}}"#
+        case "Runtime.evaluate" where object["params"]?["expression"]?.stringValue?.contains("activeElement") == true:
+            #"{"result":{"type":"string","value":"\#(focusedField)"}}"#
+        case "Page.createIsolatedWorld": #"{"executionContextId":7}"#
+        case "Page.getFrameTree" where answersFrameTree && frameTree != nil: frameTree ?? ""
         case "Runtime.evaluate" where object["params"]?["expression"]?.stringValue?.contains("navigator.userAgent") == true:
             #"{"result":{"type":"object","value":["Mozilla/5.0 (Macintosh) Chrome/154.0.0.0 Safari/537.36",[]]}}"#
         case "Runtime.evaluate": #"{"result":{"type":"number","value":\#(layout.ratio)}}"#

@@ -927,7 +927,7 @@ final class BrowserHostPaneController {
         case .download(_, let download):
             record(download)
         case .remoteDownloadStopped(_, let name):
-            showNotice(L10n.format("%@ was not downloaded because this tab was last used from another device. Download it here to keep it.", name))
+            showNotice(L10n.format("%@ was not downloaded: it started after this tab was used from another device. Download it here to keep it.", name))
         case .findResult(_, let result):
             findResult = result
         case .accessibilityTree, .accessibilityLocations, .scrollOffset:

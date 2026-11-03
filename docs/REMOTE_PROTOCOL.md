@@ -1625,8 +1625,8 @@ stays on the Mac.
   command. Errors: `badRequest` (a field missing, out of range or not the kind's, an unknown key or one past its bytes),
   `tooLarge` (text), `notFound` (the tab closed), `notAllowed` (not the watched tab, or its watch ended; a passkey or
   site sign-in window, one whose tab Chromium does not name, or a page's dialog is up, which the person answers on the
-  Mac; a key or button that is not taken; a `file:` page outside the task's files; the page moved while the input
-  went), `rateLimited`,
+  Mac; a key or button that is not taken; a `file:` page outside the task's files, in the page or any of its frames;
+  the page or one of its frames moved while the input went), `rateLimited`,
   `unavailable` (the page did not answer, or a password field could not be protected, below).
 - `{"type": "unwatchTab", "taskId": "4C1F…"}`: stops the watch. Closing the connection, removing the device, the remote
   turning off and the tab closing stop it too, input under way included. Not a command.
@@ -1634,25 +1634,29 @@ stays on the Mac.
   never another task's or the Mac's own browsing. A watched tab paints while it is watched, as one a panel shows on
   screen, and goes back to how it was (hidden, and later let go by the memory saver) when no one watches it. A phone's
   `viewport` draws it at that size while the phone watches (the smaller when two ask; sizes asked while another change
-  of the tab's size runs make one change, the latest), and after the last such watch the
-  tab takes the size and emulation it had before: the person's from the panel, the agent's while its turn goes on, else
-  its own. The tab the Mac's panel shows does not change. Input counts as the person's in that tab, as the panel's
-  does: the memory saver keeps a page they typed in, and a character typed into a password field, as text or as a key,
-  first marks the page as one that holds a secret, so the agent's scripts and pictures stay off it while the password
-  manager is on, as for one typed in the panel; when the page cannot be marked, nothing is typed. A page's request to
-  open another app on the Mac (a `mailto:` link, an app the site was always allowed) after a remote click waits for
-  someone at the Mac to choose it there (`waiting` `externalApp`), and so does one from a tab such a page opened (a
-  popup), until someone uses that tab on the Mac; the agent's use of the tab since, a read included, does not change
-  that. While a remote click drove the tab last, its downloads, and those of a popup its page opens, are refused before
-  they begin (nothing is written) and the Mac's panel says so; the person downloads it on the Mac to keep it. A `file:`
-  page is shown and driven only when `readFile` would serve it, or it is a folder inside the task's folders (§15.22),
-  checked for the very page pictured or driven: a picture during which the page moved, even away and back to the same
-  address, is not sent. Another is listed as `file://`, without its title, and the page the tab moves to next shows no
-  title until it names itself. Pictures show the page as it draws itself (a password field as dots) and are
-  made only while watched; the Mac keeps none. The audit log (§4.4) records each
-  `watchTab` and, at most once a minute per device, task, kind and result, a `tabInput`'s kind (`click`, `text`, …),
-  never what was typed. Chromium's own windows (a passkey, a site's sign-in), macOS prompts and a page's dialogs stay
-  on the Mac.
+  of the tab's size runs make one change, the latest), and after the last such watch the tab takes the size and
+  emulation it had before: the person's from the panel, the agent's while its turn goes on, else its own. The tab the
+  Mac's panel shows does not change. Input counts as the person's in that tab, as the panel's does: the memory saver
+  keeps a page they typed in, and a character typed into a password field, as text or as a key, first marks the page as
+  one that holds a secret, so the agent's scripts and pictures stay off it while the password manager is on, as for one
+  typed in the panel; when the page cannot be marked, nothing is typed. Which field has the keyboard is read from the
+  page before each character, so a field a `Tab` just moved to counts at once, and one in a frame of another site is
+  taken for a password field. A page's request to open another app on the Mac (a `mailto:` link, an app the site was
+  always allowed) after a remote click waits for someone at the Mac to choose it there (`waiting` `externalApp`), and so
+  does one from a tab such a page opened (a popup), until someone uses that tab on the Mac; the agent's use of the tab
+  since does not change that. While a remote click drove the tab last, its downloads, and those of a popup its page
+  opens, are refused before they begin (nothing is written), until someone uses the tab on the Mac or the agent acts on
+  it (a click, typing, a navigation; not a read), whose downloads are its own. The Mac's panel says so, and an empty tab
+  the page opened only for that download closes; the person downloads it on the Mac to keep it. A `file:` page, in the
+  tab or in any of its frames (an iframe, an embed, a frame a link moved), is shown and driven only when `readFile`
+  would serve it, or it is a folder inside the task's folders (§15.22), as the agent's tools hold them. It is checked
+  for the very page pictured or driven: a picture during which the page or one of its frames moved, even away and back
+  to the same address, is not sent. Another is listed as `file://`, without its title, and the page the tab moves to
+  next shows no title until it names itself. Pictures show the page as it draws itself (a password field as dots) and
+  are made only while watched; the Mac keeps none. The audit log (§4.4) records each `watchTab` and, at most once a
+  minute per device, task, kind and result, a `tabInput`'s kind (`click`, `text`, …), never what was typed. Chromium's
+  own windows (a passkey, a site's sign-in), macOS prompts and a page's dialogs stay on the Mac; while one is up, the
+  tab's `waiting` says so.
 - **What a phone needs:**
   - Draw the frame fitted to the screen, keeping its shape, and let the person zoom and pan the picture. A tap at a
     point of the picture is `click` at that point times `viewportWidth / width` (the same factor both ways); a double tap
