@@ -66,7 +66,7 @@ final class ClaudeBypassPermissionTests: XCTestCase {
             harness: .openCode, session: Fixtures.session(.openCode), providerCapabilities: Fixtures.acpCapabilities,
             providerUsage: nil, isAttached: true).permission).confirmations.isEmpty)
         // Codex's Full access keeps its own words.
-        XCTAssertEqual(Array(ComposerSessionOptionsProjection.codexPermission(.automatic).confirmations.keys),
+        XCTAssertEqual(Array(ComposerSessionOptionsProjection.codexPermission(.askForApproval, config: .init()).confirmations.keys),
                        ["dangerFullAccess"])
     }
 

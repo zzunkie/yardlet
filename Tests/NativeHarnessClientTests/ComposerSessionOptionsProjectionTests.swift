@@ -73,7 +73,7 @@ final class ComposerSessionOptionsProjectionTests: XCTestCase {
         state.modelCatalog = Fixtures.codexCatalog
         state.modes = [Fixtures.planPreset, Fixtures.defaultPreset]
         state.selectedModeID = Fixtures.planPreset.id
-        state.selectedRunLocation = .workspaceWrite
+        state.selectedRunLocation = .approveForMe
         state.skills = Fixtures.skills + [CodexSkillSummary(name: "off", displayName: "Off", description: "",
                                                             enabled: false, scope: "user", path: "/skills/off")]
         return state
@@ -108,7 +108,7 @@ final class ComposerSessionOptionsProjectionTests: XCTestCase {
                 placeholder: ask("Codex"), bashMode: false, submission: .codexDraft, retention: .codexBuiltinCommands,
                 followUp: .codex, commands: "codexCatalog/runCodexCommand/codexCommands/prepareOnOpen/git",
                 refreshes: true, mode: "planIndicator",
-                permission: "\(CodexRunLocation.workspaceWrite.displayName) codexRunLocation choices=4 canChoose=true",
+                permission: "\(CodexRunLocation.approveForMe.shortName) codexRunLocation choices=3 canChoose=true",
                 skills: 1, contextUsed: 64_000,
                 model: "GPT-6.1-Sol · \(L10n.string("High")) codexModel canChoose=true")),
             ("Claude Code", claude, Row(
@@ -165,24 +165,45 @@ final class ComposerSessionOptionsProjectionTests: XCTestCase {
 
     // MARK: - Permissions
 
-    func testCodexPermissionsAreItsFourSandboxPoliciesAndFullAccessAsksFirst() throws {
-        let slot = ComposerSessionOptionsProjection.codexPermission(.automatic)
+    func testCodexPermissionsAreTheCodexAppsMenuAndFullAccessAsksFirst() throws {
+        let slot = ComposerSessionOptionsProjection.codexPermission(.askForApproval, config: CodexPermissionConfig())
         let selector = try XCTUnwrap(slot.selector)
-        XCTAssertEqual(selector.choices.map(\.value), ["automatic", "readOnly", "workspaceWrite", "dangerFullAccess"])
-        XCTAssertEqual(selector.choices.map(\.name), CodexRunLocation.allCases.map(\.displayName))
-        XCTAssertEqual(slot.title, L10n.string("Default"))
+        XCTAssertEqual(selector.choices.map(\.value), ["askForApproval", "approveForMe", "dangerFullAccess"])
+        XCTAssertEqual(selector.choices.map(\.name), [L10n.string("Ask for approval"), L10n.string("Approve for me"),
+                                                      L10n.string("Full access")])
+        XCTAssertEqual(selector.choices.map(\.description), [
+            L10n.string("Always ask to edit external files and use the internet"),
+            L10n.string("Only ask for actions detected as potentially unsafe"),
+            L10n.string("Unrestricted access to the internet and any file on your computer")])
+        XCTAssertEqual(slot.title, L10n.string("Ask for approval"))
         XCTAssertFalse(slot.isElevated)
         XCTAssertFalse(slot.hasPendingRequest, "Codex's requests are counted by its conversation model (M3)")
         XCTAssertNil(slot.help)
-        XCTAssertEqual(slot.accessibilityHint, L10n.string("Choose the sandbox policy for the next Codex turn"))
+        XCTAssertEqual(slot.accessibilityHint, L10n.string("Change permissions"))
         XCTAssertEqual(Array(slot.confirmations.keys), ["dangerFullAccess"])
         XCTAssertEqual(slot.confirmations["dangerFullAccess"], .init(
-            title: L10n.string("Allow full access?"),
-            message: L10n.string("Codex will run commands, use the internet, and create and edit files anywhere on this Mac without asking."),
-            confirm: L10n.string("Allow full access")))
-        XCTAssertEqual(slot.apply.choice(id: selector.id, value: "readOnly"), .codexRunLocation(.readOnly))
+            title: L10n.string("Turn on full access?"),
+            message: L10n.string("Codex will be able to run commands, use the internet, and create and edit files anywhere on this computer without your permission. This comes with risks like loss or exposure of sensitive data and prompt injection."),
+            confirm: L10n.string("Confirm")))
+        XCTAssertEqual(slot.apply.choice(id: selector.id, value: "approveForMe"), .codexRunLocation(.approveForMe))
         XCTAssertNil(slot.apply.choice(id: selector.id, value: "bypass"))
-        XCTAssertTrue(ComposerSessionOptionsProjection.codexPermission(.dangerFullAccess).isElevated)
+        XCTAssertTrue(ComposerSessionOptionsProjection.codexPermission(.dangerFullAccess, config: .init()).isElevated)
+
+        // config.toml turns Approve for me off and sets permissions none of the modes is: the app's Custom.
+        let custom = ComposerSessionOptionsProjection.codexPermission(
+            .custom, config: CodexPermissionConfig(offersApproveForMe: false, offersCustom: true))
+        XCTAssertEqual(custom.selector?.choices.map(\.value), ["askForApproval", "dangerFullAccess", "custom"])
+        XCTAssertEqual(custom.selector?.choices.last?.name, L10n.string("Custom (config.toml)"))
+        XCTAssertEqual(custom.title, L10n.string("Custom"))
+        // A task already on a choice the menu no longer offers keeps it listed; Read-only comes first.
+        let readOnly = ComposerSessionOptionsProjection.codexPermission(
+            .readOnly, config: CodexPermissionConfig(offersApproveForMe: false))
+        XCTAssertEqual(readOnly.selector?.choices.map(\.value), ["readOnly", "askForApproval", "dangerFullAccess"])
+        // In Korean, the app's words, with Yardlet's own for Full access and Custom.
+        XCTAssertEqual(["Ask for approval", "Approve for me", "Full access", "Custom (config.toml)"]
+            .map { L10n.string($0, languageCode: "ko") }, ["승인 요청", "나 대신 승인", "전체 접근", "사용자 지정 (config.toml)"])
+        XCTAssertEqual(L10n.string("Only ask for actions detected as potentially unsafe", languageCode: "ko"),
+                       "잠재적으로 위험한 것으로 감지된 작업에만 승인을 요청합니다")
     }
 
     func testAProviderPermissionsControlKeepsItsSelectorAndWording() throws {
@@ -464,8 +485,8 @@ final class ComposerSessionOptionsProjectionTests: XCTestCase {
         let codex = ComposerSessionOptionsProjection.newTask(harness: .codex, choice: nil, catalogs: catalogs,
                                                             connection: nil, workspaceURL: nil)
         let codexPermission = try XCTUnwrap(codex.permission)
-        XCTAssertEqual(codexPermission, ComposerSessionOptionsProjection.codexPermission(.automatic))
-        XCTAssertEqual(codexPermission.title, L10n.string("Default"))
+        XCTAssertEqual(codexPermission, ComposerSessionOptionsProjection.codexPermission(.askForApproval, config: .init()))
+        XCTAssertEqual(codexPermission.title, L10n.string("Ask for approval"))
         XCTAssertEqual(codexPermission.apply.choice(id: NewTaskModelProjection.codexPermissionID, value: "dangerFullAccess"),
                        .codexRunLocation(.dangerFullAccess))
         let fullAccess = ComposerSessionOptionsProjection.newTask(harness: .codex,
@@ -517,8 +538,8 @@ final class ComposerSessionOptionsProjectionTests: XCTestCase {
             choice: codex, catalogs: catalogs, connection: nil, workspaceURL: nil))
         XCTAssertEqual(codex.model, model.model)
         XCTAssertEqual(codex.permissionMode, "dangerFullAccess", "Choosing a model keeps the permission")
-        XCTAssertNil(NewTaskModelProjection.choosing(.codexRunLocation(.automatic), harness: .codex, choice: codex,
-            catalogs: catalogs, connection: nil, workspaceURL: nil)?.permissionMode, "Default keeps none")
+        XCTAssertNil(NewTaskModelProjection.choosing(.codexRunLocation(.askForApproval), harness: .codex, choice: codex,
+            catalogs: catalogs, connection: nil, workspaceURL: nil)?.permissionMode, "Ask for approval keeps none")
         XCTAssertNil(NewTaskModelProjection.choosing(.codexRunLocation(.readOnly), harness: .claudeCode, choice: nil,
             catalogs: catalogs, connection: nil, workspaceURL: nil))
 

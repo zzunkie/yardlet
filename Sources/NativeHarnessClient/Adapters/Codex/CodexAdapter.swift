@@ -172,11 +172,11 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
 
     /// The task's saved permission (`CodexRunLocation.storageKey`) and mode
     /// (`CodexCollaborationPreset.storageKey`), handed over before the thread starts or resumes so
-    /// the thread carries them from its first request; the Default choice and a task without a
-    /// mode send the requests as before.
+    /// the thread carries them from its first request; a task without either keeps Ask for approval
+    /// and the default mode.
     func setLaunchOptions(_ options: [String: String], for localSessionID: UUID) {
         let location = CodexRunLocation.restored(from: options)
-        if location == .automatic {
+        if location == .askForApproval {
             runLocationByLocalSessionID.removeValue(forKey: localSessionID)
         } else {
             runLocationByLocalSessionID[localSessionID] = location
@@ -246,7 +246,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
                 config: agentToolServerByLocalSessionID[request.localSessionID]?.codexConfig,
                 ephemeral: historyFreeSessionIDs.contains(request.localSessionID),
                 developerInstructions: developerInstructions,
-                runLocation: runLocationByLocalSessionID[request.localSessionID] ?? .automatic
+                runLocation: runLocationByLocalSessionID[request.localSessionID] ?? .askForApproval
             )
         )
         let threadID = try threadID(from: response)
@@ -287,7 +287,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         let additionalRoots = additionalRootsByLocalSessionID[localSessionID] ?? []
         let config = agentToolServerByLocalSessionID[localSessionID]?.codexConfig
         let developerInstructions = await developerInstructions(for: localSessionID, workspaceURL: workspaceURL)
-        let runLocation = runLocationByLocalSessionID[localSessionID] ?? .automatic
+        let runLocation = runLocationByLocalSessionID[localSessionID] ?? .askForApproval
         let response: CodexRPCIncomingMessage
         do {
             do {
@@ -405,7 +405,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
                     threadID: session.providerSessionID,
                     input: draft.inputs,
                     collaborationPreset: collaborationPresetByLocalSessionID[session.localSessionID],
-                    runLocation: runLocationByLocalSessionID[session.localSessionID] ?? .automatic,
+                    runLocation: runLocationByLocalSessionID[session.localSessionID] ?? .askForApproval,
                     modelSelection: modelSelectionByLocalSessionID[session.localSessionID]
                 )
             )
@@ -1283,9 +1283,9 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         for session: HarnessSessionHandle
     ) async throws {
         try requireRegistered(session)
-        // The selection is applied to the next `turn/start`; `turn/steer` has no
-        // sandboxPolicy field in the locked schema and therefore remains unchanged.
-        if location == .automatic {
+        // The selection is applied to the next `turn/start`; `turn/steer` takes no permission, so
+        // a turn already running keeps the one it started with.
+        if location == .askForApproval {
             runLocationByLocalSessionID.removeValue(forKey: session.localSessionID)
         } else {
             runLocationByLocalSessionID[session.localSessionID] = location
@@ -1449,7 +1449,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         let started = try await transport.request(CodexProtocol.startTurn(
             id: takeRequestID(), threadID: session.providerSessionID, input: [],
             collaborationPreset: collaborationPresetByLocalSessionID[session.localSessionID],
-            runLocation: runLocationByLocalSessionID[session.localSessionID] ?? .automatic,
+            runLocation: runLocationByLocalSessionID[session.localSessionID] ?? .askForApproval,
             modelSelection: modelSelectionByLocalSessionID[session.localSessionID],
             turnTrigger: trigger))
         try requireRegistered(session)
@@ -1490,7 +1490,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         let started = try await transport.request(CodexProtocol.startTurn(
             id: takeRequestID(), threadID: session.providerSessionID, input: [],
             collaborationPreset: collaborationPresetByLocalSessionID[session.localSessionID],
-            runLocation: runLocationByLocalSessionID[session.localSessionID] ?? .automatic,
+            runLocation: runLocationByLocalSessionID[session.localSessionID] ?? .askForApproval,
             modelSelection: modelSelectionByLocalSessionID[session.localSessionID],
             turnTrigger: cut == .quit ? RestartContinuation.codexTurnTrigger : RestartContinuation.codexResumeTrigger))
         try requireRegistered(session)

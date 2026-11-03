@@ -2,43 +2,56 @@ import Foundation
 import XCTest
 @testable import NativeHarnessClient
 
-/// Codex permissions, MCP tool approvals and stopping, as the Codex app (26.1016) does them.
+/// Codex permissions (as the Codex app 26.1027 sends them), MCP tool approvals and stopping (26.1016).
 final class CodexApprovalParityTests: XCTestCase {
     // MARK: - Permissions
 
-    func testFullAccessIsTheCodexAppsNeverWithoutASandbox() {
-        XCTAssertNil(CodexRunLocation.automatic.approvalPolicy)
-        XCTAssertEqual(CodexRunLocation.readOnly.approvalPolicy, "on-request")
-        XCTAssertEqual(CodexRunLocation.workspaceWrite.approvalPolicy, "on-request")
-        XCTAssertEqual(CodexRunLocation.dangerFullAccess.approvalPolicy, "never")
-
-        let fullAccess = CodexProtocol.startTurn(id: 1, threadID: "thread", prompt: "go", runLocation: .dangerFullAccess)
-        XCTAssertEqual(fullAccess.params["approvalPolicy"]?.stringValue, "never")
-        XCTAssertEqual(fullAccess.params["sandboxPolicy"]?["type"]?.stringValue, "dangerFullAccess")
-        let readOnly = CodexProtocol.startTurn(id: 2, threadID: "thread", prompt: "go", runLocation: .readOnly)
-        XCTAssertEqual(readOnly.params["approvalPolicy"]?.stringValue, "on-request")
-        let inherited = CodexProtocol.startTurn(id: 3, threadID: "thread", prompt: "go")
-        XCTAssertNil(inherited.params["approvalPolicy"])
-        XCTAssertNil(inherited.params["sandboxPolicy"])
-
-        let start = CodexProtocol.startThread(id: 4, workspaceURL: URL(filePath: "/tmp/w"), runLocation: .dangerFullAccess)
-        XCTAssertEqual(start.params["approvalPolicy"]?.stringValue, "never")
-        XCTAssertEqual(start.params["sandbox"]?.stringValue, "danger-full-access")
-        let resume = CodexProtocol.resumeThread(id: 5, threadID: "thread", workspaceURL: URL(filePath: "/tmp/w"),
-                                                runLocation: .readOnly)
-        XCTAssertEqual(resume.params["approvalPolicy"]?.stringValue, "on-request")
-        XCTAssertEqual(resume.params["sandbox"]?.stringValue, "read-only")
-        let plain = CodexProtocol.resumeThread(id: 6, threadID: "thread", workspaceURL: URL(filePath: "/tmp/w"))
-        XCTAssertEqual(plain.params["approvalPolicy"]?.stringValue, "on-request")
-        XCTAssertEqual(plain.params["sandbox"]?.stringValue, "workspace-write")
+    func testEachPermissionSendsWhatTheCodexAppSends() {
+        // The app's agent modes (its `EX` table): a built-in profile, the policy and who reviews.
+        let expected: [(CodexRunLocation, String?, String?, String?)] = [
+            (.askForApproval, ":workspace", "on-request", "user"),
+            (.approveForMe, ":workspace", "on-request", "guardian_subagent"),
+            (.dangerFullAccess, ":danger-full-access", "never", "user"),
+            (.readOnly, ":read-only", "on-request", "user"),
+            (.custom, nil, nil, nil)
+        ]
+        let url = URL(filePath: "/tmp/w")
+        for (location, profile, policy, reviewer) in expected {
+            for request in [
+                CodexProtocol.startThread(id: 1, workspaceURL: url, runLocation: location),
+                CodexProtocol.resumeThread(id: 2, threadID: "thread", workspaceURL: url, runLocation: location),
+                CodexProtocol.startTurn(id: 3, threadID: "thread", prompt: "go", runLocation: location)
+            ] {
+                XCTAssertEqual(request.params["permissions"]?.stringValue, profile, "\(location) \(request.method)")
+                XCTAssertEqual(request.params["approvalPolicy"]?.stringValue, policy, "\(location) \(request.method)")
+                XCTAssertEqual(request.params["approvalsReviewer"]?.stringValue, reviewer, "\(location) \(request.method)")
+                // A profile cannot be combined with a sandbox; Custom leaves both to config.toml.
+                XCTAssertNil(request.params["sandbox"])
+                XCTAssertNil(request.params["sandboxPolicy"])
+            }
+        }
+        // A task that chose nothing is Ask for approval, from its thread's start to every turn.
+        XCTAssertEqual(CodexProtocol.startTurn(id: 4, threadID: "thread", prompt: "go").params["permissions"]?.stringValue,
+                       ":workspace")
     }
 
     @MainActor
     func testATasksSavedPermissionIsItsLevelAndItsChildsOnCodex() {
-        XCTAssertEqual(CodexRunLocation.restored(from: [:]), .automatic)
-        XCTAssertEqual(CodexRunLocation.restored(from: [CodexRunLocation.storageKey: "nonsense"]), .automatic)
+        // What earlier versions kept: no value and "automatic" (Default) and Workspace write started their
+        // threads in the workspace sandbox asking on request, as Ask for approval does.
+        for stored in [nil, "automatic", "workspaceWrite", "nonsense"] {
+            XCTAssertEqual(CodexRunLocation.restored(from: [CodexRunLocation.storageKey: stored].compactMapValues { $0 }),
+                           .askForApproval, stored ?? "nil")
+        }
+        XCTAssertEqual(CodexRunLocation.restored(from: [CodexRunLocation.storageKey: "readOnly"]), .readOnly)
+        XCTAssertEqual(CodexRunLocation.restored(from: [CodexRunLocation.storageKey: "approveForMe"]), .approveForMe)
+        XCTAssertNil(CodexRunLocation.askForApproval.storedValue)
         let saved = [CodexRunLocation.storageKey: CodexRunLocation.dangerFullAccess.rawValue]
         XCTAssertEqual(CodexRunLocation.restored(from: saved), .dangerFullAccess)
+        // Approve for me keeps the sandbox: a standard task, which a reviewer answers for as Auto's classifier does.
+        XCTAssertEqual(TaskPermissionLevel.level(harness: .codex, options: [CodexRunLocation.storageKey: "approveForMe"]),
+                       .standard)
+        XCTAssertEqual(CodexRunLocation.approveForMe.freedom, ClaudePermissionMode.freedom(ClaudePermissionMode.auto))
 
         var session = SessionRecord(harness: .codex, workspaceURL: URL(filePath: "/tmp/w"),
                                     runtimeExecutableURL: URL(filePath: "/tmp/codex"), title: "Codex")
@@ -62,18 +75,18 @@ final class CodexApprovalParityTests: XCTestCase {
             adapter: CodexAdapter(executableURL: URL(filePath: "/tmp/codex"), transport: transport),
             manifest: HarnessProtocolCompatibilityManifest.codex())
         let localID = UUID()
-        await adapter.setLaunchOptions([CodexRunLocation.storageKey: "dangerFullAccess"], for: localID)
+        await adapter.setLaunchOptions([CodexRunLocation.storageKey: "approveForMe"], for: localID)
         let handle = try await adapter.resumeSession(providerSessionID: "thread-full", localSessionID: localID,
                                                      workspaceURL: URL(filePath: "/tmp/w"))
         try await adapter.send("again", to: handle)
 
         let requests = await transport.requests
-        let resume = try XCTUnwrap(requests.first { $0.method == "thread/resume" })
-        XCTAssertEqual(resume.params["approvalPolicy"]?.stringValue, "never")
-        XCTAssertEqual(resume.params["sandbox"]?.stringValue, "danger-full-access")
-        let turn = try XCTUnwrap(requests.first { $0.method == "turn/start" })
-        XCTAssertEqual(turn.params["approvalPolicy"]?.stringValue, "never")
-        XCTAssertEqual(turn.params["sandboxPolicy"]?["type"]?.stringValue, "dangerFullAccess")
+        for method in ["thread/resume", "turn/start"] {
+            let request = try XCTUnwrap(requests.first { $0.method == method })
+            XCTAssertEqual(request.params["permissions"]?.stringValue, ":workspace", method)
+            XCTAssertEqual(request.params["approvalPolicy"]?.stringValue, "on-request", method)
+            XCTAssertEqual(request.params["approvalsReviewer"]?.stringValue, "guardian_subagent", method)
+        }
         await adapter.close(handle)
     }
 
@@ -94,6 +107,9 @@ final class CodexApprovalParityTests: XCTestCase {
         // What the composer and the session tools read once the in-memory state is gone (a restart).
         XCTAssertEqual(model.composerCodexCapabilities(for: saved).selectedRunLocation, .dangerFullAccess)
         XCTAssertEqual(model.sessionToolPermission(of: saved), .elevated)
+        // Ask for approval is kept as no value, as tasks from before kept their Default.
+        await model.selectCodexRunLocation(.askForApproval, for: saved)
+        XCTAssertNil(model.store.sessions.first { $0.id == task.id }?.providerOptions[CodexRunLocation.storageKey])
         await model.shutdown()
     }
 

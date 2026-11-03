@@ -36,12 +36,14 @@ final class RemoteTaskControlsTests: XCTestCase {
         let conversation = try XCTUnwrap(client.conversations[taskID])
         try await waitUntil { conversation.isLoaded && client.taskSettings[taskID] != nil }
 
-        // The bottom row's settings: the sandbox policy, Full access asked about first, and the model menu, which reads
-        // its list once opened.
+        // The bottom row's settings: the Codex app's permissions with their descriptions, Full access asked about
+        // first, and the model menu, which reads its list once opened.
         let permission = try XCTUnwrap(client.taskSettings[taskID]?.first { $0.role == "permission" })
-        XCTAssertEqual(permission.value, CodexRunLocation.automatic.rawValue)
-        XCTAssertEqual(permission.choices.map(\.value), CodexRunLocation.allCases.map(\.rawValue))
-        XCTAssertEqual(permission.choices.last?.confirm?.title, L10n.string("Allow full access?"))
+        XCTAssertEqual(permission.value, CodexRunLocation.askForApproval.rawValue)
+        XCTAssertEqual(permission.choices.map(\.value), ["askForApproval", "approveForMe", "dangerFullAccess"])
+        XCTAssertEqual(permission.choices.first?.description,
+                       L10n.string("Always ask to edit external files and use the internet"))
+        XCTAssertEqual(permission.choices.last?.confirm?.title, L10n.string("Turn on full access?"))
         await client.readTaskSettings(taskID, prepare: true)
         let effort = try XCTUnwrap(client.taskSettings[taskID]?.first { $0.role == "effort" })
         XCTAssertEqual(effort.choices.map(\.value), ["low", "high"])

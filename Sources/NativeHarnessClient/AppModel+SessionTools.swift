@@ -1323,10 +1323,10 @@ extension AppModel: SessionToolHandling {
     }
 
     /// The permission a call names for a new task of `harness` (`permissionMode`, in that harness's own
-    /// values), as `NewTaskModelChoice.permissionMode` keeps it: nil is Codex's Default. Refused for a value
-    /// the harness does not have, and for one that does more without asking than the caller may (Claude
-    /// Code's mode against `scheduleModeCeiling`, any other harness's level against the caller's), which
-    /// only the person chooses.
+    /// values), as `NewTaskModelChoice.permissionMode` keeps it: nil is Codex's Ask for approval. Refused for
+    /// a value the harness does not have, and for one that does more without asking than the caller may
+    /// (Claude Code's mode and Codex's permission against `scheduleModeCeiling`), which only the person
+    /// chooses.
     func sessionToolPermission(_ value: String, harness: HarnessKind, caller: SessionToolCaller,
                                subject: String, personChooses place: String) -> Result<String?, SessionToolError> {
         guard Self.permissionKey(for: harness) != nil else {
@@ -1340,7 +1340,7 @@ extension AppModel: SessionToolHandling {
         }
         let freer = harness == .claudeCode
             ? ClaudePermissionMode.freedom(choice.permissionMode) > scheduleModeCeiling(caller)
-            : TaskPermissionLevel.level(harness: harness, options: choice.providerOptions(for: harness)) > caller.permission
+            : choice.codexRunLocation.freedom > scheduleModeCeiling(caller)
         guard !freer else {
             return .failure(SessionToolError(message: "permissionMode \(value) lets \(subject) do more without asking "
                 + "than this task may; the person can choose it in \(place)."))

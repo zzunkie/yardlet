@@ -251,7 +251,7 @@ final class ScheduledTaskTests: XCTestCase {
         XCTAssertFalse(chatSubmission.startsInNewWorktree, "A chat has no repository for a worktree")
 
         // Codex's permission goes with its model, under the keys its task keeps them; a Codex schedule saved
-        // before it existed starts in Codex's Default, as it did.
+        // before it existed starts in Ask for approval, as its Default did, and so does an earlier Workspace write.
         model.runtimeSelections.select(URL(filePath: "/usr/bin/true"), for: .codex)
         let old = try JSONDecoder().decode(ScheduleDestination.self, from: Data(#"""
             {"mode":"newTask","harness":"codex","modelChoice":{"model":"gpt-6","effort":"high"},"startsInNewWorktree":false}
@@ -271,11 +271,15 @@ final class ScheduledTaskTests: XCTestCase {
         XCTAssertEqual(Set(full.keys), [CodexModelSelection.storageKey, CodexRunLocation.storageKey])
         XCTAssertEqual(CodexModelSelection.restored(from: full), selection)
         XCTAssertEqual(full[CodexRunLocation.storageKey], CodexRunLocation.dangerFullAccess.rawValue)
+        codex.destination.modelChoice?.permissionMode = "workspaceWrite"
+        XCTAssertEqual(codex.destination.modelChoice?.permissionName(for: .codex), L10n.string("Ask for approval"))
+        let earlier = try model.scheduledSubmission(for: codex, at: date(16, 22)).get().providerOptions
+        XCTAssertEqual(Set(earlier.keys), [CodexModelSelection.storageKey])
     }
 
     /// A Codex run's thread starts with the schedule's permission, in the requests the App Server takes:
-    /// the thread's approval policy and sandbox, then each turn's sandbox policy. Without one it starts as
-    /// every Codex task did.
+    /// the thread's permission profile, approval policy and reviewer, then each turn's. Without one it starts
+    /// in Ask for approval, as every Codex task did.
     func testACodexRunsThreadStartsWithTheSchedulesPermission() async throws {
         let executable = root.appending(path: "codex")
         try Data("#!/bin/sh\nprintf 'codex-cli 0.163.0\\n'\n".utf8).write(to: executable)
@@ -317,13 +321,15 @@ final class ScheduledTaskTests: XCTestCase {
         let requests = await transport.requests
         let starts = requests.filter { $0.method == "thread/start" }
         let turns = requests.filter { $0.method == "turn/start" }
-        XCTAssertEqual(starts.first?.params["approvalPolicy"]?.stringValue, "never")
-        XCTAssertEqual(starts.first?.params["sandbox"]?.stringValue, "danger-full-access")
-        XCTAssertEqual(turns.first?.params["approvalPolicy"]?.stringValue, "never")
-        XCTAssertEqual(turns.first?.params["sandboxPolicy"]?["type"]?.stringValue, "dangerFullAccess")
-        XCTAssertEqual(starts.last?.params["approvalPolicy"]?.stringValue, "on-request")
-        XCTAssertEqual(starts.last?.params["sandbox"]?.stringValue, "workspace-write")
-        XCTAssertNil(turns.last?.params["sandboxPolicy"], "Codex's Default keeps the thread's own")
+        for request in [starts.first, turns.first] {
+            XCTAssertEqual(request?.params["permissions"]?.stringValue, ":danger-full-access")
+            XCTAssertEqual(request?.params["approvalPolicy"]?.stringValue, "never")
+        }
+        for request in [starts.last, turns.last] {
+            XCTAssertEqual(request?.params["permissions"]?.stringValue, ":workspace")
+            XCTAssertEqual(request?.params["approvalPolicy"]?.stringValue, "on-request")
+            XCTAssertEqual(request?.params["approvalsReviewer"]?.stringValue, "user")
+        }
         let runTask = try XCTUnwrap(model.scheduledTasks.schedule(id: full.id)?.state.runs.first?.taskID)
         let task = try XCTUnwrap(model.store.sessions.first { $0.id == runTask })
         XCTAssertEqual(task.providerOptions[CodexRunLocation.storageKey], CodexRunLocation.dangerFullAccess.rawValue,

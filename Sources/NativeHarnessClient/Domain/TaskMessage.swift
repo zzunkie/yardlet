@@ -317,10 +317,12 @@ struct TaskMessage: Equatable, Sendable {
 
 /// How far a task's own permission setting lets it act, coarsely, in the composer's terms: read
 /// only (Claude Code's and Antigravity's Plan, Codex's Read-only), standard (each harness's default
-/// and its other asking modes), or elevated (Claude Code's Bypass permissions, Antigravity's bypass,
-/// Codex's Full access — what the composer draws orange). The session tools compare it so a subagent
-/// never acts with more than the task that started it, and a message into a task that acts without
-/// asking needs the person.
+/// and its other asking modes, with Claude Code's Auto and Codex's Approve for me, which keep the
+/// sandbox and let a reviewer answer, and Codex's Custom), or elevated (Claude Code's Bypass
+/// permissions, Antigravity's bypass, Codex's Full access, what the composer draws orange). The
+/// session tools compare it so a subagent never acts with more than the task that started it, and a
+/// message into a task that acts without asking needs the person; where they choose a permission they
+/// rank it finer (`AppModel.scheduleModeCeiling`).
 enum TaskPermissionLevel: Int, Comparable, Sendable {
     case readOnly
     case standard

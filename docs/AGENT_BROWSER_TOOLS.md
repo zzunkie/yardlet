@@ -310,13 +310,38 @@ task, or one the person moved in the sidebar, gets them as another task's messag
 The permission a child or subagent starts with (2026-11-03): left empty, on the calling task's harness its own, and on
 another harness the same level in that harness's terms (`AppModel.permissionOptions`): Claude Code's
 `bypassPermissions` and Codex's Full access (`dangerFullAccess`) run without asking, `plan` and Codex's Read-only read
-only, anything else is the harness's default. `permissionMode` names it in the harness's own values, one property whose
-values are each harness's: Claude Code's `default` (Manual), `plan`, `acceptEdits`, `auto`, `dontAsk` and
-`bypassPermissions`; Codex's `default`, `readOnly`, `workspaceWrite` and `dangerFullAccess`, the App Server's names
-for the four choices of a Codex task's permission control (Default keeps the thread's own configuration). A value of
-another harness, or a harness Yardlet chooses none for, is refused, and so is one that does more without asking than
-the caller may (`sessionToolPermission`: Claude Code by `scheduleModeCeiling`, Codex by `TaskPermissionLevel`), with
-"the person can choose it in New Task". A Codex task keeps it as `codex.runLocation`, which its thread starts with.
+only, anything else is the harness's default (Codex's Ask for approval). `permissionMode` names it in the harness's own
+values, one property whose values are each harness's: Claude Code's `default` (Manual), `plan`, `acceptEdits`, `auto`,
+`dontAsk` and `bypassPermissions`; Codex's `askForApproval`, `approveForMe`, `dangerFullAccess`, `custom` and
+`readOnly`, the choices of a Codex task's permission control, which are the Codex app's ("Codex permissions" below).
+Codex also takes `default` and `workspaceWrite` as Ask for approval. A value of another harness, or a harness Yardlet
+chooses none for, is refused, and so is one that does more without asking than the caller may, with "the person can
+choose it in New Task" (`sessionToolPermission`). Both harnesses are measured on Claude Code's scale
+(`scheduleModeCeiling`): plan and Read-only, then the default and dontAsk and Ask for approval, acceptEdits, auto and
+Approve for me (a classifier or Codex's reviewer answers in place of the person), then bypassPermissions, Full access and
+Custom (whatever `config.toml` says). A caller on another harness counts as acceptEdits, or plan when it reads only, and
+a Codex task as the freer of that and its own permission, Custom counting as acceptEdits. A Codex task keeps it as
+`codex.runLocation`, which its thread starts with.
+
+Codex permissions (2026-11-03): a Codex task's permission control, the new-task screen's and a schedule's offer the
+Codex app's own menu (ChatGPT.app 26.1027), in its order and words, each choice with the app's line under it, and send
+what the app sends on `thread/start`, `thread/resume` and every `turn/start`:
+
+| Choice | `permissions` | `approvalPolicy` | `approvalsReviewer` |
+|---|---|---|---|
+| Ask for approval (the default) | `:workspace` | `on-request` | `user` |
+| Approve for me | `:workspace` | `on-request` | `guardian_subagent` (the App Server's older name for `auto_review`, which the app still sends) |
+| Full access, asked about first in the app's words | `:danger-full-access` | `never` | `user` |
+| Custom (config.toml) | none | none | none: the App Server takes them from `config.toml` |
+| Read-only | `:read-only` | `on-request` | `user` |
+
+Approve for me is offered unless the account's `config.toml` sets `features.guardian_approval = false`, and Custom only
+where the file sets `approval_policy`, `sandbox_mode` or `approvals_reviewer` (the selected profile's over the top level)
+to permissions none of the first three is, as the app reads the file. The app offers Read-only only where policy allows
+nothing more; Yardlet lists it only for a task already on it, first, since the session tools keep a task that must read
+only on it. Named permission profiles, which the app lists in Custom's place, are not offered. What earlier versions
+kept reads as the nearest choice: no value (their Default) and `workspaceWrite` as Ask for approval, which started their
+threads the same way, in the workspace sandbox asking on request; `readOnly` and `dangerFullAccess` as themselves.
 
 - **Self-archive (`archive_task` `self`, 2026-10-23):** The same as the Claude app's `archive_session` with `session_id: "self"`
   ("the conversation ends after this tool result"). It returns the result first (its own entry `archived: true`, note
@@ -459,7 +484,7 @@ Times in results are ISO 8601 in the Mac's time zone (with the offset).
 
 | Tool | Arguments | Behavior |
 |---|---|---|
-| `create_scheduled_task` | `prompt` (required, 32,000 characters), `name`, `cronExpression` or `fireAt` (one is required; both are refused), `continueTaskId` (`self` or a task ID: each run is that task's next message), `harness`, `project` (a name or folder), `chat` (2026-10-26: true is the schedule window's "Chat (no project)", not together with `project`; false puts a chat schedule in the calling task's folder), `useWorktree`, `topLevel` (2026-10-26: true makes a top-level task with no parent, false a task under the calling task), `model`, `effort`, `permissionMode` (the Claude app's six values; 2026-11-03, Codex's four too, as for `create_task`) | Creates it at once. The first line is `Scheduled task "{name}" created in Yardlet (scheduleId: {UUID}).`, followed by `**Schedule:**`/`**Will run once at:**`, `**Next run:**` and `**Each run:**`, and the sentence "runs while Yardlet is open; a run missed while it was closed runs once, within 7 days" (the shape of the Claude app's answer). A failure is `Nothing was created: …` |
+| `create_scheduled_task` | `prompt` (required, 32,000 characters), `name`, `cronExpression` or `fireAt` (one is required; both are refused), `continueTaskId` (`self` or a task ID: each run is that task's next message), `harness`, `project` (a name or folder), `chat` (2026-10-26: true is the schedule window's "Chat (no project)", not together with `project`; false puts a chat schedule in the calling task's folder), `useWorktree`, `topLevel` (2026-10-26: true makes a top-level task with no parent, false a task under the calling task), `model`, `effort`, `permissionMode` (the Claude app's six values; 2026-11-03, Codex's own too, as for `create_task`) | Creates it at once. The first line is `Scheduled task "{name}" created in Yardlet (scheduleId: {UUID}).`, followed by `**Schedule:**`/`**Will run once at:**`, `**Next run:**` and `**Each run:**`, and the sentence "runs while Yardlet is open; a run missed while it was closed runs once, within 7 days" (the shape of the Claude app's answer). A failure is `Nothing was created: …` |
 | `list_scheduled_tasks` | `includeFinished` (2026-11-02: true also lists the one-offs that already ran), `scheduleId` (2026-11-02: only that schedule, finished or not, with its whole prompt) | `{scheduledTasks, finishedNotListed, note}`, in the order of Scheduled tasks: the schedules that will run, soonest first, then those that are off (paused, or stopped by themselves), then, with `includeFinished`, the one-offs that ran, the latest first. Each entry: `scheduleId`, `name`, `schedule` (an English summary), `cronExpression` (when it can be converted back), `fireAt`, `enabled`, `nextRunAt`, `lastRunAt`, `stoppedBecause`, `eachRun`, `continuesTaskId`, `harness`, `folder`, `project`, `useWorktree`, `nestedUnderTaskId` (2026-10-26, absent for a top-level task), `model`, `effort`, `permissionMode` and `prompt`. A listing of several cuts a prompt after 200 characters and ends it in "…", and `note` then says that `scheduleId` gives it whole and that a cut prompt is not one to send back (the Claude app's list gives a cut description and the path of the task's file instead of the prompt). `finishedNotListed` counts the one-offs left out. With none at all, "No scheduled tasks in Yardlet." |
 | `update_scheduled_task` | `scheduleId` (required), the arguments of creation, `enabled` | Changes only what is given. `cronExpression` and `fireAt` replace each other (counting from now), the arguments for where it runs are laid over that schedule (switching to a new task uses the calling task's folder), `enabled: false` pauses and `true` resumes (and also clears why it was turned off). Refused when nothing is given. `Scheduled task "…" (scheduleId: …) updated: {changes}.` |
 | `delete_scheduled_task` | `scheduleId` (required) | Deletes it. The tasks its runs made stay |
@@ -475,11 +500,12 @@ Times in results are ISO 8601 in the Mac's time zone (with the offset).
   otherwise the default mode. On another harness (2026-11-03) the caller's level carries over in that harness's terms,
   as for `create_task`: a caller that runs without asking makes Codex runs with Full access and Claude Code runs in
   bypassPermissions, one that reads only makes them read only, and any other leaves the default. Schedules made before
-  keep what they had (a Codex schedule without a permission starts in Codex's Default).
+  keep what they had (a Codex schedule without a permission starts in Ask for approval, as its Default did).
 - **No freer than the caller:** a schedule's Claude Code mode, whether `permissionMode` names it or the schedule already
   has it when an agent rewrites its prompt or moves it, may be no freer than the calling task's own (plan, then the
   default and dontAsk, acceptEdits, auto, bypassPermissions; a caller on another harness counts as acceptEdits, or plan
-  when it reads only). A Codex schedule's permission may be at no higher level than the caller's (Full access only from a
+  when it reads only). A Codex schedule's permission may be no freer than the caller's on the same scale (Approve for me
+  from a caller in auto or bypassPermissions, or a Codex task on Approve for me or Full access; Full access only from a
   caller that runs without asking). A caller that reads only schedules new tasks only on Claude Code and Codex. A caller at the nesting limit of
   `create_task` schedules no new tasks, and a task an agent's schedule started nests one below the task that made it.
 - **What a run sends:** a prompt an agent wrote, by creating the schedule or changing its prompt, reaches each run as

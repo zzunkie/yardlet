@@ -1608,7 +1608,7 @@ final class AppModelTests: XCTestCase {
         await model.loadCodexCapabilities(for: source)
         let preset = try XCTUnwrap(model.codexCapabilitiesBySessionID[source.id]?.modes.first)
         await model.selectCodexMode(preset.id, for: source)
-        await model.selectCodexRunLocation(.workspaceWrite, for: source)
+        await model.selectCodexRunLocation(.approveForMe, for: source)
 
         await model.branch(source)
         let forked = try XCTUnwrap(model.store.selectedSession)
@@ -1617,7 +1617,7 @@ final class AppModelTests: XCTestCase {
         )
         XCTAssertEqual(forkedCapabilities.modes.map(\.id), [preset.id])
         XCTAssertEqual(forkedCapabilities.selectedModeID, preset.id)
-        XCTAssertEqual(forkedCapabilities.selectedRunLocation, .workspaceWrite)
+        XCTAssertEqual(forkedCapabilities.selectedRunLocation, .approveForMe)
         await model.shutdown()
     }
 

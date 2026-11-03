@@ -114,9 +114,9 @@ package enum ScheduleToolCatalog {
 
     /// The Claude app's own permission modes; `default` is Manual.
     package static let permissionModes = ["default", "plan", "acceptEdits", "auto", "dontAsk", "bypassPermissions"]
-    /// Codex's permissions, by the App Server's names for its sandbox policies; `default` keeps the thread's own
-    /// configuration, as the Codex composer's Default does.
-    package static let codexPermissionModes = ["default", "readOnly", "workspaceWrite", "dangerFullAccess"]
+    /// Codex's permissions, the Codex app's menu: Ask for approval (the default), Approve for me, Full access and
+    /// Custom (`config.toml`), then Read-only, which its menu offers only where policy allows nothing more.
+    package static let codexPermissionModes = ["askForApproval", "approveForMe", "dangerFullAccess", "custom", "readOnly"]
 
     /// `permissionMode` for a new task, which the session tools take too: one property whose values are each
     /// harness's own.
@@ -126,8 +126,8 @@ package enum ScheduleToolCatalog {
             "enum": .array((permissionModes + codexPermissionModes.filter { !permissionModes.contains($0) })
                 .map { .string($0) }),
             "description": .string(lead + " Claude Code: " + permissionModes.joined(separator: ", ")
-                + ". Codex: " + codexPermissionModes.joined(separator: ", ") + " (Full access). No freer than this "
-                + "task's own.")
+                + ". Codex: askForApproval (the default), approveForMe, dangerFullAccess (Full access), custom "
+                + "(config.toml's) and readOnly. No freer than this task's own.")
         ])
     }
 
@@ -156,7 +156,7 @@ package enum ScheduleToolCatalog {
         Key.effort: property("string", "A reasoning effort the model accepts."),
         Key.permissionMode: permissionModeProperty("Each new task's permissions, in its harness's own values. "
             + "Defaults to this task's when it runs without asking (Auto or bypassPermissions, dangerFullAccess) or "
-            + "reads only, in that harness's terms, else default.")
+            + "reads only, in that harness's terms, else the harness's default.")
     ]
 
     package static let tools: [AgentToolDefinition] = [

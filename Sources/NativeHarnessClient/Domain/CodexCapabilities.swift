@@ -34,76 +34,175 @@ struct CodexCollaborationPreset: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-/// The locked App Server exposes per-turn sandbox policy through `sandboxPolicy`.
-/// `automatic` is an app-local choice that omits the override and keeps the thread's
-/// configured policy. The remaining cases map directly to the installed schema's
-/// discriminated policy objects; no host-side permission bypass is performed here.
+/// A Codex task's permission, as the Codex app's composer offers it (ChatGPT.app 26.1027): Ask for
+/// approval, Approve for me and Full access, its agent modes, each sent the way the app sends it (a
+/// built-in permission profile, an approval policy and who answers the requests it raises); and
+/// Custom, which sends none of the three so the App Server takes them from `config.toml`. Read-only
+/// is the app's read-only mode, which its menu offers only where policy allows nothing more; Yardlet
+/// keeps it for a task the session tools must keep reading only, and for a task that chose it.
+/// Nothing here bypasses a permission on the host.
 enum CodexRunLocation: String, Codable, CaseIterable, Equatable, Identifiable, Sendable {
-    case automatic
-    case readOnly
-    case workspaceWrite
+    case askForApproval
+    case approveForMe
     case dangerFullAccess
+    case custom
+    case readOnly
 
     var id: String { rawValue }
 
+    /// The choice's name in the menu, the app's words.
     var displayName: String {
         switch self {
-        case .automatic: L10n.string("Default")
-        case .readOnly: L10n.string("Read-only")
-        case .workspaceWrite: L10n.string("Workspace write")
+        case .askForApproval: L10n.string("Ask for approval")
+        case .approveForMe: L10n.string("Approve for me")
         case .dangerFullAccess: L10n.string("Full access")
+        case .custom: L10n.string("Custom (config.toml)")
+        case .readOnly: L10n.string("Read-only")
         }
+    }
+
+    /// The name on the composer's button, where the app shortens Custom's.
+    var shortName: String {
+        self == .custom ? L10n.string("Custom") : displayName
+    }
+
+    /// The line under the choice's name in the menu, the app's words.
+    var choiceDescription: String {
+        switch self {
+        case .askForApproval: L10n.string("Always ask to edit external files and use the internet")
+        case .approveForMe: L10n.string("Only ask for actions detected as potentially unsafe")
+        case .dangerFullAccess: L10n.string("Unrestricted access to the internet and any file on your computer")
+        case .custom: L10n.string("Uses permissions defined in config.toml")
+        case .readOnly: L10n.string("Always ask to edit files and use the internet")
+        }
+    }
+
+    /// The menu's choices, in the app's order: the three agent modes, Approve for me unless
+    /// `config.toml` turns it off, and Custom where `config.toml` sets permissions none of them is
+    /// (`CodexPermissionConfig`). A choice the task already has stays listed, Read-only first.
+    static func menu(current: Self, config: CodexPermissionConfig) -> [Self] {
+        var choices: [Self] = current == .readOnly ? [.readOnly, .askForApproval] : [.askForApproval]
+        if config.offersApproveForMe || current == .approveForMe { choices.append(.approveForMe) }
+        choices.append(.dangerFullAccess)
+        if config.offersCustom || current == .custom { choices.append(.custom) }
+        return choices
     }
 
     /// Where a task keeps its choice, so a restart, a resume and a child on Codex keep it too.
     static let storageKey = "codex.runLocation"
 
     static func restored(from options: [String: String]) -> Self {
-        options[storageKey].flatMap(Self.init(rawValue:)) ?? .automatic
+        stored(options[storageKey])
     }
 
-    /// The approval policy that goes with the sandbox, as the Codex app pairs them (26.1016
-    /// agent modes): Full access is `never` with `dangerFullAccess`, the others `on-request`.
-    /// Without `never`, a full-access turn still asked before MCP tools and Computer Use.
+    /// A kept value, including those earlier versions wrote: no value (their Default) and
+    /// `workspaceWrite` started threads as Ask for approval does, in the workspace sandbox asking on
+    /// request. An unknown value is Ask for approval too.
+    static func stored(_ value: String?) -> Self {
+        value.flatMap(Self.init(rawValue:)) ?? .askForApproval
+    }
+
+    /// The value a task keeps, nil for Ask for approval, which tasks keep as no value.
+    var storedValue: String? { self == .askForApproval ? nil : rawValue }
+
+    /// The built-in permission profile (`permissions`); Custom sends none.
+    var permissionProfile: String? {
+        switch self {
+        case .askForApproval, .approveForMe: ":workspace"
+        case .readOnly: ":read-only"
+        case .dangerFullAccess: ":danger-full-access"
+        case .custom: nil
+        }
+    }
+
+    /// Full access asks nothing (`never`); without it a full-access turn still asked before MCP
+    /// tools and Computer Use. Custom sends none.
     var approvalPolicy: String? {
         switch self {
-        case .automatic: nil
-        case .readOnly, .workspaceWrite: "on-request"
+        case .askForApproval, .approveForMe, .readOnly: "on-request"
         case .dangerFullAccess: "never"
+        case .custom: nil
         }
     }
 
-    /// `thread/start` and `thread/resume` set the thread's own policy, which every later turn
-    /// keeps; a resume that sent the default would undo the task's choice.
-    var threadApprovalPolicy: String { approvalPolicy ?? "on-request" }
-
-    var threadSandbox: String {
+    /// Who answers what the policy asks: the person, or for Approve for me Codex's auto-review agent,
+    /// by the name the app still sends (`guardian_subagent`, which the App Server takes for
+    /// `auto_review`). Custom sends none.
+    var approvalsReviewer: String? {
         switch self {
-        case .automatic, .workspaceWrite: "workspace-write"
-        case .readOnly: "read-only"
-        case .dangerFullAccess: "danger-full-access"
+        case .approveForMe: "guardian_subagent"
+        case .custom: nil
+        case .askForApproval, .readOnly, .dangerFullAccess: "user"
         }
     }
 
-    /// The exact `TurnStartParams.sandboxPolicy` envelope for this selection.
-    /// `automatic` intentionally returns nil so the provider retains its thread policy.
-    var sandboxPolicy: JSONValue? {
+    /// The fields the choice sets on `thread/start`, `thread/resume` and `turn/start`, as the app
+    /// sends them; each holds for the thread's later turns.
+    var permissionParams: [String: JSONValue] {
+        var params: [String: JSONValue] = [:]
+        if let permissionProfile { params["permissions"] = .string(permissionProfile) }
+        if let approvalPolicy { params["approvalPolicy"] = .string(approvalPolicy) }
+        if let approvalsReviewer { params["approvalsReviewer"] = .string(approvalsReviewer) }
+        return params
+    }
+
+    /// How much the choice lets Codex do without the person, on Claude Code's scale
+    /// (`ClaudePermissionMode.freedom`): Read-only reads, Ask for approval asks, Approve for me lets a
+    /// reviewer answer for the person as Auto lets a classifier, Full access asks nothing. Custom is
+    /// whatever `config.toml` says, so it counts as the most.
+    var freedom: Int {
         switch self {
-        case .automatic:
-            nil
-        case .readOnly:
-            .object([
-                "type": .string("readOnly"),
-                "networkAccess": .bool(false)
-            ])
-        case .workspaceWrite:
-            .object([
-                "type": .string("workspaceWrite"),
-                "networkAccess": .bool(false)
-            ])
-        case .dangerFullAccess:
-            .object(["type": .string("dangerFullAccess")])
+        case .readOnly: ClaudePermissionMode.freedom(ClaudePermissionMode.plan)
+        case .askForApproval: ClaudePermissionMode.freedom(nil)
+        case .approveForMe: ClaudePermissionMode.freedom(ClaudePermissionMode.auto)
+        case .dangerFullAccess, .custom: ClaudePermissionMode.freedom(ClaudePermissionMode.bypassPermissions)
         }
+    }
+}
+
+/// What a Codex home's `config.toml` changes in the permission menu, as the Codex app reads it:
+/// Approve for me goes when `features.guardian_approval` is false, and Custom (config.toml) comes
+/// when the file sets `approval_policy`, `sandbox_mode` or `approvals_reviewer` (top level, with the
+/// selected profile's over them) to permissions none of the app's modes is. Named permission
+/// profiles, which the app lists in Custom's place, are not offered.
+struct CodexPermissionConfig: Equatable, Sendable {
+    var offersApproveForMe = true
+    var offersCustom = false
+
+    init(offersApproveForMe: Bool = true, offersCustom: Bool = false) {
+        self.offersApproveForMe = offersApproveForMe
+        self.offersCustom = offersCustom
+    }
+
+    /// From the file's values by table (`TOMLStringTables`).
+    init(tables: [String: [String: String]]) {
+        let top = tables[""] ?? [:]
+        var values = top
+        if let profile = top["profile"], let table = tables["profiles.\(profile)"] {
+            values.merge(table) { _, profile in profile }
+        }
+        let features = tables["features"] ?? [:]
+        let guardian = top["features.guardian_approval"] ?? features["guardian_approval"]
+        offersApproveForMe = guardian != "false"
+        let policy = values["approval_policy"], sandbox = values["sandbox_mode"]
+        var reviewer = values["approvals_reviewer"]
+        guard policy != nil || sandbox != nil || reviewer != nil else { return }
+        if reviewer == "guardian_subagent", !offersApproveForMe { reviewer = "user" }
+        let reviews = reviewer == "auto_review" || reviewer == "guardian_subagent"
+        // The app's reading: no sandbox is read-only, and the policy follows the sandbox.
+        let workspace = tables["sandbox_workspace_write"] ?? [:]
+        let defaultWorkspace = ["network_access", "exclude_slash_tmp", "exclude_tmpdir_env_var"]
+            .allSatisfy { (workspace[$0] ?? "false") == "false" }
+        let mode: CodexRunLocation? = switch (sandbox ?? "read-only", policy) {
+        case ("read-only", "on-request"?), ("read-only", nil):
+            reviewer == nil || reviewer == "user" ? .readOnly : nil
+        case ("workspace-write", "on-request"?), ("workspace-write", nil):
+            defaultWorkspace ? (reviews ? .approveForMe : .askForApproval) : nil
+        case ("danger-full-access", "never"?), ("danger-full-access", nil):
+            reviewer == nil || reviewer == "user" ? .dangerFullAccess : nil
+        default: nil
+        }
+        offersCustom = mode == nil || (mode == .approveForMe && !offersApproveForMe)
     }
 }
 
@@ -223,7 +322,9 @@ struct CodexCapabilityState: Equatable, Sendable {
     var modelCatalog = CodexModelCatalog()
     var modes: [CodexCollaborationPreset] = []
     var selectedModeID: CodexCollaborationPreset.ID?
-    var selectedRunLocation: CodexRunLocation = .automatic
+    var selectedRunLocation: CodexRunLocation = .askForApproval
+    /// What the account's `config.toml` changes in the permission menu.
+    var permissionConfig = CodexPermissionConfig()
     var skills: [CodexSkillSummary] = []
     var plugins: [CodexPluginSummary] = []
     var isLoading = false

@@ -26,7 +26,7 @@ final class ComposerSessionControlsRenderingTests: XCTestCase {
         let composers: [(String, AnyView)] = [
             ("codex", AnyView(PromptComposer(harness: .codex, composerDraft: F.draft("Fix it"), skills: F.skills,
                 modes: [F.planPreset, F.defaultPreset], selectedModeID: F.planPreset.id, modelCatalog: F.codexCatalog,
-                runLocation: .workspaceWrite, providerSession: F.session(.codex), isProviderAttached: true,
+                runLocation: .approveForMe, providerSession: F.session(.codex), isProviderAttached: true,
                 isRunning: false, codexHasThread: true, codexTokenUsage: F.codexTokenUsage, actions: F.codexActions))),
             ("claude", AnyView(PromptComposer(harness: .claudeCode, composerDraft: F.draft("Fix it"),
                 providerSession: F.session(.claudeCode), providerCapabilities: F.claudeLiveCapabilities,
@@ -66,7 +66,7 @@ final class ComposerSessionControlsRenderingTests: XCTestCase {
             L10n.string("Permissions"), L10n.string("Context window"), L10n.string("Model"), L10n.string("Send")])
         // Each value is the provider's own.
         func value(_ name: String, _ label: String) -> String? { rows[name]?.first { $0.label == label }?.value }
-        XCTAssertEqual(value("codex", L10n.string("Permissions")), CodexRunLocation.workspaceWrite.displayName)
+        XCTAssertEqual(value("codex", L10n.string("Permissions")), CodexRunLocation.approveForMe.shortName)
         XCTAssertEqual(value("claude", L10n.string("Permissions")), L10n.string("Accept edits"))
         XCTAssertEqual(value("opencode", L10n.string("Permissions")), L10n.string("On request"))
         XCTAssertEqual(value("codex", L10n.string("Model")), "GPT-6.1-Sol, \(L10n.string("High"))")
@@ -119,12 +119,12 @@ final class ComposerSessionControlsRenderingTests: XCTestCase {
             // The same session controls as the task composer, for what the task can start with:
             // Claude Code's permission mode (its launch flag) and Codex's permission (its thread's).
             let permissions = elements.first { $0.label == L10n.string("Permissions") }
-            let expected: [HarnessKind: String] = [.claudeCode: L10n.string("Manual"), .codex: L10n.string("Default")]
+            let expected: [HarnessKind: String] = [.claudeCode: L10n.string("Manual"), .codex: L10n.string("Ask for approval")]
             XCTAssertEqual(permissions?.value, expected[harness], harness.rawValue)
             XCTAssertEqual(elements.contains { $0.label == L10n.string("Model") }, harness != .openCode, harness.rawValue)
         }
 
-        // Codex with Full access chosen, and its menu as the control opens it: the task composer's four choices.
+        // Codex with Full access chosen, and its menu as the control opens it: the Codex app's choices.
         let draft = NewTaskDraft()
         draft.workspaceURL = ComposerUnificationFixtures.workspace
         draft.projectID = project.id
@@ -133,7 +133,7 @@ final class ComposerSessionControlsRenderingTests: XCTestCase {
         draft.modelChoices[.codex] = NewTaskModelChoice(model: nil, permissionMode: CodexRunLocation.dangerFullAccess.rawValue)
         let slot = try XCTUnwrap(ComposerSessionOptionsProjection.newTask(harness: .codex, choice: draft.modelChoices[.codex],
             catalogs: catalogs, connection: nil, workspaceURL: draft.workspaceURL).permission)
-        let scenario = ComposerUnificationFixtures.Scenario(name: "new-task-codex-full-access", size: NSSize(width: 860, height: 560)) {
+        let scenario = ComposerUnificationFixtures.Scenario(name: "new-task-codex-full-access", size: NSSize(width: 860, height: 600)) {
             AnyView(VStack(alignment: .leading, spacing: 12) {
                 NewTaskHome(recentSessions: [], projects: [project], draft: draft, runtimeSelections: runtimes,
                     connections: connections, models: NewTaskModelSource(catalogs: catalogs) { _, _, _, _ in },
@@ -147,8 +147,38 @@ final class ComposerSessionControlsRenderingTests: XCTestCase {
         }
         let elements = try ComposerUnificationFixtures.render(scenario, into: directory)
         XCTAssertEqual(elements.first { $0.label == L10n.string("Permissions") }?.value, L10n.string("Full access"))
-        for location in CodexRunLocation.allCases {
+        for location in CodexRunLocation.menu(current: .dangerFullAccess, config: CodexPermissionConfig()) {
             XCTAssertTrue(elements.contains { $0.label.contains(location.displayName) }, location.rawValue)
+        }
+    }
+
+    /// A running Codex task's permission menu as its control opens it: the Codex app's choices with their
+    /// descriptions, and the same menu where `config.toml` sets permissions of its own (Custom) and turns
+    /// Approve for me off.
+    func testACodexTasksPermissionMenuDrawsInBothAppearances() throws {
+        typealias F = ComposerUnificationFixtures
+        let standard = ComposerSessionOptionsProjection.codexPermission(.approveForMe, config: CodexPermissionConfig())
+        let custom = ComposerSessionOptionsProjection.codexPermission(
+            .custom, config: CodexPermissionConfig(offersApproveForMe: false, offersCustom: true))
+        let scenario = F.Scenario(name: "task-codex-permissions", size: NSSize(width: 760, height: 470)) {
+            AnyView(VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 16) {
+                    PermissionMenuPreview(slot: standard).clipShape(RoundedRectangle(cornerRadius: 10))
+                    PermissionMenuPreview(slot: custom).clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .padding(.leading, 24)
+                PromptComposer(harness: .codex, composerDraft: F.draft(""), modelCatalog: F.codexCatalog,
+                    runLocation: .approveForMe, providerSession: F.session(.codex, status: .running),
+                    isProviderAttached: true, isRunning: true, canSteer: true, codexQueue: F.queue,
+                    codexHasThread: true, codexTokenUsage: F.codexTokenUsage, workspaceURL: F.workspace, actions: F.codexActions)
+                    .frame(height: 190)
+            }.frame(maxHeight: .infinity, alignment: .bottom))
+        }
+        let elements = try F.render(scenario, into: try WindowlessRender.directory(Self.folder))
+        XCTAssertEqual(elements.first { $0.label == L10n.string("Permissions") }?.value, L10n.string("Approve for me"))
+        for location in CodexRunLocation.allCases where location != .readOnly {
+            XCTAssertTrue(elements.contains { $0.label.contains(location.displayName) }, location.rawValue)
+            XCTAssertTrue(elements.contains { $0.label.contains(location.choiceDescription) }, location.rawValue)
         }
     }
 }

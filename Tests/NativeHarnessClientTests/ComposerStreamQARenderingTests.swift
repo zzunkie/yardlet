@@ -41,7 +41,7 @@ final class ComposerStreamQARenderingTests: XCTestCase {
             },
             .init(name: "composer-codex-running", size: NSSize(width: 760, height: 190)) {
                 AnyView(PromptComposer(harness: .codex, composerDraft: F.draft(""), modelCatalog: F.codexCatalog,
-                    runLocation: .workspaceWrite, providerSession: F.session(.codex, status: .running),
+                    runLocation: .approveForMe, providerSession: F.session(.codex, status: .running),
                     isProviderAttached: true, isRunning: true, canSteer: true, codexQueue: waitingQueue,
                     codexHasThread: true, codexTokenUsage: F.codexTokenUsage, workspaceURL: F.workspace,
                     actions: F.codexActions))

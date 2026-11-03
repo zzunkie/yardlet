@@ -228,7 +228,7 @@ struct ScheduledTaskDetail: View {
             let choice = destination.modelChoice
             let model = [choice?.model, choice?.effort].compactMap { $0 }.joined(separator: " · ")
             rows.append((L10n.string("Model"), model.isEmpty ? L10n.string("Default") : model))
-            if let permission = choice?.permissionName(for: destination.harness) {
+            if let permission = (choice ?? NewTaskModelChoice(model: nil)).permissionName(for: destination.harness) {
                 rows.append((L10n.string("Permissions"), permission))
             }
         }

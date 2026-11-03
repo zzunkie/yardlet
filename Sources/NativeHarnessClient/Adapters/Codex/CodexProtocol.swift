@@ -78,14 +78,15 @@ enum CodexProtocol {
         config: JSONValue? = nil,
         ephemeral: Bool = false,
         developerInstructions: String? = nil,
-        runLocation: CodexRunLocation = .automatic
+        runLocation: CodexRunLocation = .askForApproval
     ) -> CodexRPCRequest {
         var params: [String: JSONValue] = [
             "cwd": .string(workspaceURL.standardizedFileURL.path(percentEncoded: false)),
-            "approvalPolicy": .string(runLocation.threadApprovalPolicy),
-            "sandbox": .string(runLocation.threadSandbox),
             "ephemeral": .bool(ephemeral)
         ]
+        // The thread's own permission, which every later turn keeps; a resume sends it again, so it
+        // does not fall back to the configuration's.
+        params.merge(runLocation.permissionParams) { _, permission in permission }
         if let roots = runtimeWorkspaceRoots(cwd: workspaceURL, additionalRoots: additionalRoots) {
             params["runtimeWorkspaceRoots"] = roots
         }
@@ -103,14 +104,13 @@ enum CodexProtocol {
         additionalRoots: [URL] = [],
         config: JSONValue? = nil,
         developerInstructions: String? = nil,
-        runLocation: CodexRunLocation = .automatic
+        runLocation: CodexRunLocation = .askForApproval
     ) -> CodexRPCRequest {
         var params: [String: JSONValue] = [
             "threadId": .string(threadID),
-            "cwd": .string(workspaceURL.standardizedFileURL.path(percentEncoded: false)),
-            "approvalPolicy": .string(runLocation.threadApprovalPolicy),
-            "sandbox": .string(runLocation.threadSandbox)
+            "cwd": .string(workspaceURL.standardizedFileURL.path(percentEncoded: false))
         ]
+        params.merge(runLocation.permissionParams) { _, permission in permission }
         if let roots = runtimeWorkspaceRoots(cwd: workspaceURL, additionalRoots: additionalRoots) {
             params["runtimeWorkspaceRoots"] = roots
         }
@@ -181,7 +181,7 @@ enum CodexProtocol {
         threadID: String,
         prompt: String,
         collaborationPreset: CodexCollaborationPreset? = nil,
-        runLocation: CodexRunLocation = .automatic,
+        runLocation: CodexRunLocation = .askForApproval,
         modelSelection: CodexModelSelection? = nil
     ) -> CodexRPCRequest {
         startTurn(
@@ -199,7 +199,7 @@ enum CodexProtocol {
         threadID: String,
         input: [CodexUserInput],
         collaborationPreset: CodexCollaborationPreset? = nil,
-        runLocation: CodexRunLocation = .automatic,
+        runLocation: CodexRunLocation = .askForApproval,
         modelSelection: CodexModelSelection? = nil,
         turnTrigger: String? = nil
     ) -> CodexRPCRequest {
@@ -226,12 +226,8 @@ enum CodexProtocol {
                 "settings": .object(settings)
             ])
         }
-        if let sandboxPolicy = runLocation.sandboxPolicy {
-            params["sandboxPolicy"] = sandboxPolicy
-        }
-        if let approvalPolicy = runLocation.approvalPolicy {
-            params["approvalPolicy"] = .string(approvalPolicy)
-        }
+        // Each turn carries the task's permission, as the Codex app's turns carry the composer's.
+        params.merge(runLocation.permissionParams) { _, permission in permission }
         return CodexRPCRequest(
             id: id,
             method: "turn/start",
