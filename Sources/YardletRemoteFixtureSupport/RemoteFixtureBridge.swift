@@ -155,8 +155,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
                   turns: Self.questionTurns(now: now), pendingRequest: ("toolu_fixture_question", .input)),
             Entry(task: Self.task(ID.chat, "Plan the weekend trip", .claude, "chats", at(30)), turns: [Self.planTurn(now: now)]),
             Entry(task: Self.task(ID.child, "Check the footer on mobile", .claude, ID.website, at(14), parent: ID.idle),
-                  turns: [Self.finishedTurn("child-1", prompt: "Check the footer at 375 pt",
-                                            answer: "The footer wraps cleanly at 375 pt.", now: now)]),
+                  turns: Self.childTurns(now: now)),
             Entry(task: Self.task(ID.failed, "Regenerate the screenshots", .claude, ID.website, at(20), unread: true),
                   turns: [Self.failedTurn(now: now)]),
             Entry(task: Self.task(ID.limit, "Write the migration guide", .claude, ID.yardlet, at(8), unread: true),
@@ -781,7 +780,9 @@ public actor RemoteFixtureBridge: RemoteBridge {
     private static func turnOptions(_ turn: RemoteTurn, in entry: Entry) -> [String] {
         let finished = turn.items.first { $0.kind == .turn }.map { $0.status != "running" } ?? false
         let isLast = entry.turns.last?.id == turn.id
-        let hasRequest = turn.items.contains { $0.kind == .user && $0.queued != true && $0.shell != true }
+        let hasRequest = turn.items.contains {
+            $0.kind == .user && $0.queued != true && $0.shell != true && $0.sender == nil && $0.scheduled != true
+        }
         let idle = !entry.task.running
         if entry.task.harness == "codex" {
             return (isLast && idle && hasRequest ? ["edit"] : []) + (finished ? ["fork"] : [])
@@ -1662,6 +1663,35 @@ public actor RemoteFixtureBridge: RemoteBridge {
             items.append(chip)
         }
         return RemoteTurn(id: turnID, items: items)
+    }
+
+    /// The person's request, then three turns the person did not start (§6.2 `sender`): its parent task's message with
+    /// the person's words it passed on, a background command's notice, and a check-in Claude Code's own schedule sent.
+    private static func childTurns(now: Date) -> [RemoteTurn] {
+        var parent = user("child-2", "Check the footer at 320 pt as well, and tell me which links wrap.")
+        parent.sender = RemoteSender(kind: "task", name: "Fix the footer links", relation: "parent", quotes: [
+            .init(text: "Check the small phones too.", sentAt: now.addingTimeInterval(-50 * 60).ISO8601Format())
+        ])
+        var notice = user("child-3", "Background command \"Run the visual tests\" completed (exit code 0)")
+        notice.sender = RemoteSender(kind: "backgroundTask", status: "completed")
+        var checkIn = user("child-4", "Check the footer links again on every page width, report any that 404 or redirect, "
+            + "and list the pages they are on so the next check-in can compare.")
+        checkIn.scheduled = true
+        checkIn.sender = RemoteSender(kind: "claudeSchedule")
+        return [
+            finishedTurn("child-1", prompt: "Check the footer at 375 pt", answer: "The footer wraps cleanly at 375 pt.", now: now),
+            finishedTurn("child-2", message: parent, answer: "At 320 pt the Privacy and Terms links wrap to a second line.",
+                         now: now),
+            finishedTurn("child-3", message: notice, answer: "The visual tests passed on every footer width.", now: now),
+            finishedTurn("child-4", message: checkIn, answer: "Every footer link answers 200.", now: now)
+        ]
+    }
+
+    /// A finished turn that `message` opened.
+    private static func finishedTurn(_ turnID: String, message: RemoteItem, answer text: String, now: Date) -> RemoteTurn {
+        var turn = finishedTurn(turnID, prompt: message.text ?? "", answer: text, now: now)
+        turn.items[0] = message
+        return turn
     }
 
     private static func planReviewTurns(now: Date) -> [RemoteTurn] {

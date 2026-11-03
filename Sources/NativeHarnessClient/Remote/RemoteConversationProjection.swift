@@ -160,12 +160,12 @@ enum RemoteConversationProjection {
                 if !previews.isEmpty { result.images = previews }
             }
             if let comments = item.promptAttachments?.comments.count, comments > 0 { result.diffCommentCount = comments }
-            if full != nil { result.sender = sender(of: item) }
+            result.sender = sender(of: item, textLimit: userLimit)
         case let .scheduledTaskMessage(message):
             result.kind = .user
             setText(&result, message.instructions, userLimit)
             result.scheduled = true
-            if full != nil, let schedule = message.claudeSchedule {
+            if let schedule = message.claudeSchedule {
                 if case let .task(name) = schedule {
                     result.sender = RemoteSender(kind: "claudeSchedule", name: name)
                 } else {
@@ -270,9 +270,9 @@ enum RemoteConversationProjection {
         if isStreaming { item.streaming = true }
     }
 
-    /// Who sent a message that is not the person's (§15.24): another task, with the person's words it passed on, or a
-    /// background command's notice.
-    private static func sender(of item: ConversationItem) -> RemoteSender? {
+    /// Who sent a message that is not the person's (§6.2), in either detail: another task, with the person's words it
+    /// passed on, cut as the message's text is, or a background command's notice.
+    private static func sender(of item: ConversationItem, textLimit: Int) -> RemoteSender? {
         if let message = item.taskMessage {
             let relation = switch message.relation {
             case .task: "task"
@@ -280,7 +280,7 @@ enum RemoteConversationProjection {
             case .itself: "itself"
             }
             let quotes = message.quotes.map {
-                RemoteSender.Quote(text: RemoteText.capped($0.text, RemoteText.fullTextLimit).text, sentAt: $0.sentAt)
+                RemoteSender.Quote(text: RemoteText.capped($0.text, textLimit).text, sentAt: $0.sentAt)
             }
             return RemoteSender(kind: "task", name: RemoteText.short(message.senderName, RemoteText.titleLimit),
                                 relation: relation, quotes: quotes.isEmpty ? nil : quotes)
