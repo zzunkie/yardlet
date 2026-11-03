@@ -1,11 +1,13 @@
 import PhotosUI
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 import YardletRemote
 
-/// The message box under a conversation: a message or photos to the task, sent into a running turn or queued after
-/// it (§15.14, §15.15), Stop while it runs, the queue's own actions, and the task's model and permission mode
-/// (§15.23). What is typed stays as the task's draft until it is sent.
+/// The message box under a conversation: a message with photos (from the library or the camera) or files to the
+/// task, sent into a running turn or queued after it (§15.14, §15.15, §15.20), Stop while it runs, the queue's own
+/// actions, and the task's model and permission mode (§15.23). What is typed stays as the task's draft until it is
+/// sent.
 struct ComposerView: View {
     let session: HostSession
     let taskID: String
@@ -14,15 +16,21 @@ struct ComposerView: View {
     @State private var draft = ""
     @State private var images: [PickedImage] = []
     @State private var pickerItems: [PhotosPickerItem] = []
+    @State private var files: [AttachedFile] = []
     @State private var followUp: RemoteFollowUpMode?
     @State private var isSending = false
+    @State private var isPickingPhotos = false
+    @State private var isTakingPhoto = false
+    @State private var isPickingFiles = false
 
     private var task: RemoteTask? { session.task(taskID) }
     private var isRunning: Bool { task?.running == true }
     private var canSend: Bool {
-        session.isConnected && !isSending
-            && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty)
+        session.isConnected && !isSending && !files.contains { $0.state == .uploading }
+            && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !images.isEmpty || !files.isEmpty)
     }
+    private var acceptsImages: Bool { task?.acceptsImages == true }
+    private var acceptsFiles: Bool { task?.acceptsFiles == true }
     private var draftKey: String { "draft.\(session.id).\(taskID)" }
 
     var body: some View {
@@ -31,19 +39,9 @@ struct ComposerView: View {
             if session.taskControls, let settings = session.taskSettings[taskID], !settings.isEmpty {
                 settingsRow(settings)
             }
-            if !images.isEmpty { imageRow }
+            if !images.isEmpty || !files.isEmpty { attachmentRow }
             HStack(alignment: .bottom, spacing: 8) {
-                if task?.acceptsImages == true {
-                    PhotosPicker(selection: $pickerItems, maxSelectionCount: RemoteProtocol.maxImages - images.count,
-                                 matching: .images) {
-                        Image(systemName: "plus")
-                            .font(.body.weight(.semibold))
-                            .frame(width: 36, height: 36)
-                            .background(Color(.secondarySystemBackground), in: Circle())
-                    }
-                    .accessibilityLabel("Add Photos")
-                    .disabled(images.count >= RemoteProtocol.maxImages)
-                }
+                if acceptsImages || acceptsFiles { attachMenu }
                 HStack(alignment: .bottom, spacing: 6) {
                     TextField(isRunning ? "Message to the running task" : "Message", text: $draft, axis: .vertical)
                         .lineLimit(1...6)
@@ -70,11 +68,60 @@ struct ComposerView: View {
             pickerItems = []
             Task { await addImages(items) }
         }
+        .photosPicker(isPresented: $isPickingPhotos, selection: $pickerItems,
+                      maxSelectionCount: max(1, RemoteProtocol.maxImages - images.count), matching: .images)
+        .fileImporter(isPresented: $isPickingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            if case let .success(urls) = result { for url in urls { attach(url) } }
+        }
+        .fullScreenCover(isPresented: $isTakingPhoto) {
+            CameraPicker { image in
+                if let data = image.jpegData(compressionQuality: 0.9), let picked = PickedImage(data: data) {
+                    images.append(picked)
+                }
+            }
+            .ignoresSafeArea()
+        }
+    }
+
+    /// Photos, the camera and files, as the task's harness takes them.
+    private var attachMenu: some View {
+        Menu {
+            if acceptsImages {
+                Button {
+                    isPickingPhotos = true
+                } label: {
+                    Label("Photo Library", systemImage: "photo.on.rectangle")
+                }
+                .disabled(images.count >= RemoteProtocol.maxImages)
+                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                    Button {
+                        isTakingPhoto = true
+                    } label: {
+                        Label("Take Photo", systemImage: "camera")
+                    }
+                    .disabled(images.count >= RemoteProtocol.maxImages)
+                }
+            }
+            if acceptsFiles {
+                Button {
+                    isPickingFiles = true
+                } label: {
+                    Label("Choose Files", systemImage: "doc")
+                }
+                .disabled(files.count >= 20)
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.body.weight(.semibold))
+                .frame(width: 36, height: 36)
+                .background(Color(.secondarySystemBackground), in: Circle())
+        }
+        .accessibilityLabel("Attach")
     }
 
     @ViewBuilder
     private var actionButton: some View {
-        if isRunning && draft.isEmpty && images.isEmpty {
+        if isRunning && draft.isEmpty && images.isEmpty && files.isEmpty {
             Button {
                 session.send(.stopTurn(taskID: taskID))
             } label: {
@@ -161,9 +208,36 @@ struct ComposerView: View {
         .padding(.leading, 4)
     }
 
-    private var imageRow: some View {
+    private var attachmentRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
+                ForEach(files) { file in
+                    Button {
+                        if file.state == .failed { upload(file.id) }
+                    } label: {
+                        HStack(spacing: 6) {
+                            switch file.state {
+                            case .uploading: ProgressView().controlSize(.mini)
+                            case .ready: Image(systemName: "doc").foregroundStyle(.secondary)
+                            case .failed: Image(systemName: "arrow.clockwise").foregroundStyle(.red)
+                            }
+                            Text(file.name).lineLimit(1)
+                            Button {
+                                files.removeAll { $0.id == file.id }
+                            } label: {
+                                Image(systemName: "xmark").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                            }
+                            .accessibilityLabel("Remove File")
+                        }
+                        .font(.footnote)
+                        .padding(.horizontal, 10)
+                        .frame(height: 36)
+                        .frame(maxWidth: 220)
+                        .background(Color(.secondarySystemBackground), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(file.state == .failed ? Text("Not sent. Tap to try again.") : Text(verbatim: ""))
+                }
                 ForEach(images) { image in
                     Image(uiImage: image.preview)
                         .resizable()
@@ -199,14 +273,84 @@ struct ComposerView: View {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let mode = isRunning ? (followUp ?? session.followUp) : nil
         let attached = images.map { RemoteImage(type: "image/jpeg", data: $0.jpeg) }
+        let uploads = files.compactMap { $0.state == .ready ? $0.uploadID : nil }
         isSending = true
         Task {
-            let sent = await session.perform(.sendMessage(taskID: taskID, text: text, images: attached, followUp: mode))
+            let sent = await session.perform(.sendMessage(taskID: taskID, text: text, images: attached, followUp: mode,
+                                                          files: uploads))
             if sent {
                 draft = ""
                 images = []
+                files = []
             }
             isSending = false
+        }
+    }
+
+    /// A file goes up as soon as it is chosen (§15.20); the message then names it.
+    private func attach(_ url: URL) {
+        let type = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        let file = AttachedFile(url: url, name: url.lastPathComponent, mediaType: type)
+        files.append(file)
+        upload(file.id)
+    }
+
+    private func upload(_ id: UUID) {
+        guard let index = files.firstIndex(where: { $0.id == id }) else { return }
+        files[index].state = .uploading
+        let file = files[index]
+        Task {
+            let uploadID = await session.upload(file.url, mediaType: file.mediaType)
+            guard let index = files.firstIndex(where: { $0.id == id }) else { return }
+            files[index].uploadID = uploadID
+            files[index].state = uploadID == nil ? .failed : .ready
+        }
+    }
+}
+
+/// A file chosen for the next message, sent up in parts before it (§15.20).
+struct AttachedFile: Identifiable {
+    enum State { case uploading, ready, failed }
+
+    let id = UUID()
+    let url: URL
+    let name: String
+    let mediaType: String
+    var uploadID: String?
+    var state = State.uploading
+}
+
+/// The camera, for a photo to send.
+struct CameraPicker: UIViewControllerRepresentable {
+    let onImage: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ picker: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let parent: CameraPicker
+
+        init(_ parent: CameraPicker) {
+            self.parent = parent
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController,
+                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage { parent.onImage(image) }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
         }
     }
 }

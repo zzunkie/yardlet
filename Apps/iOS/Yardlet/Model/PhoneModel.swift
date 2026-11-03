@@ -151,7 +151,7 @@ final class PhoneModel {
         case .unavailable?:
             String(localized: "Your Mac is busy with other connections. Try again in a moment.")
         default:
-            String(localized: "Can't reach your Mac. Check that Yardlet is running and remote connections are on, and that this phone is on the same Wi-Fi or the Mac connects from outside.")
+            String(localized: "Can't reach your Mac. Check that Yardlet is running there with Allow remote connections on, and that this phone is on the same Wi-Fi or Connect from outside is on.")
         }
     }
 

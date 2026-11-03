@@ -355,6 +355,38 @@ final class HostSession: Identifiable {
         }
     }
 
+    // MARK: - Files (§15.20)
+
+    /// Sends a file up in parts of 4 MiB; its upload ID once the Mac holds it all. The parts go again from what the
+    /// Mac holds after a dropped part, and a refusal shows as a command's does.
+    func upload(_ url: URL, mediaType: String) async -> String? {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        guard size > 0, size <= RemoteProtocol.maxFileBytes else {
+            commandError = String(localized: "The file is too large to send.")
+            return nil
+        }
+        let uploadID = UUID().uuidString
+        var offset = 0
+        while offset < size {
+            try? handle.seek(toOffset: UInt64(offset))
+            guard let data = try? handle.read(upToCount: RemoteProtocol.maxUploadPartBytes), !data.isEmpty else { return nil }
+            let part = RemoteUploadPart(uploadID: uploadID, name: offset == 0 ? url.lastPathComponent : nil,
+                                        mediaType: offset == 0 ? mediaType : nil, size: offset == 0 ? size : nil,
+                                        offset: offset, data: data)
+            let response = await response(to: .uploadFile(part))
+            guard response.ok, let received = response.received else {
+                commandError = Self.message(for: response.error, host: name)
+                return nil
+            }
+            offset = received
+        }
+        return uploadID
+    }
+
     // MARK: - Commands
 
     /// Sends a request; `onResponse` runs in the order responses and events arrive. A request sent while no

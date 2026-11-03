@@ -369,6 +369,16 @@
         }
       }
     },
+    "Attach": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "첨부"
+          }
+        }
+      }
+    },
     "Awaiting an answer": {
       "localizations": {
         "ko": {
@@ -419,12 +429,12 @@
         }
       }
     },
-    "Can't reach your Mac. Check that Yardlet is running and remote connections are on, and that this phone is on the same Wi-Fi or the Mac connects from outside.": {
+    "Can't reach your Mac. Check that Yardlet is running there with Allow remote connections on, and that this phone is on the same Wi-Fi or Connect from outside is on.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mac에 연결할 수 없습니다. Mac에서 Yardlet이 실행 중이고 원격 연결이 켜져 있는지, 이 휴대폰이 같은 Wi-Fi에 있거나 Mac에서 바깥 연결이 켜져 있는지 확인하세요."
+            "value": "Mac에 연결할 수 없습니다. Mac에서 Yardlet이 실행 중이고 원격 연결 허용이 켜져 있는지, 이 휴대폰이 같은 Wi-Fi에 있거나 밖에서도 연결이 켜져 있는지 확인하세요."
           }
         }
       }
@@ -445,6 +455,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "선택"
+          }
+        }
+      }
+    },
+    "Choose Files": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "파일 선택"
           }
         }
       }
@@ -899,6 +919,16 @@
         }
       }
     },
+    "Not sent. Tap to try again.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "보내지 못했습니다. 눌러서 다시 시도하세요."
+          }
+        }
+      }
+    },
     "Nothing is running.": {
       "localizations": {
         "ko": {
@@ -949,22 +979,22 @@
         }
       }
     },
-    "On your Mac, choose Copy link under the pairing code, and paste it here.": {
+    "On your Mac, choose Copy link under the pairing code, then paste the link here.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mac에서 연결 코드 아래의 Copy link를 누른 뒤 여기에 붙여 넣으세요."
+            "value": "Mac에서 연결 코드 아래의 링크 복사를 누른 뒤, 그 링크를 여기에 붙여 넣으세요."
           }
         }
       }
     },
-    "On your Mac, open Yardlet › Settings › Remote and choose Pair a device. Then scan the code it shows.": {
+    "On your Mac, open Yardlet › Settings… › Remote and choose Pair… beside Pair a device. Then scan the code it shows.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mac의 Yardlet에서 설정 › Remote › Pair a device를 누른 뒤, 화면에 뜬 코드를 스캔하세요."
+            "value": "Mac의 Yardlet에서 설정… › 원격 연결을 열고 기기 연결 옆의 연결…을 누르세요. 그다음 화면에 뜬 코드를 스캔하세요."
           }
         }
       }
@@ -1043,16 +1073,6 @@
         }
       }
     },
-    "Pair a Mac from Yardlet on it: Settings › Remote › Pair a device. Swipe a Mac to remove it; it forgets this phone too.": {
-      "localizations": {
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mac의 Yardlet에서 설정 › Remote › Pair a device로 연결합니다. Mac을 밀어서 지우면 그 Mac도 이 휴대폰을 잊습니다."
-          }
-        }
-      }
-    },
     "Paired %@": {
       "localizations": {
         "ko": {
@@ -1079,6 +1099,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "연결 링크 붙여 넣기"
+          }
+        }
+      }
+    },
+    "Photo Library": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사진 보관함"
           }
         }
       }
@@ -1219,6 +1249,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@을(를) 제거할까요?"
+          }
+        }
+      }
+    },
+    "Remove File": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "파일 빼기"
           }
         }
       }
@@ -1523,6 +1563,16 @@
         }
       }
     },
+    "Take Photo": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사진 찍기"
+          }
+        }
+      }
+    },
     "Tasks you start on %@ or here show up in this list.": {
       "localizations": {
         "ko": {
@@ -1549,6 +1599,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "둘러보기를 시작하지 못했습니다."
+          }
+        }
+      }
+    },
+    "The file is too large to send.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "파일이 너무 커서 보낼 수 없습니다."
           }
         }
       }
@@ -1659,6 +1719,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "없어진 작업입니다"
+          }
+        }
+      }
+    },
+    "To pair a Mac, open Yardlet › Settings… › Remote on it and choose Pair… beside Pair a device. Swipe a Mac to remove it; it forgets this phone too.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac을 연결하려면 그 Mac의 Yardlet에서 설정… › 원격 연결을 열고 기기 연결 옆의 연결…을 누르세요. Mac을 밀어서 지우면 그 Mac도 이 휴대폰을 잊습니다."
           }
         }
       }

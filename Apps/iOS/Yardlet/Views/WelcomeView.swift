@@ -18,7 +18,7 @@ struct WelcomeView: View {
             Text("Connect to your Mac")
                 .font(.title2.weight(.semibold))
                 .padding(.top, 24)
-            Text("On your Mac, open Yardlet › Settings › Remote and choose Pair a device. Then scan the code it shows.")
+            Text("On your Mac, open Yardlet › Settings… › Remote and choose Pair… beside Pair a device. Then scan the code it shows.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -100,7 +100,7 @@ struct PasteLinkView: View {
                     if !text.isEmpty && link == nil {
                         Text("This isn't a Yardlet pairing link.")
                     } else {
-                        Text("On your Mac, choose Copy link under the pairing code, and paste it here.")
+                        Text("On your Mac, choose Copy link under the pairing code, then paste the link here.")
                     }
                 }
             }
