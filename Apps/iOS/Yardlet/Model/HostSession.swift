@@ -191,8 +191,8 @@ final class HostSession: Identifiable {
         case .revoked:
             connection = .removed
         case .attention, .schedulesChanged, .linked, .linkRefused, .linkRequest, .linkResolved, .tabFrame,
-             .browserTabsChanged:
-            // Not shown on the phone yet: schedules, link requests and a task's browser tab (§15.21, §15.11).
+             .browserTabsChanged, .terminalOutput, .terminalClosed:
+            // Not shown on the phone yet: schedules, link requests, browser tabs and terminals (§15.21, §15.11, §15.25, §15.29).
             break
         }
     }
