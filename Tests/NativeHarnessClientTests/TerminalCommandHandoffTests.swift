@@ -556,11 +556,11 @@ final class TerminalCommandHandoffTests: XCTestCase {
         workspace.handOffToTerminal(#"printf 'B10-%s-%s\n' same "$B10_SHELL""#)
         try waitForLine("B10-same-\(firstShell)", in: host)
 
+        // The pane learns the shell exited when SwiftTerm reports the process ended, which can come after
+        // SwiftTerm's own `process.running` turns false on the terminal closing.
+        let shell = try XCTUnwrap(host.hosting.terminalView?.processDelegate as? NativeTerminalSession)
         workspace.handOffToTerminal("exit")
-        let exited = ContinuousClock.now + testWaitLimit
-        while host.hosting.terminalView?.process.running == true, ContinuousClock.now < exited {
-            host.settle(passes: 1, interval: 0.05)
-        }
+        try waitUntilSettled(in: host) { !shell.isRunning }
         workspace.handOffToTerminal(#"printf 'B10-%s-%s\n' new "${B10_SHELL:-unset}""#)
         try waitForLine("B10-new-unset", in: host)
         XCTAssertNotEqual(host.hosting.terminalView?.process.shellPid, firstShell)
