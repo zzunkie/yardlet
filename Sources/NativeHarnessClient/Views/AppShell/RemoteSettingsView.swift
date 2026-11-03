@@ -325,15 +325,20 @@ struct RemoteSettingsView: View {
     }
 
     private func permissionToggle(_ permission: RemoteDevicePermission, title: String, device: RemoteDevice) -> some View {
-        Toggle(L10n.string(title), isOn: Binding(
-            get: { device.permissions?[permission] ?? false },
-            set: { allowed in Task { await service.setPermission(permission, allowed: allowed, for: device) } }
-        ))
+        HStack {
+            Text(L10n.string(title))
+            Spacer(minLength: 12)
+            Toggle(L10n.string(title), isOn: Binding(
+                get: { device.permissions?[permission] ?? false },
+                set: { allowed in Task { await service.setPermission(permission, allowed: allowed, for: device) } }
+            ))
+            .labelsHidden()
+            .toggleStyle(.paritySwitch)
+            .controlSize(.small)
+            .accessibilityLabel(L10n.format("%@ for %@", L10n.string(title), device.name))
+            .disabled(service.updatingDevicePermissions.contains(device.id))
+        }
         .font(.caption)
-        .toggleStyle(.paritySwitch)
-        .controlSize(.small)
-        .accessibilityLabel(L10n.format("%@ for %@", L10n.string(title), device.name))
-        .disabled(service.updatingDevicePermissions.contains(device.id))
     }
 
     /// A computer reads as one; anything else as the phone it most likely is.
