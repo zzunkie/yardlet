@@ -165,15 +165,23 @@ struct TranscriptScrollFollowing<RequestID: Hashable>: ViewModifier {
     /// Only while the blank-viewport log is on.
     @State private var blankMonitor: ConversationBlankViewportMonitor? =
         ConversationBlankViewportLog.isEnabled ? ConversationBlankViewportMonitor() : nil
-    @State private var isUserScrolling = false
-    /// What arrived below the end of a followed conversation while the reader scrolled it. The
-    /// size-change anchor does not keep the end under the reader's gesture, and following does not
-    /// move the view under it, so the end moves away by this much without the reader moving: it is
-    /// not their distance from the end, and it comes into view when their gesture ends.
-    @State private var arrivedUnderGesture: CGFloat = 0
-    @State private var continuedScroll = TranscriptContinuedScroll()
-    @State private var topLoading = TranscriptTopLoading()
+    @State private var scroll = ScrollBookkeeping()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// What the scroll callbacks keep from one frame to the next. Nothing drawn reads it, so it is a
+    /// class the view does not observe: the reader's scroll changes it on every frame, and as state
+    /// each change evaluated the conversation's views again, whose layout reported the scroll once
+    /// more in the same frame.
+    private final class ScrollBookkeeping {
+        var isUserScrolling = false
+        /// What arrived below the end of a followed conversation while the reader scrolled it. The
+        /// size-change anchor does not keep the end under the reader's gesture, and following does
+        /// not move the view under it, so the end moves away by this much without the reader moving:
+        /// it is not their distance from the end, and it comes into view when their gesture ends.
+        var arrivedUnderGesture: CGFloat = 0
+        var continuedScroll = TranscriptContinuedScroll()
+        var topLoading = TranscriptTopLoading()
+    }
 
     func body(content: Content) -> some View {
         content
@@ -227,7 +235,7 @@ struct TranscriptScrollFollowing<RequestID: Hashable>: ViewModifier {
                 if let place, readingTracker?.isRestoring != true {
                     // Keeping the place ends SwiftUI's scroll phase; the reader's scroll goes on.
                     let now = Date()
-                    if isUserScrolling || continuedScroll.goesOn(at: now) { continuedScroll.keptPlace(at: now) }
+                    if scroll.isUserScrolling || scroll.continuedScroll.goesOn(at: now) { scroll.continuedScroll.keptPlace(at: now) }
                     position.scrollTo(id: place.id, anchor: place.anchor)
                 }
             }
@@ -252,18 +260,18 @@ struct TranscriptScrollFollowing<RequestID: Hashable>: ViewModifier {
                 // scrolling when SwiftUI reports a user position and the layout stayed unchanged.
                 let restoring = readingTracker?.isRestoring == true
                 // The reader's scroll going on across a place the view kept (`TranscriptContinuedScroll`).
-                let readerScrolling = isUserScrolling
-                    || (continuedScroll.continues(from: old, to: new, at: Date()) && !restoring)
+                let readerScrolling = scroll.isUserScrolling
+                    || (scroll.continuedScroll.continues(from: old, to: new, at: Date()) && !restoring)
                 let userDriven = new.isUserMovement(from: old, interacting: readerScrolling,
                     positionedByUser: position.isPositionedByUser, restoring: restoring)
                 if userDriven, state.isFollowing, new.height != old.height {
-                    arrivedUnderGesture += max(0, new.distance - old.distance)
+                    scroll.arrivedUnderGesture += max(0, new.distance - old.distance)
                 }
-                if new.distance <= 1 { arrivedUnderGesture = 0 }
+                if new.distance <= 1 { scroll.arrivedUnderGesture = 0 }
                 if new.viewport.width >= 80, new.viewport.height >= 60 {
-                    state.observe(distance: new.distance - arrivedUnderGesture, userDriven: userDriven)
+                    state.observe(distance: new.distance - scroll.arrivedUnderGesture, userDriven: userDriven)
                 }
-                if !state.isFollowing { arrivedUnderGesture = 0 }
+                if !state.isFollowing { scroll.arrivedUnderGesture = 0 }
                 if pinsGrowthToBottom, state.isFollowing, !userDriven, new.height != old.height, new.distance > 1,
                    readingTracker?.isRestoring != true {
                     position.scrollTo(edge: .bottom)
@@ -287,33 +295,33 @@ struct TranscriptScrollFollowing<RequestID: Hashable>: ViewModifier {
                 // Only the reader's own scrolling: a jump to a find match or a turn the rail
                 // names is not the reader scrolling up.
                 if let loadEarlier, new.viewport.height >= 60,
-                   topLoading.shouldLoad(offset: new.offset, userDriven: readerScrolling, key: earlierKey) {
+                   scroll.topLoading.shouldLoad(offset: new.offset, userDriven: readerScrolling, key: earlierKey) {
                     loadEarlier()
                 }
             }
             .onScrollPhaseChange { old, new, context in
-                let wasUserScrolling = isUserScrolling
-                isUserScrolling = new == .tracking || new == .interacting || new == .decelerating
-                if (new == .tracking && old != .tracking) || (isUserScrolling && !wasUserScrolling) {
-                    topLoading.readerBeganScrolling()
+                let wasUserScrolling = scroll.isUserScrolling
+                scroll.isUserScrolling = new == .tracking || new == .interacting || new == .decelerating
+                if (new == .tracking && old != .tracking) || (scroll.isUserScrolling && !wasUserScrolling) {
+                    scroll.topLoading.readerBeganScrolling()
                 }
                 // SwiftUI tracks the reader's scrolling again. (The idle a kept place brings is not
                 // the end of the reader's scroll.)
-                if isUserScrolling { continuedScroll.end() }
-                if isUserScrolling || (new == .idle && wasUserScrolling) {
+                if scroll.isUserScrolling { scroll.continuedScroll.end() }
+                if scroll.isUserScrolling || (new == .idle && wasUserScrolling) {
                     state.observe(
                         distance: context.geometry.contentSize.height - context.geometry.visibleRect.maxY
-                            - arrivedUnderGesture,
+                            - scroll.arrivedUnderGesture,
                         userDriven: true
                     )
                 }
                 // The reader's gesture over a followed conversation ended: what arrived under it comes
                 // into view, as following would have brought it.
                 if new == .idle, wasUserScrolling {
-                    if pinsGrowthToBottom, state.isFollowing, arrivedUnderGesture > 0, readingTracker?.isRestoring != true {
+                    if pinsGrowthToBottom, state.isFollowing, scroll.arrivedUnderGesture > 0, readingTracker?.isRestoring != true {
                         position.scrollTo(edge: .bottom)
                     }
-                    arrivedUnderGesture = 0
+                    scroll.arrivedUnderGesture = 0
                 }
             }
             .overlay(alignment: .bottomTrailing) {
@@ -351,7 +359,7 @@ struct TranscriptScrollFollowing<RequestID: Hashable>: ViewModifier {
     /// the turn grows.
     private func moveToLatest(wasFollowing: Bool, animation: Animation? = nil) {
         onReturnToLatest?()
-        continuedScroll.end()
+        scroll.continuedScroll.end()
         withAnimation(animation) {
             if wasFollowing && state.isNearBottom {
                 position.scrollTo(edge: .bottom)
@@ -366,7 +374,7 @@ struct TranscriptScrollFollowing<RequestID: Hashable>: ViewModifier {
     private func applyRestoration(_ request: TranscriptRestoreRequest?) {
         if request != nil {
             blankMonitor?.note("restoring the reading place")
-            continuedScroll.end()
+            scroll.continuedScroll.end()
         }
         switch request {
         case .anchor(let id):
