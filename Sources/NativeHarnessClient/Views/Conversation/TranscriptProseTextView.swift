@@ -97,8 +97,8 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     /// The width the text was last laid out whole at, which its lines are placed for; nil once the
     /// text changed.
     private var wholeLayoutWidth: CGFloat?
-    /// Keep the last exact layout while AppKit tracks a window resize. Its final width is measured
-    /// once tracking ends, rather than laying out every paragraph for every intermediate drag step.
+    /// Keep visible prose at its last exact layout while AppKit tracks a window resize. Offscreen
+    /// texts keep measuring normally, so finishing a drag does not reflow every retained turn at once.
     private var liveResizeSize: CGSize?
     private var clipsBeforeLiveResize: Bool?
     private var codeControls: [CodeControls] = []
@@ -317,6 +317,11 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     /// How many times the text was laid out at a width other than its last, each time whole, for the tests.
     private(set) var newWidthLayouts = 0
 
+    /// The benchmark's control still runs AppKit's lifecycle, while leaving this policy off.
+    var defersResizeForMeasurement = true
+    var isDeferringResize: Bool { liveResizeSize != nil }
+    var deferredResizeChangesWidth: Bool { liveResizeSize != nil && wholeLayoutWidth != ownWidth }
+
     /// The height the text is laid out at now, which is what it draws, for the tests.
     var laidOutHeight: CGFloat {
         guard let layout = textView.textLayoutManager, (textView.textStorage?.length ?? 0) > 0 else { return 0 }
@@ -326,6 +331,12 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
 
     override func viewWillStartLiveResize() {
         super.viewWillStartLiveResize()
+#if DEBUG
+        guard defersResizeForMeasurement else { return }
+#endif
+        // A separately hosted turn can retain a nonempty visibleRect outside the viewport.
+        guard window != nil, !isHiddenOrHasHiddenAncestor, let scroll = enclosingScrollView,
+              convert(bounds, to: scroll.contentView).intersects(scroll.contentView.bounds) else { return }
         liveResizeSize = wholeLayoutWidth.flatMap { sizes[$0] }
         if liveResizeSize != nil {
             clipsBeforeLiveResize = clipsToBounds

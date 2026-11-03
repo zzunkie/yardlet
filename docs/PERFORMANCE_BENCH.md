@@ -205,13 +205,37 @@ skips without `NHC_PERF_BENCH=1`, prints what it measured, and calls `PerfBenchR
 named by their unit, so the bench compares them too. A scene of the whole app goes in `PerfBenchFixture`
 instead, when the cost needs the real window, adapters and processes; give it budgets in `budgets.json`.
 
-`TranscriptProseResizePerformanceTests` invokes AppKit's live-resize hooks in an unshown window.
-It publishes no provider events; it measures synchronous resize work, row measurements and body
-reevaluations. Its finish time includes settling the window. The final images are written to
-`.build/prose-width/`. This isolates the layout policy; it does not synthesize a physical window drag.
+`TranscriptProseResizePerformanceTests` invokes AppKit's live-resize start and end hooks in both
+variants, in an unshown window. The control switches off only the new deferral policy through a
+DEBUG measurement flag; it still performs AppKit's inherited lifecycle work. Set
+`NHC_PERF_BENCH_REPEATS=3` for repeated pairs, `NHC_PERF_BENCH_ORDER=reverse` to put the candidate
+first, or `NHC_PERF_BENCH_MODE=baseline` / `candidate` to run one variant when alternating separately
+built test binaries. These measurements do not synthesize a physical window drag.
 
-During native window live resize, existing prose keeps its last exact layout, clipped to its offered
-bounds. The final width is measured after tracking ends. A content change ends deferral immediately,
+Each case allows main-actor geometry tasks to settle before measurement. After release, the active
+interval probe stays on while scheduled geometry work completes. After closing the case, the fixture
+waits for its host, view and window to be released, clears its explicitly owned conversation row cache,
+and waits for all prose views and layout managers to be released before starting another case. This
+keeps the renderer's cache of recent conversations from transferring teardown work to a later case.
+It publishes no provider events; it measures synchronous resize wall/CPU time, width reflows,
+row measurements and body reevaluations. Its finish time includes eight 30 ms run-loop windows while settling the window.
+Release measurements separate callback work, each layout pass, and each run-loop window, including
+thread CPU time. A run-loop observer records continuous active intervals ending at `beforeWaiting`
+and starting at `afterWaiting`, including direct callback/layout work before the first wait and
+between run-loop entries. `releaseMaxActiveMs` excludes observed waiting; `finishWallMs` does not.
+The final images are written to
+`.build/prose-width/`. This isolates the layout policy.
+
+During native window live resize, visible prose keeps its last exact layout, clipped to its offered
+bounds. Visibility is intersection with the enclosing scroll viewport; a retained turn's `visibleRect`
+can include offscreen text. Hidden views and views without a window or enclosing scroll view do not
+defer layout. Offscreen prose keeps measuring normally so release does not reflow all retained turns
+at once.
+The final width is measured after tracking ends. A content change ends deferral immediately,
 so streamed text stays current. Sidebar and split-divider drags do not invoke this AppKit lifecycle
 and still measure their intermediate widths. Exact final layout and measurement of many retained
 turns can still block the main thread.
+
+Batching offscreen reflow would require coordinating changing row heights with the reading anchor
+across every batch. This path keeps its existing exact synchronous sizing; the optimization does not
+remove the cost of measuring many retained turns during a drag.
