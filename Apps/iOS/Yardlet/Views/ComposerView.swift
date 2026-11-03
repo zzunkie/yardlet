@@ -71,7 +71,7 @@ struct ComposerView: View {
         .photosPicker(isPresented: $isPickingPhotos, selection: $pickerItems,
                       maxSelectionCount: max(1, RemoteProtocol.maxImages - images.count), matching: .images)
         .fileImporter(isPresented: $isPickingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-            if case let .success(urls) = result { for url in urls { attach(url) } }
+            if case let .success(urls) = result { attach(urls) }
         }
         .fullScreenCover(isPresented: $isTakingPhoto) {
             CameraPicker { image in
@@ -110,7 +110,7 @@ struct ComposerView: View {
                 } label: {
                     Label("Choose Files", systemImage: "doc")
                 }
-                .disabled(files.count >= 20)
+                .disabled(files.count >= RemoteProtocol.maxFiles)
             }
         } label: {
             Image(systemName: "plus")
@@ -215,7 +215,7 @@ struct ComposerView: View {
             HStack(spacing: 8) {
                 ForEach(files) { file in
                     Button {
-                        if file.state == .failed { upload(file.id) }
+                        if file.state == .failed { retry(file.id) }
                     } label: {
                         HStack(spacing: 6) {
                             switch file.state {
@@ -289,23 +289,34 @@ struct ComposerView: View {
         }
     }
 
-    /// A file goes up as soon as it is chosen (§15.20); the message then names it.
-    private func attach(_ url: URL) {
-        let type = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-        let file = AttachedFile(url: url, name: url.lastPathComponent, mediaType: type)
-        files.append(file)
-        upload(file.id)
+    /// Chosen files go up as soon as they are chosen (§15.20), as many as a message names; the message then names them.
+    private func attach(_ urls: [URL]) {
+        for url in urls.prefix(RemoteProtocol.maxFiles - files.count) {
+            let type = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+            files.append(AttachedFile(url: url, name: url.lastPathComponent, mediaType: type))
+        }
+        uploadNext()
     }
 
-    private func upload(_ id: UUID) {
+    private func retry(_ id: UUID) {
         guard let index = files.firstIndex(where: { $0.id == id }) else { return }
         files[index].state = .uploading
+        uploadNext()
+    }
+
+    /// Sends the next file waiting, one at a time: the Mac holds only a few unfinished uploads from a phone and makes
+    /// room for another by dropping the one that went longest without a part, which could be one still going up.
+    private func uploadNext() {
+        guard !files.contains(where: { $0.upload != nil }),
+              let index = files.firstIndex(where: { $0.state == .uploading }) else { return }
         let file = files[index]
         files[index].upload = Task {
             let uploadID = await session.upload(file.url, mediaType: file.mediaType)
-            guard !Task.isCancelled, let index = files.firstIndex(where: { $0.id == id }) else { return }
+            guard !Task.isCancelled, let index = files.firstIndex(where: { $0.id == file.id }) else { return }
             files[index].uploadID = uploadID
             files[index].state = uploadID == nil ? .failed : .ready
+            files[index].upload = nil
+            uploadNext()
         }
     }
 
@@ -313,6 +324,7 @@ struct ComposerView: View {
     private func remove(_ id: UUID) {
         files.first { $0.id == id }?.upload?.cancel()
         files.removeAll { $0.id == id }
+        uploadNext()
     }
 }
 
@@ -326,7 +338,7 @@ struct AttachedFile: Identifiable {
     let mediaType: String
     var uploadID: String?
     var state = State.uploading
-    /// The upload under way, cancelled when the file is taken off the message.
+    /// The upload under way, cancelled when the file is taken off the message; nil while the file waits its turn.
     var upload: Task<Void, Never>?
 }
 
