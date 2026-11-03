@@ -578,7 +578,8 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
 - 2026-11-04: §15.26 adds read-only Review, advertised by optional `reviewReading`; no mutation request is added.
 - 2026-11-04: workspace file listing (§15.27), with the existing bounded `readFile` requests for content.
 
-- 2026-11-04: host-managed per-device permissions, all off by default (§15.28).
+
+- 2026-11-04: host-managed per-device permissions, all off by default, with ordered persistence and denial recovery (§15.28).
 
 - 2026-10-16, after the first Android client build:
   - §5.3: `after` always names an item the phone holds once it has applied what came before in order;
@@ -1790,36 +1791,40 @@ The host's saved device entry may carry `permissions: {"terminal": false, "fileW
 identity and history; pairing a new device does not grant any of these permissions. Old clients need no changes.
 
 Only the person at this Mac can change them, in Settings › Remote › Paired devices. There is no remote request
-for editing device permissions or managing another device. Each operation protected by one of these permissions
-must check the live device store and return `notAllowed` unless allowed. A handshake's device snapshot is not
-an authorization cache. Removing the device also denies access. Granting one permission does not grant the others.
+for editing device permissions or managing another device. Every request declares its required permission centrally;
+new kinds must explicitly extend that declaration. The server actor owns the live permission map and checks it
+without a suspension or disk lookup. Neither a handshake snapshot nor the persistence store authorizes requests.
+Granting one permission does not grant the others.
 
-Grants are persisted before taking effect. Denials take effect immediately for the running host and notify every
-resource consumer before persistence is attempted. A failed denial save keeps access off, shows an error and offers
-Retry; unsaved denials are retained independently and retrying writes only off values, never failed grants. The person is told to retry before restarting the host. Permission
-updates are scoped to the device and flag, so saving one flag does not interrupt an unrelated granted operation.
-Every request declares its required permission centrally; new request kinds must explicitly extend that declaration.
+A denial or fresh-registration reset changes that map and cancels resource permits in the same actor turn. A single
+ordered writer follows those intents; a grant becomes effective only after its save succeeds and only while it is
+still the current intent. Saving one flag cannot pause an unrelated granted operation. Existing identities are
+reserved by public key, so concurrent pairing paths cannot create two live identities for one key.
 
-A new QR or account-link registration resets an existing key's grants and notifies resource consumers. Only the
-bounded retry of the same successfully committed pairing ticket preserves them. A registration still being saved
-is not a spent-ticket retry. Existing effective rights are cleared before a fresh registration can wait or fail,
-and a store generation rejects grants queued before that reset. Independent consumers can subscribe to permission
-changes without replacing each other. Removal and shutdown notify them with all permissions off; changes completing
-after such a lifecycle boundary cannot publish an old grant. Shutdown includes devices loaded with grants at startup,
-even when they have not connected or changed permissions during this run.
+Before updating the primary device file, denial/reset writes record a private recovery fence in
+`permission-denials.json` beside it (mode 0600). Startup applies this record before enabling saved grants and retries
+unfinished saves. A failed primary write therefore cannot revive an old grant after restart. Settings reads the
+server's live values and recovery state; Retry writes only denied values. If both the recovery record and primary
+write fail, the host keeps access off for the current run and explicitly says that restart recovery could not be
+saved. It does not claim a durable denial in that case.
 
-Device removal is published only after it has been saved. A failed save keeps the paired entry and shows a removal
-error. `forgetDevice` acknowledges success only after durable removal. A failed removal responds with `internal`
-and closes affected connections transiently, without announcing revocation; the retained pairing may reconnect.
-Outstanding work stays cancelled, and a removal still being saved returns `unavailable` to other connections.
+A new QR or account-link registration clears an existing key's grants, including when another save is pending.
+Only a bounded retry of a successfully committed pairing preserves permissions; an in-progress registration is not
+a spent-ticket retry. Failed reset attempts are audited even when the live flags are already off. Independent
+consumers subscribe without replacing each other. Shutdown cancels runtime access for every known device, including
+startup grants; accepted configuration writes may finish but cannot publish runtime grants after shutdown.
 
-Each permission change writes device ID, `type: "permission.terminal"` (or `.fileWrites` or `.settings`) and
-`result: "allowed"` or `"notAllowed"`; failed persistence records `"failed"`. A new registration resetting existing
-grants records `permissionReset`. Removal records `revoke` with `ok` only after persistence, or `failed`. No device
-name, credential, command, file contents or settings values are recorded. Repeated `watchTab` audit entries with the
-same device, task and result are coalesced for sixty seconds so refreshes do not displace important changes. Central
-permission-refusal audit entries are likewise coalesced for sixty seconds per device, request type, task and result;
-request contents are not logged.
+Device removal is published only after the ordered save succeeds. A failed save keeps the paired entry, denies its
+extra access and shows a removal error. `forgetDevice` acknowledges success only after durable removal. A failure
+responds with `internal` and closes affected connections transiently; the retained pairing may reconnect without
+regaining denied permissions. A removal being saved returns `unavailable` to other connections.
+
+Audits contain the device ID, operation and outcome, never a device name, credential, command, file contents or
+settings value. Permission changes use `permission.terminal` (or `.fileWrites` or `.settings`) and `allowed`,
+`notAllowed` or `failed`; registration resets use `permissionReset`, recovery retries `permissionRecovery`, and
+removal `revoke`. Repeated `watchTab` entries are coalesced for sixty seconds per device, task and result. Permission
+refusals are coalesced per device, request type and result, independent of the unvalidated task ID. A permission
+transition clears that device's refusal window so its first newly refused operation is recorded.
 
 These permissions reserve separate authorization for terminal sessions, direct file writes and host settings.
 They do not add file-writing or settings-changing requests by themselves, and do not change the existing paired

@@ -3768,3 +3768,7 @@
 "Save and discard changes in the task's workspace." = "작업 폴더의 파일을 저장하거나 변경 내용을 버립니다.";
 
 "Change Yardlet settings on this Mac." = "이 Mac의 Yardlet 설정을 바꿉니다.";
+
+"Permission is off for now. Recovery could not be saved; retry before restarting Yardlet." = "현재 권한은 꺼졌지만 복구 기록을 저장하지 못했습니다. Yardlet을 다시 시작하기 전에 다시 시도해 주세요.";
+
+"Permission stays off after restarting. Retry saving the settings." = "재시작해도 권한은 꺼진 상태로 유지됩니다. 설정 저장을 다시 시도해 주세요.";

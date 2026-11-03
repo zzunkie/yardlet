@@ -3750,3 +3750,7 @@
 "Count token usage" = "Count token usage";
 "Reads only the new lines of Claude Code's and Codex's transcripts on this Mac and keeps the counts for a year. Turning it off deletes the counts; the transcripts stay as they are." = "Reads only the new lines of Claude Code's and Codex's transcripts on this Mac and keeps the counts for a year. Turning it off deletes the counts; the transcripts stay as they are.";
 "Not started in Yardlet" = "Not started in Yardlet";
+
+"Permission is off for now. Recovery could not be saved; retry before restarting Yardlet." = "Permission is off for now. Recovery could not be saved; retry before restarting Yardlet.";
+
+"Permission stays off after restarting. Retry saving the settings." = "Permission stays off after restarting. Retry saving the settings.";
