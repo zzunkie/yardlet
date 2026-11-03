@@ -200,7 +200,7 @@ final class PhoneModel {
         switch phase {
         case .active:
             isActive = true
-            session?.start()
+            // Opens the connection closed in the background, or tries an open one again now.
             session?.reconnectNow()
         case .background:
             isActive = false
