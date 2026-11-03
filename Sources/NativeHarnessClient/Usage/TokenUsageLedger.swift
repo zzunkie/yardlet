@@ -24,11 +24,8 @@ actor TokenUsageLedger {
         }
 
         static func canonical(_ url: URL) -> URL {
-            url.withUnsafeFileSystemRepresentation { path in
-                guard let path, let resolved = realpath(path, nil) else { return url.standardizedFileURL }
-                defer { free(resolved) }
-                return URL(filePath: String(cString: resolved), directoryHint: .isDirectory)
-            }
+            CanonicalPath.resolve(url.path(percentEncoded: false))
+                .map { URL(filePath: $0, directoryHint: .isDirectory) } ?? url.standardizedFileURL
         }
 
         var all: [URL] { claude + codex }
@@ -214,8 +211,9 @@ actor TokenUsageLedger {
 
     private func read(_ path: String, harness: HarnessKind, into batch: inout Batch) {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
-              let size = (attributes[.size] as? NSNumber)?.uint64Value,
-              let inode = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value else { return }
+              let size = (attributes[.size] as? NSNumber)?.uint64Value else { return }
+        // Where the file system has no file number, a file is known by its path alone.
+        let inode = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0
         var state = files[path] ?? TokenUsageStore.FileState(inode: inode, offset: 0, carry: nil)
         // A file replaced or cut short is read again from its start.
         if state.inode != inode || size < state.offset {
