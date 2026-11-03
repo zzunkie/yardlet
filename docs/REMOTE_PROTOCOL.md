@@ -1764,7 +1764,9 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   projects with their collapsing and "Show more", Chats, the nested tasks and each row's mark, the activity view, the
   title bar's buttons and a hidden sidebar, and in place of the account button the host's name and how it is reached.
   The Task and View menus and their keys act on it as on the local window (new task, previous and next task, the next
-  one needing attention, Pin, Archive, the sidebar, the activity view, Find in the conversation). What the host does not
+  one needing attention, Pin, Archive, the sidebar, the activity view, Find in the conversation), and it has the local
+  window's tabs (New Tab, Close Tab, Reopen Closed Tab, the next and previous tab, a row's Open in New Tab, ⌃1–⌃9 for the
+  pinned rows). Its home lists the host's projects with what their tasks need, as the local home does. What the host does not
   take from another device yet (rename, mark as unread, move, nest, delete, the projects' own actions, the archived
   list) shows dimmed.
 - **What it does:** what a phone does (§4–§6, §15), on a larger screen: the host's sidebar and its marks, a task's
