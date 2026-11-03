@@ -29,7 +29,7 @@ jobs:
           sw_vers
           xcodebuild -version
           swift --version
-          fingerprint=$( { sw_vers; xcodebuild -version; swift --version; } | shasum -a 256 | cut -d ' ' -f 1)
+          fingerprint=$( { pwd; xcode-select -p; sw_vers; xcodebuild -version; swift --version; } | shasum -a 256 | cut -d ' ' -f 1)
           echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
       # Do not restore compiled outputs for different inputs: headers, resources and build scripts
       # are inputs too. Dependency downloads use a separate key and survive source changes.
@@ -58,7 +58,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p .build/ci
-          ./scripts/test-fast.sh -v --num-workers 3 2>&1 | python3 -I scripts/test-report.py --log .build/ci/test-output.log \
+          ./scripts/test-fast.sh -v 2>&1 | python3 -I scripts/test-report.py --log .build/ci/test-output.log \
             --times .build/ci/test-times.tsv --summary "$GITHUB_STEP_SUMMARY"
       - name: Keep the test output and times
         if: ${{ !cancelled() }}
