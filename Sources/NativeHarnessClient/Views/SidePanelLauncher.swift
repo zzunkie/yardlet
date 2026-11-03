@@ -6,7 +6,8 @@ import SwiftUI
 /// page"); and the tasks whose conversations the panel can show as tabs, recent first, with a search. A panel with no
 /// tab shows it; the + menu's "All Tasks…" shows it over the tabs, and its close returns to the tab it covered.
 struct SidePanelLauncher: View {
-    let workspaceURL: URL
+    /// The task's folder on this Mac, which the header names; nil for another Mac's task, whose folder is the host's.
+    let workspaceURL: URL?
     let choices: [WorkSurfaceTab]
     /// The task's pages to offer again, each by its address (`TaskSidePanelTabs.visitedPageTabs`); read in the
     /// launcher's body.

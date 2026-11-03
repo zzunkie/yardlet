@@ -793,6 +793,7 @@ struct RemoteTaskView: View {
     @Binding var review: DiffReviewPreferences
     /// An answer that leaves a rule behind, asked about once more before it goes.
     @State private var standingAnswer: (requestID: String, action: PermissionRequestAction)?
+    @AppStorage(TerminalLocation.key) private var terminalLocation = TerminalLocation.bottom.rawValue
     @State private var width: CGFloat = 0
     /// A file read from the host, shown in Quick Look.
     @State private var preview: URL?
@@ -826,9 +827,10 @@ struct RemoteTaskView: View {
         // The local task's layout: the conversation, the rail beside it, and the side panel, whose tab strip shares the
         // title bar's row.
         TaskWorkspaceLayout(
-            showsTrailing: panels.trailingSurfaceID != nil, showsTerminal: false, preferences: $layout,
+            showsTrailing: panels.trailingSurfaceID != nil, showsTerminal: panels.isTerminalPresented && model.offersTerminals,
+            preferences: $layout,
             wantsRail: showsRail && railSession != nil,
-            onReturnToChat: closeSidePanel, onCloseTrailing: closeSidePanel,
+            onReturnToChat: closeSidePanel, onCloseTrailing: closeSidePanel, onCloseTerminal: closeTerminal,
             chat: {
                 VStack(spacing: 0) {
                     titleBar.banner
@@ -837,22 +839,23 @@ struct RemoteTaskView: View {
             },
             rail: { rail },
             trailing: { sidePanel.environment(\.workSurfaceNavigation, sidePanelNavigation) },
-            bottom: { EmptyView() })
+            bottom: { terminal(inSidePanel: false) })
         .environment(\.taskAreaHeader, TaskAreaHeader(height: ParityTheme.titleBarHeight, isTitleBar: true,
                                                       content: AnyView(RemoteTitleBar(context: titleBar) { header })))
-        // The browser's panel follows the host's watch: a handoff's Show Tab opens its tab, the panel's ✕ closes it.
-        // Also as the view appears: a Show Tab answered before the window drew the task opens its panel.
-        .onChange(of: showsBrowser, initial: true) { _, shows in
-            let browser = TaskSurface.browser.rawValue
-            if shows, panels.trailingSurfaceID != browser { showSidePanelTab(browser) }
-            if !shows, panels.trailingTabs.contains(browser) {
-                panels = TaskSurfaceNavigationProjection.closingTrailingTab(browser, in: panels)
-            }
+        // The browser's tab follows the host's watch, also as the view appears: a handoff's Show Tab or a new tab
+        // shows it in the panel.
+        .onChange(of: watchedSurfaceID, initial: true) { _, watched in
+            if let watched, panels.trailingSurfaceID != watched { showSidePanelTab(watched) }
         }
+        // A browser tab the host no longer lists has closed there: the panel forgets it and, where it showed it, goes to
+        // the tab shown before it.
+        .onChange(of: browserTabIDs) { _, listed in
+            let gone = panels.trailingTabs.filter { Self.isBrowserTab($0) && !listed.contains($0) }
+            if !gone.isEmpty { panels = TaskSurfaceNavigationProjection.closingTrailingTabs(gone, in: panels) }
+        }
+        // Leaving the browser's tab ends the watch, which the host's frames follow.
         .onChange(of: panels.trailingSurfaceID) { old, new in
-            let browser = TaskSurface.browser.rawValue
-            if new == browser, !showsBrowser { model.showBrowser(taskID: conversation.taskID) }
-            if old == browser, new != browser, showsBrowser { model.browser.hide() }
+            if let old, Self.isBrowserTab(old), new.map(Self.isBrowserTab) != true, showsBrowser { model.browser.hide() }
         }
         .focusedSceneValue(\.yardletConversationFind, find)
         .environment(\.taskSuggestionActions, suggestionActions)
@@ -897,7 +900,7 @@ struct RemoteTaskView: View {
     private var sidePanel: some View {
         switch panels.trailingSurfaceID {
         case TaskSurfaceNavigationProjection.launcherID?:
-            SidePanelLauncher(workspaceURL: hostFolder, choices: sidePanelChoices, tasks: { [] }, onOpen: openSidePanel,
+            SidePanelLauncher(workspaceURL: nil, choices: sidePanelChoices, tasks: { [] }, onOpen: openSidePanel,
                               onClose: { closeSidePanelTab(TaskSurfaceNavigationProjection.launcherID) })
         case TaskSurface.diff.rawValue?:
             RemoteReviewPane(model: model, taskID: conversation.taskID, review: $review,
@@ -905,17 +908,27 @@ struct RemoteTaskView: View {
         case "files"?:
             RemoteFilesPane(model: model, taskID: conversation.taskID, onClose: { closeSidePanelTab("files") })
                 .id(conversation.taskID)
-        case TaskSurface.browser.rawValue?:
+        case let id? where Self.isBrowserTab(id):
             RemoteBrowserPanel(model: model)
+                .task(id: id) { if model.browser.tabID.map({ "browser:" + $0 }) != id { selectBrowserTab(id) } }
+        case TaskSurfaceNavigationProjection.terminalID? where model.offersTerminals:
+            terminal(inSidePanel: true)
         default:
             EmptyView()
         }
     }
 
-    /// The launcher's folder, which it shows nothing of for a host's task: the host's own panels read the host's folder.
-    private var hostFolder: URL {
-        railSession?.workspaceURL ?? URL(filePath: "/", directoryHint: .isDirectory)
+    /// The host's browser tabs of the task, as the strip lists them (`RemoteBrowserModel.surfaceTabs`).
+    private var browserTabs: [WorkSurfaceTab] { model.browser.surfaceTabs(for: conversation.taskID) }
+    private var browserTabIDs: [String] { browserTabs.map(\.id) }
+
+    /// The browser tab the host watches for this task now, by its strip ID.
+    private var watchedSurfaceID: String? {
+        guard showsBrowser, let tabID = model.browser.tabID else { return nil }
+        return "browser:" + tabID
     }
+
+    private static func isBrowserTab(_ id: String) -> Bool { id.hasPrefix("browser:") }
 
     /// The launcher's and the strip's + choices, as the local task's, each available where the host serves it. The
     /// terminal and a side chat are not served from another Mac yet.
@@ -925,8 +938,9 @@ struct RemoteTaskView: View {
             switch choice.id {
             case TaskSurface.diff.rawValue: choice.isAvailable = model.offersReview
             case "files": choice.isAvailable = model.offersWorkspaceFiles
-            case TaskSurface.browser.rawValue: choice.isAvailable = model.offersBrowser
-            case TaskSurface.terminal.rawValue: choice.isAvailable = false
+            // A new tab is opened on the host, which a host that only shows its tabs does not take.
+            case TaskSurface.browser.rawValue: choice.isAvailable = model.offersBrowser && model.browser.canControlTabs
+            case TaskSurface.terminal.rawValue: choice.isAvailable = model.offersTerminals
             default: break
             }
             return choice
@@ -935,33 +949,74 @@ struct RemoteTaskView: View {
 
     /// The panels the title bar's buttons cannot show here.
     private var unavailableSurfaces: Set<TaskSurface> {
-        var surfaces: Set<TaskSurface> = [.terminal]
+        var surfaces: Set<TaskSurface> = []
+        if !model.offersTerminals { surfaces.insert(.terminal) }
         if !model.offersReview { surfaces.insert(.diff) }
         return surfaces
     }
 
-    private var sidePanelNavigation: WorkSurfaceNavigation {
-        WorkSurfaceNavigation(
-            tabs: panels.trailingTabs.compactMap(sidePanelTab),
-            activeID: panels.trailingSurfaceID,
-            choices: sidePanelChoices,
-            select: { id in showSidePanelTab(id) },
-            open: { id in openSidePanel(id) },
-            closeTab: { id in closeSidePanelTab(id) },
-            closeTabs: { ids in for id in ids { closeSidePanelTab(id) } },
-            closePanel: { closeSidePanel() })
+    /// The task's shell on the host, below the conversation or in the side panel as Settings place the terminal: the
+    /// local terminal panel over the host's shell, its links opened as the conversation's are, a selection attached to
+    /// the composer as the local terminal attaches it.
+    private func terminal(inSidePanel: Bool) -> some View {
+        RemoteTerminalPane(
+            model: model, taskID: conversation.taskID,
+            onAttachSelection: { [draft] selection, title in TerminalSelectionText.attach(selection, from: title, to: draft) },
+            onOpenLink: { url in _ = openLink(url) },
+            isInSidePanel: inSidePanel,
+            onClose: closeTerminal)
+            .id(conversation.taskID)
     }
 
-    private func sidePanelTab(_ id: String) -> WorkSurfaceTab? {
-        if id == TaskSurface.browser.rawValue {
-            return WorkSurfaceTab(id: id, title: model.browser.watchedTab?.title ?? L10n.string("Browser"), systemName: "globe")
-        }
-        return TaskSidePanelTabs.tab(id, selectedFilePath: nil)
+    private func closeTerminal() {
+        panels = TaskSurfaceNavigationProjection.hidingTerminal(panels)
+    }
+
+    /// The strip as the local task's: the panel's own tabs, then the host's browser tabs, which come from the host's
+    /// list rather than the panel's state, so a tab the host has not closed (a page that asked before leaving, a
+    /// refused close) stays.
+    private var sidePanelNavigation: WorkSurfaceNavigation {
+        WorkSurfaceNavigation(
+            tabs: panels.trailingTabs.filter { !Self.isBrowserTab($0) }.compactMap { TaskSidePanelTabs.tab($0, selectedFilePath: nil) }
+                + browserTabs,
+            activeID: panels.trailingSurfaceID,
+            choices: sidePanelChoices,
+            select: { id in Self.isBrowserTab(id) ? selectBrowserTab(id) : showSidePanelTab(id) },
+            open: { id in openSidePanel(id) },
+            closeTab: { id in closeSidePanelTab(id) },
+            closeTabs: { ids in
+                model.browser.closeSurfaceTabs(ids.filter(Self.isBrowserTab), taskID: conversation.taskID)
+                for id in ids where !Self.isBrowserTab(id) { closeSidePanelTab(id) }
+            },
+            closePanel: { closeSidePanel() })
     }
 
     private func openSidePanel(_ id: String) {
         guard sidePanelChoices.first(where: { $0.id == id })?.isAvailable != false
                 || id == TaskSurfaceNavigationProjection.launcherID else { return }
+        if id == TaskSurface.terminal.rawValue {
+            // The terminal opens where Settings put it; a launcher it was chosen from has done its job.
+            if panels.trailingSurfaceID == TaskSurfaceNavigationProjection.launcherID {
+                panels = TaskSurfaceNavigationProjection.closingTrailingTab(TaskSurfaceNavigationProjection.launcherID, in: panels)
+            }
+            panels = TaskSurfaceNavigationProjection.showingTerminal(in: panels,
+                                                                     at: TerminalLocation(rawValue: terminalLocation) ?? .bottom)
+            return
+        }
+        if id == TaskSurface.browser.rawValue {
+            // A new tab on the host, which shows in the strip once the host lists it.
+            if panels.trailingSurfaceID == TaskSurfaceNavigationProjection.launcherID {
+                panels = TaskSurfaceNavigationProjection.closingTrailingTab(TaskSurfaceNavigationProjection.launcherID, in: panels)
+            }
+            model.browser.newSurfaceTab(taskID: conversation.taskID)
+            return
+        }
+        showSidePanelTab(id)
+    }
+
+    /// A browser tab shown in the panel, watched on the host.
+    private func selectBrowserTab(_ id: String) {
+        model.browser.selectSurfaceTab(id, taskID: conversation.taskID)
         showSidePanelTab(id)
     }
 
@@ -969,8 +1024,14 @@ struct RemoteTaskView: View {
         panels = TaskSurfaceNavigationProjection.showing(id, in: panels)
     }
 
+    /// A browser tab is closed on the host and leaves the strip once the host's list does; the panel's own tabs close
+    /// here.
     private func closeSidePanelTab(_ id: String) {
-        panels = TaskSurfaceNavigationProjection.closingTrailingTab(id, in: panels)
+        if Self.isBrowserTab(id) {
+            model.browser.closeSurfaceTab(id, taskID: conversation.taskID)
+        } else {
+            panels = TaskSurfaceNavigationProjection.closingTrailingTab(id, in: panels)
+        }
     }
 
     private func closeSidePanel() {
@@ -1127,7 +1188,8 @@ struct RemoteTaskView: View {
     }
 
     /// A link in the conversation: a file is read from the host where it serves files, and never opened at
-    /// the same path on this Mac; a task the host lists opens here; a web page in the default browser.
+    /// the same path on this Mac; a task the host lists opens here; a web page on the host's own address (a server the
+    /// task runs) in the host's browser, any other in this Mac's default browser.
     private func openLink(_ url: URL) -> OpenURLAction.Result {
         switch ConversationLinkKind(url) {
         case .file:
@@ -1140,7 +1202,9 @@ struct RemoteTaskView: View {
             return .handled
         case .task, .place:
             return .discarded
-        case .web, .other:
+        case .web:
+            return model.openHostBrowserLink(url, taskID: conversation.taskID) ? .handled : .systemAction
+        case .other:
             return .systemAction
         }
     }
