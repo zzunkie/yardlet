@@ -50,6 +50,14 @@ import XCTest
         await store.check(defaultsOf: [.codex], savedOf: [], policy: .refresh, runtimeSelections: runtime)
         counts = await reads.counts
         XCTAssertEqual(counts["codex"], 2, "The refresh button checks a fresh reading again")
+
+        // Home's usage band reads again every 15 minutes, keeping any reading made meanwhile.
+        let span = TokenUsagePace.span
+        await store.check(defaultsOf: [.codex], savedOf: [], policy: .ifOlderThan(span), runtimeSelections: runtime)
+        counts = await reads.counts
+        XCTAssertEqual(counts["codex"], 2, "A reading under 15 minutes old is used rather than read again")
+        XCTAssertTrue(store.isFresh(key, now: Date().addingTimeInterval(span - 60), within: span))
+        XCTAssertFalse(store.isFresh(key, now: Date().addingTimeInterval(span), within: span))
     }
 
     func testRememberedAndUnfinishedReadingsAreNeverFresh() throws {

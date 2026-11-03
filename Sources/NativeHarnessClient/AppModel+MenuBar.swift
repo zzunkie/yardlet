@@ -30,8 +30,8 @@ extension AppModel {
     }
 
     /// Checks the accounts the Usage lines show, for a menu or screen that shows them as it opens.
-    func checkUsageAccounts() async {
-        await connections.checkUsageAccounts(runtimeSelections: runtimeSelections)
+    func checkUsageAccounts(policy: AccountCheckPolicy = .ifStale) async {
+        await connections.checkUsageAccounts(runtimeSelections: runtimeSelections, policy: policy)
     }
 
     /// "New task": Yardlet comes forward on the new task screen.
@@ -92,12 +92,12 @@ extension ProviderConnectionStore {
     /// a reading confirmed within the last minute is kept and a check already running is joined.
     /// The lists that check default logins open only now and then, so without this a line kept the
     /// reading of the last time one did (Codex's default login, two days old, on 2026-10-25).
-    func checkUsageAccounts(runtimeSelections: RuntimeSelectionStore) async {
+    func checkUsageAccounts(runtimeSelections: RuntimeSelectionStore, policy: AccountCheckPolicy = .ifStale) async {
         let shown = menuBarUsageChoices(for: HarnessCatalog.builtIns.map(\.id)).filter { !$0.quotas.isEmpty }
         let saved = shown.compactMap(\.connection)
         guard !shown.isEmpty else { return }
         await check(defaultsOf: shown.filter { $0.connection == nil }.map(\.harness),
-            savedOf: Array(Set(saved.map(\.harness))), connectionIDs: Set(saved.map(\.id)),
+            savedOf: Array(Set(saved.map(\.harness))), connectionIDs: Set(saved.map(\.id)), policy: policy,
             runtimeSelections: runtimeSelections)
     }
 }
