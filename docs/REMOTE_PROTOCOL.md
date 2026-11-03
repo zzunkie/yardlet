@@ -1804,7 +1804,8 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   relay room and device ID; removed with the last host), one Keychain item per host for its private key, and what
   each host's window last showed, in `~/Library/Caches/<bundle identifier>/remote/<host>/` (folder 0700, files
   0600): the snapshot's projects and tasks, and the latest page of each conversation open last (at most 6, each cut
-  to the size of Yardlet's first page, §4.2: 10 whole turns, 120 items, about 384 KB). Reopening the window shows
+  to the size of Yardlet's first page, §4.2: 10 whole turns, 120 items, about 384 KB), and the words of its unsent
+  drafts (`drafts.json`, kept a moment after typing stops and when the window closes). Reopening the window shows
   them at once, before it connects; the snapshot and subscriptions replace them once it does. The cache is written a
   moment after changes stop (at least every 10 s while they go on) and when the window closes, a conversation only
   when it changed. Nothing listens and nothing runs while no host window is open. Removing a host sends

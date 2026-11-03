@@ -110,6 +110,9 @@ final class RemoteHostModel: Identifiable {
 
     var name: String { host.name }
 
+    /// The host's folder in this Mac's caches, which goes with the host (`RemoteHostCache`); nil in tests.
+    var cacheFolder: URL? { cache?.folder }
+
     /// The host's projects and tasks as this Mac's own sidebar reads them (`RemoteSidebarMirror`), made again only when
     /// either changed.
     var sidebar: RemoteSidebarMirror {
