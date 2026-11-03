@@ -263,6 +263,11 @@ before `main` on a macOS 15 release that lacks it. `./scripts/check-macos-symbol
 checks a bundle's imports from macOS against an older SDK; CI checks them against the macOS 15.0 SDK
 of Xcode 16.0, since its macOS 15 images run the latest 15.x.
 
+### Phone app
+
+The iPhone app is in `Apps/iOS`, an Xcode project that builds the same `YardletRemote` package target as the
+Mac's remote. How to build and run it, with or without a Mac, is in [Apps/iOS/README.md](Apps/iOS/README.md).
+
 ### Screenshots and demo videos
 
 Debug builds carry a showcase scene for public screenshots and videos: made-up projects, people and
