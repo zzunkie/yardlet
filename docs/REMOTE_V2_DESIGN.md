@@ -197,7 +197,9 @@ Mac ──wss /v1/rooms/<room>/host──▶ Room(DO) ◀──wss /v1/rooms/<ro
 - **Removal:** removing the phone in the Mac's settings closes its open connections at once (`revoked`), and that public
   key cannot come back in (`unknownDevice`). Its notification token is deleted too. "Disconnect" on the phone tells the
   Mac (`forgetDevice`) and deletes the phone's own key.
-- **Reconnection:** after a drop, exponential backoff (1 second→30 seconds, ±20%), or at once when the network changes.
+- **Reconnection:** after a connection that was up drops, at once and again every half second for about 10 seconds
+  without showing the drop, since the Mac opens its relay room again within a second (protocol §14.3); then
+  exponential backoff (1 second→30 seconds, ±20%), or at once when the network changes.
   Every reconnection is a new handshake (no session resumption).
 - **Several Macs:** the phone app saves several Macs, and the person switches by tapping the Mac name at the top. It
   connects to one at a time.

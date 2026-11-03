@@ -201,6 +201,8 @@ public final class RemoteSecureConnection: RemoteChannel, @unchecked Sendable {
             if case let .open(id) = state { return id }
             return nil
         }
+        RemoteLog.notice("Remote: closing a connection over \(path.rawValue) with code \(code.rawValue)"
+            + (id == nil ? ", before it was a device's" : ""))
         transport.close(code)
         if let id { Task { await server.closed(id) } }
     }

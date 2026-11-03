@@ -360,6 +360,7 @@ public actor RemoteServer {
         connections[id]?.lastReceivedAt = now()
         if !connection.isProven {
             connections[id]?.isProven = true
+            if connection.deviceID != nil { RemoteLog.notice("Remote: \(Self.describe(connection)) connected") }
             publishStatus()
         }
         connections[id]?.queue.append(data)
@@ -370,7 +371,8 @@ public actor RemoteServer {
 
     /// The transport saw the connection end.
     public func closed(_ id: UUID) {
-        guard connections.removeValue(forKey: id) != nil else { return }
+        guard let connection = connections.removeValue(forKey: id) else { return }
+        RemoteLog.notice("Remote: \(Self.describe(connection)) ended with its transport after \(lifetime(of: connection))")
         forgetLink(on: id)
         Task { await self.updateWatched() }
         publishStatus()
@@ -1312,10 +1314,23 @@ public actor RemoteServer {
 
     private func close(_ id: UUID, _ code: RemoteCloseCode) {
         guard let connection = connections.removeValue(forKey: id) else { return }
+        RemoteLog.notice("Remote: closing \(Self.describe(connection)) with code \(code.rawValue) after \(lifetime(of: connection))")
         forgetLink(on: id)
         connection.channel.close(code)
         Task { await self.updateWatched() }
         publishStatus()
+    }
+
+    /// A connection as the log names it: its device and path.
+    private static func describe(_ connection: Connection) -> String {
+        "device \(RemoteLog.device(connection.deviceID)) over \(connection.path?.rawValue ?? "an unknown path")"
+    }
+
+    /// How long a connection was up, and how long since the phone last sent something.
+    private func lifetime(of connection: Connection) -> String {
+        let time = now()
+        return "\(RemoteLog.seconds(time.timeIntervalSince(connection.openedAt))), "
+            + "\(RemoteLog.seconds(time.timeIntervalSince(connection.lastReceivedAt))) after the phone's last message"
     }
 
     private var establishedCount: Int {

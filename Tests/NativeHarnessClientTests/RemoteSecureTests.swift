@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Network
 import XCTest
 @testable import YardletRemote
 
@@ -396,14 +397,21 @@ final class RemoteSecureTests: XCTestCase {
     }
 
     /// Through a relay running locally (`relay/`, `npx wrangler dev --local --port 8787`): the Mac opens
-    /// its room with its signature, a phone comes in through the room and pairs, reads the list, and is
-    /// told to close when the Mac removes it. Runs only with `YARDLET_REMOTE_RELAY_TEST=ws://127.0.0.1:8787`.
+    /// its room with its signature, a phone comes in through the room and pairs, and reads the list. The Mac's
+    /// way to the relay is then cut with a reset, as it sometimes is (§14.2): the phone is closed with 4404, the
+    /// room opens again at once, and the phone comes back through it with its key. Last, it is told to close when
+    /// the Mac removes it. Runs only with `YARDLET_REMOTE_RELAY_TEST=ws://127.0.0.1:8787`.
     func testAPhoneConnectsThroughALocalRelay() async throws {
-        guard let relay = ProcessInfo.processInfo.environment["YARDLET_REMOTE_RELAY_TEST"].flatMap(URL.init(string:)) else {
+        guard let relay = ProcessInfo.processInfo.environment["YARDLET_REMOTE_RELAY_TEST"].flatMap(URL.init(string:)),
+              let relayPort = relay.port.flatMap({ NWEndpoint.Port(rawValue: UInt16($0)) }) else {
             throw XCTSkip("Set YARDLET_REMOTE_RELAY_TEST to a local relay")
         }
+        let proxy = try CuttableProxy(to: relayPort)
+        defer { proxy.stop() }
+        try await waitUntil { proxy.port != nil }
         let harness = try await SecureHarness()
-        let client = RemoteRelayClient(server: harness.server, identity: harness.identity, baseURL: relay)
+        let client = RemoteRelayClient(server: harness.server, identity: harness.identity,
+                                       baseURL: try XCTUnwrap(URL(string: "ws://127.0.0.1:\(try XCTUnwrap(proxy.port))")))
         client.start()
         defer { client.stop() }
         try await waitUntil { client.currentState == .connected }
@@ -411,8 +419,9 @@ final class RemoteSecureTests: XCTestCase {
 
         let ticket = await harness.server.openPairing()
         let room = relay.appending(path: "v1/rooms/\(harness.identity.room)/connect")
+        let phoneKey = RemoteKeyPair.generate()
         let started = ContinuousClock.now
-        let phone = try await SocketPhone.connect(url: room, macKey: harness.identity.noise.publicKey,
+        let phone = try await SocketPhone.connect(url: room, macKey: harness.identity.noise.publicKey, phoneKey: phoneKey,
                                                   hello: RemoteHandshakeHello(name: "Pixel 9", pair: RemoteEncoding.base64url(ticket.secret)))
         XCTAssertEqual(phone.reply.ok, true)
         let snapshot = try await phone.request(#"{"id":"1","type":"snapshot"}"#)
@@ -422,8 +431,22 @@ final class RemoteSecureTests: XCTestCase {
         let status = await harness.server.status
         XCTAssertEqual(status.connectedPaths.values.first, .relay)
 
-        await harness.server.revoke(try XCTUnwrap(phone.reply.deviceId))
-        let closed = try await phone.closeCode()
+        let cut = ContinuousClock.now
+        proxy.cut()
+        let dropped = try await phone.closeCode()
+        XCTAssertEqual(dropped, Int(RemoteCloseCode.macOffline.rawValue))
+        try await waitUntil { client.currentState == .connected }
+        let reopened = ContinuousClock.now - cut
+        let again = try await SocketPhone.connect(url: room, macKey: harness.identity.noise.publicKey, phoneKey: phoneKey,
+                                                  hello: RemoteHandshakeHello(name: "Pixel 9"))
+        XCTAssertEqual(again.reply.ok, true)
+        let after = try await again.request(#"{"id":"2","type":"snapshot"}"#)
+        XCTAssertEqual(after.tasks?.count, 2)
+        print("RemoteSecureTests: the room opened again \(reopened) after the cut, the phone was back \(ContinuousClock.now - cut) after it")
+        XCTAssertLessThan(reopened, .seconds(3))
+
+        await harness.server.revoke(try XCTUnwrap(again.reply.deviceId))
+        let closed = try await again.closeCode()
         XCTAssertEqual(closed, Int(RemoteCloseCode.revoked.rawValue))
     }
 
@@ -779,10 +802,11 @@ final class SocketPhone: @unchecked Sendable {
         try await connect(url: try XCTUnwrap(URL(string: "ws://127.0.0.1:\(port)/")), macKey: macKey, hello: hello)
     }
 
-    static func connect(url: URL, macKey: Data, hello: RemoteHandshakeHello) async throws -> SocketPhone {
+    static func connect(url: URL, macKey: Data, phoneKey: RemoteKeyPair = .generate(),
+                        hello: RemoteHandshakeHello) async throws -> SocketPhone {
         let task = URLSession.shared.webSocketTask(with: url)
         task.resume()
-        var noise = try RemoteNoiseHandshake(role: .initiator, localStatic: .generate(), remoteStatic: macKey)
+        var noise = try RemoteNoiseHandshake(role: .initiator, localStatic: phoneKey, remoteStatic: macKey)
         try await task.send(.data(noise.writeMessage1(payload: Data(RemoteJSON.string(hello).utf8))))
         guard case let .data(message2) = try await task.receive() else { throw RemoteNoise.Failure("Expected binary") }
         let reply = try JSONDecoder().decode(RemoteHandshakeReply.self, from: noise.readMessage2(message2))
@@ -822,5 +846,58 @@ final class SocketPhone: @unchecked Sendable {
             }
         }
         throw TestChannel.TimedOut(description: "The socket stayed open")
+    }
+}
+
+/// A loopback TCP proxy in front of a local relay that can cut every connection through it at once, as the way to
+/// the relay is sometimes cut (§14.2).
+final class CuttableProxy: @unchecked Sendable {
+    private let listener: NWListener
+    private let target: NWEndpoint
+    private let queue = DispatchQueue(label: "yardlet.test.proxy")
+    private var connections: [NWConnection] = []
+
+    init(to port: NWEndpoint.Port) throws {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        listener = try NWListener(using: parameters)
+        target = .hostPort(host: "127.0.0.1", port: port)
+        listener.newConnectionHandler = { [weak self] inbound in self?.accept(inbound) }
+        listener.start(queue: queue)
+    }
+
+    var port: UInt16? { listener.port?.rawValue }
+
+    /// Ends every connection through the proxy without a word to either side.
+    func cut() {
+        queue.sync {
+            for connection in connections { connection.forceCancel() }
+            connections = []
+        }
+    }
+
+    func stop() {
+        listener.cancel()
+        cut()
+    }
+
+    private func accept(_ inbound: NWConnection) {
+        let outbound = NWConnection(to: target, using: .tcp)
+        connections += [inbound, outbound]
+        inbound.start(queue: queue)
+        outbound.start(queue: queue)
+        pipe(from: inbound, to: outbound)
+        pipe(from: outbound, to: inbound)
+    }
+
+    private func pipe(from source: NWConnection, to destination: NWConnection) {
+        source.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, isComplete, error in
+            if let data, !data.isEmpty { destination.send(content: data, completion: .idempotent) }
+            if isComplete || error != nil {
+                destination.cancel()
+                return
+            }
+            self?.pipe(from: source, to: destination)
+        }
     }
 }

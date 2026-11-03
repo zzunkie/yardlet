@@ -150,17 +150,10 @@ final class AppModelRemoteBridge: RemoteBridge {
     /// else the shared transcript, with the earlier history the provider still holds and a provider
     /// retry on the running turn's status line, as the timeline adds them.
     private func conversation(of session: SessionRecord, in model: AppModel) -> RemoteConversation {
-        let cache = projectionCaches[session.id] ?? ConversationProjectionCache()
-        projectionCaches[session.id] = cache
-        var presentation: ConversationPresentation
-        if HarnessPresentationPolicy(harness: session.harness).usesCodexTimeline,
-           let state = model.codexPresentationBySessionID[session.id], state.thread?.turns.isEmpty == false {
-            presentation = cache.codex(state, workspaceURL: session.workspaceURL, historySelection: nil)
-        } else {
-            presentation = cache.transcript(
-                model.transcriptBySessionID[session.id] ?? [], harness: session.harness, status: session.status,
-                latestTurnIsComplete: session.completionState == .completed)
-            if model.hasEarlierClaudeHistory(session) { presentation.earlier = .providerFile }
+        if projectionCaches[session.id] == nil { projectionCaches[session.id] = ConversationProjectionCache() }
+        var presentation = presentation(of: session, in: model)
+        if Self.codexState(of: session, in: model) == nil, model.hasEarlierClaudeHistory(session) {
+            presentation.earlier = .providerFile
         }
         if let retry = model.providerRetryBySessionID[session.id], let last = presentation.turns.indices.last,
            presentation.turns[last].status == .running {
@@ -1076,14 +1069,22 @@ final class AppModelRemoteBridge: RemoteBridge {
             .first { $0.id == requestID && $0.state == .pending }
     }
 
-    /// The task's conversation as the timeline draws it now, uncached.
+    /// The task's conversation as the timeline draws it now: through the projection cache of a task a phone
+    /// follows, so a phone's command reads a long conversation again only where it changed.
     private func presentation(of session: SessionRecord, in model: AppModel) -> ConversationPresentation {
-        if HarnessPresentationPolicy(harness: session.harness).usesCodexTimeline,
-           let state = model.codexPresentationBySessionID[session.id], state.thread?.turns.isEmpty == false {
-            return CodexConversationProjection.presentation(state, workspaceURL: session.workspaceURL, historySelection: nil)
+        let cache = projectionCaches[session.id] ?? ConversationProjectionCache()
+        if let state = Self.codexState(of: session, in: model) {
+            return cache.codex(state, workspaceURL: session.workspaceURL, historySelection: nil)
         }
-        return TranscriptConversationProjection.presentation(
-            from: model.transcriptBySessionID[session.id] ?? [], harness: session.harness, status: session.status,
+        return cache.transcript(
+            model.transcriptBySessionID[session.id] ?? [], harness: session.harness, status: session.status,
             latestTurnIsComplete: session.completionState == .completed)
+    }
+
+    /// The Codex thread the timeline draws, once it has turns; otherwise the timeline draws the shared transcript.
+    private static func codexState(of session: SessionRecord, in model: AppModel) -> CodexTaskState? {
+        guard HarnessPresentationPolicy(harness: session.harness).usesCodexTimeline,
+              let state = model.codexPresentationBySessionID[session.id], state.thread?.turns.isEmpty == false else { return nil }
+        return state
     }
 }

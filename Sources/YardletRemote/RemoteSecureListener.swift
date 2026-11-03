@@ -170,7 +170,8 @@ public final class RemoteSecureListener: @unchecked Sendable {
                 }
                 channel.secure = RemoteSecureConnection(transport: channel, server: server, staticKey: key, path: path)
                 self.receive(on: channel)
-            case .failed, .waiting:
+            case let .failed(error), let .waiting(error):
+                if !channel.isHandshaking { RemoteLog.notice("Direct: a phone's connection over \(path.rawValue) failed: \(RemoteLog.error(error))") }
                 channel.connection.cancel()
             case .cancelled:
                 self.channels[ObjectIdentifier(channel)] = nil
@@ -185,7 +186,8 @@ public final class RemoteSecureListener: @unchecked Sendable {
     private func receive(on channel: RemoteNWFrameChannel) {
         channel.connection.receiveMessage { [weak self, weak channel] data, context, _, error in
             guard let self, let channel else { return }
-            if error != nil {
+            if let error {
+                if !channel.isHandshaking { RemoteLog.notice("Direct: a phone's connection ended: \(RemoteLog.error(error))") }
                 channel.connection.cancel()
                 return
             }
@@ -195,12 +197,22 @@ public final class RemoteSecureListener: @unchecked Sendable {
                 channel.secure?.receive(data ?? Data())
                 self.receive(on: channel)
             case .close?:
+                RemoteLog.notice("Direct: a phone closed its connection, code \(Self.code(of: metadata?.closeCode))")
                 channel.connection.cancel()
             case .text?:
                 channel.close(.unsupportedData)
             default:
                 self.receive(on: channel)
             }
+        }
+    }
+
+    private static func code(of closeCode: NWProtocolWebSocket.CloseCode?) -> UInt16 {
+        switch closeCode {
+        case let .protocolCode(code)?: code.rawValue
+        case let .applicationCode(code)?, let .privateCode(code)?: code
+        case nil: 0
+        @unknown default: 0
         }
     }
 

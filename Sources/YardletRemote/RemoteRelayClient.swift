@@ -6,7 +6,8 @@ import FoundationNetworking
 /// The Mac's side of the relay (docs/REMOTE_PROTOCOL.md §14.2): one outgoing WebSocket that opens the
 /// Mac's room with a signature, then carries every phone that comes in through the relay as numbered
 /// binary frames, each phone a `RemoteSecureConnection`. The relay never sees inside a frame. It also
-/// sends pushes. It reconnects on its own, with backoff, until stopped.
+/// sends pushes. It reconnects on its own until stopped: at once when a room that stayed open drops, since
+/// every phone on it is waiting, then with backoff.
 public final class RemoteRelayClient: @unchecked Sendable {
     public enum State: Equatable, Sendable {
         case off
@@ -32,7 +33,11 @@ public final class RemoteRelayClient: @unchecked Sendable {
     private var isSending = false
     private var pushWaiters: [String: CheckedContinuation<RemotePushResult, Never>] = [:]
     private var pushCounter = 0
+    /// Failures in a row; a room that stayed open for `stableAfter` starts the count again.
     private var attempt = 0
+    private var startedAt = Date()
+    /// When the relay said the room was open, for the socket now.
+    private var readyAt: Date?
     private var lastHeard = Date()
     private var keepalive: DispatchSourceTimer?
     private var retry: DispatchWorkItem?
@@ -41,8 +46,11 @@ public final class RemoteRelayClient: @unchecked Sendable {
     /// Told on the client's queue whenever its state changes.
     public var onStateChange: (@Sendable (State) -> Void)?
 
-    public static let pingInterval: TimeInterval = 30
-    public static let silenceLimit: TimeInterval = 90
+    /// A way to the relay can die without a word: the next ping is what finds it, so pings come often
+    /// enough that a phone waits seconds, not half a minute (§14.2).
+    public static let pingInterval: TimeInterval = 15
+    public static let silenceLimit: TimeInterval = 45
+    static let stableAfter: TimeInterval = 10
 
     public init(server: RemoteServer, identity: RemoteIdentity, baseURL: URL, session: URLSession = .shared) {
         self.server = server
@@ -67,6 +75,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
 
     public func stop() {
         queue.sync {
+            if running { RemoteLog.notice("Relay: stopped") }
             running = false
             retry?.cancel()
             retry = nil
@@ -81,6 +90,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
             guard running, state != .connected else { return }
             retry?.cancel()
             attempt = 0
+            RemoteLog.notice("Relay: the network changed; opening the room now")
             connect()
         }
     }
@@ -105,7 +115,9 @@ public final class RemoteRelayClient: @unchecked Sendable {
         self.task = task
         update(.connecting)
         task.resume()
-        lastHeard = Date()
+        startedAt = Date()
+        readyAt = nil
+        lastHeard = startedAt
         receive(on: task, generation: current)
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + Self.pingInterval, repeating: Self.pingInterval)
@@ -117,7 +129,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
     private func tick(generation current: Int) {
         guard current == generation, let task else { return }
         if Date().timeIntervalSince(lastHeard) > Self.silenceLimit {
-            fail("The relay stopped answering")
+            fail("The relay stopped answering", detail: "nothing for \(RemoteLog.seconds(Self.silenceLimit))")
             return
         }
         if state == .connected { enqueue(.string("ping"), on: task) }
@@ -130,7 +142,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
                 guard current == self.generation else { return }
                 switch result {
                 case let .failure(error):
-                    self.fail(error.localizedDescription)
+                    self.fail(error.localizedDescription, detail: Self.ending(of: task, error: error))
                 case let .success(message):
                     self.lastHeard = Date()
                     self.handle(message, on: task)
@@ -161,17 +173,20 @@ public final class RemoteRelayClient: @unchecked Sendable {
                                               "sig": RemoteEncoding.base64url(signature)]
                 enqueue(.string(Self.json(auth)), on: task)
             case "ready":
-                attempt = 0
+                readyAt = Date()
+                RemoteLog.notice("Relay: the room is open, \(RemoteLog.seconds(Date().timeIntervalSince(startedAt))) after asking")
                 update(.connected)
             case "open":
                 guard let number = object["c"] as? NSNumber else { return }
                 let id = number.uint32Value
+                RemoteLog.notice("Relay: phone c\(id) came in")
                 let stream = RemoteRelayStream(id: id, client: self)
                 stream.secure = RemoteSecureConnection(transport: stream, server: server, staticKey: identity.noise, path: .relay)
                 streams[id] = stream
             case "closed":
                 guard let number = object["c"] as? NSNumber else { return }
                 let id = number.uint32Value
+                RemoteLog.notice("Relay: phone c\(id) left, code \((object["code"] as? NSNumber)?.intValue ?? 0)")
                 outbox.removeAll { $0.stream == id }
                 unsent[id] = nil
                 streams.removeValue(forKey: id)?.secure?.transportClosed()
@@ -188,18 +203,40 @@ public final class RemoteRelayClient: @unchecked Sendable {
         }
     }
 
-    private func fail(_ reason: String) {
+    /// The socket ended or could not open; `reason` is what Settings shows, `detail` what the log adds.
+    private func fail(_ reason: String, detail: String? = nil) {
+        let openFor = readyAt.map { Date().timeIntervalSince($0) }
+        let phones = streams.count
         drop(reason: reason)
         guard running else { return }
         update(.failed(reason))
+        if let openFor, openFor >= Self.stableAfter { attempt = 0 }
         attempt += 1
-        let delay = min(60, pow(2, Double(min(attempt, 6) - 1))) * Double.random(in: 0.8...1.2)
+        let delay = Self.retryDelay(afterFailures: attempt)
+        let what = openFor.map { "the room closed after \(RemoteLog.seconds($0)) open, with \(phones) phone\(phones == 1 ? "" : "s") on it" }
+            ?? "the room did not open, \(RemoteLog.seconds(Date().timeIntervalSince(startedAt))) after asking"
+        RemoteLog.notice("Relay: \(what): \(detail ?? reason); trying again in \(RemoteLog.seconds(delay))")
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.running else { return }
             self.connect()
         }
         retry = work
         queue.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// The wait before trying again after `failures` failures in a row: next to none after the first, since every
+    /// phone on the room waits for it to open again, then 1, 2, 4 … 32 s, each spread by a fifth.
+    static func retryDelay(afterFailures failures: Int) -> TimeInterval {
+        guard failures > 1 else { return Double.random(in: 0...0.25) }
+        return pow(2, Double(min(failures, 7) - 2)) * Double.random(in: 0.8...1.2)
+    }
+
+    /// How a socket ended, for the log: the relay's close code and reason when it sent one, and the error.
+    private static func ending(of task: URLSessionWebSocketTask, error: Error) -> String {
+        let code = task.closeCode.rawValue
+        guard code != URLSessionWebSocketTask.CloseCode.invalid.rawValue else { return RemoteLog.error(error) }
+        let reason = task.closeReason.map { String(decoding: $0.prefix(123), as: UTF8.self) } ?? ""
+        return "close code \(code) \"\(reason)\", \(RemoteLog.error(error))"
     }
 
     /// Ends the socket and every phone on it.
@@ -245,7 +282,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
                     self.unsent[stream] = left > next.bytes ? left - next.bytes : nil
                 }
                 if let error {
-                    self.fail(error.localizedDescription)
+                    self.fail(error.localizedDescription, detail: "sending: \(RemoteLog.error(error))")
                 } else {
                     self.pump(task)
                 }
@@ -262,6 +299,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
             // and what it had waiting goes (§7).
             let waiting = unsent[id, default: 0] + data.count
             guard waiting <= RemoteProtocol.maxUnsentBytes else {
+                RemoteLog.notice("Relay: closing phone c\(id), which left \(waiting) bytes untaken")
                 outbox.removeAll { $0.stream == id }
                 unsent[id] = nil
                 streams.removeValue(forKey: id)?.secure?.transportClosed()
@@ -277,6 +315,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
     fileprivate func close(_ id: UInt32, code: RemoteCloseCode) {
         queue.async { [self] in
             guard streams.removeValue(forKey: id) != nil, let task else { return }
+            RemoteLog.notice("Relay: closing phone c\(id) with code \(code.rawValue)")
             enqueue(.string(Self.json(["t": "close", "c": Int(id), "code": Int(code.rawValue)])), on: task)
         }
     }

@@ -563,6 +563,9 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
 - 2026-11-02, a rule restated: `parentTaskId` (§4.1) is the task the Mac's sidebar draws the task under, so a task
   whose parent is in another list, pinned apart or in a split view comes without one, as the sidebar lists it.
   Before, it was the task it was started from whenever that task was listed anywhere.
+- 2026-11-03, timings and a rule: the Mac pings the relay every 15 s instead of 30 s and gives up on it after 45 s
+  instead of 90 s, and opens its room again at once after it stayed open (§14.2); a phone whose connection was up
+  and closes with 4404, 4409 or no code tries again quietly for about 10 s (§14.3).
 
 ## 11. v2 transport
 
@@ -759,8 +762,10 @@ and times, and a push's FCM token while sending it.
    "code": 4403}` to close a phone's socket with that code; that phone gets no `closed` back. A close code the
    relay may not use closes with 1000.
 6. Data both ways is binary frames: a 4-byte big-endian connection number, then the phone's frame.
-7. The Mac sends the text `ping` every 30 s and the relay answers `pong` without waking the room. The
-   Mac reconnects when no `pong` came for 90 s.
+7. The Mac sends the text `ping` every 15 s and the relay answers `pong` without waking the room. A way to the
+   relay can die without a word (the next `ping` is then answered by a reset), so the pings are what find it. The Mac
+   reconnects when no `pong` came for 45 s and whenever its socket ends: within a quarter of a second when the room
+   had stayed open for 10 s, since every phone of the room is waiting, then after 1, 2, 4 … 32 s while attempts fail.
 8. Push, at most 60 a minute per room:
 
    ```json
@@ -778,6 +783,11 @@ and times, and a push's FCM token while sending it.
 
 Binary frames only (a text frame closes it, 1003), each at most 65,535 bytes (1009). The relay closes a
 phone socket that sent nothing for 120 s (4408), and every phone socket of a room whose Mac left (4404).
+
+The Mac's socket to the relay is a long-lived connection through someone else's network, and it does end now and
+then; the Mac then opens its room again within about a second (§14.2). So a phone whose connection was up and ends
+with 4404, 4409 or no code connects again at once, and again every half second or so for about 10 s, before it tells
+the person the Mac cannot be reached; a `404` in that time means the Mac is not back yet.
 
 A socket the Mac has not yet sent a frame to is waiting. The relay keeps at most 2 waiting sockets from one
 address and 8 in a room; a new one closes the oldest of them (4503). A socket still waiting after 15 s is closed
