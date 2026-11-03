@@ -19,6 +19,8 @@ enum RemoteTurnProjection {
         static let choice = "choice:"
         static let answer = "answer:"
         static let handoff = "handoff:"
+        /// Shows the handed tab in the window's browser panel (§15.25); nothing goes to the host.
+        static let showTab = "showTab:"
         /// The kind of an option whose answer leaves a rule behind (`RemoteChoice.standing`).
         static let standing = "standing"
     }
@@ -334,6 +336,12 @@ enum RemoteTurnProjection {
                 request.providerActions = [decline, done]
                 request.responses = [.init(title: decline.label, role: .destructive, route: .providerAction(decline)),
                                      .init(title: done.label, role: .primary, route: .providerAction(done))]
+                // A host that shows its tabs names the handed one: the person takes the step in it here.
+                if let tabID = item.tabId {
+                    let show = PermissionRequestAction(id: Route.showTab + tabID, label: L10n.string("Show Tab"),
+                                                       decision: .allow, kind: nil)
+                    request.responses.insert(.init(title: show.label, role: .secondary, route: .providerAction(show)), at: 1)
+                }
             }
         default:
             if let fields = item.formFields, let choices = item.choices, !choices.isEmpty {

@@ -1768,8 +1768,14 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   menu, in its own app or Finder); the copies go when the window closes. A file link never opens the same path on
   this Mac. From a host that offers them (§15.23), the task's model, effort and permission mode show in the
   composer's own controls (a choice the host asks about first is asked about here too), the slash commands that may
-  run from here in "+" and a typed `/` list, and a turn's Edit message and Fork from here. Settings, connectors, the
-  context ring, creating or editing a schedule and the side panels stay on the host.
+  run from here in "+" and a typed `/` list, and a turn's Edit message and Fork from here. A task's browser (§15.25)
+  shows in a side panel where the host's window has the task's browser panel: the task's tabs in the panel's strip,
+  Back, Forward and Reload, the handoff's bar, and the watched tab's page, which takes clicks, drags, the trackpad,
+  keys and the input method's committed text (what it is still composing shows on the client until committed; ⌘V
+  types the client's own clipboard; secure keyboard entry is on while the page's password field has the keyboard); it
+  sends no `viewport`, so the tab keeps its size. A handoff's card has Show Tab, which opens it there. Settings,
+  connectors, the context ring, creating or editing a schedule, the other side panels, opening addresses and closing
+  tabs stay on the host.
 - **Paths:** as §11.4. While a host's window is open it browses Bonjour (§11.3) for the instance with the
   discovery id of the host key it saved, and resolves it to the host's name and port (`Name.local:47616`; the
   system resolves the name when connecting). Those addresses go first, never saved, then the direct addresses the

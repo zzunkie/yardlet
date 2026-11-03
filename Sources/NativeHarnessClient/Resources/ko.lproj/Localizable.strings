@@ -3689,3 +3689,14 @@
 "Changed setting: %@" = "설정 변경: %@";
 "Open %@ in Settings" = "설정에서 %@ 열기";
 "%@ was not downloaded: it started after this tab was used from another device. Download it here to keep it." = "%@ 파일은 다른 기기에서 이 탭을 조작한 뒤 시작돼 내려받지 않았습니다. 필요하면 이 Mac에서 다시 내려받으세요.";
+"Show Tab" = "탭 보기";
+"Show browser" = "브라우저 보기";
+"Hide browser" = "브라우저 닫기";
+"No browser tabs" = "브라우저 탭 없음";
+"This task's browser tabs on %@ show here." = "%@에서 이 작업이 연 브라우저 탭이 여기에 보입니다.";
+"%@. Answer it on %@." = "%@. %@에서 답하세요.";
+"A window or dialog over this page waits on %@." = "이 페이지 위의 창이나 대화상자가 %@에서 답을 기다립니다.";
+"This tab is closed." = "이 탭은 닫혔습니다.";
+"The page didn't take that." = "페이지가 이 입력을 받지 않았습니다.";
+"Waiting on you" = "답을 기다림";
+"Browser page on %@" = "%@의 브라우저 페이지";

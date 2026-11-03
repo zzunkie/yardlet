@@ -1425,29 +1425,8 @@ struct BrowserHostPane: View {
 
     /// The agent handed this tab to the person (`browser_handoff`): what it asks, and the answers it waits for.
     private func handoffBar(_ handoff: BrowserHandoff) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "hand.point.up.left").foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(L10n.string("The agent handed this tab to you"))
-                    .font(.callout.weight(.semibold))
-                Text(handoff.reason)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(4)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 4)
-            Button(L10n.string("Decline")) { controller.answerHandoff(.declined) }
-                .controlSize(.small).parityPointer()
-            Button(L10n.string("I'm done")) { controller.answerHandoff(.done) }
-                .controlSize(.small).parityProminentButton().parityPointer()
-        }
-        .padding(.horizontal, 10).padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ParityTheme.subtleFill)
-        .background(.background)
-        .overlay(alignment: .bottom) { Rectangle().fill(ParityTheme.separator).frame(height: 1) }
-        .accessibilityElement(children: .contain)
+        BrowserHandoffBar(reason: handoff.reason, decline: { controller.answerHandoff(.declined) },
+                          done: { controller.answerHandoff(.done) })
     }
 
     /// Chrome's "Page Unresponsive", with its Wait and a Reload in place of Exit pages.

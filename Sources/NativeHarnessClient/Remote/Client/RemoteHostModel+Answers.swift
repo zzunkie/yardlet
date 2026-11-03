@@ -3,7 +3,8 @@ import YardletRemote
 
 /// A request card's answer, sent back to the host as the command that answers it there
 /// (docs/REMOTE_PROTOCOL.md §15.3, §15.4, §15.18, §15.19): the card draws the host's request with the
-/// answers `RemoteTurnProjection` gave it, and the route it sends names which.
+/// answers `RemoteTurnProjection` gave it, and the route it sends names which. A browser handoff's Show Tab
+/// opens the handed tab in the window's browser panel instead (§15.25).
 extension RemoteHostModel {
     /// The task's conversation's answer to `requestID` by `route`.
     func respond(taskID: String, requestID: String, route: ConversationRequestRoute) {
@@ -12,6 +13,8 @@ extension RemoteHostModel {
             return
         }
         switch route {
+        case let .providerAction(action) where action.id.hasPrefix(RemoteTurnProjection.Route.showTab):
+            showBrowser(taskID: taskID, tabID: String(action.id.dropFirst(RemoteTurnProjection.Route.showTab.count)))
         case let .providerAction(action):
             send(answer(action, taskID: taskID, requestID: requestID))
         case let .decision(decision):

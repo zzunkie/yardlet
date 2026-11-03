@@ -3,12 +3,14 @@ import AppKit
 import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
+@testable import YardletRemote
 
 /// Each browser tab a tab of the task's side panel, in the whole main window with the CEF panel's own
 /// views over a stand-in browser host (no Chromium: pages are the host's events, frames none), light
 /// and dark, into `.build/browser-panel-tabs-qa/<phase>/` (`BROWSER_PANEL_TABS_QA_PHASE`, "after" by
 /// default), with what the strip shows at each step (`report.md`). Buttons are pressed through
-/// accessibility and keys go to the page as the keyboard sends them.
+/// accessibility and keys go to the page as the keyboard sends them. A handed tab is also drawn as another Mac's window
+/// shows it over the remote (`remote-handoff-*`, beside this Mac's `local-handoff-*`).
 @MainActor
 final class BrowserPanelTabsQATests: XCTestCase {
     private typealias Navigation = TaskSurfaceNavigationProjection
@@ -21,8 +23,30 @@ final class BrowserPanelTabsQATests: XCTestCase {
     private final class StandInHost: BrowserHostConnection {
         var eventHandler: ((BrowserHostEvent) -> Void)?
         var sent: [BrowserHostCommand] = []
+        /// Answers the remote's picture of a tab (docs/REMOTE_PROTOCOL.md §15.25) with the page `picture` draws at the
+        /// tab's size, as Chromium would picture what it shows.
+        var picture: ((_ width: Double, _ height: Double) -> Data?)?
+        private var viewports: [BrowserTabID: BrowserViewport] = [:]
         func send(_ command: BrowserHostCommand) {
             sent.append(command)
+            if case .resize(let tab, let viewport) = command { viewports[tab] = viewport }
+            if case .open(let tab, _, let viewport, _) = command { viewports[tab] = viewport }
+            if let picture, case .devTools(let tab, let message) = command,
+               let object = try? JSONDecoder().decode(JSONValue.self, from: Data(message.utf8)),
+               let id = object["id"]?.integerValue, let method = object["method"]?.stringValue {
+                let viewport = viewports[tab] ?? .offscreenDefault
+                let result: String = switch method {
+                case "Page.getLayoutMetrics":
+                    #"{"cssVisualViewport":{"clientWidth":\#(viewport.width),"clientHeight":\#(viewport.height),"pageX":0,"pageY":0}}"#
+                case "Runtime.evaluate": #"{"result":{"type":"number","value":\#(viewport.scale)}}"#
+                case "Page.captureScreenshot":
+                    #"{"data":"\#(picture(viewport.width, viewport.height)?.base64EncodedString() ?? "")"}"#
+                default: "{}"
+                }
+                DispatchQueue.main.async { [weak self] in
+                    MainActor.assumeIsolated { self?.eventHandler?(.devTools(tab: tab, message: #"{"id":\#(id),"result":\#(result)}"#)) }
+                }
+            }
             // A person's close asks the page first (2026-10-25); these pages do not ask, so the host closes the
             // tab and says so, as Chromium does.
             if case .requestClose(let tab) = command {
@@ -435,6 +459,100 @@ final class BrowserPanelTabsQATests: XCTestCase {
         XCTAssertEqual(after.page, none.page, "\(name): with the bars gone the page has its room back")
     }
 
+    /// A tab the agent handed to the person, in this Mac's panel and in the window another Mac opens for this one over the
+    /// remote (docs/REMOTE_PROTOCOL.md §15.25), both drawn: the same page, the handoff's bar with the same answers, the
+    /// task's tab in the strip, Back, Forward and Reload, and the address. The remote's page is the host's picture of it,
+    /// and its I'm done answers the handoff here.
+    func testAHandedTabDrawsOnAnotherMacAsInThisMacsPanel() async throws {
+        for appearance in [WindowlessRender.Appearance.light, .dark] {
+            let fixture = try makeFixture()
+            let model = fixture.model, task = fixture.task, client = fixture.client
+            let workspace = model.taskWorkspaces.state(for: task.id)
+            model.splits.activate(.session(task.id))
+            let local = WindowlessRender.Host(window(fixture, appearance), size: Self.size, appearance: appearance)
+            orderIn(local)
+            XCTAssertTrue(press(TaskCommandTitle.sidePanel(isShown: false), in: local))
+            XCTAssertTrue(press(L10n.string("Browser"), in: local))
+            let key = try XCTUnwrap(Navigation.browserKey(inTab: workspace.panels.trailingSurfaceID))
+            try await settle(local) { client.tab(key: key, forSession: task.id) != nil }
+            let tab = try XCTUnwrap(client.tab(key: key, forSession: task.id))
+            let standIn = try XCTUnwrap(fixture.host())
+            standIn.picture = { width, height in Self.signInPicture(size: NSSize(width: width, height: height)) }
+            standIn.load(tab.id, "https://console.example.test/signin", title: "Sign in")
+            let reason = "Sign in to the console with your security key, then press I'm done."
+            _ = tab.handOff(reason: reason)
+            model.browserHandoffWaits[task.id] = [BrowserHandoffWait(notice: "handoff-render", tabKey: key, reason: reason)]
+            try await settle(local) { false }
+            let page = try XCTUnwrap(browserView(in: local.hosting))
+            showSignInPage(in: page, sequence: 1)
+            try await settle(local) { false }
+            try draw(local, "local-handoff", appearance)
+            let localBar = controls(in: local).filter { ["I'm done", "Decline"].map(L10n.string).contains($0.label) }
+            XCTAssertEqual(Set(localBar.map(\.label)), Set(["I'm done", "Decline"].map(L10n.string)))
+            local.close()
+
+            // This Mac as a host, followed by another Mac's window on loopback.
+            let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(
+                model: model, browser: RemoteTabBridge.Environment(client: { client })))
+            defer { stack.stop() }
+            let ticket = await stack.server.openPairing()
+            let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                            name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
+            let hosts = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                            hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
+            let paired = try await hosts.pair(link: link.absoluteString)
+            let remote = try XCTUnwrap(hosts.model(for: paired.id))
+            defer { hosts.close(paired.id) }
+            try await waitUntilAsync { remote.hasSnapshot && remote.task(task.id.uuidString) != nil }
+            XCTAssertTrue(remote.offersBrowser)
+            remote.select(.task(task.id.uuidString))
+            let conversation = try XCTUnwrap(remote.conversations[task.id.uuidString])
+            try await waitUntilAsync { conversation.presentation.turns.last?.requests.isEmpty == false }
+            let request = try XCTUnwrap(conversation.presentation.turns.last?.requests.first)
+            let show = try XCTUnwrap(request.responses.first { $0.title == L10n.string("Show Tab") })
+            remote.respond(taskID: task.id.uuidString, requestID: request.id, route: show.route)
+            try await waitUntilAsync { remote.browser.frame != nil && remote.browser.watchedTab?.requestId != nil }
+            XCTAssertEqual(remote.browser.watchedTab?.title, "Sign in")
+            XCTAssertEqual(tab.isRemotelyWatched, true)
+
+            let window = WindowlessRender.Host(RemoteHostView(model: remote, directory: hosts)
+                .frame(width: Self.size.width, height: Self.size.height)
+                .environment(\.colorScheme, appearance.colorScheme), size: Self.size, appearance: appearance)
+            orderIn(window)
+            try await settle(window) { false }
+            try draw(window, "remote-handoff", appearance)
+            let remoteBar = controls(in: window).filter { ["I'm done", "Decline"].map(L10n.string).contains($0.label) }
+            XCTAssertEqual(remoteBar.count, 4, "the card's answers and the bar's: \(remoteBar.map(\.label))")
+            XCTAssertTrue(controls(in: window).contains { $0.label == L10n.string("Reload") })
+
+            // The bar's I'm done answers the handoff on this Mac.
+            let done = try XCTUnwrap(remoteBar.filter { $0.label == L10n.string("I'm done") }.max { $0.frame.minX < $1.frame.minX })
+            XCTAssertTrue(WindowlessRender.withAccessibilityTree { done.object.accessibilityPerformPress?() ?? false })
+            try await waitUntilAsync { tab.handoff?.answer == .done }
+            window.close()
+            remote.browser.hide()
+            try await waitUntilAsync { !tab.isRemotelyWatched }
+        }
+    }
+
+    /// Lays the window out and gives the main actor back between passes, until `condition` holds or about half a second
+    /// passed: an async test holds the main queue, which the window's own settling alone does not drain.
+    private func settle<Content: View>(_ host: WindowlessRender.Host<Content>, until condition: () -> Bool) async throws {
+        for _ in 0..<20 {
+            host.settle(passes: 1, interval: 0.01)
+            try await Task.sleep(for: .milliseconds(20))
+            if condition() { return }
+        }
+    }
+
+    private func waitUntilAsync(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let deadline = ContinuousClock.now + testWaitLimit
+        while !condition() {
+            guard ContinuousClock.now < deadline else { return XCTFail("Condition not met in time", file: file, line: line) }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
     /// A sign-in page as the host would draw it at the page's size: a header with Sign in at its top right, a heading,
     /// a field and Next, so a render shows whether anything lies over the page's top.
     private func showSignInPage(in view: BrowserHostView, sequence: UInt64) {
@@ -451,14 +569,33 @@ final class BrowserPanelTabsQATests: XCTestCase {
             bytesPerRow: IOSurfaceGetBytesPerRow(surface), space: CGColorSpace(name: CGColorSpace.sRGB)!,
             bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
         ) else { return }
-        context.translateBy(x: 0, y: CGFloat(height))
+        Self.drawSignInPage(in: context, size: view.bounds.size, scale: scale)
+        view.frameDisplay.show(BrowserFrame(layer: .view, surface: sequence, pixelWidth: width, pixelHeight: height,
+                                            sequence: sequence, paintedAt: DispatchTime.now().uptimeNanoseconds,
+                                            source: "software"), surface: surface)
+    }
+
+    /// The same page as a JPEG picture of `size` points, as Chromium answers a screenshot.
+    private static func signInPicture(size: NSSize, scale: CGFloat = 2) -> Data? {
+        let width = Int(size.width * scale), height = Int(size.height * scale)
+        guard width > 0, height > 0, let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+        ) else { return nil }
+        drawSignInPage(in: context, size: size, scale: scale)
+        guard let image = context.makeImage() else { return nil }
+        return NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.6])
+    }
+
+    private static func drawSignInPage(in context: CGContext, size: NSSize, scale: CGFloat) {
+        context.translateBy(x: 0, y: size.height * scale)
         context.scaleBy(x: scale, y: -scale)
         let previous = NSGraphicsContext.current
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
         defer { NSGraphicsContext.current = previous }
-        let pageWidth = view.bounds.width
+        let pageWidth = size.width
         NSColor.white.setFill()
-        NSRect(x: 0, y: 0, width: pageWidth, height: view.bounds.height).fill()
+        NSRect(x: 0, y: 0, width: pageWidth, height: size.height).fill()
         NSColor(red: 0.14, green: 0.18, blue: 0.24, alpha: 1).setFill()
         NSRect(x: 0, y: 0, width: pageWidth, height: 56).fill()
         func text(_ string: String, _ point: NSPoint, size: CGFloat, color: NSColor, weight: NSFont.Weight = .regular) {
@@ -477,9 +614,6 @@ final class BrowserPanelTabsQATests: XCTestCase {
         NSBezierPath(roundedRect: NSRect(x: 32, y: 188, width: 120, height: 36), xRadius: 6, yRadius: 6).fill()
         text("Next", NSPoint(x: 76, y: 197), size: 14, color: .white, weight: .semibold)
         context.flush()
-        view.frameDisplay.show(BrowserFrame(layer: .view, surface: sequence, pixelWidth: width, pixelHeight: height,
-                                            sequence: sequence, paintedAt: DispatchTime.now().uptimeNanoseconds,
-                                            source: "software"), surface: surface)
     }
 
     private func browserTabs(_ appearance: WindowlessRender.Appearance) throws {
