@@ -581,7 +581,9 @@ Sidebar nesting records the task a task was started from in that task's index ro
   it, a line from the row's level for beside it, nothing where it cannot go. A task moves only within the list that
   shows it (a project, Chats, Pinned), because the sidebar nests a task only under a task of its own list and going to
   another project is its own command, which changes the roots its harness gets (`TaskProjectMove`); it never goes under
-  itself or a task under it, archived tasks in between included. The tasks under it go with it.
+  itself or a task under it, archived tasks in between included. The tasks under it go with it. A task list grouped by
+  state mixes the projects' lists, so its rows offer no move there, and a task dropped on one of them joins it in a split
+  view; the families it shows are the ones the list grouped by project nests.
 - **What a move writes:** `parent_task_id` becomes the new parent (NULL for the top level) and the column
   `sessions.lineage_detached INTEGER NOT NULL DEFAULT 0` becomes 1 (`SessionRecord.isLineageDetached`,
   `SessionStore.nest`, `SessionStore.detachFromParent`). `linkParents` and `TaskLineage.links` do not link a task with 1

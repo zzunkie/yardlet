@@ -53,6 +53,8 @@ struct RemoteHostView: View {
     @State private var drafts: RemoteComposerDrafts
     @State private var shell = RemoteHostShell()
     @State private var windowWidth: CGFloat?
+    /// How the task list groups its rows, as this Mac's own windows group theirs.
+    @AppStorage(SidebarGrouping.defaultsKey, store: .yardlet) private var grouping = SidebarGrouping.project
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(model: RemoteHostModel, directory: RemoteHostDirectory, drafts: RemoteComposerDrafts = RemoteComposerDrafts(),
@@ -137,6 +139,7 @@ struct RemoteHostView: View {
             isRestoring: !model.hasSnapshot,
             selection: SidebarProjection.row(for: windowSelection, in: layout) ?? windowSelection,
             searchText: $shell.searchText,
+            grouping: $grouping,
             onNewTask: showNewTask,
             onShowSchedules: model.offersSchedules ? { showSchedules() } : nil,
             onActivate: activate,
@@ -184,7 +187,8 @@ struct RemoteHostView: View {
             selection: windowSelection,
             waiting: Set(mirror.sessions.filter {
                 TaskAttentionProjection.waitingRequest(of: $0, detail: mirror.details[$0.id]) != nil
-            }.map(\.id)))
+            }.map(\.id)),
+            state: grouping == .state ? { TaskAttentionProjection.state(of: $0, detail: mirror.details[$0.id]) } : nil)
     }
 
     /// The activity view's list while it is on: the host's tasks that need the person or work, in attention order.

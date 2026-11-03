@@ -12,13 +12,14 @@ final class SidebarNestingTests: XCTestCase {
     private func task(
         _ title: String, in folder: URL, minutesAgo: Double, harness: HarnessKind = .codex,
         titleOrigin: SessionTitleOrigin = .provider, isPinned: Bool = false, projectID: UUID? = nil,
-        origin: URL? = nil, worktree: String? = nil
+        origin: URL? = nil, worktree: String? = nil, status: SessionStatus = .ready, unread: Bool = false,
+        parent: SessionRecord? = nil
     ) -> SessionRecord {
         SessionRecord(
             harness: harness, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/\(harness.rawValue)"),
-            title: title, titleOrigin: titleOrigin, updatedAt: base.addingTimeInterval(-minutesAgo * 60),
-            isPinned: isPinned, projectID: projectID, originWorkspacePath: origin?.path(percentEncoded: false),
-            worktreeName: worktree
+            title: title, titleOrigin: titleOrigin, status: status, updatedAt: base.addingTimeInterval(-minutesAgo * 60),
+            hasUnreadUpdate: unread, isPinned: isPinned, projectID: projectID,
+            originWorkspacePath: origin?.path(percentEncoded: false), worktreeName: worktree, parentTaskID: parent?.id
         )
     }
 
@@ -181,6 +182,76 @@ final class SidebarNestingTests: XCTestCase {
         XCTAssertNil(targets.previousRow)
     }
 
+    // MARK: - Grouped by state
+
+    /// Grouped by state, the rows go under the Claude app's state groups in its order, each family
+    /// under its most urgent task and each row knowing its project or Chats; Pinned stays as it is. A
+    /// state collapses, lists five rows before "Show more" and is found for the shown task as a project
+    /// is, and a search lists every match.
+    func testGroupingByStateListsEachFamilyUnderItsMostUrgentTask() throws {
+        let project = Project(name: "Alpha", primaryRoot: alpha)
+        let parent = task("Parent", in: alpha, minutesAgo: 9)
+        let asking = task("Asks", in: alpha, minutesAgo: 8, status: .waitingForApproval, parent: parent)
+        let running = task("Runs", in: beta, minutesAgo: 7, status: .running)
+        let unread = task("Finished", in: alpha, minutesAgo: 1, unread: true)
+        let quiet = task("Quiet", in: beta, minutesAgo: 2)
+        let pinned = task("Pinned", in: alpha, minutesAgo: 3, isPinned: true, status: .running)
+        let chat = task("Chat", in: URL(filePath: "/tmp/sidebar-nesting/new-chat", directoryHint: .isDirectory),
+                        minutesAgo: 5)
+        let older = (0..<8).map { task("Older \($0)", in: beta, minutesAgo: Double(20 + $0)) }
+        let all = groups([parent, asking, running, unread, quiet, pinned] + older, projects: [project])
+        func layout(_ disclosure: SidebarDisclosure = SidebarDisclosure(rowLimit: 5), selection: WindowItem? = nil,
+                    filtering query: String? = nil) -> SidebarProjection.Layout {
+            SidebarProjection.layout(
+                visibleGroups: query.map { TaskNavigationProjection.filteredGroups(in: all, query: $0) } ?? all,
+                allGroups: all, chats: query == nil ? [chat] : [], allChats: [chat], splits: [],
+                isFiltering: query != nil, disclosure: disclosure, selection: selection,
+                state: { TaskAttentionProjection.state(of: $0) })
+        }
+        func listed(from name: String) -> SidebarRowProject? {
+            all.first { $0.displayName == name }.map { .project($0.workspaceURL.standardizedFileURL) }
+        }
+
+        let grouped = layout()
+        XCTAssertNil(grouped.chats)
+        XCTAssertTrue(grouped.sections.isEmpty)
+        XCTAssertEqual(grouped.pinned.map(\.id), [.session(pinned.id)])
+        XCTAssertNil(grouped.pinned[0].project)
+        XCTAssertEqual(grouped.states.map(\.state), [.waiting, .active, .unread, .idle])
+        XCTAssertEqual(grouped.states.map(\.title), ["Needs input", "Working", "Unread", "Idle"].map(L10n.string))
+        XCTAssertEqual(grouped.states[0].rows.map(\.id), [.session(parent.id)], "A family goes with its waiting task")
+        XCTAssertEqual(grouped.states[0].rows[0].children.map(\.id), [.session(asking.id)])
+        XCTAssertEqual(grouped.states[0].rows[0].project, listed(from: "Alpha"))
+        XCTAssertEqual(grouped.states[0].rows[0].children[0].project, listed(from: "Alpha"))
+        XCTAssertEqual(grouped.states[1].rows.map(\.project), [listed(from: "beta")])
+        XCTAssertEqual(grouped.states[3].allRows.map(\.id), ([quiet, chat] + older).map { .session($0.id) },
+                       "The most recently active first, chats among the projects' tasks")
+        XCTAssertEqual(grouped.states[3].allRows[1].project, .chats)
+        XCTAssertEqual(grouped.states[3].rows.count, 5)
+        XCTAssertEqual(grouped.states[3].hiddenRowCount, 5)
+        XCTAssertEqual(grouped.rows.map(\.id), ([pinned, parent, asking, running, unread, quiet, chat]
+                                                + older.prefix(3)).map { .session($0.id) })
+
+        // The shown task stays listed past the limit, and its state is found to open it.
+        let shown = layout(selection: .session(older[6].id)).states[3]
+        XCTAssertEqual(shown.rows.last?.id, .session(older[6].id))
+        let key = SidebarStateSection.disclosureKey(for: .idle)
+        let collapsed = layout(SidebarDisclosure(collapsedKeys: [key], rowLimit: 5))
+        XCTAssertTrue(collapsed.states[3].isCollapsed)
+        XCTAssertTrue(collapsed.states[3].rows.isEmpty)
+        XCTAssertEqual(SidebarProjection.disclosureKey(holding: .session(chat.id), in: collapsed), key)
+        XCTAssertNil(SidebarProjection.disclosureKey(holding: .session(pinned.id), in: collapsed))
+        XCTAssertEqual(SidebarProjection.disclosureKey(holding: .session(quiet.id), in: SidebarProjection.layout(
+            visibleGroups: all, allGroups: all, splits: [], isFiltering: false)),
+                       SidebarProjection.disclosureKey(for: all.first { $0.displayName == "beta" }!))
+
+        // A search lists every match, its state collapsed or not.
+        let searched = layout(SidebarDisclosure(collapsedKeys: [key], rowLimit: 5), filtering: "Older")
+        XCTAssertEqual(searched.states.map(\.state), [.idle])
+        XCTAssertFalse(searched.states[0].isCollapsed)
+        XCTAssertEqual(searched.states[0].rows.count, older.count)
+    }
+
     // MARK: - Remembered state
 
     @MainActor
@@ -266,7 +337,8 @@ final class SidebarNestingTests: XCTestCase {
     }
 
     func testNewStringsAreLocalized() {
-        for key in ["No chats", "Expand folder", "Collapse folder", "Show more", "Expanded", "Collapsed"] {
+        for key in ["No chats", "Expand folder", "Collapse folder", "Show more", "Expanded", "Collapsed",
+                    "Group by", "State", "Idle"] {
             XCTAssertEqual(L10n.string(key, languageCode: "en"), key)
             XCTAssertNotEqual(L10n.string(key, languageCode: "ko"), key, key)
         }

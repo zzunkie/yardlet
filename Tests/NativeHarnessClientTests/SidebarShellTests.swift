@@ -18,9 +18,11 @@ import XCTest
 ///   update" over the account button.
 /// - `account-button-*.png`: the button alone, at rest and hovered, under the update strip at rest,
 ///   hovered and while the update waits for tasks.
+/// - `.build/sidebar-grouping-qa/grouping-*.png`: the task list under the title bar with its grouping
+///   menu beside the search field, by project and by state at 240 and 360 pt, and where the menu opens.
 @MainActor
 final class SidebarShellTests: XCTestCase {
-    private static let identity = SidebarAccountIdentity(fullName: "Alex Kim", userName: "alex")
+    fileprivate static let identity = SidebarAccountIdentity(fullName: "Alex Kim", userName: "alex")
     private let now = Date()
 
     // MARK: - Account button and menu
@@ -339,6 +341,100 @@ final class SidebarShellTests: XCTestCase {
         }
     }
 
+    // MARK: - Grouping
+
+    /// The grouping menu sits beside the search field and groups the task list by project, the list
+    /// exactly as it was, or by state: Pinned, then the states in the Claude app's order, each row with
+    /// its project under its title, and no Chats or Projects heading. Renders show both at the
+    /// standard width and wider, and where the menu opens: a picture of the macOS menu at the button's
+    /// frame, since a real menu would come onto the screen.
+    func testTheTaskListGroupsByProjectOrByStateFromTheMenuBesideItsSearch() throws {
+        let fixture = try Fixture(now: now)
+        let directory = try WindowlessRender.directory("sidebar-grouping-qa")
+        func labels(_ grouping: SidebarGrouping?) -> [String] {
+            let host = WindowlessRender.Host(fixture.sidebar(grouping: grouping).frame(width: 240, height: 900, alignment: .top),
+                                             size: NSSize(width: 240, height: 900))
+            defer { host.close() }
+            host.settle()
+            return host.accessibilityElements().map { "\($0.label)=\($0.value)" }
+        }
+        let byProject = labels(.project)
+        let groupBy = "\(L10n.string("Group by"))=\(L10n.string("Project"))"
+        XCTAssertEqual(byProject.filter { $0 != groupBy }, labels(nil), "By project, the list is as it was")
+        let byState = labels(.state)
+        XCTAssertTrue(byState.contains("\(L10n.string("Group by"))=\(L10n.string("State"))"), "\(byState)")
+        let headings = ["Needs input", "Working", "Unread", "Idle"].map { "\(L10n.string($0))=\(L10n.string("Expanded"))" }
+        XCTAssertEqual(byState.filter(headings.contains), headings, "\(byState)")
+        for heading in ["Projects", "Chats"] {
+            XCTAssertFalse(byState.contains { $0.hasPrefix(L10n.string(heading) + "=") }, "\(heading): \(byState)")
+        }
+
+        func window(_ grouping: SidebarGrouping, width: CGFloat, menuAt menu: NSRect? = nil,
+                    _ appearance: WindowlessRender.Appearance) -> some View {
+            HStack(spacing: 0) {
+                VStack(spacing: 0) {
+                    TitleBarSidebarPart(isSidebarVisible: true, width: width, onToggleSidebar: {}, onNewTask: {},
+                                        activityToggle: ActivityViewToggle(isOn: false, needsAttention: true, toggle: {}))
+                    fixture.sidebar(grouping: grouping)
+                }
+                .frame(width: width)
+                ParityTheme.separator.frame(width: 1)
+                ParityTheme.canvas
+            }
+            .overlay(alignment: .topLeading) {
+                if let menu { GroupingMenuPicture(chosen: grouping).offset(x: menu.maxX - 180, y: menu.maxY + 4) }
+            }
+            .background(ParityTheme.canvas)
+            .environment(\.colorScheme, appearance.colorScheme)
+        }
+        for (grouping, width) in [(SidebarGrouping.project, CGFloat(240)), (.state, 240), (.state, 360)] {
+            let size = NSSize(width: width + 1 + 160, height: 820)
+            let captures = try WindowlessRender.hostedInBothAppearances(
+                "grouping-\(grouping.rawValue)-\(Int(width))", in: directory, size: size) { appearance in
+                window(grouping, width: width, appearance).frame(width: size.width, height: size.height, alignment: .top)
+            }
+            XCTAssertTrue(captures.allSatisfy { WindowlessRender.drawsContent($0.bitmap, step: 6) })
+        }
+
+        // Where the menu opens: under the button, its right edge on the button's.
+        let size = NSSize(width: 240 + 1 + 160, height: 820)
+        let host = WindowlessRender.Host(window(.state, width: 240, .light).frame(width: size.width, height: size.height,
+                                                                                  alignment: .top), size: size)
+        let button = try XCTUnwrap(Self.frame(labelled: L10n.string("Group by"), in: host))
+        host.close()
+        XCTAssertEqual(button.maxX, 240 - SidebarMetrics.rowInset, accuracy: 1, "The button ends the search row")
+        XCTAssertEqual(button.width, 28, accuracy: 1)
+        try WindowlessRender.hostedInBothAppearances("grouping-menu-240", in: directory, size: size) { appearance in
+            window(.state, width: 240, menuAt: button, appearance).frame(width: size.width, height: size.height,
+                                                                          alignment: .top)
+        }
+    }
+
+    /// The frame of the element labelled `label`, in the window with its origin at the top left.
+    private static func frame<Content: View>(labelled label: String, in host: WindowlessRender.Host<Content>) -> NSRect? {
+        host.settle()
+        let window = host.window.frame
+        return WindowlessRender.withAccessibilityTree {
+            var visited = Set<ObjectIdentifier>()
+            func find(_ node: AnyObject) -> NSRect? {
+                for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
+                    guard visited.insert(ObjectIdentifier(child)).inserted else { continue }
+                    // A menu button is named by its title, which it hands back as attributed text.
+                    let title = child.responds(to: NSSelectorFromString("accessibilityTitle"))
+                        ? child.perform(NSSelectorFromString("accessibilityTitle"))?.takeUnretainedValue() : nil
+                    let name = (child.accessibilityLabel?() ?? nil) ?? (title as? NSAttributedString)?.string
+                    if name == label, let screen = child.accessibilityFrame?() {
+                        return NSRect(x: screen.minX - window.minX, y: window.maxY - screen.maxY,
+                                      width: screen.width, height: screen.height)
+                    }
+                    if let found = find(child) { return found }
+                }
+                return nil
+            }
+            return find(host.hosting)
+        }
+    }
+
     // MARK: - Fixture
 
     private func task(_ title: String, _ harness: HarnessKind, in folder: URL, minutesAgo: Double,
@@ -370,6 +466,7 @@ final class SidebarShellTests: XCTestCase {
         let selection: WindowItem
         let disclosure: SidebarDisclosureStore
         let details: [UUID: TaskAttentionDetail]
+        let waiting: Set<UUID>
         let pullRequests = TaskPullRequestMonitor()
         let resources = TaskResourceMonitor(table: FakeProcessTable())
 
@@ -402,7 +499,7 @@ final class SidebarShellTests: XCTestCase {
             let widthChild = task("Resizable width", .codex, in: yardlet, parent: plan)
             let grandchild = task("Check the width on a small window", .codex, in: yardlet, parent: widthChild)
             let review = task("Review the index migration", .codex, in: yardlet)
-            let merged = task("Fix the footer links", .claudeCode, in: yardlet)
+            let merged = task("Fix the footer links", .claudeCode, in: yardlet, unread: true)
             let older = (1...4).map { task("Older task \($0)", $0.isMultiple(of: 2) ? .codex : .claudeCode, in: yardlet) }
             let waiting = task("Landing page copy", .claudeCode, in: website, status: .waitingForApproval)
             let idle = task("Update the pricing table", .codex, in: website)
@@ -417,6 +514,7 @@ final class SidebarShellTests: XCTestCase {
             chats = projects.chats(sessions: sessions)
             selection = .session(review.id)
             details = [waiting.id: TaskAttentionDetail(pendingRequest: .approval)]
+            self.waiting = [waiting.id]
             layout = SidebarProjection.layout(visibleGroups: groups, allGroups: groups, chats: chats, splits: [],
                                               isFiltering: false, disclosure: disclosure.disclosure,
                                               selection: selection, waiting: [waiting.id])
@@ -425,6 +523,33 @@ final class SidebarShellTests: XCTestCase {
                                                         state: .open, checks: .passing), for: review.id)
             pullRequests.setPullRequest(TaskPullRequest(number: 2301, url: url, repository: "example/yardlet",
                                                         state: .merged), for: merged.id)
+        }
+
+        /// The layout the window makes for `grouping`.
+        @MainActor
+        func layout(by grouping: SidebarGrouping) -> SidebarProjection.Layout {
+            let details = details
+            return SidebarProjection.layout(
+                visibleGroups: groups, allGroups: groups, chats: chats, splits: [], isFiltering: false,
+                disclosure: disclosure.disclosure, selection: selection, waiting: waiting,
+                state: grouping == .state ? { TaskAttentionProjection.state(of: $0, detail: details[$0.id]) } : nil)
+        }
+
+        /// The sidebar as the window shows it, with its section words and the grouping menu; nil
+        /// `grouping` leaves the menu out, as before it was added.
+        @MainActor
+        func sidebar(grouping: SidebarGrouping?) -> some View {
+            TaskSidebar(layout: layout(by: grouping ?? .project), allGroups: groups, isRestoring: false,
+                selection: selection, searchText: .constant(""), grouping: grouping.map { .constant($0) },
+                onNewTask: {}, onShowSchedules: {}, onSelectSection: { _ in }, onActivate: { _ in },
+                onNewTaskInProject: { _ in }, projects: projects, onEditProject: { _ in },
+                onArchiveProjectChats: { _ in }, onRemoveProject: { _ in }, onTogglePinned: { _ in },
+                onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in }, onMarkRead: { _ in },
+                accountMenu: SidebarAccountMenuContext(identity: SidebarShellTests.identity), disclosure: disclosure)
+                .environment(\.taskAttentionDetails, details)
+                .environment(pullRequests)
+                .environment(resources)
+                .background(ParityTheme.sidebar)
         }
 
         @MainActor
@@ -445,4 +570,41 @@ final class SidebarShellTests: XCTestCase {
 @MainActor
 private final class Chosen {
     var destinations: [SidebarAccountMenu.Destination] = []
+}
+
+/// A picture of the grouping menu as macOS draws it, for the renders: the real menu comes onto the
+/// screen and holds the keyboard and mouse while open.
+private struct GroupingMenuPicture: View {
+    let chosen: SidebarGrouping
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(L10n.string("Group by"))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.top, 6)
+                .padding(.bottom, 3)
+            item(L10n.string("Project"), checked: chosen == .project)
+            item(L10n.string("State"), checked: chosen == .state)
+        }
+        .padding(5)
+        .frame(width: 180, alignment: .leading)
+        .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.primary.opacity(0.12)))
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 5)
+    }
+
+    private func item(_ title: String, checked: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 11, weight: .semibold))
+                .opacity(checked ? 1 : 0)
+                .frame(width: 14)
+            Text(title).font(.system(size: 13))
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 6)
+        .frame(height: 24)
+    }
 }

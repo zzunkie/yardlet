@@ -1785,6 +1785,10 @@
 "View activity, needs attention" = "활동 보기, 확인 필요";
 "Turn off activity view" = "활동 보기 끄기";
 "See chats that are unread, active, or awaiting a response" = "읽지 않았거나 활성 상태이거나 응답해야 하는 채팅을 확인합니다";
+/* 상태별로 묶은 작업 목록. Claude 앱(ion-dist i18n ko-KR)의 "그룹화 기준" 메뉴와 상태 그룹 이름. */
+"Group by" = "그룹화 기준";
+"State" = "상태";
+"Idle" = "유휴";
 "Used a tool" = "도구 사용함";
 "Used %lld tools" = "도구 %lld개 사용함";
 

@@ -18,9 +18,20 @@ struct SidebarRow: Identifiable, Hashable, Sendable {
     var hiddenChildren: [SessionRecord] = []
     /// Where the row sits in the family it is nested in; nil for a row at top level.
     var familyPlace: SidebarFamilyPlace?
+    /// The project or Chats a row listed apart from them belongs to, in a list grouped by state;
+    /// nil in a list grouped by project.
+    var project: SidebarRowProject?
 
     /// Whether the row sits nested under the task it was started from.
     var isNestedChild: Bool { familyPlace != nil }
+
+    /// The row with its family, listed apart from `project`.
+    func listed(from project: SidebarRowProject) -> SidebarRow {
+        var row = self
+        row.project = project
+        row.children = children.map { $0.listed(from: project) }
+        return row
+    }
 
     var id: WindowItem {
         switch content {
@@ -103,6 +114,66 @@ struct SidebarFamilyPlace: Hashable, Sendable {
     var parentID: UUID?
 }
 
+/// Where a row listed by state belongs, which the line under its title names: a project, by the
+/// folder its group is keyed by, or Chats.
+enum SidebarRowProject: Hashable, Sendable {
+    case project(URL)
+    case chats
+}
+
+/// How the task list groups its rows, chosen in the menu beside its search field and kept across
+/// launches: by project, the list as it always was, or by state, as the Claude app's Code sidebar
+/// groups sessions ("Group by" › State).
+enum SidebarGrouping: String, CaseIterable, Sendable {
+    case project
+    case state
+
+    static let defaultsKey = "Yardlet.sidebar.grouping"
+}
+
+/// One state of a list grouped by state, with the rows under it, after the Claude app's state
+/// groups (4.4212, `KD`: Needs input, Working, Ready for review, Idle). A family sits under its most
+/// urgent task, as the Claude app places a family by its most urgent session. Yardlet's third state
+/// is an unread result, which it knows for every agent, where the Claude app's is an open pull request.
+struct SidebarStateSection: Identifiable, Hashable, Sendable {
+    let state: TaskAttentionState
+    /// The rows the section shows, in order: none while collapsed, and the first few until "Show
+    /// more" reveals the rest.
+    let rows: [SidebarRow]
+    /// Every row the section holds, shown or not.
+    let allRows: [SidebarRow]
+    var isCollapsed = false
+
+    var id: TaskAttentionState { state }
+    var disclosureKey: String { Self.disclosureKey(for: state) }
+
+    /// Rows "Show more" would reveal.
+    var hiddenRowCount: Int { isCollapsed ? 0 : allRows.count - rows.count }
+
+    /// The sections in the Claude app's order, most urgent first.
+    static let order: [TaskAttentionState] = [.waiting, .active, .unread, .idle]
+
+    /// The key a section's collapsed state is remembered under, beside the projects' keys.
+    static func disclosureKey(for state: TaskAttentionState) -> String {
+        switch state {
+        case .waiting: "state:waiting"
+        case .active: "state:working"
+        case .unread: "state:unread"
+        case .idle: "state:idle"
+        }
+    }
+
+    /// The Claude app's names for its state groups, an unread result's as its rows' mark names it.
+    var title: String {
+        switch state {
+        case .waiting: L10n.string("Needs input")
+        case .active: L10n.string("Working")
+        case .unread: L10n.string("Unread")
+        case .idle: L10n.string("Idle")
+        }
+    }
+}
+
 /// One project in the sidebar with the task rows nested under it.
 struct SidebarSection: Identifiable, Hashable, Sendable {
     let group: WorkspaceGroup
@@ -180,11 +251,14 @@ enum SidebarProjection {
         /// Nil when there is no chat to list (or, in a search, none that matches).
         var chats: SidebarChats?
         var sections: [SidebarSection] = []
+        /// The states under Pinned in a list grouped by state, in place of Chats and the projects.
+        var states: [SidebarStateSection] = []
 
         /// Rows in rendered order for keyboard navigation, nested tasks after their task: the rows
         /// a collapsed project, a collapsed family or "Show more" hides are not among them.
         var rows: [SidebarRow] {
-            (pinned + (chats?.rows ?? []) + sections.flatMap(\.rows)).flatMap(\.rowsWithChildren)
+            (pinned + (chats?.rows ?? []) + sections.flatMap(\.rows) + states.flatMap(\.rows))
+                .flatMap(\.rowsWithChildren)
         }
 
         /// A plain list in place of the sections, as the activity view lists its rows; only
@@ -202,7 +276,7 @@ enum SidebarProjection {
         /// at top level has none; the phone nests by this alone (docs/REMOTE_PROTOCOL.md §4.1).
         var nestingParents: [UUID: UUID] {
             var parents: [UUID: UUID] = [:]
-            for row in pinned + (chats?.allRows ?? []) + sections.flatMap(\.allRows) {
+            for row in pinned + (chats?.allRows ?? []) + sections.flatMap(\.allRows) + states.flatMap(\.allRows) {
                 guard case let .session(top) = row.content else { continue }
                 // The latest task shown at each level so far, the family's top at level 0.
                 var latest = [top.id]
@@ -230,6 +304,8 @@ enum SidebarProjection {
     ///   - waiting: tasks waiting on the person, which a collapsed family keeps showing.
     ///   - archivedParents: the task each archived task was started from
     ///     (`SessionStore.archivedParentIDs`), which `nest` follows past an archived parent.
+    ///   - state: each task's state, given to group the rows by state: Chats and the projects then
+    ///     list their rows, families as they nest there, under the states (`SidebarStateSection`).
     static func layout(
         visibleGroups: [WorkspaceGroup],
         allGroups: [WorkspaceGroup],
@@ -240,7 +316,8 @@ enum SidebarProjection {
         disclosure: SidebarDisclosure = SidebarDisclosure(),
         selection: WindowItem? = nil,
         waiting: Set<UUID> = [],
-        archivedParents: [UUID: UUID] = [:]
+        archivedParents: [UUID: UUID] = [:],
+        state: ((SessionRecord) -> TaskAttentionState)? = nil
     ) -> Layout {
         var keptInFamilies = waiting
         if case let .session(id)? = selection { keptInFamilies.insert(id) }
@@ -287,7 +364,10 @@ enum SidebarProjection {
 
         let chatRows = visibleChats.filter { !grouped.contains($0.id) }.map { SidebarRow(content: .session($0)) }
         pinned += chatRows.filter(\.isPinned)
-        let allChatRows = sorted(nested(chatRows.filter { !$0.isPinned } + chatSplitRows))
+        let chatList = nested(chatRows.filter { !$0.isPinned } + chatSplitRows)
+        // Grouped by state, the rows each list would show, with the list they belong to, sorted once in their states.
+        var listedRows = state == nil ? [] : chatList.map { $0.listed(from: .chats) }
+        let allChatRows = state == nil ? sorted(chatList) : []
         let chats = allChatRows.isEmpty ? nil : SidebarChats(
             rows: isFiltering ? allChatRows : visibleRows(
                 allChatRows, limit: disclosure.limit(for: SidebarChats.disclosureKey), selection: selection),
@@ -305,7 +385,12 @@ enum SidebarProjection {
                 .filter { !grouped.contains($0.id) }
                 .map { SidebarRow(content: .session($0)) }
             pinned += sessionRows.filter(\.isPinned)
-            let allRows = sorted(nested(sessionRows.filter { !$0.isPinned } + (splitRowsByGroup[key] ?? [])))
+            let list = nested(sessionRows.filter { !$0.isPinned } + (splitRowsByGroup[key] ?? []))
+            if state != nil {
+                listedRows += list.map { $0.listed(from: .project(key)) }
+                continue
+            }
+            let allRows = sorted(list)
             // A search lists a project only with rows to show: one whose matches all sit in a split
             // view under another project, or among the pinned rows, would be an empty heading.
             guard isFiltering ? !allRows.isEmpty : (shownGroup != nil || !allRows.isEmpty) else { continue }
@@ -324,7 +409,38 @@ enum SidebarProjection {
                 isCollapsed: isCollapsed, disclosureKey: disclosureKey
             ))
         }
-        return Layout(pinned: sorted(nested(pinned)), chats: chats, sections: sections)
+        let states = state.map {
+            stateSections(listedRows, state: $0, isFiltering: isFiltering, disclosure: disclosure, selection: selection)
+        } ?? []
+        return Layout(pinned: sorted(nested(pinned)), chats: chats, sections: sections, states: states)
+    }
+
+    /// `rows` under their states, each family under its most urgent task's, the most recently active
+    /// first in each; a state with no row is left out. A state collapses and lists rows as a project
+    /// does, and a search lists every match.
+    private static func stateSections(
+        _ rows: [SidebarRow], state: (SessionRecord) -> TaskAttentionState, isFiltering: Bool,
+        disclosure: SidebarDisclosure, selection: WindowItem?
+    ) -> [SidebarStateSection] {
+        let order = SidebarStateSection.order
+        var rowsByState: [TaskAttentionState: [SidebarRow]] = [:]
+        for row in rows {
+            var urgent = order.count - 1
+            func note(_ session: SessionRecord) { urgent = min(urgent, order.firstIndex(of: state(session)) ?? urgent) }
+            row.sessions.forEach(note)
+            row.children.forEach { $0.sessions.forEach(note) }
+            row.hiddenChildren.forEach(note)
+            rowsByState[order[urgent], default: []].append(row)
+        }
+        return order.compactMap { state in
+            guard let listed = rowsByState[state] else { return nil }
+            let allRows = sorted(listed)
+            let key = SidebarStateSection.disclosureKey(for: state)
+            let isCollapsed = !isFiltering && disclosure.collapsedKeys.contains(key)
+            let shown = isCollapsed ? [] : isFiltering ? allRows
+                : visibleRows(allRows, limit: disclosure.limit(for: key), selection: selection)
+            return SidebarStateSection(state: state, rows: shown, allRows: allRows, isCollapsed: isCollapsed)
+        }
     }
 
     /// The key a family's collapsed state is remembered under, beside the projects' keys: the task
@@ -458,6 +574,14 @@ enum SidebarProjection {
         return layout.sections.first { section in section.allRows.contains { $0.familyShows(item) } }
     }
 
+    /// The key the project or state whose rows hold what the window shows for `item` is collapsed
+    /// under, shown or not. A pinned row belongs to neither.
+    static func disclosureKey(holding item: WindowItem, in layout: Layout) -> String? {
+        if let section = section(holding: item, in: layout) { return section.disclosureKey }
+        guard !layout.pinned.contains(where: { $0.familyShows(item) }) else { return nil }
+        return layout.states.first { section in section.allRows.contains { $0.familyShows(item) } }?.disclosureKey
+    }
+
     /// The title a task row shows under `group`. A Yardlet fallback title repeats the folder it
     /// was made from, which the project row above already names; provider and user titles show
     /// as they are.
@@ -524,11 +648,13 @@ enum SidebarProjection {
         return rows.first { $0.sessions.contains { $0.id == id } }?.id
     }
 
+    /// The most recently active first. Each row's date is worked out once, not at every comparison: a
+    /// family's is its newest member's.
     private static func sorted(_ rows: [SidebarRow]) -> [SidebarRow] {
-        rows.sorted { lhs, rhs in
-            if lhs.sortDate == rhs.sortDate { return lhs.id.sortKey < rhs.id.sortKey }
-            return lhs.sortDate > rhs.sortDate
-        }
+        rows.map { (row: $0, date: $0.sortDate) }.sorted { lhs, rhs in
+            if lhs.date == rhs.date { return lhs.row.id.sortKey < rhs.row.id.sortKey }
+            return lhs.date > rhs.date
+        }.map(\.row)
     }
 }
 
@@ -557,22 +683,42 @@ extension WindowItem {
 /// each time. That changes how the tasks are listed only when a held task has been active since the
 /// hold began, and only then are those who list them told (`revision`): crossing the top alone draws
 /// neither the window nor its conversation again.
+///
+/// In a list grouped by state the shown row's tasks also keep the state they are listed under, so a
+/// message sent in a task far down Idle does not take it up to Working out of view.
 @MainActor @Observable
 final class SidebarOrderHold {
     /// Changes whenever the hold changes how the tasks are listed, so the listing is read again.
     private(set) var revision = 0
     @ObservationIgnored private var listedAt: [UUID: Date] = [:]
+    @ObservationIgnored private var listedStates: [UUID: TaskAttentionState] = [:]
 
     init() {}
 
     /// Holds `held` at the times they have now, in place of what was held; none lets the hold go.
-    /// `sessions` are the tasks as they are listed now.
-    func hold(_ held: [SessionRecord], listing sessions: [SessionRecord]) {
+    /// `sessions` are the tasks as they are listed now. `state` gives each task's state in a list
+    /// grouped by state, where the held tasks keep theirs too.
+    func hold(_ held: [SessionRecord], listing sessions: [SessionRecord],
+              state: ((SessionRecord) -> TaskAttentionState)? = nil) {
         let listedAt = Dictionary(held.map { ($0.id, $0.updatedAt) }, uniquingKeysWith: { first, _ in first })
-        guard listedAt != self.listedAt else { return }
+        let states = state.map { state in
+            Dictionary(held.map { ($0.id, state($0)) }, uniquingKeysWith: { first, _ in first })
+        } ?? [:]
+        guard listedAt != self.listedAt || states != listedStates else { return }
         let before = Self.listing(sessions, at: self.listedAt)
+        // A task let go from a state it has since left moves to its own.
+        let leavesState = !listedStates.isEmpty && sessions.contains { session in
+            listedStates[session.id].map { $0 != state?(session) } ?? false
+        }
         self.listedAt = listedAt
-        if Self.listing(sessions, at: listedAt) != before { revision += 1 }
+        listedStates = states
+        if leavesState || Self.listing(sessions, at: listedAt) != before { revision += 1 }
+    }
+
+    /// The states the held tasks are listed under in a list grouped by state.
+    var heldStates: [UUID: TaskAttentionState] {
+        _ = revision
+        return listedStates
     }
 
     /// `sessions` as the sidebar orders them: a held task that has been active since the hold began
