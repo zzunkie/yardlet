@@ -36,9 +36,10 @@ extension RemoteServer {
             terminals[terminalID] = RemoteServerTerminal(connection: connection, deviceID: deviceID, taskID: taskID, permit: permit)
             let error = await bridge.openTerminal(taskID: taskID, terminalID: terminalID, columns: columns, rows: rows,
                                                   permit: permit) { [weak self] update in
-                switch permit.enqueue(update) {
-                case .notify: Task { await self?.receiveTerminalUpdates(terminalID) }
-                case .overflow: Task { await self?.endTerminal(terminalID, reason: "outputOverflow") }
+                guard let self else { permit.revoke(); return }
+                switch await permit.enqueue(update) {
+                case .notify: await self.receiveTerminalUpdates(terminalID)
+                case .overflow: await self.endTerminal(terminalID, reason: "outputOverflow")
                 case .queued, .ended: break
                 }
             }
@@ -69,7 +70,17 @@ extension RemoteServer {
             return
         }
         var error: RemoteError?
+        var response = RemoteResponse(re: requestID)
         switch request {
+        case let .terminalStatus(taskID, _):
+            switch await bridge.terminalStatus(taskID: taskID, terminalID: terminalID, permit: session.permit) {
+            case let .success(status):
+                if session.permit.isValid {
+                    response.isAtPrompt = status.isAtPrompt
+                    response.isRunningProgram = status.isRunningProgram
+                } else { error = RemoteError(.notAllowed) }
+            case let .failure(failure): error = failure
+            }
         case let .terminalInput(taskID, _, data):
             error = await bridge.terminalInput(taskID: taskID, terminalID: terminalID, data: data, permit: session.permit)
             auditTerminal("terminalInput", device: deviceID, task: taskID, bytes: data.count, result: error?.code.rawValue ?? "ok")
@@ -89,7 +100,7 @@ extension RemoteServer {
             }
         default: error = RemoteError(.badRequest)
         }
-        respond(error.map { .failure(requestID, $0) } ?? RemoteResponse(re: requestID), to: connection)
+        respond(error.map { .failure(requestID, $0) } ?? response, to: connection)
     }
 
     private func receiveTerminalUpdates(_ terminalID: String) {
@@ -168,7 +179,7 @@ private extension RemoteRequest {
     var terminalID: String? {
         switch self {
         case let .terminalInput(_, id, _), let .terminalResize(_, id, _, _), let .closeTerminal(_, id),
-             let .terminalOutputAck(_, id, _): id
+             let .terminalOutputAck(_, id, _), let .terminalStatus(_, id): id
         default: nil
         }
     }
