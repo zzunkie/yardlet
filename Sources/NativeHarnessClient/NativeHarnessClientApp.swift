@@ -692,6 +692,7 @@ struct NativeHarnessClientApp: App {
                     }))
             }
         }
+        .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1180, height: 780)
         .handlesExternalEvents(matching: [])
         .commandsRemoved()

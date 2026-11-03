@@ -13,7 +13,8 @@ struct YardletTaskCommandSet {
     var togglePinned: (TaskCommandTargets.PinTarget) -> Void = { _ in }
     var markUnread: (UUID) -> Void = { _ in }
     var archive: (UUID) -> Void = { _ in }
-    var showArchivedTasks: () -> Void = {}
+    /// Nil where the window has no archived list (another Mac's window).
+    var showArchivedTasks: (() -> Void)? = {}
     /// File › New task: the new-task screen, as the title bar's button opens it. Nil while a sheet
     /// or alert is up.
     var newTask: (() -> Void)? = nil
@@ -246,8 +247,8 @@ struct YardletTaskCommands: Commands {
 
             Divider()
 
-            Button(L10n.string("Archived tasks")) { task?.showArchivedTasks() }
-                .disabled(task == nil)
+            Button(L10n.string("Archived tasks")) { task?.showArchivedTasks?() }
+                .disabled(task?.showArchivedTasks == nil)
         }
     }
 }
