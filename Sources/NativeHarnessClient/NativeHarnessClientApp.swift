@@ -499,6 +499,10 @@ struct NativeHarnessClientApp: App {
                             await remoteHosts.allowOnce(hostID: hostID, taskID: taskID, requestID: requestID)
                         }
                         remoteHosts.onAttention = { [weak model] host, event in
+                            if let model, let withdrawn = RemoteAttentionNotice.withdrawn(hostID: host.id, event: event) {
+                                model.systemNotificationCenter.removeNotifications(identifiers: [withdrawn])
+                                return
+                            }
                             // The task shown in the window in front needs no notification.
                             if NSApp.isActive, NSApp.keyWindow?.identifier?.rawValue.hasPrefix(RemoteHostWindow.sceneID) == true,
                                host.selection == .task(event.taskId ?? "") { return }
@@ -680,6 +684,12 @@ struct NativeHarnessClientApp: App {
             YardletWindowPreferences(usesVisualFixture: model.usesVisualFixture) {
                 RemoteHostWindow(hostID: hostID, directory: remoteHosts)
                     .imageViewerHost()
+                    // ⌘, shows this Mac's Settings in its main window, as another Mac's window has none of its own.
+                    .focusedSceneValue(\.yardletSettingsPresented, Binding(get: { false }, set: { requested in
+                        guard requested else { return }
+                        model.isSettingsRequested = true
+                        if !TaskResourceUsageWindow.bringMainWindowForward() { TaskResourceUsageWindow.reopenMainWindow?() }
+                    }))
             }
         }
         .defaultSize(width: 1180, height: 780)

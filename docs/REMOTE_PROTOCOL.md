@@ -275,9 +275,12 @@ Clears the task's unread result (idempotent). Errors: `notFound`.
   its description, else the first line of its command). Credentials are masked with `•••` (`Bearer …`,
   `TOKEN=…`, `--password …`, `user:password@` in URLs, long key-like strings). Never file contents or
   diffs. Absent when the Mac has nothing to say.
+- `announces: false` on a change to `unread` from `active` or `waiting` that the Mac does not announce itself: a
+  turn the person did not ask for, one a queued message follows, or one that leaves a background agent running.
+  Absent otherwise, and from a Mac that does not say.
 - The phone makes its own notifications from these; the Mac uses no push service. Suggested: notify
   on `waiting` (approval or question) and on `active` → `unread` (finished; `indicator` `failed` when
-  it failed).
+  it failed) unless `announces` is false, and take a notification back once its task stops waiting.
 
 ### 5.3 Conversation events
 
@@ -609,6 +612,8 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
   (§15.23).
 - 2026-11-03, v2 only: a task's browser tabs, a watched tab's frames and the person's input to it (§15.25), and `tabId`
   on a browser handoff's item (§15.18). A limit on the messages the Mac holds unhandled per connection and in all (§7).
+- 2026-11-03: `announces` (§5.2) on a finish the Mac does not announce itself, which pushes (§16) no longer ring for;
+  `createTask` takes `"chats"` before the snapshot lists Chats (§15.5).
 
 ## 11. v2 transport
 
@@ -943,8 +948,8 @@ characters). Errors as §15.3.
 {"re": "14", "ok": true, "taskId": "9D02…"}
 ```
 
-- Starts a task as the Mac's new-task composer would with that project (or Chats) chosen and the text
-  typed: its harness, model, account and worktree setting as they are now on the Mac. The new task is listed
+- Starts a task as the Mac's new-task composer would with that project (or Chats, `projectId` `"chats"`, which
+  the Mac takes whether or not its snapshot lists Chats yet) chosen and the text typed: its harness, model, account and worktree setting as they are now on the Mac. The new task is listed
   (a `tasksChanged` event) before this response arrives, so the phone can subscribe to it at once.
 - A command (§7). Errors: `notFound` (no such project, or it cannot take tasks), `emptyMessage`,
   `tooLarge`, `unsupportedCommand`, `unavailable` (no harness, or the project's folder is gone), `busy`,
@@ -1688,8 +1693,9 @@ stays on the Mac.
 
 The Mac pushes to a device that registered (§15.6) and **has no open v2 connection**, for these
 `attention` changes (§5.2): a task starts waiting or waits on a newer request (urgent); a task becomes
-unread after `active` or `waiting` (finished or failed; urgent); a task stops waiting without becoming
-unread (withdraw a notification; not urgent).
+unread after `active` or `waiting` (finished or failed; urgent), unless the change says `announces: false`; a task
+stops waiting without becoming unread, or becomes unread with `announces: false` (withdraw a notification; not
+urgent).
 
 `data.y` is `nonce (12 random bytes) ‖ ciphertext ‖ tag (16 bytes)`, base64url: ChaCha20-Poly1305 with the
 device's push key, associated data the UTF-8 bytes of `yardlet-push/1`, over the UTF-8 JSON
@@ -1797,7 +1803,8 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   `forgetDevice` (§15.6) when the host can be reached and deletes all three; a cache folder whose host is no longer
   saved is removed when Yardlet starts.
 - **Notifications:** while a host's window is open, a task that starts waiting, finishes or fails posts a notification
-  named after the host, which opens the task there. An approval's offers "Allow once", sent as `answerApproval`
+  named after the host, which opens the task there. A finish with `announces: false` (§5.2) posts none, and a task
+  that stops waiting takes its notification back, as the host's own notifications do. An approval's offers "Allow once", sent as `answerApproval`
   `allowOnce` (§4.4): the host answers with its card's narrowest allow, as its own notification does, and where it
   does not take it the notification opens the task.
 - **In use:** a host whose snapshot carries `presence: true` takes `{"type": "presence", "active": true}` (or `false`);

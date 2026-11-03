@@ -150,9 +150,13 @@ public protocol RemoteBridge: AnyObject, Sendable {
     /// The person's input to a tab, through the paths the Mac's own browser panel and the agent's tools use, checking
     /// `permit` before each step it sends: the watch it came under may end meanwhile.
     func tabInput(taskID: String, tabID: String, input: RemoteTabInput, permit: RemoteTabPermit) async -> RemoteError?
+    /// Whether the Mac announces the finish of a task that just became unread, as its own notification would (§5.2).
+    func announcesFinish(of taskID: String) async -> Bool
 }
 
 extension RemoteBridge {
+    public func announcesFinish(of taskID: String) async -> Bool { true }
+
     public func newTaskOptions(projectID: String?, harness: String?, settings: [String: String]) async -> Result<RemoteNewTaskOptions, RemoteError> {
         .failure(RemoteError(.unavailable))
     }
@@ -1474,7 +1478,14 @@ public actor RemoteServer {
         let previous = published
         published = snapshot
         guard let previous else { return }
-        let changes = Self.taskChanges(from: previous, to: snapshot)
+        var changes = Self.taskChanges(from: previous, to: snapshot)
+        // A finish the Mac keeps quiet about is not announced elsewhere either. Asked only of the tasks that just finished.
+        for index in changes.attention.indices {
+            let event = changes.attention[index]
+            guard event.state == .unread, event.previousState == .active || event.previousState == .waiting,
+                  let taskID = event.taskId, !(await bridge.announcesFinish(of: taskID)) else { continue }
+            changes.attention[index].announces = false
+        }
         for (id, connection) in connections where connection.receivesTaskEvents {
             if let event = changes.tasks { send(event, to: id) }
             for event in changes.attention { send(event, to: id) }
@@ -1640,10 +1651,13 @@ public actor RemoteServer {
     }
 
     /// Whether an attention change is worth waking a phone for: a request waits, a task finished or
-    /// failed, or a request stopped waiting (withdraw its notification).
+    /// failed (unless the Mac keeps that finish quiet), or a request stopped waiting (withdraw its notification).
     static func pushes(_ event: RemoteEvent) -> (push: Bool, urgent: Bool) {
         switch (event.previousState, event.state) {
         case (_, .waiting?): (true, true)
+        // A finish the Mac keeps quiet about rings nothing; one that ends a wait still withdraws its notification.
+        case (.active?, .unread?) where event.announces == false: (false, false)
+        case (.waiting?, .unread?) where event.announces == false: (true, false)
         case (.active?, .unread?), (.waiting?, .unread?): (true, true)
         case (.waiting?, _): (true, false)
         default: (false, false)

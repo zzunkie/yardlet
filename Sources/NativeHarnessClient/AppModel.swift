@@ -377,6 +377,9 @@ final class AppModel {
 #endif
     /// Asks the window to show archived tasks: a notification led to a task that was archived.
     var archivedTasksRevealRequest = 0
+    /// ⌘, from a window that has no Settings of its own (another Mac's window): the main window that comes forward
+    /// shows them and clears it.
+    var isSettingsRequested = false
     /// An explicit navigation outside the main window asks it to reveal Tasks.
     /// Background index selection changes do not send this request.
     var taskSurfaceRevealRequest = 0

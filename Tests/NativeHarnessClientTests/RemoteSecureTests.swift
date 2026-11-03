@@ -386,6 +386,12 @@ final class RemoteSecureTests: XCTestCase {
         XCTAssertTrue(RemoteServer.pushes(event(.waiting, .active)) == (true, false))
         XCTAssertTrue(RemoteServer.pushes(event(.idle, .active)) == (false, false))
         XCTAssertTrue(RemoteServer.pushes(event(.unread, .idle)) == (false, false))
+        // A finish the Mac keeps quiet about rings nothing; one that ends a wait takes its notification back.
+        var quiet = event(.active, .unread)
+        quiet.announces = false
+        XCTAssertTrue(RemoteServer.pushes(quiet) == (false, false))
+        quiet.previousState = .waiting
+        XCTAssertTrue(RemoteServer.pushes(quiet) == (true, false))
     }
 
     // MARK: - Sockets (§11.1)

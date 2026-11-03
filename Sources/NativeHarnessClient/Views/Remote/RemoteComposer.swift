@@ -68,6 +68,8 @@ struct RemoteComposer: View {
             isFocused: $isFocused,
             onSubmit: { send(isRunning ? returnMode : nil) },
             onAlternateSubmit: isRunning && policy.steers ? { send(preferred.other) } : nil,
+            // Escape stops the running turn, as the local composer's does.
+            onEscape: { if isRunning, model.isConnected { model.send(.stopTurn(taskID: taskID)) } },
             onCommandQueryChange: { old, query in
                 // Opening the typed list reads the commands again, as the local list reads what it shows.
                 if old == nil, query != nil { Task { await readCommands() } }
