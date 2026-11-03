@@ -6,7 +6,12 @@ const encoder = new TextEncoder();
 
 export type PushError = "unregistered" | "invalid" | "rateLimited" | "unavailable" | "notConfigured";
 
+/** Where a push goes: FCM, or APNs for an iOS build signed for production or for development. */
+export type PushProvider = "fcm" | "apns" | "apns-sandbox";
+const PROVIDERS: readonly string[] = ["fcm", "apns", "apns-sandbox"] satisfies PushProvider[];
+
 export interface Push {
+  provider: PushProvider;
   to: string;
   urgent: boolean;
   collapse?: string;
@@ -37,16 +42,17 @@ export function fcmCredentials(env: Env): FcmCredentials | null {
   }
 }
 
-/** Reads a relay `push` message; null when a field is missing or wrong. */
+/** Reads a relay `push` message; null when a field is missing or wrong. No `provider` means FCM. */
 export function parsePush(message: Record<string, unknown>): Push | null {
-  const { to, urgent, collapse, ttl, data } = message;
+  const { provider = "fcm", to, urgent, collapse, ttl, data } = message;
+  if (typeof provider !== "string" || !PROVIDERS.includes(provider)) return null;
   if (typeof to !== "string" || to === "") return null;
   if (urgent !== undefined && typeof urgent !== "boolean") return null;
-  if (collapse !== undefined && (typeof collapse !== "string" || collapse.length > 64)) return null;
+  if (collapse !== undefined && (typeof collapse !== "string" || encoder.encode(collapse).length > 64)) return null;
   if (ttl !== undefined && (typeof ttl !== "number" || !Number.isInteger(ttl) || ttl < 0)) return null;
   if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
   if (!Object.values(data).every((value) => typeof value === "string")) return null;
-  return { to, urgent: urgent === true, collapse, ttl, data: data as Record<string, string> };
+  return { provider: provider as PushProvider, to, urgent: urgent === true, collapse, ttl, data: data as Record<string, string> };
 }
 
 // One access token per isolate, reused until shortly before it expires.
@@ -105,7 +111,7 @@ async function requestAccessToken(credentials: FcmCredentials): Promise<{ token:
 }
 
 /** Sends `push.data` as an FCM HTTP v1 data message; null when FCM accepted it. */
-export async function sendPush(credentials: FcmCredentials, push: Push): Promise<PushError | null> {
+export async function sendFcmPush(credentials: FcmCredentials, push: Push): Promise<PushError | null> {
   try {
     const token = await accessToken(credentials);
     const android: Record<string, string> = { priority: push.urgent ? "HIGH" : "NORMAL" };
@@ -145,11 +151,11 @@ function fcmErrorCode(body: unknown): string | undefined {
   return undefined;
 }
 
-function pemBody(pem: string): Uint8Array {
+export function pemBody(pem: string): Uint8Array {
   const base64 = pem.replace(/-----(BEGIN|END) [A-Z ]+-----/g, "").replace(/\s+/g, "");
   return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
 }
 
-function base64UrlJson(value: unknown): string {
+export function base64UrlJson(value: unknown): string {
   return toBase64Url(encoder.encode(JSON.stringify(value)));
 }

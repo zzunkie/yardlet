@@ -296,7 +296,10 @@ final class RemoteSecureTests: XCTestCase {
         let sent = PushRecorder()
         await harness.server.setPushSender { await sent.record($0) }
         let phone = try await harness.pairedPhone()
-        let registered = try await phone.request(#"{"id":"1","type":"registerPush","provider":"fcm","token":"fcm-token-1"}"#)
+        let unknown = try await phone.request(#"{"id":"0","type":"registerPush","provider":"gcm","token":"t"}"#)
+        XCTAssertEqual(unknown.error?.code, .badRequest, "Only FCM and APNs (§15.6)")
+        let deviceToken = String(repeating: "0f", count: 32)
+        let registered = try await phone.request(#"{"id":"1","type":"registerPush","provider":"apns-sandbox","token":"\#(deviceToken)"}"#)
         let key = try XCTUnwrap(registered.pushKey.flatMap(RemoteEncoding.data(base64url:)))
         XCTAssertEqual(registered.pushKeyId, RemotePushSeal.keyID(key))
 
@@ -310,9 +313,16 @@ final class RemoteSecureTests: XCTestCase {
         try await waitUntil { await harness.server.status.connectedDeviceIDs.isEmpty }
         try await harness.change(task: "A", to: .waiting, request: "r2")
         let push = try await sent.first()
-        XCTAssertEqual(push.token, "fcm-token-1")
+        XCTAssertEqual(push.provider, "apns-sandbox")
+        XCTAssertEqual(push.token, deviceToken)
         XCTAssertTrue(push.urgent)
         XCTAssertEqual(push.collapse, RemotePushSeal.collapseKey(taskID: "A"))
+        // The relay's message names the provider, which picks FCM or APNs (§14.2).
+        let message = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(RemoteRelayClient.pushMessage(push, id: "p1").utf8)) as? NSDictionary)
+        XCTAssertEqual(message, [
+            "t": "push", "id": "p1", "provider": "apns-sandbox", "to": deviceToken, "urgent": true, "collapse": push.collapse,
+            "ttl": 3600, "data": ["v": "1", "k": RemotePushSeal.keyID(key), "y": push.sealed]
+        ] as NSDictionary)
         let opened = try RemotePushSeal.open(push.sealed, key: key)
         let event = try JSONDecoder().decode(RemoteEvent.self, from: opened)
         XCTAssertEqual(event.state, .waiting)

@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
-import { fcmCredentials, parsePush, sendPush, type PushError } from "./fcm";
+import { apnsCredentials, sendApnsPush } from "./apns";
+import { fcmCredentials, parsePush, sendFcmPush, type Push, type PushError } from "./fcm";
 import { toBase64Url, verifyHostAuth } from "./keys";
 
 /** Phones the Mac answered. */
@@ -212,8 +213,8 @@ export class Room extends DurableObject<Env> {
   private async push(ws: WebSocket, state: MacState, message: Record<string, unknown>): Promise<PushError | null> {
     const push = parsePush(message);
     if (!push) return "invalid";
-    const credentials = fcmCredentials(this.env);
-    if (!credentials) return "notConfigured";
+    const send = pushSender(this.env, push);
+    if (!send) return "notConfigured";
     const now = Date.now();
     if (now - state.pushWindowStart >= PUSH_WINDOW_MS) {
       state.pushWindowStart = now;
@@ -222,7 +223,7 @@ export class Room extends DurableObject<Env> {
     if (state.pushCount >= PUSH_LIMIT) return "rateLimited";
     state.pushCount += 1;
     ws.serializeAttachment(state);
-    return sendPush(credentials, push);
+    return send();
   }
 
   private left(ws: WebSocket, code: number): void {
@@ -282,6 +283,16 @@ export class Room extends DurableObject<Env> {
     if (Number.isFinite(next)) await this.ctx.storage.setAlarm(next);
     else await this.ctx.storage.deleteAlarm();
   }
+}
+
+/** Sends `push` through its provider; null when the relay has no credentials for that provider. */
+function pushSender(env: Env, push: Push): (() => Promise<PushError | null>) | null {
+  if (push.provider === "fcm") {
+    const credentials = fcmCredentials(env);
+    return credentials && (() => sendFcmPush(credentials, push));
+  }
+  const credentials = apnsCredentials(env);
+  return credentials && (() => sendApnsPush(credentials, push));
 }
 
 function isAnswered(state: PhoneState): boolean {

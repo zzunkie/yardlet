@@ -175,7 +175,7 @@ public enum RemotePushSeal {
         return try ChaChaPoly.open(box, using: SymmetricKey(data: key), authenticating: associatedData)
     }
 
-    /// FCM's collapse key for a task: its first 16 hex characters of SHA-256.
+    /// A task's push collapse key (FCM's `collapse_key`, APNs' `apns-collapse-id`): its first 16 hex characters of SHA-256.
     public static func collapseKey(taskID: String) -> String {
         RemoteEncoding.hex(Data(SHA256.hash(data: Data(taskID.utf8))).prefix(8))
     }
