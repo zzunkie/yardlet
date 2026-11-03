@@ -32,6 +32,9 @@ struct TaskSurfaceControls: View {
     /// The new-task screen has no task for a rail or a review: its header has the terminal and the side
     /// panel, and `⌘1`, `⌘3`, `⌘4` (the Claude app's New session header has Terminal, Browser and Files).
     var offersSessionRail = true
+    /// Panels the window cannot show yet (another Mac's window, for a panel its host does not serve): their buttons and
+    /// keys show dimmed.
+    var unavailableSurfaces: Set<TaskSurface> = []
     @Environment(\.taskKeyboardFocus) private var keyboardFocus
     @AppStorage(TerminalLocation.key) private var terminalLocation = TerminalLocation.bottom.rawValue
 
@@ -58,7 +61,7 @@ struct TaskSurfaceControls: View {
         .background {
             // Keep existing commands registered independently of the visible panel toggles.
             if registersShortcuts {
-                ForEach(shortcutSurfaces) { surface in
+                ForEach(shortcutSurfaces.filter { !unavailableSurfaces.contains($0) }) { surface in
                     Button { act(surface) } label: { EmptyView() }
                         .keyboardShortcut(surface.keyboardShortcut, modifiers: .command)
                         .focusable(false).hidden().accessibilityHidden(true)
@@ -88,6 +91,7 @@ struct TaskSurfaceControls: View {
         }
         .buttonStyle(.borderless)
         .parityPointer()
+        .disabled(unavailableSurfaces.contains(surface))
         .modifier(OptionalSurfaceFocus(binding: focusedSurface, surface: surface))
         .accessibilityLabel(controlTitle(surface))
         .accessibilityAddTraits(isActive(surface) ? .isSelected : [])
