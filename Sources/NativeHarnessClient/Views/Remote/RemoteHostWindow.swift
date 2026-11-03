@@ -841,7 +841,8 @@ struct RemoteTaskView: View {
         .environment(\.taskAreaHeader, TaskAreaHeader(height: ParityTheme.titleBarHeight, isTitleBar: true,
                                                       content: AnyView(RemoteTitleBar(context: titleBar) { header })))
         // The browser's panel follows the host's watch: a handoff's Show Tab opens its tab, the panel's ✕ closes it.
-        .onChange(of: showsBrowser) { _, shows in
+        // Also as the view appears: a Show Tab answered before the window drew the task opens its panel.
+        .onChange(of: showsBrowser, initial: true) { _, shows in
             let browser = TaskSurface.browser.rawValue
             if shows, panels.trailingSurfaceID != browser { showSidePanelTab(browser) }
             if !shows, panels.trailingTabs.contains(browser) {
