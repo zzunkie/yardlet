@@ -2045,6 +2045,7 @@ final class SessionToolTests: XCTestCase {
     /// A child or subagent starts on the account automatic assignment picks among the signed-in accounts it
     /// may use, and the result says which and why. An account the agent names is taken
     /// only when it is one of those: one left out, one signed out and another harness's are refused.
+    /// The person's new task on Automatic starts on the same pick.
     func testChildrenStartOnTheAccountWithMostHeadroomAndANamedAccountMustBeOneAutomaticAssignmentMayUse() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "session-accounts-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -2112,6 +2113,24 @@ final class SessionToolTests: XCTestCase {
             XCTAssertTrue(refused.isError, account)
             XCTAssertTrue(refused.text.contains(refusal), refused.text)
         }
+
+        // The person's own new task, while the account menu says Automatic, starts on the same pick and
+        // keeps why; an account the person chooses stands instead.
+        XCTAssertEqual(model.newTaskAccountPreview(harness: .claudeCode, model: nil)?.accountID, "roomy")
+        let picked = await model.newTaskAccount(harness: .claudeCode, model: nil)
+        let start = try XCTUnwrap(picked)
+        XCTAssertEqual(start.connection, roomy)
+        let started = try await model.createTask(NewTaskDraft.Submission(
+            originalText: "Tidy the changelog", attachments: [], harness: .claudeCode, workspaceURL: fixture.app.primaryRoot,
+            projectID: fixture.app.id, runtimeURL: URL(filePath: "/usr/bin/true"), connection: start.connection,
+            accountAssignment: start.assignment, selectsTask: false))
+        let own = try XCTUnwrap(started)
+        XCTAssertEqual(own.connection, roomy)
+        XCTAssertEqual(model.accountAssignments.assignment(for: own.id)?.origin, .automatic)
+        store.choose(try XCTUnwrap(store.choices(for: [.claudeCode]).first { $0.connection?.id == "busy" }))
+        let chosen = await model.newTaskAccount(harness: .claudeCode, model: nil)
+        XCTAssertNil(chosen, "The next task starts on the account the person chose")
+        XCTAssertNil(model.newTaskAccountPreview(harness: .claudeCode, model: nil))
         await model.shutdown()
     }
 

@@ -34,8 +34,8 @@ struct TaskAccountSelectionView: View {
     }
 }
 
-/// The new-task account chip: the account the next task starts on, and the shared account list
-/// to choose another, add one or manage them.
+/// The new-task account chip: the account the next task starts on, or Automatic, and the shared
+/// account list to choose another, add one or manage them.
 struct ProviderConnectionPicker: View {
     @Bindable var store: ProviderConnectionStore
     let harness: HarnessKind
@@ -48,22 +48,31 @@ struct ProviderConnectionPicker: View {
     private var selectedChoice: AccountChoice? {
         store.choices(for: [harness]).first { $0.connection?.id == store.selection[harness] }
     }
+    private var title: String {
+        if store.startsNewTasksAutomatically(for: harness) { return L10n.string("Automatic") }
+        return selectedChoice?.composerTitle ?? L10n.string("Account unavailable")
+    }
+    private var accessibilityTitle: String {
+        if store.startsNewTasksAutomatically(for: harness) { return L10n.string("Automatic") }
+        return selectedChoice?.title ?? L10n.string("Account unavailable")
+    }
     var body: some View {
         Button { isPresented.toggle() } label: {
             HStack(spacing: 5) {
                 Image(systemName: "person.crop.circle")
-                Text(selectedChoice?.composerTitle ?? L10n.string("Account unavailable")).lineLimit(1)
+                Text(title).lineLimit(1)
                 Image(systemName: "chevron.down").font(.system(size: 8))
             }
         }
         .font(.caption).buttonStyle(.borderless).parityPointer()
         .frame(maxWidth: 190, alignment: .leading)
-        .help(selectedChoice?.title ?? L10n.string("Account unavailable"))
+        .help(accessibilityTitle)
         .accessibilityLabel(L10n.string("Choose account"))
-        .accessibilityValue(selectedChoice?.title ?? L10n.string("Account unavailable"))
+        .accessibilityValue(accessibilityTitle)
         .popover(isPresented: $isPresented) {
             AccountList(mode: .newTask(harness), store: store, runtimeSelections: runtimeSelections,
                 onChoose: { store.choose($0); isPresented = false },
+                onChooseAutomatic: { store.chooseAutomaticNewTaskAccount(for: harness); isPresented = false },
                 onConnect: { isPresented = false; onConnect($0) },
                 onAdd: { _ in isPresented = false; onAdd() },
                 onManage: { isPresented = false; onManage() },

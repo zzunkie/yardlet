@@ -75,10 +75,12 @@ enum AccountListProjection {
         AccountGroupProjection.groups(from: choices)
     }
 
-    /// The row marked as chosen: the next new task's account, or the account the task runs under.
+    /// The row marked as chosen: the next new task's account, none while it starts on the one automatic
+    /// assignment picks, or the account the task runs under.
     static func isSelected(_ choice: AccountChoice, mode: AccountListMode, store: ProviderConnectionStore) -> Bool {
         if let session = mode.session { return choice.connection == session.connection }
-        return store.selection[choice.harness] == choice.connection?.id
+        return !store.startsNewTasksAutomatically(for: choice.harness)
+            && store.selection[choice.harness] == choice.connection?.id
     }
 
     /// Whether choosing the row does something. A task moves only to another account the last

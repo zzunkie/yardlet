@@ -113,6 +113,51 @@ import XCTest
                      "Answers equal to the default leave nothing behind")
     }
 
+    /// The person's new tasks start on Automatic once more than one account is in automatic assignment.
+    /// An account the person chooses then stands until they choose Automatic again; with one account
+    /// nothing changes. Turned off in Settings, the menu is as before and only the setting is kept.
+    func testThePersonsNewTasksStartOnAutomaticUntilTheyChooseAnAccountOrTurnItOff() throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "account-routing-\(UUID().uuidString)")
+        roots.append(root)
+        let native = root.appending(path: "native")
+        try FileManager.default.createDirectory(at: native.appending(path: "projects"), withIntermediateDirectories: true)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("new-task-automatic")))
+        let store = ProviderConnectionStore(defaults: defaults)
+        store.defaultLoginEnvironment = ["CLAUDE_CONFIG_DIR": native.path]
+        let nativeChoice = AccountChoice(harness: .claudeCode, connection: nil, snapshot: nil)
+        XCTAssertFalse(store.offersAutomaticNewTaskAccount(for: .claudeCode), "One account: nothing to choose among")
+
+        let home = root.appending(path: "work")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: home.appending(path: "projects"),
+                                                   withDestinationURL: native.appending(path: "projects"))
+        let work = ProviderConnection(id: "work", name: "work", harness: .claudeCode, providerID: nil,
+                                      homePath: home.path, credentialSelector: nil)
+        try store.save(work)
+        XCTAssertTrue(store.startsNewTasksAutomatically(for: .claudeCode))
+        XCTAssertFalse(store.startsNewTasksAutomatically(for: .codex))
+
+        store.choose(AccountChoice(harness: .claudeCode, connection: work, snapshot: nil))
+        XCTAssertFalse(store.startsNewTasksAutomatically(for: .claudeCode), "The account the person chose stands")
+        XCTAssertEqual(store.selection[.claudeCode], "work")
+        XCTAssertFalse(ProviderConnectionStore(defaults: defaults).startsNewTasksAutomatically(for: .claudeCode),
+                       "The choice is remembered")
+        store.chooseAutomaticNewTaskAccount(for: .claudeCode)
+        XCTAssertTrue(store.startsNewTasksAutomatically(for: .claudeCode))
+        XCTAssertNil(defaults.object(forKey: ProviderConnectionStore.chosenNewTaskAccountsKey))
+
+        store.choose(nativeChoice)
+        store.setPicksNewTaskAccount(false)
+        XCTAssertFalse(store.offersAutomaticNewTaskAccount(for: .claudeCode))
+        store.choose(AccountChoice(harness: .claudeCode, connection: work, snapshot: nil))
+        XCTAssertEqual(defaults.object(forKey: ProviderConnectionStore.picksNewTaskAccountKey) as? Bool, false)
+        XCTAssertNil(defaults.object(forKey: ProviderConnectionStore.chosenNewTaskAccountsKey),
+                     "Off keeps only the setting: no account chosen instead of Automatic")
+        store.setPicksNewTaskAccount(true)
+        XCTAssertTrue(store.startsNewTasksAutomatically(for: .claudeCode))
+        XCTAssertNil(defaults.object(forKey: ProviderConnectionStore.picksNewTaskAccountKey))
+    }
+
     // MARK: - Fixtures
 
     private func session(used: Double, resetsIn days: Double? = nil) -> AccountUsageMetric {

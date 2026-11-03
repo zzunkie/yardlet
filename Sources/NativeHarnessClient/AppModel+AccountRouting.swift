@@ -2,7 +2,8 @@ import Foundation
 import YardletAgentTools
 
 // Automatic account assignment (docs/NATIVE_SESSION_STORAGE.md, "Choosing an additional account"): the account a task an agent starts runs on (a
-// child task, a subagent, a suggestion the person starts), the account a schedule's run goes to when
+// child task, a subagent, a suggestion the person starts), the account a new task the person starts
+// runs on while its account menu says Automatic, the account a schedule's run goes to when
 // its own is nearly spent, and `list_accounts`, which shows the
 // agent the accounts of a harness, their limits and the one Yardlet would pick. The rule is
 // `AccountRouting`; which accounts it may use is the person's
@@ -39,14 +40,36 @@ extension AppModel {
                     runningTasks: tasksRunning(on: choice.connection, harness: harness), at: now)))
             }
         }
+        return .success(automaticStart(harness: harness, model: model, now: now))
+    }
+
+    /// The account `AccountRouting.pick` picks for a task on `model` from the readings at hand, else the
+    /// account new tasks of the harness start on.
+    func automaticStart(harness: HarnessKind, model: String?, now: Date) -> AccountStart {
         if let pick = AccountRouting.pick(automaticAssignmentCandidates(harness: harness), model: model, now: now) {
-            return .success(AccountStart(connection: pick.choice.connection,
-                assignment: AccountAssignment(choice: pick.choice, origin: .automatic, pick: pick, at: now)))
+            return AccountStart(connection: pick.choice.connection,
+                assignment: AccountAssignment(choice: pick.choice, origin: .automatic, pick: pick, at: now))
         }
         let fallback = connections.selected(for: harness)
-        return .success(AccountStart(connection: fallback, assignment: AccountAssignment(
+        return AccountStart(connection: fallback, assignment: AccountAssignment(
             choice: accountChoice(harness: harness, connection: fallback), origin: .newTaskAccount,
-            runningTasks: tasksRunning(on: fallback, harness: harness), at: now)))
+            runningTasks: tasksRunning(on: fallback, harness: harness), at: now))
+    }
+
+    /// The account a new task the person starts on `harness` runs on, when its new-task account is
+    /// Automatic (`ProviderConnectionStore.startsNewTasksAutomatically`): the one `assignAccount` picks,
+    /// after the same check of the readings. Nil starts it on the account new tasks start on, as before.
+    func newTaskAccount(harness: HarnessKind, model: String?) async -> AccountStart? {
+        guard connections.startsNewTasksAutomatically(for: harness),
+              case let .success(start) = await assignAccount(harness: harness, model: model, requested: nil) else { return nil }
+        return start
+    }
+
+    /// The account `newTaskAccount` would pick now from the readings at hand, for the composer to say
+    /// before the task is sent; nil when the next task does not start on an automatic pick.
+    func newTaskAccountPreview(harness: HarnessKind, model: String?) -> AccountAssignment? {
+        guard connections.startsNewTasksAutomatically(for: harness) else { return nil }
+        return automaticStart(harness: harness, model: model, now: Date()).assignment
     }
 
     /// The account to use instead of `current` for work nobody watches start, a schedule's run: when the

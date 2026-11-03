@@ -267,6 +267,11 @@ final class ProviderConnectionStore {
     /// The person's own answers to which accounts automatic assignment may use,
     /// by `AccountChoice.id`. An account without one follows `isInAutomaticAssignmentByDefault`.
     private(set) var automaticAssignment: [String: Bool] = [:]
+    /// Settings › Accounts: whether the person's new tasks start, by default, on the account
+    /// automatic assignment picks (`startsNewTasksAutomatically`). On unless the person turned it off.
+    private(set) var picksNewTaskAccount = true
+    /// The harnesses whose new-task account the person chose themselves while Automatic was offered.
+    private(set) var chosenNewTaskAccounts: Set<HarnessKind> = []
     var selection: [HarnessKind: String] = [:] {
         didSet { if selection != oldValue { onSelectionChange?(selection) } }
     }
@@ -328,6 +333,9 @@ final class ProviderConnectionStore {
         self.fileURL = fileURL
         self.defaults = defaults
         automaticAssignment = defaults?.dictionary(forKey: Self.automaticAssignmentKey) as? [String: Bool] ?? [:]
+        picksNewTaskAccount = defaults?.object(forKey: Self.picksNewTaskAccountKey) as? Bool ?? true
+        chosenNewTaskAccounts = Set((defaults?.stringArray(forKey: Self.chosenNewTaskAccountsKey) ?? [])
+            .map(HarnessKind.init(rawValue:)))
         self.defaultLoader = defaultLoader
         self.connectionLoader = connectionLoader
         cache = AccountSnapshotCache(fileURL: snapshotCacheURL)
@@ -358,6 +366,10 @@ final class ProviderConnectionStore {
     }
 
     static let automaticAssignmentKey = "Yardlet.automaticAccountAssignment"
+    /// Kept only while the person has turned Automatic off for new tasks.
+    static let picksNewTaskAccountKey = "Yardlet.automaticNewTaskAccount"
+    /// `chosenNewTaskAccounts`, as harness IDs; kept only while one is chosen.
+    static let chosenNewTaskAccountsKey = "Yardlet.chosenNewTaskAccounts"
     /// The accounts whose tasks are moving, each with the account they move to (connection IDs).
     static let taskMovesKey = "Yardlet.accountTaskMoves"
 
@@ -763,6 +775,48 @@ final class ProviderConnectionStore {
         }
     }
 
+    // MARK: - Automatic account for new tasks
+
+    /// Whether the new-task account menu offers Automatic for `harness`: the setting is on and more
+    /// than one account a task can start on is in automatic assignment.
+    func offersAutomaticNewTaskAccount(for harness: HarnessKind) -> Bool {
+        picksNewTaskAccount
+            && choices(for: [harness]).filter { $0.canSelect && isInAutomaticAssignment($0) }.count > 1
+    }
+
+    /// Whether the person's next task on `harness` starts on the account automatic assignment picks when
+    /// it is sent (`AppModel.newTaskAccount`): Automatic is offered and the person has not chosen an account.
+    func startsNewTasksAutomatically(for harness: HarnessKind) -> Bool {
+        offersAutomaticNewTaskAccount(for: harness) && !chosenNewTaskAccounts.contains(harness)
+    }
+
+    /// Automatic, chosen from the new-task account menu.
+    func chooseAutomaticNewTaskAccount(for harness: HarnessKind) {
+        setChosenNewTaskAccount(false, for: harness)
+    }
+
+    /// Turns Automatic for new tasks on or off. Off forgets the accounts chosen instead of it, so only
+    /// the setting itself is kept, and the menu is as it was without Automatic.
+    func setPicksNewTaskAccount(_ picks: Bool) {
+        picksNewTaskAccount = picks
+        if picks {
+            defaults?.removeObject(forKey: Self.picksNewTaskAccountKey)
+        } else {
+            defaults?.set(false, forKey: Self.picksNewTaskAccountKey)
+            for harness in chosenNewTaskAccounts { setChosenNewTaskAccount(false, for: harness) }
+        }
+    }
+
+    private func setChosenNewTaskAccount(_ chosen: Bool, for harness: HarnessKind) {
+        guard chosen != chosenNewTaskAccounts.contains(harness) else { return }
+        if chosen { chosenNewTaskAccounts.insert(harness) } else { chosenNewTaskAccounts.remove(harness) }
+        if chosenNewTaskAccounts.isEmpty {
+            defaults?.removeObject(forKey: Self.chosenNewTaskAccountsKey)
+        } else {
+            defaults?.set(chosenNewTaskAccounts.map(\.rawValue).sorted(), forKey: Self.chosenNewTaskAccountsKey)
+        }
+    }
+
     /// The smallest share any of an account's plan limits has left, from its last reading.
     func remainingFraction(for connection: ProviderConnection) -> Double? {
         snapshots[connection.id].flatMap(Self.remainingFraction)
@@ -831,15 +885,23 @@ final class ProviderConnectionStore {
         return accounts.first { $0.connection?.id == selection[harness] } ?? accounts.first
     }
 
+    /// The account the person's new tasks on the choice's harness start on. Chosen while Automatic is
+    /// offered, it stands instead of Automatic until the person chooses Automatic again.
     func choose(_ choice: AccountChoice) {
         guard choice.canSelect, !(choice.connection.map(isMovingAway) ?? false) else { return }
+        if offersAutomaticNewTaskAccount(for: choice.harness) { setChosenNewTaskAccount(true, for: choice.harness) }
         selection[choice.harness] = choice.connection?.id
     }
 
     /// Checks the accounts a new task can start on with `harness`, as the new-task screen's
     /// account control and a suggestion's Options list them: the default login, and the saved
-    /// accounts too when a signed-out default is hidden next to them, so one can be chosen.
+    /// accounts too when a signed-out default is hidden next to them, so one can be chosen, or when
+    /// the next task starts on the one automatic assignment picks.
     func checkNewTaskAccounts(for harness: HarnessKind, runtimeSelections: RuntimeSelectionStore) async {
+        if startsNewTasksAutomatically(for: harness) {
+            await check(defaultsOf: [harness], savedOf: [harness], runtimeSelections: runtimeSelections)
+            return
+        }
         await check(defaultsOf: [harness], savedOf: [], runtimeSelections: runtimeSelections)
         if selection[harness] == nil, defaultSnapshots[harness]?.state == .signedOut, !connections(for: harness).isEmpty {
             await check(defaultsOf: [], savedOf: [harness], runtimeSelections: runtimeSelections)
