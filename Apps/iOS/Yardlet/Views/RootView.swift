@@ -55,20 +55,24 @@ struct LockView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
-        .task { await lock.unlock() }
     }
 }
 
 /// App Lock's cover, in a window of its own above the app's, so a sheet or an alert open when the app locked stays
 /// under it too.
+/// It takes the keyboard's focus with it: whatever was being typed into loses it, so keys pressed while the app is locked
+/// go nowhere behind the cover.
 @MainActor
 final class LockCover {
     static let shared = LockCover()
     private var window: UIWindow?
+    private weak var coveredKeyWindow: UIWindow?
 
     func show(_ covered: Bool, lock: AppLock) {
         guard covered else {
-            window?.isHidden = true
+            guard let window, !window.isHidden else { return }
+            window.isHidden = true
+            coveredKeyWindow?.makeKey()
             return
         }
         if window == nil {
@@ -78,6 +82,9 @@ final class LockCover {
             window.rootViewController = UIHostingController(rootView: LockView(lock: lock))
             self.window = window
         }
-        window?.isHidden = false
+        guard let window, window.isHidden || !window.isKeyWindow else { return }
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        coveredKeyWindow = window.windowScene?.keyWindow.flatMap { $0 === window ? nil : $0 }
+        window.makeKeyAndVisible()
     }
 }
