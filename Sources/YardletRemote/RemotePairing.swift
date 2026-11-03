@@ -259,6 +259,7 @@ public actor RemoteDeviceStore {
 
     private let fileURL: URL?
     private let recoveryFileURL: URL?
+    private let beforePermissionCommit: (@Sendable () -> Void)?
     private let beforePermissionWrite: (@Sendable () async -> Void)?
     private var recoveryDenials: Set<RemotePermissionKey> = []
     private var durableRecoveryDenials: Set<RemotePermissionKey> = []
@@ -275,9 +276,11 @@ public actor RemoteDeviceStore {
     /// `devices` are the ones a store without a file starts with (tests and the fixture). Devices paired with
     /// protocol 1 are dropped from the file as it is read.
     public init(fileURL: URL?, devices seeded: [RemoteDevice] = [], recoveryFileURL: URL? = nil,
-                beforePermissionWrite: (@Sendable () async -> Void)? = nil) {
+                beforePermissionWrite: (@Sendable () async -> Void)? = nil,
+                beforePermissionCommit: (@Sendable () -> Void)? = nil) {
         self.fileURL = fileURL
         self.beforePermissionWrite = beforePermissionWrite
+        self.beforePermissionCommit = beforePermissionCommit
         self.recoveryFileURL = recoveryFileURL ?? fileURL?.deletingLastPathComponent().appendingPathComponent("permission-denials.json")
         if let fileURL, let data = try? Data(contentsOf: fileURL),
            let file = try? JSONDecoder.remoteDates.decode(StoredFile.self, from: data) {
@@ -348,9 +351,7 @@ public actor RemoteDeviceStore {
     func persistPermissionWrite(_ operation: RemotePermissionWrite) async -> RemotePermissionWriteResult {
         await beforePermissionWrite?()
         guard let snapshot = permissionSnapshot else { return result(false) }
-        return snapshot.withValue { desired in
-            persistPermissions(desired, operation: operation)
-        }
+        return persistPermissions(snapshot.read(), operation: operation)
     }
 
     private func maskDeniedPermissions(_ desired: [String: RemoteDevicePermissions]) {
@@ -409,14 +410,36 @@ public actor RemoteDeviceStore {
         let hasNewGrants = fence.contains { desired[$0.deviceID]?[$0.permission] == true }
         let fenced = writeRecovery(fence)
         if hasNewGrants && !fenced { return result(false) }
+        beforePermissionCommit?()
+        // Only remove grants from an already prepared write. A newly requested grant gets its own
+        // queued save and fence; it cannot slip into a transaction that did not prepare for it.
+        let beforeCommit = permissionSnapshot?.read() ?? desired
+        for index in updated.indices {
+            for permission in RemoteDevicePermission.allCases where beforeCommit[updated[index].id]?[permission] != true {
+                updated[index].permissions?[permission] = false
+            }
+        }
         do { try Self.writeChecked(updated, to: fileURL) }
-        catch { return result(false) }
+        catch {
+            maskDeniedPermissions(permissionSnapshot?.read() ?? desired)
+            _ = writeRecovery(recoveryDenials.union(fence))
+            return result(false)
+        }
         persistedPermissions = Dictionary(uniqueKeysWithValues: updated.map { ($0.id, $0.permissions ?? RemoteDevicePermissions()) })
         devices = updated
-        // A lingering denial after the primary committed is safe, including a newly paired device.
-        let cleared = writeRecovery([])
-        recoveryDenials = cleared ? [] : fence
-        if !cleared { maskDeniedPermissions(desired) }
+        // The primary now contains all earlier denials. Keep only newer ones, and never let
+        // journal cleanup require the server actor to wait for filesystem synchronization.
+        recoveryDenials = []
+        maskDeniedPermissions(permissionSnapshot?.read() ?? desired)
+        let cleared = writeRecovery(recoveryDenials)
+        if !cleared {
+            let known = Set(devices.map(\.id))
+            recoveryDenials.formUnion(fence.filter { known.contains($0.deviceID) })
+        }
+        // A denial can arrive during the journal write as well. Keep it in memory immediately
+        // and repair the fence; the queued save will bring the primary up to date.
+        maskDeniedPermissions(permissionSnapshot?.read() ?? desired)
+        if cleared && recoveryDenials != durableRecoveryDenials { _ = writeRecovery(recoveryDenials) }
         let registered = registeredID.flatMap { id in devices.first { $0.id == id } }
         return result(identityChange || cleared || !hasNewGrants, device: registered)
     }
@@ -436,6 +459,8 @@ public actor RemoteDeviceStore {
     }
 
     private func recoveryState() -> RemotePermissionRecoveryState {
+        let known = Set(devices.map(\.id))
+        recoveryDenials = recoveryDenials.filter { known.contains($0.deviceID) }
         let unsafe = recoveryDenials.filter { key in
             !durableRecoveryDenials.contains(key)
                 && persistedPermissions[key.deviceID]?[key.permission] == true
@@ -491,16 +516,14 @@ public actor RemoteDeviceStore {
     }
 
     private func save() {
-        let write = { (desired: [String: RemoteDevicePermissions]) in
-            self.maskDeniedPermissions(desired)
-            if !self.recoveryDenials.isEmpty { _ = self.writeRecovery(self.recoveryDenials) }
-            do {
-                try Self.writeChecked(self.devices, to: self.fileURL)
-                self.persistedPermissions = Dictionary(uniqueKeysWithValues: self.devices.map { ($0.id, $0.permissions ?? RemoteDevicePermissions()) })
-            } catch { /* The recovery record and logical denials remain for a later retry. */ }
-        }
-        if let permissionSnapshot { permissionSnapshot.withValue(write) }
-        else { write([:]) }
+        maskDeniedPermissions(permissionSnapshot?.read() ?? [:])
+        if !recoveryDenials.isEmpty { _ = writeRecovery(recoveryDenials) }
+        do {
+            try Self.writeChecked(devices, to: fileURL)
+            persistedPermissions = Dictionary(uniqueKeysWithValues: devices.map { ($0.id, $0.permissions ?? RemoteDevicePermissions()) })
+        } catch { /* The recovery record and logical denials remain for a later retry. */ }
+        maskDeniedPermissions(permissionSnapshot?.read() ?? [:])
+        if recoveryDenials != durableRecoveryDenials { _ = writeRecovery(recoveryDenials) }
     }
 
     private static func write(_ devices: [RemoteDevice], to fileURL: URL?) {

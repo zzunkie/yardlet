@@ -1798,8 +1798,9 @@ Granting one permission does not grant the others.
 
 A denial or fresh-registration reset changes that map and cancels resource permits in the same actor turn. A single
 writer saves the latest complete intended permission map, coalescing changes made while an earlier save waits.
-Publishing an intent and committing the permission files are mutually exclusive; an obsolete snapshot cannot clear
-a newer denial. A grant becomes effective only after its save succeeds and only while it is still the current intent. Saving one flag cannot pause an unrelated granted operation. Existing identities are
+Intent snapshots use a memory-only lock; disk writes never delay live denial. The writer rechecks the current map
+before committing grants and after writing, preserving a recovery fence for newer denials. Runtime denial is
+immediate; restart uses the latest successfully saved configuration and recovery record. A grant becomes effective only after its save succeeds and only while it is still the current intent. Saving one flag cannot pause an unrelated granted operation. Existing identities are
 reserved by public key, so concurrent pairing paths cannot create two live identities for one key.
 
 Before updating the primary device file, denial/reset writes record a private recovery fence in
@@ -1813,6 +1814,7 @@ grant is pending. Recovery entries apply only to known identities; an unreadable
 all known permissions until a regular private journal can be saved.
 
 A new QR or account-link registration clears an existing key's grants, including when another save is pending.
+Permission edits are refused until that registration has committed. Recovery retry ignores removed identities.
 Only a bounded retry of a successfully committed pairing preserves permissions; an in-progress registration is not
 a spent-ticket retry. Failed reset attempts are audited even when the live flags are already off. Independent
 consumers subscribe without replacing each other. Shutdown cancels runtime access for every known device, including

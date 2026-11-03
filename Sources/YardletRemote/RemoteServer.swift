@@ -808,7 +808,10 @@ public actor RemoteServer {
 
     public func retryPermissionRecovery() async throws {
         await ensurePermissionsLoaded()
-        let keys = recovery.unsavedDeniedPermissions
+        let keys = recovery.unsavedDeniedPermissions.filter {
+            effectivePermissions[$0.deviceID] != nil && !revokedDeviceIDs.contains($0.deviceID)
+                && !removingDeviceIDs.contains($0.deviceID) && !isRegisteringDevice($0.deviceID)
+        }
         guard !keys.isEmpty else { return }
         for key in keys {
             permissionIntents[key] = nil
@@ -818,7 +821,7 @@ public actor RemoteServer {
         permissionSnapshot.replace(desiredPermissions)
         for deviceID in Set(keys.map(\.deviceID)) {
             clearPermissionRefusals(deviceID)
-            notifyPermissionsChanged(deviceID, permissions: effectivePermissions[deviceID]!)
+            notifyPermissionsChanged(deviceID, permissions: effectivePermissions[deviceID] ?? RemoteDevicePermissions())
         }
         let saved = await enqueuePermissionWrite(.save).value
         for deviceID in Set(keys.map(\.deviceID)) {
@@ -832,13 +835,14 @@ public actor RemoteServer {
     /// intent cancels a pending grant without waiting for its disk operation.
     public func setPermission(_ permission: RemoteDevicePermission, allowed: Bool, for deviceID: String) async throws {
         await ensurePermissionsLoaded()
+        guard !isRegisteringDevice(deviceID) else { throw RemoteError(.notAllowed) }
         if effectivePermissions[deviceID] == nil, let device = await devices.device(deviceID),
            !revokedDeviceIDs.contains(deviceID), !removingDeviceIDs.contains(deviceID) {
             effectivePermissions[deviceID] = RemoteDevicePermissions()
             permissionDeviceIDsByKey[device.publicKey] = deviceID
         }
         guard effectivePermissions[deviceID] != nil, !revokedDeviceIDs.contains(deviceID),
-              !removingDeviceIDs.contains(deviceID) else { throw RemoteError(.notAllowed) }
+              !removingDeviceIDs.contains(deviceID), !isRegisteringDevice(deviceID) else { throw RemoteError(.notAllowed) }
         let key = RemotePermissionKey(deviceID: deviceID, permission: permission)
         let intent = UUID()
         permissionIntents[key] = intent
@@ -847,10 +851,12 @@ public actor RemoteServer {
         clearPermissionRefusals(deviceID)
         if !allowed {
             effectivePermissions[deviceID]?[permission] = false
-            notifyPermissionsChanged(deviceID, permissions: effectivePermissions[deviceID]!)
+            notifyPermissionsChanged(deviceID, permissions: effectivePermissions[deviceID] ?? RemoteDevicePermissions())
         }
         let saved = await enqueuePermissionWrite(.save).value
-        guard permissionIntents[key] == intent, !revokedDeviceIDs.contains(deviceID) else {
+        guard permissionIntents[key] == intent, effectivePermissions[deviceID] != nil,
+              !revokedDeviceIDs.contains(deviceID), !removingDeviceIDs.contains(deviceID),
+              !isRegisteringDevice(deviceID) else {
             throw RemoteError(.notAllowed)
         }
         permissionIntents[key] = nil
@@ -860,7 +866,7 @@ public actor RemoteServer {
                 permissionSnapshot.replace(desiredPermissions)
                 effectivePermissions[deviceID]?[permission] = false
                 clearPermissionRefusals(deviceID)
-                notifyPermissionsChanged(deviceID, permissions: effectivePermissions[deviceID]!)
+                notifyPermissionsChanged(deviceID, permissions: effectivePermissions[deviceID] ?? RemoteDevicePermissions())
                 // Another queued snapshot may already have saved this pending grant. Persist the
                 // failed intent as a denial too; a later unrelated write must never revive it.
                 _ = await enqueuePermissionWrite(.save).value
@@ -871,7 +877,7 @@ public actor RemoteServer {
         if allowed {
             effectivePermissions[deviceID]?[permission] = true
             clearPermissionRefusals(deviceID)
-            notifyPermissionsChanged(deviceID, permissions: effectivePermissions[deviceID]!)
+            notifyPermissionsChanged(deviceID, permissions: effectivePermissions[deviceID] ?? RemoteDevicePermissions())
         }
         audit?.record(device: deviceID, type: "permission." + permission.rawValue, task: nil,
                       result: allowed ? "allowed" : "notAllowed", at: now())
@@ -905,6 +911,10 @@ public actor RemoteServer {
 
     private func clearPermissionRefusals(_ deviceID: String) {
         auditedPermissionRefusals = auditedPermissionRefusals.filter { $0.key.device != deviceID }
+    }
+
+    private func isRegisteringDevice(_ deviceID: String) -> Bool {
+        permissionDeviceIDsByKey.contains { $0.value == deviceID && pendingPermissionRegistrations.contains($0.key) }
     }
 
     private func registerDevice(name: String, publicKey: Data, platform: String?, resetsPermissions: Bool) async throws -> RemoteDevice {

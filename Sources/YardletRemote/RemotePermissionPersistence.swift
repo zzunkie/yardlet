@@ -40,8 +40,8 @@ struct RemotePermissionWriteResult: Sendable {
 }
 
 /// Server-owned desired configuration. Persistence reads the latest complete value, not a queued
-/// grant/deny command. The short configuration transaction and publishing a new intent are mutually
-/// exclusive, so a superseded snapshot cannot replace the files or clear a newer denial fence.
+/// grant/deny command. The lock protects only copying/replacing this map, never disk work.
+/// The serial writer reconciles newer denials after each write.
 final class RemotePermissionSnapshot: @unchecked Sendable {
     private let lock = NSLock()
     private var permissions: [String: RemoteDevicePermissions] = [:]
@@ -52,9 +52,9 @@ final class RemotePermissionSnapshot: @unchecked Sendable {
         permissions = value
     }
 
-    func withValue<T>(_ body: ([String: RemoteDevicePermissions]) throws -> T) rethrows -> T {
+    func read() -> [String: RemoteDevicePermissions] {
         lock.lock()
         defer { lock.unlock() }
-        return try body(permissions)
+        return permissions
     }
 }
