@@ -2026,8 +2026,12 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   session rail is the local rail: where the task runs (its project and harness; the folder stays the host's), its
   settings (§15.23), chosen there through the host, and its outputs (§15.22). A task lays out as the local task does,
   its side panel's tab strip sharing the title bar's row and the title bar's buttons toggling the rail and the panels:
-  the side panel's New tab, Review (§15.26) and Files (§15.27) where the host serves them, and the browser (§15.25).
-  A panel the host does not serve from another Mac shows dimmed in the New tab screen and the title bar. What the host does not
+  the side panel's New tab, Review (§15.26) and Files (§15.27) where the host serves them, the browser (§15.25), whose
+  tabs share the panel's strip and close when the host's list says they did (§15.30), and the task's terminal
+  (§15.29), below the conversation or in the side panel as Settings place the terminal, its selection attached to the
+  composer. A link in the conversation or the terminal opens as on the host: a file read from the host, a page on the
+  host's own address in the host's browser. A panel the host does not serve from another Mac, or does not allow this
+  Mac (§15.28), shows dimmed in the New tab screen and the title bar. What the host does not
   take from another device yet (rename, mark as unread, move, nest, delete, the projects' own actions, the archived
   list) shows dimmed.
 - **What it does:** what a phone does (§4–§6, §15), on a larger screen: the host's sidebar and its marks, a task's
