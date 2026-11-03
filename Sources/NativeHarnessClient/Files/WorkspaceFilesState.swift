@@ -24,6 +24,7 @@ struct WorkspaceFileDraft: Codable, Equatable {
 @MainActor @Observable
 final class WorkspaceFilesState {
     var preferences: WorkspaceFilePreferences { didSet { if preferences != oldValue { onChange?() } } }
+    private(set) var resolvedWorkspace: URL?
     private(set) var index = WorkspaceFileIndex(paths: [], isLimited: false)
     private(set) var document: WorkspaceFileDocument?
     /// An image or a PDF the panel shows in place of text.
@@ -129,7 +130,8 @@ final class WorkspaceFilesState {
             try Task.checkCancellation()
             guard indexID == id else { return }
             index = result
-            indexedWorkspace = workspace
+            resolvedWorkspace = result.workspaceURL ?? (isLocal ? workspace : nil)
+            indexedWorkspace = result.workspaceURL ?? workspace
         } catch is CancellationError { }
         catch { if indexID == id { indexError = error.localizedDescription } }
         if indexID == id { isIndexing = false }

@@ -1663,6 +1663,7 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var taskFiles: Bool?
     /// Workspace file names in the task folder (§15.27). Reads use `readFile`.
     public var workspaceFiles: Bool?
+    public var workspaceRoot: String?
     public var filePaths: [String]?
     public var filesLimited: Bool?
     /// `snapshot` on v2: the Mac answers `subscribeTask` with `"detail": "full"` (§15.24).

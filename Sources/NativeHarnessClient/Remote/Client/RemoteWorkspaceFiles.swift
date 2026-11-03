@@ -9,7 +9,8 @@ struct RemoteWorkspaceFiles: WorkspaceFiles {
     func index(in workspace: URL) async throws -> WorkspaceFileIndex {
         let response = await model.response(to: .workspaceFiles(taskID: taskID))
         guard response.ok, let paths = response.filePaths else { throw WorkspaceFileError.notAFile }
-        return WorkspaceFileIndex(paths: paths, isLimited: response.filesLimited == true)
+        return WorkspaceFileIndex(paths: paths, isLimited: response.filesLimited == true,
+            workspaceURL: response.workspaceRoot.flatMap { $0.hasPrefix("/") ? URL(filePath: $0) : nil })
     }
 
     func read(_ location: WorkspaceFileLocation, in workspace: URL) async throws -> WorkspaceFileContent {

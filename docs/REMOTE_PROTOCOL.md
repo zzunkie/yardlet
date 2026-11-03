@@ -1700,7 +1700,9 @@ This is an optional capability; existing clients ignore it and existing hosts ne
 
 `{"id":"files-1","type":"workspaceFiles","taskId":"T"}` lists regular files in the task's primary
 working folder (the worktree when the task has one). The response carries `filePaths`, paths relative to
-that folder, sorted by name, and `filesLimited`, a Boolean. It contains no file contents. Refresh requests
+that folder, sorted by name, `filesLimited`, a Boolean, and optional `workspaceRoot`, the host folder
+for the panel header. A client does not need to know that path before requesting the listing and never
+uses it for client filesystem access. It contains no file contents. Refresh requests
 list again; this request has the ordinary read-request rate limit. Unknown tasks answer `notFound`.
 
 The listing shares `readFile`'s folder boundary: a home folder or a folder containing home cannot be listed.

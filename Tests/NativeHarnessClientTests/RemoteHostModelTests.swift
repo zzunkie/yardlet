@@ -44,6 +44,7 @@ final class RemoteHostModelTests: XCTestCase {
         let local = WorkspaceFilesState()
         await remote.loadIndex(in: clientWorkspace)
         await local.loadIndex(in: root)
+        XCTAssertTrue(Project.isSamePath(try XCTUnwrap(remote.resolvedWorkspace), root))
         XCTAssertEqual(remote.index.paths, local.index.paths)
         XCTAssertEqual(remote.index.paths, ["Greeting.swift"])
         let directoryURL = try WindowlessRender.directory("remote-files-qa")
