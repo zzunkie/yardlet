@@ -155,8 +155,9 @@ The earlier task profiles (section 7): task X's profile counts as one that had s
 copies, Y holding a cookie of `only.qa-earlier.test`, which the default profile has none of, and both a cookie of
 `localhost`, which it has. After the host ends and starts again, X keeps its profile, Y uses the default profile, the
 default profile sends Y's `only.qa-earlier.test` cookie (it took the row as Chromium stored it and reads it) and keeps
-its own `localhost` cookie, its `Cookies` was copied to the Trash first, and the sign-ins log says how many profiles moved
-and how many sites the default profile took. Cleanup then removes Y's folder.
+its own `localhost` cookie, its `Cookies` was copied to the Trash first, Y's folder is whole in the Trash's
+`Yardlet task profiles <date time>`, and the sign-ins log says how many profiles moved, where their folders went and how
+many sites the default profile took.
 
 Every check uses new tasks and decides first which values it will read, so state that earlier QA left in the same QA home
 does not matter. Each step measures the process tree's memory (adding `--ui-fixture-isolation-shared` opens the same
@@ -190,11 +191,13 @@ cookies across host restarts.
     both have the same cookie table and `meta` version): every profile's values were encrypted with the same key
     ([BROWSER_HOST](BROWSER_HOST.md) section 3, "Cookie encryption"), bound to the row's host and not its profile. The
     default profile's `Cookies` is copied to `~/.Trash/Yardlet cookie backup <date time>/Default/` before it changes.
-    Its folder then goes as an archived task's does (section 4). localStorage and IndexedDB are not carried over.
+    The task's folder then moves, whole, to `~/.Trash/Yardlet task profiles <date time>/Task-<key>` rather than being
+    deleted, so the person can take it back; a folder that does not move is tried again at the next start.
+    localStorage and IndexedDB are not carried over to the default profile.
   - A profile whose cookies cannot be read or taken (another table, a database that does not open) stays its task's.
   - When a host holds the profiles or the default profile cannot be backed up or opened, nothing changes and it runs
     again at the next start; until then, each task keeps the folder it has. `sign-ins.log` gets one line: how many
-    profiles moved and stayed, and how many sites the default profile took. Then `sorted` is recorded in
+    profiles moved (and the Trash folder their folders went to) and stayed, and how many sites the default profile took. Then `sorted` is recorded in
     `TaskProfiles.json` and the earlier record (`following`) goes.
 - The isolation QA restarts the host and checks that a task's cookies and localStorage remain, checks `Local State`, and
   sorts two earlier profiles (section 6).

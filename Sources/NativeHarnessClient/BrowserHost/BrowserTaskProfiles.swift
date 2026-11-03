@@ -145,10 +145,11 @@ final class BrowserTaskProfiles {
     /// starts. A profile that had signed in to a site itself (`following.own`) stays its task's; every other one holds
     /// copies of the person's sign-ins, so its task moves to the default profile, which first takes the sites such a
     /// profile has cookies of and it has none of (`fill`: the keys to empty, answering the keys whose sites it could
-    /// not take, which stay their tasks' own, or nil to try again at the next start). The folders left go as removed
-    /// tasks' do (`removeFolders`).
+    /// not take, which stay their tasks' own, or nil to try again at the next start). Their folders go to `setAside`
+    /// (a folder in the Trash), so the person can take one back; a folder that does not move is tried again at the
+    /// next start. Nil when nothing was sorted.
     @discardableResult
-    func shareEarlierProfiles(fill: ([String]) -> Set<String>?) -> (kept: Int, moved: Int)? {
+    func shareEarlierProfiles(setAside: URL, fill: ([String]) -> Set<String>?) -> (kept: Int, moved: Int)? {
         guard saved.sorted != true else { return nil }
         let earlierOwn = Set((saved.following?.own ?? [:]).filter { !$0.value.isEmpty }.keys)
         let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path(percentEncoded: false))) ?? []
@@ -156,13 +157,22 @@ final class BrowserTaskProfiles {
             .filter { UUID(uuidString: $0) != nil }
         let emptied = keys.filter { !earlierOwn.contains($0) && saved.own?[$0] == nil }.sorted()
         guard let unreadable = emptied.isEmpty ? [] : fill(emptied) else { return nil }
+        let moving = emptied.filter { !unreadable.contains($0) }
+        if !moving.isEmpty {
+            try? FileManager.default.createDirectory(at: setAside, withIntermediateDirectories: true)
+            // A move within the home is one rename, however much the profile holds.
+            let unmoved = moving.filter { key in
+                (try? FileManager.default.moveItem(at: folder(for: key), to: setAside.appending(path: Self.folderPrefix + key))) == nil
+            }
+            guard unmoved.isEmpty else { return nil }
+        }
         var own = saved.own ?? [:]
         for key in earlierOwn.union(unreadable) where folderExists(key) { own[key] = own[key] ?? "" }
         saved.own = own
         saved.following = nil
         saved.sorted = true
         save()
-        return (keys.count - emptied.count + unreadable.count, emptied.count - unreadable.count)
+        return (keys.count - moving.count, moving.count)
     }
 
 #if DEBUG

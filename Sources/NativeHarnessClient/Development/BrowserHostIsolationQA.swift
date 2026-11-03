@@ -183,8 +183,8 @@ final class BrowserHostIsolationQA {
         await removesTheOldCopysDomainCookies()
         let earlier = await sharesEarlierProfiles()
 
-        // Archived and deleted tasks' profiles go once the host has let them go, and so does the folder of a task that
-        // uses the default profile now.
+        // Archived and deleted tasks' profiles go once the host has let them go; the folder of a task that moved to the
+        // default profile is in the Trash already.
         client.terminateHost()
         _ = await waitUntil(.seconds(20)) { !self.client.isHostRunning }
         try? await Task.sleep(for: .seconds(1))
@@ -196,10 +196,10 @@ final class BrowserHostIsolationQA {
             .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         let listed = Set(((localState?["profile"] as? [String: Any])?["info_cache"] as? [String: Any])?.keys.map { $0 } ?? [])
         let listedUnkept = unkept.filter { listed.contains(BrowserTaskProfiles.folderPrefix + $0) }
-        check("removing profiles keeps the folders of kept tasks with profiles of their own and removes the rest, a task's "
-              + "that moved to the default profile too, from Chromium's profile list too",
+        check("removing profiles keeps the folders of kept tasks with profiles of their own and removes the rest, from "
+              + "Chromium's profile list too",
               keptKeys.allSatisfy(profiles.folderExists) && unkept.isSubset(of: removed) && !unkept.contains(where: profiles.folderExists)
-                && earlier.map { removed.contains($0.movedKey) } != false
+                && earlier.map { !profiles.folderExists(profiles.key(for: $0.moved)) } != false
                 && listed.contains(BrowserTaskProfiles.folderPrefix + profiles.key(for: a)) && listedUnkept.isEmpty,
               "removed \(removed.count), this run's \(unkept.intersection(removed).count) of \(unkept.count); "
                 + "Local State lists \(listed.count), removed ones still listed \(listedUnkept.count)")
@@ -517,8 +517,8 @@ final class BrowserHostIsolationQA {
     /// Task profiles from before tasks shared the default profile are sorted once, before the host starts
     /// (docs/BROWSER_SESSION_ISOLATION.md 7). X had signed in to a site itself and keeps its profile. Y held copies of
     /// the person's sign-ins and a cookie of a site the default profile has none of, which the default profile takes
-    /// as Chromium stored it (and must read) before Y moves to the default profile. The tasks, and Y's folder to go.
-    private func sharesEarlierProfiles() async -> (kept: UUID, moved: UUID, movedKey: String)? {
+    /// as Chromium stored it (and must read) before Y moves to the default profile and Y's folder to the Trash. The tasks.
+    private func sharesEarlierProfiles() async -> (kept: UUID, moved: UUID)? {
         let page = base + "isolation", only = "https://only.qa-earlier.test/"
         let x = UUID(), y = UUID()
         guard let home = try? client.openTab(url: page, viewport: .offscreenDefault), await loaded(home, page),
@@ -558,22 +558,28 @@ final class BrowserHostIsolationQA {
                 && fromDefault["qa_earlier"] == ["Y"] && fromY["qa_earlier"] == ["Y"],
               "X own \(profiles.hasOwnProfile(x)) \(mineX ?? []), Y own \(profiles.hasOwnProfile(y)) \(mineY ?? []), "
                 + "default \(fromDefault), Y \(fromY)")
-        // The default profile's cookies were copied to the Trash first, and the log says what moved.
+        // The default profile's cookies were copied to the Trash first, Y's folder went there whole, and the log says
+        // what moved.
         let trash = URL(filePath: NSHomeDirectory()).appending(path: ".Trash")
-        let backups = ((try? FileManager.default.contentsOfDirectory(at: trash, includingPropertiesForKeys: [.creationDateKey])) ?? [])
-            .filter { $0.lastPathComponent.hasPrefix("Yardlet cookie backup ")
-                && ((try? $0.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast) >= started.addingTimeInterval(-1)
-                && FileManager.default.fileExists(atPath: $0.appending(path: "Default/Cookies").path(percentEncoded: false)) }
+        let recent = ((try? FileManager.default.contentsOfDirectory(at: trash, includingPropertiesForKeys: [.creationDateKey])) ?? [])
+            .filter { ((try? $0.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast) >= started.addingTimeInterval(-1) }
+        let backups = recent.filter { $0.lastPathComponent.hasPrefix("Yardlet cookie backup ")
+            && FileManager.default.fileExists(atPath: $0.appending(path: "Default/Cookies").path(percentEncoded: false)) }
+        let setAside = recent.filter { $0.lastPathComponent.hasPrefix("Yardlet task profiles ")
+            && FileManager.default.fileExists(atPath: $0.appending(path: "Task-\(keyY)/Cookies").path(percentEncoded: false)) }
         let logged = ((try? String(contentsOf: MacBrowserHost.shared.paths.log.deletingLastPathComponent()
             .appending(path: "sign-ins.log"), encoding: .utf8)) ?? "")
             .split(separator: "\n").last { $0.contains("tasks share the default profile") }.map(String.init) ?? ""
-        check("earlier profiles: the default profile's cookies go to the Trash before it changes, and the log says what moved",
-              !backups.isEmpty && logged.contains("task profiles moved to it") && logged.contains("sites it had no cookie of"),
-              "backups \(backups.map(\.lastPathComponent)), log \(logged)")
+        check("earlier profiles: the default profile's cookies go to the Trash before it changes, the moved task's folder goes "
+              + "there whole, and the log says how many moved",
+              !backups.isEmpty && setAside.count == 1 && !profiles.folderExists(keyY)
+                && logged.contains("task profiles moved to it, their folders to the Trash (\(setAside.first?.lastPathComponent ?? "?"))")
+                && logged.contains("sites it had no cookie of"),
+              "backups \(backups.map(\.lastPathComponent)), set aside \(setAside.map(\.lastPathComponent)), log \(logged)")
         for task in [x, y] { client.closeTabs(forSession: task) }
         _ = try? await again.devTools.send("Network.deleteCookies", ["name": .string("qa_earlier"), "domain": .string("only.qa-earlier.test")])
         again.close()
-        return (x, y, keyY)
+        return (x, y)
     }
 
     /// The person's click on an element of the page, through the host's input as the panel sends it.

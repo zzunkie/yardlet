@@ -30,7 +30,10 @@ final class BrowserTaskProfilesTests: XCTestCase {
         let profiles = BrowserTaskProfiles(root: folder, defaults: defaults)
         // Said here rather than left to the default, which another domain in the preferences search list could answer.
         profiles.storage = .perTask
-        XCTAssertNotNil(profiles.shareEarlierProfiles { _ in XCTFail("no earlier profile to empty"); return [] })
+        XCTAssertNotNil(profiles.shareEarlierProfiles(setAside: folder.appending(path: "Trash/Aside")) { _ in
+            XCTFail("no earlier profile to empty")
+            return []
+        })
         let signer = UUID(), child = UUID(), sharedChild = UUID(), plain = UUID(), stale = UUID(), archived = UUID()
         profiles.parentOf = { [child: signer, sharedChild: plain][$0] }
 
@@ -108,7 +111,8 @@ final class BrowserTaskProfilesTests: XCTestCase {
 
     /// The task profiles from before tasks shared the default profile, sorted once: one that had signed in to a site
     /// itself stays; one of copies moves its task to the default profile, which first takes the sites it holds and the
-    /// default profile has no cookie of, never over the default profile's own; one that cannot be taken stays.
+    /// default profile has no cookie of, never over the default profile's own, and its folder goes to the Trash, where the
+    /// person can take it back; one that cannot be taken stays.
     func testEarlierProfilesKeepTheirOwnSignInsAndTheRestFillTheDefaultProfileWithoutOverwritingIt() throws {
         let own = UUID().uuidString, copies = UUID().uuidString, older = UUID().uuidString, other = UUID().uuidString
         try makeDatabase("Default", [("accounts.example.com", "sid", "person", "", 1, 10)])
@@ -132,9 +136,9 @@ final class BrowserTaskProfilesTests: XCTestCase {
         profiles.storage = .perTask
         XCTAssertNotNil(profiles.profile(for: UUID(uuidString: copies)!), "until they are sorted, tasks keep the folders they have")
 
-        let trash = folder.appending(path: "Trash")
+        let trash = folder.appending(path: "Trash"), aside = trash.appending(path: "Yardlet task profiles test")
         var taken: [String: String] = [:]
-        let sorted = profiles.shareEarlierProfiles { keys in
+        let sorted = profiles.shareEarlierProfiles(setAside: aside) { keys in
             XCTAssertEqual(Set(keys), [copies, older, other])
             let outcome = BrowserProfileMerge.fill(root: folder, from: keys, trash: trash, now: now)
             taken = outcome?.sites ?? [:]
@@ -149,10 +153,16 @@ final class BrowserTaskProfilesTests: XCTestCase {
         for (key, stays) in [(own, true), (other, true), (copies, false), (older, false)] {
             XCTAssertEqual(profiles.profile(for: UUID(uuidString: key)!) != nil, stays, key)
         }
-        let backups = try FileManager.default.contentsOfDirectory(atPath: trash.path(percentEncoded: false))
+        let backups = try FileManager.default.contentsOfDirectory(atPath: trash.path(percentEncoded: false)).filter { $0 != aside.lastPathComponent }
         XCTAssertEqual(backups.count, 1)
         XCTAssertTrue(FileManager.default.fileExists(atPath: trash.appending(path: "\(backups[0])/Default/Cookies").path(percentEncoded: false)))
-        XCTAssertNil(BrowserTaskProfiles(root: folder, defaults: defaults).shareEarlierProfiles { _ in
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: aside.path(percentEncoded: false))),
+                       ["Task-" + copies, "Task-" + older], "the moved tasks' folders are in the Trash, whole")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: aside.appending(path: "Task-\(copies)/Cookies").path(percentEncoded: false)))
+        for (key, stays) in [(own, true), (other, true), (copies, false), (older, false)] {
+            XCTAssertEqual(profiles.folderExists(key), stays, key)
+        }
+        XCTAssertNil(BrowserTaskProfiles(root: folder, defaults: defaults).shareEarlierProfiles(setAside: aside) { _ in
             XCTFail("sorted once")
             return []
         })

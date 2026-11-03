@@ -407,17 +407,19 @@ final class MacBrowserHost: NativeSurfaceResource {
 
     /// Tasks had a profile each before they shared the default one: once, before the host opens the profiles, the
     /// tasks whose profile held only copies of the person's sign-ins move to the default profile, which first takes the
-    /// sites they hold and it has none of (docs/BROWSER_SESSION_ISOLATION.md 7).
+    /// sites they hold and it has none of, and their folders go to the Trash (docs/BROWSER_SESSION_ISOLATION.md 7).
     private func shareEarlierProfiles() {
-        let root = paths.root
+        let root = paths.root, trash = BrowserCookieCopyRepair.trash
+        let setAside = trash.appending(path: "Yardlet task profiles \(BrowserCookieCopyRepair.backupTime(Date()))", directoryHint: .isDirectory)
         var taken: [String: String] = [:]
-        guard let sorted = profiles.shareEarlierProfiles(fill: { keys in
-            guard let outcome = BrowserProfileMerge.fill(root: root, from: keys, trash: BrowserCookieCopyRepair.trash) else { return nil }
+        guard let sorted = profiles.shareEarlierProfiles(setAside: setAside, fill: { keys in
+            guard let outcome = BrowserProfileMerge.fill(root: root, from: keys, trash: trash) else { return nil }
             taken = outcome.sites
             return outcome.unread
         }), sorted.kept + sorted.moved > 0 else { return }
-        signInLog.write("tasks share the default profile: \(sorted.moved) task profiles moved to it, \(sorted.kept) kept; "
-                        + "the default profile took \(taken.count) sites it had no cookie of from them")
+        signInLog.write("tasks share the default profile: \(sorted.moved) task profiles moved to it, their folders to the Trash "
+                        + "(\(setAside.lastPathComponent)), \(sorted.kept) kept; the default profile took \(taken.count) sites it "
+                        + "had no cookie of from them")
     }
 
     func surface(for token: UInt64) -> IOSurfaceRef? {
