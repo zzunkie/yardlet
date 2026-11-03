@@ -712,12 +712,14 @@ public actor RemoteServer {
     public func revoke(_ deviceID: String) async {
         revokedDeviceIDs.insert(deviceID)
         spentPairing = nil
-        // Its connections go first, and with them what their watches still do (§15.25), before the list is saved.
+        // What its connections' watches still do ends before the list is saved (§15.25), and they take no request
+        // meanwhile; they close once it is, so the device is gone from the list when the phone hears it.
+        for (id, connection) in connections where connection.deviceID == deviceID { endTabWatch(on: id) }
+        await devices.remove(deviceID)
         for (id, connection) in connections where connection.deviceID == deviceID {
             send(RemoteEvent(.revoked), to: id)
             close(id, .revoked)
         }
-        await devices.remove(deviceID)
         audit?.record(device: deviceID, type: "revoke", task: nil, result: "ok", at: now())
         await reloadPushDevices()
     }
@@ -788,7 +790,13 @@ public actor RemoteServer {
             }
             return
         }
-        if let deviceID = connection.deviceID { await devices.seen(deviceID, now: now()) }
+        if let deviceID = connection.deviceID {
+            await devices.seen(deviceID, now: now())
+            // Being removed (`revoke`): its connections close once the list is saved.
+            guard !revokedDeviceIDs.contains(deviceID) else {
+                return respond(.failure(envelope.id, RemoteError(.unknownDevice)), to: id)
+            }
+        }
         switch request {
         case .revealLink:
             respond(.failure(envelope.id, RemoteError(.badRequest, "Already authenticated")), to: id)
