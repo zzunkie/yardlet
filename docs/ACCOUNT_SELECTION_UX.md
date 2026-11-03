@@ -11,8 +11,12 @@ storage. Different CLI sign-ins are not merged because they share an email or a 
   to show an existing sign-in.
 - The **Harnesses** section of Settings covers install state and executable settings. Whether an account is signed in
   does not decide whether a harness is installed. The account list can be narrowed with a harness filter and search. At
-  first only **Harnesses in use** show (harnesses that have tasks or saved accounts, or that were chosen for new tasks,
-  or all of them if there are none), and **All harnesses** or a single harness is picked in the same filter.
+  first only **Harnesses in use** show (harnesses that have tasks or saved accounts, that an agent ran a subagent on
+  with `run_agent` in the last 30 days, or that were chosen for new tasks, or all of them if there are none), and **All
+  harnesses** or a single harness is picked in the same filter. For the subagents, Yardlet keeps one preference,
+  `Yardlet.subagentHarnessUse`, with each harness's name and the time of its last subagent and nothing else; an entry
+  older than 30 days is dropped when a subagent starts or Yardlet launches, and the preference goes once none is left.
+  Yardlet's own evaluation judges are not counted.
 - As soon as the list opens, each account shows its last looked-up values (account, plan, limits) and "Updated N min.
   ago", and Yardlet looks them up again in the background and updates each one as its answer arrives. A signed-out
   account shows as signed out, and a lookup that could not finish shows "Couldn't refresh · updated N min. ago". Every
