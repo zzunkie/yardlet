@@ -137,7 +137,9 @@ enum CodexRunLocation: String, Codable, CaseIterable, Equatable, Identifiable, S
     }
 
     /// The fields the choice sets on `thread/start`, `thread/resume` and `turn/start`, as the app
-    /// sends them; each holds for the thread's later turns.
+    /// sends them; each holds for the thread's later turns. Every App Server Yardlet supports
+    /// (0.147.0 and later) takes them: `permissions` and its built-in profiles are experimental
+    /// there, which `initialize`'s `experimentalApi` opts into, and auto-review is on by default.
     var permissionParams: [String: JSONValue] {
         var params: [String: JSONValue] = [:]
         if let permissionProfile { params["permissions"] = .string(permissionProfile) }
