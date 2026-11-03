@@ -117,6 +117,8 @@ struct BrowserVaultSetupOffer: Equatable {
     var target: VaultItem?
     /// The site's items, to choose another target from.
     var choices: [VaultItem]
+    /// The agent's ask this bar answers (`BrowserTab.vaultSetupAsk`), when the agent's code fill found the setup.
+    var ask: UUID?
 
     var isImport: Bool { site == nil || setups.count > 1 }
 }
@@ -179,7 +181,10 @@ extension BrowserHostPaneController {
     /// The page moved to another address: the code and setup bars were for the document left.
     func vaultPageMoved(to address: String) {
         if let offer = vaultCodeOffer, offer.page != address { vaultCodeOffer = nil }
-        if let offer = vaultSetupOffer, offer.page != address { vaultSetupOffer = nil }
+        if let offer = vaultSetupOffer, offer.page != address {
+            vaultSetupOffer = nil
+            if offer.ask != nil, tab?.vaultSetupAsk?.id == offer.ask { tab?.answerSetupAsk(.pageMoved) }
+        }
         if let offer = vaultPasswordOffer, offer.page != address { vaultPasswordOffer = nil }
         // A filled code often sends the page on at once; the offer stays while the page is on that site.
         if let offer = vaultLinkOffer, !VaultSite.matches(offer.site, origin: address) { vaultLinkOffer = nil }
@@ -698,6 +703,7 @@ extension BrowserHostPaneController {
                              asked: Bool) {
         guard vault.isAllowedBuild, vault.isEnabled else { return }
         keepSetupKeysFromAgents(found.setups, on: tab)
+
         let new = found.setups.filter { !vault.holds($0.secret) && (asked || !dismissedSetups.contains($0.secret.key)) }
         guard !new.isEmpty else {
             if asked {
@@ -710,7 +716,9 @@ extension BrowserHostPaneController {
         Task { @MainActor [weak self] in
             // The origin comes from the browser, not from the page's script.
             guard let self, let frame = try? await VaultPageScripts.mainFrame(tab.devTools, timeout: .seconds(10)),
-                  self.tab === tab, await VaultPageScripts.shows(page, tab.devTools) else { return }
+                  self.tab === tab, await VaultPageScripts.shows(page, tab.devTools),
+                  // The agent's ask about the page's setup holds the bar until the person answers it.
+                  tab.vaultSetupAsk.map({ $0.answer != nil }) ?? true else { return }
             let site = new.count == 1 ? VaultSite.suggestion(for: frame.origin, suffixes: self.vault.suffixes) : nil
             self.vaultCodeOffer = nil
             self.vaultSetupOffer = BrowserVaultSetupOffer(
@@ -729,9 +737,26 @@ extension BrowserHostPaneController {
         Task { await VaultPageScripts.noteSecretsShown(spellings, on: tab.devTools, fills: tab.vaultFills) }
     }
 
+    /// The agent's code fill found a two-factor setup on its page and asks the person to keep it (design §20): the setup
+    /// bar, as for one the watch found, while the ask waits; it goes once the ask is answered or ended.
+    func showSetupAsk(of tab: BrowserTab) {
+        guard let ask = tab.vaultSetupAsk, ask.answer == nil, vault.isAllowedBuild, vault.isEnabled,
+              let site = VaultSite.suggestion(for: ask.origin, suffixes: vault.suffixes) else {
+            if let offer = vaultSetupOffer, offer.ask != nil, offer.ask != tab.vaultSetupAsk?.id
+                || tab.vaultSetupAsk?.answer != nil { vaultSetupOffer = nil }
+            return
+        }
+        guard vaultSetupOffer?.ask != ask.id else { return }
+        vaultCodeOffer = nil
+        vaultSetupOffer = BrowserVaultSetupOffer(
+            origin: ask.origin, site: site, page: tab.currentURL ?? "", setups: [ask.setup], unsupported: 0,
+            target: vault.oneTimeCodeTarget(for: ask.setup, origin: ask.origin), choices: vault.items(for: ask.origin),
+            ask: ask.id)
+    }
+
     /// Saves the setup bar's code: a site's into its item (the default target unless the person chose
     /// another), then fills its current code if the page asks for one to confirm the setup; an export's as
-    /// items of their own.
+    /// items of their own. For the agent's ask, the agent fills the code once it reads the answer.
     func acceptSetupOffer(into choice: BrowserVaultTarget? = nil) {
         guard let offer = vaultSetupOffer else { return }
         vaultSetupOffer = nil
@@ -748,6 +773,16 @@ extension BrowserHostPaneController {
         case .item(let item): target = item
         case .newItem: target = nil
         case nil: target = offer.target
+        }
+        // The agent's ask: its call keeps the code and fills the first one.
+        if let ask = offer.ask {
+            guard let tab, tab.vaultSetupAsk?.id == ask else { return }
+            switch choice {
+            case .item(let item): tab.answerSetupAsk(.save(.item(item.id)))
+            case .newItem: tab.answerSetupAsk(.save(.newItem))
+            case nil: tab.answerSetupAsk(.save(.suggested))
+            }
+            return
         }
         let saved: VaultItem
         do {
@@ -768,6 +803,7 @@ extension BrowserHostPaneController {
         guard let offer = vaultSetupOffer else { return }
         vaultSetupOffer = nil
         offer.setups.forEach { dismissedSetups.insert($0.secret.key) }
+        if let ask = offer.ask, tab?.vaultSetupAsk?.id == ask { tab?.answerSetupAsk(.declined) }
     }
 
     // MARK: The page's context menu

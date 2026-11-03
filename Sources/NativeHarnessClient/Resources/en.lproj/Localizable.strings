@@ -2846,6 +2846,10 @@
 "Save the two-factor code for %@?" = "Save the two-factor code for %@?";
 "Replace the two-factor code in “%@” with this one?" = "Replace the two-factor code in “%@” with this one?";
 "Save the two-factor code for %@ in “%@”?" = "Save the two-factor code for %@ in “%@”?";
+"Save the two-factor code the agent set up for %@?" = "Save the two-factor code the agent set up for %@?";
+"Save the two-factor code the agent set up for %@ in “%@”?" = "Save the two-factor code the agent set up for %@ in “%@”?";
+"Replace the two-factor code in “%@” with the one the agent set up?" = "Replace the two-factor code in “%@” with the one the agent set up?";
+"Save the two-factor code the agent set up for %@, so that it can fill its codes." = "Save the two-factor code the agent set up for %@, so that it can fill its codes.";
 "Two-factor codes" = "Two-factor codes";
 "Two-factor code" = "Two-factor code";
 "Import QR Code…" = "Import QR Code…";

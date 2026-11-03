@@ -46,9 +46,9 @@ final class MacAgentToolService: NativeSurfaceResource {
         }
         self.tabs = tabs
         let tools = BrowserAgentTools(usesMacEditingCommands: true, tabs: tabs)
-        tools.setupKeysPictured = { image in
+        tools.setupsPictured = { image in
             await Task.detached(priority: .userInitiated) {
-                VaultQRCodeReader.setups(in: VaultQRCodeReader.messages(in: image)).setups.map(\.secret.key)
+                VaultQRCodeReader.setups(in: VaultQRCodeReader.messages(in: image)).setups
             }.value
         }
         tools.clipboardIsConcealed = { VaultClipboard.holdsConcealed() }

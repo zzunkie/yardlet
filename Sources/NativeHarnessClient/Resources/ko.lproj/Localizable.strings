@@ -2846,6 +2846,10 @@
 "Save the two-factor code for %@?" = "%@ 2단계 인증 코드를 저장할까요?";
 "Replace the two-factor code in “%@” with this one?" = "“%@”의 2단계 인증 코드를 이것으로 바꿀까요?";
 "Save the two-factor code for %@ in “%@”?" = "%1$@ 2단계 인증 코드를 “%2$@”에 저장할까요?";
+"Save the two-factor code the agent set up for %@?" = "에이전트가 설정한 %@ 2단계 인증 코드를 저장할까요?";
+"Save the two-factor code the agent set up for %@ in “%@”?" = "에이전트가 설정한 %1$@ 2단계 인증 코드를 “%2$@”에 저장할까요?";
+"Replace the two-factor code in “%@” with the one the agent set up?" = "“%@”의 2단계 인증 코드를 에이전트가 설정한 코드로 바꿀까요?";
+"Save the two-factor code the agent set up for %@, so that it can fill its codes." = "에이전트가 설정한 %@ 2단계 인증 코드를 저장해 주세요. 저장하면 에이전트가 코드를 채웁니다.";
 "Two-factor codes" = "인증 코드";
 "Two-factor code" = "2단계 인증 코드";
 "Import QR Code…" = "QR 코드 가져오기…";

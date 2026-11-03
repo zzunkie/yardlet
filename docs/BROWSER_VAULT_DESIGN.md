@@ -150,7 +150,7 @@ is better not to do it because of technical limits or product principles.
 | Agent access policy "Always allow / While unlocked / Never" (default Always allow), overridden per item | [Vault] [Autofill] | Possible as is | The three steps of section 6.1. As in Aside, the default for a new item is "Always" (user correction on 2026-10-24) |
 | Unlocking the vault with Touch ID or Windows Hello | [Vault] | Possible as is | LocalAuthentication. A Mac without Touch ID uses the login password instead |
 | Scoped access that gives each task only what it needs, a record each time a credential is used | [Home] (not in the help pages) | Possible as is | The usage log of section 6.3 and per-item site binding |
-| TOTP: finding the QR on a setup page and offering to save it, the agent enrolling the authenticator and filling codes without seeing the secret | [Changes C] 2026-07-21 and 10-21 | Possible as is | Filling codes takes the same path as section 5. Since 2026-10-25 the panel reads a page's setup QR from the screen and offers to save it (section 14). There is no path yet for the agent to enroll a setup QR without the person |
+| TOTP: finding the QR on a setup page and offering to save it, the agent enrolling the authenticator and filling codes without seeing the secret | [Changes C] 2026-07-21 and 10-21 | Possible as is | Filling codes takes the same path as section 5. Since 2026-10-25 the panel reads a page's setup QR from the screen and offers to save it (section 14). Since 2026-11-03 an agent's code fill on a setup page asks the person with the same bar, and on Save fills the first code (section 20) |
 | Saving passkeys, showing them automatically, conditional sign-in, syncing between devices, handing over to the browser's own passkey flow | [Changes C] 2026-07-21, 07-25 and 10-16 | Partly possible | Passkeys that Yardlet holds should be usable through a CDP virtual authenticator (checked in step 1 of section 12). No syncing between devices. Touch ID profile passkeys already work but need the person. Apple does not open up iCloud Keychain passkeys |
 | Autofill for the person: sign-in suggestions, save prompts, password generation | [Autofill] | Partly possible | Because CEF renders off screen, Chrome's autocomplete list and save bubble do not appear in the panel. Yardlet draws them natively: a save prompt when the person signs in, a key button in the address bar on sites with items (section 8.3), a code bar when a verification code field shows (section 14), and a strong password bar at a new password field (section 15). There is no suggestion list attached under fields |
 | Import: CSV, directly from other managers, Apple Passwords, the 1Password extension | [Autofill] [Troubleshooting] [Changes C] 2026-10-11 [Changes B] 06-20 | Partly possible | CSV is possible. Apple does not open up Apple Passwords or iCloud Keychain, and Yardlet has no extension path either |
@@ -625,6 +625,7 @@ safe everywhere pleases nobody), D3's default changed, and this task decided the
 | D7 | Child tasks and other harnesses | The same rules (section 7) |
 | D8 | Strong passwords (2026-10-28) | Chrome's generator and presave, `passwordrules`, previous passwords kept in the item; agents only for new accounts (section 15) |
 | D9 | Finding an item (2026-10-30) | A search in Settings → Passwords and in the key button's list, which shows on every site's page; another site's password after Touch ID, then an offer to save the site; a sign-in with no code takes its account's code; agents unchanged (section 16) |
+| D11 | Two-factor setups an agent finds (2026-11-03) | An agent's code fill on a setup page asks the person with the setup bar before anything is saved; Save keeps it and the first code goes in, Not Now keeps nothing (section 20) |
 | D10 | Agents sign in by themselves (2026-11-03) | The server's instructions and the tools' descriptions send a sign-in or a code to the fill tool before the person; of several items, a fill naming none takes the page's account, the task's last on the host or the host's own; a passkey refusal points to the password (section 19) |
 
 ## 12. Implementation steps
@@ -772,6 +773,8 @@ apps, and backup and restore work only between devices of the same kind
   default target, and the arrow beside it picks another item or "New Item". After saving, if the page has a code field
   (the field asking for the first code to finish setup), the new code is filled right away. The code bar does not show
   on a setup page (that field belongs to the new code). An `otpauth:` link on the page is taken through the same bar.
+  An agent that fills the first code of a setup the vault does not hold gets the same bar for the person first (section
+  20).
 - **The path the person chooses:** the page right-click "Add Two-Factor Code from QR Code" reads the current screen. It
   also shows on pages that are not sites (image files). If nothing is found, it says "No two-factor QR code is on the
   screen." A key put off with "Not Now" is not asked about again while that tab is visible, but this menu reads it
@@ -1441,7 +1444,7 @@ sign-in.
 | The account was saved, and the agent never called `browser_fill_credential` (all in Claude Code) | 22 | The instructions and descriptions (section 19.2) |
 | Nothing saved for the site or the account | 26 | The save bar already offers a password the person types into a handed-over tab. Most were sites never saved, or signed in through another site's account |
 | A step only the person can take: a Touch ID passkey as a cloud console's second factor (12), a CAPTCHA or device check (4), a QR code for the phone or an identity check (4), a passkey prompt (1) | 21 | None. Where the service allows it, the person can add an authenticator app as another second factor and save it in the vault |
-| A code sent by mail or text (8), a saved code not yet linked to its site (3, linked since 2026-10-29, section 14.3), a two-factor setup the agent could not save (4) | 15 | The instructions say that a code in mail the agent can read is its to type |
+| A code sent by mail or text (8), a saved code not yet linked to its site (3, linked since 2026-10-29, section 14.3), a two-factor setup the agent could not save (4) | 15 | The instructions say that a code in mail the agent can read is its to type; a setup the agent finds is the person's to save (section 20) |
 | Several accounts and none named | 1 (16 refusals in the usage log, most named on the next call) | Choosing (section 19.2) |
 | A password changed outside the vault (2), the scripts rule (1), a fill error fixed on 2026-10-27 (1), the person's own wish (1) | 5 | — |
 | Another host or a redirect | 0 (3 refusals named an item on a site that signs in through it) | None |
@@ -1497,3 +1500,56 @@ not linked 5, an item of another site 3, the scripts rule 3 and others 3.
   report. On the QA server's `/vault/login` with two items saved for the site, a fill naming none took the account typed
   into the page's username field (an every-time item, so it waited for the person, who said no), and with the field
   empty took the item this task had filled there and said so in its result.
+
+## 20. Two-factor setups an agent finds (2026-11-03)
+
+The request: when an agent turns on two-step verification for an account (a new cloud console user, an authenticator
+added beside a phone prompt), the vault keeps the setup so that later sign-ins need no phone, as Aside's agents enroll
+an authenticator ([Changes C] 2026-10-21). The condition: before an agent's setup is saved, the person is asked once,
+with the bar they already know; Save keeps it and fills the first code, Not Now keeps nothing, and the agent never sees
+the key.
+
+### 20.1 Decisions
+
+- **When:** an agent calls `browser_fill_credential` with `kind: one_time_code` on a page that shows a two-factor setup
+  the vault does not hold: an `otpauth://` link, else a QR code that a graphic of a QR code's size and shape on screen
+  draws (the panel watch's own test), read from the tab's picture with Vision. Every key found is kept out of results
+  and makes the document a filled one (section 5.3), as when the panel sees it. An export of several accounts is not
+  taken this way. A page whose setup the vault holds fills its code without asking.
+- **Asking:** the task's browser panel opens on the tab, as for a handoff, with the setup bar (section 14.3) saying the
+  agent set it up ("Save the two-factor code the agent set up for github.com in “GitHub”?", or "Replace the two-factor
+  code in “GitHub” with the one the agent set up?" when the item has one), and a notification says what is asked. The
+  item it goes into is chosen as the bar always chooses it, and its arrow offers the site's other items or a new one.
+  The agent's call waits, as `browser_handoff` does (600 seconds, within the harness's limit); after that the bar stays
+  until the person answers or the turn ends, and a call on the field waits again. While it waits, the panel's own offer
+  for the same page does not take its place. The phone's remote connection shows the ask as it shows a handoff: I'm
+  done saves where the bar would by default, and Decline is Not Now.
+- **Save:** the agent's call keeps the code in the item the person chose, for the site, then takes that item and puts in
+  its current code, on the path of every code fill (sections 5.2 and 5.3; the item's agent policy applies). The result says
+  the person saved the setup and names the item.
+- **Not Now, the page moving on, the turn ending, the tab closing:** nothing is saved or filled, and the agent hears
+  which.
+
+### 20.2 Rules kept
+
+- The key never reaches the agent: no result, log or bar carries it, and the agent's screenshots and scripts are
+  refused on the page (section 5.3). The QR is read only inside the Yardlet process.
+- Nothing is kept without the person's Save. The site saved is the page's registrable domain from the browser's main
+  frame origin, as for every setup the person saves.
+- No new settings, menu items or shortcuts. The bar is the existing setup bar with new words for the agent's ask; with
+  the vault off, the agent's code fill asks nothing, as before.
+
+### 20.3 Verification
+
+- Unit: `BrowserAgentToolsTests.testACodeFillOnASetupPageAsksThePersonToKeepTheSetupFirst` (Save keeps the key in the
+  account's item and fills one code; the key in no result; the page then refuses the agent's scripts; Not Now keeps
+  nothing and fills nothing; a held setup asks nothing).
+- Render: `VaultSettingsRenderingTests.testTheSetupBarSaysWhenTheAgentAsks` (`vault-setup-bar`, light and dark, checked
+  by eye: the page's own bar and the agent's into a new item, into the account's item, replacing a code, and with the
+  arrow; no key in any).
+- Real CEF 154 QA (an ad-hoc QA copy in the background, a temporary home, the vault in memory, test keys only):
+  `run-check.sh … --ui-fixture-browser-check-only=vault`, 105 checks passed, no process left and no crash report. On the
+  QA server's `/vault/otp/agent-setup`, with a QR code of a test key drawn in, an agent's code fill brought the setup bar
+  for the agent's ask to the task's panel (PNG `vault-panel-agent-setup-bar`, checked by eye); Save kept the key in a
+  new item for the site and the fill's code was taken by the page's check; on `?second`, Not Now left the item's key as
+  it was and the agent's call said the person did not save it.

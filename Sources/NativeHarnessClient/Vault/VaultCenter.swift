@@ -222,6 +222,8 @@ struct VaultFillRequest: Sendable {
     var afterAgentScript = false
     /// What the page says of the account it signs in to, for a fill that names no item on a site with several.
     var pageAccounts = VaultPageAccounts()
+    /// The item the person just saved the page's two-factor setup in (design §20), which the fill takes.
+    var itemID: UUID?
 }
 
 /// What a sign-in page says of its account (design §5.1): the values of its form's username fields, hidden ones
@@ -394,7 +396,12 @@ final class VaultCenter: ObservableObject {
         }
         let item: VaultItem
         var chosen: (reason: String, among: Int)?
-        if !name.isEmpty {
+        if let id = request.itemID {
+            guard let saved = onSite.first(where: { $0.id == id }) else {
+                return refuse(request, item: nil, "The item the person saved is not for \(host).")
+            }
+            item = saved
+        } else if !name.isEmpty {
             let here = matching.filter(isNamed)
             guard here.count < 2 else {
                 return refuse(request, item: nil, "Several items for \(host) are named “\(name)”: "

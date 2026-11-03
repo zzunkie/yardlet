@@ -280,6 +280,9 @@ final class BrowserAgentTabs: BrowserAgentTabDirectory {
         page.handOff = { [weak tab] in tab?.handOff(reason: $0) }
         page.handoff = { [weak tab] in tab?.handoff }
         page.endHandoff = { [weak tab] in tab?.endHandoff() }
+        page.askToSaveSetup = { [weak tab] in tab?.askToSaveSetup($0, origin: $1) }
+        page.setupAsk = { [weak tab] in tab?.vaultSetupAsk }
+        page.endSetupAsk = { [weak tab] in tab?.endSetupAsk() }
         page.vaultFills = tab.vaultFills
         page.linkedVaultFill = { [weak self, weak tab] in tab.flatMap { self?.filledTab(linkedTo: $0)?.id } }
         page.noteScriptInLinkedTabs = { [weak self, weak tab] in

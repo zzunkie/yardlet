@@ -1049,8 +1049,16 @@ extension BrowserAgentTools {
 
         var request = VaultFillRequest(sessionID: sessionID, itemName: itemName, kind: kind, origin: frame.origin)
         request.afterAgentScript = page.vaultFills.scriptedDocuments.contains(frame.loaderID)
+        // A two-factor setup the page shows goes into the vault once the person saves it, and its first code is filled.
+        var kept = ""
+        if kind == .oneTimeCode, let setup = await setupShown(on: page, objectID: objectID) {
+            let item = try await askToKeep(setup, origin: frame.origin, on: page, sessionID: sessionID)
+            request.itemID = item.id
+            kept = "The person saved the page's two-factor setup in “\(item.name)”. "
+        }
         // Read only when the site has several items to choose from.
-        if itemName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true, vault.items(for: frame.origin).count > 1,
+        if request.itemID == nil, itemName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true,
+           vault.items(for: frame.origin).count > 1,
            let accounts = try? await callInVaultWorld(page, objectID, Self.pageAccountsFunction) {
             request.pageAccounts = VaultPageAccounts(
                 fieldValues: accounts["values"]?.arrayValue?.compactMap(\.stringValue) ?? [],
@@ -1145,8 +1153,113 @@ extension BrowserAgentTools {
                 + "would put the password in an address or send it to another site, Yardlet stops it and says so. "
                 + "The values are not shown to you." + chosen)
         }
-        return .text("Filled \(what) of “\(grant.item.name)” into the form on \(host)"
+        return .text(kept + "Filled \(what) of “\(grant.item.name)” into the form on \(host)"
             + (submitted ? " and submitted it." : ".") + " The values are not shown to you." + chosen)
+    }
+
+    /// A two-factor setup the page shows that the vault does not hold (design §20): an `otpauth://` link, else the QR
+    /// code a near-square graphic on screen draws, read from the tab's picture. Every key found is kept out of results
+    /// and makes the document one the vault filled, as the panel's watch does. Nil for a page that shows none, or an
+    /// export of several accounts.
+    private func setupShown(on page: BrowserAgentPage, objectID: String) async -> OneTimeCodeSetup? {
+        guard let vault, vault.isAllowedBuild, vault.isEnabled,
+              let look = try? await callInVaultWorld(page, objectID, Self.setupLookFunction) else { return nil }
+        var setups = (look["links"]?.arrayValue ?? []).compactMap(\.stringValue).flatMap { OneTimeCodeSetup.setups(in: $0).setups }
+        if setups.isEmpty, look["square"]?.boolValue == true, let read = setupsPictured,
+           let shot = try? await send(page, "Page.captureScreenshot", ["format": .string("png")], timeout: loadTimeout),
+           let image = shot["data"]?.stringValue.flatMap({ Data(base64Encoded: $0) }) {
+            setups = await read(image)
+        }
+        guard !setups.isEmpty else { return nil }
+        let spellings = setups.flatMap { VaultPageScripts.spellings(ofSetupKey: $0.secret.key) }
+        spellings.forEach { vaultScrub.add($0) }
+        await VaultPageScripts.noteSecretsShown(spellings, on: page.cdp, fills: page.vaultFills)
+        let new = setups.filter { !vault.holds($0.secret) }
+        return new.count == 1 ? new[0] : nil
+    }
+
+    /// Whether the page may show a two-factor setup, as the panel's watch looks for one: its `otpauth:` links, and
+    /// whether a graphic of a QR code's size and shape is on screen.
+    static let setupLookFunction = """
+        function() {
+          const onScreen = r => r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
+          const links = Array.from(document.querySelectorAll('a[href^="otpauth" i]')).map(a => a.href);
+          const square = Array.from(document.querySelectorAll('img, canvas, svg')).some(e => {
+            if (e.parentElement && e.parentElement.closest('svg')) return false;
+            const r = e.getBoundingClientRect();
+            return onScreen(r) && r.width >= 96 && r.width <= 640 && Math.abs(r.width - r.height) <= r.width * 0.15;
+          });
+          return { links, square };
+        }
+        """
+
+    /// Asks the person to keep a setup the agent's page shows (design §20): the task's panel opens on the tab with the
+    /// setup bar, and Yardlet tells them as for a handoff. Waits for Save or Not Now, the page moving on, the end of the
+    /// turn or the handoff's time, after which the bar stays and a call waits again. Returns the item the code went into.
+    private func askToKeep(_ setup: OneTimeCodeSetup, origin: String, on page: BrowserAgentPage,
+                           sessionID: UUID) async throws -> VaultItem {
+        let host = VaultSite.host(of: origin)
+        guard let asked = page.askToSaveSetup(setup, origin) else {
+            throw BrowserAgentToolError("This browser cannot ask the person to save a two-factor code.")
+        }
+        let notice = Self.handoffNotice(asked.ask.id)
+        if asked.isNew {
+            handoffNotices[sessionID, default: []].insert(notice)
+            handoffs?.handoffStarted(session: sessionID, tabKey: page.tabKey, reason: L10n.format(
+                "Save the two-factor code the agent set up for %@, so that it can fill its codes.", host), notice: notice)
+        }
+        let timeout = min(Self.handoffDefaultWait, handoffs?.handoffWaitCeiling(for: sessionID) ?? .seconds(25 * 60))
+        let start = ContinuousClock.now
+        func end() {
+            page.endSetupAsk()
+            handoffNotices[sessionID]?.remove(notice)
+            handoffs?.handoffEnded(notice: notice)
+        }
+        while true {
+            let answer = page.setupAsk()?.answer
+            if page.isClosed() || page.setupAsk() == nil {
+                end()
+                throw BrowserAgentToolError("The tab closed before the person answered; nothing was saved.")
+            }
+            switch answer {
+            case .save(let target)?:
+                end()
+                guard let vault, let site = VaultSite.suggestion(for: origin, suffixes: vault.suffixes) else {
+                    throw BrowserAgentToolError("Yardlet keeps two-factor codes only for https sites; nothing was saved.")
+                }
+                let into: VaultItem?
+                switch target {
+                case .suggested: into = vault.oneTimeCodeTarget(for: setup, origin: origin)
+                case .item(let id): into = vault.items.first { $0.id == id }
+                case .newItem: into = nil
+                }
+                do {
+                    return try vault.saveOneTimeCode(setup, site: site, into: into)
+                } catch {
+                    throw BrowserAgentToolError("Yardlet could not save the two-factor code: \(error.localizedDescription)")
+                }
+            case .declined?:
+                end()
+                throw BrowserAgentToolError("The person chose not to save the two-factor code for \(host) in Yardlet's "
+                    + "password manager, so nothing was saved or filled. Hand the tab to the person if the setup is to go on.")
+            case .pageMoved?:
+                end()
+                throw BrowserAgentToolError("The page went to another address before the person answered; nothing was saved.",
+                                            AgentToolFailure(.refused, retry: .withChanges))
+            case .turnEnded?:
+                end()
+                throw BrowserAgentToolError("The task's turn ended before the person answered; nothing was saved.")
+            case nil:
+                break
+            }
+            if ContinuousClock.now - start >= timeout {
+                let waited = Self.format(Double((ContinuousClock.now - start).components.seconds))
+                throw BrowserAgentToolError("The person has not answered after \(waited) seconds. The bar asking them to save "
+                    + "the two-factor code stays in the task's browser panel until they answer or your turn ends; "
+                    + "browser_fill_credential on this field waits again.", AgentToolFailure(.timedOut, retry: .later))
+            }
+            try? await Task.sleep(for: max(pollInterval, .milliseconds(250)))
+        }
     }
 
     /// Which of the site's items Yardlet took for a fill that named none, and why, so the agent can name another.

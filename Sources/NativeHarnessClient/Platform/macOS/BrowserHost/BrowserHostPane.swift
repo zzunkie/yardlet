@@ -318,6 +318,7 @@ final class BrowserHostPaneController {
         tab.onAgentActivity = nil
         tab.onEmulationChange = nil
         tab.onHandoffChange = nil
+        tab.onVaultSetupAskChange = nil
         emulation = nil
         handoff = nil
         view?.emulatedSize = nil
@@ -379,6 +380,11 @@ final class BrowserHostPaneController {
         }
         showHandoff(of: tab)
         adoptVault(tab, in: view)
+        tab.onVaultSetupAskChange = { [weak self, weak tab] in
+            guard let self, let tab, self.tab === tab else { return }
+            self.showSetupAsk(of: tab)
+        }
+        showSetupAsk(of: tab)
         view.tabID = tab.id
         view.isPasswordFieldFocused = tab.isPasswordFieldFocused
         view.sendCommand = { [weak tab] command in tab?.send(command) }
@@ -1270,7 +1276,10 @@ struct BrowserHostPane: View {
                         if let question = controller.externalAppQuestion { externalAppBar(question) }
                         if let chooser = controller.fileDialog, controller.fileDialogByAgent { fileChooserBar(chooser) }
                         if let offer = controller.vaultOffer { vaultOfferBar(offer) }
-                        if let offer = controller.vaultSetupOffer { vaultSetupBar(offer) }
+                        if let offer = controller.vaultSetupOffer {
+                            BrowserVaultSetupBar(offer: offer, dismiss: { controller.dismissSetupOffer() },
+                                                 accept: { controller.acceptSetupOffer(into: $0) })
+                        }
                         if let offer = controller.vaultCodeOffer { vaultCodeBar(offer) }
                         if let offer = controller.vaultPasswordOffer { vaultPasswordBar(offer) }
                         if let offer = controller.vaultLinkOffer { vaultLinkBar(offer) }
@@ -1751,52 +1760,6 @@ struct BrowserHostPane: View {
 
     /// A site's two-factor setup QR code (or an authenticator app's export) on the page, offered for the
     /// vault, as Safari offers setting up a code from a QR code's image.
-    private func vaultSetupBar(_ offer: BrowserVaultSetupOffer) -> some View {
-        vaultBar(systemName: "qrcode") {
-            Text(setupQuestion(offer))
-        } actions: {
-            Button(L10n.string("Not Now")) { controller.dismissSetupOffer() }
-                .controlSize(.small)
-            if offer.isImport {
-                Button(L10n.string("Import")) { controller.acceptSetupOffer() }
-                    .controlSize(.small)
-            } else if offer.choices.count > 1 {
-                // Saves into the default target; the arrow chooses another item.
-                Menu {
-                    ForEach(offer.choices) { item in
-                        Button(item.username.isEmpty ? item.name : "\(item.name) · \(item.username)") {
-                            controller.acceptSetupOffer(into: .item(item))
-                        }
-                    }
-                    Divider()
-                    Button(L10n.string("New Item")) { controller.acceptSetupOffer(into: .newItem) }
-                } label: {
-                    Text(L10n.string("Save"))
-                } primaryAction: {
-                    controller.acceptSetupOffer()
-                }
-                .controlSize(.small)
-                .fixedSize()
-            } else {
-                Button(L10n.string("Save")) { controller.acceptSetupOffer() }
-                    .controlSize(.small)
-            }
-        }
-    }
-
-    private func setupQuestion(_ offer: BrowserVaultSetupOffer) -> String {
-        if offer.isImport {
-            return offer.setups.count == 1
-                ? L10n.format("Save the two-factor code for “%@”?", offer.setups[0].itemName)
-                : L10n.format("Import %lld two-factor codes?", Int64(offer.setups.count))
-        }
-        let host = VaultSite.host(of: offer.origin)
-        guard let target = offer.target else { return L10n.format("Save the two-factor code for %@?", host) }
-        return target.hasOneTimeCode
-            ? L10n.format("Replace the two-factor code in “%@” with this one?", target.name)
-            : L10n.format("Save the two-factor code for %@ in “%@”?", host, target.name)
-    }
-
     private func vaultBar<Message: View, Actions: View>(systemName: String, @ViewBuilder message: () -> Message,
                                                         @ViewBuilder actions: () -> Actions) -> some View {
         HStack(spacing: 10) {
@@ -2018,6 +1981,74 @@ struct BrowserVaultSaveBar: View {
         .background(.background)
         .overlay(alignment: .bottom) { Rectangle().fill(ParityTheme.separator).frame(height: 1) }
         .accessibilityElement(children: .contain)
+    }
+}
+
+/// The bar offering to keep a two-factor setup (design §14): one the page showed, or one the agent's code fill found and
+/// asks the person to keep (§20), which says so. Not Now, and Save into the default item, whose arrow chooses another
+/// of the site's items or a new one; an authenticator app's export is imported whole.
+struct BrowserVaultSetupBar: View {
+    let offer: BrowserVaultSetupOffer
+    let dismiss: () -> Void
+    let accept: (BrowserVaultTarget?) -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "qrcode").foregroundStyle(.secondary)
+            Text(question)
+                .font(.callout)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button(L10n.string("Not Now"), action: dismiss)
+                .controlSize(.small)
+            if offer.isImport {
+                Button(L10n.string("Import")) { accept(nil) }
+                    .controlSize(.small)
+            } else if offer.choices.count > 1 {
+                // Saves into the default target; the arrow chooses another item.
+                Menu {
+                    ForEach(offer.choices) { item in
+                        Button(item.username.isEmpty ? item.name : "\(item.name) · \(item.username)") { accept(.item(item)) }
+                    }
+                    Divider()
+                    Button(L10n.string("New Item")) { accept(.newItem) }
+                } label: {
+                    Text(L10n.string("Save"))
+                } primaryAction: {
+                    accept(nil)
+                }
+                .controlSize(.small)
+                .fixedSize()
+            } else {
+                Button(L10n.string("Save")) { accept(nil) }
+                    .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ParityTheme.subtleFill)
+        .background(.background)
+        .overlay(alignment: .bottom) { Rectangle().fill(ParityTheme.separator).frame(height: 1) }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var question: String {
+        if offer.isImport {
+            return offer.setups.count == 1
+                ? L10n.format("Save the two-factor code for “%@”?", offer.setups[0].itemName)
+                : L10n.format("Import %lld two-factor codes?", Int64(offer.setups.count))
+        }
+        let host = VaultSite.host(of: offer.origin)
+        guard let target = offer.target else {
+            return offer.ask == nil ? L10n.format("Save the two-factor code for %@?", host)
+                : L10n.format("Save the two-factor code the agent set up for %@?", host)
+        }
+        if target.hasOneTimeCode {
+            return offer.ask == nil ? L10n.format("Replace the two-factor code in “%@” with this one?", target.name)
+                : L10n.format("Replace the two-factor code in “%@” with the one the agent set up?", target.name)
+        }
+        return offer.ask == nil ? L10n.format("Save the two-factor code for %@ in “%@”?", host, target.name)
+            : L10n.format("Save the two-factor code the agent set up for %@ in “%@”?", host, target.name)
     }
 }
 
