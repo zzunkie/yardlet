@@ -39,7 +39,7 @@ extension RemoteServer {
 
     func handleTerminal(_ requestID: String, request: RemoteRequest, on connection: UUID) async {
         let deviceID = connections[connection]?.deviceID
-        if let error = await permissionError(.terminal, on: connection) {
+        if let error = permissionError(.terminal, on: connection) {
             respond(.failure(requestID, error), to: connection)
             auditTerminal(request.type, device: deviceID, task: request.taskID, bytes: request.terminalInputBytes,
                           result: error.code.rawValue)
@@ -67,7 +67,7 @@ extension RemoteServer {
                 case .queued: break
                 }
             }
-            let currentPermission = await permissionError(.terminal, on: connection)
+            let currentPermission = permissionError(.terminal, on: connection)
             let refusal = error ?? currentPermission ?? (permit.isValid ? nil : RemoteError(.notAllowed))
             guard refusal == nil, terminals[terminalID] != nil else {
                 endTerminal(terminalID, reason: refusal?.code.rawValue ?? "notAllowed")

@@ -1796,7 +1796,6 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var terminals: Bool?
     public var isAtPrompt: Bool?
     public var isRunningProgram: Bool?
-    public var workspaceRoot: String?
 
     public init(re: String, ok: Bool = true, error: RemoteError? = nil) {
         self.re = re
