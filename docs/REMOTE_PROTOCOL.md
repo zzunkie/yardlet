@@ -560,6 +560,7 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
   (§7, §13.1, §14.3).
 - 2026-11-02, v2 only: scheduled tasks, Run now, Pause and Resume, and their change event (§15.21); a task's outputs
   and the files in its folders (§15.22).
+- 2026-11-03: `presence` and held pushes (§16, §18).
 - 2026-11-02, a rule restated: `parentTaskId` (§4.1) is the task the Mac's sidebar draws the task under, so a task
   whose parent is in another list, pinned apart or in a split view comes without one, as the sidebar lists it.
   Before, it was the task it was started from whenever that task was listed anywhere.
@@ -1329,6 +1330,9 @@ device's push key, associated data the UTF-8 bytes of `yardlet-push/1`, over the
  "macName": "MacBook Pro", "sentAt": 1792158000000}
 ```
 
+- While a paired desktop says it is in use (`presence`, §18), attention pushes wait: the Mac keeps the latest change
+  of each task and sends those, in the order they came, once no desktop is in use (it says so, or its connection
+  ends). A request answered on the desktop meanwhile then withdraws rather than rings. Link requests are not held.
 - A waiting link request (§15.11) is pushed too, urgent:
   `{"event": "linkRequest", "requestId", "name", "platform", "code", "expiresAt", "macName", "sentAt"}`.
 - `data.k` is the push key id, so a phone paired with several Macs knows which key opens it. `collapse` is
@@ -1386,6 +1390,11 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   can be reached and deletes both. Conversations stay in memory while the window is open.
 - **Notifications:** while a host's window is open, a task that starts waiting, finishes or fails posts a notification
   named after the host, which opens the task there.
+- **In use:** a host whose snapshot carries `presence: true` takes `{"type": "presence", "active": true}` (or `false`);
+  the answer is `ok`. The client says `true` while the host's window is in front and the person typed, clicked or
+  moved the pointer in the last two minutes, and `false` once not, telling only a change and again after each new
+  connection. Meanwhile the Mac holds the phones' attention pushes (§16), as Claude Code's remote control does not push
+  to a phone while the person watches the terminal. Not a command; a connection's presence ends with it.
 - **Host settings:** Settings › Remote's "Keep this Mac awake on power" (off unless turned on) holds off idle sleep
   while remote connections are allowed and the Mac is on power, so a device elsewhere can reach it.
 

@@ -198,6 +198,8 @@ public actor RemoteServer {
         var receivesTaskEvents = false
         /// It asked for `scheduledTasks`, so it is told when they change (§15.21).
         var receivesScheduleEvents = false
+        /// A desktop in use (`presence`, §18): phone pushes wait while one is.
+        var isPresent = false
         /// The file it read last (the path the Mac read) and where its next part starts (§15.22): a read that goes on
         /// from there is not written to the audit log again.
         var fileRead: FileRead?
@@ -269,6 +271,8 @@ public actor RemoteServer {
     /// Devices removed while this server runs: a handshake that read one before it went is refused.
     private var revokedDeviceIDs: Set<String> = []
     private var pushSender: (@Sendable (RemotePushRequest) async -> RemotePushResult)?
+    /// Pushes held while a desktop is in use, the latest per task (§18).
+    private var heldPushes: [HeldPush] = []
     private var hasPushDevices = false
     /// The Mac's static public key, for link codes (§12.1); made the first time the remote is used.
     private var macKey: Data?
@@ -374,6 +378,7 @@ public actor RemoteServer {
         guard let connection = connections.removeValue(forKey: id) else { return }
         RemoteLog.notice("Remote: \(Self.describe(connection)) ended with its transport after \(lifetime(of: connection))")
         forgetLink(on: id)
+        if connection.isPresent { Task { await self.releaseHeldPushes() } }
         Task { await self.updateWatched() }
         publishStatus()
     }
@@ -811,6 +816,10 @@ public actor RemoteServer {
                 return await self.bridge.perform(.chooseAnswer(taskID: taskID, requestID: requestID, choice: choice, note: note,
                                                                values: values))
             }
+        case let .presence(active):
+            connections[id]?.isPresent = active
+            respond(RemoteResponse(re: envelope.id), to: id)
+            if !active { await releaseHeldPushes() }
         case .scheduledTasks:
             let read = await readSchedules()
             switch read.result {
@@ -875,6 +884,7 @@ public actor RemoteServer {
             response.followUp = published?.followUp
             response.scheduledTasks = published?.scheduledTasks == true ? true : nil
             response.taskFiles = published?.taskFiles == true && RemoteFileReader.isSupported ? true : nil
+            response.presence = true
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)
             connections[id]?.receivesTaskEvents = true
@@ -1433,8 +1443,35 @@ public actor RemoteServer {
             payload.macName = configuration.server.name
             payload.sentAt = RemoteJSON.milliseconds(now())
             if let title = payload.title { payload.title = String(title.prefix(200)) }
-            await deliver(payload, urgent: urgent, collapse: RemotePushSeal.collapseKey(taskID: event.taskId ?? ""))
+            let collapse = RemotePushSeal.collapseKey(taskID: event.taskId ?? "")
+            // While a desktop is in use the person sees it there; the task's latest change waits for when it is not.
+            if isDesktopInUse {
+                heldPushes.removeAll { $0.collapse == collapse }
+                heldPushes.append(HeldPush(payload: payload, urgent: urgent, collapse: collapse))
+                continue
+            }
+            await deliver(payload, urgent: urgent, collapse: collapse)
         }
+    }
+
+    private struct HeldPush {
+        var payload: RemoteEvent
+        var urgent: Bool
+        var collapse: String
+    }
+
+    /// A paired desktop says it is in use (§18).
+    private var isDesktopInUse: Bool {
+        connections.values.contains { $0.isEstablished && $0.isPresent }
+    }
+
+    /// Once no desktop is in use, each held task's latest change goes to the phones, in the order they came:
+    /// a request still waiting rings, one answered there meanwhile withdraws what an earlier push showed.
+    private func releaseHeldPushes() async {
+        guard !isDesktopInUse, !heldPushes.isEmpty else { return }
+        let held = heldPushes
+        heldPushes = []
+        for push in held { await deliver(push.payload, urgent: push.urgent, collapse: push.collapse) }
     }
 
     private func pushLinkRequest(_ request: RemoteLinkRequest) async {

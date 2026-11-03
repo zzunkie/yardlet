@@ -724,6 +724,8 @@ public enum RemoteRequest: Equatable, Sendable {
     /// What a task made, and a part of one of its files (§15.22).
     case taskOutputs(taskID: String)
     case readFile(taskID: String, path: String, offset: Int)
+    /// A desktop in use, or no longer (§18): the Mac holds phone pushes meanwhile.
+    case presence(active: Bool)
 
     public var type: String {
         switch self {
@@ -761,6 +763,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .setScheduledTaskEnabled: "setScheduledTaskEnabled"
         case .taskOutputs: "taskOutputs"
         case .readFile: "readFile"
+        case .presence: "presence"
         }
     }
 
@@ -774,7 +777,8 @@ public enum RemoteRequest: Equatable, Sendable {
              let .actOnQueued(id, _, _), let .answerHandoff(id, _, _), let .chooseAnswer(id, _, _, _, _),
              let .taskOutputs(id), let .readFile(id, _, _): id
         case .snapshot, .ping, .createTask, .newTaskOptions, .registerPush, .unregisterPush, .forgetDevice,
-             .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled: nil
+             .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled,
+             .presence: nil
         }
     }
 
@@ -840,6 +844,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var worktree: Bool?
         var accountId: String?
         var enabled: Bool?
+        var active: Bool?
         var choice: String?
         var values: [String: RemoteFormValue]?
         var files: [String]?
@@ -1051,6 +1056,9 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             request = .revealLink(nonce: nonce)
         case "scheduledTasks":
             request = .scheduledTasks
+        case "presence":
+            guard let active = wire.active else { return fail(.badRequest, "Missing active") }
+            request = .presence(active: active)
         case "runScheduledTask":
             guard let scheduleID = required(wire.scheduleId) else { return fail(.badRequest, "Missing scheduleId") }
             request = .runScheduledTask(scheduleID: scheduleID)
@@ -1170,6 +1178,8 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             wire.nonce = RemoteEncoding.base64url(nonce)
         case .scheduledTasks:
             break
+        case let .presence(active):
+            wire.active = active
         case let .runScheduledTask(scheduleID):
             wire.scheduleId = scheduleID
         case let .setScheduledTaskEnabled(scheduleID, enabled):
@@ -1247,6 +1257,8 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var received: Int?
     /// `snapshot` on v2: the Mac answers `scheduledTasks` (§15.21).
     public var scheduledTasks: Bool?
+    /// `snapshot` (§18): the Mac takes `presence` and holds phone pushes while a desktop is in use.
+    public var presence: Bool?
     /// `scheduledTasks` (§15.21).
     public var schedules: [RemoteSchedule]?
     /// `snapshot` on v2: the Mac answers `taskOutputs` and `readFile` (§15.22).

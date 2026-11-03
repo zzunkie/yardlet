@@ -328,6 +328,52 @@ final class RemoteSecureTests: XCTestCase {
         XCTAssertTrue(pushes.isEmpty)
     }
 
+    /// A desktop in use holds the phone's pushes; once it is not, each task's latest change goes (§18).
+    func testPushesWaitWhileADesktopIsInUse() async throws {
+        let harness = try await SecureHarness()
+        let sent = PushRecorder()
+        await harness.server.setPushSender { await sent.record($0) }
+        let phone = try await harness.pairedPhone()
+        _ = try await phone.request(#"{"id":"1","type":"registerPush","provider":"fcm","token":"fcm-token-1"}"#)
+        phone.disconnect()
+        let desktop = try await harness.pairedPhone()
+        let snapshot = try await desktop.request(#"{"id":"1","type":"snapshot"}"#)
+        XCTAssertEqual(snapshot.presence, true)
+        let present = try await desktop.request(#"{"id":"2","type":"presence","active":true}"#)
+        XCTAssertTrue(present.ok)
+
+        // In use: a request that starts waiting, and then a newer one, wait with the desktop.
+        try await harness.change(task: "A", to: .waiting, request: "r1")
+        try await harness.change(task: "A", to: .waiting, request: "r2")
+        try await Task.sleep(for: .milliseconds(150))
+        let held = await sent.requests
+        XCTAssertTrue(held.isEmpty)
+
+        // No longer in use: the task's latest change goes, once.
+        _ = try await desktop.request(#"{"id":"3","type":"presence","active":false}"#)
+        let push = try await sent.first()
+        XCTAssertTrue(push.urgent)
+        let registrations = await harness.devices.all().compactMap(\.push)
+        let registration = try XCTUnwrap(registrations.first)
+        let key = try XCTUnwrap(RemoteEncoding.data(base64url: registration.key))
+        let opened = try JSONDecoder().decode(RemoteEvent.self, from: RemotePushSeal.open(push.sealed, key: key))
+        XCTAssertEqual(opened.requestId, "r2")
+        try await Task.sleep(for: .milliseconds(150))
+        let afterRelease = await sent.requests
+        XCTAssertEqual(afterRelease.count, 1)
+
+        // A desktop in use that drops its connection lets the held pushes go too.
+        _ = try await desktop.request(#"{"id":"4","type":"presence","active":true}"#)
+        try await harness.change(task: "A", to: .unread, request: nil)
+        try await Task.sleep(for: .milliseconds(150))
+        let whileInUse = await sent.requests
+        XCTAssertEqual(whileInUse.count, 1)
+        desktop.disconnect()
+        _ = try await sent.count(2)
+        let malformed = try await harness.pairedPhone().request(#"{"id":"5","type":"presence"}"#)
+        XCTAssertEqual(malformed.error?.code, .badRequest)
+    }
+
     func testOnlyWorthwhileChangesArePushed() {
         func event(_ from: RemoteAttention?, _ to: RemoteAttention) -> RemoteEvent {
             var event = RemoteEvent(.attention)

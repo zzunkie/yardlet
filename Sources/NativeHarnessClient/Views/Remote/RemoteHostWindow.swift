@@ -63,6 +63,7 @@ struct RemoteHostView: View {
         }
         .navigationTitle(model.name)
         .navigationSubtitle(RemoteConnectionText.line(model.connection))
+        .modifier(RemotePresence(model: model))
     }
 
     @ViewBuilder
@@ -91,6 +92,28 @@ struct RemoteHostView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+}
+
+/// Tells the host whether the person is using its window: in front, with input in the last two minutes. The
+/// host holds its phone pushes meanwhile (docs/REMOTE_PROTOCOL.md §18), as Claude Code's remote control does not
+/// push to a phone while the person watches the terminal.
+private struct RemotePresence: ViewModifier {
+    let model: RemoteHostModel
+    @Environment(\.controlActiveState) private var activeState
+
+    static let idleLimit: Double = 120
+    static let checkInterval: Duration = .seconds(30)
+
+    func body(content: Content) -> some View {
+        content
+            .task(id: activeState == .key) {
+                while !Task.isCancelled {
+                    model.setPresence(activeState == .key && UserIdleTime.seconds < Self.idleLimit)
+                    try? await Task.sleep(for: Self.checkInterval)
+                }
+            }
+            .onDisappear { model.setPresence(false) }
     }
 }
 

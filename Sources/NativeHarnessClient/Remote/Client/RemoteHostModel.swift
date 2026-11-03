@@ -56,6 +56,10 @@ final class RemoteHostModel: Identifiable {
     @ObservationIgnored private var reader: Task<Void, Never>?
     @ObservationIgnored private var pending: [String: (RemoteResponse) -> Void] = [:]
     @ObservationIgnored private var nextRequest = 0
+    /// The person is using this host's window now (`setPresence`), and what the host was last told.
+    @ObservationIgnored private var isPresent = false
+    @ObservationIgnored private var toldPresence: Bool?
+    @ObservationIgnored private var hostTakesPresence = false
     /// Subscriptions, the least recently shown first; a host takes 8 per connection (§7).
     @ObservationIgnored private var subscribed: [String] = []
     @ObservationIgnored static let keptSubscriptions = 6
@@ -174,9 +178,25 @@ final class RemoteHostModel: Identifiable {
             newTask = response.newTask
             followUp = response.followUp
             hasSnapshot = true
+            hostTakesPresence = response.presence == true
+            toldPresence = nil
+            tellPresence()
             if case let .task(id) = selection, !tasks.contains(where: { $0.id == id }) { selection = .none }
         }
         for taskID in subscribed { subscribe(taskID) }
+    }
+
+    /// Whether the person is using this host's window now: its phone pushes wait meanwhile (§18). The host is
+    /// told only of a change, and again after each new connection.
+    func setPresence(_ present: Bool) {
+        isPresent = present
+        tellPresence()
+    }
+
+    private func tellPresence() {
+        guard hostTakesPresence, isConnected, toldPresence != isPresent else { return }
+        toldPresence = isPresent
+        request(.presence(active: isPresent))
     }
 
     private func applyTasks(changed: [RemoteTask], removed: [String]) {
