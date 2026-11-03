@@ -399,6 +399,16 @@
         }
       }
     },
+    "Background task": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "백그라운드 작업"
+          }
+        }
+      }
+    },
     "Browser tab waiting": {
       "localizations": {
         "ko": {
@@ -1333,6 +1343,26 @@
         }
       }
     },
+    "Scheduled check-in": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "예약된 체크인"
+          }
+        }
+      }
+    },
+    "Scheduled task: %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "예약된 작업: %@"
+          }
+        }
+      }
+    },
     "Search tasks": {
       "localizations": {
         "ko": {
@@ -1383,6 +1413,26 @@
         }
       }
     },
+    "Sent from %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 작업에서 보냄"
+          }
+        }
+      }
+    },
+    "Sent from another task": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다른 작업에서 보냄"
+          }
+        }
+      }
+    },
     "Sent on schedule": {
       "localizations": {
         "ko": {
@@ -1429,6 +1479,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "계획 전체 보기"
+          }
+        }
+      }
+    },
+    "Show less": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "간단히 보기"
+          }
+        }
+      }
+    },
+    "Show more": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "더 보기"
           }
         }
       }
@@ -1989,6 +2059,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Mac에 다른 연결이 많습니다. 잠시 뒤 다시 시도하세요."
+          }
+        }
+      }
+    },
+    "Your message": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "내 메시지"
+          }
+        }
+      }
+    },
+    "Your message · %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "내 메시지 · %@"
           }
         }
       }
