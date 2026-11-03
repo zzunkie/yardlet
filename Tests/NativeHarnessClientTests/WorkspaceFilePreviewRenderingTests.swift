@@ -1,4 +1,7 @@
 import AppKit
+import AVKit
+import ImageIO
+import UniformTypeIdentifiers
 import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
@@ -131,11 +134,173 @@ final class WorkspaceFilePreviewRenderingTests: XCTestCase {
             XCTAssertEqual(state.media?.kind, .pdf)
         }
 
+        let brokenMovie = root.appending(path: "broken.mp4")
+        try Data("Invalid movie".utf8).write(to: brokenMovie)
+        try render(brokenMovie, in: root, name: "unsupported-movie", minimumInk: 0.001) { state in
+            XCTAssertEqual(state.media?.kind, .movie)
+        }
+
         let binary = root.appending(path: "app-debug.apk")
         try Data([0x50, 0x4B, 0x03, 0x04, 0x00, 0x00, 0xFF]).write(to: binary)
         try render(binary, in: root, name: "unsupported", minimumInk: 0.001) { state in
             XCTAssertNil(state.media)
             XCTAssertEqual(state.fileError, WorkspaceFileError.unsupported.localizedDescription)
+        }
+    }
+
+
+    func testPlayableMediaAndAnimatedImages() async throws {
+        let root = try folder()
+        let movie = root.appending(path: "sample.mov")
+        let writer = try AVAssetWriter(outputURL: movie, fileType: .mov)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 320, AVVideoHeightKey: 180
+        ])
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input,
+            sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB,
+                kCVPixelBufferWidthKey as String: 320, kCVPixelBufferHeightKey as String: 180])
+        writer.add(input)
+        XCTAssertTrue(writer.startWriting())
+        writer.startSession(atSourceTime: .zero)
+        var buffer: CVPixelBuffer?
+        CVPixelBufferCreate(nil, 320, 180, kCVPixelFormatType_32ARGB, nil, &buffer)
+        let pixels = try XCTUnwrap(buffer)
+        CVPixelBufferLockBaseAddress(pixels, [])
+        let bytes = CVPixelBufferGetBaseAddress(pixels)!.assumingMemoryBound(to: UInt8.self)
+        for y in 0..<180 {
+            for x in 0..<320 {
+                let offset = y * CVPixelBufferGetBytesPerRow(pixels) + x * 4
+                bytes[offset] = 255; bytes[offset + 1] = 40
+                bytes[offset + 2] = UInt8(x % 256); bytes[offset + 3] = 180
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(pixels, [])
+        for frame in 0..<10 {
+            try await waitUntil { input.isReadyForMoreMediaData }
+            XCTAssertTrue(adaptor.append(pixels, withPresentationTime: CMTime(value: Int64(frame), timescale: 5)))
+        }
+        input.markAsFinished()
+        await writer.finishWriting()
+        XCTAssertEqual(writer.status, .completed)
+
+        let audio = root.appending(path: "silence.wav")
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1))
+        let samples = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44100))
+        samples.frameLength = samples.frameCapacity
+        try AVAudioFile(forWriting: audio, settings: format.settings).write(from: samples)
+
+        let gif = root.appending(path: "animated.gif")
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(gif as CFURL, UTType.gif.identifier as CFString, 2, nil))
+        CGImageDestinationSetProperties(destination, [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+        for color in [NSColor.systemRed, NSColor.systemBlue] {
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 640, pixelsHigh: 360,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+            color.setFill()
+            NSRect(x: 0, y: 0, width: 640, height: 360).fill()
+            NSGraphicsContext.restoreGraphicsState()
+            CGImageDestinationAddImage(destination, try XCTUnwrap(bitmap.cgImage),
+                [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 0.5]] as CFDictionary)
+        }
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        let decoder = ImageFrameDecoder(url: gif)
+        let first = await decoder.frame(0), second = await decoder.frame(1)
+        XCTAssertEqual(first?.frameCount, 2)
+        XCTAssertEqual(second?.duration, 0.5)
+        XCTAssertLessThanOrEqual(first?.cgImage.width ?? 0, DecodedImage.longSidePixels)
+
+        let directory = try WindowlessRender.directory("file-preview-qa")
+        for appearance in WindowlessRender.Appearance.allCases {
+            for (file, name) in [(movie, "movie"), (audio, "audio"), (gif, "animated")] {
+                let state = WorkspaceFilesState()
+                let host = WindowlessRender.Host(FilesPane(workspaceURL: root, state: state, onClose: {})
+                    .environment(\.colorScheme, appearance.colorScheme),
+                    size: NSSize(width: 620, height: 420), appearance: appearance)
+                state.open(file, in: root)
+                await host.settle(until: { !state.isLoading && state.media != nil })
+                func playerView(_ view: NSView) -> AVPlayerView? {
+                    if let player = view as? AVPlayerView { return player }
+                    return view.subviews.lazy.compactMap { playerView($0) }.first
+                }
+                if name != "animated" {
+                    await host.settle(until: { playerView(host.hosting)?.player?.currentItem?.status == .readyToPlay })
+                    host.settle(passes: 20)
+                    let view = try XCTUnwrap(playerView(host.hosting))
+                    let player = try XCTUnwrap(view.player)
+                    XCTAssertEqual(player.rate, 0)
+                    XCTAssertLessThanOrEqual(view.bounds.width, name == "movie" ? 320 : 588)
+                    try WindowlessRender.writePNG(try host.capture().bitmap,
+                        to: directory.appending(path: "\(name)-\(appearance.suffix).png"))
+                    state.showPicker()
+                    await host.settle(until: { player.currentItem == nil })
+                    XCTAssertEqual(player.rate, 0)
+                } else {
+                    // Wait for the real animated panel to display each generated color.
+                    for (index, red) in [(0, true), (1, false)] {
+                        await host.settle(until: {
+                            guard let bitmap = try? host.capture().bitmap,
+                                  let color = bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.deviceRGB)
+                            else { return false }
+                            return red ? color.redComponent > 0.7 && color.blueComponent < 0.5 : color.blueComponent > 0.7 && color.redComponent < 0.3
+                        })
+                        try WindowlessRender.writePNG(try host.capture().bitmap,
+                            to: directory.appending(path: "animated-\(index)-\(appearance.suffix).png"))
+                    }
+                }
+                host.close()
+            }
+        }
+    }
+
+
+    func testImageSequenceDecodesWithoutKeepingEveryFrame() async throws {
+        let root = try folder()
+        for (type, ext, dictionary, delay) in [
+            (UTType.gif, "gif", kCGImagePropertyGIFDictionary, kCGImagePropertyGIFDelayTime),
+            (UTType.png, "png", kCGImagePropertyPNGDictionary, kCGImagePropertyAPNGDelayTime)
+        ] {
+            let url = root.appending(path: "sequence.\(ext)")
+            try autoreleasepool {
+                let canvas = try XCTUnwrap(CGContext(data: nil, width: 2048, height: 1024,
+                    bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 48, nil))
+                for index in 0..<48 {
+                    canvas.setFillColor(CGColor(red: CGFloat(index) / 48, green: 0.3, blue: 0.8, alpha: 1))
+                    canvas.fill(CGRect(x: 0, y: 0, width: 2048, height: 1024))
+                    CGImageDestinationAddImage(destination, try XCTUnwrap(canvas.makeImage()),
+                        [dictionary: [delay: 0.1]] as CFDictionary)
+                }
+                XCTAssertTrue(CGImageDestinationFinalize(destination))
+            }
+            let decoder = ImageFrameDecoder(url: url)
+            let warmup = await decoder.frame(0)
+            XCTAssertEqual(warmup?.frameCount, 48)
+            let context = try XCTUnwrap(CGContext(data: nil, width: 2048, height: 1024,
+                bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            var ends: [UInt64] = []
+            let baseline = Footprint.current()
+            let sampler = Footprint.Sampler()
+            for _ in 0..<3 {
+                for index in 0..<48 {
+                    let frame = await decoder.frame(index)
+                    XCTAssertEqual(frame?.cgImage.width, 2048)
+                    if let frame {
+                        context.draw(frame.cgImage, in: CGRect(x: 0, y: 0, width: 2048, height: 1024))
+                    }
+                    // Playback yields between frames; this checks memory stability over time.
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                ends.append(Footprint.current())
+            }
+            let peak = sampler.stop()
+            print("Image sequence \(ext): baseline \(baseline), peak \(peak), loop ends \(ends)")
+            // Once decoder buffers are warm, subsequent loops must not retain all their frames.
+            XCTAssertLessThan(Int64(ends[2]) - Int64(ends[0]), 64 * 1024 * 1024)
+
         }
     }
 
