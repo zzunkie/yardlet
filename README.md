@@ -34,7 +34,8 @@ several agents and accounts every day, and it is shared for anyone who doesn't h
   them its tools when it starts them. Quit it or remove it, and each agent, its sign-in and its
   sessions are as they were, ready in the original app or CLI (see [Uninstall](#uninstall)).
 - **Several accounts.** Register more than one account per provider and start a task on the one
-  with quota left; Yardlet shows each account's session and weekly limits.
+  with quota left; Yardlet shows each account's session and weekly limits, and the tokens the agents'
+  own transcripts on your Mac record, by day, model, project and task (see [Token usage](docs/TOKEN_USAGE.md)).
 - **Review the work.** Diffs of the last turn, file restore and fork, a pull request tab with checks
   through your own `gh`, a terminal, and a files pane next to the conversation.
 - **Connectors for every agent.** Gmail, Google Calendar and Google Drive through Yardlet's

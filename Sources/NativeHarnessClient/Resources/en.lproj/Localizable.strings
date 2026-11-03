@@ -3704,3 +3704,36 @@
 "Waiting until the task is available" = "Waiting until the task is available";
 
 "Missed: the task was unavailable for 24 hours" = "Missed: the task was unavailable for 24 hours";
+/* Token usage */
+"Cache reads" = "Cache reads";
+"New input" = "New input";
+"Cache writes" = "Cache writes";
+"7 days" = "7 days";
+"30 days" = "30 days";
+"Daily usage" = "Daily usage";
+"%@ tokens" = "%@ tokens";
+"%@ API equivalent" = "%@ API equivalent";
+"runs out in %@ at this pace" = "runs out in %@ at this pace";
+"runs out in %@" = "runs out in %@";
+"At the last hour's pace this limit runs out %@." = "At the last hour's pace this limit runs out %@.";
+"Open Settings › Usage" = "Open Settings › Usage";
+"%@ tokens today" = "%@ tokens today";
+"Plan limits" = "Plan limits";
+"Token usage" = "Token usage";
+"Range" = "Range";
+"Tokens" = "Tokens";
+"API equivalent" = "API equivalent";
+"Requests" = "Requests";
+"Read from cache" = "Read from cache";
+"API equivalent by day" = "API equivalent by day";
+"By kind" = "By kind";
+"Where it went" = "Where it went";
+"Group by" = "Group by";
+"API equivalent is an estimate at the providers' public API prices (%@). A subscription pays in plan limits, not dollars. A model without a price is counted in tokens only." = "API equivalent is an estimate at the providers' public API prices (%@). A subscription pays in plan limits, not dollars. A model without a price is counted in tokens only.";
+"Counted from this Mac's Claude Code and Codex transcripts, read %@. Nothing is sent anywhere." = "Counted from this Mac's Claude Code and Codex transcripts, read %@. Nothing is sent anywhere.";
+"Last 14 days, API equivalent" = "Last 14 days, API equivalent";
+"No price" = "No price";
+"Counting this Mac's transcripts…" = "Counting this Mac's transcripts…";
+"Count token usage" = "Count token usage";
+"Reads only the new lines of Claude Code's and Codex's transcripts on this Mac and keeps the counts for a year. Turning it off deletes the counts; the transcripts stay as they are." = "Reads only the new lines of Claude Code's and Codex's transcripts on this Mac and keeps the counts for a year. Turning it off deletes the counts; the transcripts stay as they are.";
+"Not started in Yardlet" = "Not started in Yardlet";

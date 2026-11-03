@@ -286,6 +286,28 @@ final class NewTaskHomeRenderingTests: XCTestCase {
 
     // MARK: - Renders
 
+    /// Token usage over the projects (`TokenUsageHomeBand`), at two widths of the Home surface, in
+    /// both appearances, into `.build/token-usage-qa/`.
+    func testTheHomeShowsTokenUsageOverTheProjects() throws {
+        let directory = try WindowlessRender.directory("token-usage-qa")
+        let runtimes = try runtimes()
+        for (name, size) in [("home-usage-1280", NSSize(width: 1280, height: 860)),
+                             ("home-usage-920", NSSize(width: 920, height: 860))] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                var fixture = homeFixture()
+                let overview = TokenUsageFixture.overview(now: fixture.activity.now)
+                fixture.activity.usage = { overview }
+                let host = WindowlessRender.Host(
+                    home(fixture: fixture, size: size, scheme: appearance.colorScheme, runtimes: runtimes),
+                    size: size, appearance: appearance)
+                defer { host.close() }
+                host.settle(passes: 10)
+                try WindowlessRender.writePNG(try host.capture().bitmap,
+                                              to: directory.appending(path: "\(name)-\(appearance.suffix).png"))
+            }
+        }
+    }
+
     func testTheHomeShowsEachProjectWithWhatItNeeds() throws {
         let directory = try WindowlessRender.directory("new-task-qa")
         let runtimes = try runtimes()

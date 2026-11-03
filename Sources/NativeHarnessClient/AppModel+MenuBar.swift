@@ -14,6 +14,7 @@ extension AppModel {
             place: taskPlaceNames(),
             usage: connections.usageLines(now: now)
         )
+        menu.usageToday = tokenUsage.todayLine
         menu.keepsScreenAwake = keepsScreenAwake
         menu.screenAwakePausedForBattery = screenAwakePausedForBattery
         menu.keepsAwakeWithLidClosed = keepsAwakeWithLidClosed

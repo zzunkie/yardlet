@@ -77,8 +77,9 @@ final class MenuBarMenuController: NSObject, NSMenuDelegate {
                 + section.rows.map(taskItem)
                 + (section.more.isEmpty ? [] : [moreItem(section.more)])
         }
-        if !contents.usage.isEmpty {
-            groups.append([NSMenuItem.sectionHeader(title: L10n.string("Usage"))] + contents.usage.map { account in
+        if !contents.usage.isEmpty || contents.usageToday != nil {
+            groups.append([NSMenuItem.sectionHeader(title: L10n.string("Usage"))]
+                          + (contents.usageToday.map { [plainItem($0)] } ?? []) + contents.usage.map { account in
                 let item = plainItem(account.line)
                 if !account.detail.isEmpty { item.subtitle = account.detail }
                 item.image = MenuBarItemMarks.harness(account.harness)

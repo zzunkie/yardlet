@@ -632,6 +632,10 @@ struct NativeHarnessClientApp: App {
                         if !QABackground.isOn { model.startPersonalAgentWatch() }
                         // The mailbox follows its setting and the connected mail accounts.
                         if !QABackground.isOn { model.startMailbox() }
+                        // Token counting follows Settings › Usage; a visual fixture counts nothing of this Mac's.
+                        if !QABackground.isOn, !model.usesVisualFixture {
+                            model.startTokenUsage(defaults: model.preferences, watch: TokenUsageWatcher.watch)
+                        }
                         await model.linkTasksStartedInTheClaudeAppOnce()
                         // The Claude app's and Codex's lists, now that the index is loaded.
                         Task {

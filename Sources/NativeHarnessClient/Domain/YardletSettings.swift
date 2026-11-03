@@ -13,6 +13,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case notifications
     case instructions
     case accounts
+    case usage
     case connectors
     case vault
     case remote
@@ -28,6 +29,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .notifications: L10n.string("Notifications")
         case .instructions: L10n.string("Yardlet Instructions")
         case .accounts: L10n.string("Accounts")
+        case .usage: L10n.string("Usage")
         case .harnesses: L10n.string("Harnesses")
         case .connectors: L10n.string("Connectors")
         case .vault: L10n.string("Passwords")
@@ -43,6 +45,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .notifications: "bell"
         case .instructions: "text.quote"
         case .accounts: "person.crop.circle"
+        case .usage: "chart.bar.xaxis"
         case .harnesses: "square.stack.3d.up"
         case .connectors: "powerplug"
         case .vault: "key"
@@ -56,12 +59,15 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
     /// The sections a window offers: Accounts and Harnesses need the app's account stores,
     /// Connectors needs a build with connectors, Vault the app's vault, Remote the app's remote,
-    /// CLI Updates the app's CLI update center, and Yardlet Instructions the app's instruction store.
+    /// CLI Updates the app's CLI update center, Yardlet Instructions the app's instruction store, and
+    /// Usage the app's token counts.
     static func available(hasAccounts: Bool, hasConnectors: Bool, hasVault: Bool = false, hasRemote: Bool = false,
-                          hasCLIUpdates: Bool = false, hasInstructions: Bool = false) -> [SettingsSection] {
+                          hasCLIUpdates: Bool = false, hasInstructions: Bool = false,
+                          hasUsage: Bool = false) -> [SettingsSection] {
         allCases.filter { section in
             switch section {
             case .accounts, .harnesses: hasAccounts
+            case .usage: hasUsage
             case .connectors: hasConnectors
             case .vault: hasVault
             case .remote: hasRemote
@@ -101,6 +107,8 @@ struct YardletSettingsContext {
     var evaluation: RoutingEvaluationStore?
     var connections: ProviderConnectionStore?
     var hasConnectors = false
+    /// Whether this copy counts token usage (Settings › Usage).
+    var hasUsage = false
     var lidHelper: LidSleepHelper?
     var updateChecks: YardletSettingSwitch?
 }
@@ -455,6 +463,17 @@ extension YardletSetting {
         offered: { $0.hasConnectors })
 }
 
+// MARK: - Usage
+
+extension YardletSetting {
+    /// Turning it off deletes the counts; the transcripts they came from stay.
+    static let tokenUsage = YardletSetting(
+        id: "token_usage", section: .usage, symbol: "chart.bar.xaxis", title: L10n.string("Count token usage"),
+        detail: L10n.string("Reads only the new lines of Claude Code's and Codex's transcripts on this Mac and keeps the counts for a year. Turning it off deletes the counts; the transcripts stay as they are."),
+        values: .onOff, storage: .flag(key: TokenUsagePreference.key, defaultValue: true),
+        offered: { $0.hasUsage })
+}
+
 // MARK: - Passwords, Remote and CLI Updates
 
 extension YardletSetting {
@@ -541,6 +560,7 @@ enum YardletSettingCatalog {
         .personalAgentMessages, .newMail,
         .yardletInstructions, .dailyEvaluation,
         .newTaskAccountAutomatically, .continueAtUsageLimit, .moveTasksToAccountsWithRoom,
+        .tokenUsage,
         .claudeAIConnectors,
         .passwordManager, .addressesAndCards,
         .remoteConnections, .connectFromOutside, .keepAwakeOnPower,

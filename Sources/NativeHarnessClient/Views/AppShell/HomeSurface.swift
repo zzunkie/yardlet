@@ -42,6 +42,11 @@ struct NewTaskHomeActivity {
     var isSuggestionOpen: (TaskAttentionSuggestion, UUID) -> Bool = { _, _ in true }
     /// What is wrong now: accounts nearly out of their limits, the disk, the Mac.
     var notices: [NewTaskHomeNotice] = []
+    /// Token usage counted from this Mac's transcripts, while Settings › Usage counts it; nil leaves
+    /// the band out. The band reads it in its own body, so a new count redraws the band alone.
+    var usage: (() -> TokenUsageOverview)? = nil
+    /// Opens Settings › Usage.
+    var onOpenUsage: () -> Void = {}
     /// The time "today" and next runs are read against.
     var now = Date()
     /// The window's height, which sets how many rows each list shows. Nil uses the screen's own.
@@ -119,7 +124,13 @@ struct NewTaskHome: View {
     static let conditionInterval: Duration = .seconds(60)
 
     /// The notices: the accounts' limits, then the Mac's condition.
-    private var notices: [NewTaskHomeNotice] { activity.notices + macConditions }
+    private var notices: [NewTaskHomeNotice] {
+        // The usage band shows the limits closest to running out; the line keeps the Mac's.
+        let accounts = activity.usage == nil ? activity.notices : activity.notices.filter {
+            if case .usage = $0 { return false } else { return true }
+        }
+        return accounts + macConditions
+    }
 
     /// The task the composer answers, while the sidebar still lists it.
     private var replyingSession: SessionRecord? {
@@ -132,7 +143,12 @@ struct NewTaskHome: View {
             let columns = NewTaskHomeLayout.columns(width: viewport.size.width)
             VStack(spacing: 0) {
                 ScrollView {
-                    lists(.projects, viewport: viewport, columns: columns)
+                    VStack(alignment: .leading, spacing: 22) {
+                        if let usage = activity.usage {
+                            TokenUsageHomeBand(overview: usage, columns: columns, onOpen: activity.onOpenUsage)
+                        }
+                        lists(.projects, viewport: viewport, columns: columns)
+                    }
                         .frame(maxWidth: columns > 1 ? NewTaskHomeLayout.gridWidth : NewTaskHomeLayout.composerWidth)
                         .padding(.horizontal, NewTaskHomeLayout.inset)
                         .padding(.top, 28)
