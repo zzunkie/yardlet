@@ -113,6 +113,12 @@ final class BrowserAgentTools {
         AgentToolCatalog.scroll: "scroll"
     ]
 
+    /// The tools that act on the page rather than read it: what the page downloads after one is the agent's.
+    private static let actingTools: Set<String> = Set(inputTools.keys).union([
+        AgentToolCatalog.navigate, AgentToolCatalog.selectOption, AgentToolCatalog.fileUpload, AgentToolCatalog.handleDialog,
+        VaultToolCatalog.fillCredential
+    ])
+
     /// The tools over a task's tab directory (the app's `BrowserAgentTabs`).
     init(
         usesMacEditingCommands: Bool,
@@ -377,6 +383,7 @@ final class BrowserAgentTools {
                     try await allowFile(address, on: page, sessionID: sessionID, shown: true)
                 }
             }
+            if Self.actingTools.contains(tool) { page.agentActs() }
             let mark = page.cdp.eventLog.count
             var result = try await perform(tool, arguments, on: page, sessionID: sessionID)
             result.content += notices(after: tool, on: page, sessionID: sessionID, since: mark).map { .text($0) }

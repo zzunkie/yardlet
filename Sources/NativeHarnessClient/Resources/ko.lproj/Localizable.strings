@@ -3688,4 +3688,4 @@
 "%@ › %@" = "%@ › %@";
 "Changed setting: %@" = "설정 변경: %@";
 "Open %@ in Settings" = "설정에서 %@ 열기";
-"%@ was not downloaded because this tab was last used from another device. Download it here to keep it." = "이 탭을 마지막으로 다른 기기에서 조작해서 %@ 파일을 내려받지 않았습니다. 필요하면 이 Mac에서 다시 내려받으세요.";
+"%@ was not downloaded: it started after this tab was used from another device. Download it here to keep it." = "%@ 파일은 다른 기기에서 이 탭을 조작한 뒤 시작돼 내려받지 않았습니다. 필요하면 이 Mac에서 다시 내려받으세요.";

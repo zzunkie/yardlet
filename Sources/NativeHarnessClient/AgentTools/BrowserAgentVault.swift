@@ -952,6 +952,27 @@ enum VaultPageScripts {
         return found["result"]?["value"]?.boolValue == true
     }
 
+    /// Whether the field with the keyboard may be a password field, read in the vault's world: the focused element,
+    /// through open shadow roots and frames of the page's own origin. One in a frame of another origin may be, and so may
+    /// any on a page that cannot be read. The host's word that a password field took the keyboard (`passwordField`) can
+    /// come after the key that moved the focus there.
+    static func focusMayBePassword(_ cdp: any BrowserAgentCDP, timeout: Duration = .seconds(10)) async -> Bool {
+        guard let frame = try? await mainFrame(cdp, timeout: timeout),
+              let context = try? await vaultWorld(cdp, frame: frame.id, timeout: timeout),
+              let found = try? await cdp.send("Runtime.evaluate", [
+                  "expression": .string(focusedFieldScript), "contextId": .integer(context), "returnByValue": .bool(true)
+              ], timeout: timeout) else { return true }
+        return found["result"]?["value"]?.stringValue != "other"
+    }
+
+    private static let focusedFieldScript = """
+        (() => { let e = document.activeElement; for (;;) { \
+        if (e && e.shadowRoot && e.shadowRoot.activeElement) { e = e.shadowRoot.activeElement; continue; } \
+        if (e && (e.tagName === 'IFRAME' || e.tagName === 'FRAME')) { let d = null; try { d = e.contentDocument; } catch (_) {} \
+        if (!d) return 'unknown'; e = d.activeElement; continue; } break; } \
+        return e && e.tagName === 'INPUT' && String(e.type).toLowerCase() === 'password' ? 'password' : 'other'; })()
+        """
+
     /// The value in the page's username field, read in the vault's world.
     static func typedUsername(_ cdp: any BrowserAgentCDP, timeout: Duration = .seconds(10)) async -> String {
         guard let frame = try? await mainFrame(cdp, timeout: timeout),

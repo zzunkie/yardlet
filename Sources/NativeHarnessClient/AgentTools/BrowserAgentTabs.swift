@@ -270,6 +270,7 @@ final class BrowserAgentTabs: BrowserAgentTabDirectory {
             return await tab.rendererAnswered(after: method)
         }
         page.crash = { [weak tab] in tab?.crash }
+        page.agentActs = { [weak tab] in tab?.noteAgentInput() }
         page.openFailure = { [weak tab] in tab?.openFailure }
         page.viewport = { [weak tab] in tab?.viewport }
         page.emulation = { [weak tab] in tab?.emulation }
