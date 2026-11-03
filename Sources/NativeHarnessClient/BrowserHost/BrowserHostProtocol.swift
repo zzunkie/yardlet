@@ -408,7 +408,7 @@ enum BrowserHostCommand: Codable, Equatable, Sendable {
     /// profile) with another browser's, which the person chose to bring over; answered with `cookiesImported`. A task
     /// profile that has no folder yet is left as it is: it starts from the default profile's cookies.
     case importCookies(request: Int, to: String?, sites: [String], cookies: [BrowserImportedCookie])
-    /// Releases the retained request with its original opener after the person chooses it.
+    /// Opens the selected recorded URL independently in its originating profile.
     case openBlockedPopup(tab: BrowserTabID, popupTab: BrowserTabID)
     /// Saves or removes the displayed site's popup exception. The host ignores it if the page left `url`.
     case popupPermission(tab: BrowserTabID, url: String, allowed: Bool)
@@ -509,15 +509,15 @@ enum BrowserHostEvent: Codable, Equatable, Sendable {
     /// made none for it (no user gesture, or no room); the client opens `url` as another tab of the task,
     /// behind when `background`.
     case newWindow(tab: BrowserTabID, url: String, background: Bool, userGesture: Bool)
-    /// The host made the page's new window as tab `tab`, which keeps `window.opener` (Chrome's
-    /// pop-up); the client shows it as another tab of the opener's task, behind when `background`,
-    /// or closes it.
     /// A retained popup awaiting the person; its ID distinguishes requests to the same address.
     case blockedPopup(tab: BrowserTabID, popupTab: BrowserTabID, url: String)
     /// The request is no longer resumable, for example because its opening frame navigated.
     case blockedPopupRemoved(tab: BrowserTabID, popupTab: BrowserTabID)
+    /// The host is temporarily full. The request remains available for another attempt.
+    case blockedPopupRetry(tab: BrowserTabID, popupTab: BrowserTabID)
     /// The current site's saved popup exception in the tab's profile.
     case popupPermission(tab: BrowserTabID, allowed: Bool)
+    /// An engine-created browser to adopt into the originating task. Blocked-menu URLs have no DOM opener.
     case popupOpened(tab: BrowserTabID, opener: BrowserTabID, url: String, background: Bool)
     /// Produced by the client, never sent by a host: the tab's page opened `newTab` (a new window
     /// request), or nil when the task had no room for another tab and the page went there itself.
@@ -599,7 +599,7 @@ enum BrowserHostEvent: Codable, Equatable, Sendable {
              .contextMenu(let tab, _), .compositionBounds(let tab, _), .address(let tab, _),
              .title(let tab, _), .favicon(let tab, _, _), .loading(let tab, _, _, _), .loadEnd(let tab, _, _),
              .loadError(let tab, _, _, _), .console(let tab, _, _, _, _), .newWindow(let tab, _, _, _), .popupOpened(let tab, _, _, _),
-             .blockedPopup(let tab, _, _), .blockedPopupRemoved(let tab, _), .popupPermission(let tab, _),
+             .blockedPopup(let tab, _, _), .blockedPopupRemoved(let tab, _), .blockedPopupRetry(let tab, _), .popupPermission(let tab, _),
              .openedTab(let tab, _, _), .externalApp(let tab, _), .externalAppHandled(let tab, _, _, _), .newDocument(let tab, _),
              .remoteDownloadStopped(let tab, _),
              .navigationBlocked(let tab, _), .filledValueBlocked(let tab), .tooltip(let tab, _), .javaScriptDialog(let tab, _),

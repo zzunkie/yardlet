@@ -26,6 +26,7 @@
 #include "include/capi/cef_devtools_message_observer_capi.h"
 #include "include/capi/cef_display_handler_capi.h"
 #include "include/capi/cef_frame_capi.h"
+#include "include/capi/cef_frame_handler_capi.h"
 #include "include/capi/cef_image_capi.h"
 #include "include/capi/cef_life_span_handler_capi.h"
 #include "include/capi/cef_load_handler_capi.h"
@@ -918,15 +919,14 @@ void yardlet_cef_context_menu_result(int menu_id, int command_id) {
 
 // MARK: - Life span handler
 
-// CEF does not expose Chromium's PopupBlockerTabHelper or a continuation for
-// OnBeforePopup. Keep the source frame and request metadata, cancel creation (so
-// window.open returns null), and reissue window.open in that frame when selected.
-// This preserves opener for script windows; CEF does not expose form POST bodies here.
+// CEF does not expose Chromium's retained popup request, POST body or original
+// opener-suppression flag. Cancel creation so window.open returns null. A menu
+// selection opens only the recorded URL as an independent browser in the same profile;
+// it never runs page-controlled JavaScript or grants an opener the request may have suppressed.
 typedef struct {
     int id, openerTab;
     cef_frame_t *frame;
-    char *frameID, *url, *name;
-    double replayUntil;
+    char *frameID, *sourceURL, *url;
 } BlockedPopup;
 enum { kMaximumBlockedPopups = 1024, kMaximumPagePopups = 25 };
 static BlockedPopup g_blocked_popups[kMaximumBlockedPopups];
@@ -934,28 +934,52 @@ static BlockedPopup g_blocked_popups[kMaximumBlockedPopups];
 static void free_blocked_popup(BlockedPopup *popup) {
     YARDLET_RELEASE(popup->frame);
     free(popup->frameID);
+    free(popup->sourceURL);
     free(popup->url);
-    free(popup->name);
     memset(popup, 0, sizeof(*popup));
 }
 static void clear_blocked_popups(int tab) {
     for (int i = 0; i < kMaximumBlockedPopups; i++) {
-        if (g_blocked_popups[i].id && g_blocked_popups[i].openerTab == tab)
+        if (g_blocked_popups[i].id && g_blocked_popups[i].openerTab == tab) {
+            emit(tab, YardletCEFEventPopupRemoved, NULL, NULL, g_blocked_popups[i].id);
             free_blocked_popup(&g_blocked_popups[i]);
+        }
     }
 }
 static void clear_frame_popups(int tab, cef_frame_t *frame) {
     cef_string_userfree_t identifier = frame->get_identifier(frame);
     char *frameID = identifier ? copy_string(identifier) : NULL;
     if (identifier) p_cef_string_userfree_utf16_free(identifier);
-    for (int i = 0; frameID && i < kMaximumBlockedPopups; i++) {
+    for (int i = 0; i < kMaximumBlockedPopups; i++) {
         BlockedPopup *popup = &g_blocked_popups[i];
-        if (popup->id && popup->openerTab == tab && !strcmp(popup->frameID, frameID)) {
+        if (popup->id && popup->openerTab == tab
+            && (!popup->frame->is_valid(popup->frame) || (frameID && !strcmp(popup->frameID, frameID)))) {
             emit(tab, YardletCEFEventPopupRemoved, NULL, NULL, popup->id);
             free_blocked_popup(popup);
         }
     }
     free(frameID);
+}
+static void CEF_CALLBACK popup_frame_detached(cef_frame_handler_t *self, cef_browser_t *browser, cef_frame_t *frame) {
+    (void)self;
+    BrowserSlot *slot = browser && browser->is_valid(browser) ? slot_for_browser(browser) : NULL;
+    if (slot && frame) clear_frame_popups(slot->tab, frame);
+    YARDLET_RELEASE(frame);
+    YARDLET_RELEASE(browser);
+}
+static cef_frame_handler_t g_popup_frame_handler;
+static cef_frame_handler_t *CEF_CALLBACK client_get_frame_handler(cef_client_t *self) {
+    (void)self;
+    return &g_popup_frame_handler;
+}
+static int popup_source_is_current(BlockedPopup *popup) {
+    if (!popup->frame->is_valid(popup->frame)) return 0;
+    cef_string_userfree_t url = popup->frame->get_url(popup->frame);
+    char *current = url ? copy_string(url) : NULL;
+    if (url) p_cef_string_userfree_utf16_free(url);
+    int matches = current && popup->sourceURL && !strcmp(current, popup->sourceURL);
+    free(current);
+    return matches;
 }
 static int popups_allowed(BrowserSlot *slot) {
     if (!slot || !slot->browser) return 0;
@@ -992,53 +1016,75 @@ void yardlet_cef_popup_permission(int tab, int allowed, const char *expected_url
             emit(other->tab, YardletCEFEventPopupPermission, NULL, NULL, popups_allowed(other));
     }
 }
-void yardlet_cef_cancel_blocked_popup(int openerTab, int popupTab) {
+static int make_browser(BrowserSlot *slot, const char *url);
+
+int yardlet_cef_open_blocked_popup(int openerTab, int popupTab) {
     for (int i = 0; i < kMaximumBlockedPopups; i++) {
         BlockedPopup *popup = &g_blocked_popups[i];
         if (popup->id != popupTab || popup->openerTab != openerTab) continue;
-        emit(openerTab, YardletCEFEventPopupRemoved, NULL, NULL, popupTab);
-        free_blocked_popup(popup);
-        return;
-    }
-}
-static char *popup_json_string(const char *text) {
-    cef_value_t *value = p_cef_value_create();
-    cef_string_t string = {0};
-    set_string(&string, text);
-    value->set_string(value, &string);
-    p_cef_string_utf16_clear(&string);
-    value->base.add_ref(&value->base);
-    cef_string_userfree_t json = p_cef_write_json(value, JSON_WRITER_DEFAULT);
-    char *result = json ? copy_string(json) : NULL;
-    if (json) p_cef_string_userfree_utf16_free(json);
-    YARDLET_RELEASE(value);
-    return result;
-}
-void yardlet_cef_open_blocked_popup(int openerTab, int popupTab) {
-    for (int i = 0; i < kMaximumBlockedPopups; i++) {
-        BlockedPopup *popup = &g_blocked_popups[i];
-        if (popup->id != popupTab || popup->openerTab != openerTab) continue;
-        if (!popup->frame->is_valid(popup->frame)) {
+        BrowserSlot *opener = slot_for_tab(openerTab);
+        if (!opener || !opener->browser || !popup_source_is_current(popup)) {
             emit(openerTab, YardletCEFEventPopupRemoved, NULL, NULL, popupTab);
             free_blocked_popup(popup);
-            return;
+            return 0;
         }
-        char *url = popup_json_string(popup->url), *name = popup_json_string(popup->name);
-        if (!url || !name) { free(url); free(name); return; }
-        char *script = NULL;
-        if (asprintf(&script, "window.open(%s,%s)", url, name) >= 0) {
-            cef_string_t code = {0}, source = {0};
-            set_string(&code, script);
-            // A one-shot grant for this frame, URL and target only. An overridden window.open
-            // that does not make the request cannot leave a durable permission behind.
-            popup->replayUntil = monotonic_seconds() + 2;
-            popup->frame->execute_java_script(popup->frame, &code, &source, 0);
-            p_cef_string_utf16_clear(&code);
-            free(script);
+        cef_string_t target = {0};
+        set_string(&target, popup->url);
+        if (url_carries_filled_value(opener, &target) || !string_is_allowed(&target)) {
+            if (url_carries_filled_value(opener, &target))
+                emit(openerTab, YardletCEFEventFilledValueBlocked, NULL, NULL, 0);
+            else emit(openerTab, YardletCEFEventNavigationBlocked, &target, NULL, 0);
+            emit(openerTab, YardletCEFEventPopupRemoved, NULL, NULL, popupTab);
+            free_blocked_popup(popup);
+            p_cef_string_utf16_clear(&target);
+            return 0;
         }
-        free(url); free(name);
-        return;
+        BrowserSlot *slot = free_slot();
+        if (!slot) {
+            emit(openerTab, YardletCEFEventPopupRetry, NULL, NULL, popupTab);
+            p_cef_string_utf16_clear(&target);
+            return 0;
+        }
+        memset(slot, 0, sizeof(*slot));
+        slot->inUse = 1;
+        slot->tab = popupTab;
+        slot->width = opener->width;
+        slot->height = opener->height;
+        slot->scale = opener->scale;
+        slot->screenX = opener->screenX;
+        slot->screenY = opener->screenY;
+        slot->frameRate = opener->frameRate;
+        slot->sharedTexture = opener->sharedTexture;
+        slot->contextHandle = opener->contextHandle;
+        if (slot->contextHandle > 0) g_contexts[slot->contextHandle - 1].users++;
+        // No openerIdentifier: CreateBrowserSync creates an unrelated browsing context.
+        // Start blank so the host installs the original download policy before any target request.
+        if (!make_browser(slot, "about:blank")) {
+            emit(openerTab, YardletCEFEventPopupRetry, NULL, NULL, popupTab);
+            p_cef_string_utf16_clear(&target);
+            return 0;
+        }
+        if (popup->id != popupTab || !popup_source_is_current(popup)) {
+            yardlet_cef_close_browser(popupTab);
+            emit(openerTab, YardletCEFEventPopupRemoved, NULL, NULL, popupTab);
+            if (popup->id == popupTab) free_blocked_popup(popup);
+            p_cef_string_utf16_clear(&target);
+            return 0;
+        }
+        char openerText[16];
+        snprintf(openerText, sizeof(openerText), "%d", openerTab);
+        cef_string_t owner = {0};
+        set_string(&owner, openerText);
+        emit(popupTab, YardletCEFEventPopupOpened, &target, &owner, 0);
+        p_cef_string_utf16_clear(&owner);
+        free_blocked_popup(popup);
+        cef_frame_t *main = slot->browser->get_main_frame(slot->browser);
+        if (main) main->load_url(main, &target);
+        YARDLET_RELEASE(main);
+        p_cef_string_utf16_clear(&target);
+        return 1;
     }
+    return 0;
 }
 
 static int CEF_CALLBACK life_span_on_before_popup(
@@ -1048,26 +1094,18 @@ static int CEF_CALLBACK life_span_on_before_popup(
     const cef_popup_features_t *popup_features, cef_window_info_t *window_info,
     cef_client_t **client, cef_browser_settings_t *settings,
     cef_dictionary_value_t **extra_info, int *no_javascript_access) {
-    (void)self; (void)popup_features; (void)extra_info; (void)no_javascript_access;
+    (void)self; (void)target_frame_name; (void)popup_features; (void)extra_info; (void)no_javascript_access;
     BrowserSlot *opener = slot_for_browser(browser);
     int tab = opener ? opener->tab : -1;
     int behind = target_disposition == CEF_WOD_NEW_BACKGROUND_TAB;
     int made = 0;
-    BlockedPopup *replay = NULL;
     char *requestedURL = target_url ? copy_string(target_url) : strdup("");
-    char *requestedName = target_frame_name ? copy_string(target_frame_name) : strdup("");
     cef_string_userfree_t frameIdentifier = frame ? frame->get_identifier(frame) : NULL;
     char *frameID = frameIdentifier ? copy_string(frameIdentifier) : strdup("");
     if (frameIdentifier) p_cef_string_userfree_utf16_free(frameIdentifier);
-    for (int i = 0; i < kMaximumBlockedPopups; i++) {
-        BlockedPopup *candidate = &g_blocked_popups[i];
-        if (candidate->id && candidate->openerTab == tab && candidate->replayUntil > monotonic_seconds()
-            && !strcmp(candidate->frameID, frameID) && !strcmp(candidate->url, requestedURL)
-            && !strcmp(candidate->name, requestedName)) { replay = candidate; break; }
-    }
-    int allowed = user_gesture || replay || popups_allowed(opener);
+    int allowed = user_gesture || popups_allowed(opener);
 #ifndef NDEBUG
-    fprintf(stderr, "popup request tab=%d userGesture=%d replay=%d allowed=%d\n", tab, user_gesture, replay != NULL, allowed);
+    fprintf(stderr, "popup request tab=%d userGesture=%d allowed=%d\n", tab, user_gesture, allowed);
 #endif
     if (url_carries_filled_value(opener, target_url)) {
         emit(tab, YardletCEFEventFilledValueBlocked, NULL, NULL, 0);
@@ -1080,7 +1118,7 @@ static int CEF_CALLBACK life_span_on_before_popup(
         BrowserSlot *slot = free_slot();
         memset(slot, 0, sizeof(*slot));
         slot->inUse = 1;
-        slot->tab = replay ? replay->id : g_next_popup_tab++;
+        slot->tab = g_next_popup_tab++;
         slot->identifier = kPopupPending;
         slot->waitingURL = target_url ? copy_string(target_url) : strdup("");
         slot->openerIdentifier = browser->get_identifier(browser);
@@ -1106,7 +1144,8 @@ static int CEF_CALLBACK life_span_on_before_popup(
         settings->windowless_frame_rate = slot->frameRate;
         settings->background_color = 0xFFFFFFFF;
         made = 1;
-    } else if (!allowed && opener && frame) {
+    } else if (opener && frame) {
+        // Capacity failures retain the same source identity as policy-blocked requests.
         int count = 0;
         BlockedPopup *pending = NULL;
         for (int i = 0; i < kMaximumBlockedPopups; i++) {
@@ -1119,19 +1158,17 @@ static int CEF_CALLBACK life_span_on_before_popup(
             pending->frame = frame;
             frame->base.add_ref(&frame->base);
             pending->frameID = strdup(frameID);
+            cef_string_userfree_t sourceURL = frame->get_url(frame);
+            pending->sourceURL = sourceURL ? copy_string(sourceURL) : strdup("");
+            if (sourceURL) p_cef_string_userfree_utf16_free(sourceURL);
             pending->url = strdup(requestedURL);
-            pending->name = strdup(requestedName);
             emit(tab, YardletCEFEventPopupRetained, target_url, NULL, pending->id);
         }
-    } else if (target_url && !replay) {
+    } else if (target_url) {
         // number: 1 background, 2 user gesture.
         emit(tab, YardletCEFEventPopupBlocked, target_url, NULL, (behind ? 1 : 0) | (user_gesture ? 2 : 0));
     }
-    if (replay) {
-        if (!made) emit(tab, YardletCEFEventPopupRemoved, NULL, NULL, replay->id);
-        free_blocked_popup(replay);
-    }
-    free(requestedURL); free(requestedName); free(frameID);
+    free(requestedURL); free(frameID);
     YARDLET_RELEASE(frame);
     YARDLET_RELEASE(browser);
     return made ? 0 : 1;
@@ -1412,6 +1449,7 @@ static void CEF_CALLBACK request_on_render_process_terminated(cef_request_handle
     if (slot) {
         YARDLET_RELEASE(slot->unresponsive);
         slot->unresponsive = NULL;
+        clear_blocked_popups(slot->tab);
         // The ended renderer's field is gone; the page that loads next reports its own.
         set_password_focus(slot, 0, NULL);
         release_media_prompts(slot->tab);
@@ -2319,6 +2357,7 @@ static void prepare_handlers(void) {
     memset(&g_client, 0, sizeof(g_client));
     init_base(&g_client.base, sizeof(g_client));
     g_client.get_life_span_handler = client_get_life_span_handler;
+    g_client.get_frame_handler = client_get_frame_handler;
     g_client.get_display_handler = client_get_display_handler;
     g_client.get_load_handler = client_get_load_handler;
     g_client.get_render_handler = client_get_render_handler;
@@ -2331,6 +2370,11 @@ static void prepare_handlers(void) {
     g_client.get_permission_handler = client_get_permission_handler;
     g_client.on_process_message_received = client_on_process_message_received;
     g_client.get_audio_handler = client_get_audio_handler;
+
+    memset(&g_popup_frame_handler, 0, sizeof(g_popup_frame_handler));
+    init_base(&g_popup_frame_handler.base, sizeof(g_popup_frame_handler));
+    g_popup_frame_handler.on_frame_detached = popup_frame_detached;
+    g_popup_frame_handler.on_frame_destroyed = popup_frame_detached;
 
     memset(&g_request_handler, 0, sizeof(g_request_handler));
     init_base(&g_request_handler.base, sizeof(g_request_handler));
