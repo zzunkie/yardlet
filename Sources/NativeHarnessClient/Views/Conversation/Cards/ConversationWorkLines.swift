@@ -520,8 +520,9 @@ struct ConversationWorkLine: View, Equatable {
                 || !tool.images.isEmpty || tool.loadsDetailOnOpen,
             startsOpen: startsOpen,
             accessibilityLabel: tool.name.isEmpty ? tool.kind.label : tool.name,
-            // A worded line whose output and changes were read opens for a review render, as a file change does.
-            opensForReview: tool.loadsDetailOnOpen && !isLoading, isHistoryMatch: item.isHistoryMatch,
+            // A worded line holding a change's diff opens for a review render, as a file change's line does; a
+            // call's output stays folded there, as a local call's does.
+            opensForReview: !tool.diffs.isEmpty, isHistoryMatch: item.isHistoryMatch,
             images: images, onToggle: record
         ) {
             if let connector = tool.connector {
