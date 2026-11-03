@@ -449,8 +449,8 @@ struct MainWindow: View {
                         newTaskDraft.takeMailThread(MailText.handoff(thread, account: account))
                         showNewTask()
                     },
-                    openOriginal: { url in model.openExternalLinks([url]) { NSWorkspace.shared.open($0) } },
-                    openLink: { url in model.openExternalLinks([url]) { NSWorkspace.shared.open($0) } },
+                    openOriginal: { url in model.openMailLink(url, elsewhere: OutsideBrowser.open) },
+                    openLink: { url in model.openMailLink(url, elsewhere: OutsideBrowser.open) },
                     openSettings: { presentSettings(.connectors) })
     }
 
@@ -1937,10 +1937,11 @@ struct MainWindow: View {
                                                   onAccounts: { presentSettings(.harnesses) })
                         }
                     } else if sidebarSection == .mail {
-                        VStack(spacing: 0) {
-                            titleBar(for: nil)
-                            MailContent(center: model.mailbox, window: mailWindow, actions: mailActions)
-                        }
+                        // The thread's browser panel reaches the window's top, its tabs in the title bar's row.
+                        MailWorkspace(center: model.mailbox, window: mailWindow, actions: mailActions,
+                                      panel: model.mailbox.isEnabled ? model.taskWorkspaces.mail : nil)
+                            .environment(\.taskAreaHeader, TaskAreaHeader(height: ParityTheme.titleBarHeight, isTitleBar: true,
+                                                                          content: AnyView(titleBar(for: nil))))
                     } else if model.isRestoringIndex {
                         VStack(spacing: 0) {
                             titleBar(for: nil)

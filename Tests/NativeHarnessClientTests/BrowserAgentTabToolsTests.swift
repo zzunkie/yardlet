@@ -113,9 +113,12 @@ final class BrowserAgentTabToolsTests: XCTestCase {
         ]))
         let gone = await run(AgentToolCatalog.snapshot, ["tabId": .string(closedID)])
         XCTAssertEqual(text(gone), "Tab \(closedID) is closed: browser_tab_close closed it. " + tabsNow)
-        let otherTasksTab = try client.openTab(forSession: UUID(), url: "about:blank", viewport: .offscreenDefault)
+        // The mailbox's panel is no task's: its pages (a sign-in link, an invoice) are not this task's to list or close.
+        let otherTasksTab = try client.openTab(forSession: TaskWorkspaceStore.mailID, url: "about:blank", viewport: .offscreenDefault)
+        let withMail = try await listing()
+        XCTAssertEqual(withMail["tabs"]?.arrayValue?.count, 2, "the agent's list leaves the mailbox's tab out")
         let foreign = await run(AgentToolCatalog.tabClose, ["tabId": .string(String(otherTasksTab.id))])
-        XCTAssertTrue(foreign.isError, "another task's tab is not this task's to close")
+        XCTAssertTrue(foreign.isError, "another panel's tab is not this task's to close")
         XCTAssertTrue(text(foreign).hasPrefix("This task has no tab \(otherTasksTab.id)"), text(foreign))
         XCTAssertFalse(otherTasksTab.isClosed)
 

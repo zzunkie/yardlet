@@ -9,8 +9,9 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
 
 - Settings › General › **Mailbox**, off by default. While it is off the Mail word is not shown, nothing
   is read and nothing is watched.
-- Turning it off stops the watch, closes what is open, forgets every list, thread, search and message
-  being written in every window, and removes the history cursors (see "What is kept"). A window showing the mailbox goes back to
+- Turning it off stops the watch, closes what is open (the mailbox's browser panel and its pages too), forgets
+  every list, thread, search and message being written in every window, and removes the history cursors (see
+  "What is kept"). A window showing the mailbox goes back to
   its tasks. The mail connectors and their Keychain items stay; they belong to Settings › Connectors.
 - Settings › Notifications › **New mail**, on by default and shown while the mailbox is on.
 
@@ -75,7 +76,7 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
 - New mail: the inbox's delta query, begun over the last day's mail and followed to its `deltaLink`,
   every minute. Unread mail that came after the link was taken, not a draft and not in the Other inbox,
   is told. A link Graph no longer knows (410) starts again.
-- **Open in Outlook** opens the newest message's `webLink` in the built-in browser. **Ask an agent** names
+- **Open in Outlook** opens the newest message's `webLink` in the mailbox's browser panel (see "Links"). **Ask an agent** names
   the newest message and the connector's `get_message`.
 
 ## Mail accounts over IMAP
@@ -156,15 +157,35 @@ connector › **Mail (IMAP)**, as Apple Mail and Thunderbird add them.
   a content rule blocks every `http` and `https` load, the page's policy allows only inline images and
   styles, and links that would connect ahead of time are taken out. If the rule cannot be made, the
   message's text is shown instead of its HTML.
-  A chosen link opens as a link another app hands Yardlet does. The page is as tall as its content and
+  A chosen link opens in the mailbox's browser panel (see "Links"). The page is as tall as its content and
   scrolls with the thread. A message without HTML shows its text.
 - The thread's bar: **Ask an agent**, Archive (in an inbox), Mark as read or unread, Star, and
-  **Open in Gmail**, which opens the thread on Gmail's web app in the built-in browser
-  (`AppModel.openExternalLinks`), signed in as the account (`authuser`).
+  **Open in Gmail**, which opens the thread on Gmail's web app in the mailbox's browser panel (see "Links"), as
+  the account (`authuser`).
 - **Spam and Trash** are told apart: their folder symbols are red, their list says that Gmail deletes such
   mail after 30 days and draws its rows dimmer, and a thread read there says where it is across its top.
   Spam offers **Not spam** (back to the inbox) and Trash **Move out of the Trash** (`threads.untrash`)
   in Archive's place, and neither offers **Ask an agent**.
+
+## Links
+
+- A link chosen in a message, and **Open in Gmail** or **Open in Outlook**, open in a new tab of the mailbox's own
+  browser panel beside the thread (`AppModel.openMailLink`), as a task's side panel sits beside its conversation:
+  the same tab strip, browser pane, tab menu and widths, its tabs in the title bar's row. The thread stays beside
+  it. Its **+** opens another tab, and closing the panel closes its pages, since the mailbox has no button that
+  shows it again. It holds up to nine tabs; a link past that opens in another browser. A `mailto:` link goes to the
+  Mac's mail app.
+- The panel belongs to no task (`TaskWorkspaceStore.mailID`): no agent's browser tools list or use its tabs, and
+  what one of its pages waits on (a dialog, a passkey) shows over the panel and on its tab, not on a task's row or
+  in a notification. Its pages open in the default browser profile (`Browser/Default`), with the person's own
+  sign-ins, and it never takes a profile of its own, having no agent (docs/BROWSER_SESSION_ISOLATION.md,
+  "Rules").
+- The panel is kept in memory only: its tabs are not saved and are gone once Yardlet quits. The pages it showed go
+  to the address field's history as any page does. Turning the mailbox off closes it.
+- **Ask an agent** names the thread, not the panel's pages; to have an agent work on a page, open it in the task's
+  own browser.
+- Links other apps hand Yardlet as the default browser still open beside the task the window shows
+  (docs/BROWSER_HOST.md, "Default browser").
 
 ## Writing
 
@@ -222,11 +243,13 @@ connector › **Mail (IMAP)**, as Apple Mail and Thunderbird add them.
 | `Presentation/MailboxCenter.swift` | The app's mailbox (`MailboxCenter`: accounts, lists, opened threads, watch, writing) and a window's view of it (`MailWindowState`) |
 | `Presentation/MailText.swift` | Names, subjects, times and the hand-off text |
 | `AppModel+Mailbox.swift` | Following the setting and the connectors, notifications and their clicks |
-| `Views/Mail/` | The sidebar (`MailSidebar`, `MailFolderTree`), the thread (`MailContent`, `MailThreadView`), HTML (`MailHTMLBody`) and writing (`MailComposeView`) |
+| `AppModel+ExternalLinks.swift` | Where a link chosen in mail opens (`openMailLink`), and closing the mailbox's browser panel (`closeMailBrowser`) |
+| `Views/Mail/` | The sidebar (`MailSidebar`, `MailFolderTree`), the thread (`MailContent`, `MailThreadView`) and its browser panel (`MailWorkspace`), HTML (`MailHTMLBody`) and writing (`MailComposeView`) |
 
 Tests: `GmailMailTransportTests`, `OutlookMailTransportTests` and `IMAPMailTransportTests` (requests and answers
 against a fake Gmail, a fake Graph and a scripted IMAP and SMTP server), `IMAPClientTests`, `SMTPClientTests` and
 `MIMEMessageTests`, `MailboxCenterTests` (the
 watch, sending, Undo and Drafts), `MailHTMLBodyTests` (no remote content before Show images) and
-`MailboxRenderingTests` (the list, a thread, writing, the hand-off, the folders and spam, drawn under
-`.build/mailbox-qa/` in both appearances at 1280×800 and 920×680).
+`MailboxRenderingTests` (the list, a thread, writing, the hand-off, the folders and spam, and a link in the
+mailbox's own browser panel with no task's panel taking it, drawn under `.build/mailbox-qa/` in both appearances at
+1280×800 and 920×680).

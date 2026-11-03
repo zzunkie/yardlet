@@ -43,5 +43,19 @@ final class DefaultBrowserLinkTests: XCTestCase {
         model.openExternalLinks([third], elsewhere: { elsewhere.append($0) })
         XCTAssertEqual(elsewhere, [third], "with no room anywhere the link goes to another browser")
         XCTAssertEqual(model.taskSurfaceRevealRequest, reveals, "a link sent elsewhere leaves the window as it is")
+
+        // A link chosen in mail opens in the mailbox's own panel, whatever task the window shows, and moves no window.
+        model.splits.activate(.session(task.id))
+        let taskTabs = workspace.panels.trailingTabs
+        let invoice = try XCTUnwrap(URL(string: "https://example.test/invoice"))
+        model.openMailLink(invoice, elsewhere: { elsewhere.append($0) })
+        XCTAssertEqual(shownAddress(model.taskWorkspaces.mail), invoice.absoluteString)
+        XCTAssertEqual(workspace.panels.trailingTabs, taskTabs, "the shown task's panel does not take it")
+        XCTAssertEqual(model.taskSurfaceRevealRequest, reveals)
+        let address = try XCTUnwrap(URL(string: "mailto:haneul@vendor.example"))
+        model.openMailLink(address, elsewhere: { elsewhere.append($0) })
+        while model.taskWorkspaces.mail.openBrowserTab() != nil {}
+        model.openMailLink(invoice, elsewhere: { elsewhere.append($0) })
+        XCTAssertEqual(elsewhere, [third, address, invoice], "a mail address goes to the mail app; a full panel's page elsewhere")
     }
 }

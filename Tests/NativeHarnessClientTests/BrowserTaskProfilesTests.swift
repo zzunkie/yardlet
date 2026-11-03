@@ -40,6 +40,9 @@ final class BrowserTaskProfilesTests: XCTestCase {
         XCTAssertNil(profiles.opening(for: signer), "a task uses the default profile")
         XCTAssertNil(profiles.opening(for: sharedChild), "a child of a task in the default profile stays there")
         XCTAssertFalse(profiles.takeOwnProfile(for: TaskWorkspaceStore.draftID), "the new-task screen has no agent")
+        // The mailbox's panel is no task's: mail's links open with the person's own sign-ins.
+        XCTAssertFalse(profiles.takeOwnProfile(for: TaskWorkspaceStore.mailID), "the mailbox's panel has no agent")
+        XCTAssertNil(profiles.opening(for: TaskWorkspaceStore.mailID), "the mailbox's panel opens in the default profile")
 
         // Before its agent signs in itself, a task takes a profile of its own, once, which starts from the default one.
         XCTAssertTrue(profiles.takeOwnProfile(for: signer))

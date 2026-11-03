@@ -35,4 +35,20 @@ extension AppModel {
         if splits.selection != .home { splits.newTab() }
         taskSurfaceRevealRequest += 1
     }
+
+    /// A link chosen in a message, and Open in Gmail or Outlook: a new tab of the mailbox's own browser panel beside
+    /// the thread (`TaskWorkspaceStore.mailID`), not of the task shown last, so no agent reads the page and no task's
+    /// sign-ins open it (docs/MAILBOX.md, "Links"). A mail address goes to the Mac's mail app, and a page the panel
+    /// has no room for to another browser (`elsewhere`).
+    func openMailLink(_ url: URL, elsewhere: (URL) -> Void) {
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""), taskWorkspaces.mail.openBrowserPage(url)
+        else { return elsewhere(url) }
+    }
+
+    /// The mailbox turned off: its browser panel closes, with its pages.
+    func closeMailBrowser() {
+        guard let panel = taskWorkspaces.loadedState(for: TaskWorkspaceStore.mailID) else { return }
+        panel.browserClient?.closeTabs(forSession: TaskWorkspaceStore.mailID)
+        taskWorkspaces.remove(for: TaskWorkspaceStore.mailID)
+    }
 }

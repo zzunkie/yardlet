@@ -673,6 +673,13 @@ final class TaskWorkspaceStore {
 
     var draft: TaskWorkspaceState { state(for: Self.draftID) }
 
+    /// The mailbox's browser panel beside the thread, where links chosen in mail open (docs/MAILBOX.md,
+    /// "Links"). It is no task's: no agent's tools reach its tabs, its pages open in the default profile
+    /// (`BrowserTaskProfiles.profile(for:)`), and it is kept in memory only, never saved.
+    static let mailID = UUID(uuidString: "6D61696C-426F-7800-8000-000000000001")!
+
+    var mail: TaskWorkspaceState { state(for: Self.mailID) }
+
     /// The task started from the new-task screen takes over its panels and its terminal's shell.
     func handOffDraft(to taskID: UUID) {
         guard taskID != Self.draftID else { return }
@@ -716,6 +723,7 @@ final class TaskWorkspaceStore {
     }
 
     private func changed(_ id: UUID) {
+        guard id != Self.mailID else { return }
         dirtyIDs.insert(id)
         scheduleSave()
     }
