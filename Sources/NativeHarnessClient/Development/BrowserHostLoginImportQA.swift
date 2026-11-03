@@ -8,12 +8,15 @@ import Foundation
 /// place of the keychain item, and a made-up Firefox folder holds plain ones: it never reads the keychain or a real
 /// browser's data. A made-up Chrome folder whose `Local State` cannot be read stands for one macOS 27 keeps from
 /// Yardlet. In the task's browser panel the page's menu opens the sheet (drawn to `import-sheet.png`), and each import
-/// puts the chosen sites' cookies in the default profile and the task's own, each once, as the other browser stores
-/// them. Checks land in `result.json`.
+/// puts the chosen sites' cookies in the default profile and the task's profile of its own (the task takes one before
+/// the panel opens, as its agent's first sign-in would), each once, as the other browser stores them. Checks land in
+/// `result.json`.
 @MainActor
 final class BrowserHostLoginImportQA {
     private let output: URL
     private let base: String
+    /// The task the QA window shows, whose browser panel imports.
+    private let panelSession: UUID
     private var record: [String: JSONValue] = [:]
     private var checks: [JSONValue] = []
     private var client: BrowserHostClient { MacBrowserHost.shared.client }
@@ -23,9 +26,10 @@ final class BrowserHostLoginImportQA {
     private static let marker = "qa-imported-"
     private static let accounts = "https://accounts.example.com/"
 
-    init(output: URL, base: String) {
+    init(output: URL, base: String, panelSession: UUID) {
         self.output = output
         self.base = base.replacingOccurrences(of: "127.0.0.1", with: "localhost")
+        self.panelSession = panelSession
     }
 
     func run() async {
@@ -113,6 +117,7 @@ final class BrowserHostLoginImportQA {
             cookie("qa_signin", "OLD", domain: ".accounts.example.com"), cookie("qa_signin", "Y"),
             cookie("qa_leftover", "Y", domain: ".example.com"), cookie("qa_keep", "Y", url: "https://keep.test/")
         ])])
+        _ = MacBrowserHost.shared.takeOwnProfile(for: panelSession, site: "localhost", how: "import QA")
         let previous = BrowserHostPaneController.current
         NotificationCenter.default.post(name: BrowserHostQAFixture.openBrowserPanel, object: nil)
         guard await waitUntil(.seconds(10), { BrowserHostPaneController.current !== previous && BrowserHostPaneController.current?.view != nil }),

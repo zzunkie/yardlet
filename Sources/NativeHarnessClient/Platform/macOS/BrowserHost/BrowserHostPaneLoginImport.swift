@@ -8,8 +8,7 @@ struct BrowserLoginImportRequest: Identifiable {
 }
 
 /// Another browser's sign-ins in the browser panel: the page's menu item, and the import into the default profile,
-/// where new tasks start, and into this task's own profile. It is the person's sign-in: the running tasks that follow
-/// those sites take it too (docs/BROWSER_SESSION_ISOLATION.md 11).
+/// which tasks share, and into this task's profile of its own if it has one (docs/BROWSER_SESSION_ISOLATION.md 10).
 extension BrowserHostPaneController {
     func loginImportMenuItems() -> [(title: String, action: () -> Void)] {
         [(L10n.string("Import Sign-ins from Another Browser…"), { [weak self] in self?.startLoginImport() })]
@@ -32,15 +31,9 @@ extension BrowserHostPaneController {
             return try BrowserLoginImport.cookies(in: profile, sites: sites, password: secret)
         }.value
         var profiles: [String?] = [nil]
-        let own = client.profileForSession?(session)?.key
-        if let own { profiles.append(own) }
-        let follow = MacBrowserHost.shared.loginFollow
-        // The import is no sign-in of the panel task's own: its watches of the sites wait for it.
-        let counts = try await follow.changing(own, sites: sites) {
-            try await client.importCookies(cookies, sites: sites, into: profiles)
-        }
+        if let own = client.profileForSession?(session)?.key { profiles.append(own) }
+        let counts = try await client.importCookies(cookies, sites: sites, into: profiles)
         guard !counts.contains(-1) else { throw BrowserLoginImport.Failure.hostDidNotAnswer }
-        for site in sites { follow.signedIn(session: session, site: site, fromDefault: true) }
         showVaultNotice(sites.count == 1
                         ? L10n.format("Imported the sign-in for %@ from %@.", sites[0], profile.browser.name)
                         : L10n.format("Imported sign-ins for %lld sites from %@.", Int64(sites.count), profile.browser.name))

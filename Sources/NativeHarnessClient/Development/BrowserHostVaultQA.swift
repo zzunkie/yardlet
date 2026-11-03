@@ -42,6 +42,9 @@ final class BrowserHostVaultQA {
             return await finish()
         }
         token = launch.environment[AgentToolEnvironment.token] ?? ""
+        // The tasks sign in with the vault throughout: each takes its profile of its own first, as its first fill would
+        // (docs/BROWSER_SESSION_ISOLATION.md 3), so every fill here goes in at once.
+        for task in [session, panelSession] { _ = MacBrowserHost.shared.takeOwnProfile(for: task, site: "localhost", how: "vault QA") }
         let origin = VaultSite.origin(of: base) ?? base
         let item = VaultItem(name: "QA sign-in", sites: [origin], username: Self.username, policy: .always)
         let strict = VaultItem(name: "QA strict", sites: [origin], username: "strict@example.test", policy: .everyTime)

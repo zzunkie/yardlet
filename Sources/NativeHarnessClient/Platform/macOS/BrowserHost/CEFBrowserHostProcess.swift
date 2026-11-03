@@ -284,7 +284,6 @@ final class MacBrowserHost: NativeSurfaceResource {
         client.onTabClosed = { tab in BrowserAgentUse.shared.tabClosed(tab) }
         client.profileForSession = { [unowned self] in self.profiles.profile(for: $0) }
         client.openingProfileForSession = { [unowned self] in self.profiles.opening(for: $0) }
-        client.onTabsMoved = { [unowned self] in self.profiles.tabsMoved(from: $0, to: $1) }
         client.onHostEnded = { [unowned self] in self.removeUnusedProfiles() }
         client.externalApps = LaunchServicesApps()
         client.addressHistory = addressHistory
@@ -337,21 +336,22 @@ final class MacBrowserHost: NativeSurfaceResource {
         presenter.hostProcessID = { [weak self] in self?.process?.processIdentifier }
         return presenter
     }()
-    /// Which profile each task's tabs use (docs/BROWSER_SESSION_ISOLATION.md). The agents' password manager fills
-    /// from before tasks followed the person's sign-ins are their tasks' own sign-ins (section 11).
-    private(set) lazy var profiles: BrowserTaskProfiles = {
-        let profiles = BrowserTaskProfiles(root: paths.root)
-        profiles.adoptEarlierAgentFills { MacAgentToolService.shared.vault.agentFills() }
-        return profiles
-    }()
-    /// The sign-ins made in tasks' tabs, which tasks follow or keep (docs/BROWSER_SESSION_ISOLATION.md 11), each
-    /// written in `Logs/sign-ins.log` beside the host's log.
-    private(set) lazy var loginFollow: BrowserLoginFollow = {
-        let log = BrowserSignInLog(file: paths.log.deletingLastPathComponent().appending(path: "sign-ins.log"))
-        let follow = BrowserLoginFollow(client: client, profiles: profiles, log: log)
-        follow.start()
-        return follow
-    }()
+    /// Which profile each task's tabs use (docs/BROWSER_SESSION_ISOLATION.md).
+    private(set) lazy var profiles = BrowserTaskProfiles(root: paths.root)
+    /// The tasks that took a profile of their own and the earlier task profiles sorted (docs/BROWSER_SESSION_ISOLATION.md
+    /// 3 and 7), written in `Logs/sign-ins.log` beside the host's log.
+    private(set) lazy var signInLog = BrowserSignInLog(file: paths.log.deletingLastPathComponent().appending(path: "sign-ins.log"))
+
+    /// A task's agent is about to sign in to `site` itself (`how`: a fill from the password manager, or typing into a
+    /// password or code field): the task takes a profile of its own, a copy of the default profile's cookies, and its
+    /// tabs open again there, so the sign-in changes no other task's and none of the person's. False when its tabs use
+    /// a profile of their own already, or every task shares the default profile.
+    func takeOwnProfile(for session: UUID, site: String, how: String) -> Bool {
+        guard profiles.takeOwnProfile(for: session) else { return false }
+        signInLog.write("\(site): task \(session.uuidString.prefix(8)) took a profile of its own before its agent's sign-in (\(how))")
+        client.reopenTabs(forSession: session, cause: .ownProfile)
+        return true
+    }
     /// Every task's visits, for the address field's suggestions (docs/BROWSER_HOST.md, "Address suggestions").
     private(set) lazy var addressHistory = BrowserAddressHistory(file: paths.root.appending(path: "AddressHistory.json"))
     /// The address field's requests for suggested searches, spaced for all panels as for a Chrome profile (a QA run
@@ -398,12 +398,26 @@ final class MacBrowserHost: NativeSurfaceResource {
         // Before the host opens the profiles' cookie databases; never from a test process.
         if NSClassFromString("XCTestCase") == nil {
             BrowserCookieCopyRepair.runOnce(root: paths.root, trash: BrowserCookieCopyRepair.trash)
+            shareEarlierProfiles()
         }
         let process = try CEFBrowserHostProcess(paths: paths)
         self.process = process
-        // Follows the sign-ins of the tabs this host opens.
-        _ = loginFollow
         return process
+    }
+
+    /// Tasks had a profile each before they shared the default one: once, before the host opens the profiles, the
+    /// tasks whose profile held only copies of the person's sign-ins move to the default profile, which first takes the
+    /// sites they hold and it has none of (docs/BROWSER_SESSION_ISOLATION.md 7).
+    private func shareEarlierProfiles() {
+        let root = paths.root
+        var taken: [String: String] = [:]
+        guard let sorted = profiles.shareEarlierProfiles(fill: { keys in
+            guard let outcome = BrowserProfileMerge.fill(root: root, from: keys, trash: BrowserCookieCopyRepair.trash) else { return nil }
+            taken = outcome.sites
+            return outcome.unread
+        }), sorted.kept + sorted.moved > 0 else { return }
+        signInLog.write("tasks share the default profile: \(sorted.moved) task profiles moved to it, \(sorted.kept) kept; "
+                        + "the default profile took \(taken.count) sites it had no cookie of from them")
     }
 
     func surface(for token: UInt64) -> IOSurfaceRef? {

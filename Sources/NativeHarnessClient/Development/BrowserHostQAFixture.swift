@@ -42,7 +42,7 @@ enum BrowserHostQAFixture {
         }
         // `--ui-fixture-browser-check-only=import` runs bringing another browser's sign-ins over alone.
         if argument("ui-fixture-browser-check-only") == "import" {
-            Task { @MainActor in await BrowserHostLoginImportQA(output: output, base: base).run() }
+            Task { @MainActor in await BrowserHostLoginImportQA(output: output, base: base, panelSession: session).run() }
             return
         }
         if argument("ui-fixture-browser-check-only") == "vault" {

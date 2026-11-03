@@ -111,7 +111,7 @@ enum BrowserCookieCopyRepair {
 
     /// Chromium's lock on the root cache names the host that holds it (`<host name>-<pid>`), and stays behind
     /// a host that crashed.
-    private static func hostHoldsProfiles(root: URL) -> Bool {
+    static func hostHoldsProfiles(root: URL) -> Bool {
         let lock = root.appending(path: "SingletonLock").path(percentEncoded: false)
         guard let target = try? FileManager.default.destinationOfSymbolicLink(atPath: lock),
               let pid = target.split(separator: "-").last.flatMap({ pid_t($0) }), pid > 0 else { return false }
@@ -190,7 +190,7 @@ enum BrowserCookieCopyRepair {
     }
 
     /// Copies the database and its journal into `folder` (a new one), true once every file is there.
-    private static func backUp(_ database: URL, to folder: URL) -> Bool {
+    static func backUp(_ database: URL, to folder: URL) -> Bool {
         var destination = folder
         var number = 2
         while FileManager.default.fileExists(atPath: destination.path(percentEncoded: false)) {
@@ -242,7 +242,7 @@ enum BrowserCookieCopyRepair {
     }
 
     /// Runs `sql`, calling `each` for every row: the number of rows, nil on an error.
-    private static func query(_ handle: OpaquePointer?, _ sql: String, each: (OpaquePointer?) -> Void) -> Int? {
+    static func query(_ handle: OpaquePointer?, _ sql: String, each: (OpaquePointer?) -> Void) -> Int? {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(statement) }

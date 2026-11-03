@@ -379,14 +379,10 @@ enum BrowserUnresponsiveAction: String, Codable, Equatable, Sendable {
 
 /// A task's own browser profile (docs/BROWSER_SESSION_ISOLATION.md): its folder key (`Task-<key>` beside the
 /// default profile), and the profile a new folder copies its cookies from (another key; nil for the default
-/// profile). Before the tab's page the profile also takes, from the default profile, the person's sign-ins it
-/// follows and has not yet (`follow`, sites whose cookies it replaces) and, for a task that predates following,
-/// the sites it has no cookie of (`fill`) (section 11).
+/// profile).
 struct BrowserTabProfile: Codable, Equatable, Sendable {
     var key: String
     var seedFrom: String?
-    var follow: [String]? = nil
-    var fill: Bool? = nil
 }
 
 /// A cookie another browser keeps (`BrowserLoginImport`), as Chromium stores it: `domain` with a leading dot for a
@@ -408,14 +404,6 @@ struct BrowserImportedCookie: Codable, Equatable, Sendable {
 enum BrowserHostCommand: Codable, Equatable, Sendable {
     /// Opens a tab; with a profile it shares that task profile's cookies and storage, else the default's.
     case open(tab: BrowserTabID, url: String, viewport: BrowserViewport, profile: BrowserTabProfile? = nil)
-    /// Copies the cookies of `domain` and its subdomains from one profile to another (a key; nil for the
-    /// default profile), with `replace` in place of the target's cookies of `domain`, answered with `cookiesCopied`
-    /// once the target has them: a person's sign-in in a task's tab goes to the default profile and the tasks that
-    /// follow it.
-    case copyCookies(request: Int, from: String?, to: String?, domain: String, replace: Bool)
-    /// Sums a hash of each cookie of `site` and its subdomains in a profile (a key; nil for the default profile),
-    /// answered with `cookieDigest`: whether a sign-in changed them, without their values leaving the host.
-    case cookieDigest(request: Int, profile: String?, site: String)
     /// Replaces the cookies of `sites` (each a domain with its subdomains) in one profile (a key; nil for the default
     /// profile) with another browser's, which the person chose to bring over; answered with `cookiesImported`. A task
     /// profile that has no folder yet is left as it is: it starts from the default profile's cookies.
@@ -486,10 +474,6 @@ enum BrowserHostEvent: Codable, Equatable, Sendable {
     case ready(processID: Int, engine: String, acceleratedPaint: Bool)
     /// An `importCookies` is done: the cookies it set (0 for a task profile it left as it is), or -1 when it could not run.
     case cookiesImported(request: Int, count: Int)
-    /// A `copyCookies` is done: the cookies it set, or -1 when it could not run.
-    case cookiesCopied(request: Int, count: Int)
-    /// A `cookieDigest`'s sum, 16 hexadecimal digits; empty when it could not run.
-    case cookieDigest(request: Int, digest: String)
     /// Chromium opened (true) or closed its last window of its own in the host, such as the passkey
     /// dialog, or the windows shown changed. While one is shown the host may be activated, so the window takes
     /// the keyboard. `kinds` (one per title): passkey, signIn (HTTP authentication), print, other; nil from a
@@ -593,7 +577,7 @@ enum BrowserHostEvent: Codable, Equatable, Sendable {
     /// The tab an event belongs to; nil for host-wide events.
     var tab: BrowserTabID? {
         switch self {
-        case .ready, .chromiumWindow, .cookiesImported, .cookiesCopied, .cookieDigest, .failed, .terminated: nil
+        case .ready, .chromiumWindow, .cookiesImported, .failed, .terminated: nil
         case .opened(let tab), .frame(let tab, _), .popup(let tab, _), .cursor(let tab, _),
              .contextMenu(let tab, _), .compositionBounds(let tab, _), .address(let tab, _),
              .title(let tab, _), .favicon(let tab, _, _), .loading(let tab, _, _, _), .loadEnd(let tab, _, _),

@@ -1025,6 +1025,11 @@ extension BrowserAgentTools {
         }
         let node = element.node
         let frame = try await mainFrame(of: page)
+        // A sign-in Yardlet has something to fill for is the task's own.
+        if kind == .newPassword || !vault.items(for: frame.origin).isEmpty {
+            try await takeOwnProfile(sessionID, on: page, how: "password manager fill", undone: "nothing was filled",
+                                     again: "call browser_fill_credential again")
+        }
         let world = try await send(page, "Page.createIsolatedWorld", [
             "frameId": .string(frame.id), "worldName": .string(Self.vaultWorldName)
         ])
@@ -1357,6 +1362,18 @@ extension BrowserAgentTools {
     // MARK: Pieces
 
     /// The page's main frame as the browser reports it: its ID, the document it shows, and its origin.
+    /// Before the task's agent signs in to a site itself (`takesOwnProfile`): once the task took a profile of its own,
+    /// the page the agent read has opened again there, so the call stops and says what to do again.
+    func takeOwnProfile(_ sessionID: UUID?, on page: BrowserAgentPage, how: String, undone: String, again: String) async throws {
+        guard let sessionID, let takesOwnProfile else { return }
+        let origin = try await mainFrame(of: page).origin
+        guard takesOwnProfile(sessionID, VaultSite.host(of: origin), how) else { return }
+        throw BrowserAgentToolError("This task now has a browser profile of its own, so the sign-in it makes here leaves the "
+            + "person's sign-ins in other tasks as they are. Its tabs opened again in that profile, which starts with the "
+            + "person's cookies, and \(undone). Call browser_snapshot for new refs, then \(again).",
+            AgentToolFailure(.refused, retry: .withChanges))
+    }
+
     private func mainFrame(of page: BrowserAgentPage) async throws -> (id: String, loaderID: String, origin: String) {
         let tree = try await send(page, "Page.getFrameTree")
         let frame = tree["frameTree"]?["frame"]

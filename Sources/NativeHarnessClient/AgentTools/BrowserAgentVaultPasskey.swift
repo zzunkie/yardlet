@@ -77,6 +77,10 @@ extension BrowserAgentTools {
         let frame = tree["frameTree"]?["frame"]
         let origin = frame?["securityOrigin"]?.stringValue.flatMap { $0.isEmpty || $0 == "null" ? nil : $0 }
             ?? frame?["url"]?.stringValue.flatMap(VaultSite.origin(of:)) ?? ""
+        if !vault.items(for: origin).isEmpty {
+            try await takeOwnProfile(sessionID, on: page, how: "password manager passkey", undone: "no passkey was prepared",
+                                     again: "call browser_fill_credential again")
+        }
         let request = VaultFillRequest(sessionID: sessionID, itemName: itemName, kind: .passkey, origin: origin)
         let grant: VaultFillGrant
         switch await vault.authorize(request) {

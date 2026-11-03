@@ -58,10 +58,8 @@ final class BrowserHostClient {
     /// opened again after the host ended.
     var carriesFilledValue: (String) -> Bool = { _ in false }
     private var sessionObservers: [UUID: [UUID: () -> Void]] = [:]
-    /// Cookie imports and copies waiting for the host's `cookiesImported` or `cookiesCopied`, and digests for its
-    /// `cookieDigest`.
+    /// Cookie imports waiting for the host's `cookiesImported`.
     private var cookieImports: [Int: CheckedContinuation<Int, Never>] = [:]
-    private var cookieDigests: [Int: CheckedContinuation<String?, Never>] = [:]
     private var nextCookieImport = 1
 
     /// The most tabs one task keeps, as the Claude app's Browser pane (⌘1…⌘9 reach all of them).
@@ -111,11 +109,9 @@ final class BrowserHostClient {
     var isHostRunning: Bool { connection != nil }
     /// The profile a session's tabs open in (`BrowserTaskProfiles`); nil, or no provider, is the default profile.
     var profileForSession: (@MainActor (UUID) -> BrowserTabProfile?)?
-    /// The profile a session's tab opens with, with the cookies it takes first (`BrowserTaskProfiles.opening`);
-    /// `profileForSession` when nil.
+    /// The profile a session's tab opens with (`BrowserTaskProfiles.opening`, where a child task's first tab decides
+    /// its profile); `profileForSession` when nil.
     var openingProfileForSession: (@MainActor (UUID) -> BrowserTabProfile?)?
-    /// Tabs moved to another session with their pages; the profile they are in goes with them.
-    var onTabsMoved: (@MainActor (_ source: UUID, _ target: UUID) -> Void)?
     /// The host ended (idle, quit or crashed): the moment no profile folder is open.
     var onHostEnded: (@MainActor () -> Void)?
 
@@ -124,41 +120,8 @@ final class BrowserHostClient {
         sessionOrder.filter { !$0.value.isEmpty }.map(\.key)
     }
 
-    /// A person's sign-in on `site` goes from one profile to another (a key; nil for the default profile), in place
-    /// of that profile's cookies of the site (`BrowserLoginFollow`). The cookies it set, once the target has them; -1
-    /// when the host is not running, could not copy, or did not answer within `timeout`.
-    func copyCookies(from source: String?, to target: String?, site: String, timeout: Duration = .seconds(10)) async -> Int {
-        guard let connection else { return -1 }
-        let request = nextCookieImport
-        nextCookieImport += 1
-        return await withCheckedContinuation { continuation in
-            cookieImports[request] = continuation
-            connection.send(.copyCookies(request: request, from: source, to: target, domain: site, replace: true))
-            Task { [weak self] in
-                try? await Task.sleep(for: timeout)
-                self?.cookieImports.removeValue(forKey: request)?.resume(returning: -1)
-            }
-        }
-    }
-
-    /// A sum of the hashes of a profile's cookies of `site` (a key; nil for the default profile), to tell that they
-    /// changed; nil when the host is not running or did not answer within `timeout`.
-    func cookieDigest(profile: String?, site: String, timeout: Duration = .seconds(5)) async -> String? {
-        guard let connection else { return nil }
-        let request = nextCookieImport
-        nextCookieImport += 1
-        return await withCheckedContinuation { continuation in
-            cookieDigests[request] = continuation
-            connection.send(.cookieDigest(request: request, profile: profile, site: site))
-            Task { [weak self] in
-                try? await Task.sleep(for: timeout)
-                self?.cookieDigests.removeValue(forKey: request)?.resume(returning: nil)
-            }
-        }
-    }
-
     /// Brings the person's sign-ins for `sites` over from another browser (`BrowserLoginImport`): each profile (a key;
-    /// nil for the default profile, where new tasks start) loses its cookies of those sites and takes `cookies`, one
+    /// nil for the default profile) loses its cookies of those sites and takes `cookies`, one
     /// profile after another. What each set, as `cookiesImported` counts them; -1 for one the host did not answer
     /// within `timeout`. Starts the host when it is not running.
     func importCookies(_ cookies: [BrowserImportedCookie], sites: [String], into profiles: [String?],
@@ -431,14 +394,15 @@ final class BrowserHostClient {
     /// place and as much in front: the side panel keeps its tab. A renderer Chromium's hang monitor holds
     /// is ended first; the new tab may still share a process with another page of the same site.
     @discardableResult
-    func replace(_ tab: BrowserTab, url: String) throws -> BrowserTab {
+    func replace(_ tab: BrowserTab, url: String, cause: BrowserTabDeparture.Cause? = nil) throws -> BrowserTab {
         guard tabs[tab.id] === tab, let session = tab.session else { throw BrowserTabGoneError() }
         if tab.unresponsive == .hangMonitor { connection?.send(.unresponsive(tab: tab.id, action: .terminate)) }
         var order = sessionOrder[session] ?? []
         let index = order.firstIndex(of: tab.id) ?? order.count
         let wasFront = frontedTabs[session] == tab.id
         // Gone without the session hearing it as closed: the same key opens again below.
-        noteDeparture(of: tab, from: session, .reopened(key: tab.key, cause: tab.openFailure != nil ? .couldNotOpen : .notResponding))
+        noteDeparture(of: tab, from: session,
+                      .reopened(key: tab.key, cause: cause ?? (tab.openFailure != nil ? .couldNotOpen : .notResponding)))
         tabs.removeValue(forKey: tab.id)
         connection?.send(.close(tab: tab.id))
         tab.markClosed()
@@ -457,6 +421,15 @@ final class BrowserHostClient {
         reschedule()
         notifySession(session)
         return replacement
+    }
+
+    /// The session's tabs open again in their places, each at its page, in the profile the session's tabs take now: a
+    /// task took a profile of its own before its agent's sign-in, and a tab's profile is fixed once it opens. A
+    /// restored tab that has not loaded opens in it when it does.
+    func reopenTabs(forSession session: UUID, cause: BrowserTabDeparture.Cause) {
+        for tab in tabs(forSession: session) where tab.pendingAddress == nil {
+            _ = try? replace(tab, url: tab.currentURL ?? "about:blank", cause: cause)
+        }
     }
 
     /// "Wait" for a page that does not respond: Chromium's hang monitor waits another 15 seconds and
@@ -519,7 +492,6 @@ final class BrowserHostClient {
         if agentUsedTabs[source] == tab.id { agentUsedTabs[source] = nil }
         noteDeparture(of: tab, from: source, .moved)
         tab.session = target
-        onTabsMoved?(source, target)
         remembered[target] = nil
         sessionOrder[target, default: []].append(tab.id)
         if select || frontedTabs[target].flatMap({ tabs[$0] }) == nil { frontedTabs[target] = tab.id }
@@ -1092,15 +1064,11 @@ final class BrowserHostClient {
                 sessions.forEach(notifySession)
                 onPersonWaitsChange?()
             }
-        case .cookiesImported(let request, let count), .cookiesCopied(let request, let count):
+        case .cookiesImported(let request, let count):
             cookieImports.removeValue(forKey: request)?.resume(returning: count)
-        case .cookieDigest(let request, let digest):
-            cookieDigests.removeValue(forKey: request)?.resume(returning: digest.isEmpty ? nil : digest)
         case .terminated(let reason):
             for waiting in cookieImports.values { waiting.resume(returning: -1) }
             cookieImports.removeAll()
-            for waiting in cookieDigests.values { waiting.resume(returning: nil) }
-            cookieDigests.removeAll()
             chromiumWindows = []
             onChromiumWindowsChange?()
             connection = nil
@@ -2070,6 +2038,9 @@ enum BrowserTabDeparture: Equatable, Sendable {
         case couldNotOpen
         /// The browser host ended, and the session's tabs open again as they were (`restoreTabs`).
         case hostEnded
+        /// The task took a browser profile of its own before its agent signed in to a site itself, and its tabs opened
+        /// again there (`reopenTabs`).
+        case ownProfile
     }
     /// Another tab took or takes its place as the same side-panel tab, `key`.
     case reopened(key: UUID, cause: Cause)

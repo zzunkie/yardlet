@@ -22,22 +22,33 @@ final class BrowserSessionTabsTests: XCTestCase {
         connection.sent.compactMap { if case .open(_, let url, _, _) = $0 { url } else { nil } }
     }
 
-    /// Every tab of a task opens in that task's profile; a tab of no task in the default one; tabs that
-    /// move to another task say so, so its profile can follow them (docs/BROWSER_SESSION_ISOLATION.md).
-    func testATasksTabsOpenInItsProfileAndMovedTabsAreTold() throws {
+    /// Every tab of a task opens in that task's profile, a tab of no task in the default one, and a task that takes a
+    /// profile of its own opens its tabs again in their places, at their pages, in it: a tab's profile is fixed once it
+    /// opens, so a tab left behind would sign the agent in where the person's sign-ins are
+    /// (docs/BROWSER_SESSION_ISOLATION.md 3).
+    func testATasksTabsOpenInItsProfileAndOpenAgainInPlaceWhenItTakesOne() throws {
         let client = makeClient()
-        let task = UUID(), other = UUID()
-        client.profileForSession = { BrowserTabProfile(key: $0.uuidString, seedFrom: nil) }
-        var moves: [(UUID, UUID)] = []
-        client.onTabsMoved = { moves.append(($0, $1)) }
+        let task = UUID()
+        var own = false
+        client.profileForSession = { own ? BrowserTabProfile(key: $0.uuidString, seedFrom: nil) : nil }
         let first = try client.openTab(forSession: task, url: "https://a.test", viewport: .offscreenDefault)
-        _ = try client.newTab(forSession: task, url: "https://b.test", viewport: .offscreenDefault, select: false)
+        let second = try client.newTab(forSession: task, url: "https://b.test", viewport: .offscreenDefault, select: false)
         _ = try client.openTab(url: "https://c.test", viewport: .offscreenDefault)
-        let profiles = connection.sent.compactMap { if case .open(_, _, _, let profile) = $0 { profile?.key ?? "default" } else { nil } }
-        XCTAssertEqual(profiles, [task.uuidString, task.uuidString, "default"])
-        try client.move(first, toSession: other, select: true)
-        XCTAssertEqual(moves.map(\.0), [task])
-        XCTAssertEqual(moves.map(\.1), [other])
+        let profiles = { self.connection.sent.compactMap { if case .open(_, _, _, let profile) = $0 { profile?.key ?? "default" } else { nil } } }
+        XCTAssertEqual(profiles(), ["default", "default", "default"])
+        connection.eventHandler?(.address(tab: first.id, url: "https://a.test/signin"))
+        connection.eventHandler?(.address(tab: second.id, url: "https://b.test/"))
+
+        own = true
+        connection.sent.removeAll()
+        client.reopenTabs(forSession: task, cause: .ownProfile)
+        let reopened = connection.sent.compactMap { if case .open(_, let url, _, let profile) = $0 { "\(url) \(profile?.key ?? "default")" } else { nil } }
+        XCTAssertEqual(reopened, ["https://a.test/signin \(task.uuidString)", "https://b.test/ \(task.uuidString)"])
+        XCTAssertEqual(connection.sent.filter { if case .close = $0 { true } else { false } }.count, 2)
+        let tabs = client.tabs(forSession: task)
+        XCTAssertEqual(tabs.map(\.key), [first.key, second.key], "each opens again as the same panel tab, in its place")
+        XCTAssertTrue(client.tab(forSession: task) === tabs[0], "the fronted tab stays in front")
+        XCTAssertEqual(client.departure(of: first.id)?.departure, .reopened(key: first.key, cause: .ownProfile))
     }
 
     func testNewTabsOpenBehindTheFrontedTabUnlessSelected() throws {

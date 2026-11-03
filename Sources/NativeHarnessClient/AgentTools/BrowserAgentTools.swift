@@ -74,6 +74,10 @@ final class BrowserAgentTools {
     var loadTimeout: Duration = .seconds(30)
     /// The vault `browser_fill_credential` asks (design docs/BROWSER_VAULT_DESIGN.md); nil leaves the tool refusing.
     var vault: VaultCenter?
+    /// Just before the task's agent signs in to a site itself: the task takes a browser profile of its own and its tabs
+    /// open again there, so the sign-in changes no other task's (docs/BROWSER_SESSION_ISOLATION.md 3). Given the task,
+    /// the page's host and how it signs in; true when it did. Nil (tests) takes none.
+    var takesOwnProfile: (@MainActor (UUID, String, String) -> Bool)?
     /// The keys of the two-factor setup QR codes in a picture (Vision on macOS), which a screenshot does not hand
     /// over while the vault is on; nil reads no picture (tests).
     var setupKeysPictured: (@Sendable (Data) async -> [Data])?
@@ -631,7 +635,7 @@ final class BrowserAgentTools {
         case AgentToolCatalog.navigate: try await navigate(arguments, on: page, sessionID: sessionID)
         case AgentToolCatalog.snapshot: try await snapshot(on: page)
         case AgentToolCatalog.click: try await click(arguments, on: page)
-        case AgentToolCatalog.type: try await type(arguments, on: page)
+        case AgentToolCatalog.type: try await type(arguments, on: page, sessionID: sessionID)
         case AgentToolCatalog.pressKey: try await pressKey(arguments, on: page)
         case AgentToolCatalog.scroll: try await scroll(arguments, on: page)
         case AgentToolCatalog.selectOption: try await selectOption(arguments, on: page)
@@ -854,7 +858,7 @@ final class BrowserAgentTools {
         return .text("\(what) \(target) at (\(Self.format(point.x)), \(Self.format(point.y))).")
     }
 
-    private func type(_ arguments: JSONValue, on page: BrowserAgentPage) async throws -> AgentToolResult {
+    private func type(_ arguments: JSONValue, on page: BrowserAgentPage, sessionID: UUID?) async throws -> AgentToolResult {
         guard let ref = arguments["ref"]?.stringValue, let text = arguments["text"]?.stringValue else {
             throw BrowserAgentToolError("browser_type needs a ref and text.")
         }
@@ -864,12 +868,14 @@ final class BrowserAgentTools {
         } catch let error as BrowserAgentToolError where !error.message.contains(" is stale") {
             throw BrowserAgentToolError("\(ref) cannot take keyboard focus, so it is not a text field.")
         }
+        // A password or one-time code field is a sign-in of the task's own.
         let kind = try await call(page, ref: ref, element: element, function: """
             function() {
+              \(VaultPageScripts.codeFieldTests)
               if (this instanceof HTMLInputElement || this instanceof HTMLTextAreaElement) {
                 if (this.readOnly || this.disabled) return 'readonly';
                 this.select();
-                return 'field';
+                return this.type === 'password' || looksLikeCodeField(this) ? 'signIn' : 'field';
               }
               if (this.isContentEditable) {
                 const range = document.createRange();
@@ -885,6 +891,8 @@ final class BrowserAgentTools {
         switch kind.stringValue {
         case "readonly": throw BrowserAgentToolError("\(ref) is read-only or disabled.")
         case "other": throw BrowserAgentToolError("\(ref) is not an editable text field.")
+        case "signIn": try await takeOwnProfile(sessionID, on: page, how: "typed into a password or code field",
+                                                undone: "nothing was typed", again: "type again")
         default: break
         }
         if text.isEmpty {

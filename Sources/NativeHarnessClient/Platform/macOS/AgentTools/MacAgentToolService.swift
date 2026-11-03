@@ -52,6 +52,9 @@ final class MacAgentToolService: NativeSurfaceResource {
             }.value
         }
         tools.clipboardIsConcealed = { VaultClipboard.holdsConcealed() }
+        tools.takesOwnProfile = { session, host, how in
+            MacBrowserHost.isAvailable && MacBrowserHost.shared.takeOwnProfile(for: session, site: host, how: how)
+        }
         broker = AgentToolBroker(
             environment: AgentToolBroker.Environment(
                 executableURL: Self.executableURL,

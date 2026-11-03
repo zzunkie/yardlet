@@ -245,6 +245,7 @@ final class BrowserAgentTabs: BrowserAgentTabDirectory {
         case .notResponding: "its page was not responding"
         case .couldNotOpen: "it could not open"
         case .hostEnded: "the browser host ended"
+        case .ownProfile: "the task took a browser profile of its own before signing in to a site itself"
         }
     }
 

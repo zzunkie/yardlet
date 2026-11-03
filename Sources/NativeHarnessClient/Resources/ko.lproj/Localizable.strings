@@ -2904,7 +2904,7 @@
 "Keep cookies" = "쿠키 보관";
 "Per task" = "작업마다";
 "Shared by all tasks" = "모든 작업이 함께";
-"Each task keeps its own sign-ins and site data; sign-ins saved in the password manager work in every task" = "작업마다 로그인 상태와 사이트 데이터를 따로 둡니다. 비밀번호 관리자에 저장한 로그인 정보는 모든 작업에서 씁니다";
+"Tasks share your sign-ins. A task whose agent signs in to a site itself keeps that sign-in to itself. Sign-ins saved in the password manager work in every task" = "작업들이 로그인 상태를 함께 씁니다. 에이전트가 직접 로그인한 작업만 그 로그인을 따로 둡니다. 비밀번호 관리자에 저장한 로그인 정보는 모든 작업에서 씁니다";
 
 /* Claude Code session jobs (CronCreate, /loop) in a task's rail and the scheduled tasks list */
 "Session schedules" = "세션 안 예약";

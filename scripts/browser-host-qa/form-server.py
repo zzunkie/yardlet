@@ -806,26 +806,7 @@ document.getElementById('form').addEventListener('submit', e => { e.preventDefau
 
 ISOLATION = '''<!doctype html><meta charset="utf-8"><title>Isolation</title><h1>Isolation</h1>'''
 
-# The sign-ins tasks follow (BrowserHostIsolationQA, docs/BROWSER_SESSION_ISOLATION.md 11). /follow/signin has a
-# password form, whose post sets qa_follow to the username, and a "Sign in with QA" link to the other site's
-# /follow/idp (localhost and 127.0.0.1 are two sites), which waits for a click as an account chooser does and goes
-# back to /follow/callback, which sets qa_follow=SSO. Both end on /follow/home. /follow/home?rotate renews qa_rotate
-# from the page, as a site renews a cookie while it is used.
-FOLLOW_SIGN_IN = """<!doctype html><meta charset="utf-8"><title>Follow sign-in</title>
-<form method="post" action="/follow/signin"><input id="user" name="user" autocomplete="username">
-<input id="password" name="password" type="password" autocomplete="current-password">
-<button id="go" type="submit">Sign in</button></form>
-<p><a id="sso" href="#">Sign in with QA</a> <a id="rotate" href="/follow/home?rotate">Browse</a></p>
-<script>
-const other = location.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
-document.querySelector('#sso').href = location.protocol + '//' + other + ':' + location.port + '/follow/idp?return='
-  + encodeURIComponent(location.origin + '/follow/callback');
-</script>"""
-FOLLOW_HOME = """<!doctype html><meta charset="utf-8"><title>Follow home</title><h1>Home</h1>
-<script>if (location.search.includes('rotate')) document.cookie = 'qa_rotate=' + Date.now() + '; path=/; max-age=3600';</script>"""
-FOLLOW_IDP = """<!doctype html><meta charset="utf-8"><title>QA sign-in</title><h1>Choose an account</h1>
-<a id="continue" href="RETURN?code=qa">Continue</a>"""
-# Several accounts in one sign-in, as Google keeps them. A post to /follow/accounts adds its account to those the
+# Several accounts in one sign-in, as Google keeps them (BrowserHostIsolationQA, docs/BROWSER_SESSION_ISOLATION.md 6). A post to /follow/accounts adds its account to those the
 # request's cookies name and starts a new session: qa_accounts lists the accounts, each of qa_s01 to qa_s30 carries
 # the session, and qa_seen, which the page reads, changes with it. The page reloads when qa_seen changes, as a Google
 # page does when its session changed in another tab.
@@ -1646,9 +1627,6 @@ class Handler(BaseHTTPRequestHandler):
         global landed
         if self.path.startswith('/vault/landed'):
             landed += 1
-        if self.path.startswith('/follow/signin'):
-            return self.redirect('/follow/home', ['qa_follow=%s; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600' % (
-                ''.join(c for c in fields.get('user', '') if c.isalnum()) or 'none')])
         if self.path.startswith('/follow/accounts'):
             sent = dict(part.strip().partition('=')[::2] for part in (self.headers.get('Cookie') or '').split(';'))
             accounts = [name for name in sent.get('qa_accounts', '').split('.') if name]
@@ -1690,20 +1668,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send(payload.encode(), {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'})
 
     def follow(self):
-        """The sign-ins tasks follow (FOLLOW_SIGN_IN above)."""
-        route, _, query = self.path.partition('?')
-        page = {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'}
-        if route == '/follow/signin':
-            return self.send(FOLLOW_SIGN_IN.encode(), page)
-        if route == '/follow/home':
-            return self.send(FOLLOW_HOME.encode(), page)
+        """Several accounts in one sign-in (FOLLOW_ACCOUNTS above)."""
+        route = self.path.partition('?')[0]
         if route == '/follow/accounts':
-            return self.send(FOLLOW_ACCOUNTS.encode(), page)
-        if route == '/follow/idp':
-            back = parse_qs(query).get('return', [''])[0]
-            return self.send(FOLLOW_IDP.replace('RETURN', html.escape(back)).encode(), page)
-        if route == '/follow/callback':
-            return self.redirect('/follow/home', ['qa_follow=SSO; Path=/; HttpOnly; SameSite=Lax; Max-Age=3600'])
+            return self.send(FOLLOW_ACCOUNTS.encode(), {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'})
         self.send_response(404)
         self.send_header('Content-Length', '0')
         self.end_headers()

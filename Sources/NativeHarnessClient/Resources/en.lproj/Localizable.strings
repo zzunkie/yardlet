@@ -2904,7 +2904,7 @@
 "Keep cookies" = "Keep cookies";
 "Per task" = "Per task";
 "Shared by all tasks" = "Shared by all tasks";
-"Each task keeps its own sign-ins and site data; sign-ins saved in the password manager work in every task" = "Each task keeps its own sign-ins and site data; sign-ins saved in the password manager work in every task";
+"Tasks share your sign-ins. A task whose agent signs in to a site itself keeps that sign-in to itself. Sign-ins saved in the password manager work in every task" = "Tasks share your sign-ins. A task whose agent signs in to a site itself keeps that sign-in to itself. Sign-ins saved in the password manager work in every task";
 
 /* Claude Code session jobs (CronCreate, /loop) in a task's rail and the scheduled tasks list */
 "Session schedules" = "Session schedules";

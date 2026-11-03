@@ -56,8 +56,7 @@ typedef enum {
     /// number: 0 Chromium's hang monitor found the renderer unresponsive (no input handled for 15 s),
     /// 1 it answers again.
     YardletCEFEventResponsiveness = 18,
-    /// Process-wide (tab -1): a cookie copy finished. number: its request ID, detail: how many cookies (a digest's
-    /// sum for yardlet_cef_cookie_digest).
+    /// Process-wide (tab -1): a cookie copy or import finished. number: its request ID, detail: how many cookies.
     YardletCEFEventCookiesCopied = 19,
     /// The profile a tab waited for has loaded. number: 1 its browser was made, 0 Chromium could not make it
     /// (the tab is gone).
@@ -247,18 +246,11 @@ int yardlet_cef_ask_main_frame(int tab, int query);
 /// history; YardletCEFEventDiscarded follows instead of YardletCEFEventPageCrashed. Returns 0 when it could
 /// not.
 int yardlet_cef_discard(int tab);
-/// Copies the cookies of one request context into another (an empty path is the global context), only
-/// those of `sites` (each a domain with its subdomains) when there are any, then flushes the target's store
-/// and emits YardletCEFEventCookiesCopied with `request`. `mode` 0 adds them beside the target's; 1 first
-/// deletes the target's cookies of `sites`, so each holds the source's alone; 2 adds only those of sites the
-/// target has no cookie of (a site no finer than its registrable domain). A host-only cookie stays host-only;
-/// a partitioned cookie is left out, since CEF cannot set one. Returns 0 when the copy could not start.
-int yardlet_cef_copy_cookies(int request, const char *fromPath, const char *toPath, const char *const *sites,
-                             int siteCount, int mode);
-/// Sums a hash of each cookie of `site` (a domain with its subdomains) in a request context (an empty path is
-/// the global context): name, domain, path and value. Emits YardletCEFEventCookiesCopied with `request` and
-/// the sum as 16 hexadecimal digits for detail. Returns 0 when it could not start.
-int yardlet_cef_cookie_digest(int request, const char *path, const char *site);
+/// Copies the cookies of one request context into another (an empty path is the global context), beside the
+/// target's, then flushes the target's store and emits YardletCEFEventCookiesCopied with `request`. A host-only
+/// cookie stays host-only; a partitioned cookie is left out, since CEF cannot set one. Returns 0 when the copy
+/// could not start.
+int yardlet_cef_copy_cookies(int request, const char *fromPath, const char *toPath);
 /// A cookie another browser keeps, as Chromium stores it: `domain` with a leading dot for a domain cookie and
 /// the host alone for a host-only one; `same_site` and `priority` as CEF's (cef_cookie_same_site_t,
 /// cef_cookie_priority_t); `expires` in microseconds since 1601, as Chromium's times, when `has_expires`.

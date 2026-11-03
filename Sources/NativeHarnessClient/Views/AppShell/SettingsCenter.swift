@@ -541,8 +541,8 @@ struct SettingsCenterView: View {
                     .pickerStyle(.segmented)
                     .fixedSize()
                     .controlSize(.small)
-                    .help(L10n.string("Each task keeps its own sign-ins and site data; sign-ins saved in the password manager work in every task"))
-                    .accessibilityHint(L10n.string("Each task keeps its own sign-ins and site data; sign-ins saved in the password manager work in every task"))
+                    .help(L10n.string("Tasks share your sign-ins. A task whose agent signs in to a site itself keeps that sign-in to itself. Sign-ins saved in the password manager work in every task"))
+                    .accessibilityHint(L10n.string("Tasks share your sign-ins. A task whose agent signs in to a site itself keeps that sign-in to itself. Sign-ins saved in the password manager work in every task"))
                 }
                 .padding(.vertical, 14)
                 Divider().padding(.leading, Self.dividerLeading)

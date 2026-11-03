@@ -328,6 +328,11 @@ tool that lists items. With no matching item, it answers "No vault item for http
 
 ### 5.2 How filling works
 
+A fill on a site the vault has an item for, in a task that still uses the default profile all tasks share, first gives
+the task a browser profile of its own and opens its tabs again there, so the agent's sign-in changes no other task's
+([BROWSER_SESSION_ISOLATION](BROWSER_SESSION_ISOLATION.md) section 3). That call fills nothing and says to take a new
+snapshot and call again; the steps below run on the next call.
+
 1. **Origin check:** the origin of the tab's top-level document and the origin of the frame holding the field are taken
    from values the browser gives (`frameId` from CDP `DOM.describeNode` → `securityOrigin` from `Page.getFrameTree`).
    The page cannot change these values, and no URL from the model is used.

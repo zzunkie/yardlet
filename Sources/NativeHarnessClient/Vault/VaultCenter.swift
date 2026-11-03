@@ -968,16 +968,6 @@ final class VaultCenter: ObservableObject {
             .filter { $0.outcome == .filled || $0.outcome == .refused }.prefix(limit))
     }
 
-    /// The agents' fills the log keeps (90 days): each task and the site of the page filled. A task signed in
-    /// to that site itself (docs/BROWSER_SESSION_ISOLATION.md 11).
-    func agentFills() -> [(task: UUID, site: String)] {
-        environment.repository.allUses().compactMap { use in
-            guard use.outcome == .filled, use.confirmedBy != .person, let task = use.taskID,
-                  let site = BrowserLoginFollow.site(of: use.origin) else { return nil }
-            return (task, site)
-        }
-    }
-
     /// The item's secret, if the sites and agent policy `items.json` gives the item are the ones Yardlet saved with the
     /// secret; a secret saved before they were kept with it takes the item's now. Otherwise the person hears of it
     /// and it throws `VaultChangedOutside`.

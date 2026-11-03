@@ -588,6 +588,30 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertEqual(keys[0]["windowsVirtualKeyCode"], .integer(13))
     }
 
+    /// A sign-in the agent types goes into the task's profile of its own: typed before the task takes one, it would
+    /// change the person's sign-in in every task (docs/BROWSER_SESSION_ISOLATION.md 3).
+    func testTypeIntoAPasswordOrCodeFieldGivesTheTaskAProfileOfItsOwnBeforeAnythingGoesIn() async {
+        _ = await loadSnapshot()
+        cdp.responders["DOM.resolveNode"] = { _ in .object(["object": .object(["objectId": .string("obj-12")])]) }
+        cdp.responders["Runtime.callFunctionOn"] = { _ in ScriptedCDP.value(.string("signIn")) }
+        cdp.responders["Page.getFrameTree"] = { _ in
+            .object(["frameTree": .object(["frame": .object(["id": .string("main"), "securityOrigin": .string("https://www.example.com")])])])
+        }
+        var taken: [String] = []
+        tools.takesOwnProfile = { _, host, _ in
+            taken.append(host)
+            return taken.count == 1
+        }
+        let first = await run(AgentToolCatalog.type, ["ref": .string("@e2"), "text": .string("secret")])
+        XCTAssertTrue(first.isError)
+        XCTAssertTrue(first.text.contains("profile of its own") && first.text.contains("browser_snapshot"), first.text)
+        XCTAssertTrue(cdp.params(of: "Input.insertText").isEmpty, "nothing goes into the page that opened again")
+        let second = await run(AgentToolCatalog.type, ["ref": .string("@e2"), "text": .string("secret")])
+        XCTAssertFalse(second.isError, second.text)
+        XCTAssertEqual(taken, ["www.example.com", "www.example.com"])
+        XCTAssertEqual(cdp.params(of: "Input.insertText").first?["text"], .string("secret"))
+    }
+
     func testTypeRefusesAnElementThatIsNotATextField() async {
         _ = await loadSnapshot()
         cdp.responders["DOM.resolveNode"] = { _ in .object(["object": .object(["objectId": .string("obj-13")])]) }

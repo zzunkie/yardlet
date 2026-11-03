@@ -9,22 +9,11 @@ struct TaskProfiles {
     let rootCache: String
     let defaultProfile: String
 
-    /// A tab's context as the app asked for it: the folder, and the cookie copies into it before the tab's page
-    /// loads. Nil for the default context.
+    /// A tab's context as the app asked for it: the folder, and for a new one the folder whose cookies it starts with
+    /// before the tab's page loads (empty for the default profile). Nil for the default context.
     struct Prepared {
         var path: String
-        var copies: [Copy] = []
-    }
-
-    /// Cookies a profile takes before its tab's page: a new folder's starting cookies (every site of the profile it
-    /// seeds from), the person's sign-ins the task follows (replacing its own cookies of those sites), and for a
-    /// task that predates following, the default profile's sites it has no cookie of
-    /// (docs/BROWSER_SESSION_ISOLATION.md 11). `from` is a folder, empty for the default profile; `mode` is the
-    /// bridge's (`yardlet_cef_copy_cookies`): 0 add, 1 replace, 2 fill.
-    struct Copy: Equatable {
-        var from: String
-        var sites: [String]
-        var mode: Int32
+        var seed: String?
     }
 
     /// The folder for a key; the default profile for nil or a key that is not one.
@@ -47,12 +36,8 @@ struct TaskProfiles {
                                                      attributes: [.posixPermissions: 0o700])
             copyPasskeyMetadataKey(to: path)
             let named = self.path(forKey: profile?["seedFrom"] as? String)
-            let seed = !named.isEmpty && FileManager.default.fileExists(atPath: named) ? named : ""
-            prepared.copies.append(Copy(from: seed, sites: [], mode: 0))
+            prepared.seed = !named.isEmpty && FileManager.default.fileExists(atPath: named) ? named : ""
         }
-        let follow = (profile?["follow"] as? [String] ?? []).filter { !$0.isEmpty }
-        if !follow.isEmpty { prepared.copies.append(Copy(from: "", sites: follow, mode: 1)) }
-        if profile?["fill"] as? Bool == true { prepared.copies.append(Copy(from: "", sites: [], mode: 2)) }
         return prepared
     }
 

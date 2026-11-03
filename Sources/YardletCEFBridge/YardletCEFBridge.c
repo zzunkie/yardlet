@@ -2579,8 +2579,8 @@ int yardlet_cef_open_browser_count(void) {
 }
 
 // MARK: - Cookie copies
-// A new task's context starts with the cookies of another (the default profile or its parent task's),
-// and a person's sign-in in a task goes back to the default profile. A copy must leave each cookie as
+// A new task profile's context starts with the cookies of another (the default profile or its parent
+// task's; docs/BROWSER_SESSION_ISOLATION.md 3). A copy must leave each cookie as
 // Chromium stored it, or leave it out: Google's accounts site answers a __Host- cookie that is missing,
 // or a sign-in cookie that comes twice, with /CookieMismatch (docs/BROWSER_SESSION_ISOLATION.md 8).
 // A first visitor reads the source's cookies. CEF's cookie struct carries no partition key, and setting
@@ -2591,11 +2591,6 @@ int yardlet_cef_open_browser_count(void) {
 // source context: its cookies come from Yardlet, unpartitioned, and a first visitor deletes the target's
 // cookies of the chosen sites, so each site holds the other browser's cookies alone; they are then set
 // as a copy's are.
-// A person's sign-in goes to the tasks that follow it (docs/BROWSER_SESSION_ISOLATION.md 11) as a copy of its
-// sites that replaces the target's cookies of them the way an import does, so no site holds two sessions'
-// cookies. A task that predates following takes only the sites it has no cookie of (a fill). A digest
-// sums a hash of each of a site's cookies, so Yardlet can tell that a sign-in changed them without
-// seeing a value.
 
 typedef struct {
     cef_completion_callback_t callback;
@@ -2611,31 +2606,21 @@ typedef struct {
     int unpartitioned;
 } SourceCookie;
 
-/// What a copy does with the target's cookies: adds the source's beside them, replaces those of its sites, or
-/// adds only those of sites the target has no cookie of. A digest reads the source alone.
-enum { kCopyAdd, kCopyReplace, kCopyFill, kCopyDigest };
-
 typedef struct {
     int references;
     int request, sourceHandle, targetHandle;
-    int mode;
-    /// The sites (each a domain with its subdomains) a copy reads and a replace or an import deletes first;
-    /// none for every site.
+    /// The sites (each a domain with its subdomains) an import deletes first; none for a copy, which reads every
+    /// site.
     char **sites;
     int siteCount;
     cef_cookie_manager_t *source, *target;
     SourceCookie *cookies;
     int count, capacity;
-    /// A fill's sites the target already has a cookie of (`cookie_site_key`).
-    char **present;
-    int presentCount, presentCapacity;
-    /// A digest's sum.
-    uint64_t digest;
 } CookieCopy;
 
-/// What a visitor does: reads every source cookie, finds those an address gets, deletes the target's cookies of
-/// the copy's sites, lists the sites the target has cookies of, or adds a site's cookies to a digest.
-enum { kVisitSource, kVisitAddress, kVisitDeleteSites, kVisitTargetSites, kVisitDigest };
+/// What a visitor does: reads every source cookie, finds those an address gets, or deletes the target's cookies
+/// of the import's sites.
+enum { kVisitSource, kVisitAddress, kVisitDeleteSites };
 
 typedef struct {
     cef_cookie_visitor_t visitor;
@@ -2695,26 +2680,6 @@ static int copy_covers(const CookieCopy *copy, const char *domain) {
     return 0;
 }
 
-/// A cookie's site for a fill, never finer than its registrable domain (the bridge has no public suffix list): an
-/// IP address whole, else the host's last two labels, so `a.example.co.uk` and `b.other.co.uk` count as one site.
-/// A coarser site only leaves more of a fill out.
-static char *cookie_site_key(const char *domain) {
-    const char *host = domain[0] == '.' ? domain + 1 : domain;
-    if (strspn(host, "0123456789.") == strlen(host)) return strdup(host);
-    const char *last = strrchr(host, '.');
-    if (last == NULL) return strdup(host);
-    const char *start = last;
-    while (start > host && start[-1] != '.') start--;
-    return strdup(start);
-}
-
-static int target_has_site(const CookieCopy *copy, const char *key) {
-    for (int index = 0; index < copy->presentCount; index++) {
-        if (strcasecmp(copy->present[index], key) == 0) return 1;
-    }
-    return 0;
-}
-
 /// Whether the source also has the host-only cookie of this domain cookie's host, name and path: a copied domain
 /// cookie the copy before 2026-10-25 made beside the site's own cookie, which the copy leaves out.
 static int has_host_only_twin(const CookieCopy *copy, const SourceCookie *item) {
@@ -2758,12 +2723,6 @@ static void set_copied_cookies(CookieCopy *copy) {
     for (int index = 0; index < copy->count; index++) {
         SourceCookie *item = &copy->cookies[index];
         if (!item->unpartitioned || has_host_only_twin(copy, item)) continue;
-        if (copy->mode == kCopyFill) {
-            char *key = cookie_site_key(item->domain);
-            int present = key == NULL || target_has_site(copy, key);
-            free(key);
-            if (present) continue;
-        }
         cef_cookie_t cookie = item->cookie;
         memset(&cookie.name, 0, sizeof(cookie.name));
         memset(&cookie.value, 0, sizeof(cookie.value));
@@ -2806,16 +2765,7 @@ static void set_copied_cookies(CookieCopy *copy) {
 /// Drops one of the copy's references; the last sets the cookies and frees the copy.
 static void cookie_copy_release_reference(CookieCopy *copy) {
     if (__atomic_sub_fetch(&copy->references, 1, __ATOMIC_ACQ_REL) != 0) return;
-    if (copy->mode == kCopyDigest) {
-        release_context(copy->sourceHandle);
-        char digest[24];
-        snprintf(digest, sizeof(digest), "%016llx", (unsigned long long)copy->digest);
-        if (g_callbacks.event) g_callbacks.event(-1, (int)YardletCEFEventCookiesCopied, NULL, digest, copy->request);
-    } else {
-        set_copied_cookies(copy);
-    }
-    for (int index = 0; index < copy->presentCount; index++) free(copy->present[index]);
-    free(copy->present);
+    set_copied_cookies(copy);
     for (int index = 0; index < copy->count; index++) {
         SourceCookie *item = &copy->cookies[index];
         free(item->name);
@@ -2855,38 +2805,6 @@ static int CEF_CALLBACK cookie_copy_visit(cef_cookie_visitor_t *self, const cef_
     char *path = copy_string(&cookie->path);
     if (visitor->mode == kVisitDeleteSites) {
         if (copy->siteCount > 0 && copy_covers(copy, domain)) *delete_cookie = 1;
-    } else if (visitor->mode == kVisitTargetSites) {
-        char *key = domain[0] ? cookie_site_key(domain) : NULL;
-        if (key && !target_has_site(copy, key)) {
-            if (copy->presentCount == copy->presentCapacity) {
-                int capacity = copy->presentCapacity ? copy->presentCapacity * 2 : 64;
-                char **grown = realloc(copy->present, sizeof(*grown) * (size_t)capacity);
-                if (grown) {
-                    copy->present = grown;
-                    copy->presentCapacity = capacity;
-                }
-            }
-            if (copy->presentCount < copy->presentCapacity) {
-                copy->present[copy->presentCount++] = key;
-                key = NULL;
-            }
-        }
-        free(key);
-    } else if (visitor->mode == kVisitDigest) {
-        if (copy_covers(copy, domain)) {
-            // FNV-1a over the cookie's name, domain, path and value; the sum leaves out the order CEF visits them in.
-            uint64_t hash = 14695981039346656037ULL;
-            char *value = copy_string(&cookie->value);
-            const char *parts[] = {name, domain, path, value ? value : ""};
-            for (int part = 0; part < 4; part++) {
-                for (const unsigned char *byte = (const unsigned char *)parts[part]; *byte; byte++) {
-                    hash = (hash ^ *byte) * 1099511628211ULL;
-                }
-                hash = (hash ^ 0xff) * 1099511628211ULL;
-            }
-            free(value);
-            copy->digest += hash;
-        }
     } else if (visitor->mode == kVisitAddress) {
         // This address gets the cookie, so it is not partitioned.
         for (int index = 0; index < copy->count; index++) {
@@ -2951,7 +2869,7 @@ static int CEF_CALLBACK cookie_copy_has_at_least_one_ref(cef_base_ref_counted_t 
 
 /// Hands CEF a visitor with its one reference, which holds one of the copy's: every source cookie, the
 /// unpartitioned ones `url` gets (`kVisitAddress`), or every cookie of the target, whose sites' it deletes
-/// (`kVisitDeleteSites`) or lists (`kVisitTargetSites`). CEF's last release of the visitor ends its part.
+/// (`kVisitDeleteSites`). CEF's last release of the visitor ends its part.
 static void start_cookie_visitor(CookieCopy *copy, int mode, const char *url) {
     CookieCopyVisitor *visitor = calloc(1, sizeof(*visitor));
     if (visitor == NULL) return;
@@ -2964,7 +2882,7 @@ static void start_cookie_visitor(CookieCopy *copy, int mode, const char *url) {
     base->has_one_ref = cookie_copy_has_one_ref;
     base->has_at_least_one_ref = cookie_copy_has_at_least_one_ref;
     visitor->visitor.visit = cookie_copy_visit;
-    if (mode == kVisitDeleteSites || mode == kVisitTargetSites) {
+    if (mode == kVisitDeleteSites) {
         copy->target->visit_all_cookies(copy->target, &visitor->visitor);
         return;
     }
@@ -2978,9 +2896,8 @@ static void start_cookie_visitor(CookieCopy *copy, int mode, const char *url) {
     p_cef_string_utf16_clear(&address);
 }
 
-int yardlet_cef_copy_cookies(int request, const char *from_path, const char *to_path, const char *const *sites,
-                             int site_count, int mode) {
-    if (g_library == NULL || site_count < 0 || mode < kCopyAdd || mode > kCopyFill) return 0;
+int yardlet_cef_copy_cookies(int request, const char *from_path, const char *to_path) {
+    if (g_library == NULL) return 0;
     int source = acquire_context(from_path);
     if (source < 0) return 0;
     int target = acquire_context(to_path);
@@ -3002,41 +2919,10 @@ int yardlet_cef_copy_cookies(int request, const char *from_path, const char *to_
         release_context(target);
         return 0;
     }
-    // This function's own reference, dropped once the first visitors are with CEF.
+    // This function's own reference, dropped once the first visitor is with CEF.
     *copy = (CookieCopy){.references = 1, .request = request, .sourceHandle = source, .targetHandle = target,
-                         .mode = mode, .source = reader, .target = writer,
-                         .sites = site_count ? calloc((size_t)site_count, sizeof(char *)) : NULL};
-    for (int index = 0; copy->sites && index < site_count; index++) {
-        if (sites[index] && sites[index][0]) copy->sites[copy->siteCount++] = strdup(sites[index]);
-    }
+                         .source = reader, .target = writer};
     start_cookie_visitor(copy, kVisitSource, NULL);
-    // The target's cookies go (a replace) or are listed (a fill) while the source is read; CEF's cookie manager
-    // takes the deletions before the cookies set once every visitor is done.
-    if (mode == kCopyReplace && copy->siteCount > 0) start_cookie_visitor(copy, kVisitDeleteSites, NULL);
-    if (mode == kCopyFill) start_cookie_visitor(copy, kVisitTargetSites, NULL);
-    cookie_copy_release_reference(copy);
-    return 1;
-}
-
-int yardlet_cef_cookie_digest(int request, const char *path, const char *site) {
-    if (g_library == NULL || site == NULL || site[0] == '\0') return 0;
-    int handle = acquire_context(path);
-    if (handle < 0) return 0;
-    cef_request_context_t *context = context_reference(handle);
-    cef_cookie_manager_t *manager = context ? context->get_cookie_manager(context, NULL) : NULL;
-    YARDLET_RELEASE_CONTEXT(context);
-    CookieCopy *copy = manager ? calloc(1, sizeof(*copy)) : NULL;
-    char **sites = copy ? calloc(1, sizeof(char *)) : NULL;
-    if (sites == NULL) {
-        free(copy);
-        YARDLET_RELEASE(manager);
-        release_context(handle);
-        return 0;
-    }
-    sites[0] = strdup(site);
-    *copy = (CookieCopy){.references = 1, .request = request, .sourceHandle = handle, .mode = kCopyDigest,
-                         .sites = sites, .siteCount = 1, .source = manager};
-    start_cookie_visitor(copy, kVisitDigest, NULL);
     cookie_copy_release_reference(copy);
     return 1;
 }

@@ -143,10 +143,8 @@ extension BrowserHostPaneController {
                 MainActor.assumeIsolated { self?.vaultFilled(tab: filledTab) }
             }
         }
-        // The watch tells of the person's sign-ins: the vault offers saving them, and with per-task
-        // profiles the tasks that follow the person's sign-ins take the site's cookies.
-        let offers = vault.isAllowedBuild && (vault.isEnabled || vault.isWalletEnabled)
-        guard offers || MacBrowserHost.shared.profiles.storage == .perTask else { return }
+        // The watch tells of the person's sign-ins, which the vault offers to save.
+        guard vault.isAllowedBuild && (vault.isEnabled || vault.isWalletEnabled) else { return }
         let token = tab.devTools.observeEvents { [weak self, weak tab] method, params in
             guard method == "Runtime.bindingCalled", params["name"]?.stringValue == VaultPageScripts.offerBinding,
                   let tab, let payload = params["payload"]?.stringValue else { return }
@@ -193,7 +191,6 @@ extension BrowserHostPaneController {
               let fields = try? JSONDecoder().decode([String: String].self, from: data) else { return }
         switch fields["kind"] {
         case "codeField":
-            MacBrowserHost.shared.loginFollow.codeFieldShown(on: tab)
             codeFieldShown(on: tab, page: fields["page"] ?? "")
         case "typedSecret": personTypedSecret(on: tab)
         case "qr": scanForCodes(on: tab, page: fields["page"] ?? "", asked: false)
@@ -224,7 +221,6 @@ extension BrowserHostPaneController {
             // The origin comes from the browser, not from the page's script.
             guard let self, let frame = try? await VaultPageScripts.mainFrame(tab.devTools, timeout: .seconds(10)),
                   let site = VaultSite.suggestion(for: frame.origin, suffixes: self.vault.suffixes) else { return }
-            MacBrowserHost.shared.loginFollow.signInSubmitted(on: tab)
             guard self.vault.isAllowedBuild, self.vault.isEnabled else { return }
             // A password step with no username takes the one its earlier step asked for.
             let step = self.signInStep.flatMap { $0.holds(tab.id, origin: frame.origin) ? $0 : nil }
@@ -400,7 +396,6 @@ extension BrowserHostPaneController {
             if password.count >= VaultScrubList.shortest {
                 tab.send(.guardFilledValues(tab: tab.id, values: VaultScrubList.spellings(of: password)))
             }
-            MacBrowserHost.shared.loginFollow.personFilling(on: tab)
             switch await VaultPageScripts.fillNewPassword(tab.devTools, frame: field.frame, fills: tab.vaultFills,
                                                           into: field.objectID, password: password) {
             case .nothing:
@@ -631,7 +626,6 @@ extension BrowserHostPaneController {
             if let password = grant.password, password.count >= VaultScrubList.shortest {
                 tab.send(.guardFilledValues(tab: tab.id, values: VaultScrubList.spellings(of: password)))
             }
-            MacBrowserHost.shared.loginFollow.personFilling(on: tab)
             let filled = await VaultPageScripts.fillForPerson(tab.devTools, frame: frame, fills: tab.vaultFills,
                                                               username: grant.username, password: grant.password,
                                                               code: grant.code, fields: grant.item.fields, codeOnly: codeOnly)
