@@ -1521,6 +1521,10 @@
 "Your weekly limit resets at %@." = "Your weekly limit resets at %@.";
 "Your %1$@ limit resets at %2$@." = "Your %1$@ limit resets at %2$@.";
 "Your usage limit resets at %@." = "Your usage limit resets at %@.";
+"Your session limit reset at %@." = "Your session limit reset at %@.";
+"Your weekly limit reset at %@." = "Your weekly limit reset at %@.";
+"Your %1$@ limit reset at %2$@." = "Your %1$@ limit reset at %2$@.";
+"Your usage limit reset at %@." = "Your usage limit reset at %@.";
 "You've used %lld%% of your session limit" = "You've used %lld%% of your session limit";
 "Approaching your session limit" = "Approaching your session limit";
 "You've used %lld%% of your weekly limit" = "You've used %lld%% of your weekly limit";

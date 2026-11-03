@@ -20,6 +20,10 @@ final class ClaudeProviderNoticeRenderingTests: XCTestCase {
             message: "You've hit your session limit · resets 3pm (Asia/Seoul)")
         let model = HarnessRateLimit(status: .rejected, window: .model, model: "Fable",
             resetsAt: Date().addingTimeInterval(3 * 86_400))
+        let passed = [HarnessRateLimit(status: .rejected, window: .weekly, resetsAt: Date().addingTimeInterval(-3_600)),
+                      HarnessRateLimit(status: .rejected, window: .model, model: "Opus",
+                                       resetsAt: Date().addingTimeInterval(-2 * 3_600)),
+                      HarnessRateLimit(status: .rejected, resetsAt: Date().addingTimeInterval(-1_800))]
         let latest = UUID(), armed = UUID()
         let store = ProviderConnectionStore()
         try store.save(account)
@@ -56,6 +60,10 @@ final class ClaudeProviderNoticeRenderingTests: XCTestCase {
                 UsageLimitCard(entryID: armed, limit: model, isLatest: true, notices: notices)
                 UsageLimitCard(entryID: UUID(), limit: HarnessRateLimit(status: .rejected,
                     message: "You've hit your limit · resets 3pm"), isLatest: false, notices: notices)
+                // Resets that passed read as past, whichever limit it was.
+                ForEach(Array(passed.enumerated()), id: \.offset) { _, limit in
+                    UsageLimitCard(entryID: UUID(), limit: limit, isLatest: false, notices: notices)
+                }
                 CompactionMarker(compaction: HarnessContextCompaction(phase: .started))
                 CompactionMarker(compaction: HarnessContextCompaction(phase: .completed,
                     tokensBefore: 167_012, tokensAfter: 41_230))
@@ -85,7 +93,8 @@ final class ClaudeProviderNoticeRenderingTests: XCTestCase {
     /// In the conversation, only the latest entry's limit card offers to continue, the armed one
     /// shows its switch on, and compactions read where they happened. Once the latest limit has
     /// reset, as for a task the person comes back to after it, that card offers Resume in place of
-    /// the switch, and Resume continues from that card. So does a card followed only by the notice
+    /// the switch, and Resume continues from that card; a reset that passed reads as past, one ahead
+    /// as ahead. So does a card followed only by the notice
     /// of a subagent the same limit stopped, which Claude has not answered (a saved conversation
     /// read back after a relaunch shows it after the card).
     func testTheConversationOffersToContinueOnlyFromTheLatestLimit() throws {
@@ -142,6 +151,17 @@ final class ClaudeProviderNoticeRenderingTests: XCTestCase {
                     // The switch reads as one check box named by its label, as the parity switch does.
                     let switches = drawing.elements.filter { $0.role == "AXCheckBox" }
                     let resumes = drawing.elements.filter { $0.role == "AXButton" && $0.label == L10n.string("Resume") }
+                    // The earlier card's reset passed: it says so, as the latest one does once its own has.
+                    let pastResets = [earlier, latest].compactMap { entry -> String? in
+                        guard case let .usageLimit(limit) = entry.content, let resetsAt = limit.resetsAt,
+                              resetsAt <= Date() else { return nil }
+                        return L10n.format("Your session limit reset at %@.", ProviderNoticeText.resetTime(resetsAt))
+                    }
+                    XCTAssertEqual(pastResets.count, latest.id == waiting.id ? 1 : 2)
+                    for words in pastResets {
+                        XCTAssertTrue(drawing.elements.contains { $0.label == words || $0.value == words },
+                                      "\(words)\n\(listed)")
+                    }
                     if latest.id == waiting.id {
                         XCTAssertEqual(switches.count, 1, listed)
                         XCTAssertEqual(switches.first?.value, "1", "the latest card is the armed one")

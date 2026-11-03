@@ -108,9 +108,10 @@ struct UsageLimitCard: View {
             guard offersActions, let notices else { return }
             await notices.refreshAccounts()
         }
-        .task(id: offersActions ? limit.resetsAt : nil) {
-            // The continuous clock keeps counting while the Mac sleeps, so a reset that passed
-            // during sleep shows at wake.
+        .task(id: limit.resetsAt) {
+            // The words turn to the past and the switch to Resume at the reset. The continuous
+            // clock keeps counting while the Mac sleeps, so a reset that passed during sleep shows
+            // at wake.
             guard let resetsAt = limit.resetsAt, resetsAt > now else { return }
             try? await Task.sleep(for: .seconds(max(0, resetsAt.timeIntervalSinceNow)))
             if !Task.isCancelled { now = Date() }
@@ -127,10 +128,10 @@ struct UsageLimitCard: View {
     /// The reset, or once armed when the task continues; the CLI's own words when it named no
     /// reset.
     private var detail: String? {
-        if isArmed, let resetsAt = limit.resetsAt {
-            return L10n.format("Auto-resuming at %@", ProviderNoticeText.resetTime(resetsAt))
+        if isArmed, let resetsAt = limit.resetsAt, resetsAt > now {
+            return L10n.format("Auto-resuming at %@", ProviderNoticeText.resetTime(resetsAt, now: now))
         }
-        return ProviderNoticeText.limitReset(limit) ?? limit.message
+        return ProviderNoticeText.limitReset(limit, now: now) ?? limit.message
     }
 }
 

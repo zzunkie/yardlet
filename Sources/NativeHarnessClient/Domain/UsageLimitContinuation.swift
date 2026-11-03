@@ -81,10 +81,20 @@ enum ProviderNoticeText {
         }
     }
 
-    /// When the limit resets, with the day named unless it is today.
+    /// When the limit resets, or once that has passed when it reset, with the day named unless it
+    /// is today.
     static func limitReset(_ limit: HarnessRateLimit, now: Date = Date()) -> String? {
         guard let resetsAt = limit.resetsAt else { return nil }
         let time = resetTime(resetsAt, now: now)
+        if resetsAt <= now {
+            return switch limit.window {
+            case .session: L10n.format("Your session limit reset at %@.", time)
+            case .weekly: L10n.format("Your weekly limit reset at %@.", time)
+            case .model: limit.model.map { L10n.format("Your %1$@ limit reset at %2$@.", $0, time) }
+                ?? L10n.format("Your usage limit reset at %@.", time)
+            case .overage, nil: L10n.format("Your usage limit reset at %@.", time)
+            }
+        }
         return switch limit.window {
         case .session: L10n.format("Your session limit resets at %@.", time)
         case .weekly: L10n.format("Your weekly limit resets at %@.", time)
