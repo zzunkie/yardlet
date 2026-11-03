@@ -4,21 +4,20 @@ import YardletRemote
 struct RemoteGitDiffReading: GitDiffReading {
     let isRemote = true
     let taskID: String
-    let workspaceURL: URL
     private let hostName: String
     let read: @MainActor @Sendable (RemoteRequest) async -> RemoteResponse
 
-    @MainActor init(model: RemoteHostModel, taskID: String, workspaceURL: URL) {
-        self.taskID = taskID; self.workspaceURL = workspaceURL; hostName = model.name
+    @MainActor init(model: RemoteHostModel, taskID: String) {
+        self.taskID = taskID; hostName = model.name
         read = { [weak model] request in
             guard let model else { return .failure("", RemoteError(.unavailable)) }
             return await model.response(to: request)
         }
     }
 
-    init(taskID: String, workspaceURL: URL,
+    init(taskID: String,
          read: @escaping @MainActor @Sendable (RemoteRequest) async -> RemoteResponse) {
-        self.taskID = taskID; self.workspaceURL = workspaceURL; self.read = read; hostName = "Host"
+        self.taskID = taskID; self.read = read; hostName = "Host"
     }
 
     private struct ReadFailure: LocalizedError { let errorDescription: String? }
@@ -36,6 +35,8 @@ struct RemoteGitDiffReading: GitDiffReading {
         }
         return review
     }
+    func context() async throws -> RemoteReviewResult { try await request(.init(.context)) }
+
     func lastTurn() async throws -> ReviewLastTurn? {
         let result = try await request(.init(.lastTurn))
         guard result.lastTurnOffered == true else { return .notOffered }

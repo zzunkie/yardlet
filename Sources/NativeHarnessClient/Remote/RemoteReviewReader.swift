@@ -9,6 +9,11 @@ enum RemoteReviewReader {
         do {
             var result = RemoteReviewResult()
             let folders = [scope.folder] + scope.otherFolders
+            if query.operation == .context {
+                result.workspace = scope.folder.path
+                result.additionalRoots = scope.otherFolders.map(\.path)
+                return .success(result)
+            }
             // Check the spelling before resolving any client-supplied path or invoking Git there.
             let selected = query.repository.map { URL(filePath: $0) } ?? scope.folder
             guard folders.contains(where: { $0.standardizedFileURL == selected.standardizedFileURL })
@@ -33,7 +38,7 @@ enum RemoteReviewReader {
             let root = try await service.repositoryRoot(workspaceURL: selected)
             guard RemoteFileReader.allowsPage(root.path, in: scope) else { return .failure(RemoteError(.notAllowed)) }
             switch query.operation {
-            case .repositories: break
+            case .context, .repositories: break
             case .lastTurn: return .failure(RemoteError(.unavailable))
             case .root: result.root = root.path
             case .commits:

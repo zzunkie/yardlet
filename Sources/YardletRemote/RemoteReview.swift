@@ -2,7 +2,7 @@ import Foundation
 
 /// Read-only Review operations. All paths are host paths, scoped to the named task.
 public struct RemoteReviewQuery: Codable, Equatable, Sendable {
-    public enum Operation: String, Codable, Sendable { case repositories, commits, baseBranch, root, diff, text, lastTurn }
+    public enum Operation: String, Codable, Sendable { case context, repositories, commits, baseBranch, root, diff, text, lastTurn }
     public var operation: Operation
     public var repository: String?
     public var target: String?
@@ -31,6 +31,9 @@ public struct RemoteReviewCommit: Codable, Equatable, Sendable {
 }
 
 public struct RemoteReviewResult: Codable, Equatable, Sendable {
+    /// Disclosed only when the task's Review panel asks, never in the general task snapshot.
+    public var workspace: String?
+    public var additionalRoots: [String]?
     public var lastTurnOffered: Bool?
     public var turnID: String?
     public var isRunning: Bool?

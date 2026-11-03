@@ -113,7 +113,11 @@ extension RemoteHostModelTests {
         try await waitUntil {
             ConversationFileChangeProjection.carriesFileChanges(host.transcriptBySessionID[session.id] ?? [])
         }
-        let remote = RemoteGitDiffReading(model: client, taskID: session.id.uuidString, workspaceURL: root)
+        let remote = RemoteGitDiffReading(model: client, taskID: session.id.uuidString)
+        // The client starts with only the task ID; the task snapshot does not disclose host folders.
+        let context = try await remote.context()
+        let hostRoot = URL(filePath: try XCTUnwrap(context.workspace))
+        XCTAssertEqual(hostRoot.standardizedFileURL.path, session.workspaceURL.standardizedFileURL.path)
         let readLast = try await remote.lastTurn()
         let last = try XCTUnwrap(readLast)
         let expectedLast = ReviewLastTurn.transcript(host.transcriptBySessionID[session.id] ?? [], harness: .claudeCode,
@@ -123,24 +127,24 @@ extension RemoteHostModelTests {
 
         let local = GitDiffService()
         let expected = try await local.load(workspaceURL: root)
-        let received = try await remote.load(workspaceURL: root, target: .unstaged)
+        let received = try await remote.load(workspaceURL: hostRoot, target: .unstaged)
         XCTAssertEqual(received, expected)
-        let commits = try await remote.recentCommits(workspaceURL: root, limit: 50)
+        let commits = try await remote.recentCommits(workspaceURL: hostRoot, limit: 50)
         XCTAssertEqual(commits.count, 1)
-        let old = try await remote.fileText(workspaceURL: root, revision: commits[0].id, path: "README.md")
-        let new = try await remote.workingText(root.appending(path: "README.md"))
+        let old = try await remote.fileText(workspaceURL: hostRoot, revision: commits[0].id, path: "README.md")
+        let new = try await remote.workingText(hostRoot.appending(path: "README.md"))
         XCTAssertTrue(old?.contains("Monday") == true)
         XCTAssertTrue(new?.contains("Tuesday") == true)
-        let staged = try await remote.load(workspaceURL: root, target: .staged)
+        let staged = try await remote.load(workspaceURL: hostRoot, target: .staged)
         XCTAssertTrue(staged.isEmpty)
-        let commitDiff = try await remote.load(workspaceURL: root, target: .commit(commits[0].id))
+        let commitDiff = try await remote.load(workspaceURL: hostRoot, target: .commit(commits[0].id))
         XCTAssertEqual(commitDiff.files.first?.path, "README.md")
         let output = try WindowlessRender.directory("remote-review-qa")
         for appearance in WindowlessRender.Appearance.allCases {
             for (name, markdown, scope) in [("diff", false, GitDiffScope.unstaged),
                                             ("markdown", true, .unstaged), ("last-turn", false, .lastTurn)] {
                 let size = NSSize(width: 1440, height: 660)
-                let view = ReviewPair(root: root, remote: remote, markdown: markdown, scope: scope, lastTurn: expectedLast)
+                let view = ReviewPair(root: root, client: client, taskID: session.id.uuidString, markdown: markdown, scope: scope, lastTurn: expectedLast)
                     .environment(\.colorScheme, appearance.colorScheme)
                     .frame(width: size.width, height: size.height)
                     .background(ParityTheme.canvas)
@@ -162,12 +166,13 @@ extension RemoteHostModelTests {
 
 private struct ReviewPair: View {
     let root: URL
-    let remote: RemoteGitDiffReading
+    let client: RemoteHostModel
+    let taskID: String
     let lastTurn: ReviewLastTurn
     @State var localPreferences: DiffReviewPreferences
     @State var remotePreferences: DiffReviewPreferences
-    init(root: URL, remote: RemoteGitDiffReading, markdown: Bool, scope: GitDiffScope, lastTurn: ReviewLastTurn) {
-        self.root = root; self.remote = remote; self.lastTurn = lastTurn
+    init(root: URL, client: RemoteHostModel, taskID: String, markdown: Bool, scope: GitDiffScope, lastTurn: ReviewLastTurn) {
+        self.root = root; self.client = client; self.taskID = taskID; self.lastTurn = lastTurn
         var preferences = DiffReviewPreferences()
         preferences.scope = scope
         preferences.rendersMarkdown = markdown
@@ -178,7 +183,7 @@ private struct ReviewPair: View {
         HStack(spacing: 0) {
             DiffPane(workspaceURL: root, review: $localPreferences, lastTurn: lastTurn, onClose: {})
             Divider()
-            DiffPane(workspaceURL: root, review: $remotePreferences, reading: remote, onClose: {})
+            RemoteReviewPane(model: client, taskID: taskID, review: $remotePreferences)
         }
     }
 }
