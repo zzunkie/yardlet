@@ -20,6 +20,71 @@ final class RemoteAccountTests: XCTestCase {
         super.tearDown()
     }
 
+    func testIdentityLoadingDoesNotBlockTheMainActorAndCancelledRequestsStayCancelled() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteIdentity")))
+        defaults.set(true, forKey: RemoteControlService.enabledKey)
+        let store = DelayedRemoteIdentityStore()
+        defer { store.release() }
+        let service = RemoteControlService(
+            bridge: FakeBridge(), deviceStore: RemoteDeviceStore(fileURL: nil), audit: nil,
+            identityStore: store, defaults: defaults, environment: [:], interfaces: { [] },
+            resolveName: { _ in nil }, listens: false)
+        XCTAssertEqual(store.reads, 0, "Constructing the service must not read the keychain")
+        let starting = Task { await service.start() }
+        try await waitUntil { store.reads == 1 }
+        var pairingStarted = false
+        let pairing = Task {
+            pairingStarted = true
+            await service.startPairing()
+        }
+        try await waitUntil { pairingStarted }
+        service.cancelPairing()
+        service.setEnabled(false)
+        store.release()
+        await starting.value
+        await pairing.value
+        XCTAssertNil(service.pairing)
+        XCTAssertFalse(service.isEnabled)
+        XCTAssertEqual(store.writes, 0, "Disabling while loading must not create an identity or start serving")
+        XCTAssertFalse(store.usedMainThread)
+
+        // Concurrent first-use requests share one stored key, including its creation.
+        async let first: Void = service.startPairing()
+        async let second: Void = service.startPairing()
+        _ = await (first, second)
+        XCTAssertEqual(store.writes, 1)
+        XCTAssertFalse(store.usedMainThread)
+        let url = try XCTUnwrap(service.pairing?.url)
+        let parsed = try XCTUnwrap(RemoteSecurePairingURL.parse(url))
+        XCTAssertEqual(parsed.macKey, store.storedPublicKey)
+        await service.shutdown()
+    }
+
+    func testPairingWaitsForTheRelayToStartAfterIdentityLoading() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteIdentityPairing")))
+        defaults.set("http://127.0.0.1:1", forKey: RemoteControlService.relayURLKey)
+        let store = DelayedRemoteIdentityStore(blockedRead: 2)
+        defer { store.release() }
+        let service = RemoteControlService(
+            bridge: FakeBridge(), deviceStore: RemoteDeviceStore(fileURL: nil), audit: nil,
+            identityStore: store, defaults: defaults, environment: [:], interfaces: { [] },
+            resolveName: { _ in nil })
+        await service.start()
+        service.setEnabled(true)
+        try await waitUntil { store.reads == 2 }
+        let pairing = Task { await service.startPairing() }
+        store.release()
+        await pairing.value
+        let url = try XCTUnwrap(service.pairing?.url)
+        let parsed = try XCTUnwrap(RemoteSecurePairingURL.parse(url))
+        XCTAssertEqual(parsed.relayURL, "http://127.0.0.1:1",
+                       "A pairing requested during activation must include the relay, as it did before loading became asynchronous")
+        XCTAssertEqual(parsed.macKey, store.storedPublicKey)
+        XCTAssertEqual(store.writes, 1)
+        service.setEnabled(false)
+        await service.shutdown()
+    }
+
     func testTheMacSignsInPutsItselfOnTheAccountAndTakesLinkRequests() async throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteAccountTests")))
         defaults.set("wss://relay.example.test", forKey: RemoteControlService.relayURLKey)
@@ -155,5 +220,41 @@ final class StubRelay: URLProtocol {
             data.append(buffer, count: count)
         }
         return data
+    }
+}
+
+private final class DelayedRemoteIdentityStore: RemoteIdentityStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private let gate = DispatchSemaphore(value: 0)
+    private var identity: RemoteIdentity?
+    private var readCount = 0
+    private var writeCount = 0
+    private var onMain = false
+    private let blockedRead: Int
+    init(blockedRead: Int = 1) { self.blockedRead = blockedRead }
+    var storedPublicKey: Data? { lock.withLock { identity?.noise.publicKey } }
+    var reads: Int { lock.withLock { readCount } }
+    var writes: Int { lock.withLock { writeCount } }
+    var usedMainThread: Bool { lock.withLock { onMain } }
+
+    func release() { gate.signal() }
+
+    func load() throws -> RemoteIdentity? {
+        let first = lock.withLock {
+            readCount += 1
+            onMain = onMain || Thread.isMainThread
+            return readCount == blockedRead
+        }
+        // A regression must fail rather than hang the test's main actor.
+        if first && !Thread.isMainThread { gate.wait() }
+        return lock.withLock { identity }
+    }
+
+    func save(_ value: RemoteIdentity) throws {
+        lock.withLock {
+            writeCount += 1
+            onMain = onMain || Thread.isMainThread
+            identity = value
+        }
     }
 }

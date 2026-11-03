@@ -78,7 +78,7 @@ final class RemoteControlService {
     @ObservationIgnored private let macName: String
     @ObservationIgnored let server: RemoteServer
     @ObservationIgnored private let deviceStore: RemoteDeviceStore
-    @ObservationIgnored private let identityStore: any RemoteIdentityStoring
+    @ObservationIgnored private let identityStore: RemoteIdentityLoader
     @ObservationIgnored private(set) var identity: RemoteIdentity?
     /// False where nothing may listen (tests that drive the server directly, visual fixtures).
     @ObservationIgnored private let listens: Bool
@@ -88,6 +88,9 @@ final class RemoteControlService {
     @ObservationIgnored private let webSignIn: @MainActor (URL, String) async throws -> URL
     @ObservationIgnored private var monitor: NWPathMonitor?
     @ObservationIgnored private var started = false
+    @ObservationIgnored private var startup: Task<Void, Never>?
+    @ObservationIgnored private var activation: Task<Void, Never>?
+    @ObservationIgnored private var pairingRequestID: UUID?
     @ObservationIgnored private var nameLookup: Task<Void, Never>?
     /// The Tailscale address last looked up, so an address without a MagicDNS name is asked once.
     @ObservationIgnored private var lookedUpAddress: String?
@@ -118,7 +121,7 @@ final class RemoteControlService {
         self.resolveName = resolveName
         self.macName = macName
         self.deviceStore = deviceStore
-        self.identityStore = identityStore
+        self.identityStore = RemoteIdentityLoader(store: identityStore)
         self.accountToken = accountToken
         self.webSignIn = webSignIn
         self.listens = listens
@@ -126,11 +129,9 @@ final class RemoteControlService {
         isEnabled = defaults.bool(forKey: Self.enabledKey)
         isRelayEnabled = defaults.object(forKey: Self.relayEnabledKey) as? Bool ?? true
         keepsAwakeOnPower = defaults.bool(forKey: Self.keepAwakeKey)
-        let identity = (try? identityStore.load()) ?? nil
-        self.identity = identity
         server = RemoteServer(
             configuration: RemoteServer.Configuration(server: RemoteServerInfo(name: macName, appVersion: appVersion),
-                                                      macKey: identity?.noise.publicKey),
+                                                      macKey: nil),
             bridge: bridge, devices: deviceStore, audit: audit)
     }
 
@@ -165,7 +166,7 @@ final class RemoteControlService {
     func refreshAccount() async {
         guard isEnabled, let client = accountClient else { return }
         accountProviders = (try? await client.providers()) ?? accountProviders
-        guard let token = await withAccountToken({ $0.load() }), let identity = ensureIdentity() else { return }
+        guard let token = await withAccountToken({ $0.load() }), let identity = await ensureIdentity() else { return }
         do {
             let current = try await client.account(token: token)
             try await client.registerMac(token: token, identity: identity, name: macName, accountID: current.id)
@@ -182,10 +183,11 @@ final class RemoteControlService {
 
     /// Signs in with a provider in the browser sheet and puts this Mac on the account.
     func signIn(with provider: String) async {
-        guard let client = accountClient, let identity = ensureIdentity(), !isSigningIn else { return }
+        guard let client = accountClient, !isSigningIn else { return }
         isSigningIn = true
         accountError = nil
         defer { isSigningIn = false }
+        guard let identity = await ensureIdentity() else { return }
         let pkce = RemoteAccountClient.PKCE()
         let state = RemoteEncoding.base64url(Data(RemoteRandom.bytes(16)))
         do {
@@ -212,7 +214,7 @@ final class RemoteControlService {
     /// Takes this Mac off the account and forgets the token; link requests stop.
     func signOut() async {
         if let client = accountClient, let token = await withAccountToken({ $0.load() }) {
-            if let identity { try? await client.removeMac(token: token, room: identity.room) }
+            if let identity = await loadIdentity(create: false) { try? await client.removeMac(token: token, room: identity.room) }
             try? await client.logout(token: token)
         }
         await withAccountToken { $0.delete() }
@@ -238,12 +240,23 @@ final class RemoteControlService {
     func start() async {
         guard !started else { return }
         started = true
-        await server.start()
-        await server.setStatusHandler { [weak self] status in
-            Task { @MainActor in await self?.apply(status) }
+        startup = Task {
+            _ = await loadIdentity(create: false)
+            guard started, !Task.isCancelled else { return }
+            await server.start()
+            guard started, !Task.isCancelled else { return }
+            await server.setStatusHandler { [weak self] status in
+                Task { @MainActor in await self?.apply(status) }
+            }
+            guard started, !Task.isCancelled else { return }
+            await reloadDevices()
         }
-        await reloadDevices()
-        if isEnabled { activate() }
+        await startup?.value
+        guard started, !Task.isCancelled else { return }
+        if isEnabled {
+            activate()
+            await activation?.value
+        }
         refreshAwake()
     }
 
@@ -319,8 +332,18 @@ final class RemoteControlService {
 
     /// Opens a pairing for five minutes and shows its QR code.
     func startPairing() async {
-        guard let identity = ensureIdentity() else { return }
+        let requestID = UUID()
+        pairingRequestID = requestID
+        await startup?.value
+        guard pairingRequestID == requestID, !Task.isCancelled else { return }
+        if isEnabled {
+            activate()
+            await activation?.value
+        }
+        guard pairingRequestID == requestID, !Task.isCancelled else { return }
+        guard let identity = await ensureIdentity(), pairingRequestID == requestID, !Task.isCancelled else { return }
         let ticket = await server.openPairing()
+        guard pairingRequestID == requestID, !Task.isCancelled else { return }
         pairedDeviceName = nil
         let relay = relayClient?.relayInfo
         pairing = Pairing(expiresAt: ticket.expiresAt, url: RemoteSecurePairingURL(
@@ -330,6 +353,7 @@ final class RemoteControlService {
     }
 
     func cancelPairing() {
+        pairingRequestID = nil
         pairing = nil
         Task { await server.cancelPairing() }
     }
@@ -350,6 +374,10 @@ final class RemoteControlService {
     func shutdown() async {
         guard started else { return }
         started = false
+        startup?.cancel()
+        activation?.cancel()
+        activation = nil
+        pairingRequestID = nil
         refreshAwake()
         await server.shutdown(reason: "quitting")
         secureListener?.stop()
@@ -363,17 +391,36 @@ final class RemoteControlService {
 
     // MARK: - Serving
 
-    /// The Mac's keys, made the first time the remote is used.
-    private func ensureIdentity() -> RemoteIdentity? {
+    /// The Mac's keys, made the first time the remote is used. All callers share the loader,
+    /// whose actor serializes keychain reads and creation away from the main actor.
+    private func ensureIdentity() async -> RemoteIdentity? {
+        await loadIdentity(create: true)
+    }
+
+    private func loadIdentity(create: Bool) async -> RemoteIdentity? {
         if let identity { return identity }
-        guard let made = try? identityStore.loadOrCreate() else { return nil }
-        identity = made
-        return made
+        guard let loaded = try? await identityStore.load(create: create) else { return nil }
+        await server.setMacKey(loaded.noise.publicKey)
+        identity = loaded
+        return loaded
     }
 
     private func activate() {
         refreshAddresses()
-        if let identity = ensureIdentity() {
+        guard activation == nil else { return }
+        activation = Task {
+            await activateWhenReady()
+            // A failed keychain read can be retried by the next activation request.
+            if !Task.isCancelled, identity == nil { activation = nil }
+        }
+    }
+
+    private func activateWhenReady() async {
+        await startup?.value
+        guard !Task.isCancelled, isEnabled else { return }
+        let prepared = await ensureIdentity()
+        guard !Task.isCancelled, isEnabled else { return }
+        if let identity = prepared {
             if listens, secureListener == nil {
                 let listener = RemoteSecureListener(server: server, staticKey: identity.noise,
                                                     advertisement: .of(identity))
@@ -386,7 +433,6 @@ final class RemoteControlService {
                 secureListener = listener
                 listener.start()
             }
-            Task { await server.setMacKey(identity.noise.publicKey) }
             if isRelayEnabled { startRelay() }
             Task { await refreshAccount() }
         }
@@ -403,6 +449,9 @@ final class RemoteControlService {
     }
 
     private func deactivate(reason: String) {
+        activation?.cancel()
+        activation = nil
+        pairingRequestID = nil
         monitor?.cancel()
         monitor = nil
         pairing = nil
@@ -414,7 +463,11 @@ final class RemoteControlService {
     }
 
     private func startRelay() {
-        guard listens, relayClient == nil, let url = relayURL, let identity = ensureIdentity() else { return }
+        guard listens, isEnabled, isRelayEnabled, relayClient == nil, let url = relayURL else { return }
+        guard let identity else {
+            activate()
+            return
+        }
         let client = RemoteRelayClient(server: server, identity: identity, baseURL: url)
         client.onStateChange = { [weak self] state in
             Task { @MainActor in
@@ -488,5 +541,26 @@ final class RemoteControlService {
         if let id = status.pairedDeviceID {
             pairedDeviceName = devices.first { $0.id == id }?.name
         }
+    }
+}
+
+/// A single off-main queue for the stored identity prevents concurrent first requests from
+/// generating different keys while the keychain is still answering.
+private actor RemoteIdentityLoader {
+    let store: any RemoteIdentityStoring
+    private var identity: RemoteIdentity?
+    private var hasLoaded = false
+
+    init(store: any RemoteIdentityStoring) { self.store = store }
+
+    func load(create: Bool) throws -> RemoteIdentity? {
+        if let identity { return identity }
+        if create {
+            identity = try store.loadOrCreate()
+        } else if !hasLoaded {
+            identity = try store.load()
+        }
+        hasLoaded = true
+        return identity
     }
 }
