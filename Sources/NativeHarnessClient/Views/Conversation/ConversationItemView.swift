@@ -53,6 +53,8 @@ struct ConversationItemView: View {
             TaskSuggestionCard(items: [item])
         case let .scheduleCreated(creation):
             ScheduledTaskCreatedRow(creation: creation)
+        case let .settingChanged(change):
+            SettingChangedRow(change: change)
         case .proposedPlan, .notice, .compaction, .request, .outcome:
             // The turn draws a compaction, an answered request and an earlier outcome itself.
             sourceCard

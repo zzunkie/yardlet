@@ -67,6 +67,7 @@ enum ConversationDrawOrder {
         case .command, .fileChange, .tool, .subagent: item.phase == .running ? "call (running)" : "call"
         case .taskSuggestion: "suggestion"
         case .scheduleCreated: "schedule"
+        case .settingChanged: "setting"
         case .notice: "notice"
         case .compaction: "compaction"
         case .request: "request"

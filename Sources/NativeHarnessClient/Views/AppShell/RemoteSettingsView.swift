@@ -18,9 +18,8 @@ struct RemoteSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(spacing: 0) {
-                row(icon: "iphone.radiowaves.left.and.right", title: L10n.string("Allow remote connections"),
-                    detail: L10n.string("Follow and drive this Mac's tasks from Yardlet on your phone or another computer.")) {
-                    Toggle(L10n.string("Allow remote connections"), isOn: Binding(
+                row(setting: .remoteConnections) {
+                    Toggle(YardletSetting.remoteConnections.title, isOn: Binding(
                         get: { service.isEnabled }, set: { service.setEnabled($0) }))
                         .labelsHidden()
                         .toggleStyle(.paritySwitch)
@@ -29,9 +28,8 @@ struct RemoteSettingsView: View {
                 if service.isEnabled {
                     if service.relayURL != nil {
                         divider
-                        row(icon: "cloud", title: L10n.string("Connect from outside"),
-                            detail: L10n.string("Through the Yardlet server. It is end-to-end encrypted, so the server can't read it.")) {
-                            Toggle(L10n.string("Connect from outside"), isOn: Binding(
+                        row(setting: .connectFromOutside) {
+                            Toggle(YardletSetting.connectFromOutside.title, isOn: Binding(
                                 get: { service.isRelayEnabled }, set: { service.setRelayEnabled($0) }))
                                 .labelsHidden()
                                 .toggleStyle(.paritySwitch)
@@ -39,9 +37,8 @@ struct RemoteSettingsView: View {
                         }
                     }
                     divider
-                    row(icon: "powerplug", title: L10n.string("Keep this Mac awake on power"),
-                        detail: L10n.string("While it's plugged in, this Mac doesn't sleep on its own, so your devices can still reach it. The display can still turn off.")) {
-                        Toggle(L10n.string("Keep this Mac awake on power"), isOn: Binding(
+                    row(setting: .keepAwakeOnPower) {
+                        Toggle(YardletSetting.keepAwakeOnPower.title, isOn: Binding(
                             get: { service.keepsAwakeOnPower }, set: { service.setKeepsAwakeOnPower($0) }))
                             .labelsHidden()
                             .toggleStyle(.paritySwitch)
@@ -95,6 +92,11 @@ struct RemoteSettingsView: View {
         }
         .padding(.vertical, 14)
         .accessibilityElement(children: .contain)
+    }
+
+    /// A switch's row, in the words the settings catalog gives it.
+    private func row<Accessory: View>(setting: YardletSetting, @ViewBuilder accessory: () -> Accessory) -> some View {
+        row(icon: setting.symbol, title: setting.title, detail: setting.detail ?? "", accessory: accessory)
     }
 
     /// Signed in: the account and Sign out. Signed out: a button per provider the relay offers.

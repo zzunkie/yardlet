@@ -111,9 +111,9 @@ struct VaultSettingsView: View {
 
     private var switchCard: some View {
         HStack(spacing: 12) {
-            VaultSettingsIcon(systemName: "lock.shield")
+            VaultSettingsIcon(systemName: YardletSetting.passwordManager.symbol)
             VStack(alignment: .leading, spacing: 3) {
-                Text(L10n.string("Password manager for agents")).font(.callout.weight(.medium))
+                Text(YardletSetting.passwordManager.title).font(.callout.weight(.medium))
                 if !vault.isAllowedBuild {
                     Text(L10n.string("Available in team-signed builds of Yardlet."))
                         .font(.caption)
@@ -123,7 +123,7 @@ struct VaultSettingsView: View {
             }
             Spacer(minLength: 8)
             // A build that cannot keep items behind the team's code requirement shows the vault off.
-            Toggle(L10n.string("Password manager for agents"), isOn: Binding(
+            Toggle(YardletSetting.passwordManager.title, isOn: Binding(
                 get: { vault.isAllowedBuild && vault.isEnabled }, set: { vault.isEnabled = $0 }))
                 .labelsHidden()
                 .toggleStyle(.paritySwitch)

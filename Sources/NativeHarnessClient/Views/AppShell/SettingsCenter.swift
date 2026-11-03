@@ -1,86 +1,5 @@
 import SwiftUI
 
-/// The Settings sections in sidebar order, following the Codex and Claude apps: personal settings
-/// (Yardlet Instructions where the Codex app has Personalization's custom instructions) with the
-/// account right after them, then integrations (Connectors, and the Vault agents fill sign-ins
-/// from), then the coding tools
-/// (Harnesses, where Claude has its Claude Code section, then CLI Updates for their runtimes).
-/// Remote, the phone remote, sits with the integrations. Each section owns its page; General holds
-/// only its own controls rather than links to the others.
-enum SettingsSection: String, CaseIterable, Identifiable {
-    case general
-    case appearance
-    case notifications
-    case instructions
-    case accounts
-    case connectors
-    case vault
-    case remote
-    case harnesses
-    case cliUpdates
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .general: L10n.string("General")
-        case .appearance: L10n.string("Appearance")
-        case .notifications: L10n.string("Notifications")
-        case .instructions: L10n.string("Yardlet Instructions")
-        case .accounts: L10n.string("Accounts")
-        case .harnesses: L10n.string("Harnesses")
-        case .connectors: L10n.string("Connectors")
-        case .vault: L10n.string("Passwords")
-        case .remote: L10n.string("Remote")
-        case .cliUpdates: L10n.string("CLI Updates")
-        }
-    }
-
-    var systemName: String {
-        switch self {
-        case .general: "gearshape"
-        case .appearance: "circle.lefthalf.filled"
-        case .notifications: "bell"
-        case .instructions: "text.quote"
-        case .accounts: "person.crop.circle"
-        case .harnesses: "square.stack.3d.up"
-        case .connectors: "powerplug"
-        case .vault: "key"
-        case .remote: "iphone.radiowaves.left.and.right"
-        case .cliUpdates: "arrow.triangle.2.circlepath"
-        }
-    }
-
-    /// Accounts and Harnesses share one Account Center and fill the page with their own lists.
-    var isConnectionSection: Bool { self == .accounts || self == .harnesses }
-
-    /// The sections a window offers: Accounts and Harnesses need the app's account stores,
-    /// Connectors needs a build with connectors, Vault the app's vault, Remote the app's remote,
-    /// CLI Updates the app's CLI update center, and Yardlet Instructions the app's instruction store.
-    static func available(hasAccounts: Bool, hasConnectors: Bool, hasVault: Bool = false, hasRemote: Bool = false,
-                          hasCLIUpdates: Bool = false, hasInstructions: Bool = false) -> [SettingsSection] {
-        allCases.filter { section in
-            switch section {
-            case .accounts, .harnesses: hasAccounts
-            case .connectors: hasConnectors
-            case .vault: hasVault
-            case .remote: hasRemote
-            case .cliUpdates: hasCLIUpdates
-            case .instructions: hasInstructions
-            default: true
-            }
-        }
-    }
-
-    /// The section a window opens on: the requested one when it is offered, otherwise General.
-    static func initial(_ rawValue: String?, available: [SettingsSection]) -> SettingsSection {
-        guard let rawValue, let section = SettingsSection(rawValue: rawValue), available.contains(section) else {
-            return .general
-        }
-        return section
-    }
-}
-
 /// Where the window's account and harness entries open. Accounts and harnesses are Settings
 /// sections; adding or connecting an account from a new task keeps its own sheet, which returns to
 /// the task's draft when done.
@@ -155,24 +74,6 @@ struct SettingsCenterView: View {
         YardletAppearancePreference.system.rawValue
     @AppStorage(YardletPreferenceKeys.interfaceSize) private var interfaceSizeRawValue =
         YardletInterfaceSizePreference.standard.rawValue
-    /// Read when a task starts or resumes, so a change applies from the next session on.
-    @AppStorage(AgentToolPreference.browserToolsKey) private var agentBrowserTools = true
-    @AppStorage(TerminalSharingPreference.key) private var sharesTerminal = true
-    @AppStorage(TerminalLocation.key) private var terminalLocation = TerminalLocation.bottom.rawValue
-    @AppStorage(TaskServersPreference.key) private var showsTaskServers = true
-    /// Read when a tab opens: its task's own profile, or the default profile every task shares.
-    @AppStorage(BrowserTaskProfiles.storageKey) private var cookieStorage = BrowserTaskProfiles.Storage.perTask.rawValue
-    /// Read as the person types in a browser panel's address field.
-    @AppStorage(SearchSuggestionPreference.key) private var suggestsSearches = true
-    /// Read as a task's browser tabs move to pages, and as the launcher and a new tab's start page show.
-    @AppStorage(BrowserPageSuggestionPreference.key) private var suggestsPages = true
-    /// What Return does while a Codex turn runs; read at each send.
-    @AppStorage(CodexFollowUpMode.preferenceKey) private var codexFollowUpMode = CodexFollowUpMode.steer.rawValue
-    /// Yardlet's menu bar item (`MenuBarStatusItem`), on unless turned off as in the Codex app.
-    @AppStorage(MenuBarPreference.key) private var showsInMenuBar = true
-    /// Read when Yardlet quits and when it opens again (`RestartResumePolicy`).
-    @AppStorage(RestartResumePreference.key) private var continuesWorkAfterRestart = true
-    @AppStorage(KeepScreenAwakePreference.key) private var keepsScreenAwake = false
     @AppStorage(PersonalAgentNotificationPreference.key) private var notifiesPersonalAgentMessages = true
     /// Followed by the app's mailbox as it changes (`AppModel.followMailbox`); off by default.
     @AppStorage(MailboxPreference.key) private var showsMailbox = false
@@ -182,9 +83,6 @@ struct SettingsCenterView: View {
     @AppStorage(MemorySaverPreference.levelKey) private var memorySaverLevel = BrowserMemorySaver.Level.balanced
     /// `RunningWorkActivity` registers or removes the lid helper as it changes.
     @AppStorage(LidClosedWorkPreference.key) private var keepsWorkingWithLidClosed = false
-    /// Asked of a Claude Code task's CLI when it starts or resumes; the composer reads it live.
-    @AppStorage(NextMessageSuggestionPreference.key) private var suggestsNextMessage = true
-    @AppStorage(PullRequestAutoFixPrompt.preferenceKey) private var autoFixPrompt = PullRequestAutoFixPrompt.ask.rawValue
     /// Not `@AppStorage`: System must remove the app's own `AppleLanguages`, not store a value.
     @State private var language = AppLanguagePreference.stored()
     /// Sparkle in a public build: General's automatic update check. Nil in a development build.
@@ -397,293 +295,12 @@ struct SettingsCenterView: View {
     private var detail: some View {
         switch section {
         case .general:
+            // The rows come from the settings catalog, which the agent's settings tools list too.
             VStack(spacing: 0) {
-                // The Codex app's General rows (`settings.ide.language`, `settings.general.macMenuBar`),
-                // first and in its order.
-                HStack(spacing: 12) {
-                    settingsControlIcon("character.bubble")
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(L10n.string("Language")).font(.callout.weight(.medium))
-                        Text(L10n.string("Applies the next time you open Yardlet"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 8)
-                    Picker(L10n.string("Language"), selection: Binding(
-                        get: { language },
-                        set: { language = $0; AppLanguagePreference.store($0) })) {
-                        ForEach(AppLanguagePreference.allCases) { preference in
-                            Text(preference.title).tag(preference)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .fixedSize()
-                    .controlSize(.small)
-                }
-                .padding(.vertical, 14)
-                Divider().padding(.leading, Self.dividerLeading)
-                HStack(spacing: 12) {
-                    settingsControlIcon("menubar.rectangle")
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(L10n.string("Show in menu bar")).font(.callout.weight(.medium))
-                        Text(L10n.string("Keep Yardlet in the macOS menu bar when the main window is closed"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 8)
-                    Toggle(L10n.string("Show Yardlet in the menu bar"), isOn: $showsInMenuBar)
-                        .labelsHidden()
-                        .toggleStyle(.paritySwitch)
-                        .controlSize(.small)
-                }
-                .padding(.vertical, 14)
-                Divider().padding(.leading, Self.dividerLeading)
-                HStack(spacing: 12) {
-                    settingsControlIcon("envelope")
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(L10n.string("Mailbox")).font(.callout.weight(.medium))
-                        Text(L10n.string("Show the inboxes of the mail accounts connected in Connectors (Gmail, Outlook and accounts over IMAP) beside your tasks. Mail is read from the service and kept in memory only."))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 8)
-                    Toggle(L10n.string("Mailbox"), isOn: $showsMailbox)
-                        .labelsHidden()
-                        .toggleStyle(.paritySwitch)
-                        .controlSize(.small)
-                }
-                .padding(.vertical, 14)
-                Divider().padding(.leading, Self.dividerLeading)
-                HStack(spacing: 12) {
-                    settingsControlIcon("globe")
-                    Text(L10n.string("Agent browser tools")).font(.callout.weight(.medium))
-                    Spacer(minLength: 8)
-                    Toggle(L10n.string("Agent browser tools"), isOn: $agentBrowserTools)
-                        .labelsHidden()
-                        .toggleStyle(.paritySwitch)
-                        .controlSize(.small)
-                }
-                .padding(.vertical, 14)
-                Divider().padding(.leading, Self.dividerLeading)
-                HStack(spacing: 12) {
-                    settingsControlIcon("terminal")
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(L10n.string("Share the terminal with agents")).font(.callout.weight(.medium))
-                        Text(L10n.string("A task's agent can read the task's terminal tabs, without typing in them, and a selection in the terminal can be attached to your message (⌘⇧L)."))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 8)
-                    Toggle(L10n.string("Share the terminal with agents"), isOn: $sharesTerminal)
-                        .labelsHidden()
-                        .toggleStyle(.paritySwitch)
-                        .controlSize(.small)
-                }
-                .padding(.vertical, 14)
-                Divider().padding(.leading, Self.dividerLeading)
-                HStack(spacing: 12) {
-                    settingsControlIcon("rectangle.split.2x1")
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(L10n.string("Terminal location")).font(.callout.weight(.medium))
-                        Text(L10n.string("Where the terminal opens: below the conversation, or as a tab of the side panel."))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 8)
-                    Picker(L10n.string("Terminal location"), selection: $terminalLocation) {
-                        Text(L10n.string("Bottom")).tag(TerminalLocation.bottom.rawValue)
-                        Text(L10n.string("Right")).tag(TerminalLocation.right.rawValue)
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .controlSize(.small)
-                }
-                .padding(.vertical, 14)
-                if let vault {
-                    Divider().padding(.leading, Self.dividerLeading)
-                    CredentialHidingRow(vault: vault, icon: settingsControlIcon("eye.slash"))
-                }
-                Divider().padding(.leading, Self.dividerLeading)
-                HStack(spacing: 12) {
-                    settingsControlIcon("server.rack")
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(L10n.string("Show servers tasks start")).font(.callout.weight(.medium))
-                        Text(L10n.string("Show the localhost address of a server a task's harness or terminal starts beside the task's title"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 8)
-                    Toggle(L10n.string("Show servers tasks start"), isOn: $showsTaskServers)
-                        .labelsHidden()
-                        .toggleStyle(.paritySwitch)
-                        .controlSize(.small)
-                }
-                .padding(.vertical, 14)
-                Divider().padding(.leading, Self.dividerLeading)
-                HStack(spacing: 12) {
-                    settingsControlIcon("person.2.badge.key")
-                    Text(L10n.string("Keep cookies")).font(.callout.weight(.medium))
-                    Spacer(minLength: 8)
-                    Picker(L10n.string("Keep cookies"), selection: $cookieStorage) {
-                        ForEach(BrowserTaskProfiles.Storage.allCases) { storage in
-                            Text(storage.title).tag(storage.rawValue)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .controlSize(.small)
-                    .help(L10n.string("Tasks share your sign-ins. A task whose agent signs in to a site itself keeps that sign-in to itself. Sign-ins saved in the password manager work in every task"))
-                    .accessibilityHint(L10n.string("Tasks share your sign-ins. A task whose agent signs in to a site itself keeps that sign-in to itself. Sign-ins saved in the password manager work in every task"))
-                }
-                .padding(.vertical, 14)
-                Divider().padding(.leading, Self.dividerLeading)
-                HStack(spacing: 12) {
-                    settingsControlIcon("magnifyingglass")
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(L10n.string("Autocomplete searches and URLs")).font(.callout.weight(.medium))
-                        Text(L10n.string("Sends what you type in the address field to Google to suggest searches. Pages from your browsing history are suggested either way."))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 8)
-                    Toggle(L10n.string("Autocomplete searches and URLs"), isOn: $suggestsSearches)
-                        .labelsHidden()
-                        .toggleStyle(.paritySwitch)
-                        .controlSize(.small)
-                }
-                .padding(.vertical, 14)
-                Divider().padding(.leading, Self.dividerLeading)
-                HStack(spacing: 12) {
-                    settingsControlIcon("clock.arrow.circlepath")
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(L10n.string("Suggest pages on new tabs")).font(.callout.weight(.medium))
-                        Text(L10n.string("Shows the pages this task opened and the sites you visit most on a new tab and in the side panel. Turned off, tasks keep no list of the pages they opened."))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 8)
-                    Toggle(L10n.string("Suggest pages on new tabs"), isOn: $suggestsPages)
-                        .labelsHidden()
-                        .toggleStyle(.paritySwitch)
-                        .controlSize(.small)
-                }
-                .padding(.vertical, 14)
-                Divider().padding(.leading, Self.dividerLeading)
-                HStack(spacing: 12) {
-                    settingsControlIcon("arrow.clockwise")
-                    Text(L10n.string("Continue running work after a restart")).font(.callout.weight(.medium))
-                    Spacer(minLength: 8)
-                    Toggle(L10n.string("Continue running work after a restart"), isOn: $continuesWorkAfterRestart)
-                        .labelsHidden()
-                        .toggleStyle(.paritySwitch)
-                        .controlSize(.small)
-                        .help(L10n.string("Claude Code and Codex tasks continue where they left off after Yardlet quits or updates"))
-                        .accessibilityHint(L10n.string("Claude Code and Codex tasks continue where they left off after Yardlet quits or updates"))
-                }
-                .padding(.vertical, 14)
-                Divider().padding(.leading, Self.dividerLeading)
-                HStack(spacing: 12) {
-                    settingsControlIcon("lock.open.display")
-                    Text(L10n.string("Keep the screen unlocked while tasks work")).font(.callout.weight(.medium))
-                    Spacer(minLength: 8)
-                    Toggle(L10n.string("Keep the screen unlocked while tasks work"), isOn: $keepsScreenAwake)
-                        .labelsHidden()
-                        .toggleStyle(.paritySwitch)
-                        .controlSize(.small)
-                }
-                .padding(.vertical, 14)
-                if let lidHelper {
-                    Divider().padding(.leading, Self.dividerLeading)
-                    lidClosedWorkRow(lidHelper)
-                }
-                Divider().padding(.leading, Self.dividerLeading)
-                memorySaverRow
-                Divider().padding(.leading, Self.dividerLeading)
-                HStack(spacing: 12) {
-                    settingsControlIcon("text.append")
-                    Text(L10n.string("Follow-up behavior")).font(.callout.weight(.medium))
-                    Spacer(minLength: 8)
-                    Picker(L10n.string("Follow-up behavior"), selection: $codexFollowUpMode) {
-                        ForEach(CodexFollowUpMode.allCases) { mode in
-                            Text(mode.title).tag(mode.rawValue)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .controlSize(.small)
-                    .help(L10n.string("While a turn runs, Return sends this way and Command-Return the other way"))
-                    .accessibilityHint(L10n.string("While a turn runs, Return sends this way and Command-Return the other way"))
-                }
-                .padding(.vertical, 14)
-                Divider().padding(.leading, Self.dividerLeading)
-                // The Claude app's "Prompt suggestions" and the Codex app's "Show predictions" in one
-                // row, with the cost note.
-                HStack(spacing: 12) {
-                    settingsControlIcon("text.bubble")
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(L10n.string("Next message suggestions")).font(.callout.weight(.medium))
-                        Text(L10n.string("After a reply, show a suggested next message as faint text in the empty message box. Claude Code and Codex make each one with one more model request, which adds a little to your usage."))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 8)
-                    Toggle(L10n.string("Next message suggestions"), isOn: $suggestsNextMessage)
-                        .labelsHidden()
-                        .toggleStyle(.paritySwitch)
-                        .controlSize(.small)
-                        .help(L10n.string("Codex tasks follow it from their next reply, Claude Code tasks from their next start or resume"))
-                        .accessibilityHint(L10n.string("Codex tasks follow it from their next reply, Claude Code tasks from their next start or resume"))
-                }
-                .padding(.vertical, 14)
-                Divider().padding(.leading, Self.dividerLeading)
-                HStack(spacing: 12) {
-                    settingsControlIcon("wrench.and.screwdriver")
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(L10n.string("Auto-fix failing CI")).font(.callout.weight(.medium))
-                        Text(L10n.string("When a task first has a pull request, ask whether to send it failing checks to fix. Auto-fix stays off until you turn it on for that task."))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 8)
-                    Picker(L10n.string("Auto-fix failing CI"), selection: $autoFixPrompt) {
-                        ForEach(PullRequestAutoFixPrompt.allCases, id: \.self) { prompt in
-                            Text(prompt.title).tag(prompt.rawValue)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .controlSize(.small)
-                }
-                .padding(.vertical, 14)
-                if let sparkle {
-                    Divider().padding(.leading, Self.dividerLeading)
-                    HStack(spacing: 12) {
-                        settingsControlIcon("arrow.down.circle")
-                        Text(L10n.string("Automatically check for updates")).font(.callout.weight(.medium))
-                        Spacer(minLength: 8)
-                        Toggle(L10n.string("Automatically check for updates"), isOn: Binding(
-                            get: { sparkle.checksAutomatically },
-                            set: { sparkle.checksAutomatically = $0 }))
-                            .labelsHidden()
-                            .toggleStyle(.paritySwitch)
-                            .controlSize(.small)
-                    }
-                    .padding(.vertical, 14)
+                ForEach(Array(YardletSettingCatalog.rows(in: .general, context: settingsContext).enumerated()),
+                        id: \.element.id) { index, setting in
+                    if index > 0 { Divider().padding(.leading, Self.dividerLeading) }
+                    generalRow(setting)
                 }
             }
             .padding(.horizontal, 12)
@@ -707,12 +324,79 @@ struct SettingsCenterView: View {
         }
     }
 
+    /// What the settings catalog reads its rows' presence from: the objects this window has.
+    private var settingsContext: YardletSettingsContext {
+        YardletSettingsContext(
+            vault: vault, remote: remote, cliUpdates: cliUpdates, instructions: instructions, evaluation: evaluation,
+            connections: accounts?.connections, hasConnectors: connectors != nil, lidHelper: lidHelper,
+            updateChecks: sparkle.map { sparkle in
+                YardletSettingSwitch(get: { sparkle.checksAutomatically }, set: { sparkle.checksAutomatically = $0 })
+            })
+    }
+
+    /// One General row: the catalog's row for a setting in Yardlet's defaults, or the row of a setting kept
+    /// elsewhere. The Codex app's General rows (`settings.ide.language`, `settings.general.macMenuBar`) come
+    /// first and in its order.
+    @ViewBuilder
+    private func generalRow(_ setting: YardletSetting) -> some View {
+        switch setting.id {
+        case YardletSetting.language.id:
+            languageRow(setting)
+        case YardletSetting.hideKeysAndTokens.id:
+            if let vault { CredentialHidingRow(vault: vault, setting: setting, icon: settingsControlIcon(setting.symbol)) }
+        case YardletSetting.keepWorkingWithLidClosed.id:
+            if let lidHelper { lidClosedWorkRow(lidHelper, setting: setting) }
+        case YardletSetting.memorySaver.id:
+            memorySaverRow(setting)
+        case YardletSetting.checkForUpdates.id:
+            if let sparkle { updateChecksRow(sparkle, setting: setting) }
+        default:
+            SettingsPreferenceRow(setting: setting, icon: settingsControlIcon(setting.symbol))
+        }
+    }
+
+    private func languageRow(_ setting: YardletSetting) -> some View {
+        HStack(spacing: 12) {
+            settingsControlIcon(setting.symbol)
+            SettingsRowText(setting: setting)
+            Spacer(minLength: 8)
+            Picker(setting.title, selection: Binding(
+                get: { language },
+                set: { language = $0; AppLanguagePreference.store($0) })) {
+                ForEach(AppLanguagePreference.allCases) { preference in
+                    Text(preference.title).tag(preference)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .fixedSize()
+            .controlSize(.small)
+        }
+        .padding(.vertical, 14)
+    }
+
+    /// Sparkle's own switch, in a public build.
+    private func updateChecksRow(_ sparkle: YardletSparkle, setting: YardletSetting) -> some View {
+        HStack(spacing: 12) {
+            settingsControlIcon(setting.symbol)
+            SettingsRowText(setting: setting)
+            Spacer(minLength: 8)
+            Toggle(setting.title, isOn: Binding(
+                get: { sparkle.checksAutomatically },
+                set: { sparkle.checksAutomatically = $0 }))
+                .labelsHidden()
+                .toggleStyle(.paritySwitch)
+                .controlSize(.small)
+        }
+        .padding(.vertical, 14)
+    }
+
     private var appearanceDetail: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 10) {
-                Label(L10n.string("Theme"), systemImage: "circle.lefthalf.filled")
+                Label(YardletSetting.theme.title, systemImage: YardletSetting.theme.symbol)
                     .font(.callout.weight(.semibold))
-                Picker(L10n.string("Theme"), selection: $appearanceRawValue) {
+                Picker(YardletSetting.theme.title, selection: $appearanceRawValue) {
                     ForEach(YardletAppearancePreference.allCases) { preference in
                         Text(preference.title).tag(preference.rawValue)
                     }
@@ -722,9 +406,9 @@ struct SettingsCenterView: View {
             }
             Divider()
             VStack(alignment: .leading, spacing: 10) {
-                Label(L10n.string("Interface size"), systemImage: "textformat.size")
+                Label(YardletSetting.interfaceSize.title, systemImage: YardletSetting.interfaceSize.symbol)
                     .font(.callout.weight(.semibold))
-                Picker(L10n.string("Interface size"), selection: $interfaceSizeRawValue) {
+                Picker(YardletSetting.interfaceSize.title, selection: $interfaceSizeRawValue) {
                     ForEach(YardletInterfaceSizePreference.allCases) { preference in
                         Text(preference.title).tag(preference.rawValue)
                     }
@@ -742,26 +426,20 @@ struct SettingsCenterView: View {
     static let dividerLeading: CGFloat = 30 + 12
 
     /// "Memory saver", and while it is on Chrome's levels under it, each with its line, as Chrome's Memory page has them.
-    private var memorySaverRow: some View {
+    private func memorySaverRow(_ setting: YardletSetting) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
-                settingsControlIcon("memorychip")
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(L10n.string("Memory saver")).font(.callout.weight(.medium))
-                    Text(L10n.string("Frees memory from tasks you haven't used in a while and brings them back when you return."))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                settingsControlIcon(setting.symbol)
+                SettingsRowText(setting: setting)
                 Spacer(minLength: 8)
-                Toggle(L10n.string("Memory saver"), isOn: $savesMemory)
+                Toggle(setting.title, isOn: $savesMemory)
                     .labelsHidden()
                     .toggleStyle(.paritySwitch)
                     .controlSize(.small)
             }
             .padding(.vertical, 14)
             if savesMemory {
-                Picker(L10n.string("Memory saver level"), selection: $memorySaverLevel) {
+                Picker(YardletSetting.memorySaverLevel.title, selection: $memorySaverLevel) {
                     ForEach(BrowserMemorySaver.Level.allCases) { level in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(level.title).font(.callout)
@@ -785,7 +463,7 @@ struct SettingsCenterView: View {
 
     /// "Keep tasks working with the lid closed", with one line while it is on and macOS has not let
     /// the helper run yet.
-    private func lidClosedWorkRow(_ helper: LidSleepHelper) -> some View {
+    private func lidClosedWorkRow(_ helper: LidSleepHelper, setting: YardletSetting) -> some View {
         let note: String? = switch (keepsWorkingWithLidClosed, helper.status) {
         case (true, .needsApproval): L10n.string("Allow Yardlet in the background in System Settings")
         case (true, .off): L10n.string("macOS did not add Yardlet's helper")
@@ -793,9 +471,9 @@ struct SettingsCenterView: View {
         default: nil
         }
         return HStack(spacing: 12) {
-            settingsControlIcon("laptopcomputer")
+            settingsControlIcon(setting.symbol)
             VStack(alignment: .leading, spacing: 3) {
-                Text(L10n.string("Keep tasks working with the lid closed")).font(.callout.weight(.medium))
+                Text(setting.title).font(.callout.weight(.medium))
                 if let note {
                     Text(note)
                         .font(.caption)
@@ -808,7 +486,7 @@ struct SettingsCenterView: View {
                 Button(L10n.string("Open System Settings")) { helper.openSystemSettings() }
                     .controlSize(.small)
             }
-            Toggle(L10n.string("Keep tasks working with the lid closed"), isOn: $keepsWorkingWithLidClosed)
+            Toggle(setting.title, isOn: $keepsWorkingWithLidClosed)
                 .labelsHidden()
                 .toggleStyle(.paritySwitch)
                 .controlSize(.small)
@@ -853,16 +531,10 @@ struct SettingsCenterView: View {
             .controlSize(.small)
             Divider()
             HStack(spacing: 12) {
-                settingsControlIcon("circle.dotted")
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(L10n.string("Personal agent messages")).font(.callout.weight(.medium))
-                    Text(L10n.string("Notify when a dot replies or asks for input while you are elsewhere"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                settingsControlIcon(YardletSetting.personalAgentMessages.symbol)
+                SettingsRowText(setting: .personalAgentMessages)
                 Spacer(minLength: 8)
-                Toggle(L10n.string("Personal agent messages"), isOn: $notifiesPersonalAgentMessages)
+                Toggle(YardletSetting.personalAgentMessages.title, isOn: $notifiesPersonalAgentMessages)
                     .labelsHidden()
                     .toggleStyle(.paritySwitch)
                     .controlSize(.small)
@@ -871,16 +543,10 @@ struct SettingsCenterView: View {
             if showsMailbox {
                 Divider()
                 HStack(spacing: 12) {
-                    settingsControlIcon("envelope.badge")
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(L10n.string("New mail")).font(.callout.weight(.medium))
-                        Text(L10n.string("Notify when new mail reaches an inbox in the mailbox: in Gmail its Primary tab, in Outlook its Focused inbox"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    settingsControlIcon(YardletSetting.newMail.symbol)
+                    SettingsRowText(setting: .newMail)
                     Spacer(minLength: 8)
-                    Toggle(L10n.string("New mail"), isOn: $notifiesNewMail)
+                    Toggle(YardletSetting.newMail.title, isOn: $notifiesNewMail)
                         .labelsHidden()
                         .toggleStyle(.paritySwitch)
                         .controlSize(.small)
@@ -966,14 +632,15 @@ private struct SettingsSectionRow: View {
 /// it changes; turning it off asks Touch ID or the login password.
 private struct CredentialHidingRow<Icon: View>: View {
     @ObservedObject var vault: VaultCenter
+    let setting: YardletSetting
     let icon: Icon
 
     var body: some View {
         HStack(spacing: 12) {
             icon
             VStack(alignment: .leading, spacing: 3) {
-                Text(L10n.string("Hide keys and tokens")).font(.callout.weight(.medium))
-                Text(L10n.string("Hides values that look like API keys, access tokens or private keys in what agents read in the browser. Turned off, agents read them as the page shows them, and they stay in the task's history."))
+                Text(setting.title).font(.callout.weight(.medium))
+                Text(setting.detail ?? "")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -985,7 +652,7 @@ private struct CredentialHidingRow<Icon: View>: View {
                 }
             }
             Spacer(minLength: 8)
-            Toggle(L10n.string("Hide keys and tokens"), isOn: Binding(
+            Toggle(setting.title, isOn: Binding(
                 get: { vault.hidesCredentials }, set: { hides in Task { await vault.setHidesCredentials(hides) } }))
                 .labelsHidden()
                 .toggleStyle(.paritySwitch)
@@ -993,5 +660,107 @@ private struct CredentialHidingRow<Icon: View>: View {
                 .disabled(!vault.isAllowedBuild)
         }
         .padding(.vertical, 14)
+    }
+}
+
+/// A settings row's words: the setting's title, with its line under it where it has one.
+struct SettingsRowText: View {
+    let setting: YardletSetting
+
+    var body: some View {
+        if let detail = setting.detail {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(setting.title).font(.callout.weight(.medium))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            Text(setting.title).font(.callout.weight(.medium))
+        }
+    }
+}
+
+/// A General row for a setting kept in Yardlet's defaults: its symbol and words, and a switch, or segments
+/// for a choice, on the key the rest of the app reads, so a change the agent's settings tools make shows here.
+private struct SettingsPreferenceRow<Icon: View>: View {
+    let setting: YardletSetting
+    let icon: Icon
+
+    var body: some View {
+        HStack(spacing: 12) {
+            icon
+            SettingsRowText(setting: setting)
+            Spacer(minLength: 8)
+            control.modifier(SettingsHint(hint: setting.hint))
+        }
+        .padding(.vertical, 14)
+    }
+
+    @ViewBuilder private var control: some View {
+        switch setting.storage {
+        case let .flag(key, defaultValue):
+            PreferenceSwitch(setting.controlLabel ?? setting.title, key: key, defaultValue: defaultValue)
+        case let .choice(key, defaultValue):
+            PreferenceSegments(setting.controlLabel ?? setting.title, key: key, defaultValue: defaultValue,
+                               choices: setting.choices)
+        case .app:
+            EmptyView()
+        }
+    }
+}
+
+/// A control's tooltip and accessibility hint, where its setting has one.
+private struct SettingsHint: ViewModifier {
+    let hint: String?
+
+    func body(content: Content) -> some View {
+        if let hint {
+            content.help(hint).accessibilityHint(hint)
+        } else {
+            content
+        }
+    }
+}
+
+private struct PreferenceSwitch: View {
+    let label: String
+    @AppStorage private var isOn: Bool
+
+    init(_ label: String, key: String, defaultValue: Bool) {
+        self.label = label
+        _isOn = AppStorage(wrappedValue: defaultValue, key)
+    }
+
+    var body: some View {
+        Toggle(label, isOn: $isOn)
+            .labelsHidden()
+            .toggleStyle(.paritySwitch)
+            .controlSize(.small)
+    }
+}
+
+private struct PreferenceSegments: View {
+    let label: String
+    let choices: [YardletSetting.Choice]
+    @AppStorage private var value: String
+
+    init(_ label: String, key: String, defaultValue: String, choices: [YardletSetting.Choice]) {
+        self.label = label
+        self.choices = choices
+        _value = AppStorage(wrappedValue: defaultValue, key)
+    }
+
+    var body: some View {
+        Picker(label, selection: $value) {
+            ForEach(choices, id: \.value) { choice in
+                Text(choice.title).tag(choice.value)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .fixedSize()
+        .controlSize(.small)
     }
 }

@@ -11,24 +11,24 @@ struct YardletInstructionsSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "text.quote")
+                Image(systemName: YardletSetting.yardletInstructions.symbol)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 30, height: 30)
                     .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(L10n.string("Use Yardlet instructions")).font(.callout.weight(.medium))
-                    Text(L10n.string("Added when Yardlet starts or resumes a task; a task whose harness is already running keeps the instructions it started with until it resumes, for example after Yardlet reopens. Never written to a harness's own files."))
+                    Text(YardletSetting.yardletInstructions.title).font(.callout.weight(.medium))
+                    Text(YardletSetting.yardletInstructions.detail ?? "")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(L10n.string("Global instruction files such as AGENTS.md and CLAUDE.md also apply outside Yardlet; Yardlet instructions apply only to tasks Yardlet launches."))
+                    Text(YardletSetting.yardletInstructions.note ?? "")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
-                Toggle(L10n.string("Use Yardlet instructions"), isOn: $store.isEnabled)
+                Toggle(YardletSetting.yardletInstructions.title, isOn: $store.isEnabled)
                     .labelsHidden()
                     .toggleStyle(.paritySwitch)
                     .controlSize(.small)
@@ -64,18 +64,18 @@ private struct RoutingEvaluationSettingsCard: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "arrow.triangle.branch")
+            Image(systemName: YardletSetting.dailyEvaluation.symbol)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 30, height: 30)
                 .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
             VStack(alignment: .leading, spacing: 3) {
-                Text(L10n.string("Choose harnesses and models by daily evaluation")).font(.callout.weight(.medium))
-                Text(L10n.string("Once a day, the models you use review the day's tasks, their own included, and the routing they settle on is added to these instructions."))
+                Text(YardletSetting.dailyEvaluation.title).font(.callout.weight(.medium))
+                Text(YardletSetting.dailyEvaluation.detail ?? "")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(L10n.string("It uses your plans, and excerpts of your tasks are shown to the other harnesses' models. Turning it off removes its records."))
+                Text(YardletSetting.dailyEvaluation.note ?? "")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -91,7 +91,7 @@ private struct RoutingEvaluationSettingsCard: View {
                 }
             }
             Spacer(minLength: 8)
-            Toggle(L10n.string("Choose harnesses and models by daily evaluation"), isOn: $store.isEnabled)
+            Toggle(YardletSetting.dailyEvaluation.title, isOn: $store.isEnabled)
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .controlSize(.small)

@@ -114,20 +114,14 @@ struct ConnectorSettingsView: View {
 
     private var claudeAIRow: some View {
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: "person.crop.circle")
+            Image(systemName: YardletSetting.claudeAIConnectors.symbol)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 30, height: 30)
                 .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(L10n.string("Use claude.ai account connectors")).font(.callout.weight(.medium))
-                Text(L10n.string("On: Claude tasks also load the connectors each Claude account connected on claude.ai, such as Gmail, Google Calendar, and Google Drive. They differ by account, and a service also connected here appears twice. Codex and ACP tasks are unaffected."))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            SettingsRowText(setting: .claudeAIConnectors)
             Spacer(minLength: 8)
-            Toggle(L10n.string("Use claude.ai account connectors"), isOn: $claudeAIConnectors)
+            Toggle(YardletSetting.claudeAIConnectors.title, isOn: $claudeAIConnectors)
                 .labelsHidden()
                 .toggleStyle(.paritySwitch)
                 .controlSize(.small)

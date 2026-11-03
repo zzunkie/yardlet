@@ -3,17 +3,6 @@ import Observation
 import ServiceManagement
 import YardletLidSleep
 
-/// Settings › General › "Keep tasks working with the lid closed". Off by default. Turning it on asks
-/// macOS to allow Yardlet's lid helper, a launch daemon in the bundle; turning it off removes the
-/// helper (docs/REMOTE_V2_DESIGN.md §6.5).
-enum LidClosedWorkPreference {
-    static let key = "Yardlet.keepWorkingWithLidClosed"
-
-    static func isOn(in defaults: UserDefaults = .yardlet) -> Bool {
-        defaults.bool(forKey: key)
-    }
-}
-
 /// Yardlet's lid helper as Settings and `RunningWorkActivity` see it: whether macOS lets it run, and
 /// whether it says the Mac stays awake with the lid closed now.
 @MainActor @Observable final class LidSleepHelper {

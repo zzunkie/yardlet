@@ -108,14 +108,14 @@ struct CLIUpdateSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "arrow.triangle.2.circlepath")
+                Image(systemName: YardletSetting.cliAutomaticUpdates.symbol)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 30, height: 30)
                     .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(L10n.string("CLI automatic updates")).font(.callout.weight(.medium))
-                    Text(L10n.string("Updates each harness CLI with its own updater while none of its tasks is running. Yardlet checks the CLI before and after, without a model turn, and goes back to the earlier version if the new one fails."))
+                    Text(YardletSetting.cliAutomaticUpdates.title).font(.callout.weight(.medium))
+                    Text(YardletSetting.cliAutomaticUpdates.detail ?? "")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -128,7 +128,7 @@ struct CLIUpdateSettingsView: View {
                     }
                 }
                 Spacer(minLength: 8)
-                Toggle(L10n.string("CLI automatic updates"), isOn: Binding(
+                Toggle(YardletSetting.cliAutomaticUpdates.title, isOn: Binding(
                     get: { center.isAutoUpdateEnabled },
                     set: { center.setAutoUpdate($0) }))
                     .labelsHidden()

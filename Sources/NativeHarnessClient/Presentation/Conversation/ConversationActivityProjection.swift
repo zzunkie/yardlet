@@ -46,6 +46,9 @@ enum ConversationActivityProjection {
         if phase == .completed, let creation = ConversationScheduleProjection.creation(from: activity) {
             return .scheduleCreated(creation)
         }
+        if phase == .completed, let change = ConversationSettingProjection.change(from: activity) {
+            return .settingChanged(change)
+        }
         if let run = ConversationAgentRunProjection.subagent(from: activity, phase: phase, isApproved: isApproved) {
             return .subagent(run)
         }

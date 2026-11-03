@@ -4,16 +4,6 @@ import IOKit
 import Observation
 import YardletLidSleep
 
-/// Settings › General › "Keep the screen unlocked while tasks work". Off by default: a Mac left alone
-/// stays unlocked while it is on (docs/REMOTE_V2_DESIGN.md §6.5).
-enum KeepScreenAwakePreference {
-    static let key = "Yardlet.keepScreenAwakeWhileWorking"
-
-    static func isOn(in defaults: UserDefaults = .yardlet) -> Bool {
-        defaults.bool(forKey: key)
-    }
-}
-
 /// Keeps the Mac from idle-sleeping while a task is working, as the Codex app does; the display may
 /// still sleep. A task waiting for the person's approval is not working, so it does not count,
 /// unless a paired phone can answer it (`AppModel.keepsMacAwake`). For that time, two settings go

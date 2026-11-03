@@ -3682,3 +3682,9 @@
 "Mail accounts…" = "Mail accounts…";
 "Move tasks to an account with room" = "Move tasks to an account with room";
 "Moves Claude Code tasks on an account that is nearly out of its limit to an account with room once they have been idle for an hour. A task that hits its limit continues on another account, or waits and continues if the limit resets soon." = "Moves Claude Code tasks on an account that is nearly out of its limit to an account with room once they have been idle for an hour. A task that hits its limit continues on another account, or waits and continues if the limit resets soon.";
+
+/* Settings tools */
+"Change “%@”?" = "Change “%@”?";
+"%@ › %@" = "%@ › %@";
+"Changed setting: %@" = "Changed setting: %@";
+"Open %@ in Settings" = "Open %@ in Settings";

@@ -97,9 +97,10 @@ package enum AgentToolCatalog {
         """
 
     /// The tools Yardlet itself offers, when the app cannot say which a task has: the browser tools,
-    /// the task suggestion tools, the session tools, then the scheduled-task tools.
+    /// the task suggestion tools, the session tools, the settings tools, then the scheduled-task tools.
     package static var builtInTools: [AgentToolDefinition] {
-        browserTools + TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools + ScheduleToolCatalog.tools
+        browserTools + TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools + SettingsToolCatalog.tools
+            + ScheduleToolCatalog.tools
     }
 
     private static let tabIDProperty: ToolJSON = .object([

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 @preconcurrency import SwiftTerm
 import XCTest
 @testable import NativeHarnessClient
@@ -26,11 +27,13 @@ final class SessionToolTests: XCTestCase {
             "wait_tasks": ["ids"], "create_task": ["prompt"], "run_agent": ["harness", "prompt"],
             "archive_task": ["task_ids"], "list_projects": [], "hide_project": ["project"], "show_project": ["project"],
             "list_accounts": [], "list_personal_agents": [], "read_personal_agent": ["agent"],
-            "read_personal_agent_thread": ["agent", "thread_id"]
+            "read_personal_agent_thread": ["agent", "thread_id"], "list_settings": [], "update_setting": ["id", "value"]
         ]
         let readOnly: Set<String> = ["list_tasks", "read_task", "wait_tasks", "list_projects", "list_accounts",
-                                     "list_personal_agents", "read_personal_agent", "read_personal_agent_thread"]
-        for tool in SessionToolCatalog.tools {
+                                     "list_personal_agents", "read_personal_agent", "read_personal_agent_thread",
+                                     "list_settings"]
+        XCTAssertEqual(SettingsToolCatalog.tools.map(\.name), ["list_settings", "update_setting"])
+        for tool in SessionToolCatalog.tools + SettingsToolCatalog.tools {
             let json = tool.json
             XCTAssertEqual(json["inputSchema"]?["type"], .string("object"), tool.name)
             XCTAssertEqual(json["inputSchema"]?["additionalProperties"], .bool(false), tool.name)
@@ -45,16 +48,19 @@ final class SessionToolTests: XCTestCase {
                 XCTAssertFalse(description.contains(nudge), "\(tool.name) says what it does, not when: \(nudge)")
             }
         }
-        XCTAssertEqual(Array(AgentToolCatalog.builtInTools.dropLast(ScheduleToolCatalog.tools.count).suffix(names.count)).map(\.name),
-                       names, "Before the scheduled-task tools")
+        XCTAssertEqual(Array(AgentToolCatalog.builtInTools.dropLast(ScheduleToolCatalog.tools.count
+            + SettingsToolCatalog.tools.count).suffix(names.count)).map(\.name), names, "Before the settings tools")
+        XCTAssertEqual(Array(AgentToolCatalog.builtInTools.dropLast(ScheduleToolCatalog.tools.count).suffix(2)).map(\.name),
+                       ["list_settings", "update_setting"], "Before the scheduled-task tools")
         let browserNames = Set(AgentToolCatalog.browserTools.map(\.name))
         XCTAssertEqual(AgentToolCatalog.builtInTools.map(\.name).filter {
             !browserNames.contains($0) && $0.hasPrefix(AgentToolCatalog.browserToolPrefix)
         }, [], "yardlet-mcp refuses an unknown browser_ name itself, so only a browser tool starts with it")
-        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.dropLast(2).suffix(names.count)), names.map { "mcp__yardlet__\($0)" },
+        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.dropLast(4).suffix(names.count)), names.map { "mcp__yardlet__\($0)" },
                        "A Claude task runs them without the CLI's card; the app asks the person where it should")
-        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.suffix(2)),
-                       ["mcp__yardlet__read_terminal", "mcp__yardlet__list_task_runs"])
+        XCTAssertEqual(Array(AgentToolServerLaunch.claudeAllowedTools.suffix(4)),
+                       ["mcp__yardlet__list_settings", "mcp__yardlet__update_setting", "mcp__yardlet__read_terminal",
+                        "mcp__yardlet__list_task_runs"])
         XCTAssertEqual(AgentToolServerLaunch.codexToolTimeoutSeconds, 1_800, "Codex lets a call wait 30 minutes")
         let invoker = UnixSocketToolInvoker(environment: [:])
         XCTAssertEqual(invoker.timeout, 180)
@@ -115,10 +121,11 @@ final class SessionToolTests: XCTestCase {
                 .tools.compactMap { $0["name"]?.stringValue }
         }
         let list = await listed()
-        XCTAssertEqual(list, SessionToolCatalog.tools.map(\.name), "Not shared, the terminal tool is not listed")
+        let sessionAndSettings = (SessionToolCatalog.tools + SettingsToolCatalog.tools).map(\.name)
+        XCTAssertEqual(list, sessionAndSettings, "Not shared, the terminal tool is not listed")
         sharesTerminal = true
         let shared = await listed()
-        XCTAssertEqual(shared, SessionToolCatalog.tools.map(\.name) + [TerminalToolCatalog.readTerminal],
+        XCTAssertEqual(shared, sessionAndSettings + [TerminalToolCatalog.readTerminal],
                        "Shared, the next list has it")
 
         // Over the socket, as yardlet-mcp reaches the app.
@@ -2280,6 +2287,209 @@ final class SessionToolTests: XCTestCase {
         var reason: String?
     }
 
+    // MARK: - Settings tools
+
+    private struct SettingsListing: Decodable {
+        struct Setting: Decodable {
+            struct Choice: Decodable {
+                var value: String
+                var title: String
+                var detail: String?
+            }
+
+            var id: String
+            var section: String
+            var title: String
+            var help: String?
+            var kind: String
+            var value: String
+            var choices: [Choice]?
+            var asksThePerson: Bool
+        }
+
+        var settings: [Setting]
+        var note: String
+    }
+
+    private func listedSettings(_ model: AppModel, from caller: SessionRecord) async throws -> [SettingsListing.Setting] {
+        let result = await call(model, "list_settings", [:], from: caller)
+        XCTAssertFalse(result.isError, result.text)
+        return try decode(SettingsListing.self, result.text).settings
+    }
+
+    /// `list_settings` reads the catalog Settings draws: Settings' words and order, the value where the app
+    /// reads it, only what Settings shows now, and whether a change asks this caller's person.
+    func testListSettingsGivesSettingsWordsAndValuesAndWhetherAChangeAsks() async throws {
+        let suite = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("SettingsToolsList")))
+        let fixture = try Fixture(preferences: suite)
+        defer { fixture.tearDown() }
+        var settings = try await listedSettings(fixture.model, from: fixture.caller)
+        let shown = YardletSettingCatalog.all.map(\.id).filter { id in settings.contains { $0.id == id } }
+        XCTAssertEqual(settings.map(\.id), shown, "In Settings' order")
+
+        let mailbox = try XCTUnwrap(settings.first { $0.id == "mailbox" })
+        XCTAssertEqual(mailbox.section, L10n.string("General"))
+        XCTAssertEqual(mailbox.title, L10n.string("Mailbox"))
+        XCTAssertEqual(mailbox.help, L10n.string("Show the inboxes of the mail accounts connected in Connectors (Gmail, Outlook and accounts over IMAP) beside your tasks. Mail is read from the service and kept in memory only."))
+        XCTAssertEqual(mailbox.kind, "switch")
+        XCTAssertEqual(mailbox.value, "off")
+        XCTAssertNil(mailbox.choices)
+        XCTAssertTrue(mailbox.asksThePerson, "The caller asks, so every change asks")
+
+        let cookies = try XCTUnwrap(settings.first { $0.id == "keep_cookies" })
+        XCTAssertEqual(cookies.kind, "choice")
+        XCTAssertEqual(cookies.value, "perTask")
+        XCTAssertEqual(cookies.choices?.map(\.value), ["perTask", "shared"])
+        XCTAssertEqual(cookies.choices?.map(\.title), [L10n.string("Per task"), L10n.string("Shared by all tasks")])
+        XCTAssertEqual(cookies.help, L10n.string("Tasks share your sign-ins. A task whose agent signs in to a site itself keeps that sign-in to itself. Sign-ins saved in the password manager work in every task"),
+                       "A row's tooltip is its help when it has no line")
+        let level = try XCTUnwrap(settings.first { $0.id == "memory_saver_level" })
+        XCTAssertEqual(level.choices?.compactMap(\.detail).count, 3, "Each level's line, as Settings shows it")
+        XCTAssertEqual(settings.first { $0.id == "theme" }?.section, L10n.string("Appearance"))
+        for absent in ["new_mail", "hide_keys_and_tokens", "password_manager", "remote_connections",
+                       "keep_working_with_lid_closed", "check_for_updates", "claude_ai_connectors", "cli_automatic_updates"] {
+            XCTAssertFalse(settings.contains { $0.id == absent }, "\(absent): Settings does not show it here")
+        }
+
+        suite.set(true, forKey: MailboxPreference.key)
+        suite.set(false, forKey: MemorySaverPreference.key)
+        settings = try await listedSettings(fixture.model, from: fixture.caller)
+        XCTAssertEqual(settings.first { $0.id == "mailbox" }?.value, "on")
+        XCTAssertEqual(settings.first { $0.id == "new_mail" }?.value, "on", "Shown while the mailbox is on")
+        XCTAssertNil(settings.first { $0.id == "memory_saver_level" }, "Shown only while the memory saver is on")
+
+        // A task that runs without asking changes a plain setting without a card, never one that asks every time.
+        let bypass = try Fixture(callerOptions: [ClaudeLaunchOption.permissionMode: ClaudePermissionMode.bypassPermissions],
+                                 preferences: suite)
+        defer { bypass.tearDown() }
+        let unasked = try await listedSettings(bypass.model, from: bypass.caller)
+        XCTAssertEqual(unasked.first { $0.id == "mailbox" }?.asksThePerson, false)
+        XCTAssertEqual(unasked.filter(\.asksThePerson).map(\.id),
+                       ["agent_browser_tools", "share_terminal", "keep_cookies", "page_suggestions", "keep_screen_unlocked"])
+        await fixture.model.shutdown()
+        await bypass.model.shutdown()
+    }
+
+    /// A plain setting changes where Settings reads it, so the open Settings shows it, with no card for a task
+    /// that runs without asking and the task's card for one that asks.
+    func testAPlainSettingChangesWhereSettingsReadsItAndAsksOnlyWhereTheCallerAsks() async throws {
+        let suite = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("SettingsToolsPlain")))
+        let fixture = try Fixture(callerOptions: [ClaudeLaunchOption.permissionMode: ClaudePermissionMode.bypassPermissions],
+                                  preferences: suite)
+        defer { fixture.tearDown() }
+        let model = fixture.model
+        let host = WindowlessRender.Host(SettingsCenterView(notificationCenter: MenuBarQuietNotificationCenter())
+            .defaultAppStorage(suite), size: NSSize(width: 820, height: 620))
+        defer { host.close() }
+        host.settle()
+        func mailboxSwitch() -> String? {
+            host.accessibilityElements().first {
+                $0.role == NSAccessibility.Role.checkBox.rawValue && $0.label == L10n.string("Mailbox")
+            }?.value
+        }
+        XCTAssertEqual(mailboxSwitch(), "0")
+
+        let result = await call(model, "update_setting", ["id": "mailbox", "value": "on"], from: fixture.caller)
+        XCTAssertFalse(result.isError, result.text)
+        XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id), "No card for a task that runs without asking")
+        XCTAssertEqual(result.text.components(separatedBy: "\n").first, SettingsToolCatalog.changedLine(
+            title: L10n.string("Mailbox"), from: L10n.string("Off"), to: L10n.string("On"), id: "mailbox"))
+        XCTAssertTrue(MailboxPreference.isOn(in: suite), "Where the mailbox reads it")
+        host.settle()
+        XCTAssertEqual(mailboxSwitch(), "1", "The open Settings shows the change")
+        XCTAssertEqual(ConversationSettingProjection.change(result: result.text), ConversationSettingChange(
+            settingID: "mailbox", title: L10n.string("Mailbox"), from: L10n.string("Off"), to: L10n.string("On")))
+
+        let again = await call(model, "update_setting", ["id": "mailbox", "value": true], from: fixture.caller)
+        XCTAssertFalse(again.isError, again.text)
+        XCTAssertTrue(again.text.contains("nothing changed"), again.text)
+        XCTAssertNil(ConversationSettingProjection.change(result: again.text), "Nothing changed, so no row")
+        let byWords = await call(model, "update_setting", ["id": "show_task_servers", "value": false], from: fixture.caller)
+        XCTAssertFalse(byWords.isError, byWords.text)
+        XCTAssertFalse(TaskServersPreference.isOn(in: suite))
+
+        // A task that asks gets its card for a plain setting too, named by its title here.
+        let asking = try Fixture(preferences: suite)
+        defer { asking.tearDown() }
+        let pending = Task { await self.call(asking.model, "update_setting", ["id": L10n.string("Theme"),
+                                                                               "value": L10n.string("Dark")], from: asking.caller) }
+        let request = try await waitForApproval(in: asking.caller.id, model: asking.model)
+        XCTAssertEqual(request.request.title, L10n.format("Change “%@”?", L10n.string("Theme")))
+        XCTAssertEqual(request.request.detail, L10n.format("%@ › %@", L10n.string("Settings"), L10n.string("Appearance"))
+            + "\n" + L10n.format("%@ → %@", L10n.string("System"), L10n.string("Dark")))
+        XCTAssertNil(suite.string(forKey: YardletPreferenceKeys.appearance), "Nothing changes before the person answers")
+        await asking.model.respond(to: request.id, decision: .allow, in: asking.caller)
+        let changed = await pending.value
+        XCTAssertFalse(changed.isError, changed.text)
+        XCTAssertEqual(suite.string(forKey: YardletPreferenceKeys.appearance), "dark")
+        await model.shutdown()
+        await asking.model.shutdown()
+    }
+
+    /// A setting that lowers a protection asks on the task's card even when the task runs without asking, and a
+    /// declined card changes nothing.
+    func testASensitiveSettingAsksEveryTimeAndADeclinedCardChangesNothing() async throws {
+        let suite = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("SettingsToolsSensitive")))
+        let fixture = try Fixture(callerOptions: [ClaudeLaunchOption.permissionMode: ClaudePermissionMode.bypassPermissions],
+                                  preferences: suite)
+        defer { fixture.tearDown() }
+        let model = fixture.model
+        func change() -> Task<AgentToolResult, Never> {
+            Task { await self.call(model, "update_setting", ["id": "keep_cookies", "value": "shared"], from: fixture.caller) }
+        }
+        let declining = change()
+        let request = try await waitForApproval(in: fixture.caller.id, model: model)
+        XCTAssertEqual(request.request.title, L10n.format("Change “%@”?", L10n.string("Keep cookies")))
+        XCTAssertEqual(request.request.detail, [
+            L10n.format("%@ › %@", L10n.string("Settings"), L10n.string("General")),
+            L10n.format("%@ → %@", L10n.string("Per task"), L10n.string("Shared by all tasks")),
+            L10n.string("Tasks share your sign-ins. A task whose agent signs in to a site itself keeps that sign-in to itself. Sign-ins saved in the password manager work in every task")
+        ].joined(separator: "\n"))
+        await model.respond(to: request.id, decision: .deny, in: fixture.caller)
+        let declined = await declining.value
+        XCTAssertEqual(declined.failure?.kind, .refused, declined.text)
+        XCTAssertEqual(declined.failure?.retry, .no)
+        XCTAssertNil(suite.string(forKey: BrowserTaskProfiles.storageKey), "A declined card changes nothing")
+        XCTAssertNil(ConversationSettingProjection.change(result: declined.text))
+
+        let allowing = change()
+        let again = try await waitForApproval(in: fixture.caller.id, model: model)
+        await model.respond(to: again.id, decision: .allow, in: fixture.caller)
+        let allowed = await allowing.value
+        XCTAssertFalse(allowed.isError, allowed.text)
+        XCTAssertEqual(suite.string(forKey: BrowserTaskProfiles.storageKey), "shared", "Where the browser reads it")
+        XCTAssertEqual(ConversationSettingProjection.change(result: allowed.text)?.to, L10n.string("Shared by all tasks"))
+        await model.shutdown()
+    }
+
+    /// A value outside the setting's set, an id no setting has and a setting Settings does not show now are
+    /// refused before any card, and change nothing.
+    func testUpdateSettingRefusesOtherValuesUnknownIdsAndWhatSettingsDoesNotShow() async throws {
+        let suite = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("SettingsToolsRefusals")))
+        let fixture = try Fixture(preferences: suite)
+        defer { fixture.tearDown() }
+        let model = fixture.model
+        let wrong = await call(model, "update_setting", ["id": "terminal_location", "value": "left"], from: fixture.caller)
+        XCTAssertEqual(wrong.failure?.kind, .invalidArguments, wrong.text)
+        XCTAssertEqual(wrong.failure?.retry, .withChanges)
+        XCTAssertEqual(wrong.failure?.details["values"], .array([.string("bottom"), .string("right")]))
+        let notASwitchValue = await call(model, "update_setting", ["id": "mailbox", "value": "maybe"], from: fixture.caller)
+        XCTAssertEqual(notASwitchValue.failure?.kind, .invalidArguments, notASwitchValue.text)
+        let unknown = await call(model, "update_setting", ["id": "dark_mode", "value": "on"], from: fixture.caller)
+        XCTAssertEqual(unknown.failure?.kind, .notFound, unknown.text)
+        let hidden = await call(model, "update_setting", ["id": "new_mail", "value": "off"], from: fixture.caller)
+        XCTAssertEqual(hidden.failure?.kind, .refused, hidden.text)
+        XCTAssertTrue(hidden.text.contains(L10n.string("Mailbox")), hidden.text)
+        let noHelper = await call(model, "update_setting", ["id": "keep_working_with_lid_closed", "value": "on"],
+                                  from: fixture.caller)
+        XCTAssertEqual(noHelper.failure?.kind, .refused, noHelper.text)
+        XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id), "Refused before any card")
+        for key in [TerminalLocation.key, MailboxPreference.key, MailboxPreference.notificationsKey, LidClosedWorkPreference.key] {
+            XCTAssertNil(suite.object(forKey: key), key)
+        }
+        await model.shutdown()
+    }
+
     private struct ArchivedTask: Decodable {
         var taskId: String
         var title: String?
@@ -2481,7 +2691,8 @@ final class SessionToolTests: XCTestCase {
         init(callerOptions: [String: String] = [:], siblingOptions: [String: String] = [:],
              codexOptions: [String: String] = [:], codexState: CodexTaskState? = nil,
              repository: (([SessionRecord]) -> any SessionRepository)? = nil,
-             connections: ProviderConnectionStore? = nil, callerTranscript: [TranscriptEntry] = []) throws {
+             connections: ProviderConnectionStore? = nil, callerTranscript: [TranscriptEntry] = [],
+             preferences: UserDefaults? = nil) throws {
             root = FileManager.default.temporaryDirectory.appending(path: "session-tools-\(UUID().uuidString.prefix(8))")
             let appRoot = root.appending(path: "app", directoryHint: .isDirectory)
             let siteRoot = root.appending(path: "site", directoryHint: .isDirectory)
@@ -2519,6 +2730,7 @@ final class SessionToolTests: XCTestCase {
             var transcripts = [sibling.id: builder.entries]
             if !callerTranscript.isEmpty { transcripts[caller.id] = callerTranscript }
             let defaults = defaults
+            let preferences = preferences ?? defaults
             let selections = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
             for harness in [HarnessKind.claudeCode, .codex, .openCode] { selections.select(runtime, for: harness) }
             let adapter = adapter
@@ -2537,7 +2749,7 @@ final class SessionToolTests: XCTestCase {
                     initialTranscripts: transcripts,
                     initialCodexPresentation: codexPresentation,
                     codexQueueRepository: UserDefaultsCodexQueueRepository(defaults: defaults),
-                    preferences: defaults,
+                    preferences: preferences,
                     codexPendingRequestRepository: UserDefaultsCodexPendingServerRequestRepository(defaults: defaults),
                     codexTimelineItemRepository: UserDefaultsCodexTimelineItemRepository(defaults: defaults),
                     codexHistorySelectionRepository: UserDefaultsCodexHistorySelectionRepository(defaults: defaults),

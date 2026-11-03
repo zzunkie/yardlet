@@ -67,7 +67,14 @@ extension ClaudeConversationCatalog {
 @MainActor
 final class RemoteControlService {
     private(set) var isEnabled = false
+    private(set) var isRelayEnabled = false
+    private(set) var keepsAwakeOnPower = false
     private(set) var devices: [RemoteDevice] = []
+    var relayURL: URL? { nil }
+
+    func setEnabled(_ enabled: Bool) {}
+    func setRelayEnabled(_ enabled: Bool) {}
+    func setKeepsAwakeOnPower(_ keepsAwake: Bool) {}
 }
 
 /// No helper keeps the computer awake.

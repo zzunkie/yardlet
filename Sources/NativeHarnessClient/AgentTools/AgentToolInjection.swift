@@ -30,9 +30,10 @@ struct AgentToolServerLaunch: Equatable, Sendable {
     /// Of the scheduled-task tools only `list_task_runs` goes without asking, as the Claude app
     /// allows only its own; the CLI asks before the others as it asks before any tool.
     /// `read_terminal` goes without asking too, as the Claude app's `read_terminal` runs nothing; while the
-    /// terminal is not shared the server does not list it and the name allows nothing.
+    /// terminal is not shared the server does not list it and the name allows nothing. The settings tools go
+    /// without the CLI's card as well: the app asks on its own card for the changes that ask.
     static var claudeAllowedTools: [String] {
-        ((TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools).map(\.name)
+        ((TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools + SettingsToolCatalog.tools).map(\.name)
             + [TerminalToolCatalog.readTerminal, ScheduleToolCatalog.listRuns])
             .map { "mcp__\(AgentToolEnvironment.serverName)__\($0)" }
     }

@@ -1,21 +1,7 @@
 import AppKit
 import SwiftUI
 
-enum YardletAppearancePreference: String, CaseIterable, Identifiable {
-    case system
-    case light
-    case dark
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .system: L10n.string("System")
-        case .light: L10n.string("Light")
-        case .dark: L10n.string("Dark")
-        }
-    }
-
+extension YardletAppearancePreference {
     var colorScheme: ColorScheme? {
         switch self {
         case .system: nil
@@ -25,21 +11,7 @@ enum YardletAppearancePreference: String, CaseIterable, Identifiable {
     }
 }
 
-enum YardletInterfaceSizePreference: String, CaseIterable, Identifiable {
-    case compact
-    case standard
-    case large
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .compact: L10n.string("Compact")
-        case .standard: L10n.string("Default")
-        case .large: L10n.string("Large")
-        }
-    }
-
+extension YardletInterfaceSizePreference {
     var scale: CGFloat {
         switch self {
         case .compact: 0.94
@@ -55,11 +27,6 @@ enum YardletInterfaceSizePreference: String, CaseIterable, Identifiable {
         case .large: .xLarge
         }
     }
-}
-
-enum YardletPreferenceKeys {
-    static let appearance = "Yardlet.appearance"
-    static let interfaceSize = "Yardlet.interfaceSize"
 }
 
 private struct YardletInterfaceScaleKey: EnvironmentKey {

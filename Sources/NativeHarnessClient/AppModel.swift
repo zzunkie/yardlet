@@ -438,6 +438,11 @@ final class AppModel {
     /// Yardlet's lid helper, for Settings › General. The app sets it; nil in tests and fixtures,
     /// where the setting is left out.
     var lidSleepHelper: LidSleepHelper?
+    /// The vault for agents and Sparkle's automatic update checks, as Settings binds them, for the agent's
+    /// settings tools (`settingsContext`). The app sets them; nil in tests and fixtures, and in a build without
+    /// Sparkle, where those settings are left out.
+    @ObservationIgnored var settingsVault: VaultCenter?
+    @ObservationIgnored var settingsUpdateChecks: YardletSettingSwitch?
     /// Harness CLI update checks (Settings › CLI Updates). The app sets it after restoring the index;
     /// nil in tests and fixtures.
     var cliUpdates: CLIUpdateCenter?

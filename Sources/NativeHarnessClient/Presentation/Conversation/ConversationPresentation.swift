@@ -309,6 +309,8 @@ enum ConversationItemKind: Equatable, Sendable {
     /// Yardlet's `create_scheduled_task` call: the schedule it made, drawn as one row where the call
     /// happened.
     case scheduleCreated(ConversationScheduleCreation)
+    /// Yardlet's `update_setting` call: the change it made, drawn as one row where the call happened.
+    case settingChanged(ConversationSettingChange)
     case notice(CodexNoticeItem)
     case compaction(HarnessContextCompaction)
     /// A request already answered, kept with the work.
