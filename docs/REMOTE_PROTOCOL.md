@@ -575,6 +575,8 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
 
 Every revision of protocol 2 only adds optional fields or states a rule, except where it says otherwise.
 
+- 2026-11-04: §15.26 adds read-only Review, advertised by optional `reviewReading`; no mutation request is added.
+
 - 2026-10-16, after the first Android client build:
   - §5.3: `after` always names an item the phone holds once it has applied what came before in order;
     a phone that cannot find it subscribes again. A `loadOlder` page is followed by the changes its
@@ -1690,6 +1692,37 @@ stays on the Mac.
   - With `requestId` on the watched tab, show the handoff's `reason` and its Done and Decline (`answerHandoff`, §15.18)
     above the picture, as the Mac's panel does. With another `waiting`, say what waits on the Mac (§15.19's
     "Steps that are not requests").
+
+### 15.26 Read-only Review
+
+A snapshot may advertise `reviewReading: true`. Older hosts omit it; clients keep the panel unavailable.
+`readReview` takes `taskId` and `reviewQuery`, an object with `operation` and optional `repository`,
+`target`, `revision`, and `path`. The answer holds a `review` object. The desktop uses the same Review
+pane and scope/file selectors as its local window, backed by these reads:
+
+| Operation | Inputs | `review` fields |
+|---|---|---|
+| `lastTurn` | none | `lastTurnOffered`, optional `turnID`, `text` (unified diff), `isRunning`, `truncated`; the same provider projection the host Review uses |
+| `repositories` | none | `repositories`: host repository paths among the task's folders |
+| `root` | optional `repository` | `root`: repository root |
+| `commits` | optional `repository` | `commits`: at most 50 `{id, shortID, subject, timestamp}` entries; timestamp is milliseconds |
+| `baseBranch` | optional `repository` | `baseBranch`: a full ref, `missing`, or `current` |
+| `diff` | optional `repository`, `target`: `unstaged`, `staged`, `commit`, or `branch`; commit needs `revision` | `text`: unified diff, `truncated`: output reached its 2 MiB bound |
+| `text` | optional `repository`, `path` (repository-relative with a revision), optional `revision` | `text`: at most 2 MiB of UTF-8 Markdown source, omitted if unavailable |
+
+Without `revision`, `text` reads the working file through §15.22's file reader, with the same absolute
+or task-relative path rules. An empty revision reads
+the index, `HEAD` reads the branch tip, and a full hexadecimal commit ID reads that commit. Branch diff
+uses the host's selected base branch, not a client-selected Git expression. Requests cannot mutate
+files or the index; Stage, Unstage and Discard remain disabled in the remote pane.
+
+The task must still be listed. A repository is accepted only inside the task's authorized folders,
+with symbolic links resolved and the home-folder exclusions of §15.22. A task opened below a larger
+repository's root cannot expose that repository's sibling folders. Invalid fields answer `badRequest`,
+a disallowed selection `notFound`, and a repository root outside those folders `notAllowed`. Git failures
+answer `unavailable` without paths or command output. A response whose JSON encoding exceeds the server
+message limit answers `tooLarge`. Markdown renders on the client without resolving
+host-relative images or links against the client's filesystem. Last-turn provider changes use the host's existing projection after loading saved history without starting a model turn. Refresh reads them again; there is no new subscription.
 
 ## 16. Push notifications
 

@@ -265,6 +265,7 @@ struct CodexLastTurnDiff: Equatable, Sendable {
     /// A git-style unified diff; empty when the turn changed no file.
     let text: String
     let isRunning: Bool
+    var isTruncated: Bool = false
 
     /// Changes whenever the diff does, so the panel reloads only then.
     var revision: String { "\(turnID):\(text.utf8.count):\(text.hashValue)" }
