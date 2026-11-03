@@ -1561,7 +1561,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
         item.requestKind = "form"
         item.status = "pending"
         item.title = "GitHub"
-        item.detail = "Create a repository for the new service."
+        item.message = "Create a repository for the new service."
         item.questions = ["Repository", "Private", "Team"]
         var repo = RemoteFormField(id: "repo", label: "Repository", type: "text")
         repo.required = true

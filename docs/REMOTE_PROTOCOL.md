@@ -426,6 +426,9 @@ Unknown kinds: skip them. Text fields are capped (`truncated: true` when cut).
   at its turn's end; once answered it moves into the turn's work (`inWork`) where it happened.
 - `title`, `detail` (≤ 1,000), `command` (≤ 2,000): what the Mac's card shows. `text`: a plan review's
   plan (Markdown, ≤ 8,000). `questions`: a question's texts (each ≤ 500).
+- `message` (≤ 1,000, optional, since 2026-11-03): the provider's own words the Mac's card shows above its form or
+  answers: a Codex request's message and reason, such as the sentence an MCP form (§15.19) asks with, joined by a
+  blank line. Absent when the request sends none.
 - `options` (pending only): what the phone may answer — `allowOnce`, `deny`, both, or none.
 - `moreOnMac: true`: the Mac's card offers answers the phone does not (for example "Allow for
   session", a question form, a plan review). Show that more is on the Mac.
@@ -574,6 +577,7 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
 - 2026-11-03: a line's words in parts, `words` (§6.4), and a choice's catalog key, `text` (§15.19). Later the same day:
   a subscription's full detail (§15.24), with the snapshot's `fullConversation`; a `conversation` event's changes may
   come in several events in a row (§5.3, §15.24).
+- 2026-11-03: a request's own words, `message` (§6.5), which the Mac's card shows above an MCP form's fields.
 - 2026-11-02, a rule restated: `parentTaskId` (§4.1) is the task the Mac's sidebar draws the task under, so a task
   whose parent is in another list, pinned apart or in a split view comes without one, as the sidebar lists it.
   Before, it was the task it was started from whenever that task was listed anywhere.
@@ -1191,6 +1195,7 @@ shows, instead of the few §4.4 and §15.13 name.
   "values": {"repo": "acme/web", "private": true, "team": "web"}}`: the Mac checks the values as its card does and
   answers `notAllowed` with the first problem in `message` ("Repository: Required") when one does not fit. A value
   of the wrong kind for its field, or for no field, is refused the same way, never replaced by the field's default. The
+  sentence the form asks with, which the Mac's card shows above the fields, is the item's `message` (§6.5). The
   form's item also keeps `moreOnMac` for phones that do not read `choices`.
 - A question step whose answer is a secret (`secret: true` in `questionSteps`) is answered on the phone as any other
   step (§15.3). Such a question offers `answerSecret` in `options` instead of `answer`, with `moreOnMac` and a
@@ -1467,9 +1472,9 @@ for what they read beyond §6's items. A phone keeps §6.
   A subscription asks for it once; its page, `loadOlder` pages and events then hold the same items in the same order,
   with the same IDs, as §6, and the fields below besides. Nothing else differs: lines still read their output and
   diffs with `itemDetail` (§15.8), and requests answer as §15.19.
-- **Longer text.** `text` of `user` and `assistant` items, a request's `text`, `detail` and `command`, and an error's
-  `message` (the provider's whole text, not its summary) are cut at 200,000 characters instead of §6's limits, with
-  `truncated: true` as before.
+- **Longer text.** `text` of `user` and `assistant` items, a request's `text`, `detail`, `message` and `command`, and an
+  error's `message` (the provider's whole text, not its summary) are cut at 200,000 characters instead of §6's limits,
+  with `truncated: true` as before.
 - **`images`** on a `user` item: the pictures the message sent, as small previews the Mac makes once, `{"type":
   "image/jpeg", "data": "<base64>", "name": "login-page.png"}`, at most 480 pixels on the long side, in the message's
   order. A picture the Mac cannot read (or one on the web, which it never fetches) has none, and a preview being made
