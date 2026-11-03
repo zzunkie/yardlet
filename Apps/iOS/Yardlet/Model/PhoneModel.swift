@@ -26,7 +26,8 @@ final class PhoneModel {
     @ObservationIgnored private let store: RemoteHostStore
     @ObservationIgnored private let keys = KeychainClientKeys()
     @ObservationIgnored private var demo: DemoMac?
-    @ObservationIgnored private var isActive = true
+    /// The app is in front: the scene's first `active` opens the connection, so launching starts it once.
+    @ObservationIgnored private var isActive = false
     @ObservationIgnored private var pushRegistration: (provider: String, token: String)?
 
     private var selectedHostID: String {
