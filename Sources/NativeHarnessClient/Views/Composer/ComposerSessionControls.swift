@@ -53,8 +53,11 @@ struct ComposerSessionControls: View {
             EmptyView()
         }
         if let permission = options.permission {
+            // The row wraps a control whole rather than shorten its words; the session rail's
+            // Settings card, in a fixed column, lets the same controls shorten theirs.
             ComposerPermissionControl(slot: permission, isPreparing: $isPreparing, isDisabled: isDisabled,
                                       onChoose: onChoose, onPrepare: onPrepare)
+                .fixedSize()
         }
         if let skills = options.skills {
             ComposerSkillsControl(skills: skills.skills, onInsert: onInsertSkill)
@@ -85,6 +88,7 @@ struct ComposerSessionControls: View {
             ComposerModelControl(menu: model.menu, onPrepare: onPrepare, onSetOption: { id, value in
                 if let choice = model.apply.choice(id: id, value: value) { onChoose(choice) }
             }, openRequest: modelOpenRequest, isDisabled: isDisabled, registersTaskFocus: registersTaskFocus)
+            .fixedSize()
         }
     }
 }
@@ -193,7 +197,6 @@ struct ComposerPermissionControl: View {
         }
         .buttonStyle(.borderless)
         .parityPointer()
-        .fixedSize()
         .disabled(isPreparing || isDisabled)
         .focused($isTriggerFocused)
         .taskFocus(.permissions, isFocused: $isTriggerFocused, enabled: registersTaskFocus)

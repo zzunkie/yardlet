@@ -157,6 +157,19 @@ final class SessionRailRenderingTests: XCTestCase {
             rail(Self.openCodeContent(), folds: everyCardOpen, appearance: appearance)
         }
 
+        // Each card's content stays within the raised rail's narrower column, whatever the length of the model's
+        // and the account's names: a control that keeps its words whole would widen its card past the column.
+        var long = claude
+        long.settings?.model?.menu.model?.currentValue = "default"
+        long.settings?.accountName = "a.long.account.name@example-company.com"
+        let column = SessionRailPlacement.width - 12 - 12 - 24
+        for kind in long.cards(Self.preferences().preferences) {
+            let body = SessionRailCardBody(kind: kind, content: long,
+                                           actions: SessionRailActions(chooseAccount: {}, pullRequest: SessionRailPullRequestActions()))
+            let width = NSHostingController(rootView: body).sizeThatFits(in: CGSize(width: column, height: 2_000)).width
+            XCTAssertLessThanOrEqual(width, column, kind.rawValue)
+        }
+
         // The rail is named for assistive apps, and each header says its card and whether it is folded.
         let host = WindowlessRender.Host(rail(claude, folds: SessionRailFolds(), appearance: .light),
                                          size: NSSize(width: width, height: 900), appearance: .light)

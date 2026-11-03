@@ -166,11 +166,12 @@ struct ParityComposerControl: View {
                 Image(systemName: systemName)
                     .font(.system(size: 11.5 * interfaceScale, weight: .medium))
             }
-            label
-                .font(.system(size: 13 * interfaceScale, weight: .medium))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: detail == nil ? 138 : 196)
+            ParityLabelWidth(limit: detail == nil ? 138 : 196) {
+                label
+                    .font(.system(size: 13 * interfaceScale, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
             if showsChevron {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8, weight: .bold))
@@ -196,6 +197,25 @@ struct ParityComposerControl: View {
     private var label: Text {
         guard let detail else { return Text(title) }
         return Text(title) + Text(" · \(detail)").foregroundStyle(.tertiary)
+    }
+}
+
+/// A control's words, no wider than `limit` and no wider than they are. `frame(maxWidth:)` would
+/// grow to whatever it is offered up to the limit, spreading a short title away from its icon and
+/// chevron in a row that offers more, such as the session rail's Settings card.
+private struct ParityLabelWidth: Layout {
+    let limit: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let label = subviews.first else { return .zero }
+        let width = min(label.sizeThatFits(.unspecified).width, limit, proposal.width ?? .infinity)
+        let size = label.sizeThatFits(ProposedViewSize(width: width, height: proposal.height))
+        return CGSize(width: max(width, size.width), height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: CGPoint(x: bounds.midX, y: bounds.midY), anchor: .center,
+                              proposal: ProposedViewSize(bounds.size))
     }
 }
 
