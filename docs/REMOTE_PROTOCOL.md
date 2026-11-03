@@ -1860,9 +1860,10 @@ and revocable watch permit with `tabInput`. Ending the watch, changing tasks, re
 invalidates queued actions. The host rechecks the task, target tab, page boundary and blocking dialogs immediately
 before acting. Audits record the request type, task, device and outcome, never the address or page contents.
 
-The desktop client opens conversation links to `localhost`, `*.localhost`, IPv4 loopback and IPv6 loopback in the
-host's browser panel. They refer to the host's servers; no port forwarding is created. With an older host, the client
-shows an update notice instead of sending those links to its own loopback interface.
+The desktop client provides `openHostBrowserLink` for window and terminal link handlers to route `localhost`,
+`*.localhost`, IPv4 loopback and IPv6 loopback to the host's browser panel. Callers use the hook before default-browser
+handling. These addresses refer to the host's servers; no port forwarding is created. With an older host, the hook
+shows an update notice instead of sending those links to the client's own loopback interface.
 
 ## 16. Push notifications
 
@@ -1974,7 +1975,8 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   keys and the input method's committed text (what it is still composing shows on the client until committed; ⌘V
   types the client's own clipboard; secure keyboard entry is on while the page's password field has the keyboard); it
   sends no `viewport`, so the tab keeps its size. A handoff's card has Show Tab, which opens it there. With `tabControls`,
-  the address field, new-tab button and tab close buttons act on the host (§15.30); loopback links open there too.
+  the address field, new-tab button and tab close buttons act on the host (§15.30), and a hook routes loopback links
+  there for the window's link handler. The tab strip uses the same `WorkSurfaceHeader` as other side panels.
   Settings, connectors, the context ring, creating or editing a schedule and the other side panels stay on the host.
 - **Paths:** as §11.4. While a host's window is open it browses Bonjour (§11.3) for the instance with the
   discovery id of the host key it saved, and resolves it to the host's name and port (`Name.local:47616`; the
