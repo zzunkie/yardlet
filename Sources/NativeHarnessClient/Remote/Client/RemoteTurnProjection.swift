@@ -554,3 +554,16 @@ enum RemoteSuggestionState {
         }
     }
 }
+
+extension ConversationPresentation {
+    /// The presentation without the pending request `id`, which a host sets at the end of its turn (§6.5): another
+    /// place answers it.
+    func withoutRequest(_ id: String) -> ConversationPresentation {
+        guard pendingRequestIDs.contains(id),
+              let index = turns.lastIndex(where: { $0.requests.contains { $0.id == id } }) else { return self }
+        var presentation = self
+        presentation.turns[index].requests.removeAll { $0.id == id }
+        presentation.pendingRequestIDs.remove(id)
+        return presentation
+    }
+}
