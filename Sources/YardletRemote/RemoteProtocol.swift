@@ -234,6 +234,7 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var scheduledTasks: Bool
     /// The bridge answers `taskOutputs` and `readFile` (§15.22).
     public var taskFiles: Bool
+    public var reviewReading: Bool = false
     /// The bridge answers a task's settings, slash commands, edit and fork (§15.23).
     public var taskControls: Bool
     /// The bridge answers `subscribeTask` with `"detail": "full"` (§15.24).
@@ -973,6 +974,7 @@ public enum RemoteRequest: Equatable, Sendable {
     case setScheduledTaskEnabled(scheduleID: String, enabled: Bool)
     /// What a task made, and a part of one of its files (§15.22).
     case taskOutputs(taskID: String)
+    case readReview(taskID: String, query: RemoteReviewQuery)
     case readFile(taskID: String, path: String, offset: Int)
     /// A desktop in use, or no longer (§18): the Mac holds phone pushes meanwhile.
     case presence(active: Bool)
@@ -1025,6 +1027,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .runScheduledTask: "runScheduledTask"
         case .setScheduledTaskEnabled: "setScheduledTaskEnabled"
         case .taskOutputs: "taskOutputs"
+        case .readReview: "readReview"
         case .readFile: "readFile"
         case .presence: "presence"
         case .taskSettings: "taskSettings"
@@ -1048,7 +1051,7 @@ public enum RemoteRequest: Equatable, Sendable {
              let .reviewPlan(id, _, _, _), let .itemDetail(id, _), let .actOnSuggestion(id, _, _), let .setPinned(id, _),
              let .archiveTask(id), let .limitAccounts(id), let .continueWithAccount(id, _), let .setAutoContinue(id, _),
              let .actOnQueued(id, _, _), let .answerHandoff(id, _, _), let .chooseAnswer(id, _, _, _, _),
-             let .taskOutputs(id), let .readFile(id, _, _), let .taskSettings(id, _), let .setTaskSetting(id, _, _, _),
+             let .readReview(id, _), let .taskOutputs(id), let .readFile(id, _, _), let .taskSettings(id, _), let .setTaskSetting(id, _, _, _),
              let .composerCommands(id), let .runComposerCommand(id, _, _), let .editMessage(id, _, _), let .forkTask(id, _),
              let .watchTab(id, _, _, _, _), let .unwatchTab(id),
              let .tabFrameAck(id, _, _), let .tabInput(id, _, _): id
@@ -1142,6 +1145,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var data: String?
         var nonce: String?
         var scheduleId: String?
+        var reviewQuery: RemoteReviewQuery?
         var path: String?
         var prepare: Bool?
         var setting: String?
@@ -1374,6 +1378,11 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         case "taskOutputs":
             guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
             request = .taskOutputs(taskID: taskID)
+        case "readReview":
+            guard let taskID = required(wire.taskId), let query = wire.reviewQuery, query.isValid else {
+                return fail(.badRequest, "Missing or invalid review query")
+            }
+            request = .readReview(taskID: taskID, query: query)
         case "readFile":
             guard let taskID = required(wire.taskId), let path = required(wire.path) else {
                 return fail(.badRequest, "Missing taskId or path")
@@ -1541,6 +1550,9 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             wire.enabled = enabled
         case let .taskOutputs(taskID):
             wire.taskId = taskID
+        case let .readReview(taskID, query):
+            wire.taskId = taskID
+            wire.reviewQuery = query
         case let .readFile(taskID, path, offset):
             wire.taskId = taskID
             wire.path = path
@@ -1653,6 +1665,8 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     /// `scheduledTasks` (§15.21).
     public var schedules: [RemoteSchedule]?
     /// `snapshot` on v2: the Mac answers `taskOutputs` and `readFile` (§15.22).
+    public var reviewReading: Bool?
+    public var review: RemoteReviewResult?
     public var taskFiles: Bool?
     /// `snapshot` on v2: the Mac answers `subscribeTask` with `"detail": "full"` (§15.24).
     public var fullConversation: Bool?

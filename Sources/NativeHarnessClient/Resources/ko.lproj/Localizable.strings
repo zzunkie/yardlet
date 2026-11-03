@@ -3704,3 +3704,7 @@
 "Waiting until the task is available" = "작업이 메시지를 받을 수 있을 때까지 대기 중";
 
 "Missed: the task was unavailable for 24 hours" = "놓친 실행: 24시간 동안 작업에 메시지를 보낼 수 없었음";
+
+"Update Yardlet on the host to use this panel." = "이 패널을 사용하려면 호스트의 Yardlet을 업데이트하세요.";
+
+"This repository is outside the task's folders." = "이 저장소는 작업에 허용된 폴더 밖에 있습니다.";
