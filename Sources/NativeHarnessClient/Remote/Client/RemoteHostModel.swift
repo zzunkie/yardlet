@@ -304,6 +304,11 @@ final class RemoteHostModel: Identifiable {
     func loadDetail(_ taskID: String, itemID: String) {
         guard let conversation = conversations[taskID], conversation.beginLoadingDetail(itemID) else { return }
         request(.itemDetail(taskID: taskID, itemID: itemID)) { [weak self] response in
+            // Not reached: asked again when the line opens next, rather than kept as a line with nothing more.
+            if response.error?.code == .unavailable {
+                self?.conversations[taskID]?.cancelLoadingDetail(itemID)
+                return
+            }
             let detail = response.ok
                 ? RemoteItemDetail(output: response.output, outputTruncated: response.outputTruncated == true, diffs: response.diffs ?? [])
                 : nil

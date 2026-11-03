@@ -168,6 +168,9 @@ final class RemoteHostModelTests: XCTestCase {
         let first = try XCTUnwrap(directory.model(for: host.id))
         XCTAssertEqual(finder.watched, [RemoteIdentity.discoveryID(for: stack.identity.noise.publicKey)])
         try await waitUntil { first.hasSnapshot }
+        let approval = RemoteFixtureBridge.ID.approval
+        first.select(.task(approval))
+        try await waitUntil { first.conversations[approval]?.isLoaded == true }
         first.select(.task(idle))
         let read = try XCTUnwrap(first.conversations[idle])
         try await waitUntil { read.isLoaded }
@@ -186,7 +189,7 @@ final class RemoteHostModelTests: XCTestCase {
 
         // Marked here, so the test tells what the cache shows from what the host sends.
         var list = try JSONDecoder().decode(RemoteHostCache.List.self, from: Data(contentsOf: listFile))
-        XCTAssertEqual(list.conversations, [idle])
+        XCTAssertEqual(Set(list.conversations), [idle, approval])
         let index = try XCTUnwrap(list.tasks.firstIndex { $0.id == idle })
         list.tasks[index].title = "Fix the footer links (cached)"
         try JSONEncoder().encode(list).write(to: listFile)
@@ -205,6 +208,17 @@ final class RemoteHostModelTests: XCTestCase {
         let shown = try XCTUnwrap(second.conversations[idle])
         XCTAssertTrue(shown.isLoaded)
         XCTAssertEqual(prompt(shown), "Find the footer links (cached)")
+        // A line opened while the host is away reads nothing, and asks again once it is back.
+        second.select(.task(approval))
+        let cached = try XCTUnwrap(second.conversations[approval])
+        let line = try XCTUnwrap(cached.presentation.turns.flatMap(\.work).first { item in
+            if case let .tool(tool) = item.kind { return tool.loadsDetailOnOpen }
+            return false
+        })
+        second.loadDetail(approval, itemID: line.id)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertNil(cached.details[line.id], "Nothing kept for a read the host never answered")
+        second.select(.task(idle))
 
         // Found on the network on another port: the host's own list and page replace them, and the found
         // address is not saved as one the host named.
@@ -217,6 +231,11 @@ final class RemoteHostModelTests: XCTestCase {
         try await waitUntil { second.hasSnapshot && second.task(idle)?.title == "Fix the footer links" }
         XCTAssertEqual(second.connection, .connected(.direct(address)))
         try await waitUntil { prompt(shown) == "Find the footer links that 404" }
+        second.select(.task(approval))
+        let live = try XCTUnwrap(second.conversations[approval])
+        try await waitUntil { live.presentation.turns.flatMap(\.work).contains { $0.id == line.id } }
+        second.loadDetail(approval, itemID: line.id)
+        try await waitUntil { live.details[line.id]?.output != nil || live.details[line.id]?.diffs.isEmpty == false }
         XCTAssertFalse(directory.host(host.id)?.direct.contains(address) ?? true)
 
         // Removing the host removes what it showed, and the folder of all hosts with its last one.

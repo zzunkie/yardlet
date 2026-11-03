@@ -76,6 +76,11 @@ final class RemoteConversationModel {
         return true
     }
 
+    /// A read the connection cut off, so the line asks again.
+    func cancelLoadingDetail(_ itemID: String) {
+        loadingDetails.remove(itemID)
+    }
+
     func setDetail(_ detail: RemoteItemDetail?, for itemID: String) {
         loadingDetails.remove(itemID)
         details[itemID] = detail ?? RemoteItemDetail()
