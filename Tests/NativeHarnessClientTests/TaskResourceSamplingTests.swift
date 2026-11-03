@@ -268,7 +268,7 @@ final class TaskResourceSamplingTests: XCTestCase {
         )
         session.attach(view)
         defer { session.stop() }
-        let shellPID = view.process.shellPid
+        let shellPID = try XCTUnwrap(session.process?.shellPid)
         XCTAssertEqual(TaskProcessRegistry.shared.registered[shellPID], .task(task))
 
         let listener = try Self.listener(in: home)

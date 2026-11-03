@@ -47,6 +47,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     var answeredSettings: [UUID: [RemoteSetting]] = [:]
     var watchesSettings: Set<UUID> = []
     /// A task's browser tabs (§15.25), when this build has a browser engine.
+    let terminals = RemoteTerminalBridge()
     let browser: RemoteTabBridge
 
     init(model: AppModel, makePreview: RemoteImagePreviews.Make? = nil,
@@ -78,6 +79,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.followUp = model.followUpMode == .steer ? .steer : .queue
         snapshot.reviewReading = true
         snapshot.browserTabs = browser.isAvailable
+        snapshot.terminals = RemoteTerminalBridge.isAvailable
         return snapshot
     }
 

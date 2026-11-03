@@ -196,13 +196,17 @@ struct TerminalPane: View {
             }
             Button(L10n.string("Cancel"), role: .cancel) { restarting = nil }
         } message: {
-            Text(L10n.string("This stops the terminal's running processes and clears its output."))
+            Text(L10n.string(restarting?.foregroundIsUnknown == true
+                ? "Restarting clears the terminal's output and stops any commands that are running."
+                : "This stops the terminal's running processes and clears its output."))
         }
         .confirmationDialog(L10n.string("Restart terminal?"), isPresented: $confirmsFolderRestart) {
             Button(L10n.string("Restart terminal"), role: .destructive) { folder?.restart() }
             Button(L10n.string("Cancel"), role: .cancel) {}
         } message: {
-            Text(L10n.string("This stops the terminal's running processes and clears its output."))
+            Text(L10n.string(session.foregroundIsUnknown
+                ? "Restarting clears the terminal's output and stops any commands that are running."
+                : "This stops the terminal's running processes and clears its output."))
         }
         .confirmationDialog(
             closing.map { TerminalCloseQuestion.title(closing: $0.count) } ?? "",
@@ -276,7 +280,7 @@ struct TerminalPane: View {
             title: titles[ObjectIdentifier(session)] ?? workspaceURL.lastPathComponent,
             systemName: "terminal",
             workspaceURL: workspaceURL,
-            status: session.isRunning ? nil : session.statusText,
+            status: session.actionError ?? (session.isRunning ? nil : session.statusText),
             statusTint: session.exitCode.map({ $0 != 0 }) == true || session.terminationSignal != nil
                 ? .red : .secondary,
             showsPanelControls: !isInSidePanel,
@@ -427,6 +431,11 @@ enum TerminalCloseQuestion {
     }
 
     static func message(closing shells: [NativeTerminalSession], titles: [ObjectIdentifier: String]) -> String {
+        if shells.contains(where: \.foregroundIsUnknown) {
+            return L10n.string(shells.count == 1
+                ? "Closing this terminal stops any commands that are running."
+                : "Closing these terminals stops any commands that are running.")
+        }
         let running = shells.filter(\.isRunningProgram)
         guard running.count == 1, let shell = running.first else {
             return L10n.format("Commands are still running in %d terminals. Closing them stops them.", running.count)
@@ -479,7 +488,8 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
 
     /// The header strip's id for its tab.
     let id = UUID()
-    let workspaceURL: URL
+    private let initialWorkspaceURL: URL
+    var workspaceURL: URL { hosting.workspaceURL ?? initialWorkspaceURL }
     /// The name the person gave its tab; nil keeps the default (`TerminalTabTitle`).
     var name: String?
     /// Takes the keyboard the next time a panel shows it: the tab a split opened.
@@ -488,6 +498,7 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
     /// does not have.
     var number = 1
     private(set) var isRunning = false
+    private(set) var actionError: String?
     private(set) var title: String?
     private(set) var currentDirectory: String?
     private(set) var exitCode: Int32?
@@ -509,11 +520,18 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
     var process: LocalProcess? { (hosting as? LocalTerminalHosting)?.process }
     @ObservationIgnored var onOutput: ((ArraySlice<UInt8>) -> Void)?
     @ObservationIgnored var onExit: ((Int32?) -> Void)?
-    @ObservationIgnored private var pendingOutput: [UInt8] = []
+    @ObservationIgnored var onStop: (() -> Void)?
+    @ObservationIgnored var onOpenLink: ((URL) -> Void)?
+    @ObservationIgnored private(set) var allowsClipboard = true
+    @ObservationIgnored var clipboard = TerminalClipboard.system
+    @ObservationIgnored private var mirror: TerminalBufferMirror?
+    @ObservationIgnored private var columns = 80
+    @ObservationIgnored private var rows = 24
     /// When the shell last printed, while its view reports it (`NativeTerminalView`).
     @ObservationIgnored private var lastOutputAt: ContinuousClock.Instant?
     /// Panels showing a shell the task's workspace keeps.
     @ObservationIgnored private var shownPanels = 0
+    var hasVisiblePanel: Bool { shownPanels > 0 }
 
     /// The shell it starts, the one launch bash mode's shell shares: the person's login shell, or
     /// a test's zsh with its own `ZDOTDIR` so it neither reads their rc files nor writes their
@@ -526,13 +544,18 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
 
     init(workspaceURL: URL, launch: ShellLaunchEnvironment = .userLoginShell(), taskID: UUID? = nil,
          hosting: (any TerminalHosting)? = nil) {
-        self.workspaceURL = workspaceURL.standardizedFileURL
+        self.initialWorkspaceURL = workspaceURL.standardizedFileURL
         self.launch = launch
         self.taskID = taskID
         self.hosting = hosting ?? LocalTerminalHosting(folder: workspaceURL, launch: launch)
         super.init()
         self.hosting.onOutput = { [weak self] in self?.dataReceived(slice: $0) }
         self.hosting.onExit = { [weak self] in self?.processTerminated(exitCode: $0) }
+        self.hosting.onReady = { [weak self] in
+            guard let self else { return }
+            self.isRunning = true
+            self.registerShell()
+        }
         NativeSurfaceResourceRegistry.shared.register(self)
     }
 
@@ -604,24 +627,38 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
         terminalView = view
         view.terminalDelegate = self
         (view as? NativeTerminalView)?.session = self
-        if !pendingOutput.isEmpty {
-            view.feed(byteArray: pendingOutput[...])
-            pendingOutput.removeAll(keepingCapacity: false)
+        if let mirror {
+            view.terminal = mirror.terminal
+            mirror.display = view
+            // The public font setter rebuilds selection, search, caret and glyph caches for this emulator.
+            let font = view.font
+            view.font = font
         }
-        start()
         sizeChanged(source: view, newCols: view.getTerminal().cols, newRows: view.getTerminal().rows)
+        start()
     }
 
     /// Starts the PTY independently of any panel or AppKit view.
     func start() {
         guard !started, !hasEnded else { return }
         started = true
+        // Ordinary panels already have an emulator. Only a shell started headless needs a mirror.
+        if terminalView == nil {
+            mirror = TerminalBufferMirror()
+            mirror?.sendBytes = { [weak self] bytes in
+                guard let self, self.hosting is LocalTerminalHosting else { return }
+                self.hosting.send(bytes)
+            }
+            mirror?.terminal.resize(cols: columns, rows: rows)
+        }
         exitCode = nil
         terminationSignal = nil
+        actionError = nil
         currentDirectory = workspaceURL.path(percentEncoded: false)
         lastOutputAt = nil
-        isRunning = true
+        isRunning = false
         hosting.start()
+        isRunning = hosting.isReady
         registerShell()
     }
 
@@ -630,30 +667,46 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
         if let terminalView {
             terminalView.feed(byteArray: slice)
         } else {
-            pendingOutput.append(contentsOf: slice)
-            if pendingOutput.count > 1_048_576 { pendingOutput.removeFirst(pendingOutput.count - 1_048_576) }
+            mirror?.terminal.feed(buffer: slice)
         }
         onOutput?(slice)
     }
 
-    func resize(columns: Int, rows: Int) { hosting.resize(columns: columns, rows: rows) }
+    func resize(columns: Int, rows: Int) {
+        self.columns = max(2, min(columns, 500))
+        self.rows = max(2, min(rows, 300))
+        mirror?.terminal.resize(cols: self.columns, rows: self.rows)
+        hosting.resize(columns: columns, rows: rows)
+    }
     func send(source: TerminalView, data: ArraySlice<UInt8>) { send(data) }
     func send(_ data: ArraySlice<UInt8>) {
         guard isRunning else { return }
+        actionError = nil
         hosting.send(data)
     }
     func scrolled(source: TerminalView, position: Double) {}
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
 
+    func disableClipboardAccess() { allowsClipboard = false }
+
+    func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+        guard let url = URL(string: link) else { return }
+        if let onOpenLink { onOpenLink(url); return }
+        guard hosting is LocalTerminalHosting else {
+            actionError = L10n.string("Open this address in the remote task's browser.")
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
     func clipboardCopy(source: TerminalView, content: Data) {
-        guard hosting is LocalTerminalHosting, let text = String(data: content, encoding: .utf8) else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.writeObjects([text as NSString])
+        guard allowsClipboard, hosting is LocalTerminalHosting else { return }
+        clipboard.write(content)
     }
 
     func clipboardRead(source: TerminalView) -> Data? {
-        guard hosting is LocalTerminalHosting else { return nil }
-        return NSPasteboard.general.string(forType: .string)?.data(using: .utf8)
+        guard allowsClipboard, hosting is LocalTerminalHosting else { return nil }
+        return clipboard.read()
     }
 
     func restart() {
@@ -664,9 +717,10 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
     func stop() {
         unregisterShell()
         hosting.stop()
+        onStop?()
         started = false
         terminalView = nil
-        pendingOutput.removeAll()
+        mirror = nil
         isRunning = false
     }
 
@@ -688,8 +742,12 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
     /// paste mode the shell asked for by then) and presses Return, as the Claude app's Run in terminal runs
     /// what it types.
     func runWhenReady(_ command: String) async -> Bool {
-        guard await waitUntilReady() else { return false }
-        send(Self.pasteText(command, bracketedPaste: terminalView?.getTerminal().bracketedPasteMode ?? false) + "\r")
+        guard await waitUntilReady() else {
+            actionError = L10n.string("The command was not sent because the shell prompt could not be confirmed.")
+            return false
+        }
+        actionError = nil
+        send(Self.pasteText(command, bracketedPaste: terminalView?.getTerminal().bracketedPasteMode ?? mirror?.terminal.bracketedPasteMode ?? false) + "\r")
         return true
     }
 
@@ -714,8 +772,9 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
     ) async -> Bool {
         let deadline = ContinuousClock.now + limit
         while ContinuousClock.now < deadline, !Task.isCancelled {
+            if hosting is RemoteTerminalHosting, await hosting.refreshPromptState() == nil { return false }
             if isAtPrompt, let lastOutputAt, ContinuousClock.now - lastOutputAt >= quietPeriod { break }
-            try? await Task.sleep(for: .milliseconds(50))
+            try? await Task.sleep(for: .milliseconds(hosting is RemoteTerminalHosting ? 250 : 50))
         }
         return !Task.isCancelled && isAtPrompt
     }
@@ -726,15 +785,18 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
 
     /// A program other than the shell holds the terminal: a command still runs in it. Read when asked,
     /// never watched.
+    var foregroundIsUnknown: Bool { isRunning && hosting is RemoteTerminalHosting }
+
     var isRunningProgram: Bool {
-        guard let group = foregroundProcessGroup, let shell = hosting.processID else { return false }
+        guard isRunning else { return false }
+        // A remote process group is host-owned. Unknown foreground state must still ask before destruction.
+        guard let group = foregroundProcessGroup, let shell = hosting.processID else { return isRunning && hosting is RemoteTerminalHosting }
         return group != shell
     }
 
     /// The shell holds its terminal: no command runs in the foreground.
     var isAtPrompt: Bool {
-        guard let group = foregroundProcessGroup, let shell = hosting.processID else { return false }
-        return group == shell
+        isRunning && hosting.isAtPrompt == true
     }
 
     func focus() -> Bool {
@@ -743,10 +805,11 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
     }
 
     var bufferText: String {
-        terminalView?.getTerminal().unwrappedText ?? ""
+        mirror?.terminal.unwrappedText ?? terminalView?.getTerminal().unwrappedText ?? ""
     }
 
     var statusText: String {
+        if let status = hosting.statusMessage { return status }
         if isRunning { return L10n.string("Running") }
         if let terminationSignal { return L10n.format("Stopped by signal %d", terminationSignal) }
         if let exitCode { return L10n.format("Exited (%d)", exitCode) }
@@ -890,6 +953,12 @@ extension EnvironmentValues {
 /// "Attach selection as context" key, attach the selection to the person's message; otherwise it has
 /// no menu, as SwiftTerm's own view has none.
 final class NativeTerminalView: TerminalView {
+    /// Parser-generated replies come only from the host's emulator. Key input still uses the view delegate.
+    override func send(source: Terminal, data: ArraySlice<UInt8>) {
+        guard session?.hosting is LocalTerminalHosting else { return }
+        super.send(source: source, data: data)
+    }
+
     weak var session: NativeTerminalSession?
     var process: LocalProcess! { session?.process }
     /// Attaches the selected text to the task's message; nil while the terminal is not shared.

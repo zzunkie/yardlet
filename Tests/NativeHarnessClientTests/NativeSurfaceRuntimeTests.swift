@@ -194,7 +194,7 @@ final class NativeSurfaceRuntimeTests: XCTestCase {
         XCTAssertTrue(session.isRunning)
         XCTAssertTrue(session.bufferText.contains("NHC_PTY_OK"))
         XCTAssertFalse(session.bufferText.contains("NHC_NOT_PTY"), session.bufferText)
-        let shellPID = view.process.shellPid
+        let shellPID = try XCTUnwrap(session.process?.shellPid)
         XCTAssertGreaterThan(shellPID, 0)
         session.stop()
         XCTAssertFalse(session.isRunning)

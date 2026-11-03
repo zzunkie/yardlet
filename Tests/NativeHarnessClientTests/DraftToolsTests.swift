@@ -185,8 +185,8 @@ final class DraftToolsTests: XCTestCase {
         let taskID = UUID()
         let shell = store.state(for: taskID).terminal(in: folder, launch: launch, taskID: taskID)
         defer { shell.stop() }
-        let view = shell.view { Self.terminalView() }
-        let shellPID = view.process.shellPid
+        _ = shell.view { Self.terminalView() }
+        let shellPID = try XCTUnwrap(shell.process?.shellPid)
         XCTAssertTrue(shell.isRunning)
         shell.panelAppeared()
         shell.panelDisappeared()
@@ -218,6 +218,7 @@ final class DraftToolsTests: XCTestCase {
         let typed = await exited.typeWhenReady("exit\n", limit: testWaitLimit)
         XCTAssertTrue(typed, "the shell reached its prompt")
         try await waitUntil { !exited.isRunning }
+        XCTAssertFalse(exited.isAtPrompt)
         XCTAssertFalse(exited.isRunning)
         exited.panelAppeared()
         exited.panelDisappeared()

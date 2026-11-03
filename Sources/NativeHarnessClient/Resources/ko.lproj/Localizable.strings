@@ -3772,3 +3772,24 @@
 "Permission is off for now. Recovery could not be saved; retry before restarting Yardlet." = "현재 권한은 꺼졌지만 복구 기록을 저장하지 못했습니다. Yardlet을 다시 시작하기 전에 다시 시도해 주세요.";
 
 "Permission stays off after restarting. Retry saving the settings." = "재시작해도 권한은 꺼진 상태로 유지됩니다. 설정 저장을 다시 시도해 주세요.";
+"Connection lost" = "연결이 끊겼습니다";
+
+"The remote terminal was closed." = "원격 터미널이 닫혔습니다.";
+
+"The remote terminal is unavailable." = "원격 터미널을 열 수 없습니다.";
+
+"Allow Terminal for this device in the host's Remote Connections settings." = "호스트의 원격 연결 설정에서 이 기기의 터미널 권한을 켜 주세요.";
+
+"The host's remote terminal limit has been reached. Close an unused terminal." = "호스트에서 원격 터미널을 더 열 수 없습니다. 사용하지 않는 터미널을 닫아 주세요.";
+
+"The command was not sent because the shell prompt could not be confirmed." = "셸이 입력을 받을 수 있는지 확인하지 못해 명령을 보내지 않았습니다.";
+
+"Restarting clears the terminal's output and stops any commands that are running." = "터미널을 다시 시작하고 출력을 지웁니다. 실행 중인 명령이 있다면 종료됩니다.";
+
+"Closing this terminal stops any commands that are running." = "이 터미널에서 실행 중인 명령이 있다면 종료됩니다.";
+
+"Closing these terminals stops any commands that are running." = "이 터미널들에서 실행 중인 명령이 있다면 모두 종료됩니다.";
+
+"Open this address in the remote task's browser." = "원격 작업의 브라우저에서 이 주소를 열어 주세요.";
+
+"Closing this window or losing the connection ends its terminals." = "이 창을 닫거나 연결이 끊기면 터미널이 종료됩니다.";
