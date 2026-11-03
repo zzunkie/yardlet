@@ -41,7 +41,15 @@ extension AppModel: BrowserHandoffPresenting {
     /// already answered.
     func answerBrowserHandoff(_ notice: String, done: Bool, in session: UUID) -> Bool {
         guard let wait = browserHandoffWaits[session]?.first(where: { $0.notice == notice }),
-              let tab = handoffTab(wait, in: session), tab.handoff?.answer == nil else { return false }
+              let tab = handoffTab(wait, in: session) else { return false }
+        // The agent's ask to keep a two-factor setup (docs/BROWSER_VAULT_DESIGN.md §20): I'm done saves it where the
+        // panel's bar suggests, Decline is its Not Now.
+        if let ask = tab.vaultSetupAsk, ask.answer == nil, notice == BrowserAgentTools.handoffNotice(ask.id) {
+            tab.answerSetupAsk(done ? .save(.suggested) : .declined)
+            handoffEnded(notice: notice)
+            return true
+        }
+        guard tab.handoff?.answer == nil else { return false }
         tab.answerHandoff(done ? .done : .declined)
         handoffEnded(notice: notice)
         return true

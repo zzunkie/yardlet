@@ -70,6 +70,11 @@ final class BrowserAgentPage {
     var handOff: (String) -> (handoff: BrowserHandoff, isNew: Bool)? = { _ in nil }
     var handoff: () -> BrowserHandoff? = { nil }
     var endHandoff: () -> Void = {}
+    /// Asks the person to keep a two-factor setup the page shows (`BrowserTab.askToSaveSetup`), reads the ask, and
+    /// ends it.
+    var askToSaveSetup: (OneTimeCodeSetup, String) -> (ask: BrowserVaultSetupAsk, isNew: Bool)? = { _, _ in nil }
+    var setupAsk: () -> BrowserVaultSetupAsk? = { nil }
+    var endSetupAsk: () -> Void = {}
     /// Emulates a color scheme, or follows the Mac again (`BrowserTab.emulateColorScheme`).
     var emulateColorScheme: (String?) async throws -> Void = { _ in
         throw BrowserAgentToolError("This browser cannot emulate a color scheme.")

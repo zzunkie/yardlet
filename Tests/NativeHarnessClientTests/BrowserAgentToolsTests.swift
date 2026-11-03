@@ -1100,6 +1100,91 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertFalse(after.text.contains("%40ss") || after.text.contains("%2540ss"), after.text)
     }
 
+    /// A code fill on a page that shows a two-factor setup the vault does not hold (docs/BROWSER_VAULT_DESIGN.md §20)
+    /// asks the person to keep it before anything is saved: Save keeps it in the site's item and its first code goes
+    /// in, Not Now keeps nothing and the agent hears so. The key never reaches a result, and the page is a filled one.
+    func testACodeFillOnASetupPageAsksThePersonToKeepTheSetupFirst() async {
+        let item = VaultItem(name: "Example", sites: ["example.com"], username: "ada", hasPassword: true)
+        let vault = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore([item.id: VaultSecret(password: "correct horse")]),
+            repository: InMemoryVaultRepository(items: [item]), hmac: MacVault.hmac, isAllowedBuild: true,
+            defaults: .vaultTests()))
+        tools.vault = vault
+        _ = await loadSnapshot()
+        cdp.responders["Page.getFrameTree"] = { _ in
+            .object(["frameTree": .object(["frame": .object([
+                "id": .string("main"), "loaderId": .string("doc-1"), "url": .string("https://www.example.com/2fa"),
+                "securityOrigin": .string("https://www.example.com")
+            ])])])
+        }
+        cdp.responders["Page.createIsolatedWorld"] = { _ in .object(["executionContextId": .integer(7)]) }
+        cdp.responders["DOM.resolveNode"] = { _ in .object(["object": .object(["objectId": .string("field")])]) }
+        let key = Data("setup-test-key-0001".utf8)
+        var link = "otpauth://totp/Example:ada?secret=\(Base32.encode(key))&issuer=Example"
+        var filledCodes: [String] = []
+        cdp.responders["Runtime.callFunctionOn"] = { params in
+            let function = params["functionDeclaration"]?.stringValue ?? ""
+            if function.contains("ownerDocument === document") { return ScriptedCDP.value(.bool(true)) }
+            if function == BrowserAgentTools.setupLookFunction {
+                return ScriptedCDP.value(.object(["links": .array([.string(link)]), "square": .bool(false)]))
+            }
+            if function == BrowserAgentTools.submissionFunction {
+                return ScriptedCDP.value(.object(["form": .bool(true), "targets": .array([
+                    .object(["action": .string("https://www.example.com/2fa"), "method": .string("post")])])]))
+            }
+            if function == BrowserAgentTools.submitFunction { return ScriptedCDP.value(.string("submitted")) }
+            if function == BrowserAgentTools.fillFunction,
+               let code = params["arguments"]?.arrayValue?[3]["value"]?.stringValue { filledCodes.append(code) }
+            return ScriptedCDP.value(.object(["kinds": .array([.string("one_time_code")])]))
+        }
+        // The person's answer on the panel's setup bar.
+        var ask: BrowserVaultSetupAsk?
+        var answer: (OneTimeCodeSetup) -> BrowserVaultSetupAsk.Answer = { _ in .declined }
+        page.askToSaveSetup = { setup, origin in
+            let new = BrowserVaultSetupAsk(id: UUID(), setup: setup, origin: origin)
+            ask = new
+            return (new, true)
+        }
+        // The person answers by the time the agent's wait looks.
+        page.setupAsk = {
+            if let waiting = ask, waiting.answer == nil { ask?.answer = answer(waiting.setup) }
+            return ask
+        }
+        page.endSetupAsk = { ask = nil }
+        func fill() async -> AgentToolResult {
+            await run(VaultToolCatalog.fillCredential, ["ref": .string("@e2"), "kind": .string("one_time_code")])
+        }
+
+        answer = { _ in .save(.suggested) }
+        let saved = await fill()
+        XCTAssertFalse(saved.isError, saved.text)
+        XCTAssertTrue(saved.text.contains("The person saved the page's two-factor setup in “Example”")
+                      && saved.text.contains("the one-time code"), saved.text)
+        XCTAssertEqual(vault.secret(of: item.id)?.oneTimeCode?.key, key, "the code went into the account's item")
+        XCTAssertEqual(filledCodes.count, 1)
+        XCTAssertEqual(filledCodes.first?.count, 6)
+        XCTAssertNil(ask, "the ask ends once the agent read it")
+        XCTAssertFalse(saved.text.contains(Base32.encode(key)))
+        let evaluated = await run(AgentToolCatalog.evaluate, ["function": .string("() => document.title")])
+        XCTAssertTrue(evaluated.isError && evaluated.text.contains("password or code"), evaluated.text)
+
+        // Not Now: nothing is saved or filled.
+        let other = Data("setup-test-key-0002".utf8)
+        link = "otpauth://totp/Example:ada?secret=\(Base32.encode(other))&issuer=Example"
+        answer = { _ in .declined }
+        let declined = await fill()
+        XCTAssertTrue(declined.isError && declined.text.contains("chose not to save"), declined.text)
+        XCTAssertEqual(vault.secret(of: item.id)?.oneTimeCode?.key, key)
+        XCTAssertEqual(filledCodes.count, 1)
+
+        // A page whose setup the vault holds asks nothing and fills its code.
+        link = "otpauth://totp/Example:ada?secret=\(Base32.encode(key))&issuer=Example"
+        answer = { _ in XCTFail("asked about a setup the vault holds"); return .declined }
+        let held = await fill()
+        XCTAssertFalse(held.isError || held.text.contains("saved the page's"), held.text)
+        XCTAssertEqual(filledCodes.count, 2)
+    }
+
     /// A key or token shows in no result, from a field that is not a password field too, and leaves no part of itself
     /// where a long text is cut; a screenshot is taken with it covered in each frame and the page put back after. Agents
     /// read it only once the person at this Mac turned that off.

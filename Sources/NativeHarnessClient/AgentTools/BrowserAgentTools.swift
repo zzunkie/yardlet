@@ -78,9 +78,10 @@ final class BrowserAgentTools {
     /// open again there, so the sign-in changes no other task's (docs/BROWSER_SESSION_ISOLATION.md 3). Given the task,
     /// the page's host and how it signs in; true when it did. Nil (tests) takes none.
     var takesOwnProfile: (@MainActor (UUID, String, String) -> Bool)?
-    /// The keys of the two-factor setup QR codes in a picture (Vision on macOS), which a screenshot does not hand
-    /// over while the vault is on; nil reads no picture (tests).
-    var setupKeysPictured: (@Sendable (Data) async -> [Data])?
+    /// The two-factor setups the QR codes in a picture hold (Vision on macOS): a screenshot does not hand over a
+    /// picture of one while the vault is on, and a code fill on a page showing one asks the person to keep it; nil
+    /// reads no picture (tests).
+    var setupsPictured: (@Sendable (Data) async -> [OneTimeCodeSetup])?
     /// Whether the clipboard holds what a password manager copied (`org.nspasteboard.ConcealedType`), which the
     /// agent's paste does not put into a page.
     var clipboardIsConcealed: () -> Bool = { false }
@@ -99,7 +100,7 @@ final class BrowserAgentTools {
     /// A page that holds a password or code refuses the tools that could read it out, until it goes to another page.
     static let vaultBoundary = AgentToolFailure(.refused, retry: .no)
     /// The notifications of each task's handoffs not ended yet, which go when its turn ends.
-    private var handoffNotices: [UUID: Set<String>] = [:]
+    var handoffNotices: [UUID: Set<String>] = [:]
 
     /// Tools that still work while a JavaScript dialog pauses the page.
     private static let usableDuringDialog: Set<String> = [
@@ -1160,15 +1161,16 @@ final class BrowserAgentTools {
         // phone's touch points; the emulation goes back as it was.
         if fullPage, let emulation = page.emulation() { try? await page.emulate(emulation) }
         guard let data = shot["data"]?.stringValue else { throw BrowserAgentToolError("The browser returned no image.") }
-        if let read = setupKeysPictured, let vault, vault.isAllowedBuild, vault.isEnabled, let image = Data(base64Encoded: data) {
-            let keys = await read(image)
+        if let read = setupsPictured, let vault, vault.isAllowedBuild, vault.isEnabled, let image = Data(base64Encoded: data) {
+            let keys = await read(image).map(\.secret.key)
             if !keys.isEmpty {
                 let spellings = keys.flatMap(VaultPageScripts.spellings(ofSetupKey:))
                 spellings.forEach { vaultScrub.add($0) }
                 await VaultPageScripts.noteSecretsShown(spellings, on: page.cdp, fills: page.vaultFills)
                 throw BrowserAgentToolError("The page shows a two-factor setup QR code, whose secret makes the account's codes "
-                    + "for good, so Yardlet does not hand over this picture. The person saves it in Yardlet's password manager "
-                    + "(right-click the page → Add Two-Factor Code from QR Code); then browser_fill_credential fills its codes.")
+                    + "for good, so Yardlet does not hand over this picture. To set it up, call browser_fill_credential with "
+                    + "kind one_time_code on the page's code field: Yardlet asks the person to save the code in its password "
+                    + "manager and then fills its first code, without showing you the key.")
             }
         }
         let location = try? await pageLocation(page)
@@ -1799,7 +1801,7 @@ final class BrowserAgentTools {
         return object["description"]?.stringValue ?? "undefined"
     }
 
-    private static func format(_ value: Double) -> String {
+    static func format(_ value: Double) -> String {
         value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
     }
 }

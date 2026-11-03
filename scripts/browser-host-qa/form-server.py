@@ -15,7 +15,8 @@ left), and for the vault for agents /vault/login (a sign-in form), /vault/get an
 send the password where it does not belong, VAULT_GET below), /vault/react (fields kept the way React keeps
 controlled inputs), /vault/otp (a one-time code field and six one-digit boxes, checked against RFC 6238's
 test key in the page), /vault/otp/setup (a site's two-factor setup: a QR code of an otpauth:// address and a
-field for the first code, checked against the QR code's test key), /vault/otp/export (a picture of Google
+field for the first code, checked against the QR code's test key), /vault/otp/agent-setup (a setup page with only the
+first code's field, whose QR code the QA draws in; ?second takes another test key), /vault/otp/export (a picture of Google
 Authenticator's export QR code with two TOTP accounts and one counter-based one, all test keys), /vault/otp/dialog (a
 two-step dialog shaped like Instagram's, whose code field only a label after it names, checked against RFC 6238's test
 key), /vault/otp/decoys (fields that are not code fields: search, phone, a card's, postal code, promo code, birth year
@@ -615,6 +616,28 @@ VAULT_OTP_SETUP = """<!doctype html><meta charset="utf-8"><title>Vault two-facto
 async function expected(offset) {
   const key = await crypto.subtle.importKey('raw', new Uint8Array([72, 101, 108, 108, 111, 33, 222, 173, 190, 239]),
     {name: 'HMAC', hash: 'SHA-1'}, false, ['sign']);
+  const counter = Math.floor(Date.now() / 1000 / 30) + offset;
+  const message = new ArrayBuffer(8); new DataView(message).setUint32(4, counter);
+  const hash = new Uint8Array(await crypto.subtle.sign('HMAC', key, message));
+  const o = hash[19] & 15;
+  const binary = ((hash[o] & 127) << 24) | (hash[o + 1] << 16) | (hash[o + 2] << 8) | hash[o + 3];
+  return String(binary % 1000000).padStart(6, '0');
+}
+window.qa = {confirmed: null};
+document.getElementById('confirm').addEventListener('submit', async e => { e.preventDefault();
+  window.qa.confirmed = [await expected(0), await expected(-1)].includes(document.getElementById('code').value); });
+</script>"""
+
+# A setup the agent finds (docs/BROWSER_VAULT_DESIGN.md §20): the page has the first code's field, and the QA draws the QR
+# code of its test key in, "QA agent key 1" or, with ?second, "QA agent key 2".
+VAULT_OTP_AGENT_SETUP = """<!doctype html><meta charset="utf-8"><title>Vault agent two-factor setup</title>
+<h1>Set up two-factor authentication</h1><p>Scan this QR code with your authenticator app.</p><div id="qr"></div>
+<form id="confirm"><label>Code <input id="code" autocomplete="one-time-code" inputmode="numeric" maxlength="6"></label>
+<button>Turn on</button></form>
+<script>
+const secret = new TextEncoder().encode(location.search.includes('second') ? 'QA agent key 2' : 'QA agent key 1');
+async function expected(offset) {
+  const key = await crypto.subtle.importKey('raw', secret, {name: 'HMAC', hash: 'SHA-1'}, false, ['sign']);
   const counter = Math.floor(Date.now() / 1000 / 30) + offset;
   const message = new ArrayBuffer(8); new DataView(message).setUint32(4, counter);
   const hash = new Uint8Array(await crypto.subtle.sign('HMAC', key, message));
@@ -1468,6 +1491,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = VAULT_LANDED.encode()
         elif self.path.startswith('/vault/react'):
             payload = VAULT_REACT.encode()
+        elif self.path.startswith('/vault/otp/agent-setup'):
+            payload = VAULT_OTP_AGENT_SETUP.encode()
         elif self.path.startswith('/vault/otp/setup'):
             payload = VAULT_OTP_SETUP.encode()
         elif self.path.startswith('/vault/otp/export'):

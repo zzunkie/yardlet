@@ -14,6 +14,7 @@ import XCTest
 /// - `settings-vault-search-*`: the lists narrowed by a search.
 /// - `settings-vault-accounts-*`, `vault-item-account-*`: two accounts of one username, and one's item sheet.
 /// - `vault-save-bar-*`: the browser panel's save, update and add-username bars.
+/// - `vault-setup-bar-*`: the browser panel's two-factor setup bars, the page's and the ones the agent asks with.
 /// - `settings-vault-wallet-*`, `vault-card-*`, `vault-address-*`, `vault-wallet-bars-*`: addresses and cards.
 /// - `vault-picker-*`, `vault-picker-search-*`, `vault-picker-codes-*`, `vault-picker-empty-*`: the browser panel's
 ///   key button list on a site's page, searched, searched for a code from the code bar, and on a site with nothing.
@@ -355,6 +356,52 @@ final class VaultSettingsRenderingTests: XCTestCase {
         XCTAssertTrue(spoken.contains { $0.contains(L10n.format("Update the saved password of %@ for %@?", "“Console sign-in”",
                                                                 "us-east-1.console.example.test")) }, "\(spoken)")
         XCTAssertFalse(labels.contains { $0.contains("not-a-real-password") }, "\(labels)")
+    }
+
+    /// The browser panel's setup bar (design §14, §20): a setup the page showed, and the setups an agent's code fill found,
+    /// which say that the agent set them up: into a new item, into the account's item, replacing its code, and with the
+    /// site's other items on the arrow. Each answers with Not Now and Save, and no bar shows the setup's key.
+    func testTheSetupBarSaysWhenTheAgentAsks() throws {
+        let directory = try WindowlessRender.directory("vault-qa")
+        let setup = OneTimeCodeSetup(secret: OneTimeCodeSecret(key: Data("setup-render-key-01".utf8)), issuer: "GitHub",
+                                     account: "ada@example.test")
+        let signIn = VaultItem(name: "github.com", sites: ["github.com"], username: "ada@example.test", hasPassword: true)
+        let other = VaultItem(name: "github.com", sites: ["github.com"], username: "grace@example.test", hasPassword: true)
+        let offer = { (target: VaultItem?, choices: [VaultItem], ask: UUID?) in
+            BrowserVaultSetupOffer(origin: "https://github.com", site: "github.com", page: "https://github.com/settings/2fa",
+                                   setups: [setup], unsupported: 0, target: target, choices: choices, ask: ask)
+        }
+        let offers = [
+            offer(signIn, [signIn], nil),
+            offer(nil, [], UUID()),
+            offer(signIn, [signIn], UUID()),
+            offer(Self.github, [Self.github], UUID()),
+            offer(signIn, [signIn, other], UUID())
+        ]
+        let size = NSSize(width: 760, height: 230)
+        let bars = VStack(spacing: 0) {
+            ForEach(offers.indices, id: \.self) { index in
+                BrowserVaultSetupBar(offer: offers[index], dismiss: {}, accept: { _ in })
+            }
+        }
+        .frame(width: size.width, height: size.height, alignment: .top)
+        let captures = try WindowlessRender.hostedInBothAppearances("vault-setup-bar", in: directory, size: size) { appearance in
+            bars.environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas)
+        }
+        for capture in captures { XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6)) }
+        let host = WindowlessRender.Host(bars, size: size)
+        defer { host.close() }
+        host.settle()
+        let spoken = host.accessibilityElements().map { "\($0.label) \($0.value)" }
+        for text in [L10n.format("Save the two-factor code for %@ in “%@”?", "github.com", "github.com"),
+                     L10n.format("Save the two-factor code the agent set up for %@?", "github.com"),
+                     L10n.format("Save the two-factor code the agent set up for %@ in “%@”?", "github.com", "github.com"),
+                     L10n.format("Replace the two-factor code in “%@” with the one the agent set up?", "GitHub (work)")] {
+            XCTAssertTrue(spoken.contains { $0.contains(text) }, "No \(text): \(spoken)")
+        }
+        let labels = host.accessibilityElements().map(\.label)
+        XCTAssertEqual(labels.filter { $0 == L10n.string("Not Now") }.count, 5, "\(labels)")
+        XCTAssertFalse(spoken.contains { $0.contains(Base32.encode(setup.secret.key)) }, "\(spoken)")
     }
 
     /// Addresses and cards (design §18): the section in Settings → Passwords with its switch, an address, and cards by

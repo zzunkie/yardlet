@@ -1,5 +1,6 @@
 #if DEBUG
 import AppKit
+import CoreImage.CIFilterBuiltins
 import Foundation
 import YardletAgentTools
 
@@ -749,6 +750,8 @@ final class BrowserHostVaultQA {
               saved?.hasOneTimeCode == true && confirmFilled && confirmed,
               "saved \(saved?.hasOneTimeCode == true), filled \(confirmFilled), checked \(confirmed)")
 
+        await exerciseAgentSetup(controller, open: open, page: page)
+
         guard await open("vault/otp/export") != nil else { return }
         let exportOffered = await waitUntilAsync(.seconds(8)) { controller.vaultSetupOffer != nil }
         capture(controller, named: "vault-panel-import-bar.png")
@@ -771,6 +774,67 @@ final class BrowserHostVaultQA {
               imported.map { "\($0.name): \($0.username)" }.joined(separator: ", "))
 
         await exerciseUnlinkedCode(controller, page: page)
+    }
+
+    /// A setup the agent's code fill finds (design §20): the panel's setup bar asks the person, saying the agent set it
+    /// up; Save keeps the code for the site and the agent's fill puts in its first code, which the page takes; Not Now
+    /// keeps nothing, and the agent hears that the person did not save it.
+    private func exerciseAgentSetup(_ controller: BrowserHostPaneController, open: @escaping (String) async -> BrowserTab?,
+                                    page: @escaping (BrowserTab, String) async -> JSONValue?) async {
+        func agent(_ tool: String, _ arguments: [String: ToolJSON] = [:]) async -> AgentToolResult? {
+            guard let launch = broker.agentToolServer(for: panelSession, workspaceRoots: []),
+                  let token = launch.environment[AgentToolEnvironment.token] else { return nil }
+            return await broker.handle(AgentToolCall(token: token, session: panelSession.uuidString, tool: tool,
+                                                     arguments: .object(arguments)))
+        }
+        let first = Data("QA agent key 1".utf8)
+        for (path, key, saves) in [("vault/otp/agent-setup", first, true), ("vault/otp/agent-setup?second", Data("QA agent key 2".utf8), false)] {
+            guard let tab = await open(path) else { return }
+            // The QR code of the page's test key, drawn in as a site's setup page shows one.
+            let address = "otpauth://totp/QA%20Agent:agent@example.test?secret=\(Base32.encode(key))&issuer=QA%20Agent"
+            guard let png = Self.qrCode(address) else { return check("agent setup: a QR code is drawn", false, "no image") }
+            _ = await page(tab, "document.getElementById('qr').innerHTML = '<img alt=\"QR code\" style=\"width:215px;height:215px;"
+                + "image-rendering:pixelated\" src=\"data:image/png;base64,\(png.base64EncodedString())\">'; true")
+            try? await Task.sleep(for: .seconds(1))
+            let snapshot = await agent(AgentToolCatalog.snapshot)
+            guard let ref = Self.ref(in: snapshot?.text ?? "", role: "textbox", name: "Code") else {
+                return check("agent setup: the setup page's snapshot names its code field", false, snapshot?.text ?? "")
+            }
+            let fill = Task { await agent(VaultToolCatalog.fillCredential, ["ref": .string(ref), "kind": .string("one_time_code")]) }
+            let asked = await waitUntilAsync(.seconds(20)) { controller.vaultSetupOffer?.ask != nil }
+            let offer = controller.vaultSetupOffer
+            capture(controller, named: saves ? "vault-panel-agent-setup-bar.png" : "vault-panel-agent-setup-replace.png")
+            if saves { controller.acceptSetupOffer() } else { controller.dismissSetupOffer() }
+            let result = await fill.value
+            let kept = vault.items.first { $0.username == "agent@example.test" && $0.hasOneTimeCode }
+            let keptKey = kept.flatMap { vault.secret(of: $0.id)?.oneTimeCode?.key }
+            if saves {
+                var confirmed = await waitUntilAsync(.seconds(4)) { await page(tab, "window.qa.confirmed") == .bool(true) }
+                if !confirmed {
+                    _ = await page(tab, "document.querySelector('#confirm button').click()")
+                    confirmed = await waitUntilAsync(.seconds(3)) { await page(tab, "window.qa.confirmed") == .bool(true) }
+                }
+                check("agent setup: a code fill on a setup page asks the person with the setup bar; Save keeps the code for "
+                        + "the site and the fill puts in its first code, which the page takes",
+                      asked && offer?.setups.first?.account == "agent@example.test" && result?.isError == false
+                        && result?.text.contains("The person saved the page's two-factor setup") == true
+                        && keptKey == first && kept?.sites.isEmpty == false && confirmed,
+                      "asked \(asked), kept \(keptKey == first), confirmed \(confirmed): \(result?.text ?? "no result")")
+            } else {
+                check("agent setup: Not Now keeps nothing and the agent hears that the person did not save it",
+                      asked && offer?.target?.id == kept?.id && result?.isError == true
+                        && result?.text.contains("chose not to save") == true && keptKey == first,
+                      "asked \(asked), key unchanged \(keptKey == first): \(result?.text ?? "no result")")
+            }
+        }
+    }
+
+    /// A QR code of `text`, as a page draws a setup's.
+    private static func qrCode(_ text: String) -> Data? {
+        let generator = CIFilter.qrCodeGenerator()
+        generator.message = Data(text.utf8)
+        guard let image = generator.outputImage?.transformed(by: CGAffineTransform(scaleX: 8, y: 8)) else { return nil }
+        return NSBitmapImageRep(ciImage: image).representation(using: .png, properties: [:])
     }
 
     /// A code brought over with no site (design §14.3): an agent's fill of it is refused with a failure that names it

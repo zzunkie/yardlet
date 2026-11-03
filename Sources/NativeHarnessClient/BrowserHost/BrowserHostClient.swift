@@ -1259,6 +1259,10 @@ final class BrowserTab {
     private(set) var handoff: BrowserHandoff?
     /// Called when `handoff` changes, for the panel that shows the tab.
     var onHandoffChange: (() -> Void)?
+    /// The agent asks the person to keep a two-factor setup the page shows, until the agent's wait reads the answer.
+    private(set) var vaultSetupAsk: BrowserVaultSetupAsk?
+    /// Called when `vaultSetupAsk` changes, for the panel that shows the tab.
+    var onVaultSetupAskChange: (() -> Void)?
     /// The page's title and navigation state, as the host last reported them, for a panel that
     /// fronts the tab later.
     private(set) var title = ""
@@ -1680,12 +1684,43 @@ final class BrowserTab {
         onHandoffChange?()
     }
 
+    // MARK: The agent's two-factor setup
+
+    /// The agent asks the person to keep the setup its page shows. An ask still waiting for this setup is returned as
+    /// it is, as is one answered after the agent's last wait gave up, so the call reads the answer; another setup takes
+    /// the place of an unanswered ask. Returns the ask and whether it is new.
+    func askToSaveSetup(_ setup: OneTimeCodeSetup, origin: String) -> (ask: BrowserVaultSetupAsk, isNew: Bool) {
+        if let earlier = vaultSetupAsk, earlier.setup == setup, earlier.answer != .turnEnded, earlier.answer != .pageMoved {
+            return (earlier, false)
+        }
+        let new = BrowserVaultSetupAsk(id: UUID(), setup: setup, origin: origin)
+        vaultSetupAsk = new
+        onVaultSetupAskChange?()
+        return (new, true)
+    }
+
+    /// The person's answer from the panel's setup bar, the page moving on, or the end of the agent's turn.
+    func answerSetupAsk(_ answer: BrowserVaultSetupAsk.Answer) {
+        guard var waiting = vaultSetupAsk, waiting.answer == nil else { return }
+        waiting.answer = answer
+        vaultSetupAsk = waiting
+        onVaultSetupAskChange?()
+    }
+
+    /// The agent's wait read the answer.
+    func endSetupAsk() {
+        guard vaultSetupAsk != nil else { return }
+        vaultSetupAsk = nil
+        onVaultSetupAskChange?()
+    }
+
     /// The agent's turn ended: the size and color scheme it set go, as the Claude app clears them; the person's stay.
     func endAgentEmulation() async {
         if isInAgentTurn { agentTurnEndedAt = .now }
         isInAgentTurn = false
         // A waiting call reads that the turn ended; an answer no call read belongs to the turn that ended.
         if handoff?.answer == nil { answerHandoff(.turnEnded) } else { endHandoff() }
+        if vaultSetupAsk?.answer == nil { answerSetupAsk(.turnEnded) } else { endSetupAsk() }
         if emulation?.owner == .agent { try? await emulate(nil) }
         if emulatedColorScheme != nil { try? await emulateColorScheme(nil) }
     }
@@ -1955,6 +1990,34 @@ struct BrowserHandoff: Equatable, Sendable {
 
     let id: UUID
     var reason: String
+    var answer: Answer?
+}
+
+/// The agent's ask to keep a two-factor setup its page shows (`browser_fill_credential` with `one_time_code`,
+/// docs/BROWSER_VAULT_DESIGN.md §20): the setup, where it showed, and the person's answer from the setup bar.
+struct BrowserVaultSetupAsk: Equatable, Sendable {
+    /// Where the person's Save keeps the code: the item the bar suggested, another of the site's items, or a new one.
+    enum Target: Equatable, Sendable {
+        case suggested
+        case item(UUID)
+        case newItem
+    }
+
+    enum Answer: Equatable, Sendable {
+        /// The person's Save, from the panel's bar or the phone's I'm done; the agent's call keeps the code.
+        case save(Target)
+        /// The person's Not Now.
+        case declined
+        /// The page went to another address before the person answered.
+        case pageMoved
+        /// The agent's turn ended first.
+        case turnEnded
+    }
+
+    let id: UUID
+    var setup: OneTimeCodeSetup
+    /// The page's origin, as the browser reported it.
+    var origin: String
     var answer: Answer?
 }
 
