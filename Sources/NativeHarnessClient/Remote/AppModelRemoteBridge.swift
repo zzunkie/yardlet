@@ -76,6 +76,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         cachedSnapshot = snapshot
         // A setting, which Observation does not see change: read each time.
         snapshot.followUp = model.followUpMode == .steer ? .steer : .queue
+        snapshot.reviewReading = true
         snapshot.browserTabs = browser.isAvailable
         return snapshot
     }
@@ -1052,6 +1053,34 @@ final class AppModelRemoteBridge: RemoteBridge {
                 current: choice.connection == session.connection ? true : nil,
                 available: AccountListProjection.canChoose(choice, mode: mode) ? true : nil)
         })
+    }
+
+    func readReview(taskID: String, query: RemoteReviewQuery) async -> Result<RemoteReviewResult, RemoteError> {
+        if query.operation == .lastTurn {
+            await prepareConversation(of: taskID)
+            guard let model, let session = session(taskID) else { return .failure(RemoteError(.notFound)) }
+            let last: ReviewLastTurn
+            if HarnessPresentationPolicy(harness: session.harness).usesCodexTimeline {
+                last = .offered(Self.codexState(of: session, in: model).flatMap {
+                    CodexWorkSurfaceProjection.lastTurnDiff(from: $0, workspaceURL: session.workspaceURL)
+                })
+            } else {
+                last = .transcript(model.transcriptBySessionID[session.id] ?? [], harness: session.harness,
+                                   isRunning: session.status == .running || session.status == .waitingForApproval,
+                                   workspaceURL: session.workspaceURL)
+            }
+            var result = RemoteReviewResult()
+            result.lastTurnOffered = last.isOffered
+            if let diff = last.diff {
+                result.turnID = diff.turnID
+                result.text = String(decoding: diff.text.utf8.prefix(2 * 1024 * 1024), as: UTF8.self)
+                result.isRunning = diff.isRunning
+                result.truncated = diff.text.utf8.count > 2 * 1024 * 1024
+            }
+            return .success(result)
+        }
+        guard case let .success(scope) = await fileScope(taskID: taskID) else { return .failure(RemoteError(.notFound)) }
+        return await RemoteReviewReader.read(query, scope: scope)
     }
 
     // MARK: - Files (§15.22)

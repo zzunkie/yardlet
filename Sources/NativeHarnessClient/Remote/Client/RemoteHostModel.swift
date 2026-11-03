@@ -51,6 +51,7 @@ final class RemoteHostModel: Identifiable {
     /// The host lists its scheduled tasks (§15.21) and serves what its tasks made (§15.22).
     private(set) var offersSchedules = false
     private(set) var offersTaskFiles = false
+    private(set) var offersReview = false
     /// The sidebar lists the host's scheduled tasks in place of its tasks, as the Mac's sidebar does.
     var showsSchedules = false
     /// The host's scheduled tasks, and its tasks' outputs and files, read when shown.
@@ -249,6 +250,7 @@ final class RemoteHostModel: Identifiable {
             followUp = response.followUp
             offersSchedules = response.scheduledTasks == true
             offersTaskFiles = response.taskFiles == true
+            offersReview = response.reviewReading == true
             taskControls = response.taskControls == true
             let full = response.fullConversation == true
             if full != sendsFullConversation {

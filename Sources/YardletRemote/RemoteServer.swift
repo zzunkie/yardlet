@@ -125,6 +125,7 @@ public protocol RemoteBridge: AnyObject, Sendable {
     /// that answers it and `fileScope` says so in its snapshot (`taskFiles`).
     func taskOutputs(taskID: String) async -> Result<[RemoteOutput], RemoteError>
     /// The task's folders and outputs, which a `readFile` of the task is checked against (§15.22).
+    func readReview(taskID: String, query: RemoteReviewQuery) async -> Result<RemoteReviewResult, RemoteError>
     func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError>
     /// The controls the task's composer shows for its settings (§15.23); `prepare` reads the choices first, as opening
     /// the Mac's menu does. Told as `.taskSettings` when they change since this read. A bridge that answers this,
@@ -157,6 +158,9 @@ public protocol RemoteBridge: AnyObject, Sendable {
 extension RemoteBridge {
     public func announcesFinish(of taskID: String) async -> Bool { true }
 
+    public func readReview(taskID: String, query: RemoteReviewQuery) async -> Result<RemoteReviewResult, RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
     public func newTaskOptions(projectID: String?, harness: String?, settings: [String: String]) async -> Result<RemoteNewTaskOptions, RemoteError> {
         .failure(RemoteError(.unavailable))
     }
@@ -968,6 +972,18 @@ public actor RemoteServer {
             case let .failure(error):
                 respond(.failure(envelope.id, error), to: id)
             }
+        case let .readReview(taskID, query):
+            switch await bridge.readReview(taskID: taskID, query: query) {
+            case let .success(review):
+                var response = RemoteResponse(re: envelope.id)
+                response.review = review
+                if RemoteJSON.string(response).utf8.count > RemoteProtocol.maxServerMessageBytes {
+                    respond(.failure(envelope.id, RemoteError(.tooLarge)), to: id)
+                } else {
+                    respond(response, to: id)
+                }
+            case let .failure(error): respond(.failure(envelope.id, error), to: id)
+            }
         case let .readFile(taskID, path, offset):
             await readFile(envelope.id, taskID: taskID, path: path, offset: offset, on: id)
         case let .taskSettings(taskID, prepare):
@@ -1067,6 +1083,7 @@ public actor RemoteServer {
             response.presence = true
             response.taskControls = published?.taskControls == true ? true : nil
             response.fullConversation = published?.fullConversation == true ? true : nil
+            response.reviewReading = published?.reviewReading == true ? true : nil
             response.browserTabs = published?.browserTabs == true ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)
