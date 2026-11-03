@@ -15,6 +15,27 @@ import XCTest
 final class TerminalCommandHandoffTests: XCTestCase {
     private typealias Projection = TaskSurfaceNavigationProjection
 
+    /// A remote shell starts and receives output before any panel creates an AppKit terminal.
+    func testSessionOwnsPTYWithoutAView() async throws {
+        let folder = try temporaryFolder()
+        let session = NativeTerminalSession(workspaceURL: folder, launch: .isolatedZsh(in: folder))
+        defer { session.end() }
+        var output = ""
+        session.onOutput = { output += String(decoding: $0, as: UTF8.self) }
+        session.resize(columns: 100, rows: 30)
+        session.start()
+        XCTAssertTrue(session.hasShell)
+        XCTAssertTrue(session.isRunning)
+        let ready = await session.typeWhenReady("printf 'HEADLESS_%s\\n' READY; stty size\r")
+        XCTAssertTrue(ready)
+        try await waitUntil { output.contains("HEADLESS_READY") && output.contains("30 100") }
+        XCTAssertTrue(output.contains("HEADLESS_READY"))
+        XCTAssertTrue(output.contains("30 100"))
+        session.end()
+        XCTAssertFalse(session.isRunning)
+        XCTAssertFalse(session.hasShell)
+    }
+
     // MARK: - The cards
 
     /// Every harness's command card offers the action and hands over its own command; other calls
