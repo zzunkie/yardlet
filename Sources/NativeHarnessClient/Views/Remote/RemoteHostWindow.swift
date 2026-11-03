@@ -55,10 +55,12 @@ struct RemoteHostView: View {
     @State private var windowWidth: CGFloat?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(model: RemoteHostModel, directory: RemoteHostDirectory, drafts: RemoteComposerDrafts = RemoteComposerDrafts()) {
+    init(model: RemoteHostModel, directory: RemoteHostDirectory, drafts: RemoteComposerDrafts = RemoteComposerDrafts(),
+         shell: RemoteHostShell = RemoteHostShell()) {
         self.model = model
         self.directory = directory
         _drafts = State(initialValue: drafts)
+        _shell = State(initialValue: shell)
     }
 
     var body: some View {
@@ -92,6 +94,8 @@ struct RemoteHostView: View {
         .navigationSubtitle(RemoteConnectionText.line(model.connection))
         .modifier(RemotePresence(model: model))
         .focusedSceneValue(\.yardletTaskCommands, taskCommands)
+        .focusedSceneValue(\.yardletSplitCommands, splitCommands)
+        .onChange(of: windowSelection) { old, new in shell.follow(new, from: old) }
         .background(RemoteDraftAutosave(draft: shownDraft, drafts: drafts))
         .onAppear { drafts.restore(from: model.cacheFolder) }
         .onChange(of: model.selection) { _, _ in drafts.save() }
@@ -137,6 +141,7 @@ struct RemoteHostView: View {
             activity: activity(mirror)
         )
         .environment(\.taskAttentionDetails, mirror.details)
+        .environment(\.openWindowItemInNewTab, WindowItemNewTabAction(open: { openInNewTab($0, before: nil) }))
     }
 
     /// The host's lists as the local sidebar lays them out, filtered by the search on titles and project names (a
@@ -239,7 +244,75 @@ struct RemoteHostView: View {
 
     private var titleBar: RemoteTitleBarContext {
         RemoteTitleBarContext(isSidebarVisible: shell.isSidebarVisible, toggleSidebar: toggleSidebar, newTask: showNewTask,
-                              banner: AnyView(RemoteConnectionBanner(model: model, directory: directory)))
+                              banner: AnyView(RemoteConnectionBanner(model: model, directory: directory)),
+                              tabs: tabStrip, selectedTitle: shownTaskID.flatMap { model.task($0.uuidString)?.title })
+    }
+
+    // MARK: Tabs
+
+    /// The window's tabs in the title bar once there are two or more, drawn by the local window's strip.
+    private var tabStrip: TitleBarTabs? {
+        guard shell.tabs.count > 1 else { return nil }
+        let mirror = model.sidebar
+        return TitleBarTabs(
+            tabs: WindowTabProjection.tabs(shell.tabs, sessions: mirror.sessions, splits: [], details: mirror.details),
+            selection: windowSelection, onSelect: activate, onClose: closeTab, onCloseOthers: closeOtherTabs,
+            onNewTab: newTab, onOpenTask: { id, before in openInNewTab(.session(id), before: before) })
+    }
+
+    private func newTab() { openInNewTab(.home, before: nil) }
+
+    /// Opens `item` in a tab of its own, before `before` or after the shown one, and shows it.
+    private func openInNewTab(_ item: WindowItem, before: WindowItem?) {
+        if shell.tabs.isEmpty { shell.tabs = [windowSelection] }
+        shell.tabs.removeAll { $0 == item && $0 != windowSelection }
+        if !shell.tabs.contains(item) {
+            let index = before.flatMap { shell.tabs.firstIndex(of: $0) }
+                ?? shell.tabs.firstIndex(of: windowSelection).map { $0 + 1 } ?? shell.tabs.endIndex
+            shell.tabs.insert(item, at: index)
+        }
+        activate(item)
+    }
+
+    private func closeTab(_ item: WindowItem) {
+        guard shell.tabs.count > 1, let index = shell.tabs.firstIndex(of: item) else { return }
+        shell.tabs.remove(at: index)
+        shell.closedTabs.append(item)
+        if item == windowSelection { activate(shell.tabs[min(index, shell.tabs.count - 1)]) }
+        if shell.tabs.count == 1 { shell.tabs = [] }
+    }
+
+    private func closeOtherTabs(_ item: WindowItem) {
+        shell.closedTabs += shell.tabs.filter { $0 != item }
+        shell.tabs = []
+        activate(item)
+    }
+
+    private func selectTab(by offset: Int) {
+        guard let index = shell.tabs.firstIndex(of: windowSelection), !shell.tabs.isEmpty else { return }
+        activate(shell.tabs[(index + offset + shell.tabs.count) % shell.tabs.count])
+    }
+
+    /// The File and Window menus' tab commands, and ⌃1–⌃9 for the pinned rows, as the local window offers them.
+    private var splitCommands: YardletSplitCommandSet {
+        var commands = YardletSplitCommandSet()
+        commands.selection = windowSelection
+        commands.pinnedRows = sidebarLayout(model.sidebar).rows.filter(\.isPinned).prefix(9).compactMap { row in
+            guard case let .session(session) = row.content else { return nil }
+            return PinnedRowMenuItem(id: row.id, title: session.title)
+        }
+        commands.activate = activate
+        commands.tabs.canCloseTab = shell.tabs.count > 1
+        commands.tabs.canReopenClosedTab = !shell.closedTabs.isEmpty
+        commands.tabs.newTab = newTab
+        commands.tabs.closeTab = { closeTab(windowSelection) }
+        commands.tabs.selectNextTab = { selectTab(by: 1) }
+        commands.tabs.selectPreviousTab = { selectTab(by: -1) }
+        commands.tabs.reopenClosedTab = {
+            guard let item = shell.closedTabs.popLast() else { return }
+            openInNewTab(item, before: nil)
+        }
+        return commands
     }
 
     // MARK: Actions
@@ -343,6 +416,17 @@ final class RemoteHostShell {
     var showsRail = true
     /// The sidebar's project actions are the host's (`TaskSidebar.managesProjects`); this store only stands in for them.
     let projects = ProjectStore()
+    /// The window's tabs once it has two or more, as the local window's: what each shows, the shown one following what
+    /// the window shows. Empty while there is one.
+    var tabs: [WindowItem] = []
+    /// Closed tabs, the latest last, for Reopen Closed Tab.
+    var closedTabs: [WindowItem] = []
+
+    /// The shown tab now shows `shown`, unless another tab already does.
+    func follow(_ shown: WindowItem, from old: WindowItem) {
+        guard !tabs.isEmpty, !tabs.contains(shown), let index = tabs.firstIndex(of: old) else { return }
+        tabs[index] = shown
+    }
 }
 
 /// What a detail's title bar row needs from the window: the sidebar part it starts with while the sidebar is hidden,
@@ -352,6 +436,10 @@ struct RemoteTitleBarContext {
     var toggleSidebar: () -> Void
     var newTask: () -> Void
     var banner: AnyView
+    /// The window's tabs, once there are two or more.
+    var tabs: TitleBarTabs?
+    /// The shown task's title, which its tab holds; nil for the new task.
+    var selectedTitle: String?
 }
 
 /// The row in the window's title bar over the detail, as the local window's: with the sidebar hidden, the bar's sidebar
@@ -368,7 +456,20 @@ struct RemoteTitleBar<Content: View>: View {
                 Rectangle().fill(ParityTheme.separator).frame(width: 1)
             }
             HStack(spacing: 8) {
-                content
+                if let tabs = context.tabs {
+                    WindowTabStrip(tabs: tabs.tabs, selection: tabs.selection, onSelect: tabs.onSelect,
+                                   onClose: tabs.onClose, onCloseOthers: tabs.onCloseOthers, onNewTab: tabs.onNewTab,
+                                   onOpenTask: tabs.onOpenTask, selectedTitle: {
+                                       Text(context.selectedTitle ?? L10n.string("New task"))
+                                           .font(.system(size: 12.5, weight: .medium))
+                                           .lineLimit(1)
+                                           .allowsHitTesting(false)
+                                   })
+                        .layoutPriority(1)
+                    WindowDragRegion().frame(minWidth: 24, maxWidth: .infinity)
+                } else {
+                    content
+                }
             }
             .padding(.horizontal, 16)
         }
