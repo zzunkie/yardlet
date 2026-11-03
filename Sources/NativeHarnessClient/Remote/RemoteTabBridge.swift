@@ -270,6 +270,16 @@ final class RemoteTabBridge {
         // address (`BrowserTab.navigations`), nor one any of whose frames moved (`frameMark`).
         let page = tab.navigations
         if let refusal = await outsideFiles(tab.currentURL, taskID: taskID) { return .failure(refusal) }
+        // A frame that comes and goes between the two reads of the tree is heard as it navigates (the Page domain's
+        // events, as the agent's tools follow a page's frames): a file outside the task's among them keeps the picture.
+        _ = try? await tab.devTools.send("Page.enable", timeout: Self.captureTimeout)
+        var navigatedFiles: Set<String> = []
+        let listening = tab.devTools.observeEvents { method, params in
+            guard method == "Page.frameNavigated", let address = params["frame"]?["url"]?.stringValue,
+                  address.lowercased().hasPrefix("file:") else { return }
+            navigatedFiles.insert(address)
+        }
+        defer { tab.devTools.stopObservingEvents(listening) }
         let frames: String
         switch await checkFrames(tab, taskID: taskID) {
         case let .success(mark): frames = mark
@@ -302,6 +312,9 @@ final class RemoteTabBridge {
             // is not sent.
             guard tab.navigations == page, try await frameMark(tab).mark == frames else {
                 return .failure(RemoteError(.unavailable, "The page moved"))
+            }
+            for file in navigatedFiles {
+                if let refusal = await outsideFiles(file, taskID: taskID) { return .failure(refusal) }
             }
             return .success(RemoteTabFrame(image: data, mediaType: "image/jpeg", width: Int((width * fit).rounded()),
                                            height: Int((height * fit).rounded()), viewportWidth: width, viewportHeight: height))
