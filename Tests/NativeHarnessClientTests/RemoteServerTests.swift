@@ -8,6 +8,50 @@ import XCTest
 /// attention events, conversation pages and changes, and commands reaching the bridge with their audit
 /// lines — never the message text.
 final class RemoteServerTests: XCTestCase {
+    func testDevicePermissionsDefaultToDeniedPersistAndRevokeLive() async throws {
+        let harness = try await ServerHarness()
+        let phone = try await harness.authenticatedPhone()
+        let connectionID = try XCTUnwrap(phone.id)
+        let allDevices = await harness.devices.all()
+        let device = try XCTUnwrap(allDevices.first)
+        for permission in RemoteDevicePermission.allCases {
+            let refused = await harness.server.permissionError(permission, on: connectionID)
+            XCTAssertEqual(refused?.code, .notAllowed)
+        }
+        try await harness.server.setPermission(.terminal, allowed: true, for: device.id)
+        let allowed = await harness.server.permissionError(.terminal, on: connectionID)
+        XCTAssertNil(allowed)
+        let files = await harness.server.permissionError(.fileWrites, on: connectionID)
+        XCTAssertEqual(files?.code, .notAllowed)
+        try await harness.server.setPermission(.terminal, allowed: false, for: device.id)
+        let revoked = await harness.server.permissionError(.terminal, on: connectionID)
+        XCTAssertEqual(revoked?.code, .notAllowed)
+        XCTAssertEqual(harness.audit.entries().filter { $0.type == "permission.terminal" }.map(\.result),
+                       ["allowed", "notAllowed"])
+        // Even a paired device cannot edit the host's device permissions over the wire.
+        await harness.send(#"{"id":"permissions","type":"setPermission","terminal":true}"#, on: phone)
+        let response = try await phone.response("permissions")
+        XCTAssertNotNil(response.error)
+
+        let folder = FileManager.default.temporaryDirectory.appending(path: "remote-permissions-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appending(path: "devices.json")
+        let store = RemoteDeviceStore(fileURL: file, devices: [device])
+        _ = try await store.setPermission(.settings, allowed: true, for: device.id)
+        let saved = await RemoteDeviceStore(fileURL: file).device(device.id)
+        XCTAssertEqual(saved?.permissions, RemoteDevicePermissions(settings: true))
+        let partial = try JSONDecoder().decode(RemoteDevicePermissions.self, from: Data(#"{"terminal":true}"#.utf8))
+        XCTAssertEqual(partial, RemoteDevicePermissions(terminal: true))
+        // A failed save never grants a permission in memory.
+        let badStore = RemoteDeviceStore(fileURL: file.appending(path: "impossible.json"), devices: [device])
+        do {
+            _ = try await badStore.setPermission(.terminal, allowed: true, for: device.id)
+            XCTFail("Expected a persistence failure")
+        } catch {}
+        let unchanged = await badStore.device(device.id)
+        XCTAssertNil(unchanged?.permissions)
+    }
+
     func testUnprovenAndQuietConnectionsAreClosed() async throws {
         let clock = RemoteTestClock()
         let harness = try await ServerHarness(clock: clock)
@@ -45,6 +89,7 @@ final class RemoteServerTests: XCTestCase {
         let devices = await RemoteDeviceStore(fileURL: file).all()
         XCTAssertEqual(devices.map(\.id), ["NEW-PHONE"])
         XCTAssertEqual(devices.first?.platform, "android")
+        XCTAssertNil(devices.first?.permissions)
         // Written back without it, so it does not come back.
         let reread = await RemoteDeviceStore(fileURL: file).all()
         XCTAssertEqual(reread, devices)

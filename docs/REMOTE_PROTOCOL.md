@@ -578,6 +578,8 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
 - 2026-11-04: §15.26 adds read-only Review, advertised by optional `reviewReading`; no mutation request is added.
 - 2026-11-04: workspace file listing (§15.27), with the existing bounded `readFile` requests for content.
 
+- 2026-11-04: host-managed per-device permissions, all off by default (§15.28).
+
 - 2026-10-16, after the first Android client build:
   - §5.3: `after` always names an item the phone holds once it has applied what came before in order;
     a phone that cannot find it subscribes again. A `loadOlder` page is followed by the changes its
@@ -1780,6 +1782,28 @@ client's filesystem. Image and PDF previews read those copies; text preserves it
 Read-only access is a provider permission, independent of the document's size and encoding; small source files
 keep the same syntax colors and layout. The remote panel has no editing or saving operation, shows Save disabled, and offers no client Finder
 or local-app actions for a host path. Copies are removed when the host window closes, as in §18.
+
+### 15.28 Per-device permissions
+
+The host's saved device entry may carry `permissions: {"terminal": false, "fileWrites": false,
+"settings": false}`. An absent object or absent member means false. Existing pairings retain their keys,
+identity and history; pairing a new device does not grant any of these permissions. Old clients need no changes.
+
+Only the person at this Mac can change them, in Settings › Remote › Paired devices. There is no remote request
+for editing device permissions or managing another device. Each operation protected by one of these permissions
+must check the live device store and return `notAllowed` unless allowed. A handshake's device snapshot is not
+an authorization cache. Removing the device also denies access. Granting one permission does not grant the others.
+
+The host persists a change before publishing it; a failed save keeps the previous permission and shows an error.
+Each change writes an audit line with device ID, `type: "permission.terminal"` (or `.fileWrites` or `.settings`),
+and `result: "allowed"` or `"notAllowed"`; a failed save records `"failed"`. No device name, credential,
+command, file contents or settings values are recorded. Consumers of long-lived resources must end the affected
+access when its permission is removed, in addition to checking every new operation.
+
+These permissions reserve separate authorization for terminal sessions, direct file writes and host settings.
+They do not add file-writing or settings-changing requests by themselves, and do not change the existing paired
+remote's task messages or task-specific controls. Credentials, vault entries, sign-in and remote device management
+remain on the host.
 
 ## 16. Push notifications
 

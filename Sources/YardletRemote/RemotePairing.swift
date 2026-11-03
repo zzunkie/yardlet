@@ -162,6 +162,49 @@ public struct RemotePushRegistration: Codable, Equatable, Sendable {
     }
 }
 
+/// Additional host access is granted only in this Mac's paired-device settings.
+public enum RemoteDevicePermission: String, Codable, CaseIterable, Sendable {
+    case terminal, fileWrites, settings
+}
+
+public struct RemoteDevicePermissions: Codable, Equatable, Sendable {
+    public var terminal: Bool
+    public var fileWrites: Bool
+    public var settings: Bool
+
+    public init(terminal: Bool = false, fileWrites: Bool = false, settings: Bool = false) {
+        self.terminal = terminal
+        self.fileWrites = fileWrites
+        self.settings = settings
+    }
+
+    private enum CodingKeys: String, CodingKey { case terminal, fileWrites, settings }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        terminal = try values.decodeIfPresent(Bool.self, forKey: .terminal) ?? false
+        fileWrites = try values.decodeIfPresent(Bool.self, forKey: .fileWrites) ?? false
+        settings = try values.decodeIfPresent(Bool.self, forKey: .settings) ?? false
+    }
+
+    public subscript(_ permission: RemoteDevicePermission) -> Bool {
+        get {
+            switch permission {
+            case .terminal: terminal
+            case .fileWrites: fileWrites
+            case .settings: settings
+            }
+        }
+        set {
+            switch permission {
+            case .terminal: terminal = newValue
+            case .fileWrites: fileWrites = newValue
+            case .settings: settings = newValue
+            }
+        }
+    }
+}
+
 public struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
     public var id: String
     public var name: String
@@ -169,17 +212,19 @@ public struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
     public var publicKey: String
     public var platform: String?
     public var push: RemotePushRegistration?
+    public var permissions: RemoteDevicePermissions?
     public var createdAt: Date
     public var lastSeenAt: Date?
 
     public init(id: String = UUID().uuidString, name: String, publicKey: String, platform: String? = nil, createdAt: Date,
-                lastSeenAt: Date? = nil) {
+                lastSeenAt: Date? = nil, permissions: RemoteDevicePermissions? = nil) {
         self.id = id
         self.name = name
         self.publicKey = publicKey
         self.platform = platform
         self.createdAt = createdAt
         self.lastSeenAt = lastSeenAt
+        self.permissions = permissions
     }
 }
 
@@ -249,6 +294,19 @@ public actor RemoteDeviceStore {
         devices.first { $0.id == id }
     }
 
+    /// Persists before publishing, so a failed write cannot grant access for this process alone.
+    @discardableResult
+    public func setPermission(_ permission: RemoteDevicePermission, allowed: Bool, for id: String) throws -> RemoteDevice? {
+        guard let index = devices.firstIndex(where: { $0.id == id }) else { return nil }
+        var updated = devices
+        var permissions = updated[index].permissions ?? RemoteDevicePermissions()
+        permissions[permission] = allowed
+        updated[index].permissions = permissions
+        try Self.writeChecked(updated, to: fileURL)
+        devices = updated
+        return devices[index]
+    }
+
     /// Stores where the device's pushes go and returns its push key, made once and kept.
     public func setPush(_ id: String, provider: String, token: String) -> Data? {
         guard let index = devices.firstIndex(where: { $0.id == id }) else { return nil }
@@ -296,14 +354,19 @@ public actor RemoteDeviceStore {
     }
 
     private static func write(_ devices: [RemoteDevice], to fileURL: URL?) {
+        try? writeChecked(devices, to: fileURL)
+    }
+
+    private static func writeChecked(_ devices: [RemoteDevice], to fileURL: URL?) throws {
         guard let fileURL else { return }
         let folder = fileURL.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
-                                                 attributes: [.posixPermissions: 0o700])
-        guard let data = try? JSONEncoder.remoteDates.encode(File(devices: devices)) else { return }
-        try? data.write(to: fileURL, options: [.atomic])
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let data = try JSONEncoder.remoteDates.encode(File(devices: devices))
+        try data.write(to: fileURL, options: [.atomic])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
     }
+
 }
 
 extension JSONEncoder {

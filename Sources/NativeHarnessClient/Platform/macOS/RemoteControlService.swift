@@ -359,6 +359,21 @@ final class RemoteControlService {
     }
 
     /// Removes a paired device; it is disconnected at once and its key or token stops working.
+    private(set) var permissionError: String?
+    private(set) var updatingDevicePermissions: Set<String> = []
+
+    func setPermission(_ permission: RemoteDevicePermission, allowed: Bool, for device: RemoteDevice) async {
+        guard updatingDevicePermissions.insert(device.id).inserted else { return }
+        defer { updatingDevicePermissions.remove(device.id) }
+        do {
+            try await server.setPermission(permission, allowed: allowed, for: device.id)
+            permissionError = nil
+        } catch {
+            permissionError = L10n.string("Could not save device permissions. Try again.")
+        }
+        await reloadDevices()
+    }
+
     func remove(_ device: RemoteDevice) async {
         await server.revoke(device.id)
         await reloadDevices()

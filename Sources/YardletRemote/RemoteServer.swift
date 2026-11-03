@@ -338,6 +338,9 @@ public actor RemoteServer {
     /// What each connection watches of a task's browser tabs (§15.25), in `RemoteServer+Tabs.swift`.
     var tabs = RemoteServerTabs()
     private var pairing: RemotePairingTicket?
+    private var permissionChanges: Set<String> = []
+    private var permissionVersions: [String: UInt64] = [:]
+    private var permissionsChanged: (@Sendable (String, RemoteDevicePermissions) -> Void)?
     private var pairedDeviceID: String?
     private var published: RemoteSnapshot?
     private var tasksDirty = true
@@ -692,6 +695,48 @@ public actor RemoteServer {
     }
 
     // MARK: - Control (Settings)
+
+    /// Host-only control. There is deliberately no request for changing a device's permissions.
+    public func setPermission(_ permission: RemoteDevicePermission, allowed: Bool, for deviceID: String) async throws {
+        guard permissionChanges.insert(deviceID).inserted else { throw RemoteError(.notAllowed) }
+        permissionVersions[deviceID, default: 0] &+= 1
+        defer { permissionChanges.remove(deviceID) }
+        guard !revokedDeviceIDs.contains(deviceID), let before = await devices.device(deviceID) else {
+            throw RemoteError(.notAllowed)
+        }
+        guard (before.permissions?[permission] ?? false) != allowed else { return }
+        do {
+            guard let device = try await devices.setPermission(permission, allowed: allowed, for: deviceID) else {
+                throw RemoteError(.notAllowed)
+            }
+            permissionsChanged?(deviceID, device.permissions ?? RemoteDevicePermissions())
+            audit?.record(device: deviceID, type: "permission." + permission.rawValue, task: nil,
+                          result: allowed ? "allowed" : "notAllowed", at: now())
+        } catch {
+            audit?.record(device: deviceID, type: "permission." + permission.rawValue, task: nil,
+                          result: "failed", at: now())
+            throw error
+        }
+    }
+
+    public func setPermissionsChangedHandler(_ handler: (@Sendable (String, RemoteDevicePermissions) -> Void)?) {
+        permissionsChanged = handler
+    }
+
+    /// Checks the live store for each operation, never the device snapshot from the handshake.
+    func permissionError(_ permission: RemoteDevicePermission, on id: UUID) async -> RemoteError? {
+        guard let connection = connections[id], connection.isProven, let deviceID = connection.deviceID,
+              !revokedDeviceIDs.contains(deviceID), !permissionChanges.contains(deviceID) else {
+            return RemoteError(.notAllowed)
+        }
+        let version = permissionVersions[deviceID, default: 0]
+        guard let device = await devices.device(deviceID), device.permissions?[permission] == true,
+              connections[id]?.deviceID == deviceID, !revokedDeviceIDs.contains(deviceID),
+              !permissionChanges.contains(deviceID), permissionVersions[deviceID, default: 0] == version else {
+            return RemoteError(.notAllowed)
+        }
+        return nil
+    }
 
     /// Opens a pairing, replacing any open one.
     @discardableResult

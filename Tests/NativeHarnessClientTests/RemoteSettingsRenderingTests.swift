@@ -96,6 +96,22 @@ final class RemoteSettingsRenderingTests: XCTestCase {
         try await phone.waitUntilClosed(.unavailable)
     }
 
+    func testDevicePermissionsDrawInBothAppearances() async throws {
+        let (service, _) = try await makeService()
+        await service.reloadDevices()
+        let device = try XCTUnwrap(service.devices.first)
+        XCTAssertNil(device.permissions)
+        let directory = try WindowlessRender.directory("remote-qa")
+        let size = NSSize(width: 820, height: 820)
+        try render("remote-permissions-off", service: service, in: directory, size: size)
+        await service.setPermission(.terminal, allowed: true, for: device)
+        XCTAssertNil(service.permissionError)
+        XCTAssertEqual(service.devices.first?.permissions?.terminal, true)
+        try render("remote-permissions-terminal", service: service, in: directory, size: size)
+        let labels = elements(service, size: size).map(\.label)
+        XCTAssertTrue(labels.contains(L10n.format("%@ for %@", L10n.string("Terminal"), device.name)))
+    }
+
     // MARK: - Helpers
 
     private func makeService() async throws -> (RemoteControlService, RemoteIdentity) {

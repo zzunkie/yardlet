@@ -295,6 +295,16 @@ struct RemoteSettingsView: View {
                         .accessibilityLabel(L10n.format("Remove %@", device.name))
                 }
                 .padding(.vertical, 12)
+                VStack(alignment: .leading, spacing: 8) {
+                    permissionToggle(.terminal, title: "Terminal", device: device)
+                    permissionToggle(.fileWrites, title: "Write files", device: device)
+                    permissionToggle(.settings, title: "Change settings", device: device)
+                }
+                .padding(.leading, 42)
+                .padding(.bottom, 12)
+            }
+            if let error = service.permissionError {
+                Text(error).font(.caption).foregroundStyle(.red).padding(.bottom, 12)
             }
         }
         .padding(.horizontal, 12)
@@ -312,6 +322,18 @@ struct RemoteSettingsView: View {
         } message: {
             Text(L10n.string("The device disconnects and has to pair again."))
         }
+    }
+
+    private func permissionToggle(_ permission: RemoteDevicePermission, title: String, device: RemoteDevice) -> some View {
+        Toggle(L10n.string(title), isOn: Binding(
+            get: { device.permissions?[permission] ?? false },
+            set: { allowed in Task { await service.setPermission(permission, allowed: allowed, for: device) } }
+        ))
+        .font(.caption)
+        .toggleStyle(.paritySwitch)
+        .controlSize(.small)
+        .accessibilityLabel(L10n.format("%@ for %@", L10n.string(title), device.name))
+        .disabled(service.updatingDevicePermissions.contains(device.id))
     }
 
     /// A computer reads as one; anything else as the phone it most likely is.
