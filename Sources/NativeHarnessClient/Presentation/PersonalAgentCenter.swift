@@ -186,6 +186,10 @@ final class PersonalAgentCenter {
     }
     /// The dot a notification asked to show, chosen once the agents are read.
     @ObservationIgnored private var preferredID: PersonalAgentIdentity?
+    /// What every window of the app last read of each source, shown while this window reads its own.
+    @ObservationIgnored let readings: PersonalAgentReadings?
+    /// The account the shown dots were kept under, until this connection's own read replaces them.
+    @ObservationIgnored private var keptAccount: (accountID: String, userID: String)?
 
     private struct AvatarKey: Hashable {
         let identity: PersonalAgentIdentity
@@ -220,10 +224,12 @@ final class PersonalAgentCenter {
 
     init(drafts: PersonalAgentDrafts = PersonalAgentDrafts(),
          preparer: any PersonalAgentFilePreparing = PersonalAgentUnchangedFiles(),
-         responses: any DotsResponseJournal = DotsMemoryResponseJournal()) {
+         responses: any DotsResponseJournal = DotsMemoryResponseJournal(),
+         readings: PersonalAgentReadings? = nil) {
         self.drafts = drafts
         self.preparer = preparer
         self.responses = responses
+        self.readings = readings
     }
 
     /// The window shows the dots, or no longer does (covered, minimized, hidden), as `reporter` sees
@@ -254,7 +260,8 @@ final class PersonalAgentCenter {
     private func observeSelected() {
         if let key = liveKey, live != nil, key.identity == selectedID, key.generation == generation, isVisible { return }
         stopObserving()
-        guard isVisible, let agent = selected, let client else { return }
+        // Dots kept from an earlier reading are observed once this connection has read them.
+        guard isVisible, !isLoading, let agent = selected, let client else { return }
         let current = generation
         liveKey = (agent.id, current)
         live = Task { [weak self] in
@@ -296,8 +303,14 @@ final class PersonalAgentCenter {
         if !sameSource { clear() }
         self.sourceKey = sourceKey
         self.draftSourceKey = draftSourceKey ?? sourceKey
+        let source = self.draftSourceKey
         await old?.stop()
         guard current == generation, !Task.isCancelled else { return }
+        // What this or another window last read of the source shows until the provider answers.
+        if agents.isEmpty, !hasLoaded, let kept = await readings?.reading(for: source) {
+            guard current == generation, !Task.isCancelled else { return }
+            showKept(kept)
+        }
         let reader = makeClient()
         client = reader
         isLoading = true
@@ -309,7 +322,13 @@ final class PersonalAgentCenter {
                oldIdentity.accountID != next.accountID || oldIdentity.userID != next.userID {
                 throw PersonalAgentFailure.accountChanged
             }
-            agents = values
+            // Dots kept under another account, or none now, are not this login's.
+            if let kept = keptAccount, values.first.map({ $0.id.accountID != kept.accountID || $0.id.userID != kept.userID }) ?? true {
+                dropKept()
+            }
+            keptAccount = nil
+            readings?.noteAgents(values, source: source)
+            if agents != values { agents = values }
             hasLoaded = true
             isLoading = false
             if let preferredID, values.contains(where: { $0.id == preferredID }) {
@@ -333,6 +352,51 @@ final class PersonalAgentCenter {
         }
     }
 
+    /// Shows what was kept of the source: the dots, the chosen dot's newest messages and the pictures.
+    /// Nothing of it counts as read now; this connection's reads replace it.
+    private func showKept(_ kept: PersonalAgentReading) {
+        keptAccount = (kept.accountID, kept.userID)
+        agents = kept.agents
+        hasLoaded = true
+        if let preferredID, kept.agents.contains(where: { $0.id == preferredID }) {
+            selectedID = preferredID
+        } else {
+            selectedID = kept.agents.first(where: \.isPrimary)?.id ?? kept.agents.first?.id
+        }
+        avatarData = Dictionary(kept.agents.compactMap { agent in
+            agent.avatar.flatMap { avatar in
+                kept.avatars[PersonalAgentReading.pictureKey(agentID: agent.id.agentID, version: avatar.version)]
+                    .map { (AvatarKey(identity: agent.id, version: avatar.version), $0) }
+            }
+        }, uniquingKeysWith: { first, _ in first })
+        spriteSheets = kept.sheets
+        if let selectedID { prepareConversation(selectedID) }
+        reportShown()
+    }
+
+    /// Forgets dots kept under an account this connection's read did not find.
+    private func dropKept() {
+        selectedID = nil
+        reportShown()
+        conversations = [:]
+        detailsByAgent = [:]
+        avatarData = [:]
+        spriteSheets = [:]
+    }
+
+    /// The dot's conversation, made with its draft and, when one was kept, its newest messages as
+    /// last shown, not yet read on this connection.
+    private func prepareConversation(_ id: PersonalAgentIdentity) {
+        guard conversations[id] == nil else { return }
+        let state = PersonalAgentConversation(draft: drafts.draft(source: draftSourceKey, identity: id),
+            optionReply: drafts.optionReply(source: draftSourceKey, identity: id))
+        conversations[id] = state
+        guard let room = readings?.room(of: id, source: draftSourceKey) else { return }
+        state.messages = room.messages
+        state.roomLifecycle = room.lifecycle
+        reconcileReplies(state)
+    }
+
     func select(_ id: PersonalAgentIdentity) async {
         guard agents.contains(where: { $0.id == id }), selectedID != id else { return }
         closeActivity()
@@ -341,16 +405,15 @@ final class PersonalAgentCenter {
         selectedID = id
         reportShown()
         stopObserving()
+        // While the dots are read, a kept dot shows what was kept; the read shows it once it ends.
+        if isLoading { return prepareConversation(id) }
         await showSelected()
     }
 
     private func showSelected() async {
         guard let agent = selected, let client else { return }
         let current = generation
-        if conversations[agent.id] == nil {
-            conversations[agent.id] = PersonalAgentConversation(draft: drafts.draft(source: draftSourceKey, identity: agent.id),
-                optionReply: drafts.optionReply(source: draftSourceKey, identity: agent.id))
-        }
+        prepareConversation(agent.id)
         // Each connection reads the details again: an earlier connection's reads were dropped with it.
         refreshDetails()
         await refreshConversation()
@@ -419,12 +482,14 @@ final class PersonalAgentCenter {
                     if preceding.messages.isEmpty { break }
                 }
             }
-            state.messages = older ? DotsProjection.merge(state.messages, with: incoming, older: true) : incoming
+            let shown = older ? DotsProjection.merge(state.messages, with: incoming, older: true) : incoming
+            // The same messages read again draw nothing again.
+            if state.messages != shown { state.messages = shown }
             state.replies.noteRoom(incoming, epoch: epoch)
             // The Outputs look only at the messages this read returned.
             let outputs = detailsByAgent[agent.id]?.outputs
             outputs?.noteRoom(incoming)
-            if !older, let lifecycle = page.roomLifecycle { state.roomLifecycle = lifecycle }
+            if !older, let lifecycle = page.roomLifecycle, state.roomLifecycle != lifecycle { state.roomLifecycle = lifecycle }
             let confirmed = Set(state.messages.map(\.id))
             // A successful latest read is authoritative even if an accepted
             // message was deleted before that read. Do not retain a ghost copy.
@@ -433,10 +498,14 @@ final class PersonalAgentCenter {
                state.messages.contains(where: { $0.author == .person && $0.requestID == request.requestID }) {
                 state.draft.accepted(request.requestID)
             }
-            state.before = older && page.messages.allSatisfy({ previousIDs.contains($0.id) }) ? nil : cursor
-            state.loaded = true
+            let earlier = older && page.messages.allSatisfy({ previousIDs.contains($0.id) }) ? nil : cursor
+            if state.before != earlier { state.before = earlier }
+            if !state.loaded { state.loaded = true }
             outputs?.noteConversation(before: state.before, loaded: true)
-            if !older { state.hasCompleteTail = true }
+            if !older {
+                state.hasCompleteTail = true
+                readings?.noteRoom(state.messages, lifecycle: state.roomLifecycle, of: agent, source: draftSourceKey)
+            }
             succeeded = true
             reconcileReplies(state)
             syncInputRequests(state, agent: agent)
@@ -761,6 +830,7 @@ final class PersonalAgentCenter {
                     let data = try await reader.avatar(for: agent)
                     guard self.generation == current, !Task.isCancelled else { return }
                     self.avatarData[key] = data
+                    self.readings?.noteAvatar(data, of: agent, source: self.draftSourceKey)
                 } catch {
                     // A picture that cannot be read leaves the dot's initial; the messages carry on.
                     guard self.generation == current else { return }
@@ -792,7 +862,11 @@ final class PersonalAgentCenter {
             }
             guard generation == current, !Task.isCancelled else { return }
             // A pet gone, or one without a sheet to read, leaves the still picture.
-            guard let pet else { spriteSheets[id] = nil; continue }
+            guard let pet else {
+                if spriteSheets[id] != nil { spriteSheets[id] = nil }
+                readings?.noteSheet(nil, pet: id, of: agent, source: draftSourceKey)
+                continue
+            }
             let key = id + "|" + pet.version
             guard spriteSheets[id]?.version != pet.version else { continue }
             // A new version that cannot be read does not leave the old one playing.
@@ -801,7 +875,9 @@ final class PersonalAgentCenter {
             do {
                 let data = try await reader.spriteSheet(pet, for: agent)
                 guard generation == current, !Task.isCancelled else { return }
-                spriteSheets[id] = PersonalAgentSpriteSheet(data: data, version: pet.version)
+                let sheet = PersonalAgentSpriteSheet(data: data, version: pet.version)
+                spriteSheets[id] = sheet
+                readings?.noteSheet(sheet, pet: id, of: agent, source: draftSourceKey)
             } catch {
                 guard generation == current else { return }
                 if Self.endsTheLogin(error) { return accept(error) }
@@ -1037,6 +1113,7 @@ final class PersonalAgentCenter {
         spriteSheets = [:]
         unavailableSprites = []
         thumbnailStore = nil
+        keptAccount = nil
         hasLoaded = false
         failure = nil
     }
@@ -1044,6 +1121,9 @@ final class PersonalAgentCenter {
     func accept(_ error: Error) {
         let value = error as? PersonalAgentFailure ?? .network
         if value == .accountChanged || value == .signInRequired {
+            // What was kept of this source belongs to a login that ended or changed.
+            if !draftSourceKey.isEmpty { readings?.forget(source: draftSourceKey) }
+            keptAccount = nil
             stopObserving()
             closeActivity()
             cancelOutputs()

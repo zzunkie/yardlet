@@ -148,7 +148,8 @@ final class DotsServiceTests: XCTestCase {
                        "A deleted parent's preview keeps nothing of what it said")
         XCTAssertEqual(latest.messages[1].replyPreview, .init(messageID: "root", text: "Question", hasAttachments: true, isDeleted: false))
         XCTAssertEqual(latest.before, "c1")
-        let query = try XCTUnwrap(URLComponents(url: try XCTUnwrap(threaded.requests.last?.url), resolvingAgainstBaseURL: false)?.queryItems)
+        let pageRequest = threaded.requests.last { $0.url?.path.hasSuffix("/messages") == true }
+        let query = try XCTUnwrap(URLComponents(url: try XCTUnwrap(pageRequest?.url), resolvingAgainstBaseURL: false)?.queryItems)
         XCTAssertEqual(Set(query), [.init(name: "limit", value: "20"), .init(name: "reply_root_message_id", value: "root")])
         let earlier = try await reader.replies(to: "root", for: agent, before: "c1")
         XCTAssertEqual(earlier.messages.map(\.id), ["r1"])
@@ -160,6 +161,34 @@ final class DotsServiceTests: XCTestCase {
         let room = try await reader.messages(for: agent, before: "c1")
         XCTAssertEqual(room.before, "r1")
         await reader.stop()
+    }
+
+    /// The dots and the primary selection are read side by side, as are a room and its newest page;
+    /// each still answers only for the login the reading began under.
+    func testOpeningReadsRunSideBySideAndStillCheckTheLogin() async throws {
+        let fixture = DotsHTTPRecorder(pages: ["": #"{"items":[]}"#])
+        let service = makeService(fixture, broker: DotsTestBroker())
+        fixture.answerTogether(["/backend-api/tbo", "/backend-api/tbo/primary"])
+        let dots = try await service.agents()
+        XCTAssertEqual(dots.map(\.id.agentID), ["dot"])
+        XCTAssertEqual(dots.map(\.isPrimary), [true])
+        XCTAssertTrue(fixture.answeredSideBySide, "The primary selection is read beside the list")
+        fixture.answerTogether(["/backend-api/messaging/rooms/room", "/backend-api/messaging/rooms/room/messages"])
+        let page = try await service.messages(for: agent, before: nil)
+        XCTAssertEqual(page.messages, [])
+        XCTAssertTrue(fixture.answeredSideBySide, "The room is read beside its newest page")
+        await service.stop()
+
+        // A login that changes while they are read fails either reading.
+        for read in ["agents", "messages"] {
+            let changing = DotsHTTPRecorder(pages: ["": #"{"items":[]}"#])
+            let changed = makeService(changing, broker: DotsTestBroker(changesAccountAt: 3))
+            do {
+                if read == "agents" { _ = try await changed.agents() } else { _ = try await changed.messages(for: agent, before: nil) }
+                XCTFail("Expected the changed login to fail \(read)")
+            } catch { XCTAssertEqual(error as? PersonalAgentFailure, .accountChanged, read) }
+            await changed.stop()
+        }
     }
 
     func testLoginLossAfterAcceptanceDoesNotPretendTheMessageWasRejected() async throws {
@@ -833,6 +862,32 @@ private final class DotsHTTPRecorder: @unchecked Sendable {
     var requests: [URLRequest] { lock.withLock { recorded } }
     func body(_ request: URLRequest) -> Data { request.httpBody ?? Data() }
 
+    /// Paths that are answered only once all of them wait at the same time, or else each after a while.
+    private var together: Set<String> = []
+    private var waiting: [String: () -> Void] = [:]
+    private var sideBySide = false
+    func answerTogether(_ paths: Set<String>) { lock.withLock { together = paths; sideBySide = false } }
+    var answeredSideBySide: Bool { lock.withLock { sideBySide } }
+    func holdsTogether(_ path: String) -> Bool { lock.withLock { together.contains(path) } }
+
+    /// A held path waits; when every held path waits, all are answered, else each is answered in time.
+    func arrive(_ path: String, answer: @escaping () -> Void) {
+        let ready: [() -> Void] = lock.withLock {
+            waiting[path] = answer
+            guard together.isSubset(of: Set(waiting.keys)) else { return [] }
+            sideBySide = true
+            together = []
+            defer { waiting = [:] }
+            return Array(waiting.values)
+        }
+        ready.forEach { $0() }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self else { return }
+            let late = self.lock.withLock { self.waiting.removeValue(forKey: path) }
+            late?()
+        }
+    }
+
     func respond(_ input: URLRequest) -> (Int, Data) {
         lock.withLock {
             var request = input
@@ -950,6 +1005,20 @@ private final class DotsHTTPProtocol: URLProtocol, @unchecked Sendable {
             if status != 200 { client?.urlProtocolDidFinishLoading(self) }
             return
         }
+        guard let fixture = Self.current else { client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse)); return }
+        if let path = request.url?.path, fixture.holdsTogether(path) {
+            let thread = Thread.current
+            loadingThread = thread
+            fixture.arrive(path) { [weak self] in
+                guard let self else { return }
+                self.perform(#selector(self.answer), on: thread, with: nil, waitUntilDone: false)
+            }
+            return
+        }
+        answer()
+    }
+
+    @objc private func answer() {
         guard let fixture = Self.current else { client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse)); return }
         let (status, data) = fixture.respond(request)
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil,

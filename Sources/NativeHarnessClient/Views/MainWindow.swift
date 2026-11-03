@@ -44,8 +44,7 @@ struct MainWindow: View {
     /// This window's place in `AppModel.taskWindowIDs`: windows share one model, each says for itself
     /// whether it shows Tasks.
     @State private var windowID = UUID()
-    @State private var personalAgents = PersonalAgentCenter(
-        drafts: .live, preparer: PersonalAgentImagePreparation.live, responses: DotsResponseJournalFiles.live)
+    @State private var personalAgents: PersonalAgentCenter
     @State private var personalAccountID = AccountChoice.nativeID(for: .codex)
     /// The width the person set by dragging the sidebar's line (`SidebarWidth`), kept across launches.
     /// Only the sidebar's column and the title bar read it, so a drag does not rebuild the window.
@@ -155,9 +154,11 @@ struct MainWindow: View {
          personalAgentReader: (() -> any PersonalAgentClient)? = nil) {
         self.model = model
         self.personalAgentReader = personalAgentReader
-        if personalAgentReader != nil {
-            _personalAgents = State(initialValue: PersonalAgentCenter(drafts: personalAgentDrafts ?? PersonalAgentDrafts()))
-        }
+        // What the app's windows last read of the dots is shown while this one reads its own.
+        _personalAgents = State(initialValue: personalAgentReader != nil
+            ? PersonalAgentCenter(drafts: personalAgentDrafts ?? PersonalAgentDrafts(), readings: model.personalAgentReadings)
+            : PersonalAgentCenter(drafts: .live, preparer: PersonalAgentImagePreparation.live,
+                                  responses: DotsResponseJournalFiles.live, readings: model.personalAgentReadings))
     }
 
     private var visibleGroups: [WorkspaceGroup] {

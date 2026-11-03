@@ -609,7 +609,8 @@ struct PersonalAgentConversationView: View {
                     if conversation.before != nil || conversation.olderFailure != nil {
                         olderMessages
                     }
-                    if !conversation.loaded, conversation.isLoading {
+                    // Messages kept from an earlier reading stay in place while the room is read.
+                    if !conversation.loaded, conversation.isLoading, conversation.messages.isEmpty {
                         ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(.vertical, 30)
                     }
                     let messages = conversation.visibleMessages

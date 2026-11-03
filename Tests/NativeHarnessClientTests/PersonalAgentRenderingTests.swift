@@ -258,6 +258,8 @@ final class PersonalAgentRenderingTests: XCTestCase {
         for size in [NSSize(width: 1280, height: 800), NSSize(width: 920, height: 680)] {
             for appearance in WindowlessRender.Appearance.allCases {
                 let reader = RenderedPersonalAgentReader(agents: agents, messages: messages)
+                // Each window opens as after a launch with nothing kept, so it reads its pictures itself.
+                model.personalAgentReadings = PersonalAgentReadings()
                 // Atlas's pet plays below, which it does only without Reduce Motion, whatever the Mac's own setting.
                 let window = MainWindow(model: model) { reader }
                     .environment(\.personalAgentOriginalOpener, opener)
@@ -362,7 +364,8 @@ final class PersonalAgentRenderingTests: XCTestCase {
         defer { host.close() }
         host.settle()
         XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
-        await host.settle(until: { host.accessibilityElements().contains { $0.label == "Juniper" } })
+        // The dots kept from the windows above show first; the latest page is read after them.
+        await host.settle(until: { host.accessibilityElements().contains { $0.value == "Message 24 of the latest page." } })
         host.settle(passes: 20)
         let readsBeforeScrolling = await reader.olderReads
         XCTAssertEqual(readsBeforeScrolling, 0, "The latest page at the bottom reads nothing earlier")
@@ -383,6 +386,121 @@ final class PersonalAgentRenderingTests: XCTestCase {
         XCTAssertEqual(readsAfterScrolling, 1, "Reaching the top reads one earlier page")
         XCTAssertTrue(host.accessibilityElements().contains { $0.label == "older-notes.txt" })
         try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "personal-earlier-page.png"))
+    }
+
+    /// A window opened after a launch shows the dots, the chosen dot's newest messages, its picture
+    /// and its pet from what an earlier run kept, before the provider answers and without reading
+    /// anything for them. The provider's same answer then draws the conversation no more often than a
+    /// window that kept nothing draws it to show the same messages.
+    func testAWindowOpensFromKeptReadingsBeforeTheProviderAnswers() async throws {
+        let (model, _) = try makeWindowModel()
+        let caches = FileManager.default.temporaryDirectory.appending(path: "yardlet-kept-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: caches) }
+        let files = PersonalAgentCacheFiles(directory: caches.appending(path: "personal-agents"))
+        let agents = [
+            PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                          name: "Atlas", rootThreadID: "root", isPaused: false, isPrimary: true,
+                          avatar: .init(location: "https://files.oaiusercontent.com/example-avatar", version: "v1"),
+                          petID: "pet"),
+            PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot-2", roomID: "room-2"),
+                          name: "Juniper", rootThreadID: nil, isPaused: true, isPrimary: false)
+        ]
+        let messages: [PersonalAgentMessage] = [
+            .init(id: "m1", author: .person, text: "Check the launch plan and tell me what needs a decision.",
+                  createdAt: nil, isDeleted: false, attachments: []),
+            .init(id: "m2", author: .agent, text: "Two decisions are left: the release date and who publishes the announcement.",
+                  createdAt: nil, isDeleted: false, attachments: [.init(fileID: "file", name: "announcement-draft.md", type: "file")]),
+            .init(id: "m3", author: .person, text: "Keep the announcement as a draft for now.",
+                  createdAt: nil, isDeleted: false, attachments: [])
+        ]
+        let shownBefore = PersonalAgentWindowVisibility.ReportingView.isOnScreen
+        PersonalAgentWindowVisibility.ReportingView.isOnScreen = { _ in true }
+        defer { PersonalAgentWindowVisibility.ReportingView.isOnScreen = shownBefore }
+        func lastMessage<Content: View>(_ host: WindowlessRender.Host<Content>) -> Bool {
+            host.accessibilityElements().contains { $0.value == "Keep the announcement as a draft for now." }
+        }
+        func pets<Content: View>(_ host: WindowlessRender.Host<Content>) -> Bool {
+            !Self.views(PersonalAgentSpriteView.self, in: host.hosting).isEmpty
+        }
+
+        // An earlier run reads and keeps them; a window that kept nothing draws the conversation this often.
+        let earlier = PersonalAgentReadings(cache: files)
+        model.personalAgentReadings = earlier
+        let size = NSSize(width: 1280, height: 800)
+        var freshDraws = 0
+        do {
+            let reader = RenderedPersonalAgentReader(agents: agents, messages: messages)
+            let host = WindowlessRender.Host(MainWindow(model: model) { reader }
+                .environment(\._accessibilityReduceMotion, false)
+                .frame(width: size.width, height: size.height), size: size)
+            defer { host.close() }
+            host.settle()
+            ViewBodyCensus.isEnabled = true
+            ViewBodyCensus.reset()
+            XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
+            await host.settle(until: { lastMessage(host) })
+            try await waitUntil { await reader.sheetReads > 0 }
+            try await waitUntil { await reader.avatarReads > 0 }
+            await host.settle(until: { pets(host) })
+            host.settle(passes: 12)
+            freshDraws = ViewBodyCensus[.personalAgentConversation]
+            ViewBodyCensus.isEnabled = false
+            ViewBodyCensus.reset()
+        }
+        await earlier.settle()
+
+        let directory = try WindowlessRender.directory("personal-agent-cache-qa")
+        for size in [NSSize(width: 1280, height: 800), NSSize(width: 920, height: 680)] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                // A new launch: nothing in memory, the files from before.
+                model.personalAgentReadings = PersonalAgentReadings(cache: files)
+                let reader = RenderedPersonalAgentReader(agents: agents, messages: messages)
+                await reader.holdAgents()
+                let host = WindowlessRender.Host(MainWindow(model: model) { reader }
+                    .environment(\.colorScheme, appearance.colorScheme)
+                    .environment(\._accessibilityReduceMotion, false)
+                    .frame(width: size.width, height: size.height), size: size, appearance: appearance)
+                defer { host.close() }
+                host.settle()
+                let measures = size.width >= 1280 && appearance == .light
+                if measures { ViewBodyCensus.isEnabled = true; ViewBodyCensus.reset() }
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
+                await host.settle(until: { lastMessage(host) && pets(host) })
+                host.settle(passes: 12)
+                let waiting = await reader.isHoldingAgents()
+                let readsWhileKept = await (reader.latestReads, reader.avatarReads, reader.sheetReads)
+                XCTAssertTrue(waiting, "Shown before the provider answered")
+                XCTAssertEqual(readsWhileKept.0, 0)
+                XCTAssertEqual(readsWhileKept.1, 0)
+                XCTAssertEqual(readsWhileKept.2, 0)
+                let visible = host.accessibilityElements(visibleOnly: true)
+                for label in ["Atlas", "Juniper", "announcement-draft.md", L10n.string("Send message")] {
+                    XCTAssertTrue(visible.contains { $0.label == label }, "\(label) is on screen at \(size)")
+                }
+                let name = "\(Int(size.width))-\(appearance.suffix).png"
+                let capture = try host.capture()
+                XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6))
+                try WindowlessRender.writePNG(capture.bitmap, to: directory.appending(path: "kept-\(name)"))
+
+                await reader.releaseAgents()
+                try await waitUntil { await reader.latestReads == 1 }
+                host.settle(passes: 20)
+                if measures {
+                    let keptDraws = ViewBodyCensus[.personalAgentConversation]
+                    ViewBodyCensus.isEnabled = false
+                    ViewBodyCensus.reset()
+                    print("Conversation drawn \(keptDraws) times from kept readings, \(freshDraws) times without")
+                    XCTAssertLessThanOrEqual(keptDraws, freshDraws,
+                                             "Showing kept messages and then the same page drew more than reading them")
+                }
+                let pictureReads = await (reader.avatarReads, reader.sheetReads)
+                XCTAssertEqual(pictureReads.0, 0, "A kept picture of the same version is not read again")
+                XCTAssertEqual(pictureReads.1, 0, "A kept sheet of the same version is not read again")
+                XCTAssertTrue(lastMessage(host))
+                try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "refreshed-\(name)"))
+                host.close()
+            }
+        }
     }
 
     /// A task from the dot's Activity opens in place of the conversation and reads only its record:
@@ -1977,6 +2095,8 @@ final class PersonalAgentRenderingTests: XCTestCase {
         for appearance in WindowlessRender.Appearance.allCases {
             for reduceMotion in motions {
                 let reader = RenderedPersonalAgentReader(agents: [agent], messages: messages, live: live)
+                // Each window opens as after a launch with nothing kept, so it reads its pictures itself.
+                model.personalAgentReadings = PersonalAgentReadings()
                 let window = MainWindow(model: model) { reader }
                     .environment(\.colorScheme, appearance.colorScheme)
                     .environment(\._accessibilityReduceMotion, reduceMotion)
@@ -2821,9 +2941,22 @@ private actor RenderedPersonalAgentReader: PersonalAgentClient {
         answers.append(result)
         return .applied
     }
-    func agents() async throws -> [PersonalAgent] { values }
+    /// The dots' read waits for `releaseAgents` while held.
+    private var holdsAgents = false
+    private var pendingAgents: CheckedContinuation<Void, Never>?
+    func holdAgents() { holdsAgents = true }
+    func isHoldingAgents() -> Bool { pendingAgents != nil }
+    func releaseAgents() { holdsAgents = false; pendingAgents?.resume(); pendingAgents = nil }
+    private(set) var latestReads = 0
+    func agents() async throws -> [PersonalAgent] {
+        if holdsAgents { await withCheckedContinuation { pendingAgents = $0 } }
+        return values
+    }
     func messages(for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage {
-        guard before != nil else { return .init(messages: page, before: older.isEmpty ? nil : page.first?.id) }
+        guard before != nil else {
+            latestReads += 1
+            return .init(messages: page, before: older.isEmpty ? nil : page.first?.id)
+        }
         olderReads += 1
         return .init(messages: older, before: nil)
     }

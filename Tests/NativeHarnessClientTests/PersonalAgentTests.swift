@@ -1,4 +1,5 @@
 import ImageIO
+import Observation
 import XCTest
 @testable import NativeHarnessClient
 
@@ -159,6 +160,137 @@ final class PersonalAgentTests: XCTestCase {
         await pending.value
         XCTAssertEqual(center.selectedID, replacement.id)
         await center.disconnect()
+    }
+
+    /// What one window read shows at once in the next window and, from the user's Caches, after a
+    /// launch, before the provider answers and without reading anything for it; the provider's answer
+    /// then replaces it, a deleted message included, and the same page read again publishes nothing.
+    /// Another account read through the same source replaces it, nothing kept names an account or a
+    /// signed location, and a login that ends deletes it.
+    func testKeptReadingsShowAtOnceAndTheProvidersAnswerReplacesThem() async throws {
+        let caches = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: caches) }
+        let folder = caches.appending(path: "personal-agents")
+        let files = PersonalAgentCacheFiles(directory: folder)
+        var dot = fixtureAgent()
+        dot.avatar = .init(location: "https://files.oaiusercontent.com/avatar?sig=signed-secret", version: "v1")
+        dot.petID = "pet"
+        let pet = PersonalAgentPet(id: "pet", location: "https://files.oaiusercontent.com/sheet?sig=signed-secret", version: "2|t")
+        let first = PersonalAgentMessage(id: "m1", author: .agent, text: "Draft ready.", createdAt: nil, isDeleted: false, attachments: [])
+        let second = PersonalAgentMessage(id: "m2", author: .person, text: "Thanks", createdAt: nil, isDeleted: false, attachments: [])
+        func reader(_ agents: [PersonalAgent], room: [PersonalAgentMessage], delay: Bool = true) async -> FixturePersonalAgentReader {
+            let reader = FixturePersonalAgentReader(agents: agents, delay: delay)
+            for agent in agents { await reader.setRoomPage(agent.id.roomID, room) }
+            await reader.useAvatar(Data("PNG".utf8))
+            await reader.usePets([pet])
+            return reader
+        }
+
+        // The first window reads the dots, the room, the picture and the sheet.
+        let readings = PersonalAgentReadings(cache: files)
+        let one = PersonalAgentCenter(readings: readings)
+        let fresh = await reader([dot], room: [first, second], delay: false)
+        await one.connect(sourceKey: "home") { fresh }
+        try await waitUntil { one.avatar(for: dot) != nil && one.spriteSheet(for: dot) != nil }
+
+        // A second window shows them while its own reader has not answered, and reads none of them.
+        let two = PersonalAgentCenter(readings: readings)
+        let held = await reader([dot], room: [first, second])
+        let opening = Task { await two.connect(sourceKey: "home") { held } }
+        try await waitUntil { await held.hasPendingRead() }
+        XCTAssertEqual(two.agents.map(\.id), [dot.id])
+        let state = try XCTUnwrap(two.conversation)
+        XCTAssertEqual(state.messages.map(\.id), ["m1", "m2"])
+        XCTAssertFalse(state.loaded, "Kept messages are not a read of the room")
+        XCTAssertNotNil(two.avatar(for: dot))
+        XCTAssertEqual(two.spriteSheet(for: dot)?.version, pet.version)
+        let readsBefore = await held.roomReads
+        XCTAssertEqual(readsBefore, [])
+        let published = PublishedFlag()
+        withObservationTracking { _ = state.messages } onChange: { published.set() }
+        await held.release()
+        await opening.value
+        let readsAfter = await held.roomReads
+        XCTAssertEqual(readsAfter, ["room"])
+        XCTAssertTrue(state.loaded)
+        XCTAssertFalse(published.value, "The same page read again published no messages")
+        let pictureReads = await (held.avatarReads, held.sheetReads)
+        XCTAssertEqual(pictureReads.0, 0, "A kept picture of the same version is not read again")
+        XCTAssertEqual(pictureReads.1, 0, "A kept sheet of the same version is not read again")
+        await two.disconnect()
+        await one.disconnect()
+
+        // After a launch the files show the same; a message deleted at the provider goes and stays gone.
+        await readings.settle()
+        let launched = PersonalAgentReadings(cache: files)
+        let three = PersonalAgentCenter(readings: launched)
+        let later = await reader([dot], room: [first])
+        let reopening = Task { await three.connect(sourceKey: "home") { later } }
+        try await waitUntil { await later.hasPendingRead() }
+        XCTAssertEqual(three.conversation?.messages.map(\.id), ["m1", "m2"])
+        XCTAssertNotNil(three.avatar(for: dot))
+        XCTAssertNotNil(three.spriteSheet(for: dot))
+        await later.release()
+        await reopening.value
+        XCTAssertEqual(three.conversation?.messages.map(\.id), ["m1"])
+        await three.disconnect()
+        await launched.settle()
+        let kept = await files.reading(source: "home")
+        XCTAssertEqual(kept?.rooms["room"]?.messages.map(\.id), ["m1"])
+        XCTAssertEqual(kept?.agents.first?.avatar?.location, "", "A kept picture has no location to read it from")
+
+        // Private files whose names and contents carry no account, room or signed location.
+        let manager = FileManager.default
+        for path in try XCTUnwrap(manager.subpathsOfDirectory(atPath: folder.path)) {
+            let url = folder.appending(path: path)
+            var isFolder: ObjCBool = false
+            XCTAssertTrue(manager.fileExists(atPath: url.path, isDirectory: &isFolder))
+            let mode = (try manager.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int) ?? 0
+            XCTAssertEqual(mode, isFolder.boolValue ? 0o700 : 0o600, path)
+            for id in ["account", "person", "room", "dot", "pet"] where !["list.json", "rooms", "pictures"].contains(url.lastPathComponent) {
+                XCTAssertFalse(url.lastPathComponent.contains(id), path)
+            }
+            if !isFolder.boolValue {
+                XCTAssertNil(try Data(contentsOf: url).range(of: Data("signed-secret".utf8)), path)
+            }
+        }
+        // Another source keeps nothing of this one.
+        let elsewhere = await files.reading(source: "other home")
+        XCTAssertNil(elsewhere)
+
+        // The same source signed in to another account shows the old dots only until the read; then
+        // they go, here and in the files.
+        let otherDot = fixtureAgent(account: "other-account")
+        let switched = PersonalAgentReadings(cache: files)
+        let four = PersonalAgentCenter(readings: switched)
+        let other = await reader([otherDot], room: [second])
+        let switching = Task { await four.connect(sourceKey: "home") { other } }
+        try await waitUntil { await other.hasPendingRead() }
+        XCTAssertEqual(four.conversation?.messages.map(\.id), ["m1"])
+        await other.release()
+        await switching.value
+        XCTAssertEqual(four.agents.map(\.id), [otherDot.id])
+        XCTAssertEqual(four.conversation?.messages.map(\.id), ["m2"])
+        XCTAssertNil(four.avatar(for: dot))
+        await four.disconnect()
+        await switched.settle()
+        let replaced = await files.reading(source: "home")
+        XCTAssertEqual(replaced?.accountID, "other-account")
+        XCTAssertEqual(try manager.contentsOfDirectory(atPath: folder.path).count, 1, "The earlier account's folder is gone")
+
+        // A login that ends deletes what was kept of it.
+        let ended = PersonalAgentReadings(cache: files)
+        let five = PersonalAgentCenter(readings: ended)
+        let signedOut = await reader([otherDot], room: [], delay: false)
+        await signedOut.failAgents(.signInRequired)
+        await five.connect(sourceKey: "home") { signedOut }
+        XCTAssertEqual(five.failure, .signInRequired)
+        XCTAssertTrue(five.agents.isEmpty)
+        await ended.settle()
+        let forgotten = await files.reading(source: "home")
+        XCTAssertNil(forgotten)
+        XCTAssertFalse(manager.fileExists(atPath: caches.path), "Nothing of the dots stays in the Caches")
+        await five.disconnect()
     }
 
     /// Whatever keeps a dot's pet from playing leaves its still picture, and nothing of an earlier pet,
@@ -1800,6 +1932,14 @@ final class PersonalAgentTests: XCTestCase {
     }
 }
 
+/// Whether an observed value was changed, from whatever thread Observation tells it on.
+private final class PublishedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var changed = false
+    var value: Bool { lock.withLock { changed } }
+    func set() { lock.withLock { changed = true } }
+}
+
 private actor FixturePersonalAgentReader: PersonalAgentClient {
     let values: [PersonalAgent]
     let delay: Bool
@@ -1823,8 +1963,11 @@ private actor FixturePersonalAgentReader: PersonalAgentClient {
     }
     func agents() async throws -> [PersonalAgent] {
         if delay { return await withCheckedContinuation { pending = $0 } }
+        if let agentsFailure { throw agentsFailure }
         return values
     }
+    private var agentsFailure: PersonalAgentFailure?
+    func failAgents(_ failure: PersonalAgentFailure?) { agentsFailure = failure }
     func messages(for agent: PersonalAgent, before: String?) async throws -> PersonalAgentPage {
         if before == nil, let page = roomPages[agent.id.roomID] {
             roomReads.append(agent.id.roomID)
@@ -1930,7 +2073,14 @@ private actor FixturePersonalAgentReader: PersonalAgentClient {
     func hasPendingUpload() -> Bool { pendingUpload != nil }
     func releaseUpload() { holdsUploads = false; pendingUpload?.resume(); pendingUpload = nil }
     func uploadCount() -> Int { uploads }
-    func avatar(for agent: PersonalAgent) async throws -> Data { throw PersonalAgentFailure.attachmentUnavailable }
+    private var avatarBytes: Data?
+    private(set) var avatarReads = 0
+    func useAvatar(_ data: Data?) { avatarBytes = data }
+    func avatar(for agent: PersonalAgent) async throws -> Data {
+        avatarReads += 1
+        guard let avatarBytes else { throw PersonalAgentFailure.attachmentUnavailable }
+        return avatarBytes
+    }
     private var pets: [String: PersonalAgentPet] = [:]
     private var sheetFailure: PersonalAgentFailure?
     private var petFailure: PersonalAgentFailure?

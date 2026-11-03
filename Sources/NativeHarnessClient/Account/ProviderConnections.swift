@@ -276,6 +276,8 @@ final class ProviderConnectionStore {
         didSet { if selection != oldValue { onSelectionChange?(selection) } }
     }
     @ObservationIgnored var onSelectionChange: (([HarnessKind: String]) -> Void)?
+    /// A saved account left the list.
+    @ObservationIgnored var onRemove: ((ProviderConnection) -> Void)?
     /// The environment Codex's default login is read in, the one the app's Codex tasks run in.
     @ObservationIgnored var codexEnvironmentManager: CodexEnvironmentManager?
     /// Replace the runtime reads of default logins and saved accounts; nil reads the runtimes.
@@ -595,6 +597,7 @@ final class ProviderConnectionStore {
         let underway = movesUnderway
         taskMoves = taskMoves.filter { $0.key != connection.id && $0.value.target.id != connection.id }
         if movesUnderway != underway { saveTaskMoves() }
+        onRemove?(connection)
     }
 
     // MARK: - Moving an account's tasks
