@@ -12,21 +12,26 @@ import YardletRemote
 /// costs nothing until a phone follows it. The scheduled tasks a phone lists (§15.21) are read the same
 /// way, from the schedules and from the snapshot's tasks. A task's outputs (§15.22) are read when a phone
 /// asks and kept until the task's conversation changes, since a file comes in many parts; which of its
-/// files a phone may open is decided in `RemoteFileReader`.
+/// files a phone may open is decided in `RemoteFileReader`. A task's settings, commands, edit and fork (§15.23) are in
+/// `AppModelRemoteBridge+TaskControls`.
 @MainActor
 final class AppModelRemoteBridge: RemoteBridge {
-    private weak var model: AppModel?
-    private var changeHandler: (@Sendable (RemoteBridgeChange) -> Void)?
+    private(set) weak var model: AppModel?
+    private(set) var changeHandler: (@Sendable (RemoteBridgeChange) -> Void)?
     private var cachedSnapshot: RemoteSnapshot?
     private var cachedConversations: [UUID: RemoteConversation] = [:]
     private var projectionCaches: [UUID: ConversationProjectionCache] = [:]
     private var turnMemos: [UUID: [String: (turn: ConversationTurn, remote: RemoteTurn)]] = [:]
-    private var watched: Set<UUID> = []
+    private(set) var watched: Set<UUID> = []
     private var cachedSchedules: [RemoteSchedule]?
     private var cachedOutputs: [UUID: [SessionRailContent.Output]] = [:]
     /// A read of the schedules is watched until they change; one watch at a time, since every read
     /// reads the same properties.
     private var watchesSchedules = false
+    /// Each followed task's settings as `taskSettings` last answered them (§15.23), and the tasks whose settings are
+    /// watched until they change; one watch per task, since every read reads the same properties.
+    var answeredSettings: [UUID: [RemoteSetting]] = [:]
+    var watchesSettings: Set<UUID> = []
 
     init(model: AppModel) {
         self.model = model
@@ -67,6 +72,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.newTask = newTaskHarness(in: model).map { RemoteNewTask(harness: $0.rawValue, harnessName: $0.displayName) }
         snapshot.scheduledTasks = true
         snapshot.taskFiles = true
+        snapshot.taskControls = true
         let listed = Dictionary(model.sidebarSessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for index in snapshot.tasks.indices {
             guard let id = UUID(uuidString: snapshot.tasks[index].id), let session = listed[id] else { continue }
@@ -179,8 +185,9 @@ final class AppModelRemoteBridge: RemoteBridge {
         for wait in model.browserHandoffWaits[session.id] ?? [] {
             result = RemoteConversationProjection.handoff(wait, site: model.browserHandoffSite(wait, in: session.id), into: result)
         }
-        return withLimitActions(withSuggestionStates(result, of: session, in: model), presentation: presentation, of: session,
-                                in: model)
+        return withTurnOptions(withLimitActions(withSuggestionStates(result, of: session, in: model), presentation: presentation,
+                                                of: session, in: model),
+                               presentation: presentation, of: session, in: model)
     }
 
     /// The latest limit card's actions while the task can act on it (§15.17), as the Mac's card
@@ -284,6 +291,7 @@ final class AppModelRemoteBridge: RemoteBridge {
             turnMemos[id] = nil
             cachedConversations[id] = nil
         }
+        for id in Array(answeredSettings.keys) where !watched.contains(id) { answeredSettings[id] = nil }
     }
 
     private func tasksChanged() {
@@ -308,7 +316,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         changeHandler?(.conversation(id.uuidString))
     }
 
-    private func listedSession(_ id: UUID) -> SessionRecord? {
+    func listedSession(_ id: UUID) -> SessionRecord? {
         model?.sidebarSessions.first { $0.id == id }
     }
 
@@ -550,6 +558,8 @@ final class AppModelRemoteBridge: RemoteBridge {
             }
             center.setEnabled(enabled, for: id)
             return nil
+        case let .editMessage(taskID, turnID, text):
+            return await editMessage(taskID: taskID, turnID: turnID, text: text)
         }
     }
 
@@ -1062,7 +1072,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         return nil
     }
 
-    private func session(_ taskID: String) -> SessionRecord? {
+    func session(_ taskID: String) -> SessionRecord? {
         UUID(uuidString: taskID).flatMap(listedSession)
     }
 
@@ -1078,7 +1088,7 @@ final class AppModelRemoteBridge: RemoteBridge {
 
     /// The task's conversation as the timeline draws it now: through the projection cache of a task a phone
     /// follows, so a phone's command reads a long conversation again only where it changed.
-    private func presentation(of session: SessionRecord, in model: AppModel) -> ConversationPresentation {
+    func presentation(of session: SessionRecord, in model: AppModel) -> ConversationPresentation {
         let cache = projectionCaches[session.id] ?? ConversationProjectionCache()
         if let state = Self.codexState(of: session, in: model) {
             return cache.codex(state, workspaceURL: session.workspaceURL, historySelection: nil)

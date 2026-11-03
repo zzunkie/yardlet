@@ -289,8 +289,9 @@ private struct MenuRowPointer: ViewModifier {
 /// place. The chat composer's menu draws the same line between what is added and the tools.
 enum ComposerPlusMenu {
     struct Actions {
-        var addFiles: () -> Void
-        var addFolder: () -> Void
+        var addFiles: (() -> Void)?
+        /// Nil where a folder cannot go with a message (another Mac's task).
+        var addFolder: (() -> Void)?
         var openCommands: (() -> Void)?
         var openConnectors: (() -> Void)?
     }
@@ -300,10 +301,13 @@ enum ComposerPlusMenu {
         var entries = [
             ComposerMenuEntry(id: "files",
                               title: carriesImages ? L10n.string("Add files or photos") : L10n.string("Add files"),
-                              icon: .symbol("paperclip"), action: actions.addFiles),
-            ComposerMenuEntry(id: "folder", title: L10n.string("Add folder"), icon: .symbol("folder"),
-                              action: actions.addFolder)
+                              icon: .symbol("paperclip"), action: actions.addFiles)
         ]
+        if let addFolder = actions.addFolder {
+            entries.append(ComposerMenuEntry(id: "folder", title: L10n.string("Add folder"), icon: .symbol("folder"),
+                                             action: addFolder))
+        }
+        let additions = entries.count
         if let openCommands = actions.openCommands {
             entries.append(ComposerMenuEntry(id: "commands", title: L10n.string("Slash commands"),
                                              icon: .symbol("slash.circle"), accessory: .submenu(hint: nil),
@@ -314,7 +318,7 @@ enum ComposerPlusMenu {
                                              icon: .symbol("powerplug"), accessory: .submenu(hint: connectors.hint),
                                              action: openConnectors, accessibilityValue: connectors.hint))
         }
-        if entries.count > 2 { entries[2].startsGroup = true }
+        if entries.count > additions { entries[additions].startsGroup = true }
         return entries
     }
 }

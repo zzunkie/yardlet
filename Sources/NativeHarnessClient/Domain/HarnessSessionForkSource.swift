@@ -42,6 +42,9 @@ protocol HarnessSessionBranching: Actor {
 /// selected, or the parent's side chat in the side panel.
 enum BranchPlacement: Sendable {
     case sidebar
+    /// Its own task in the sidebar, left unselected: one another device made, which the window here
+    /// does not switch to (docs/REMOTE_PROTOCOL.md §15.23).
+    case sidebarInBackground
     case sidePanel
 }
 

@@ -57,7 +57,17 @@ final class RemoteProtocolTests: XCTestCase {
             .runScheduledTask(scheduleID: "S"),
             .setScheduledTaskEnabled(scheduleID: "S", enabled: false),
             .taskOutputs(taskID: "T1"),
-            .readFile(taskID: "T1", path: "reports/crash-notes.txt", offset: 4_194_304)
+            .readFile(taskID: "T1", path: "reports/crash-notes.txt", offset: 4_194_304),
+            .taskSettings(taskID: "T1"),
+            .taskSettings(taskID: "T1", prepare: true),
+            .setTaskSetting(taskID: "T1", setting: "model", value: "opus"),
+            .setTaskSetting(taskID: "T1", setting: "permissionMode", value: "bypassPermissions", confirmed: true),
+            .composerCommands(taskID: "T1"),
+            .runComposerCommand(taskID: "T1", command: "compact"),
+            .runComposerCommand(taskID: "T1", command: "compact", arguments: "Keep the API notes"),
+            .editMessage(taskID: "T1", turnID: "turn-3", text: "Run only the unit tests"),
+            .forkTask(taskID: "T1", turnID: "turn-3"),
+            .forkTask(taskID: "T1", turnID: nil)
         ]
         for (index, request) in requests.enumerated() {
             let envelope = RemoteRequestEnvelope(id: "\(index)", request: request)
@@ -165,6 +175,68 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertEqual(read.modifiedAt, 1_792_158_000_000)
         let written = try XCTUnwrap(JSONSerialization.jsonObject(with: RemoteJSON.encoder.encode(read)) as? NSDictionary)
         XCTAssertEqual(written, try XCTUnwrap(JSONSerialization.jsonObject(with: Data(part.utf8)) as? NSDictionary))
+    }
+
+    /// §15.23 as the contract writes it: the requests read and write back the same JSON, the reads are not commands and
+    /// the changes are, and the settings and commands answers decode and encode back the same.
+    func testTheDocumentedTaskControlsDecode() throws {
+        let requests: [(String, RemoteRequest)] = [
+            (#"{"id": "40", "type": "taskSettings", "taskId": "4C1F…"}"#, .taskSettings(taskID: "4C1F…")),
+            (#"{"id": "40", "type": "taskSettings", "taskId": "4C1F…", "prepare": true}"#, .taskSettings(taskID: "4C1F…", prepare: true)),
+            (#"{"id": "41", "type": "setTaskSetting", "taskId": "4C1F…", "setting": "permissionMode", "value": "bypassPermissions", "confirmed": true}"#,
+             .setTaskSetting(taskID: "4C1F…", setting: "permissionMode", value: "bypassPermissions", confirmed: true)),
+            (#"{"id": "42", "type": "composerCommands", "taskId": "4C1F…"}"#, .composerCommands(taskID: "4C1F…")),
+            (#"{"id": "43", "type": "runComposerCommand", "taskId": "4C1F…", "command": "compact", "arguments": "Keep the API notes"}"#,
+             .runComposerCommand(taskID: "4C1F…", command: "compact", arguments: "Keep the API notes")),
+            (#"{"id": "44", "type": "editMessage", "taskId": "4C1F…", "turnId": "3F2A…", "text": "Run only the unit tests"}"#,
+             .editMessage(taskID: "4C1F…", turnID: "3F2A…", text: "Run only the unit tests")),
+            (#"{"id": "45", "type": "forkTask", "taskId": "4C1F…", "turnId": "3F2A…"}"#, .forkTask(taskID: "4C1F…", turnID: "3F2A…"))
+        ]
+        for (json, request) in requests {
+            let envelope = try decode(json)
+            XCTAssertEqual(envelope.request, request)
+            XCTAssertEqual(envelope.request.isCommand, !["taskSettings", "composerCommands"].contains(request.type), json)
+            XCTAssertEqual(envelope.request.taskID, "4C1F…")
+            let written = try XCTUnwrap(JSONSerialization.jsonObject(with: envelope.encoded()) as? NSDictionary)
+            XCTAssertEqual(written, try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? NSDictionary))
+        }
+        for json in [#"{"id":"46","type":"setTaskSetting","taskId":"T","value":"opus"}"#,
+                     #"{"id":"47","type":"runComposerCommand","taskId":"T"}"#,
+                     #"{"id":"48","type":"editMessage","taskId":"T","text":"x"}"#,
+                     #"{"id":"49","type":"forkTask"}"#] {
+            guard case let .failure(failure) = RemoteRequestEnvelope.decode(Data(json.utf8)) else { return XCTFail(json) }
+            XCTAssertEqual(failure.error.code, .badRequest, json)
+        }
+
+        let settings = #"""
+        {"re": "40", "ok": true, "taskId": "4C1F…", "settings": [
+          {"id": "permissionMode", "name": "Permission mode", "role": "permission", "value": "default",
+           "choices": [{"value": "default", "name": "Manual"}, {"value": "acceptEdits", "name": "Accept edits"},
+                       {"value": "bypassPermissions", "name": "Bypass permissions",
+                        "confirm": {"title": "Bypass permission checks?",
+                                    "message": "Claude Code will change files and run commands without asking.",
+                                    "button": "Use bypass permissions"}}]},
+          {"id": "model", "name": "Model", "role": "model", "value": "opus",
+           "choices": [{"value": "opus", "name": "Opus 5.5"}, {"value": "sonnet", "name": "Sonnet 5.5"}]},
+          {"id": "effort", "name": "Effort", "role": "effort", "value": "high",
+           "choices": [{"value": "medium", "name": "Medium"}, {"value": "high", "name": "High"}]}]}
+        """#
+        let read = try JSONDecoder().decode(RemoteResponse.self, from: Data(settings.utf8))
+        XCTAssertEqual(read.settings?.map(\.role), ["permission", "model", "effort"])
+        XCTAssertEqual(read.settings?.first?.choices.last?.confirm?.button, "Use bypass permissions")
+        let rewritten = try XCTUnwrap(JSONSerialization.jsonObject(with: RemoteJSON.encoder.encode(read)) as? NSDictionary)
+        XCTAssertEqual(rewritten, try XCTUnwrap(JSONSerialization.jsonObject(with: Data(settings.utf8)) as? NSDictionary))
+
+        let commands = #"""
+        {"re": "42", "ok": true, "taskId": "4C1F…", "commands": [
+          {"name": "compact", "description": "Clear conversation history but keep a summary in context",
+           "argumentHint": "<optional custom summarization instructions>"},
+          {"name": "clear", "description": "Start a new conversation and keep this chat."}]}
+        """#
+        let listed = try JSONDecoder().decode(RemoteResponse.self, from: Data(commands.utf8))
+        XCTAssertEqual(listed.commands?.map(\.name), ["compact", "clear"])
+        let relisted = try XCTUnwrap(JSONSerialization.jsonObject(with: RemoteJSON.encoder.encode(listed)) as? NSDictionary)
+        XCTAssertEqual(relisted, try XCTUnwrap(JSONSerialization.jsonObject(with: Data(commands.utf8)) as? NSDictionary))
     }
 
     func testRequestsThatCannotBeReadSayWhy() {

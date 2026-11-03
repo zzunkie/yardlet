@@ -275,7 +275,7 @@ struct TaskDetail: View {
             }
 
             if let edit = composerDraft.editState, let rewindActions = conversationActions.rewind {
-                ConversationEditBanner(edit: edit, onCancel: rewindActions.cancelEdit)
+                ConversationEditBanner(canCancel: edit.preparedProviderSessionID == nil, onCancel: rewindActions.cancelEdit)
             }
 
             // A retry shows on the running turn's status line (D6); this line keeps the limit warning.

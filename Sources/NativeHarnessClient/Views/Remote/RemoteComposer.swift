@@ -6,18 +6,30 @@ import YardletRemote
 /// The composer of a host's task: the app's own editor (`ComposerEditor`) with what the host takes from
 /// another device (docs/REMOTE_PROTOCOL.md §15.14, §15.15, §15.20): words, pictures and files, and while a
 /// turn runs the local composer's own rules and words for where a message goes (`FollowUpPolicy`), with
-/// the host's follow-up setting in place of this Mac's, its queue's rows above the text, and Stop. The
-/// host's own composer keeps what only it offers (the model and permission menus, slash commands,
-/// connectors), so those are not here; while the host cannot be reached, sending waits and the words stay.
+/// the host's follow-up setting in place of this Mac's, its queue's rows above the text, and Stop. From a host
+/// that offers them (§15.23) its bottom row draws the task's own settings with the local controls
+/// (`ComposerSessionControls`), "+" and a typed `/` list the slash commands that may run from here, and an
+/// edited message goes as the host's edit. The host's own composer keeps what only it offers (connectors, a
+/// folder, the context ring); while the host cannot be reached, sending waits and the words stay.
 struct RemoteComposer: View {
     let model: RemoteHostModel
     let taskID: String
     @Bindable var draft: TaskComposerDraft
     /// Messages waiting in the task's queue on the host.
     var queued: [RemoteItem] = []
+    /// A turn's message being edited, sent as its edit.
+    @Binding var editing: RemoteMessageEdit?
     @FocusState private var isFocused: Bool
     @State private var isSending = false
     @State private var showsFollowUpMenu = false
+    @State private var menu: Menu?
+    @State private var commands: [RemoteComposerCommand]?
+    @State private var commandSearch = ""
+
+    enum Menu {
+        case attachments
+        case commands
+    }
 
     private var task: RemoteTask? { model.task(taskID) }
     private var isRunning: Bool { task?.running == true }
@@ -42,14 +54,24 @@ struct RemoteComposer: View {
     /// Where Return sends while a turn runs; a harness that cannot steer queues.
     private var returnMode: FollowUpMode { policy.steers ? preferred : .queue }
 
+    /// The task's settings as the local bottom row reads them, from a host that sent them.
+    private var options: ComposerSessionOptions? {
+        model.taskSettings[taskID].map { RemoteTaskSettingsProjection.options($0, task: task) }
+    }
+
     var body: some View {
         ComposerEditor(
             draft: draft, placeholder: placeholder,
             accessibilityHint: isRunning ? policy.returnHint(preferred: preferred) : L10n.string("Press Return to send"),
             metrics: .task(), input: nil, onExternalInput: acceptsAttachments ? { receive($0) } : nil, mentionRoots: [],
-            commands: nil, isCommandMenuOpen: false, isMenuOpen: showsFollowUpMenu, isFocused: $isFocused,
+            commands: editorCommands, isCommandMenuOpen: menu == .commands, isMenuOpen: showsFollowUpMenu || menu != nil,
+            isFocused: $isFocused,
             onSubmit: { send(isRunning ? returnMode : nil) },
-            onAlternateSubmit: isRunning && policy.steers ? { send(preferred.other) } : nil
+            onAlternateSubmit: isRunning && policy.steers ? { send(preferred.other) } : nil,
+            onCommandQueryChange: { old, query in
+                // Opening the typed list reads the commands again, as the local list reads what it shows.
+                if old == nil, query != nil { Task { await readCommands() } }
+            }
         ) {
             if !queued.isEmpty {
                 VStack(spacing: 4) {
@@ -61,24 +83,20 @@ struct RemoteComposer: View {
         } chips: {
             EmptyView()
         } footer: {
-            HStack(spacing: 7) {
-                ParityIconButton(systemName: "plus", help: L10n.string("Add files or photos"), action: chooseFiles)
-                    .accessibilityLabel(L10n.string("Add files or photos"))
-                    .disabled(!acceptsAttachments)
-                Spacer()
-                if isSending { ProgressView().controlSize(.small) }
-                if isRunning {
-                    followUpButton
-                    stopButton
-                } else {
-                    ParityIconButton(systemName: "arrow.up", help: L10n.string("Send"), isProminent: true) { send(nil) }
-                        .accessibilityLabel(L10n.string("Send message"))
-                        .disabled(!canSend)
-                }
+            // The local composer's bottom row: what goes into the message and the task's settings, then the model
+            // menu and Send pinned at the end.
+            AnyLayout(ControlRowLayout(pinsTrailingActions: true)) {
+                inputControls
+                actionControls
+                    .fixedSize(horizontal: true, vertical: false)
             }
             .padding(.leading, 10).padding(.trailing, 9).padding(.bottom, 9)
         }
         .shadow(color: .black.opacity(0.05), radius: 10, y: 3)
+        .task(id: "\(taskID)|\(model.isConnected)|\(model.taskControls)") { await readCommands() }
+        .onChange(of: editing) { _, edit in
+            if edit != nil { isFocused = true }
+        }
     }
 
     private var placeholder: String {
@@ -88,6 +106,161 @@ struct RemoteComposer: View {
     }
 
     private var acceptsAttachments: Bool { task?.acceptsImages == true || task?.acceptsFiles == true }
+
+    @ViewBuilder private var inputControls: some View {
+        plusButton
+        if let options {
+            ComposerSessionControls(
+                options: options, placement: .leading, isDisabled: !model.isConnected, registersTaskFocus: false,
+                onChoose: choose, onPrepare: prepareSettings,
+                onTurnOffPlanMode: options.mode == .planIndicator ? { run("plan-mode", arguments: nil) } : nil)
+        }
+    }
+
+    private var actionControls: some View {
+        HStack(spacing: 7) {
+            if let options {
+                ComposerSessionControls(options: options, placement: .trailing, isDisabled: !model.isConnected,
+                                        registersTaskFocus: false, onChoose: choose, onPrepare: prepareSettings)
+            }
+            if isSending { ProgressView().controlSize(.small) }
+            if isRunning {
+                followUpButton
+                stopButton
+            } else {
+                ParityIconButton(systemName: "arrow.up", help: L10n.string("Send"), isProminent: true) { send(nil) }
+                    .accessibilityLabel(L10n.string("Send message"))
+                    .disabled(!canSend)
+            }
+        }
+    }
+
+    // MARK: - Settings (§15.23)
+
+    /// A menu's choice; one the host's menu asks about first was asked about here too (`ComposerPermissionControl`).
+    private func choose(_ choice: ComposerSessionChoice) {
+        guard case let .providerOption(id, value) = choice,
+              let setting = model.taskSettings[taskID]?.first(where: { $0.id == id }) else { return }
+        let confirmed = setting.role == "permission" && setting.choices.first { $0.value == value }?.confirm != nil
+        model.setTaskSetting(taskID, id: id, value: value, confirmed: confirmed)
+    }
+
+    private func prepareSettings() async {
+        await model.readTaskSettings(taskID, prepare: true)
+    }
+
+    // MARK: - "+" and slash commands (§15.23)
+
+    /// The local composer's "+": files and photos where the task takes them, and the slash commands that may run from
+    /// here. From a host that offers no commands it opens the file panel at once, as before.
+    private var plusButton: some View {
+        let hasMenu = !(commands ?? []).isEmpty
+        return Button {
+            if hasMenu { menu = .attachments } else { chooseFiles() }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.borderless)
+        .parityPointer()
+        .disabled(!acceptsAttachments && !hasMenu)
+        .accessibilityLabel(hasMenu ? L10n.string("Add files and more") : L10n.string("Add files or photos"))
+        .help(hasMenu ? L10n.string("Add files and more") : L10n.string("Add files or photos"))
+        .popover(isPresented: Binding(get: { menu != nil }, set: { if !$0 { menu = nil } })) {
+            switch menu {
+            case .commands?:
+                commandsPage
+            default:
+                ComposerMenuList(
+                    entries: ComposerPlusMenu.entries(
+                        carriesImages: task?.acceptsImages == true, connectors: nil,
+                        actions: ComposerPlusMenu.Actions(
+                            addFiles: acceptsAttachments ? {
+                                menu = nil
+                                chooseFiles()
+                            } : nil,
+                            addFolder: nil,
+                            openCommands: {
+                                commandSearch = ""
+                                menu = .commands
+                                Task { await readCommands() }
+                            },
+                            openConnectors: nil)),
+                    onDismiss: { menu = nil })
+            }
+        }
+    }
+
+    /// "+" → "Slash commands": the search and the list, with the way back.
+    private var commandsPage: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ComposerMenuBackHeader(title: L10n.string("Slash commands")) { menu = .attachments }
+            TextField(L10n.string("Search commands"), text: $commandSearch)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit {
+                    if let command = ComposerCommands.matching(listedCommands, query: commandSearch).first { chooseCommand(command) }
+                }
+                .padding(.horizontal, 3)
+            ComposerCommandPicker(commands: listedCommands, query: commandSearch, isLoading: commands == nil,
+                                  onSelect: chooseCommand)
+        }
+        .padding(5)
+        .frame(width: 340)
+        .onExitCommand { menu = nil }
+    }
+
+    /// The host's commands as the local list draws them.
+    private var listedCommands: [ProviderComposerCommand] {
+        (commands ?? []).map { command in
+            ProviderComposerCommand(name: command.name, description: command.description ?? "",
+                                    argumentHint: command.argumentHint ?? "", builtin: true, title: command.title,
+                                    group: command.group)
+        }
+    }
+
+    private var editorCommands: ComposerEditorCommands? {
+        guard !(commands ?? []).isEmpty else { return nil }
+        return ComposerEditorCommands(commands: listedCommands, choose: chooseCommand)
+    }
+
+    private func readCommands() async {
+        guard let read = await model.composerCommands(taskID) else { return }
+        commands = read
+    }
+
+    /// As the local list does: a command that runs at once takes the typed `/name` out of the draft and runs (the Codex
+    /// app's); any other is typed into the draft, and runs when sent.
+    private func chooseCommand(_ command: ProviderComposerCommand) {
+        menu = nil
+        guard let remote = commands?.first(where: { $0.name == command.name }) else { return }
+        guard remote.runs == true else {
+            ComposerFieldEditor.insert(command, into: draft, isFocused: $isFocused)
+            return
+        }
+        if ComposerCommands.query(in: draft.text) != nil { draft.text = "" }
+        isFocused = true
+        run(remote.name, arguments: nil)
+    }
+
+    private func run(_ name: String, arguments: String?) {
+        isSending = true
+        Task {
+            defer { isSending = false }
+            _ = await model.runComposerCommand(taskID, name: name, arguments: arguments)
+        }
+    }
+
+    /// The draft's first word names one of the host's commands: its name and the words after it.
+    private func typedCommand(_ text: String) -> (name: String, arguments: String?)? {
+        guard text.hasPrefix("/"), let commands else { return nil }
+        let first = text.prefix { !$0.isWhitespace }
+        let name = String(first.dropFirst())
+        guard commands.contains(where: { $0.name == name }) else { return nil }
+        let rest = text.dropFirst(first.count).trimmingCharacters(in: .whitespacesAndNewlines)
+        return (name, rest.isEmpty ? nil : rest)
+    }
 
     // MARK: - While a turn runs
 
@@ -240,6 +413,21 @@ struct RemoteComposer: View {
     private func send(_ mode: FollowUpMode?) {
         guard canSend else { return }
         let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let editing { return sendEdit(editing, text: text) }
+        // A typed command runs as the host's composer runs it once sent.
+        if draft.attachments.isEmpty, let command = typedCommand(text) {
+            isSending = true
+            Task {
+                defer { isSending = false }
+                guard await model.runComposerCommand(taskID, name: command.name, arguments: command.arguments) else {
+                    draft.notice = model.commandError
+                    return
+                }
+                if draft.text.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft.text = "" }
+                draft.notice = nil
+            }
+            return
+        }
         let attachments = draft.attachments
         let followUp = mode.flatMap { RemoteFollowUpMode(rawValue: $0.rawValue) }
         isSending = true
@@ -260,6 +448,31 @@ struct RemoteComposer: View {
             RemoteAttachments.discard(attachments)
         }
     }
+
+    /// The edited message, as the host's composer sends an edit; it leaves the draft once the host took it, as the
+    /// local composer's edit does.
+    private func sendEdit(_ edit: RemoteMessageEdit, text: String) {
+        guard !text.isEmpty else { return }
+        isSending = true
+        Task {
+            defer { isSending = false }
+            guard await model.editMessage(taskID, turnID: edit.turnID, text: text) else {
+                draft.notice = model.commandError
+                return
+            }
+            if editing == edit { editing = nil }
+            if draft.text.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft.text = "" }
+            draft.notice = nil
+        }
+    }
+}
+
+/// A host turn's message put back in the composer to edit (its Edit message, §15.23), with what the composer held
+/// before, which comes back when the edit is cancelled.
+struct RemoteMessageEdit: Equatable {
+    let turnID: String
+    let previousText: String
+    let previousAttachments: [CodexUserInput]
 }
 
 /// Pictures and files on their way to a host: a picture the harness takes as one goes as an image (§15.14),

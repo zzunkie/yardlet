@@ -234,10 +234,13 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var scheduledTasks: Bool
     /// The bridge answers `taskOutputs` and `readFile` (§15.22).
     public var taskFiles: Bool
+    /// The bridge answers a task's settings, slash commands, edit and fork (§15.23).
+    public var taskControls: Bool
 
     public init(projects: [RemoteProject] = [], tasks: [RemoteTask] = [], newestRequestIDs: [String: String] = [:],
                 requestSummaries: [String: String] = [:], newTask: RemoteNewTask? = nil,
-                followUp: RemoteFollowUpMode? = nil, scheduledTasks: Bool = false, taskFiles: Bool = false) {
+                followUp: RemoteFollowUpMode? = nil, scheduledTasks: Bool = false, taskFiles: Bool = false,
+                taskControls: Bool = false) {
         self.projects = projects
         self.tasks = tasks
         self.newestRequestIDs = newestRequestIDs
@@ -246,6 +249,7 @@ public struct RemoteSnapshot: Equatable, Sendable {
         self.followUp = followUp
         self.scheduledTasks = scheduledTasks
         self.taskFiles = taskFiles
+        self.taskControls = taskControls
     }
 
     public static let empty = RemoteSnapshot()
@@ -760,6 +764,14 @@ public enum RemoteRequest: Equatable, Sendable {
     case readFile(taskID: String, path: String, offset: Int)
     /// A desktop in use, or no longer (§18): the Mac holds phone pushes meanwhile.
     case presence(active: Bool)
+    /// A task's composer controls, its slash commands, and the edit and fork of its turns (§15.23). `prepare` reads
+    /// the choices first, as opening the Mac's menu does.
+    case taskSettings(taskID: String, prepare: Bool = false)
+    case setTaskSetting(taskID: String, setting: String, value: String, confirmed: Bool = false)
+    case composerCommands(taskID: String)
+    case runComposerCommand(taskID: String, command: String, arguments: String? = nil)
+    case editMessage(taskID: String, turnID: String, text: String)
+    case forkTask(taskID: String, turnID: String?)
 
     public var type: String {
         switch self {
@@ -798,6 +810,12 @@ public enum RemoteRequest: Equatable, Sendable {
         case .taskOutputs: "taskOutputs"
         case .readFile: "readFile"
         case .presence: "presence"
+        case .taskSettings: "taskSettings"
+        case .setTaskSetting: "setTaskSetting"
+        case .composerCommands: "composerCommands"
+        case .runComposerCommand: "runComposerCommand"
+        case .editMessage: "editMessage"
+        case .forkTask: "forkTask"
         }
     }
 
@@ -809,7 +827,8 @@ public enum RemoteRequest: Equatable, Sendable {
              let .reviewPlan(id, _, _, _), let .itemDetail(id, _), let .actOnSuggestion(id, _, _), let .setPinned(id, _),
              let .archiveTask(id), let .limitAccounts(id), let .continueWithAccount(id, _), let .setAutoContinue(id, _),
              let .actOnQueued(id, _, _), let .answerHandoff(id, _, _), let .chooseAnswer(id, _, _, _, _),
-             let .taskOutputs(id), let .readFile(id, _, _): id
+             let .taskOutputs(id), let .readFile(id, _, _), let .taskSettings(id, _), let .setTaskSetting(id, _, _, _),
+             let .composerCommands(id), let .runComposerCommand(id, _, _), let .editMessage(id, _, _), let .forkTask(id, _): id
         case .snapshot, .ping, .createTask, .newTaskOptions, .registerPush, .unregisterPush, .forgetDevice,
              .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled,
              .presence: nil
@@ -830,7 +849,8 @@ public enum RemoteRequest: Equatable, Sendable {
         switch self {
         case .sendMessage, .answerApproval, .stopTurn, .markRead, .answerQuestion, .reviewPlan, .createTask,
              .actOnSuggestion, .setPinned, .archiveTask, .answerLink, .continueWithAccount, .setAutoContinue, .actOnQueued,
-             .answerHandoff, .chooseAnswer, .runScheduledTask, .setScheduledTaskEnabled: true
+             .answerHandoff, .chooseAnswer, .runScheduledTask, .setScheduledTaskEnabled, .setTaskSetting, .runComposerCommand,
+             .editMessage, .forkTask: true
         default: false
         }
     }
@@ -891,6 +911,13 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var nonce: String?
         var scheduleId: String?
         var path: String?
+        var prepare: Bool?
+        var setting: String?
+        var value: String?
+        var confirmed: Bool?
+        var command: String?
+        var arguments: String?
+        var turnId: String?
     }
 
     private struct WireImage: Codable {
@@ -933,7 +960,9 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             ("scheduleId", wire.scheduleId, RemoteProtocol.maxOwnIDBytes), ("accountId", wire.accountId, RemoteProtocol.maxOwnIDBytes),
             ("requestId", wire.requestId, RemoteProtocol.maxProviderIDBytes), ("itemId", wire.itemId, RemoteProtocol.maxProviderIDBytes),
             ("suggestionId", wire.suggestionId, RemoteProtocol.maxProviderIDBytes),
-            ("choice", wire.choice, RemoteProtocol.maxProviderIDBytes)
+            ("choice", wire.choice, RemoteProtocol.maxProviderIDBytes), ("setting", wire.setting, RemoteProtocol.maxProviderIDBytes),
+            ("value", wire.value, RemoteProtocol.maxProviderIDBytes), ("command", wire.command, RemoteProtocol.maxProviderIDBytes),
+            ("turnId", wire.turnId, RemoteProtocol.maxProviderIDBytes)
         ]
         if let long = identifiers.first(where: { ($0.value?.utf8.count ?? 0) > $0.limit }) {
             return fail(.badRequest, "\(long.name) is too long")
@@ -1110,6 +1139,29 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             }
             guard let offset = wire.offset, offset >= 0 else { return fail(.badRequest, "Missing or negative offset") }
             request = .readFile(taskID: taskID, path: path, offset: offset)
+        case "taskSettings", "composerCommands", "forkTask":
+            guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
+            switch type {
+            case "taskSettings": request = .taskSettings(taskID: taskID, prepare: wire.prepare == true)
+            case "composerCommands": request = .composerCommands(taskID: taskID)
+            default: request = .forkTask(taskID: taskID, turnID: required(wire.turnId))
+            }
+        case "setTaskSetting":
+            guard let taskID = required(wire.taskId), let setting = required(wire.setting), let value = wire.value else {
+                return fail(.badRequest, "Missing taskId, setting or value")
+            }
+            request = .setTaskSetting(taskID: taskID, setting: setting, value: value, confirmed: wire.confirmed == true)
+        case "runComposerCommand":
+            guard let taskID = required(wire.taskId), let command = required(wire.command) else {
+                return fail(.badRequest, "Missing taskId or command")
+            }
+            let arguments = wire.arguments?.trimmingCharacters(in: .whitespacesAndNewlines)
+            request = .runComposerCommand(taskID: taskID, command: command, arguments: arguments?.isEmpty == false ? arguments : nil)
+        case "editMessage":
+            guard let taskID = required(wire.taskId), let turnID = required(wire.turnId), let text = wire.text else {
+                return fail(.badRequest, "Missing taskId, turnId or text")
+            }
+            request = .editMessage(taskID: taskID, turnID: turnID, text: text)
         default:
             return fail(.unknownType, "Unknown type \(type)")
         }
@@ -1225,6 +1277,27 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             wire.taskId = taskID
             wire.path = path
             wire.offset = offset
+        case let .taskSettings(taskID, prepare):
+            wire.taskId = taskID
+            wire.prepare = prepare ? true : nil
+        case let .setTaskSetting(taskID, setting, value, confirmed):
+            wire.taskId = taskID
+            wire.setting = setting
+            wire.value = value
+            wire.confirmed = confirmed ? true : nil
+        case let .composerCommands(taskID):
+            wire.taskId = taskID
+        case let .runComposerCommand(taskID, command, arguments):
+            wire.taskId = taskID
+            wire.command = command
+            wire.arguments = arguments
+        case let .editMessage(taskID, turnID, text):
+            wire.taskId = taskID
+            wire.turnId = turnID
+            wire.text = text
+        case let .forkTask(taskID, turnID):
+            wire.taskId = taskID
+            wire.turnId = turnID
         }
         return (try? RemoteJSON.encoder.encode(wire)) ?? Data()
     }
@@ -1308,6 +1381,10 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var offset: Int?
     public var data: Data?
     public var modifiedAt: Int64?
+    /// `snapshot` on v2: the Mac answers a task's settings, slash commands, edit and fork (§15.23).
+    public var taskControls: Bool?
+    /// `composerCommands` (§15.23).
+    public var commands: [RemoteComposerCommand]?
 
     public init(re: String, ok: Bool = true, error: RemoteError? = nil) {
         self.re = re
@@ -1358,11 +1435,27 @@ public struct RemoteSetting: Codable, Equatable, Sendable {
         public var value: String
         public var name: String
         public var description: String?
+        /// The Mac's menu asks before it applies this choice, in these words (§15.23).
+        public var confirm: Confirmation?
 
-        public init(value: String, name: String, description: String? = nil) {
+        public init(value: String, name: String, description: String? = nil, confirm: Confirmation? = nil) {
             self.value = value
             self.name = name
             self.description = description
+            self.confirm = confirm
+        }
+    }
+
+    /// What the Mac asks before a choice that lifts the sandbox or skips asking (§15.23).
+    public struct Confirmation: Codable, Equatable, Sendable {
+        public var title: String
+        public var message: String
+        public var button: String
+
+        public init(title: String, message: String, button: String) {
+            self.title = title
+            self.message = message
+            self.button = button
         }
     }
 
@@ -1370,12 +1463,46 @@ public struct RemoteSetting: Codable, Equatable, Sendable {
     public var name: String
     public var value: String
     public var choices: [Choice]
+    /// Where the Mac's task composer shows it (§15.23): `mode`, `plan`, `permission`, `model`, `effort` or `speed`.
+    public var role: String?
+    /// The Mac's menu reads its choices first when it opens: ask `taskSettings` with `prepare` (§15.23).
+    public var prepare: Bool?
+    /// The value now lifts the sandbox or skips asking (drawn in orange on the Mac).
+    public var elevated: Bool?
+    /// The control's words when no choice names its value, and what its menu says when there is nothing to choose.
+    public var title: String?
+    public var note: String?
 
-    public init(id: String, name: String, value: String, choices: [Choice]) {
+    public init(id: String, name: String, value: String, choices: [Choice], role: String? = nil) {
         self.id = id
         self.name = name
         self.value = value
         self.choices = choices
+        self.role = role
+    }
+}
+
+/// A slash command a task's composer offers that may run from another device (§15.23).
+public struct RemoteComposerCommand: Codable, Equatable, Sendable {
+    /// Typed as `/name`.
+    public var name: String
+    /// The list's own title where it shows one in place of `/name` (Codex).
+    public var title: String?
+    public var description: String?
+    /// The words it takes after its name, as the list hints them; absent when it takes none.
+    public var argumentHint: String?
+    public var group: String?
+    /// Choosing it runs it at once (the Codex app's commands); otherwise it is typed into the draft and runs when sent.
+    public var runs: Bool?
+
+    public init(name: String, title: String? = nil, description: String? = nil, argumentHint: String? = nil,
+                group: String? = nil, runs: Bool? = nil) {
+        self.name = name
+        self.title = title
+        self.description = description
+        self.argumentHint = argumentHint
+        self.group = group
+        self.runs = runs
     }
 }
 
@@ -1545,6 +1672,8 @@ public struct RemoteEvent: Codable, Equatable, Sendable {
         case linkResolved
         // §15.21
         case schedulesChanged
+        // §15.23
+        case taskSettingsChanged
     }
 
     public var event: Name

@@ -48,6 +48,13 @@ enum RemoteTurnProjection {
             }
         }
         if let lastOutcome { turn.outcome = outcome(items[lastOutcome]) }
+        // What the host's turn offers (§15.23): the edit of the message that opened it, and its fork.
+        let offered = header.flatMap { items[$0].options } ?? []
+        if offered.contains("edit"), let request = turn.prompt.last(where: \.isPersonMessage),
+           case let .userMessage(text, _) = request.kind {
+            turn.actions.editLatest = ConversationMessageTarget(entryID: uuid(request.id), text: text)
+        }
+        turn.actions.canFork = offered.contains("fork")
         (turn.work, turn.answers) = ConversationTurnLayout.arrange(flow)
         turn.hasWorkDetails = !turn.work.isEmpty || turn.plan != nil
         turn.showsHeader = header != nil && (turn.hasWorkDetails || turn.timing.durationMilliseconds != nil)

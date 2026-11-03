@@ -898,12 +898,12 @@ final class AppModel {
             return await prepareSideChat(for: session)
         case (.sidePanel, _):
             return nil
-        case (.sidebar, .start):
-            return await startNewChat(from: session)
-        case (.sidebar, .latest):
-            return await forkTask(session, throughTurnID: nil)
-        case let (.sidebar, .turn(turnID)):
-            return await forkTask(session, throughTurnID: turnID)
+        case (.sidebar, .start), (.sidebarInBackground, .start):
+            return await startNewChat(from: session, selects: placement == .sidebar)
+        case (.sidebar, .latest), (.sidebarInBackground, .latest):
+            return await forkTask(session, throughTurnID: nil, selects: placement == .sidebar)
+        case let (.sidebar, .turn(turnID)), let (.sidebarInBackground, .turn(turnID)):
+            return await forkTask(session, throughTurnID: turnID, selects: placement == .sidebar)
         }
     }
 
@@ -944,14 +944,15 @@ final class AppModel {
         return method
     }
 
-    /// A fork into a task of its own, which is selected. Only an attached provider forks through
-    /// a turn; an adapter without a native method has no fork.
-    private func forkTask(_ session: SessionRecord, throughTurnID: String?) async -> SessionRecord? {
+    /// A fork into a task of its own, which is selected unless `selects` is false. Only an attached
+    /// provider forks through a turn; an adapter without a native method has no fork.
+    private func forkTask(_ session: SessionRecord, throughTurnID: String?, selects: Bool) async -> SessionRecord? {
         switch await branchMethod(for: session) {
         case .savedConversation? where throughTurnID == nil:
-            return await forkSavedConversation(session, selectsSession: true)
+            return await forkSavedConversation(session, selectsSession: true, inBackground: !selects)
         case .attachedSession?:
-            return await forkAttachedSession(session, selectsSession: true, throughTurnID: throughTurnID)
+            return await forkAttachedSession(session, selectsSession: true, inBackground: !selects,
+                                             throughTurnID: throughTurnID)
         case .savedConversation?, nil:
             return nil
         }
@@ -3297,7 +3298,9 @@ final class AppModel {
 
     /// `HarnessSessionBranchMethod.savedConversation`. The boundary is read in Claude's own
     /// conversation format, the one saved conversation Yardlet reads.
-    private func forkSavedConversation(_ source: SessionRecord, selectsSession: Bool) async -> SessionRecord? {
+    /// `selectsSession` makes it a fork in the sidebar, which is selected unless `inBackground`; otherwise it is a side chat.
+    private func forkSavedConversation(_ source: SessionRecord, selectsSession: Bool,
+                                       inBackground: Bool = false) async -> SessionRecord? {
         guard let source = matchingSession(source), source.harness == .claudeCode,
               !switchingAccounts.contains(source.id), forkingSessions.insert(source.id).inserted else { return nil }
         defer { forkingSessions.remove(source.id) }
@@ -3333,7 +3336,7 @@ final class AppModel {
             }
             transcriptBuilders[child.id] = TranscriptBuilder(entries: snapshot.transcript.entries)
             publishTranscript(for: child.id)
-            if selectsSession, store.selectedSessionID == selectedAtStart { store.selectedSessionID = child.id }
+            if selectsSession, !inBackground, store.selectedSessionID == selectedAtStart { store.selectedSessionID = child.id }
             return child
         } catch {
             guard matchingSession(source) != nil else { return nil }
@@ -3345,7 +3348,7 @@ final class AppModel {
 
     /// Claude's `/clear`. As in the CLI it waits for the current turn, then opens a new chat.
     @discardableResult
-    func restartClaudeConversation(_ source: SessionRecord) async -> SessionRecord? {
+    func restartClaudeConversation(_ source: SessionRecord, placement: BranchPlacement = .sidebar) async -> SessionRecord? {
         guard let source = matchingSession(source), !switchingAccounts.contains(source.id),
               !restartingSessions.contains(source.id) else { return nil }
         guard source.status != .running, source.status != .waitingForApproval else {
@@ -3353,13 +3356,13 @@ final class AppModel {
                 L10n.string("Stop the current turn before starting a new conversation.")
             return nil
         }
-        return await branch(source, at: .start)
+        return await branch(source, at: .start, placement: placement)
     }
 
     /// A blank task in the source's project, account, storage scope and runtime; the source keeps
     /// its history and draft. It does not wait for the current turn, as in the Codex app: the
     /// source keeps running on its own. Claude's `/clear` waits before it gets here.
-    private func startNewChat(from source: SessionRecord) async -> SessionRecord? {
+    private func startNewChat(from source: SessionRecord, selects: Bool) async -> SessionRecord? {
         guard let source = matchingSession(source),
               !switchingAccounts.contains(source.id), restartingSessions.insert(source.id).inserted else { return nil }
         defer { restartingSessions.remove(source.id) }
@@ -3373,7 +3376,7 @@ final class AppModel {
                 try? await store.discardSession(id: next.id)
                 return nil
             }
-            if store.selectedSessionID == selectedAtStart { store.selectedSessionID = next.id }
+            if selects, store.selectedSessionID == selectedAtStart { store.selectedSessionID = next.id }
             return next
         } catch {
             if matchingSession(source) != nil {
@@ -3847,6 +3850,7 @@ final class AppModel {
     private func forkAttachedSession(
         _ session: SessionRecord,
         selectsSession: Bool,
+        inBackground: Bool = false,
         throughTurnID: String? = nil
     ) async -> SessionRecord? {
         guard let saved = matchingSession(session), !switchingAccounts.contains(saved.id),
@@ -3948,7 +3952,7 @@ final class AppModel {
                 }
                 guard matchingSession(session) != nil,
                       store.sessions.contains(where: { $0.id == forkedSession.id }) else { return nil }
-                if selectsSession, store.selectedSessionID == selectedAtStart {
+                if selectsSession, !inBackground, store.selectedSessionID == selectedAtStart {
                     store.selectedSessionID = forkedSession.id
                 }
                 return store.sessions.first { $0.id == forkedSession.id }
@@ -7753,6 +7757,54 @@ extension AppModel {
             draft.editState = edit
             composerDrafts.persistNow()
         } catch { draft.notice = error.localizedDescription }
+    }
+
+    /// What another device's Edit message starts from (docs/REMOTE_PROTOCOL.md §15.23): a Codex turn, or the
+    /// latest Claude message's text, as the turn's own Edit message passes them.
+    enum ConversationEditStart {
+        case codexTurn(CodexTurnState)
+        case claudeMessage(String)
+    }
+
+    /// Another device's Edit message and Send, through the composer's own edit: it begins as the turn's Edit message
+    /// begins it, `text` takes the place of the message's words (its pictures stay), and it goes as the composer sends an
+    /// edit. The composer's own words come back afterwards, and an edit that did not go is the caller's to report, so the
+    /// composer's notice stays as it was. Nil once sent; otherwise why not.
+    func editMessage(_ start: ConversationEditStart, to text: String, in source: SessionRecord) async -> String? {
+        let refused = L10n.string("This message can no longer be edited.")
+        guard let session = matchingSession(source) else { return refused }
+        let draft = composerDrafts.tasks.draft(for: session.id)
+        guard draft.editState == nil else { return L10n.string("A message is being edited in this task.") }
+        let kept = draft.snapshot
+        let notice = draft.notice
+        switch start {
+        case let .codexTurn(turn): beginCodexEdit(turn, in: session)
+        case let .claudeMessage(original): await beginClaudeEdit(original, in: session)
+        }
+        guard let edit = draft.editState else {
+            let reason = draft.notice ?? refused
+            draft.notice = notice
+            return reason
+        }
+        draft.text = text
+        await submitConversationEdit(draft.submission, to: session)
+        if let unsent = draft.editState, unsent.id == edit.id {
+            let reason = draft.notice ?? refused
+            // An edit the provider has not taken yet goes back; one it has stays for Send to finish.
+            if unsent.preparedProviderSessionID == nil {
+                cancelConversationEdit(in: session)
+                draft.notice = notice
+            }
+            return reason
+        }
+        if draft.isMessageEmpty, !draft.isBashMode {
+            draft.text = kept.text
+            draft.attachments = kept.attachments
+            draft.isBashMode = kept.isBashMode == true
+            draft.notice = notice
+            composerDrafts.persistNow()
+        }
+        return nil
     }
 
     func cancelConversationEdit(in session: SessionRecord) {
