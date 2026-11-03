@@ -9,22 +9,8 @@ import XCTest
 final class AgentToolInjectionTests: XCTestCase {
     private let workspace = URL(filePath: "/tmp/agent-tool-workspace")
 
-    /// Preferences held in memory. A suite on disk leaves a file in ~/Library/Preferences even
-    /// after its domain is removed, since the preferences daemon writes the emptied domain back.
-    private final class VolatileDefaults: UserDefaults {
-        private var values: [String: Any] = [:]
-
-        init() { super.init(suiteName: nil)! }
-
-        override func object(forKey defaultName: String) -> Any? { values[defaultName] }
-        override func string(forKey defaultName: String) -> String? { values[defaultName] as? String }
-        override func set(_ value: Any?, forKey defaultName: String) { values[defaultName] = value }
-        override func set(_ value: Bool, forKey defaultName: String) { values[defaultName] = value }
-        override func removeObject(forKey defaultName: String) { values[defaultName] = nil }
-    }
-
     private func temporaryDefaults(_ purpose: String) -> UserDefaults {
-        VolatileDefaults()
+        SuggestionVolatileDefaults()
     }
 
     private func launch(session: UUID = UUID(), directory: URL? = nil) -> AgentToolServerLaunch {

@@ -882,21 +882,24 @@ func suggestionToolJSON(_ object: [String: Any]) throws -> ToolJSON {
     try JSONDecoder().decode(ToolJSON.self, from: JSONSerialization.data(withJSONObject: object))
 }
 
-/// Preferences held in memory, so nothing reaches the user's preferences.
+/// Preferences held in memory, so nothing reaches the user's preferences. Safe from any thread, as
+/// `UserDefaults` is: the app writes some of them from queues of its own, as `CodexCardWriter`
+/// and `TranscriptSnapshotWriter` do.
 final class SuggestionVolatileDefaults: UserDefaults {
+    private let lock = NSLock()
     private var values: [String: Any] = [:]
 
     init() { super.init(suiteName: nil)! }
 
-    override func object(forKey defaultName: String) -> Any? { values[defaultName] }
-    override func data(forKey defaultName: String) -> Data? { values[defaultName] as? Data }
-    override func string(forKey defaultName: String) -> String? { values[defaultName] as? String }
-    override func bool(forKey defaultName: String) -> Bool { values[defaultName] as? Bool ?? false }
-    override func array(forKey defaultName: String) -> [Any]? { values[defaultName] as? [Any] }
-    override func dictionary(forKey defaultName: String) -> [String: Any]? { values[defaultName] as? [String: Any] }
-    override func set(_ value: Any?, forKey defaultName: String) { values[defaultName] = value }
-    override func set(_ value: Bool, forKey defaultName: String) { values[defaultName] = value }
-    override func removeObject(forKey defaultName: String) { values[defaultName] = nil }
+    override func object(forKey defaultName: String) -> Any? { lock.withLock { values[defaultName] } }
+    override func data(forKey defaultName: String) -> Data? { object(forKey: defaultName) as? Data }
+    override func string(forKey defaultName: String) -> String? { object(forKey: defaultName) as? String }
+    override func bool(forKey defaultName: String) -> Bool { object(forKey: defaultName) as? Bool ?? false }
+    override func array(forKey defaultName: String) -> [Any]? { object(forKey: defaultName) as? [Any] }
+    override func dictionary(forKey defaultName: String) -> [String: Any]? { object(forKey: defaultName) as? [String: Any] }
+    override func set(_ value: Any?, forKey defaultName: String) { lock.withLock { values[defaultName] = value } }
+    override func set(_ value: Bool, forKey defaultName: String) { lock.withLock { values[defaultName] = value } }
+    override func removeObject(forKey defaultName: String) { lock.withLock { values[defaultName] = nil } }
 }
 
 private actor ForwardingInvoker: AgentToolInvoking {
