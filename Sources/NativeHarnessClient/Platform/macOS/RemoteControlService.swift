@@ -360,30 +360,30 @@ final class RemoteControlService {
 
     private var permissionSaveError: String?
     var permissionError: String? {
+        if !unsafeDeniedPermissions.isEmpty {
+            return L10n.string("Permission is off for now. Recovery could not be saved; retry before restarting Yardlet.")
+        }
         if !unsavedDeniedPermissions.isEmpty {
-            return L10n.string("Permission is off, but the change could not be saved. Retry before restarting Yardlet.")
+            return L10n.string("Permission stays off after restarting. Retry saving the settings.")
         }
         return permissionSaveError
     }
     private(set) var removalError: String?
     private(set) var removingDeviceIDs: Set<String> = []
     private(set) var updatingDevicePermissions: [String: Set<RemoteDevicePermission>] = [:]
-    struct UnsavedDeniedPermission: Hashable {
-        var deviceID: String
-        var permission: RemoteDevicePermission
-    }
-    private(set) var unsavedDeniedPermissions: Set<UnsavedDeniedPermission> = []
+    typealias UnsavedDeniedPermission = RemotePermissionKey
+    private(set) var unsavedDeniedPermissions: Set<RemotePermissionKey> = []
+    private(set) var unsafeDeniedPermissions: Set<RemotePermissionKey> = []
     var canRetryPermissionChange: Bool { !unsavedDeniedPermissions.isEmpty }
 
     func retryPermissionChange() async {
-        for change in unsavedDeniedPermissions {
-            guard unsavedDeniedPermissions.contains(change) else { continue }
-            guard let device = devices.first(where: { $0.id == change.deviceID }) else {
-                unsavedDeniedPermissions.remove(change)
-                continue
-            }
-            await setPermission(change.permission, allowed: false, for: device)
+        do {
+            try await server.retryPermissionRecovery()
+            permissionSaveError = nil
+        } catch {
+            permissionSaveError = L10n.string("Could not save device permissions. Try again.")
         }
+        await reloadDevices()
     }
 
     func setPermission(_ permission: RemoteDevicePermission, allowed: Bool, for device: RemoteDevice) async {
@@ -395,10 +395,8 @@ final class RemoteControlService {
         do {
             try await server.setPermission(permission, allowed: allowed, for: device.id)
             permissionSaveError = nil
-            unsavedDeniedPermissions.remove(UnsavedDeniedPermission(deviceID: device.id, permission: permission))
         } catch {
-            if allowed { permissionSaveError = L10n.string("Could not save device permissions. Try again.") }
-            else { unsavedDeniedPermissions.insert(UnsavedDeniedPermission(deviceID: device.id, permission: permission)) }
+            permissionSaveError = L10n.string("Could not save device permissions. Try again.")
         }
         await reloadDevices()
     }
@@ -408,7 +406,6 @@ final class RemoteControlService {
         defer { removingDeviceIDs.remove(device.id) }
         do {
             try await server.revoke(device.id)
-            unsavedDeniedPermissions = unsavedDeniedPermissions.filter { $0.deviceID != device.id }
             removalError = nil
         } catch {
             removalError = L10n.string("Could not remove this device. It is still paired. Try again.")
@@ -437,7 +434,10 @@ final class RemoteControlService {
     }
 
     func reloadDevices() async {
-        devices = await deviceStore.all().sorted { $0.createdAt < $1.createdAt }
+        devices = await server.devicesForSettings().sorted { $0.createdAt < $1.createdAt }
+        let recovery = await server.permissionRecoveryState()
+        unsavedDeniedPermissions = recovery.unsavedDeniedPermissions
+        unsafeDeniedPermissions = recovery.unsafeDeniedPermissions
         refreshAddresses()
     }
 

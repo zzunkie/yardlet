@@ -150,6 +150,27 @@ final class RemoteSettingsRenderingTests: XCTestCase {
         XCTAssertTrue(service.unsavedDeniedPermissions.isEmpty)
     }
 
+    func testDurableDenialRecoveryExplainsThatRestartRemainsSafe() async throws {
+        let fixture = try DeviceStoreWriteFailure()
+        defer {
+            try? FileManager.default.setAttributes([.immutable: false], ofItemAtPath: fixture.file.path)
+            fixture.cleanUp()
+        }
+        let store = RemoteDeviceStore(fileURL: fixture.file)
+        let (service, _) = try await makeService(store: store)
+        await service.reloadDevices()
+        let device = try XCTUnwrap(service.devices.first)
+        await service.setPermission(.terminal, allowed: true, for: device)
+        try FileManager.default.setAttributes([.immutable: true], ofItemAtPath: fixture.file.path)
+        await service.setPermission(.terminal, allowed: false, for: device)
+        XCTAssertFalse(service.unsavedDeniedPermissions.isEmpty)
+        XCTAssertTrue(service.unsafeDeniedPermissions.isEmpty)
+        XCTAssertEqual(service.devices.first?.permissions?.terminal, false)
+        XCTAssertEqual(service.permissionError, L10n.string("Permission stays off after restarting. Retry saving the settings."))
+        try render("remote-permissions-recovery-saved", service: service,
+                   in: WindowlessRender.directory("remote-qa"), size: NSSize(width: 820, height: 820))
+    }
+
     func testFailedRemovalRetainsThePairedDeviceAndReportsFailure() async throws {
         let fixture = try DeviceStoreWriteFailure()
         defer { fixture.cleanUp() }

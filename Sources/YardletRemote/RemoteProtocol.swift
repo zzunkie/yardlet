@@ -1051,6 +1051,7 @@ public enum RemoteRequest: Equatable, Sendable {
     /// this exhaustive switch; task-specific controls retain their established paired-device access.
     public var requiredPermission: RemoteDevicePermission? {
         switch self {
+        case .readReview, .workspaceFiles: nil
         case .snapshot, .subscribeTask, .loadOlder, .unsubscribeTask, .ping, .sendMessage, .answerApproval,
              .stopTurn, .markRead, .answerQuestion, .reviewPlan, .createTask, .newTaskOptions, .limitAccounts,
              .continueWithAccount, .setAutoContinue, .actOnQueued, .answerHandoff, .chooseAnswer, .uploadFile, .registerPush,
