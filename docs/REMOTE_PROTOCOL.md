@@ -1296,7 +1296,7 @@ and deleting schedules stay on the Mac.
   since 1970) is absent when it will not run again on its own. `projectName`: the project its runs start in, or for
   a folder outside any project the folder's name (as the sidebar names it); for one that continues a task, that
   task's project; absent for a chat. `harnessName` is the harness its runs start on. `lastRun` is the latest run,
-  absent before its first: `at`, `outcome` (`started`, `skipped`, `failed`; unknown values are read as `failed`),
+  absent before its first: `at`, `outcome` (`started`, `deferred`, `expired`, `skipped`, `failed`; unknown values are read as `failed`),
   `taskId` when the run started or continued a task the snapshot lists, and `line`, the Mac's own line for it in
   the Mac's language: when it ran, and for a skip or a failed start why, as the run history says it ("Last run
   today at 9:00 AM · Skipped: the previous run is still going"). The session schedules a Claude Code task's CLI

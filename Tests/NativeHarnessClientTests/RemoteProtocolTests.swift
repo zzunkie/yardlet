@@ -125,8 +125,12 @@ final class RemoteProtocolTests: XCTestCase {
         // Written back, it is the same JSON.
         let written = try XCTUnwrap(JSONSerialization.jsonObject(with: RemoteJSON.encoder.encode(response)) as? NSDictionary)
         XCTAssertEqual(written, try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? NSDictionary))
+        for outcome in [RemoteSchedule.Run.Outcome.deferred, .expired] {
+            let run = RemoteSchedule.Run(at: 1, outcome: outcome, line: "Pending or expired")
+            XCTAssertEqual(try JSONDecoder().decode(RemoteSchedule.Run.self, from: RemoteJSON.encoder.encode(run)), run)
+        }
         // An outcome a later Mac adds reads as a failure.
-        let later = try JSONDecoder().decode(RemoteSchedule.Run.self, from: Data(#"{"at": 1, "outcome": "deferred", "line": "x"}"#.utf8))
+        let later = try JSONDecoder().decode(RemoteSchedule.Run.self, from: Data(#"{"at": 1, "outcome": "futureOutcome", "line": "x"}"#.utf8))
         XCTAssertEqual(later.outcome, .failed)
     }
 

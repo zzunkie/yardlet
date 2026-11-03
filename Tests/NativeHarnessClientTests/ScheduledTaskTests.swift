@@ -180,6 +180,110 @@ final class ScheduledTaskTests: XCTestCase {
         await model.shutdown()
     }
 
+    func testOneOffWaitsThroughRunningAndApprovalBeforeSending() async throws {
+        let adapter = SuggestionRecordingAdapter()
+        let clock = Clock(date(16, 20))
+        let model = makeModel(adapter: adapter, clock: clock)
+        let target = try await model.store.createSession(harness: .openCode, workspaceURL: try folder("once"),
+            runtimeExecutableURL: URL(filePath: "/usr/bin/true"), title: "Watch")
+        let schedule = ScheduledTask(name: "Once", prompt: "Check results", trigger: .once(date(17, 9)),
+            destination: ScheduleDestination(mode: .continueTask, harness: .openCode, targetTaskID: target.id))
+        model.scheduledTasks.create(schedule)
+        clock.now = date(17, 9)
+        for status: SessionStatus in [.running, .waitingForApproval] {
+            try await model.store.updateSession(id: target.id, status: status)
+            await model.scheduledTasks.checkDue()
+            XCTAssertEqual(model.scheduledTasks.schedules[0].state.runs.first?.outcome, .deferred)
+            let prompts = await adapter.prompts
+            XCTAssertTrue(prompts.isEmpty)
+        }
+        try await model.store.updateSession(id: target.id, status: .completed)
+        model.scheduledTasks.checkInterval = .milliseconds(10)
+        model.scheduledTasks.startLoop()
+        try await waitUntil { await adapter.prompts == ["Check results"] }
+        try await waitUntil { model.scheduledTasks.schedules[0].state.stopReason == .finished }
+        model.scheduledTasks.stop()
+        await model.scheduledTasks.checkDue()
+        let prompts = await adapter.prompts
+        XCTAssertEqual(prompts, ["Check results"])
+        await model.shutdown()
+    }
+
+    func testOneOffContinuationDefersPersistsAndRunsOnceWhenAvailable() async throws {
+        let clock = Clock(date(16, 20))
+        let repository = InMemoryScheduledTaskRepository()
+        let center = ScheduledTaskCenter(repository: repository)
+        center.now = { clock.now }
+        let schedule = ScheduledTask(name: "Once", prompt: "Check results", trigger: .once(date(17, 9)),
+            destination: ScheduleDestination(mode: .continueTask, harness: .openCode, targetTaskID: UUID()))
+        center.create(schedule)
+        center.busyReason = { _ in .targetBusy }
+        clock.now = date(17, 9)
+        await center.checkDue()
+        await center.checkDue()
+        XCTAssertEqual(center.schedules[0].state.runs.count, 1)
+        XCTAssertEqual(center.schedules[0].state.runs.first?.outcome, .deferred)
+        XCTAssertNil(center.schedules[0].state.lastSlot)
+        XCTAssertTrue(center.schedules[0].isEnabled)
+
+        let restored = ScheduledTaskCenter(repository: repository)
+        restored.now = { clock.now }
+        var busy = true
+        var starts = 0
+        restored.busyReason = { _ in busy ? .targetBusy : nil }
+        restored.start = { _, _, _ in
+            starts += 1
+            let duringStart = ScheduledTaskCenter(repository: repository)
+            duringStart.now = { clock.now }
+            duringStart.start = { _, _, _ in XCTFail("A claimed slot must not replay after restart"); return .started(taskID: UUID()) }
+            await duringStart.checkDue()
+            return .started(taskID: UUID())
+        }
+        restored.checkInterval = .milliseconds(10)
+        restored.startLoop()
+        defer { restored.stop() }
+        busy = false
+        try await waitUntil { starts == 1 }
+        await restored.checkDue()
+        XCTAssertEqual(starts, 1)
+        XCTAssertEqual(restored.schedules[0].state.runs.count, 1)
+        XCTAssertEqual(restored.schedules[0].state.runs.first?.outcome, .started)
+        XCTAssertEqual(restored.schedules[0].state.stopReason, .finished)
+    }
+
+    func testDeferredOneOffExpiresOrCanBePausedWithoutSending() async throws {
+        let clock = Clock(date(16, 20))
+        let center = ScheduledTaskCenter()
+        center.now = { clock.now }
+        center.busyReason = { _ in .targetBusy }
+        var starts = 0
+        center.start = { _, _, _ in starts += 1; return .started(taskID: UUID()) }
+        let schedule = ScheduledTask(name: "Once", prompt: "Check results", trigger: .once(date(17, 9)),
+            destination: ScheduleDestination(mode: .continueTask, harness: .openCode, targetTaskID: UUID()))
+        center.create(schedule)
+        clock.now = date(17, 9)
+        await center.checkDue()
+        clock.now = date(18, 9)
+        center.busyReason = { _ in nil }
+        await center.checkDue()
+        XCTAssertEqual(starts, 0)
+        XCTAssertEqual(center.schedules[0].state.stopReason, .expired)
+        XCTAssertEqual(center.schedules[0].state.runs.first?.outcome, .expired)
+
+        clock.now = date(16, 20)
+        let paused = ScheduledTask(name: "Paused", prompt: "Check", trigger: .once(date(17, 9)),
+            destination: schedule.destination)
+        center.create(paused)
+        center.busyReason = { _ in .targetBusy }
+        clock.now = date(17, 9)
+        await center.checkDue()
+        center.setEnabled(false, for: paused.id)
+        center.setEnabled(true, for: paused.id)
+        center.busyReason = { _ in nil }
+        await center.checkDue()
+        XCTAssertEqual(starts, 0)
+    }
+
     func testAMissedRunRunsOnceAndSaysSo() async throws {
         let notifications = ScheduleNotificationRecorder()
         let adapter = SuggestionRecordingAdapter()

@@ -173,6 +173,33 @@ final class ScheduledTaskRenderingTests: XCTestCase {
 
     // MARK: - The window
 
+    func testDeferredAndExpiredContinuationDetails() async throws {
+        let fixture = try await makeFixture()
+        var schedule = try XCTUnwrap(fixture.schedules["release"])
+        schedule.trigger = .once(Date().addingTimeInterval(-60))
+        schedule.state = ScheduleRunState(scanFloor: Date().addingTimeInterval(-120))
+        schedule.origin = nil
+        schedule.isEnabled = true
+        schedule.state.runs = [ScheduledTaskRun(slot: Date().addingTimeInterval(-60), at: Date(),
+            trigger: .scheduled, outcome: .deferred)]
+        for outcome: ScheduledTaskRun.Outcome in [.deferred, .expired] {
+            schedule.state.runs[0].outcome = outcome
+            if outcome == .expired { schedule = ScheduleRunPolicy.expire(schedule, slot: Date()) }
+            let value = schedule
+            let elements = try render("detail-\(outcome.rawValue)", size: NSSize(width: 900, height: 760)) { _ in
+                ScheduledTaskDetail(schedule: value,
+                    nextRun: ScheduleRunPolicy.nextRun(of: value, now: Date(), calendar: .autoupdatingCurrent),
+                    isStarting: false, now: Date(),
+                    context: ScheduledTaskContext(task: { id in fixture.model.store.sessions.first { $0.id == id } }),
+                    actions: ScheduledTaskActions())
+            }
+            let text = outcome == .deferred ? "Waiting until the task is available"
+                : "Missed: the task was unavailable for 24 hours"
+            XCTAssertTrue(shows(elements, L10n.string(text)))
+        }
+        await fixture.model.shutdown()
+    }
+
     func testTheListBesideTheChosenScheduleAndItsRuns() async throws {
         let fixture = try await makeFixture()
         let window = try render("window", size: NSSize(width: 1180, height: 820)) { _ in

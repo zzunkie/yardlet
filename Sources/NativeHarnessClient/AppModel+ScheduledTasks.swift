@@ -5,7 +5,8 @@ import Foundation
 /// permission mode, folder, project, local or new worktree — so its status dots, notifications,
 /// the phone remote and resuming after a restart are those of any task. A continuing run is the
 /// task's next message, the way auto-fix's message goes (`deliverAutoFix`). Nothing here wakes a
-/// task that is busy: the center skips the slot instead. A run whose account is nearly spent goes to
+/// task that is busy: the center defers a one-off continuation for up to 24 hours,
+/// and skips other busy slots. A run whose account is nearly spent goes to
 /// the one automatic assignment picks instead (`accountReplacing`): a new task starts there, and a
 /// continued task first moves there as Continue with another account moves it, unless tasks move
 /// to an account with room on their own and its cache still lives (`AccountRouting.move`).

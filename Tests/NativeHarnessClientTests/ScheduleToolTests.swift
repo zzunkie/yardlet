@@ -629,6 +629,30 @@ final class ScheduleToolTests: XCTestCase {
         return try XCTUnwrap(model.sessionTools.approvals(for: taskID).last)
     }
 
+    func testRunHistoryReportsDeferredContinuationWithoutChangingManualRuns() async throws {
+        let fixture = try Fixture(root: root, calendar: seoul, now: date(17, 20))
+        let model = fixture.model
+        let created = await call(model, "create_scheduled_task", [
+            "prompt": "Check the results", "fireAt": "2026-10-17T21:00", "continueTaskId": "self"
+        ], from: fixture.caller)
+        XCTAssertFalse(created.isError, created.text)
+        let schedule = try XCTUnwrap(model.scheduledTasks.schedules.first)
+        try await model.store.updateSession(id: fixture.caller.id, status: .running)
+        fixture.clock.now = date(17, 21)
+        await model.scheduledTasks.checkDue()
+        let history = await call(model, "list_task_runs", ["scheduleId": schedule.id.uuidString], from: fixture.caller)
+        XCTAssertTrue(history.text.contains("deferred"), history.text)
+        let manual = await call(model, "run_scheduled_task", ["scheduleId": schedule.id.uuidString], from: fixture.caller)
+        XCTAssertTrue(manual.isError)
+        XCTAssertEqual(model.scheduledTasks.schedules[0].state.runs.first?.outcome, .skipped)
+        XCTAssertTrue(model.scheduledTasks.schedules[0].isEnabled)
+        fixture.clock.now = date(18, 21)
+        await model.scheduledTasks.checkDue()
+        let expired = await call(model, "list_task_runs", ["scheduleId": schedule.id.uuidString], from: fixture.caller)
+        XCTAssertTrue(expired.text.contains("expired"), expired.text)
+        await model.shutdown()
+    }
+
     func testContinuingThisTaskTargetsTheCaller() async throws {
         let fixture = try Fixture(root: root, calendar: seoul, now: date(17, 20))
         let model = fixture.model

@@ -164,6 +164,8 @@ struct ScheduledTaskRun: Codable, Equatable, Identifiable, Sendable {
 
     enum Outcome: String, Codable, Sendable {
         case started
+        case deferred
+        case expired
         case skipped
         case failed
     }

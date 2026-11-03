@@ -12,10 +12,11 @@ import Foundation
 /// - **A slot up to `onTimeTolerance` late is on time** (the Claude app's two minutes, `12e4` ms).
 /// - **Skip if still running.** A slot whose previous run's task is still working or waiting on the
 ///   person is skipped and recorded (`ScheduledTaskRun.SkipReason`); the center checks that, since
-///   it needs the tasks.
+///   it needs the tasks. One-off continuations instead keep a pending run for at most 24 hours.
 /// - **Repeated failures turn it off.** `failureLimit` failed starts in a row pause the schedule
 ///   with the reason.
 enum ScheduleRunPolicy {
+    static let busyDeferralWindow: TimeInterval = 24 * 3_600
     static let catchUpWindow: TimeInterval = 7 * 24 * 3_600
     static let onTimeTolerance: TimeInterval = 120
     static let failureLimit = 3
@@ -32,6 +33,10 @@ enum ScheduleRunPolicy {
     static func decide(_ schedule: ScheduledTask, now: Date, calendar: Calendar) -> Decision {
         guard schedule.isEnabled else { return .wait(next: nil) }
         let state = schedule.state
+        if let pending = state.runs.first(where: { $0.outcome == .deferred }), let slot = pending.slot {
+            return now.timeIntervalSince(slot) >= busyDeferralWindow
+                ? .expire(slot: slot) : .run(slot: slot, trigger: .missed)
+        }
         let floor = max(state.lastSlot ?? .distantPast, state.scanFloor, now.addingTimeInterval(-catchUpWindow))
         if let slot = schedule.trigger.latestSlot(after: floor, notAfter: now, calendar: calendar) {
             return .run(slot: slot, trigger: now.timeIntervalSince(slot) > onTimeTolerance ? .missed : .scheduled)
@@ -55,10 +60,17 @@ enum ScheduleRunPolicy {
     static func record(_ run: ScheduledTaskRun, in schedule: ScheduledTask) -> ScheduledTask {
         var schedule = schedule
         var state = schedule.state
-        if let slot = run.slot { state.lastSlot = max(state.lastSlot ?? slot, slot) }
-        if run.outcome != .skipped { state.lastRunAt = run.at }
+        // Replace the pending record; repeated checks never add duplicate runs.
+        if let index = state.runs.firstIndex(where: { $0.outcome == .deferred && $0.slot == run.slot }) {
+            state.runs.remove(at: index)
+        }
+        if let slot = run.slot, run.outcome != .deferred { state.lastSlot = max(state.lastSlot ?? slot, slot) }
+        if run.outcome == .started || run.outcome == .failed { state.lastRunAt = run.at }
         state.runs.insert(run, at: 0)
-        if state.runs.count > runHistoryLimit { state.runs.removeLast(state.runs.count - runHistoryLimit) }
+        while state.runs.count > runHistoryLimit,
+              let index = state.runs.lastIndex(where: { $0.outcome != .deferred }) {
+            state.runs.remove(at: index)
+        }
         switch run.outcome {
         case .started:
             state.consecutiveFailures = 0
@@ -68,11 +80,11 @@ enum ScheduleRunPolicy {
                 schedule.isEnabled = false
                 state.stopReason = .repeatedFailures
             }
-        case .skipped:
+        case .skipped, .deferred, .expired:
             break
         }
         // A one-off is done once its moment has been dealt with, however it went.
-        if case .once = schedule.trigger, run.slot != nil, state.stopReason == nil {
+        if case .once = schedule.trigger, run.slot != nil, run.outcome != .deferred, state.stopReason == nil {
             schedule.isEnabled = false
             state.stopReason = .finished
         }
@@ -85,6 +97,9 @@ enum ScheduleRunPolicy {
         var schedule = schedule
         schedule.isEnabled = false
         schedule.state.lastSlot = slot
+        for index in schedule.state.runs.indices where schedule.state.runs[index].outcome == .deferred {
+            schedule.state.runs[index].outcome = .expired
+        }
         schedule.state.stopReason = .expired
         return schedule
     }
@@ -95,6 +110,10 @@ enum ScheduleRunPolicy {
         var schedule = schedule
         guard schedule.isEnabled != enabled else { return schedule }
         schedule.isEnabled = enabled
+        for index in schedule.state.runs.indices where schedule.state.runs[index].outcome == .deferred {
+            schedule.state.runs[index].outcome = .skipped
+            schedule.state.runs[index].skipReason = .targetBusy
+        }
         schedule.updatedAt = now
         if enabled {
             schedule.state.scanFloor = now
@@ -113,6 +132,9 @@ enum ScheduleRunPolicy {
         result.origin = schedule.origin
         result.updatedAt = now
         result.state = schedule.state
+        if edited.trigger != schedule.trigger || edited.destination != schedule.destination {
+            result.state.runs.removeAll { $0.outcome == .deferred }
+        }
         if edited.trigger != schedule.trigger {
             result.state.scanFloor = now
             result.state.lastSlot = nil

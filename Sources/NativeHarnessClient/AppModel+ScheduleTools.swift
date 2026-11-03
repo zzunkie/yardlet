@@ -378,6 +378,10 @@ extension AppModel: ScheduleToolHandling {
             let verb = schedule.destination.mode == .continueTask ? "continued" : "started"
             return .text("Scheduled task \"\(name)\" ran now: it \(verb) task \(task). read_task or wait_tasks "
                 + "show what it does, and list_task_runs lists its runs.")
+        case .deferred:
+            return .text("Waiting until the task is available (up to 24 hours after the scheduled time).")
+        case .expired:
+            return .error("Missed: the task was unavailable for 24 hours.")
         case .skipped:
             return .error("Not run: \(run.skipReason.map(Self.skipWords) ?? "it was skipped").")
         case .failed:

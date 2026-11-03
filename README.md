@@ -164,7 +164,8 @@ Three helpers in the app bundle do work outside the main process:
   Muse Code and earlier Antigravity CLI versions have no way to add an MCP server to one session,
   so their tasks run without them.
 - Scheduled tasks run only while Yardlet is open. A run missed while it was closed runs once when it
-  opens again, within 7 days.
+  opens again, within 7 days. A one-time continuation waits for a busy task to become available,
+  for up to 24 hours after its scheduled time. Repeating and manual runs skip busy tasks.
 - The built-in browser cannot use passkeys saved in iCloud Keychain
   ([docs/BROWSER_HOST.md](docs/BROWSER_HOST.md)).
 - Personal agents have limits of their own ([docs/PERSONAL_AGENTS.md](docs/PERSONAL_AGENTS.md)).

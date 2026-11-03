@@ -87,6 +87,9 @@ enum ScheduleText {
             break
         }
         guard schedule.isEnabled else { return L10n.string("Paused") }
+        if schedule.state.runs.contains(where: { $0.outcome == .deferred }) {
+            return L10n.string("Waiting until the task is available")
+        }
         guard let nextRun else { return L10n.string("No next run") }
         return L10n.format("Next run %@", moment(nextRun, relativeTo: now, calendar: calendar))
     }
@@ -125,6 +128,9 @@ enum ScheduleText {
             break
         }
         guard schedule.isEnabled else { return "\(L10n.string("Paused")) · \(cadence)" }
+        if schedule.state.runs.contains(where: { $0.outcome == .deferred }) {
+            return L10n.string("Waiting until the task is available")
+        }
         guard let nextRun else { return "\(L10n.string("No next run")) · \(cadence)" }
         return "\(moment(nextRun, relativeTo: now, calendar: calendar)) · \(cadence)"
     }
@@ -144,6 +150,8 @@ enum ScheduleText {
         let when = lastRun(at: run.at, now: now, calendar: calendar)
         switch run.outcome {
         case .started: return when
+        case .deferred: return L10n.string("Waiting until the task is available")
+        case .expired: return L10n.string("Missed: the task was unavailable for 24 hours")
         case .skipped: return "\(when) · \(skipReason(run.skipReason ?? .previousRunActive))"
         case .failed: return "\(when) · \(couldNotStart(run.failure ?? ""))"
         }

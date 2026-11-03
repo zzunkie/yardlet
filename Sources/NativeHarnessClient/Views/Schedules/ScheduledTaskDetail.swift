@@ -13,7 +13,7 @@ struct ScheduledTaskContext {
 /// own was nearly spent.
 struct ScheduledRunRow: Identifiable, Equatable {
     enum State: Equatable {
-        case running, waiting, completed, failed, skipped(ScheduledTaskRun.SkipReason), notStarted(String), gone
+        case deferred, expired, running, waiting, completed, failed, skipped(ScheduledTaskRun.SkipReason), notStarted(String), gone
     }
 
     let id: UUID
@@ -30,6 +30,8 @@ struct ScheduledRunRow: Identifiable, Equatable {
             let session = run.taskID.flatMap(task)
             let state: State
             switch run.outcome {
+            case .deferred: state = .deferred
+            case .expired: state = .expired
             case .skipped: state = .skipped(run.skipReason ?? .previousRunActive)
             case .failed: state = .notStarted(run.failure ?? "")
             case .started:
@@ -67,6 +69,8 @@ struct ScheduledRunRow: Identifiable, Equatable {
 
     var stateText: String {
         switch state {
+        case .deferred: L10n.string("Waiting until the task is available")
+        case .expired: L10n.string("Missed: the task was unavailable for 24 hours")
         case .running: L10n.string("Running now")
         case .waiting: L10n.string("Needs your attention")
         case .completed: L10n.string("Run completed")
