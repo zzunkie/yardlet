@@ -88,8 +88,8 @@ struct NewTaskView: View {
                 pickerItems = []
                 Task {
                     for item in items {
-                        if let data = try? await item.loadTransferable(type: Data.self), let image = PickedImage(data: data),
-                           images.count < RemoteProtocol.maxImages {
+                        if let data = try? await item.loadTransferable(type: Data.self),
+                           let image = await PickedImage.make(from: data), images.count < RemoteProtocol.maxImages {
                             images.append(image)
                         }
                     }

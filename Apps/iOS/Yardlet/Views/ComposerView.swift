@@ -75,8 +75,10 @@ struct ComposerView: View {
         }
         .fullScreenCover(isPresented: $isTakingPhoto) {
             CameraPicker { image in
-                if let data = image.jpegData(compressionQuality: 0.9), let picked = PickedImage(data: data) {
-                    images.append(picked)
+                Task {
+                    if let picked = await PickedImage.make(from: image), images.count < RemoteProtocol.maxImages {
+                        images.append(picked)
+                    }
                 }
             }
             .ignoresSafeArea()
@@ -223,7 +225,7 @@ struct ComposerView: View {
                             }
                             Text(file.name).lineLimit(1)
                             Button {
-                                files.removeAll { $0.id == file.id }
+                                remove(file.id)
                             } label: {
                                 Image(systemName: "xmark").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
                             }
@@ -264,7 +266,7 @@ struct ComposerView: View {
         for item in items {
             guard images.count < RemoteProtocol.maxImages,
                   let data = try? await item.loadTransferable(type: Data.self),
-                  let image = PickedImage(data: data) else { continue }
+                  let image = await PickedImage.make(from: data), images.count < RemoteProtocol.maxImages else { continue }
             images.append(image)
         }
     }
@@ -299,12 +301,18 @@ struct ComposerView: View {
         guard let index = files.firstIndex(where: { $0.id == id }) else { return }
         files[index].state = .uploading
         let file = files[index]
-        Task {
+        files[index].upload = Task {
             let uploadID = await session.upload(file.url, mediaType: file.mediaType)
-            guard let index = files.firstIndex(where: { $0.id == id }) else { return }
+            guard !Task.isCancelled, let index = files.firstIndex(where: { $0.id == id }) else { return }
             files[index].uploadID = uploadID
             files[index].state = uploadID == nil ? .failed : .ready
         }
+    }
+
+    /// Takes a file off the message, stopping its upload between parts.
+    private func remove(_ id: UUID) {
+        files.first { $0.id == id }?.upload?.cancel()
+        files.removeAll { $0.id == id }
     }
 }
 
@@ -318,6 +326,8 @@ struct AttachedFile: Identifiable {
     let mediaType: String
     var uploadID: String?
     var state = State.uploading
+    /// The upload under way, cancelled when the file is taken off the message.
+    var upload: Task<Void, Never>?
 }
 
 /// The camera, for a photo to send.
@@ -355,27 +365,38 @@ struct CameraPicker: UIViewControllerRepresentable {
     }
 }
 
-/// A photo to send: a JPEG within the Mac's size limit (§15.14), and a small preview.
-struct PickedImage: Identifiable {
+/// A photo to send: a JPEG within the Mac's size limit (§15.14), and a small preview. Decoding, scaling and
+/// compressing a photo takes a while, so it is made off the main actor; a photo from the camera comes as the image the
+/// camera took, not encoded and read again.
+struct PickedImage: Identifiable, Sendable {
     let id = UUID()
     let jpeg: Data
     let preview: UIImage
 
-    init?(data: Data) {
+    @concurrent
+    static func make(from data: Data) async -> PickedImage? {
         guard let image = UIImage(data: data) else { return nil }
-        let scaled = Self.scaled(image, longestSide: 2048)
-        var quality: CGFloat = 0.8
-        var jpeg = scaled.jpegData(compressionQuality: quality)
-        while let current = jpeg, current.count > RemoteProtocol.maxImageBytes, quality > 0.3 {
-            quality -= 0.15
-            jpeg = scaled.jpegData(compressionQuality: quality)
-        }
-        guard let jpeg, jpeg.count <= RemoteProtocol.maxImageBytes else { return nil }
-        self.jpeg = jpeg
-        preview = Self.scaled(image, longestSide: 200)
+        return encode(image)
     }
 
-    private static func scaled(_ image: UIImage, longestSide: CGFloat) -> UIImage {
+    @concurrent
+    static func make(from image: UIImage) async -> PickedImage? {
+        encode(image)
+    }
+
+    private nonisolated static func encode(_ image: UIImage) -> PickedImage? {
+        let resized = scaled(image, longestSide: 2048)
+        var quality: CGFloat = 0.8
+        var jpeg = resized.jpegData(compressionQuality: quality)
+        while let current = jpeg, current.count > RemoteProtocol.maxImageBytes, quality > 0.3 {
+            quality -= 0.15
+            jpeg = resized.jpegData(compressionQuality: quality)
+        }
+        guard let jpeg, jpeg.count <= RemoteProtocol.maxImageBytes else { return nil }
+        return PickedImage(jpeg: jpeg, preview: scaled(image, longestSide: 200))
+    }
+
+    private nonisolated static func scaled(_ image: UIImage, longestSide: CGFloat) -> UIImage {
         let size = image.size
         let scale = min(1, longestSide / max(size.width, size.height))
         guard scale < 1 else { return image }
