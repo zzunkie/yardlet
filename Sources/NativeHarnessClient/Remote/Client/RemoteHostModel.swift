@@ -65,6 +65,10 @@ final class RemoteHostModel: Identifiable {
     private(set) var taskControls = false
     /// Each open task's composer settings as the host last answered them (§15.23).
     var taskSettings: [String: [RemoteSetting]] = [:]
+    /// The host shows a task's browser tabs (§15.25).
+    private(set) var offersBrowser = false
+    /// The browser panel's task, tabs and picture.
+    let browser = RemoteBrowserModel()
 
     /// Called for each `attention` event, for a notification of the host's task.
     @ObservationIgnored var onAttention: ((RemoteEvent) -> Void)?
@@ -80,6 +84,8 @@ final class RemoteHostModel: Identifiable {
     @ObservationIgnored private var isPresent = false
     @ObservationIgnored private var toldPresence: Bool?
     @ObservationIgnored private var hostTakesPresence = false
+    /// The last request sent in order (`requestInOrder`), which the next waits for.
+    @ObservationIgnored private var outbox: Task<Void, Never>?
     /// Subscriptions, the least recently shown first; a host takes 8 per connection (§7).
     @ObservationIgnored private var subscribed: [String] = []
     @ObservationIgnored static let keptSubscriptions = 6
@@ -97,6 +103,8 @@ final class RemoteHostModel: Identifiable {
                                          clientKey: clientKey, hello: hello, session: session, timing: timing)
         schedules.model = self
         files.model = self
+        browser.hostName = host.name
+        browser.send = { [weak self] request, onResponse in self?.requestInOrder(request, onResponse: onResponse) }
     }
 
     var name: String { host.name }
@@ -170,6 +178,7 @@ final class RemoteHostModel: Identifiable {
             store?.save(host)
             if let target = host.target { Task { await connector.update(target: target) } }
             for conversation in conversations.values { conversation.renameHost(host.name) }
+            browser.hostName = host.name
             connection = .connected(path)
             resync()
         case let .waiting(retryAt, _):
@@ -210,7 +219,9 @@ final class RemoteHostModel: Identifiable {
             closingReason = event.reason
         case .schedulesChanged:
             if schedules.isFollowing { schedules.load() }
-        case .revoked, .linked, .linkRefused, .linkRequest, .linkResolved, .tabFrame, .browserTabsChanged:
+        case .tabFrame, .browserTabsChanged:
+            browser.receive(event)
+        case .revoked, .linked, .linkRefused, .linkRequest, .linkResolved:
             break
         }
     }
@@ -232,10 +243,12 @@ final class RemoteHostModel: Identifiable {
                 // Pages read before this answer came in the other detail.
                 for taskID in subscribed { subscribe(taskID) }
             }
+            offersBrowser = response.browserTabs == true
             hasSnapshot = true
             hostTakesPresence = response.presence == true
             toldPresence = nil
             tellPresence()
+            if offersBrowser { browser.rewatch() } else { browser.hide() }
             if case let .task(id) = selection, !tasks.contains(where: { $0.id == id }) { selection = .none }
             // The host sends `schedulesChanged` to a connection that asked since it connected.
             if offersSchedules, schedules.isFollowing { schedules.load() }
@@ -288,6 +301,10 @@ final class RemoteHostModel: Identifiable {
         guard selection != self.selection else { return }
         self.selection = selection
         commandError = nil
+        // The panel follows the task shown, as each task's side panel is its own.
+        if browser.taskID != nil {
+            if case let .task(taskID) = selection { browser.show(taskID: taskID) } else { browser.hide() }
+        }
         guard case let .task(taskID) = selection else { return }
         // A task opened from a schedule, a chip or a notification shows among the tasks.
         showsSchedules = false
@@ -372,6 +389,26 @@ final class RemoteHostModel: Identifiable {
             let sent = await connector.send(id: id, request)
             if !sent { self.fail(id) }
         }
+    }
+
+    /// Sends a request after the ones sent this way before it have gone out, so a page gets a person's clicks, keys
+    /// and text in the order they made them.
+    func requestInOrder(_ request: RemoteRequest, onResponse: ((RemoteResponse) -> Void)? = nil) {
+        nextRequest += 1
+        let id = "c\(nextRequest)"
+        pending[id] = { onResponse?($0) }
+        let previous = outbox
+        outbox = Task { [connector] in
+            await previous?.value
+            let sent = await connector.send(id: id, request)
+            if !sent { self.fail(id) }
+        }
+    }
+
+    /// Shows the task's browser in the window's panel, on `tabID` or the tab its host's panel shows.
+    func showBrowser(taskID: String, tabID: String? = nil) {
+        guard offersBrowser else { return }
+        browser.show(taskID: taskID, tabID: tabID)
     }
 
     /// A request whose answer the caller waits for.

@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import XCTest
 @testable import NativeHarnessClient
 @testable import YardletRemote
@@ -82,6 +83,73 @@ final class RemoteHostModelTests: XCTestCase {
         XCTAssertNil(device)
         XCTAssertTrue(directory.hosts.isEmpty)
         XCTAssertNil(keys.load(hostID: host.id))
+    }
+
+    /// A host task's browser in the window's panel (§15.25): the handoff's card shows the handed tab, its pictures come
+    /// one after another as the window takes each, and a click, typing, Tab and the trackpad reach the page in the order
+    /// made, the trackpad's movements added up. The password field's focus reaches the panel, and the handoff's bar
+    /// answers the host. Closing the panel lets the tab go.
+    func testAHostTasksBrowserShowsItsTabAndTakesInput() async throws {
+        typealias ID = RemoteFixtureBridge.ID
+        let stack = try await LoopbackStack(name: "Mac Studio", bridge: RemoteFixtureBridge(speed: 25))
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                        name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                            hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
+        let paired = try await directory.pair(link: link.absoluteString)
+        let model = try XCTUnwrap(directory.model(for: paired.id))
+        defer { directory.close(paired.id) }
+        try await waitUntil { model.hasSnapshot }
+        XCTAssertTrue(model.offersBrowser)
+
+        model.select(.task(ID.handoff))
+        let conversation = try XCTUnwrap(model.conversations[ID.handoff])
+        try await waitUntil { conversation.presentation.turns.last?.requests.isEmpty == false }
+        let request = try XCTUnwrap(conversation.presentation.turns.last?.requests.first)
+        XCTAssertEqual(request.responses.map(\.title), ["Decline", "Show Tab", "I'm done"].map(L10n.string))
+        let show = try XCTUnwrap(request.responses.first { $0.title == L10n.string("Show Tab") })
+        model.respond(taskID: ID.handoff, requestID: request.id, route: show.route)
+        let browser = model.browser
+        XCTAssertEqual(browser.taskID, ID.handoff)
+        try await waitUntil { browser.frame != nil && browser.isListed }
+        XCTAssertEqual(browser.tabID, RemoteFixtureTabs.signInTab)
+        XCTAssertEqual(browser.tabs.count, 2)
+        XCTAssertEqual(browser.watchedTab?.requestId, request.id, "the tab carries the handoff the bar answers")
+        let first = try XCTUnwrap(browser.frame)
+
+        // A frame changes the panel's picture only: the conversation and what shows the panel are not drawn again.
+        let redrawn = SignalRecorder()
+        withObservationTracking {
+            _ = conversation.presentation
+            _ = browser.taskID
+        } onChange: { redrawn.record(.tasks) }
+
+        // Drawn 320 points wide, the picture's point (100, 72) is the page's (200, 144): the username field.
+        let field = try XCTUnwrap(browser.pagePoint(x: 100, y: 72.5, drawnWidth: 320))
+        XCTAssertEqual(field.x, 200)
+        browser.input(.click(x: field.x, y: field.y))
+        browser.input(.text("octo"))
+        browser.input(.text("cat"))
+        browser.input(.key("Tab"))
+        try await waitUntil { browser.watchedTab?.passwordField == true }
+        XCTAssertGreaterThan(try XCTUnwrap(browser.frame).number, first.number, "each frame follows the one the window took")
+        XCTAssertTrue(redrawn.changes.isEmpty, "frames and the list redraw only the browser panel")
+        for _ in 0..<5 { browser.scroll(x: 10, y: 10, deltaX: 0, deltaY: 30) }
+        browser.input(.text("hunter2"))
+        browser.input(.key("Enter"))
+        try await waitUntil { browser.watchedTab?.title == "New release · acme/web" }
+        XCTAssertNil(browser.refusal)
+
+        // The bar's I'm done answers the handoff on the host.
+        model.send(.answerHandoff(taskID: ID.handoff, requestID: request.id, answer: .done))
+        try await waitUntil { browser.watchedTab?.requestId == nil }
+        try await waitUntil { conversation.presentation.turns.last?.requests.isEmpty == true }
+
+        browser.hide()
+        XCTAssertNil(browser.taskID)
+        XCTAssertNil(browser.frame)
     }
 
     /// Two Yardlets on loopback: the host is the app's own model behind the remote server

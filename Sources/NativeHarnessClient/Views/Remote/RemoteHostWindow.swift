@@ -450,8 +450,9 @@ private struct RemoteTaskRow: View {
 
 /// A task of the host: its conversation in the app's own timeline, with the plan limit's actions on its card,
 /// the queue's chips, and the composer; beside it, as the local session rail, the task's outputs when the host
-/// serves its files (§15.22). Suggested tasks' chips act through the host (§15.9), and a file a link names or an
-/// output is read from the host and opened here (`RemoteHostFiles`).
+/// serves its files (§15.22), and where the Mac's own window has the task's side panel, its browser (§15.25) while
+/// it is open. Suggested tasks' chips act through the host (§15.9), and a file a link names or an output is read
+/// from the host and opened here (`RemoteHostFiles`).
 struct RemoteTaskView: View {
     let model: RemoteHostModel
     let conversation: RemoteConversationModel
@@ -470,17 +471,25 @@ struct RemoteTaskView: View {
 
     private var outputs: [RemoteOutput] { model.offersTaskFiles ? model.files.outputs[conversation.taskID] ?? [] : [] }
 
+    private var showsBrowser: Bool { model.browser.taskID == conversation.taskID }
+
     private var drawsRail: Bool {
-        showsRail && !outputs.isEmpty && SessionRailPlacement.fits(sessionWidth: width, panelOpen: false)
+        showsRail && !outputs.isEmpty && SessionRailPlacement.fits(sessionWidth: width, panelOpen: showsBrowser)
     }
 
     var body: some View {
         HStack(spacing: 0) {
             conversationColumn
+                .frame(minWidth: 360, maxWidth: .infinity)
             if drawsRail {
                 Divider()
                 RemoteTaskRail(outputs: outputs, open: { open($0, .viewer) }, openInItsApp: { open($0, .itsApp) },
                                revealInFinder: { open($0, .finder) })
+            }
+            if showsBrowser {
+                Rectangle().fill(ParityTheme.separator).frame(width: 1)
+                RemoteBrowserPanel(model: model)
+                    .frame(minWidth: 380, idealWidth: 560, maxWidth: 760)
             }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
@@ -565,6 +574,11 @@ struct RemoteTaskView: View {
             Text(L10n.format("On %@", model.name))
                 .font(.system(size: 12))
                 .foregroundStyle(.tertiary)
+            if model.offersBrowser {
+                ParityIconButton(systemName: "globe", help: showsBrowser ? L10n.string("Hide browser") : L10n.string("Show browser")) {
+                    if showsBrowser { model.browser.hide() } else { model.showBrowser(taskID: conversation.taskID) }
+                }
+            }
             if !outputs.isEmpty {
                 ParityIconButton(systemName: "sidebar.squares.right",
                                  help: L10n.string(drawsRail ? "Hide session rail" : "Show session rail")) {
