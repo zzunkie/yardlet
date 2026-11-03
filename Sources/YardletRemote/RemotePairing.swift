@@ -1,5 +1,12 @@
 import Crypto
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif os(Windows)
+import WinSDK
+#endif
 #if canImport(Security)
 import Security
 #endif
@@ -260,6 +267,8 @@ public actor RemoteDeviceStore {
         var denied: [RemotePermissionKey]
     }
     private var devices: [RemoteDevice]
+    private var persistedPermissions: [String: RemoteDevicePermissions] = [:]
+    private var permissionSnapshot: RemotePermissionSnapshot?
     /// A seen time is written at most this often per device.
     private let seenWriteInterval: TimeInterval = 60
 
@@ -278,16 +287,25 @@ public actor RemoteDeviceStore {
         } else {
             devices = seeded
         }
-        if let journal = self.recoveryFileURL, FileManager.default.fileExists(atPath: journal.path) {
-            if let data = try? Data(contentsOf: journal), let saved = try? JSONDecoder().decode(RecoveryFile.self, from: data),
+        persistedPermissions = Dictionary(uniqueKeysWithValues: devices.map { ($0.id, $0.permissions ?? RemoteDevicePermissions()) })
+        if let journal = self.recoveryFileURL,
+           let attributes = try? FileManager.default.attributesOfItem(atPath: journal.path) {
+            if attributes[.type] as? FileAttributeType == .typeRegular, let data = try? Data(contentsOf: journal), let saved = try? JSONDecoder().decode(RecoveryFile.self, from: data),
                saved.version == 1 {
-                recoveryDenials = Set(saved.denied)
+                let known = Set(devices.map(\.id))
+                recoveryDenials = Set(saved.denied.filter { known.contains($0.deviceID) })
                 durableRecoveryDenials = recoveryDenials
             } else {
                 // An unreadable recovery record never revives an old grant.
                 recoveryDenials = Set(devices.flatMap { device in
                     RemoteDevicePermission.allCases.map { RemotePermissionKey(deviceID: device.id, permission: $0) }
                 })
+            }
+        }
+        for index in devices.indices {
+            for key in recoveryDenials where key.deviceID == devices[index].id {
+                if devices[index].permissions == nil { devices[index].permissions = RemoteDevicePermissions() }
+                devices[index].permissions?[key.permission] = false
             }
         }
     }
@@ -322,48 +340,47 @@ public actor RemoteDeviceStore {
         return devices.first { $0.publicKey == key }
     }
 
-    func permissionBootstrap() -> RemotePermissionBootstrap {
-        RemotePermissionBootstrap(devices: devices, recovery: recoveryState())
+    func permissionBootstrap(_ snapshot: RemotePermissionSnapshot) -> RemotePermissionBootstrap {
+        permissionSnapshot = snapshot
+        return RemotePermissionBootstrap(devices: devices, recovery: recoveryState())
     }
 
-    /// All operations here are synchronous on the persistence actor. RemoteServer queues them in
-    /// request order; metadata writes between operations preserve these committed permission values.
     func persistPermissionWrite(_ operation: RemotePermissionWrite) async -> RemotePermissionWriteResult {
         await beforePermissionWrite?()
-        switch operation {
-        case let .grant(key):
-            guard let index = devices.firstIndex(where: { $0.id == key.deviceID }) else { return result(false) }
-            // A denial fence must be durable before a grant can replace the primary record.
-            if recoveryDenials.contains(key), !writeRecovery(recoveryDenials) { return result(false) }
-            var updated = devices
-            var permissions = updated[index].permissions ?? RemoteDevicePermissions()
-            permissions[key.permission] = true
-            updated[index].permissions = permissions
-            do { try Self.writeChecked(updated, to: fileURL) }
-            catch { return result(false) }
-            devices = updated
-            if recoveryDenials.contains(key) {
-                let cleared = recoveryDenials.subtracting([key])
-                guard writeRecovery(cleared) else { return result(false) }
-                recoveryDenials = cleared
-            }
-            return result(true, device: devices[index])
-        case let .deny(keys):
-            return persistDenial(keys, replacement: nil, removing: nil)
-        case let .register(device):
-            let keys = Set(RemoteDevicePermission.allCases.map { RemotePermissionKey(deviceID: device.id, permission: $0) })
-            return persistDenial(keys, replacement: device, removing: nil)
-        case let .remove(id):
-            let keys = Set(RemoteDevicePermission.allCases.map { RemotePermissionKey(deviceID: id, permission: $0) })
-            return persistDenial(keys, replacement: nil, removing: id)
+        guard let snapshot = permissionSnapshot else { return result(false) }
+        return snapshot.withValue { desired in
+            persistPermissions(desired, operation: operation)
         }
     }
 
-    private func persistDenial(_ keys: Set<RemotePermissionKey>, replacement: RemoteDevice?, removing: String?) -> RemotePermissionWriteResult {
-        recoveryDenials.formUnion(keys)
-        _ = writeRecovery(recoveryDenials)
+    private func maskDeniedPermissions(_ desired: [String: RemoteDevicePermissions]) {
+        for index in devices.indices {
+            let id = devices[index].id
+            var permissions = devices[index].permissions ?? RemoteDevicePermissions()
+            for permission in RemoteDevicePermission.allCases {
+                let key = RemotePermissionKey(deviceID: id, permission: permission)
+                if desired[id]?[permission] == false || recoveryDenials.contains(key) {
+                    permissions[permission] = false
+                    if persistedPermissions[id]?[permission] == true { recoveryDenials.insert(key) }
+                }
+            }
+            if devices[index].permissions != nil || permissions != RemoteDevicePermissions() {
+                devices[index].permissions = permissions
+            }
+        }
+    }
+
+    private func persistPermissions(_ desired: [String: RemoteDevicePermissions], operation: RemotePermissionWrite) -> RemotePermissionWriteResult {
+        // Keep the logical store denied even if BOTH writes fail. Metadata can never resurrect it.
+        maskDeniedPermissions(desired)
         var updated = devices
-        if let replacement {
+        var registeredID: String?
+        var identityChange = false
+        switch operation {
+        case .save: break
+        case let .register(replacement):
+            identityChange = true
+            registeredID = replacement.id
             if let index = updated.firstIndex(where: { $0.publicKey == replacement.publicKey }) {
                 guard updated[index].id == replacement.id else { return result(false) }
                 if !replacement.name.isEmpty,
@@ -372,24 +389,36 @@ public actor RemoteDeviceStore {
                 }
                 updated[index].lastSeenAt = max(updated[index].lastSeenAt ?? .distantPast, replacement.lastSeenAt ?? .distantPast)
             } else {
-                var registered = replacement
-                registered.permissions = RemoteDevicePermissions()
-                updated.append(registered)
+                updated.append(replacement)
             }
+        case let .remove(id):
+            identityChange = true
+            updated.removeAll { $0.id == id }
         }
         for index in updated.indices {
-            var permissions = updated[index].permissions ?? RemoteDevicePermissions()
-            for key in keys where key.deviceID == updated[index].id { permissions[key.permission] = false }
-            updated[index].permissions = permissions
+            updated[index].permissions = desired[updated[index].id] ?? RemoteDevicePermissions()
         }
-        if let removing { updated.removeAll { $0.id == removing } }
+        // Fence every new grant until both files commit. A failed cleanup must never grant on restart.
+        var fence = recoveryDenials
+        for device in updated {
+            for permission in RemoteDevicePermission.allCases where device.permissions?[permission] == true
+                && devices.first(where: { $0.id == device.id })?.permissions?[permission] != true {
+                fence.insert(RemotePermissionKey(deviceID: device.id, permission: permission))
+            }
+        }
+        let hasNewGrants = fence.contains { desired[$0.deviceID]?[$0.permission] == true }
+        let fenced = writeRecovery(fence)
+        if hasNewGrants && !fenced { return result(false) }
         do { try Self.writeChecked(updated, to: fileURL) }
         catch { return result(false) }
+        persistedPermissions = Dictionary(uniqueKeysWithValues: updated.map { ($0.id, $0.permissions ?? RemoteDevicePermissions()) })
         devices = updated
-        let cleared = recoveryDenials.subtracting(keys)
-        if writeRecovery(cleared) { recoveryDenials = cleared }
-        else if removing == nil { return result(false) }
-        return result(true, device: replacement.flatMap { registered in devices.first { $0.id == registered.id } })
+        // A lingering denial after the primary committed is safe, including a newly paired device.
+        let cleared = writeRecovery([])
+        recoveryDenials = cleared ? [] : fence
+        if !cleared { maskDeniedPermissions(desired) }
+        let registered = registeredID.flatMap { id in devices.first { $0.id == id } }
+        return result(identityChange || cleared || !hasNewGrants, device: registered)
     }
 
     private func writeRecovery(_ denied: Set<RemotePermissionKey>) -> Bool {
@@ -409,7 +438,7 @@ public actor RemoteDeviceStore {
     private func recoveryState() -> RemotePermissionRecoveryState {
         let unsafe = recoveryDenials.filter { key in
             !durableRecoveryDenials.contains(key)
-                && devices.first(where: { $0.id == key.deviceID })?.permissions?[key.permission] == true
+                && persistedPermissions[key.deviceID]?[key.permission] == true
         }
         return RemotePermissionRecoveryState(unsavedDeniedPermissions: recoveryDenials,
                                              unsafeDeniedPermissions: Set(unsafe))
@@ -462,7 +491,16 @@ public actor RemoteDeviceStore {
     }
 
     private func save() {
-        Self.write(devices, to: fileURL)
+        let write = { (desired: [String: RemoteDevicePermissions]) in
+            self.maskDeniedPermissions(desired)
+            if !self.recoveryDenials.isEmpty { _ = self.writeRecovery(self.recoveryDenials) }
+            do {
+                try Self.writeChecked(self.devices, to: self.fileURL)
+                self.persistedPermissions = Dictionary(uniqueKeysWithValues: self.devices.map { ($0.id, $0.permissions ?? RemoteDevicePermissions()) })
+            } catch { /* The recovery record and logical denials remain for a later retry. */ }
+        }
+        if let permissionSnapshot { permissionSnapshot.withValue(write) }
+        else { write([:]) }
     }
 
     private static func write(_ devices: [RemoteDevice], to fileURL: URL?) {
@@ -491,11 +529,26 @@ public actor RemoteDeviceStore {
             try? handle.close()
             throw error
         }
+        #if canImport(Darwin) || canImport(Glibc)
+        guard rename(temporary.path, fileURL.path) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        #elseif os(Windows)
+        let source = Array(temporary.path.utf16) + [0]
+        let destination = Array(fileURL.path.utf16) + [0]
+        let replaced = source.withUnsafeBufferPointer { from in
+            destination.withUnsafeBufferPointer { to in
+                MoveFileExW(from.baseAddress, to.baseAddress, DWORD(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            }
+        }
+        guard replaced else { throw NSError(domain: "Win32", code: Int(GetLastError())) }
+        #else
         if FileManager.default.fileExists(atPath: fileURL.path) {
             _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary, options: [.usingNewMetadataOnly])
         } else {
             try FileManager.default.moveItem(at: temporary, to: fileURL)
         }
+        #endif
     }
 
 }
