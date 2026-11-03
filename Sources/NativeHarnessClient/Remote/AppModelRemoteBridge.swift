@@ -818,11 +818,13 @@ final class AppModelRemoteBridge: RemoteBridge {
         }
         let attachments = stored.compactMap { CodexUserInput.localAttachment(for: $0.url) } + fileInputs
         let text = start.text
+        let providerOptions = choice?.providerOptions(for: harness) ?? [:]
+        let account = await model.newTaskAccount(harness: harness, model: AppModel.modelOption(providerOptions, harness: harness))
         let submission = NewTaskDraft.Submission(
             originalText: text, attachments: attachments, harness: harness, workspaceURL: folder, projectID: project?.id,
-            runtimeURL: runtime, connection: connection, startsInNewWorktree: worktree,
-            providerOptions: choice?.providerOptions(for: harness) ?? [:],
-            selectsTask: false)
+            runtimeURL: runtime, connection: account.map(\.connection) ?? connection,
+            accountAssignment: account?.assignment, startsInNewWorktree: worktree,
+            providerOptions: providerOptions, selectsTask: false)
         let previousError = model.bootstrapError
         do {
             guard let created = try await model.createTask(submission) else {

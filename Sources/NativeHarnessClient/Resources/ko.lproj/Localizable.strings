@@ -1106,6 +1106,10 @@
 "Chosen automatically" = "자동 배정";
 "Chosen by the agent" = "에이전트가 고름";
 "Account for new tasks" = "새 작업 계정";
+"Automatic" = "자동";
+"Each new task starts on the account with the most room left in its limits" = "새 작업마다 한도 여유가 가장 많은 계정으로 시작합니다";
+"Choose the account for new tasks automatically" = "새 작업 계정 자동 선택";
+"With more than one account in automatic assignment, a new task starts on the one with the most room left in its limits unless you choose an account." = "자동 배정에 포함된 계정이 둘 이상이면, 계정을 직접 고르지 않은 새 작업은 한도 여유가 가장 많은 계정으로 시작합니다.";
 "%@ %lld%% used" = "%1$@ %2$lld%% 사용";
 "Frees up %@" = "%@에 풀림";
 "Switched from %@: nearly out of its limit" = "%@ 한도가 거의 소진되어 바꿈";

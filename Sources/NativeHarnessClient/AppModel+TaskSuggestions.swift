@@ -198,7 +198,7 @@ extension AppModel: TaskSuggestionToolHandling {
         }
         let submission = NewTaskDraft.Submission(
             originalText: TaskMessage.disarmed(suggestion.prompt), attachments: [], harness: harness, workspaceURL: place.folder,
-            projectID: place.project?.id, runtimeURL: runtime, connection: connection,
+            projectID: place.project?.id, runtimeURL: runtime, connection: connection, accountAssignment: assignment,
             startsInNewWorktree: place.folder != nil && place.startsInNewWorktree,
             providerOptions: choice.providerOptions,
             suggestion: NewTaskSuggestionOrigin(sourceTaskID: sourceID, suggestionID: suggestion.id,
@@ -209,7 +209,6 @@ extension AppModel: TaskSuggestionToolHandling {
         let failure: String?
         do {
             let created = try await createTask(submission)
-            if let created, let assignment { accountAssignments.record(assignment, for: created.id) }
             failure = created == nil
                 ? (bootstrapError != previousError ? bootstrapError : nil) ?? L10n.string("The task could not start.")
                 : nil

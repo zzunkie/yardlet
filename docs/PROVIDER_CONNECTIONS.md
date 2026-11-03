@@ -17,6 +17,14 @@ The latest screen flow and design decisions follow [ACCOUNT_SELECTION_UX.md](ACC
   CLI keeps owning secret values.
 - In **Choose account** next to the project and harness of a new task, the user chooses after seeing the remaining
   limits and reset times. The choice is kept with the draft, and the account binding is fixed just before submission.
+  When more than one of the harness's accounts is in automatic assignment, the menu starts with **Automatic**, chosen
+  until the person chooses an account: the task then starts on the account `AccountRouting.pick` picks when it is sent,
+  after the same check of the readings an agent's child task gets, and a line above the composer's controls names the
+  account and why ("work@example.com · Chosen automatically · 5 hour limit 12% used · Resets 3:00 PM"), before sending
+  and while the task starts. The task's hover card keeps the reason. An account the person chooses stands until they
+  choose Automatic again. A task started from the phone follows the same choice. **Choose the account for new tasks
+  automatically** in Settings › Accounts turns Automatic off; the menu is then as it was without it, and only that
+  setting is kept.
 - Resuming, forking and side chats of a task use the saved account environment together with the native session ID.
   Changing the default account for new tasks does not change the account of existing tasks.
 - Claude Code can switch, from **Choose account** in the task menu, only to an account that uses the same conversation

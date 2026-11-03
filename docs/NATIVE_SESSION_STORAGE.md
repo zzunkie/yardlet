@@ -52,8 +52,10 @@ directly under the config folder, and rejects links and FIFOs below it. Removing
 all its tasks, archived ones included, to another saved folder signed in to the same account under the same rule; only
 the binding changes (see [PROVIDER_CONNECTIONS.md](PROVIDER_CONNECTIONS.md), "Removing an account").
 
-**Automatic account assignment.** Child tasks an agent starts (`create_task`), subagents (`run_agent`) and suggestion
-chips the person starts begin on one of the harness's accounts in automatic assignment (`AccountRouting`). The chosen
+**Automatic account assignment.** Child tasks an agent starts (`create_task`), subagents (`run_agent`), suggestion
+chips the person starts and new tasks the person starts while the new-task account menu says Automatic
+(`ProviderConnectionStore.startsNewTasksAutomatically`) begin on one of the harness's accounts in automatic assignment
+(`AccountRouting`). The chosen
 account is stored from the start as the new task's `connection_binding`, together with the provider session ID and the
 `.native` scope, and later resume, fork and title lookup follow that binding. The account, history and scope of existing
 tasks do not move. Unless the person says otherwise, assignment uses the default sign-in and the accounts that keep

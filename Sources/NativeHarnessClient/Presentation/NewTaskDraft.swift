@@ -158,6 +158,9 @@ final class NewTaskDraft {
         let projectID: UUID?
         let runtimeURL: URL
         var connection: ProviderConnection?
+        /// Why the task starts on `connection` when Yardlet picked it, kept for the task once it exists
+        /// (`AccountAssignmentLog`).
+        var accountAssignment: AccountAssignment? = nil
         /// Start in a new linked worktree of `workspaceURL`'s repository instead of the folder itself.
         var startsInNewWorktree = false
         /// The model and effort the new task keeps as its own, so its first turn runs on them.

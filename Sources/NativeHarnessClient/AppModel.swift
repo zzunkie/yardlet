@@ -678,6 +678,9 @@ final class AppModel {
     /// (`ChatWorkspaces.makeFolder`), as the Codex app makes one, and no project.
     func createTask(_ submission: NewTaskDraft.Submission) async throws -> SessionRecord? {
         let created = try await createSession(for: submission)
+        if let created, let assignment = submission.accountAssignment {
+            accountAssignments.record(assignment, for: created.id)
+        }
         if let created, let origin = submission.suggestion {
             await recordSuggestedTaskStart(origin, startedTask: created)
         }

@@ -10,6 +10,9 @@ struct AccountList: View {
     let runtimeSelections: RuntimeSelectionStore
     /// Choosing a row the mode lets the user choose.
     let onChoose: (AccountChoice) -> Void
+    /// Choosing Automatic, the new task's row above the accounts while more than one of them is in
+    /// automatic assignment (`ProviderConnectionStore.offersAutomaticNewTaskAccount`).
+    var onChooseAutomatic: (() -> Void)? = nil
     /// The harness's own sign-in for a row that needs it (new task and Settings only).
     var onConnect: ((AccountChoice) -> Void)? = nil
     /// Adding an account: for the new task's harness, or for the Settings filter's harness.
@@ -112,6 +115,21 @@ struct AccountList: View {
                 Spacer()
                 if let onManage { Button(L10n.string("Manage accounts"), action: onManage) }
             }.font(.callout)
+        } else if mode == .manage {
+            Divider()
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(L10n.string("Choose the account for new tasks automatically")).font(.callout.weight(.medium))
+                    Text(L10n.string("With more than one account in automatic assignment, a new task starts on the one with the most room left in its limits unless you choose an account."))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Toggle(L10n.string("Choose the account for new tasks automatically"), isOn: Binding(
+                    get: { store.picksNewTaskAccount }, set: { store.setPicksNewTaskAccount($0) }))
+                    .labelsHidden().toggleStyle(.paritySwitch).controlSize(.small)
+            }
+            .padding(.bottom, 12)
         }
     }
 
@@ -121,6 +139,11 @@ struct AccountList: View {
         let groups = AccountListProjection.groups(choices)
         ScrollView {
             LazyVStack(spacing: 8) {
+                if case let .newTask(harness) = mode, let onChooseAutomatic,
+                   store.offersAutomaticNewTaskAccount(for: harness) {
+                    AutomaticAccountRow(selected: store.startsNewTasksAutomatically(for: harness),
+                                        onSelect: onChooseAutomatic)
+                }
                 ForEach(groups) { group in
                     AccountListSection(group: group, mode: mode, store: store,
                         showsHarness: mode == .manage, onChoose: onChoose,
@@ -184,6 +207,35 @@ struct AccountList: View {
         guard mode == .manage else { return [] }
         return AccountHarnessScope.harnesses(for: filter.wrappedValue, available: availableHarnesses,
             inUse: harnessesInUse)
+    }
+}
+
+/// Automatic in the new task's account list: each new task starts on the account automatic assignment
+/// picks when it is sent. Drawn as an account row is, with the same mark when chosen.
+struct AutomaticAccountRow: View {
+    let selected: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 10) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(selected ? ParityTheme.accent : Color.secondary.opacity(0.5))
+                    .font(.system(size: 15))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(L10n.string("Automatic")).font(.system(size: 13, weight: .medium))
+                    Text(L10n.string("Each new task starts on the account with the most room left in its limits"))
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(selected ? ParityTheme.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+        .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityValue(selected ? L10n.string("Selected for new tasks") : "")
     }
 }
 
