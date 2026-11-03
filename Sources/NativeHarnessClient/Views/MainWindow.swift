@@ -57,6 +57,8 @@ struct MainWindow: View {
     /// is drawn again only when the hold changes the order, not each time the list crosses its top.
     @State private var sidebarOrderHold = SidebarOrderHold()
     @State private var isSidebarListAtTop = true
+    /// How the task list groups its rows, the same in every window and kept across launches.
+    @AppStorage(SidebarGrouping.defaultsKey, store: .yardlet) private var sidebarGrouping = SidebarGrouping.project
     @State private var searchText = ""
     /// The sidebar search's matches, kept per task while its conversation is unchanged.
     @State private var searchMemo = ConversationSearchMemo()
@@ -191,8 +193,9 @@ struct MainWindow: View {
 
     /// Holds the shown task's place from now, or lets it go with the list at its top.
     private func holdSidebarOrder() {
+        let state = sidebarGrouping == .state ? taskState : nil
         guard !isSidebarListAtTop else {
-            sidebarOrderHold.hold([], listing: model.store.listedSessions)
+            sidebarOrderHold.hold([], listing: model.store.listedSessions, state: state)
             return
         }
         let shown: [UUID]
@@ -203,7 +206,23 @@ struct MainWindow: View {
         }
         let ids = Set(shown)
         let listed = model.store.listedSessions
-        sidebarOrderHold.hold(listed.filter { ids.contains($0.id) }, listing: listed)
+        sidebarOrderHold.hold(listed.filter { ids.contains($0.id) }, listing: listed, state: state)
+    }
+
+    /// A task's state, which the task list grouped by state lists it under.
+    private var taskState: (SessionRecord) -> TaskAttentionState {
+        let details = model.taskAttentionDetails
+        let shellBusy = model.shellBusySessionIDs
+        return { TaskAttentionProjection.state(of: $0, detail: details[$0.id], isShellBusy: shellBusy.contains($0.id)) }
+    }
+
+    /// The state each task is listed under while the task list groups by state: a held task's as the
+    /// hold keeps it (`SidebarOrderHold`).
+    private var sidebarState: ((SessionRecord) -> TaskAttentionState)? {
+        guard sidebarGrouping == .state else { return nil }
+        let held = sidebarOrderHold.heldStates
+        let state = taskState
+        return { held[$0.id] ?? state($0) }
     }
 
     private var visibleChats: [SessionRecord] {
@@ -987,7 +1006,8 @@ struct MainWindow: View {
             disclosure: sidebarDisclosure.disclosure,
             selection: model.splits.selection,
             waiting: waitingSessionIDs,
-            archivedParents: model.store.archivedParentIDs
+            archivedParents: model.store.archivedParentIDs,
+            state: sidebarState
         )
     }
 
@@ -1856,13 +1876,15 @@ struct MainWindow: View {
                     SidebarColumn(state: sidebarWidth, windowWidth: knownWindowWidth) {
                     VStack(spacing: 0) {
                     sidebarTitleBar
+                    let layout = sidebarLayout
                     TaskSidebar(
-                        layout: sidebarLayout,
+                        layout: layout,
                         allGroups: allVisibleGroups,
                         isRestoring: model.isRestoringIndex,
-                        selection: SidebarProjection.row(for: model.splits.selection, in: sidebarLayout)
+                        selection: SidebarProjection.row(for: model.splits.selection, in: layout)
                             ?? model.splits.selection,
                         searchText: $searchText,
+                        grouping: $sidebarGrouping,
                         onNewTask: showNewTask,
                         onShowSchedules: showSchedules,
                         onSelectSection: selectSection,

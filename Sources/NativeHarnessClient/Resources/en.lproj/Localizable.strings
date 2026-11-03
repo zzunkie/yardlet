@@ -1787,6 +1787,10 @@
 "View activity, needs attention" = "View activity, needs attention";
 "Turn off activity view" = "Turn off activity view";
 "See chats that are unread, active, or awaiting a response" = "See chats that are unread, active, or awaiting a response";
+/* The task list grouped by state: the Claude app's "Group by" menu and state groups. */
+"Group by" = "Group by";
+"State" = "State";
+"Idle" = "Idle";
 
 /* Tool rows in each provider's words. <verb> marks the verb, drawn muted; the rest is what the call
    was about. Codex: the Codex app's toolSummaryForCmd rows; Claude: the Claude app's TurnStatusStep. */

@@ -215,6 +215,9 @@ struct TaskSidebar: View {
     /// The row the window shows. A task inside a split selects the split's row.
     let selection: WindowItem
     @Binding var searchText: String
+    /// How the list groups its rows, chosen in the menu beside the search field; nil leaves the menu
+    /// out. The layout above already groups them so.
+    var grouping: Binding<SidebarGrouping>? = nil
     let onNewTask: () -> Void
     /// Opens the scheduled tasks in the task list's place.
     var onShowSchedules: (() -> Void)? = nil
@@ -286,8 +289,15 @@ struct TaskSidebar: View {
             SidebarPlacesHeader(onHome: onNewTask, onShowSchedules: onShowSchedules, section: .tasks,
                                 onSelectSection: onSelectSection)
 
-            SidebarSearchField(placeholder: L10n.string("Search tasks"), text: $searchText)
-                .padding(.horizontal, SidebarMetrics.rowInset)
+            HStack(spacing: 4) {
+                SidebarSearchField(placeholder: L10n.string("Search tasks"), text: $searchText)
+                if let grouping {
+                    // The activity view lists its tasks in place of the grouped list.
+                    SidebarGroupingMenu(grouping: grouping)
+                        .disabled(activity != nil)
+                }
+            }
+            .padding(.horizontal, SidebarMetrics.rowInset)
             .padding(.top, onSelectSection == nil ? 8 : 4)
             .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 1)
 
@@ -310,15 +320,19 @@ struct TaskSidebar: View {
                             .accessibilityElement(children: .combine)
                         } else if let activity {
                             activityEntry(activity)
-                        } else {
-                            if !layout.pinned.isEmpty {
-                                ParitySectionTitle(title: L10n.string("Pinned"))
-                                    .padding(.horizontal, 13)
-                                    .padding(.bottom, 2)
-                                ForEach(layout.pinned) { row in
-                                    familyEntry(row, under: nil)
-                                }
+                        } else if grouping?.wrappedValue == .state {
+                            pinnedEntry()
+                            ForEach(layout.states) { section in
+                                stateEntry(section)
                             }
+                            if layout.states.isEmpty, layout.pinned.isEmpty, !searchText.isEmpty {
+                                Text(L10n.string("No matching tasks."))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 13)
+                            }
+                        } else {
+                            pinnedEntry()
 
                             if let chats = layout.chats {
                                 chatsEntry(chats)
@@ -393,13 +407,14 @@ struct TaskSidebar: View {
                 // Going to a task in a collapsed project opens the project, as the Codex app does
                 // when its sidebar sees a new current chat (also when the sidebar appears); a
                 // project collapsed around the shown task stays so until another task is shown.
+                // A state the list is grouped by opens the same way.
                 .onChange(of: selection, initial: true) { old, item in
                     defer { place?.selection = item }
                     guard old != item || place?.selection != item else { return }
                     guard let disclosure, item != .home,
-                          let section = SidebarProjection.section(holding: item, in: layout),
-                          disclosure.isCollapsed(section.disclosureKey) else { return }
-                    disclosure.expand(section.disclosureKey)
+                          let key = SidebarProjection.disclosureKey(holding: item, in: layout),
+                          disclosure.isCollapsed(key) else { return }
+                    disclosure.expand(key)
                 }
                 // Pinning or unpinning the shown row moves it: the list follows it there. Another row
                 // shown is the selection's to follow, or not.
@@ -457,7 +472,7 @@ struct TaskSidebar: View {
             isCollapsed: section.isCollapsed,
             projects: projects,
             managesProject: managesProjects,
-            onToggle: { toggle(section) },
+            onToggle: { toggle(section.disclosureKey) },
             onNewTask: { onNewTaskInProject(group.workspaceURL) },
             onEditProject: { onEditProject(completeGroup) },
             onArchiveChats: { onArchiveProjectChats(completeGroup) },
@@ -501,10 +516,45 @@ struct TaskSidebar: View {
         }
     }
 
-    private func toggle(_ section: SidebarSection) {
+    /// The pinned rows under their title, above the projects or the states.
+    @ViewBuilder
+    private func pinnedEntry() -> some View {
+        if !layout.pinned.isEmpty {
+            ParitySectionTitle(title: L10n.string("Pinned"))
+                .padding(.horizontal, 13)
+                .padding(.bottom, 2)
+            ForEach(layout.pinned) { row in
+                familyEntry(row, under: nil)
+            }
+        }
+    }
+
+    /// A state's label and, while it is expanded, its rows, each with its project under its title,
+    /// and "Show more" when it holds more than it lists, as a project lists its rows.
+    @ViewBuilder
+    private func stateEntry(_ section: SidebarStateSection) -> some View {
+        SidebarStateHeader(title: section.title, isCollapsed: section.isCollapsed,
+                           isFirst: section.id == layout.states.first?.id && layout.pinned.isEmpty) {
+            toggle(section.disclosureKey)
+        }
+        if !section.isCollapsed {
+            ForEach(section.rows) { row in
+                familyEntry(row, under: nil)
+            }
+            if section.hiddenRowCount > 0 {
+                SidebarShowMoreButton { disclosure?.showMore(section.disclosureKey) }
+                    .padding(.horizontal, 4)
+            }
+            Color.clear
+                .frame(height: SidebarMetrics.groupBottomSpacing - SidebarMetrics.rowSpacing)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func toggle(_ key: String) {
         guard let disclosure else { return }
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
-            disclosure.toggle(section.disclosureKey)
+            disclosure.toggle(key)
         }
     }
 
@@ -542,17 +592,22 @@ struct TaskSidebar: View {
         return SidebarFamilyToggle(isCollapsed: collapsed) { toggleFamily(of: session.id) }
     }
 
-    /// A task or split row; under a project when `group` is set, in Pinned or Chats otherwise.
-    /// `title` replaces the row's own title where a section names it differently (Chats).
+    /// A task or split row; under a project when `group` is set, in Pinned, Chats or a state
+    /// otherwise. `title` replaces the row's own title where a section names it differently (Chats).
+    /// A row listed by state names its project or Chats under its title, a nested row by its family.
     @ViewBuilder
     private func rowEntry(_ row: SidebarRow, under group: WorkspaceGroup?, title: String? = nil) -> some View {
+        let listed = listedProject(of: row)
         Group {
             switch row.content {
             case let .session(session):
                 SidebarTaskEntry(
                     session: session,
-                    title: title ?? group.map { SidebarProjection.rowTitle(for: session, under: $0) } ?? session.title,
-                    projectName: group.map { $0.project?.name } ?? projectName(of: session),
+                    title: title ?? listed?.title
+                        ?? group.map { SidebarProjection.rowTitle(for: session, under: $0) } ?? session.title,
+                    subtitle: row.isNestedChild ? nil : listed?.subtitle,
+                    projectName: listed == nil ? group.map { $0.project?.name } ?? projectName(of: session)
+                        : listed?.projectName,
                     familyPlace: row.familyPlace,
                     familyToggle: familyToggle(for: row),
                     isSelected: selection == row.id,
@@ -568,14 +623,15 @@ struct TaskSidebar: View {
                         projects: projects.projects, home: projects.chatWorkspaceHome),
                     onMoveToProject: onMoveToProject.map { move in { move(session, $0) } },
                     onDropTask: splitActions.combine.map { combine in { dropped in combine(dropped, session.id) } },
-                    nesting: onNest == nil ? nil : nesting
+                    // A task moves among the families of its project's list, which the states mix.
+                    nesting: onNest == nil || row.project != nil ? nil : nesting
                 )
                 .equatable()
             case let .split(split, members):
                 SidebarSplitEntry(
                     split: split,
                     members: members,
-                    title: title ?? group.map { SidebarProjection.rowTitle(for: row, under: $0) } ?? row.title,
+                    title: title ?? listed?.title ?? group.map { SidebarProjection.rowTitle(for: row, under: $0) } ?? row.title,
                     isSelected: selection == row.id,
                     onSelect: { pick(row.id) },
                     actions: splitActions
@@ -585,6 +641,28 @@ struct TaskSidebar: View {
         .padding(.horizontal, 4)
         .id(row.id)
         .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 2)
+    }
+
+    /// What a row listed by state shows of where it belongs: its title there, the project's name or
+    /// Chats under it, and the project's name for its hover card.
+    private struct ListedProject {
+        let title: String
+        let subtitle: String
+        let projectName: String?
+    }
+
+    private func listedProject(of row: SidebarRow) -> ListedProject? {
+        switch row.project {
+        case nil:
+            return nil
+        case .chats:
+            return ListedProject(title: SidebarProjection.chatRowTitle(for: row), subtitle: L10n.string("Chats"),
+                                 projectName: nil)
+        case let .project(key):
+            guard let group = allGroups.first(where: { $0.workspaceURL.standardizedFileURL == key }) else { return nil }
+            return ListedProject(title: SidebarProjection.rowTitle(for: row, under: group), subtitle: group.displayName,
+                                 projectName: group.project?.name)
+        }
     }
 
     /// The project a task listed outside its project's section belongs to (a pinned row, the activity
@@ -690,6 +768,93 @@ private struct SidebarActivityHeader: View {
             .help(L10n.string("Activity view options"))
             .accessibilityLabel(L10n.string("Activity view options"))
         }
+    }
+}
+
+/// The task list's grouping beside its search field, the Claude app's "Group by" (in the filter button
+/// at the head of its Code list): by project, the list as it always was, or by state.
+private struct SidebarGroupingMenu: View {
+    @Binding var grouping: SidebarGrouping
+    @State private var isHovering = false
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+
+    var body: some View {
+        Menu {
+            Section(L10n.string("Group by")) {
+                Picker(L10n.string("Group by"), selection: $grouping) {
+                    ForEach(SidebarGrouping.allCases, id: \.self) { grouping in
+                        Text(Self.title(grouping)).tag(grouping)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            }
+        } label: {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.system(size: 12 * interfaceScale, weight: .semibold))
+                .foregroundStyle(isEnabled ? .secondary : .tertiary)
+                .frame(width: 28 * interfaceScale, height: SidebarMetrics.rowHeight * interfaceScale)
+                .background(isHovering && isEnabled ? ParityTheme.hoverFill : .clear, in: SidebarMetrics.rowShape())
+                .contentShape(Rectangle())
+        }
+        // SwiftUI draws the label, so the whole slot beside the search field opens the menu.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .parityPointer()
+        .onHover { isHovering = $0 }
+        .help(L10n.string("Group by"))
+        .accessibilityLabel(L10n.string("Group by"))
+        .accessibilityValue(Self.title(grouping))
+    }
+
+    static func title(_ grouping: SidebarGrouping) -> String {
+        switch grouping {
+        case .project: L10n.string("Project")
+        case .state: L10n.string("State")
+        }
+    }
+}
+
+/// A state's label over its rows in a list grouped by state, drawn as a project's label is: faint and
+/// small, collapsing and expanding the rows under it, with a caret after it while collapsed or hovered.
+private struct SidebarStateHeader: View {
+    let title: String
+    let isCollapsed: Bool
+    /// Nothing is listed above it, so it leaves no space above.
+    let isFirst: Bool
+    let onToggle: () -> Void
+    @State private var isHovering = false
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 4) {
+                Text(title)
+                    .font(.system(size: SidebarMetrics.projectHeaderFontSize * interfaceScale))
+                    .foregroundStyle(isHovering ? .primary : .secondary)
+                    .lineLimit(1)
+                DisclosureCaret(isOpen: !isCollapsed, size: 8 * interfaceScale)
+                    .foregroundStyle(.secondary)
+                    .opacity(isCollapsed || isHovering ? 1 : 0)
+                Spacer(minLength: 4)
+            }
+            .padding(.leading, SidebarMetrics.projectHeaderLeading - SidebarMetrics.rowInset)
+            .padding(.trailing, SidebarMetrics.rowTrailingPadding)
+            .frame(height: SidebarMetrics.projectHeaderHeight * interfaceScale)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .parityPointer()
+        .onHover { isHovering = $0 }
+        .accessibilityLabel(title)
+        .accessibilityValue(L10n.string(isCollapsed ? "Collapsed" : "Expanded"))
+        .accessibilityAddTraits(.isHeader)
+        .padding(.top, isFirst ? 0 : SidebarMetrics.projectHeaderTopSpacing)
+        .padding(.horizontal, SidebarMetrics.rowInset)
+        .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 2)
     }
 }
 

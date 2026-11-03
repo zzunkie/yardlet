@@ -902,6 +902,153 @@ final class WindowStructureQATests: XCTestCase {
         XCTAssertEqual(ViewBodyCensus[.mainWindow], 0, "Crossing the list's top drew the window again")
     }
 
+    /// The same hold in a task list grouped by state: with the list scrolled away from its top, an idle task that starts
+    /// working keeps its place under Idle; at the top it is listed under Working. Crossing the top with no state changed
+    /// draws no window again. Into `.build/window-structure-qa/sidebar-state-hold-*.png`.
+    func testTheShownTaskKeepsItsStateWhileTheSidebarGroupedByStateIsScrolled() async throws {
+        UserDefaults.yardlet.set(SidebarGrouping.state.rawValue, forKey: SidebarGrouping.defaultsKey)
+        addTeardownBlock { @MainActor in UserDefaults.yardlet.removeObject(forKey: SidebarGrouping.defaultsKey) }
+        let root = FileManager.default.temporaryDirectory.appending(path: "yardlet-state-hold-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let cli = URL(filePath: "/usr/bin/true")
+        let now = Date()
+        var sessions: [SessionRecord] = []
+        var folders: [URL] = []
+        // Six tasks in each of Needs input, Working and Unread, and twelve idle, so every state lists rows.
+        for project in 0..<6 {
+            let folder = root.appending(path: "project-\(project)")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            folders.append(folder)
+            for task in 0..<5 {
+                let index = project * 5 + task
+                let status: SessionStatus = index < 6 ? .waitingForApproval : index < 12 ? .running : .ready
+                sessions.append(SessionRecord(harness: .codex, workspaceURL: folder, runtimeExecutableURL: cli,
+                    title: "Task \(project)-\(task)", status: status,
+                    updatedAt: now.addingTimeInterval(-Double(index) * 60), hasUnreadUpdate: (12..<18).contains(index)))
+            }
+        }
+        let model = try sidebarModel(sessions, folders: folders, root: root, suite: "WindowStructureQA.stateHold")
+        let target = sessions[20]
+        let directory = try WindowlessRender.directory(Self.folder)
+        let host = WindowlessRender.Host(window(model, .light, size: Self.size), size: Self.size, appearance: .light)
+        defer { host.close() }
+        orderIn(host)
+        func row(_ title: String) -> Control? { elements(in: host).first { $0.label.hasPrefix(title) && $0.frame.height > 0 } }
+        // The list scrolls to the task shown at launch at its next update, which a window off every screen makes only
+        // when the list's rows change: a row marked unread and read again makes one now.
+        await model.store.markUnread(id: sessions[29].id)
+        host.settle(passes: 6, interval: 0.03)
+        await model.store.markRead(id: sessions[29].id)
+        host.settle(passes: 6, interval: 0.03)
+        let idle = try XCTUnwrap(elements(in: host, buttonsOnly: false).first { $0.label == L10n.string("Idle") },
+                                 "The list is not grouped by state")
+        let scroll = try XCTUnwrap(sidebarScrollView(in: host.hosting, x: idle.frame.midX))
+        // Idle lists all its rows, so the task can be scrolled to short of the list's end, where the list's height,
+        // which it estimates for rows it has not drawn, can shorten and take the scroll back whatever the hold does.
+        func scrollToEnd(short: CGFloat) {
+            let end = (scroll.documentView?.frame.height ?? 0) - scroll.contentView.bounds.height
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: max(end - short, 0)))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            host.settle(passes: 10, interval: 0.03)
+        }
+        scrollToEnd(short: 0)
+        XCTAssertTrue(press(row(L10n.string("Show more")), in: host), "Idle has no Show more")
+        scrollToEnd(short: 250)
+        XCTAssertGreaterThan(scroll.contentView.bounds.origin.y, 100, "The sidebar does not scroll")
+        XCTAssertTrue(press(row(target.title), in: host), "The idle task's row is not in view")
+        XCTAssertEqual(model.splits.selection, .session(target.id))
+        let shown = try XCTUnwrap(row(target.title))
+
+        // A message sent in it: it works now, and stays where it was under Idle.
+        try await model.store.updateSession(id: target.id, status: .running)
+        host.settle(passes: 12, interval: 0.03)
+        let held = try XCTUnwrap(row(target.title), "The shown task left the list's view")
+        XCTAssertEqual(held.frame.minY, shown.frame.minY, accuracy: 1, "The shown task moved")
+        try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "sidebar-state-hold-after-light.png"))
+
+        // At the list's top it is listed under Working, above Unread.
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
+        host.settle(passes: 12, interval: 0.03)
+        let working = try XCTUnwrap(row(target.title))
+        let unread = try XCTUnwrap(elements(in: host, buttonsOnly: false).first { $0.label == L10n.string("Unread") })
+        XCTAssertLessThan(working.frame.minY, unread.frame.minY, "At the top the task did not go under Working")
+        try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "sidebar-state-hold-top-light.png"))
+
+        // Its turn ends; crossing the top again and again, which starts and ends the hold each time, changes no state:
+        // the window is not drawn again.
+        try await model.store.updateSession(id: target.id, status: .ready)
+        host.settle(passes: 12, interval: 0.03)
+        ViewBodyCensus.isEnabled = true
+        ViewBodyCensus.reset()
+        defer { ViewBodyCensus.isEnabled = false; ViewBodyCensus.reset() }
+        for offset in [30, 0, 30, 0] {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            host.settle(passes: 3, interval: 0.02)
+        }
+        XCTAssertEqual(ViewBodyCensus[.mainWindow], 0, "Crossing the list's top drew the window again")
+    }
+
+    /// A task's state changing in a sidebar of 3,000 tasks in 30 projects, grouped by project and by state: a task
+    /// starting or ending a turn 20 times. Prints the main thread's time a step, the window's body evaluations and the
+    /// rows drawn again, and the layout's own time for each grouping. Run with `NHC_PERF_BENCH=1`.
+    func testBenchmarkAStateChangeInASidebarOfThousands() async throws {
+        guard ProcessInfo.processInfo.environment["NHC_PERF_BENCH"] == "1" else {
+            throw XCTSkip("Set NHC_PERF_BENCH=1 to run the sidebar grouping benchmark")
+        }
+        addTeardownBlock { @MainActor in UserDefaults.yardlet.removeObject(forKey: SidebarGrouping.defaultsKey) }
+        let root = FileManager.default.temporaryDirectory.appending(path: "yardlet-grouping-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let folders = (0..<30).map { root.appending(path: "project-\($0)") }
+        for folder in folders { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) }
+        let now = Date()
+        let sessions = (0..<3_000).map { index in
+            SessionRecord(harness: .claudeCode, workspaceURL: folders[index % 30], runtimeExecutableURL: URL(filePath: "/usr/bin/true"),
+                          title: "Task \(index)", updatedAt: now.addingTimeInterval(-Double(index) * 60),
+                          hasUnreadUpdate: index.isMultiple(of: 7))
+        }
+        func cpu() -> Double { Double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)) / 1_000_000 }
+        var record: [String: Double] = [:]
+        for grouping in SidebarGrouping.allCases {
+            UserDefaults.yardlet.set(grouping.rawValue, forKey: SidebarGrouping.defaultsKey)
+            let model = try sidebarModel(sessions, folders: folders, root: root, suite: "WindowStructureQA.grouping.\(grouping)")
+            model.splits.activate(.session(sessions[0].id))
+            let groups = model.projects.visibleGroups(sessions: model.store.listedSessions)
+            let start = cpu()
+            for _ in 0..<20 {
+                _ = SidebarProjection.layout(visibleGroups: groups, allGroups: groups, splits: [], isFiltering: false,
+                                             disclosure: SidebarDisclosure(rowLimit: 5),
+                                             state: grouping == .state ? { TaskAttentionProjection.state(of: $0) } : nil)
+            }
+            let layoutMs = (cpu() - start) / 20
+            let host = WindowlessRender.Host(window(model, .light, size: Self.size), size: Self.size, appearance: .light)
+            orderIn(host)
+            ViewBodyCensus.isEnabled = true
+            ViewBodyCensus.reset()
+            var steps: [Double] = []
+            for step in 0..<20 {
+                let task = sessions[150 * step + 3]
+                let begin = cpu()
+                try await model.store.updateSession(id: task.id, status: step.isMultiple(of: 2) ? .running : .ready)
+                host.settle(passes: 3, interval: 0.016)
+                steps.append(cpu() - begin)
+            }
+            let windows = ViewBodyCensus[.mainWindow], rows = ViewBodyCensus[.sidebarRow]
+            ViewBodyCensus.isEnabled = false
+            ViewBodyCensus.reset()
+            host.close()
+            let sorted = steps.sorted()
+            print(String(format: "[sidebar-grouping] %@: layout %.2f ms; 20 state changes: median %.2f ms, p95 %.2f ms; "
+                         + "window bodies %d, rows drawn %d", grouping.rawValue, layoutMs, sorted[10], sorted[18], windows, rows))
+            record["\(grouping.rawValue)LayoutMs"] = layoutMs
+            record["\(grouping.rawValue)StepMedianMs"] = sorted[10]
+            record["\(grouping.rawValue)WindowBodiesCount"] = Double(windows)
+            record["\(grouping.rawValue)RowsDrawnCount"] = Double(rows)
+        }
+        PerfBenchRecord.write("sidebar-state-change-3000-tasks", record)
+    }
+
     /// The sidebar crossing its top, as a scroll near it does: 828 tasks in 10 projects, the list moved
     /// between 0 and 30 pt 120 times. Prints the main thread's time a step and the window's body
     /// evaluations. Run with `NHC_PERF_BENCH=1`.
