@@ -310,12 +310,13 @@ to add UI now.
 
 ### 5.1 Tools
 
-One tool is added: `browser_fill_credential`. Its description says only what it does (it does not say when to call it).
+One tool is added: `browser_fill_credential`. Its description says what it does and, since 2026-11-03, that a page
+asking to sign in or for a code goes to it before the person (section 19).
 
 | Argument | Meaning |
 |---|---|
 | `ref` | The input field reference from the last snapshot. For a sign-in, Yardlet finds the username field and the password field of the form that field belongs to |
-| `item` | Item name or username (optional; usernames since 2026-10-27). If empty, the item matching this tab's origin is used when there is exactly one; if there are several, an error with a list of "name (username)". Only the site's items that have what `kind` asks for (a password, a code, a passkey) are weighed, unless none has it, since a site's password and its two-factor code are often two items (section 14.3). Items with the same name, which import names after the site, are also picked by username |
+| `item` | Item name or username (optional; usernames since 2026-10-27). If empty, the item matching this tab's origin is used when there is exactly one; of several, the one the page's account, the task's last fill on this host or this very host points to (section 19), else an error with a list of "name (username)". Only the site's items that have what `kind` asks for (a password, a code, a passkey) are weighed, unless none has it, since a site's password and its two-factor code are often two items (section 14.3). Items with the same name, which import names after the site, are also picked by username |
 | `kind` | `login` (default, username and password), `one_time_code` (TOTP), `passkey` (briefly prepares the virtual authenticator on this tab), `new_password` (a password Yardlet makes for a sign-up form, saved as a new item, section 15) |
 | `submit` | Whether to submit the form after filling (optional): a safe form is submitted unless it is false (section 5.2) |
 | `tabId` | Same as in the other page tools |
@@ -624,6 +625,7 @@ safe everywhere pleases nobody), D3's default changed, and this task decided the
 | D7 | Child tasks and other harnesses | The same rules (section 7) |
 | D8 | Strong passwords (2026-10-28) | Chrome's generator and presave, `passwordrules`, previous passwords kept in the item; agents only for new accounts (section 15) |
 | D9 | Finding an item (2026-10-30) | A search in Settings → Passwords and in the key button's list, which shows on every site's page; another site's password after Touch ID, then an offer to save the site; a sign-in with no code takes its account's code; agents unchanged (section 16) |
+| D10 | Agents sign in by themselves (2026-11-03) | The server's instructions and the tools' descriptions send a sign-in or a code to the fill tool before the person; of several items, a fill naming none takes the page's account, the task's last on the host or the host's own; a passkey refusal points to the password (section 19) |
 
 ## 12. Implementation steps
 
@@ -1422,3 +1424,76 @@ the vendors' help pages; these may differ from released builds; Safari's card pa
   waited for Touch ID, filled nothing on a no, and on a yes filled the number, expiry and name with the code field
   left empty, after which the agent's script was refused and its snapshot held no part of the number. The panel PNGs
   (`vault-panel-wallet-save-address`, `-save-card`, `-fill-card`) were checked by eye.
+
+## 19. Agents sign in by themselves (2026-11-03)
+
+The request: now that passwords and codes match better, agents should sign in by themselves rather than wait for the
+person each time.
+
+### 19.1 What held agents back
+
+Nine days of the agents' `browser_handoff` calls in Claude Code and Codex task histories (from the tool's first day,
+2026-10-26), the vault's usage log and the items' metadata were read without values: 122 handoffs, 90 of them for a
+sign-in.
+
+| Cause | Handoffs | Yardlet's part |
+|---|---|---|
+| The account was saved, and the agent never called `browser_fill_credential` (all in Claude Code) | 22 | The instructions and descriptions (section 19.2) |
+| Nothing saved for the site or the account | 26 | The save bar already offers a password the person types into a handed-over tab. Most were sites never saved, or signed in through another site's account |
+| A step only the person can take: a Touch ID passkey as a cloud console's second factor (12), a CAPTCHA or device check (4), a QR code for the phone or an identity check (4), a passkey prompt (1) | 21 | None. Where the service allows it, the person can add an authenticator app as another second factor and save it in the vault |
+| A code sent by mail or text (8), a saved code not yet linked to its site (3, linked since 2026-10-29, section 14.3), a two-factor setup the agent could not save (4) | 15 | The instructions say that a code in mail the agent can read is its to type |
+| Several accounts and none named | 1 (16 refusals in the usage log, most named on the next call) | Choosing (section 19.2) |
+| A password changed outside the vault (2), the scripts rule (1), a fill error fixed on 2026-10-27 (1), the person's own wish (1) | 5 | — |
+| Another host or a redirect | 0 (3 refusals named an item on a site that signs in through it) | None |
+
+The other 32 handoffs were payments, CAPTCHAs on forms, consent and review steps, and permission prompts. The usage log
+of the same days holds 92 entries: 36 fills, 9 made passwords and 47 refusals, of which several items 16, nothing saved
+12, no passkey 5 (a page offered a passkey first; the vault held none, and each item had a password), no code or a code
+not linked 5, an item of another site 3, the scripts rule 3 and others 3.
+
+### 19.2 Decisions
+
+- **Context where the agent reads it:** Claude Code lists an MCP server's tools by name until the model loads one, and
+  agents went straight to loading `browser_handoff`. The server's instructions, which harnesses show whole, now say
+  that a page asking to sign in or for a two-factor code goes to `browser_fill_credential` first when the task has it,
+  even when the site may ask for another step after; that a code in mail or texts the agent can read is its to type; and
+  that `browser_handoff` is for what is the person's (nothing saved, a passkey on their phone or Touch ID, a CAPTCHA, a
+  payment, a choice of theirs). The handoff tool's description and the fill tool's say the same in a sentence. This
+  replaces the earlier rule of section 5.1 that the fill tool's description says only what it does, which left sign-ins
+  of saved accounts to the person.
+- **Choosing among several:** a fill that names no item, on a site with several items that have what `kind` asks for,
+  takes the first rule that leaves exactly one: the item whose username the form's username or email field holds
+  (hidden ones too: a password step keeps the account of the step before), the one whose username the page's text
+  shows whole, the item this task filled on this host last or another item of its account (a code after its sign-in),
+  and the one item saved on this very host (its name or a site entry is the host). Chrome's password manager fills a
+  site's best match the same way: an exact match before a same-domain one, the one used last among them. When no rule
+  leaves one, the refusal lists the items as before. The result names the item taken, its account and the rule, so the
+  agent can name another. The page's field values and text are read only on a site with several items, in Yardlet's
+  isolated world, and stay in the Yardlet process.
+- **A passkey asked of a site with none:** the refusal names the site's items that have a password, and whether a code
+  is saved, and tells the agent to choose the page's other way to sign in and fill the password with kind `login`, then
+  the code.
+- **Nothing saved:** the refusal adds that a page signing in through another site's account may have that site's item
+  saved, and that otherwise the agent hands the tab to the person, whose typed password the save bar offers to keep.
+- **Not done:** matching through Apple's password-manager-resources lists or through the tab's redirect chain, since no
+  handoff of the measured days came from a site mismatch.
+
+### 19.3 Rules kept
+
+- No value reaches the agent; a result names the item, never a value. A choice is only among the site's own items
+  (section 6.2), and the item's policy still decides whether the person is asked. The scripts rule and the rules for a
+  filled document are unchanged.
+- No setting, bar, menu item or shortcut is added.
+
+### 19.4 Verification
+
+- Unit: `VaultTests.testAnItemAskedForOnAnotherSiteIsRefusedAndThePersonIsTold` (the account in the page's username
+  field; the page's text naming a username whole, and not inside an address; fields holding both accounts picking none;
+  the task's last fill on the host, with another task still refused; the one item saved on the host; a passkey refusal
+  naming the items with a password) and `BrowserAgentToolsTests.testAVaultFillKeepsThePasswordOutOfAddressesAndOtherSites`
+  (a site with one item reads nothing of the page; with two, the result names the item taken and why).
+- Real CEF 154 QA (an ad-hoc QA copy running in the background, a temporary home, the vault in memory, test values
+  only): `run-check.sh … --ui-fixture-browser-check-only=vault`, 103 checks passed, no process left and no crash
+  report. On the QA server's `/vault/login` with two items saved for the site, a fill naming none took the account typed
+  into the page's username field (an every-time item, so it waited for the person, who said no), and with the field
+  empty took the item this task had filled there and said so in its result.

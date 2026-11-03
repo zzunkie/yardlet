@@ -125,7 +125,8 @@ extension BrowserAgentTools {
             await self?.disarmPasskey(on: page)
         }
         return .text("“\(grant.item.name)”'s passkey answers this tab's next passkey request on \(host) within 60 seconds, "
-            + "without a dialog; start the page's passkey sign-in now. The key is not shown to you.")
+            + "without a dialog; start the page's passkey sign-in now. The key is not shown to you."
+            + Self.chosenNote(grant, host: host))
     }
 
     /// The vault was turned off or emptied: every armed passkey goes.

@@ -383,8 +383,17 @@ final class BrowserHostVaultQA {
         let unconfirmed = await call(VaultToolCatalog.fillCredential, ["ref": .string(strictRef), "item": .string("QA strict")])
         check("an every-time item that the person does not confirm is not filled",
               unconfirmed.isError && unconfirmed.text.contains("did not confirm"), unconfirmed.text)
-        let unnamed = await call(VaultToolCatalog.fillCredential, ["ref": .string(strictRef)])
-        check("two items for a site need the agent to name one", unnamed.isError && unnamed.text.contains("Name one"), unnamed.text)
+        // Two items for the site and none named: the account the page's username field holds, else the item this task
+        // filled on this host last, and the result says which.
+        _ = await pageValue("document.getElementById('user').value = 'strict@example.test'")
+        let byField = await call(VaultToolCatalog.fillCredential, ["ref": .string(strictRef)])
+        check("of two items for a site, a fill that names none takes the account in the page's username field",
+              byField.isError && byField.text.contains("did not confirm filling “QA strict”"), byField.text)
+        _ = await pageValue("document.getElementById('user').value = ''")
+        let unnamed = await call(VaultToolCatalog.fillCredential, ["ref": .string(strictRef), "submit": .bool(false)])
+        check("else it takes the item this task filled on this host last, and says which and why",
+              !unnamed.isError && unnamed.text.contains("Yardlet took “QA sign-in”") && unnamed.text.contains("because"),
+              unnamed.text)
 
         vault.isEnabled = false
         let off = await call(VaultToolCatalog.fillCredential, ["ref": .string(strictRef), "item": .string("QA sign-in")])

@@ -81,6 +81,13 @@ package enum AgentToolCatalog {
         such as @e3; an element keeps its reference while it stays on the page, and a navigation ends \
         them. Tab ids and element references are the tools' own and the user never sees them: when you \
         tell the user about a tab, name it by its page's title or site, and an element by its label or text. \
+        When a page asks you to sign in or for a two-factor code and you have browser_fill_credential, call it \
+        first, even when the site may ask for another step after: it fills the username and password, the current \
+        authenticator code or a passkey the person saved in Yardlet's password manager without showing you the \
+        values, and when it cannot fill, its answer says why and what would. A code a site sends to mail or texts \
+        you can read is yours to type. Hand the tab to the person with browser_handoff for what is theirs to do: a \
+        sign-in with nothing saved, a passkey on their phone or Touch ID, a CAPTCHA, a payment, or a choice that is \
+        theirs to make. \
         spawn_task flags out-of-scope work for a separate task: the user sees a chip in this \
         conversation and decides whether to start it. The session tools read the person's other \
         Yardlet tasks, message one, start a task, or run a subagent on a harness. The \
@@ -320,7 +327,9 @@ package enum AgentToolCatalog {
             name: handoff,
             title: "Hand tab to person",
             description: "Hand this task's browser tab to the person for a step only they can take, such as a CAPTCHA, a "
-                + "QR code sign-in or a payment approval, and wait for them. The task's panel shows the tab with the reason "
+                + "QR code sign-in, a passkey on their phone or a payment approval, and wait for them. A sign-in or a "
+                + "two-factor code goes to browser_fill_credential first when you have it, which fills what the person "
+                + "saved without showing it to you; hand over the step it cannot fill. The task's panel shows the tab with the reason "
                 + "and Done and Decline buttons, and Yardlet notifies the person. Returns when they answer, when text appears "
                 + "on the page if given, or after timeout seconds (default 600); until they answer or your turn ends the tab "
                 + "stays handed to them, and calling again waits again. Cannot run in a batch.",

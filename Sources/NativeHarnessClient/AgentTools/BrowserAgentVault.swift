@@ -1049,6 +1049,13 @@ extension BrowserAgentTools {
 
         var request = VaultFillRequest(sessionID: sessionID, itemName: itemName, kind: kind, origin: frame.origin)
         request.afterAgentScript = page.vaultFills.scriptedDocuments.contains(frame.loaderID)
+        // Read only when the site has several items to choose from.
+        if itemName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true, vault.items(for: frame.origin).count > 1,
+           let accounts = try? await callInVaultWorld(page, objectID, Self.pageAccountsFunction) {
+            request.pageAccounts = VaultPageAccounts(
+                fieldValues: accounts["values"]?.arrayValue?.compactMap(\.stringValue) ?? [],
+                text: accounts["text"]?.stringValue ?? "")
+        }
         let grant: VaultFillGrant
         switch await vault.authorize(request) {
         case .success(let allowed): grant = allowed
@@ -1131,15 +1138,38 @@ extension BrowserAgentTools {
         default: what = "the one-time code"
         }
         let host = VaultSite.host(of: frame.origin)
+        let chosen = Self.chosenNote(grant, host: host)
         if let unsent, asked != false {
             return .text("Filled \(what) of “\(grant.item.name)” into the form on \(host) but did not submit it: \(unsent) "
                 + "Click the page's sign-in button: the page's own script usually sends the form another way. If the page "
                 + "would put the password in an address or send it to another site, Yardlet stops it and says so. "
-                + "The values are not shown to you.")
+                + "The values are not shown to you." + chosen)
         }
         return .text("Filled \(what) of “\(grant.item.name)” into the form on \(host)"
-            + (submitted ? " and submitted it." : ".") + " The values are not shown to you.")
+            + (submitted ? " and submitted it." : ".") + " The values are not shown to you." + chosen)
     }
+
+    /// Which of the site's items Yardlet took for a fill that named none, and why, so the agent can name another.
+    static func chosenNote(_ grant: VaultFillGrant, host: String) -> String {
+        guard let chosen = grant.chosen else { return "" }
+        return " Of the \(chosen.among) items saved for \(host), Yardlet took \(VaultCenter.label(grant.item)) because "
+            + "\(chosen.reason); to sign in with another, call again with its item."
+    }
+
+    /// What the page says of the account it signs in to (`VaultPageAccounts`), with the field to fill as `this`: the
+    /// values of the form's username and email fields, hidden ones too, and the page's text.
+    static let pageAccountsFunction = """
+        function() {
+          const scope = (this instanceof HTMLInputElement && this.form) || this.closest('form') || document;
+          const named = /user|e-?mail|login|identifier|account/i;
+          const values = Array.from(scope.querySelectorAll('input')).filter(e =>
+            ['text', 'email', 'hidden'].includes(e.type) && e.value && e.value.length <= 200
+              && (e.type === 'email' || (e.autocomplete || '').split(/\\s+/).some(t => t === 'username' || t === 'email')
+                || named.test(e.name || '') || named.test(e.id || '')))
+            .map(e => e.value);
+          return { values, text: document.body ? document.body.innerText.slice(0, 20000) : '' };
+        }
+        """
 
     /// `browser_fill_credential` with `kind: new_password` (design §15), on the path a saved password's fill takes:
     /// Yardlet makes the password within what the field asks, saves it as a new item for the site before the page

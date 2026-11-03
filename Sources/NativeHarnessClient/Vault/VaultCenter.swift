@@ -220,6 +220,16 @@ struct VaultFillRequest: Sendable {
     /// The agent ran its own scripts in the document to fill, or in a tab linked to it by `window.opener`: a script
     /// set there before the fill could take the value, so the person confirms whatever the item's policy.
     var afterAgentScript = false
+    /// What the page says of the account it signs in to, for a fill that names no item on a site with several.
+    var pageAccounts = VaultPageAccounts()
+}
+
+/// What a sign-in page says of its account (design §5.1): the values of its form's username fields, hidden ones
+/// too (a password step keeps the account typed on the step before), and the page's text, which a password step
+/// often shows the account in. They stay in Yardlet: only the item they pick, and why, reach the agent.
+struct VaultPageAccounts: Sendable {
+    var fieldValues: [String] = []
+    var text = ""
 }
 
 /// The values for one allowed fill. They go into the page and nowhere else.
@@ -230,6 +240,8 @@ struct VaultFillGrant {
     var code: String?
     var passkey: VaultPasskey?
     var confirmedBy: VaultUse.Confirmation
+    /// Why Yardlet took this item of the site's several when the agent named none, and how many there were.
+    var chosen: (reason: String, among: Int)?
 }
 
 /// A refused fill, in words for the agent, and what calling again can do: naming another item, or nothing until the
@@ -360,16 +372,29 @@ final class VaultCenter: ObservableObject {
         // weighed, unless none has it.
         let able = onSite.filter { $0.has(request.kind) }
         let matching = able.isEmpty ? onSite : able
-        let item: VaultItem
-        if let name = request.itemName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
-            // Several accounts on one site often share its name (an import names items by site), so an item
-            // is named by its name or its username.
-            // An item's other fields tell apart accounts of one username (an AWS account ID, design §17).
-            func isNamed(_ item: VaultItem) -> Bool {
-                ([item.name, item.username] + (item.fields ?? []).map(\.value)).contains {
-                    !$0.isEmpty && $0.compare(name, options: [.caseInsensitive]) == .orderedSame
-                }
+        let name = request.itemName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // Several accounts on one site often share its name (an import names items by site), so an item
+        // is named by its name or its username.
+        // An item's other fields tell apart accounts of one username (an AWS account ID, design §17).
+        func isNamed(_ item: VaultItem) -> Bool {
+            ([item.name, item.username] + (item.fields ?? []).map(\.value)).contains {
+                !$0.isEmpty && $0.compare(name, options: [.caseInsensitive]) == .orderedSame
             }
+        }
+        // A page that offers a passkey first (Google's sign-in, for one) mostly signs in with a password too: with no
+        // passkey saved for the site, the agent hears which of its items can sign in the other way.
+        if request.kind == .passkey, able.isEmpty, !onSite.isEmpty, name.isEmpty || onSite.contains(where: isNamed) {
+            let signIns = onSite.filter { $0.hasPassword && (name.isEmpty || isNamed($0)) }
+            guard !signIns.isEmpty else { return refuse(request, item: nil, "No passkey is saved for \(host).") }
+            let code = onSite.contains(where: \.hasOneTimeCode)
+            return refuse(request, item: nil, "No passkey is saved for \(host). " + signIns.map(Self.label).joined(separator: ", ")
+                + " can sign in with a password" + (code ? " and a two-factor code" : "") + ": choose the page's other way "
+                + "to sign in (such as “Try another way” or “Use your password”), then fill the password with kind login"
+                + (code ? " and the code with kind one_time_code" : "") + ".", retry: .withChanges)
+        }
+        let item: VaultItem
+        var chosen: (reason: String, among: Int)?
+        if !name.isEmpty {
             let here = matching.filter(isNamed)
             guard here.count < 2 else {
                 return refuse(request, item: nil, "Several items for \(host) are named “\(name)”: "
@@ -408,14 +433,22 @@ final class VaultCenter: ObservableObject {
             item = named
         } else {
             guard let only = matching.first else {
-                return refuseCode(request, item: nil, "No item is saved for \(host).")
+                return refuseCode(request, item: nil, "No item is saved for \(host)."
+                    + (request.kind == .login ? " If the page signs in through another site's account (a “Continue with "
+                        + "Google” button, for one), that site's sign-in page may have one saved. Otherwise hand the tab to "
+                        + "the person with browser_handoff; Yardlet offers to save a password they type there, for your "
+                        + "next sign-in." : ""))
             }
-            guard matching.count == 1 else {
+            if matching.count == 1 {
+                item = only
+            } else if let pick = choose(among: matching, for: request) {
+                item = pick.item
+                chosen = (pick.reason, matching.count)
+            } else {
                 return refuse(request, item: nil, "Several items are saved for \(host): "
                     + matching.map(Self.label).joined(separator: ", ") + ". Name one with item, by its name, its username or another value in its parentheses.",
                     retry: .withChanges)
             }
-            item = only
         }
         switch request.kind {
         case .login where !item.hasPassword && item.username.isEmpty:
@@ -462,7 +495,7 @@ final class VaultCenter: ObservableObject {
         } catch {
             return refuse(request, item: item, "Yardlet could not read “\(item.name)” from the keychain.")
         }
-        var grant = VaultFillGrant(item: item, confirmedBy: confirmation)
+        var grant = VaultFillGrant(item: item, confirmedBy: confirmation, chosen: chosen)
         switch request.kind {
         case .login:
             grant.username = item.username.isEmpty ? nil : item.username
@@ -619,8 +652,59 @@ final class VaultCenter: ObservableObject {
         return account.count == 1 ? account[0] : nil
     }
 
+    /// Of a site's several items, the one a fill that names none means, as Chrome fills a site's best match: the account
+    /// the page asks for, by its username field and then by its text; else the item this task filled on this host
+    /// last, or that item's account (a code after its sign-in); else the one item saved on this very host. Nil when
+    /// none of these leaves exactly one.
+    private func choose(among candidates: [VaultItem], for request: VaultFillRequest) -> (item: VaultItem, reason: String)? {
+        let host = VaultSite.host(of: request.origin).lowercased()
+        func one(_ items: [VaultItem]) -> VaultItem? { items.count == 1 ? items[0] : nil }
+        let values = Set(request.pageAccounts.fieldValues.map { $0.trimmingCharacters(in: .whitespaces).lowercased() })
+        if let item = one(candidates.filter { !$0.username.isEmpty && values.contains($0.username.lowercased()) }) {
+            return (item, "the page's username field holds its username")
+        }
+        if let item = one(candidates.filter { $0.username.count >= 4
+            && Self.text(request.pageAccounts.text, holds: $0.username) }) {
+            return (item, "the page shows its username")
+        }
+        let last = environment.repository.allUses().last { use in
+            use.taskID == request.sessionID && use.outcome == .filled && use.itemID != nil
+                && VaultSite.host(of: use.origin).lowercased() == host
+        }
+        if let used = items.first(where: { $0.id == last?.itemID }),
+           let item = one(candidates.filter { $0.id == used.id || $0.isSameAccount(as: used) }) {
+            return (item, "this task filled it here last")
+        }
+        if let item = one(candidates.filter { $0.name.lowercased() == host || $0.sites.contains { $0.lowercased() == host } }) {
+            return (item, "it was saved on \(host)")
+        }
+        return nil
+    }
+
+    /// Whether `text` holds `username` whole, apart from case: not as a part of a longer name or address
+    /// (`ada` is not in `ada.lovelace@example.com`), while a sentence's full stop after it does not count.
+    static func text(_ text: String, holds username: String) -> Bool {
+        let characters = Array(text)
+        func isName(_ index: Int) -> Bool {
+            guard characters.indices.contains(index) else { return false }
+            let character = characters[index]
+            if character.isLetter || character.isNumber || "_@+-".contains(character) { return true }
+            // A dot inside a name joins two of its parts; at the end of a sentence it does not.
+            return character == "." && [index - 1, index + 1].allSatisfy { characters.indices.contains($0)
+                && (characters[$0].isLetter || characters[$0].isNumber) }
+        }
+        var start = text.startIndex
+        while let found = text.range(of: username, options: .caseInsensitive, range: start..<text.endIndex) {
+            let lower = text.distance(from: text.startIndex, to: found.lowerBound)
+            let upper = text.distance(from: text.startIndex, to: found.upperBound)
+            if !isName(lower - 1), !isName(upper) { return true }
+            start = found.upperBound
+        }
+        return false
+    }
+
     /// An item as a refusal lists it: its name, and the username that tells apart items of one name.
-    private static func label(_ item: VaultItem) -> String {
+    static func label(_ item: VaultItem) -> String {
         item.identity.isEmpty ? "“\(item.name)”" : "“\(item.name)” (\(item.identity))"
     }
 
