@@ -246,6 +246,58 @@ Claude Code offers banked resets to some accounts behind a server-side flag, but
 Claude's OAuth token to call the service itself, so Claude accounts show no resets. The same path takes them once
 Claude Code reports them.
 
+## Moving tasks to an account with room
+
+**Settings › Accounts → Move tasks to an account with room** (`AccountMovePreference`, on by default, shown once a
+Claude Code account is saved besides the default login) lets Claude Code tasks leave an account that is nearly out of
+its limit on their own. Only Claude Code tasks move, to the accounts Continue with another account offers them
+(`TaskAccountSwitch`) that automatic assignment may use and that are signed in, and only when `AccountRouting.pick`
+picks one with room (`AppModel.accountWithRoom`); the provider session, scope and history stay.
+
+What a move costs decides when one happens. Claude Code asks for a prompt cache that lives an hour after a
+conversation's last request (`AccountRouting.promptCacheLifetime`), and caches are kept per account; only Claude
+Code's own system prompt is cached across accounts. A task that moves while its cache lives makes the new account
+process its whole conversation again at the cache-writing price, many times what an ordinary request costs; once the
+cache has expired, the next request does that anyway, wherever the task is. So (`AccountRouting.move`):
+
+1. An idle task on a nearly spent account whose cache has expired moves at no cost. It moves as an account's tasks
+   move when the account leaves the list (`moveSettledTask`): a task without a runtime does not start its CLI.
+2. A task a limit stopped moves and continues on the new account (the same message as Continue with another account,
+   `UsageLimitContinuation.afterAccountSwitch`), unless the limit resets before its cache expires: then it stays, and
+   its limit card is armed to continue at the reset, as if the person had turned on Auto-continue (kept the same way,
+   so it outlasts a relaunch). With no account with room it waits for the reset too, when the CLI named one.
+3. A task whose cache lives stays on a nearly spent account until a limit stops it or its cache expires.
+
+A task waiting for its reset that moves under rule 1 continues on the new account at once. A move never cuts into a
+turn: it goes through the path of an account chosen during one (`AppModel.moveAutomatically`), so a task with
+background work or a message on its way moves once that is over, with the line "Moving to <account> when its
+background work ends" and Cancel above the composer. The card a move continues from is the one a stopped task
+continues from (`UsageLimitContinuation.card`). A turn that starts meanwhile cancels the move, since it writes
+the cache again on the current account, and a move the person cancels is not made again until the task works again.
+A task that moved keeps why, in its hover card ("Switched from <account>: nearly out of its limit").
+
+Nothing is read for this beyond what Yardlet holds: the accounts' readings, which a running task's own limit reports
+keep current; an idle task's last activity (`SessionRecord.updatedAt`, never earlier than its last request); and, for
+a task a limit just stopped, the last answer, thinking or tool call before the limit card in the conversation it holds
+(a compaction after it left nothing cached). Yardlet looks at one task when its turn ends, at the tasks on nearly
+spent accounts when the set of Claude Code accounts with room changes (`ProviderConnectionStore.onReadingsChange`),
+and once at the moment the next of those tasks' caches expires or a nearly spent limit resets; there is no periodic
+scan.
+
+While the setting is on, a schedule's run that continues a task whose cache lives leaves it on its account (see
+[NATIVE_SESSION_STORAGE.md](NATIVE_SESSION_STORAGE.md), "Schedules and nearly spent accounts"). Turned off, Yardlet
+looks at nothing, cancels the moves it was waiting to make, disarms the continues it armed since Yardlet opened, and
+schedules move runs as they did before. Moving right after a compaction would also cost nothing, but a compaction happens inside a turn.
+
+Tests: `AccountRoutingTests.testATaskMovesOnlyWhenItsCacheIsLostAnywayOrALimitStoppedIt` (the rule),
+`ClaudeUsageLimitAppModelTests.testALimitThatResetsAfterTheCacheExpiresMovesTheTaskToAnAccountWithRoom`,
+`testALimitThatResetsBeforeTheCacheExpiresWaitsForTheReset` (with and without room elsewhere, and turning the setting
+off), `testAnIdleTaskLeavesANearlySpentAccountOnceItsCacheHasExpired`,
+`ScheduledTaskTests.testAContinuingRunMovesItsTaskOffANearlySpentAccountFirst`, and the renders
+`ClaudeProviderNoticeRenderingTests.testAnAutomaticMoveWaitsForTheResetOrSaysWhereTheTaskGoes`
+(`.build/claude-provider-notices-qa/automatic-move-*.png`) and Settings › Accounts in
+`AccountListRenderingTests.testEachModeDrawsTheSameRows` (`.build/account-list-qa/manage-*.png`).
+
 ## Account folder shape, finding sign-ins and removing accounts (2026-10-27)
 
 The user asked that Yardlet alone give the multi-account experience Session Switch gives (continuing a conversation

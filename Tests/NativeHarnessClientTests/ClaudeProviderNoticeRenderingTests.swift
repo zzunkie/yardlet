@@ -90,6 +90,51 @@ final class ClaudeProviderNoticeRenderingTests: XCTestCase {
         }
     }
 
+    /// What a task a limit stopped shows when Yardlet moves tasks to an account with room on its own:
+    /// a limit that resets before its cache expires leaves the card armed to continue at the reset;
+    /// one that resets later moves the task, and while the move waits for its background work the
+    /// line above the composer says where it goes, with Cancel. Rendered without a window into
+    /// `.build/claude-provider-notices-qa/automatic-move-*.png`.
+    func testAnAutomaticMoveWaitsForTheResetOrSaysWhereTheTaskGoes() throws {
+        let directory = try WindowlessRender.directory("claude-provider-notices-qa")
+        let soon = Date().addingTimeInterval(20 * 60)
+        let store = ProviderConnectionStore()
+        let next = ProviderConnection(id: "next", name: "next@example.test", harness: .claudeCode, providerID: nil,
+            homePath: "/tmp/claude-next", credentialSelector: nil)
+        try store.save(next)
+        let task = SessionRecord(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp"),
+            runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Limit", connection: nil)
+        let accounts = UsageLimitAccounts(session: task, store: store,
+            runtimeSelections: RuntimeSelectionStore(discoversRuntimes: false), others: [next])
+        let waiting = TaskProviderNotices(autoContinueResetsAt: soon, canContinue: true, accounts: { accounts })
+        let moving = TaskProviderNotices(canContinue: true, accounts: { accounts })
+        for appearance in [ColorScheme.light, .dark] {
+            let view = VStack(alignment: .leading, spacing: 18) {
+                UsageLimitCard(entryID: UUID(), limit: HarnessRateLimit(status: .rejected, window: .session,
+                    resetsAt: soon, usedFraction: 1,
+                    message: "You've hit your session limit · resets 3:20pm (Asia/Seoul)"),
+                    isLatest: true, notices: waiting)
+                Divider()
+                UsageLimitCard(entryID: UUID(), limit: HarnessRateLimit(status: .rejected, window: .session,
+                    resetsAt: Date().addingTimeInterval(3 * 3_600), usedFraction: 1,
+                    message: "You've hit your session limit · resets 6pm (Asia/Seoul)"),
+                    isLatest: true, notices: moving)
+                TaskAccountMoveLine(notice: TaskAccountMoveNotice(accountName: next.name, isInTurn: false, cancel: {}))
+            }
+            .padding(20)
+            .frame(width: 720)
+            .background(ParityTheme.canvas)
+            .environment(\.colorScheme, appearance)
+            let host = NSHostingView(rootView: view)
+            host.appearance = NSAppearance(named: appearance == .dark ? .darkAqua : .aqua)
+            host.frame = CGRect(origin: .zero, size: host.fittingSize)
+            host.layoutSubtreeIfNeeded()
+            XCTAssertGreaterThan(host.frame.height, 200)
+            try WindowlessRender.writePNG(WindowlessRender.capture(host), to:
+                directory.appending(path: appearance == .dark ? "automatic-move-dark.png" : "automatic-move-light.png"))
+        }
+    }
+
     /// In the conversation, only the latest entry's limit card offers to continue, the armed one
     /// shows its switch on, and compactions read where they happened. Once the latest limit has
     /// reset, as for a task the person comes back to after it, that card offers Resume in place of

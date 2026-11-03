@@ -247,8 +247,12 @@ struct AccountReadToken: Equatable, Sendable {
 @MainActor @Observable
 final class ProviderConnectionStore {
     private(set) var connections: [ProviderConnection] = []
-    private(set) var snapshots: [String: HarnessAccountSnapshot] = [:]
-    private(set) var defaultSnapshots: [HarnessKind: HarnessAccountSnapshot] = [:]
+    private(set) var snapshots: [String: HarnessAccountSnapshot] = [:] {
+        didSet { onReadingsChange?() }
+    }
+    private(set) var defaultSnapshots: [HarnessKind: HarnessAccountSnapshot] = [:] {
+        didSet { onReadingsChange?() }
+    }
     private(set) var errorMessage: String?
     /// How current each shown reading is, keyed like `AccountChoice.id`.
     private(set) var readingStatus: [String: AccountReadingStatus] = [:]
@@ -278,6 +282,9 @@ final class ProviderConnectionStore {
     @ObservationIgnored var onSelectionChange: (([HarnessKind: String]) -> Void)?
     /// A saved account left the list.
     @ObservationIgnored var onRemove: ((ProviderConnection) -> Void)?
+    /// Every change to a reading, for the moves that follow which accounts have room
+    /// (`AppModel.accountReadingsChanged`).
+    @ObservationIgnored var onReadingsChange: (() -> Void)?
     /// The environment Codex's default login is read in, the one the app's Codex tasks run in.
     @ObservationIgnored var codexEnvironmentManager: CodexEnvironmentManager?
     /// Replace the runtime reads of default logins and saved accounts; nil reads the runtimes.

@@ -194,6 +194,102 @@ import XCTest
         await after.shutdown()
     }
 
+    /// With Settings › Accounts' moves to an account with room on, a task a limit stopped whose limit
+    /// resets after its cache would expire moves at the end of its turn to the account with room, keeps
+    /// its conversation and why it moved, and asks Claude to pick up there.
+    func testALimitThatResetsAfterTheCacheExpiresMovesTheTaskToAnAccountWithRoom() async throws {
+        let fixture = try makeFixture()
+        let model = fixture.model
+        read(fixture.first, used: 0.5, in: model)
+        read(fixture.next, used: 0.2, in: model)
+        model.startAccountMoves()
+        let task = try await limitedTask(in: fixture, resetsAt: Date().addingTimeInterval(2 * 3_600))
+        let card = try await waitForLimitCard(in: model, task: task)
+
+        try await waitUntil { model.store.sessions.first?.connection == fixture.next && fixture.transports.all.count == 2 }
+        let resumed = try XCTUnwrap(fixture.transports.all.last)
+        try await waitUntil {
+            await resumed.sentValues.contains { $0["message"]?["content"]?.stringValue == UsageLimitContinuation.afterAccountSwitch }
+        }
+        XCTAssertEqual(fixture.transports.all.count, 2)
+        XCTAssertEqual(model.store.sessions.first?.providerSessionID, task.providerSessionID)
+        let assignment = try XCTUnwrap(model.accountAssignments.assignment(for: task.id))
+        XCTAssertEqual(assignment.accountID, fixture.next.id)
+        XCTAssertEqual(assignment.replacedAccountName, fixture.first.name)
+        XCTAssertNil(model.usageLimitAutoContinue[task.id])
+        XCTAssertNotEqual(model.transcriptBySessionID[task.id]?.last?.id, card)
+        XCTAssertNil(model.accountSwitchesAfterTurn[task.id])
+    }
+
+    /// A limit that resets before the task's cache expires keeps the task where it is, armed to
+    /// continue at the reset, as is one with no account with room to go to; turning the setting off
+    /// disarms what Yardlet armed and leaves the card as it was.
+    func testALimitThatResetsBeforeTheCacheExpiresWaitsForTheReset() async throws {
+        for roomElsewhere in [true, false] {
+            let fixture = try makeFixture()
+            let model = fixture.model
+            read(fixture.first, used: 0.5, in: model)
+            read(fixture.next, used: roomElsewhere ? 0.2 : 0.95, in: model)
+            model.startAccountMoves()
+            let resetsAt = Date().addingTimeInterval(roomElsewhere ? 20 * 60 : 2 * 3_600)
+            let task = try await limitedTask(in: fixture, resetsAt: resetsAt)
+            let card = try await waitForLimitCard(in: model, task: task)
+
+            try await waitUntil { model.usageLimitAutoContinue[task.id]?.waits(for: resetsAt) == true }
+            XCTAssertNotNil(UsageLimitAutoContinue.load(from: model.preferences)[task.id], "Kept as one the person armed is")
+            XCTAssertEqual(model.store.sessions.first?.connection, fixture.first)
+            XCTAssertEqual(fixture.transports.all.count, 1)
+            let sent = await fixture.transports.all[0].sentValues
+            XCTAssertTrue(sent.isEmpty, "Nothing is sent before the reset")
+            XCTAssertNil(model.accountAssignments.assignment(for: task.id))
+
+            model.preferences.set(false, forKey: AccountMovePreference.key)
+            model.followAccountMovePreference()
+            XCTAssertNil(model.usageLimitAutoContinue[task.id])
+            XCTAssertNil(UsageLimitAutoContinue.load(from: model.preferences)[task.id], "Nothing is left to arm again")
+            XCTAssertNil(model.accountMoveLook)
+            XCTAssertEqual(model.transcriptBySessionID[task.id]?.last?.id, card)
+        }
+    }
+
+    /// An idle task on a nearly spent account moves to an account with room once its cache has
+    /// expired, without starting its CLI. One whose cache lives stays, and is looked at again when it
+    /// expires; with no account with room elsewhere nothing moves.
+    func testAnIdleTaskLeavesANearlySpentAccountOnceItsCacheHasExpired() async throws {
+        var rested: SessionRecord?, recent: SessionRecord?
+        let fixture = try makeFixture { first, cli in
+            let workspace = cli.deletingLastPathComponent()
+            rested = SessionRecord(harness: .claudeCode, workspaceURL: workspace, runtimeExecutableURL: cli,
+                title: "Rested", updatedAt: Date().addingTimeInterval(-2 * 3_600), providerSessionID: "rested",
+                connection: first)
+            recent = SessionRecord(harness: .claudeCode, workspaceURL: workspace, runtimeExecutableURL: cli,
+                title: "Recent", updatedAt: Date().addingTimeInterval(-10 * 60), providerSessionID: "recent",
+                connection: first)
+            return [rested, recent].compactMap { $0 }
+        }
+        let model = fixture.model
+        let (restedTask, recentTask) = try (XCTUnwrap(rested), XCTUnwrap(recent))
+        try await model.store.restore()
+        func task(_ id: UUID) -> SessionRecord? { model.store.sessions.first { $0.id == id } }
+
+        // Nowhere with room: nothing moves.
+        read(fixture.first, used: 0.95, in: model)
+        read(fixture.next, used: 0.93, in: model)
+        model.startAccountMoves()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(task(restedTask.id)?.connection, fixture.first)
+
+        read(fixture.next, used: 0.2, in: model)
+        try await waitUntil { task(restedTask.id)?.connection == fixture.next }
+        XCTAssertEqual(task(restedTask.id)?.providerSessionID, "rested")
+        XCTAssertEqual(model.accountAssignments.assignment(for: restedTask.id)?.replacedAccountName, fixture.first.name)
+        XCTAssertEqual(task(recentTask.id)?.connection, fixture.first, "Its cache lives")
+        XCTAssertEqual(model.accountMoveLook?.at, task(recentTask.id).map {
+            $0.updatedAt.addingTimeInterval(AccountRouting.promptCacheLifetime)
+        }, "Looked at again once its cache has expired")
+        XCTAssertTrue(fixture.transports.all.isEmpty, "No CLI starts for the move")
+    }
+
     func testRetriesWarningsAndReportsFollowTheRunningTask() async throws {
         let fixture = try makeFixture()
         let model = fixture.model
@@ -306,7 +402,8 @@ import XCTest
         var all: [FakeClaudeTransport] { lock.withLock { transports } }
     }
 
-    private func makeFixture(currentPermissionMode: String? = nil) throws -> Fixture {
+    private func makeFixture(currentPermissionMode: String? = nil,
+                             sessions: (ProviderConnection, URL) -> [SessionRecord] = { _, _ in [] }) throws -> Fixture {
         let shared = try directory()
         let projects = shared.appending(path: "projects")
         try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
@@ -339,10 +436,12 @@ import XCTest
                 }, preferences: defaults, transcriptRepository: UserDefaultsTranscriptRepository(defaults: defaults),
                 restoresIndexOnLaunch: false)
             for home in homes { try? model.connections.save(home) }
+            // The default login keeps its conversations where the accounts do, so automatic assignment uses them.
+            model.connections.defaultLoginEnvironment = ["CLAUDE_CONFIG_DIR": shared.path]
             self.addTeardownBlock { await model.shutdown() }
             return model
         }
-        let model = makeModel(SessionStore(repository: InMemorySessionRepository()))
+        let model = makeModel(SessionStore(repository: InMemorySessionRepository(sessions: sessions(connection(first), cli))))
         return Fixture(model: model, defaults: defaults, makeModel: makeModel, shared: shared, cli: cli,
             first: connection(first), next: connection(next), signedOut: connection(signedOut), transports: transports)
     }
@@ -412,6 +511,18 @@ import XCTest
         }
         try Data((lines.joined(separator: "\n") + "\n").utf8)
             .write(to: folder.appending(path: "\(task.providerSessionID ?? "").jsonl"))
+    }
+
+    /// Shows a signed-in reading of the account with its 5 hour limit used as given, so a move reads it
+    /// without asking a CLI.
+    private func read(_ connection: ProviderConnection, used: Double, in model: AppModel) {
+        model.connections.usesFixtureSnapshots = true
+        let now = Date()
+        model.connections.publish(HarnessAccountSnapshot(id: connection.id, harness: .claudeCode, providerID: nil,
+            state: .signedIn, accountLabel: connection.name, detail: "", credentialOwner: "", checkedAt: now,
+            usage: [AccountUsageMetric(id: "claude:session:", label: "5 hour limit", usedFraction: used, detail: "",
+                resetsAt: now.addingTimeInterval(4 * 3_600), evidence: .exactQuota, windowMinutes: 300)],
+            canLogin: false, canLogout: false), for: connection)
     }
 
     private func waitForLimitCard(in model: AppModel, task: SessionRecord) async throws -> UUID {

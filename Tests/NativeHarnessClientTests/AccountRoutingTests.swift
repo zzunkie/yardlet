@@ -65,6 +65,31 @@ import XCTest
         XCTAssertEqual(AccountRouting.pick(candidates, model: nil, now: now)?.choice.id, "half")
     }
 
+    /// Moving a task while its prompt cache lives writes its conversation again on the other account,
+    /// so a task on a nearly spent account moves only once its cache has expired, and one a limit
+    /// stopped waits for a reset that comes before then. Without room elsewhere nothing moves, and a
+    /// stopped task waits for a reset the CLI named.
+    func testATaskMovesOnlyWhenItsCacheIsLostAnywayOrALimitStoppedIt() {
+        let hour = AccountRouting.promptCacheLifetime
+        let alive = now.addingTimeInterval(10 * 60), expired = now.addingTimeInterval(-60)
+        func move(_ state: AccountRouting.MoveState, expires: Date, room: Bool) -> AccountRouting.Move {
+            AccountRouting.move(state, cacheExpiresAt: expires, hasRoomElsewhere: room, now: now)
+        }
+        XCTAssertEqual(hour, 3600)
+        XCTAssertEqual(move(.nearlySpent, expires: alive, room: true), .stay, "Its cache lives: it goes on until a limit stops it")
+        XCTAssertEqual(move(.nearlySpent, expires: expired, room: true), .move)
+        XCTAssertEqual(move(.nearlySpent, expires: expired, room: false), .stay)
+
+        let resetsBefore = AccountRouting.MoveState.stoppedByLimit(resetsAt: alive.addingTimeInterval(-60))
+        let resetsAfter = AccountRouting.MoveState.stoppedByLimit(resetsAt: alive.addingTimeInterval(60))
+        XCTAssertEqual(move(resetsBefore, expires: alive, room: true), .waitForReset, "The cache is still there at the reset")
+        XCTAssertEqual(move(resetsAfter, expires: alive, room: true), .move)
+        XCTAssertEqual(move(resetsAfter, expires: expired, room: true), .move)
+        XCTAssertEqual(move(resetsAfter, expires: alive, room: false), .waitForReset)
+        XCTAssertEqual(move(.stoppedByLimit(resetsAt: nil), expires: alive, room: true), .move)
+        XCTAssertEqual(move(.stoppedByLimit(resetsAt: nil), expires: alive, room: false), .stay)
+    }
+
     /// By default automatic assignment uses the default login and the accounts that keep their
     /// conversations with it; a login with its own history stays out until the person includes it, and an
     /// answer equal to the default is forgotten.

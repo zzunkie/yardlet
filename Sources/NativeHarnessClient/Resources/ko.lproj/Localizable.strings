@@ -3666,3 +3666,5 @@
 "This message is no longer in the account." = "이 메일은 더 이상 계정에 없습니다.";
 "Choose a service" = "서비스 선택";
 "Mail accounts…" = "메일 계정…";
+"Move tasks to an account with room" = "한도가 남은 계정으로 작업 옮기기";
+"Moves Claude Code tasks on an account that is nearly out of its limit to an account with room once they have been idle for an hour. A task that hits its limit continues on another account, or waits and continues if the limit resets soon." = "한도가 거의 찬 계정의 Claude Code 작업을, 1시간 쉬고 나면 한도가 남은 계정으로 옮깁니다. 한도에 걸린 작업은 다른 계정에서 이어 가거나, 곧 풀리면 기다렸다가 이어 갑니다.";

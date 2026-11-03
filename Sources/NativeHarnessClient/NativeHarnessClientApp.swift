@@ -614,6 +614,8 @@ struct NativeHarnessClientApp: App {
                         Task {
                             await newestRuntimes.value
                             model.startScheduledTasks()
+                            // Claude Code tasks on a nearly spent account move to one with room.
+                            model.startAccountMoves()
                         }
                         await model.refreshNotificationPermission()
                         // The dots last opened are watched for new messages while their setting is on.
