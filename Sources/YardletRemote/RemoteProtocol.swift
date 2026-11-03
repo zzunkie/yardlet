@@ -412,6 +412,7 @@ public struct RemoteItem: Codable, Equatable, Sendable {
 
     // error
     public var errorKind: String?
+    /// An error's message, or the words a request's card shows above its form or answers (§6.5).
     public var message: String?
     public var recoverable: Bool?
     public var resetsAt: Int64?

@@ -303,6 +303,7 @@ enum RemoteTurnProjection {
             id: id, title: item.title ?? L10n.string("Request"), detail: item.detail, command: item.command, state: state,
             source: .transcript(TranscriptEntry(id: uuid(item.id), createdAt: Date(timeIntervalSince1970: 0),
                                                 content: .permission(permission, state: permissionState(state)))))
+        request.hostMessage = item.message
         let options = item.options ?? []
         let steps = item.questionSteps ?? []
         switch item.requestKind {

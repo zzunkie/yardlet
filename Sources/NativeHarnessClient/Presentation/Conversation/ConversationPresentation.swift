@@ -486,6 +486,9 @@ struct ConversationRequest: Identifiable, Equatable, Sendable {
     /// `AskUserQuestion` result, Codex's response), by `ConversationQuestionStep.id`; a question
     /// left out was not answered. Nil when the provider's record is not known here.
     var recordedAnswers: [String: ConversationQuestionAnswer]? = nil
+    /// The words the host's card shows with a request drawn from another Mac (`RemoteItem.message`): a Codex
+    /// request's message and reason, which this card shows where it shows a Codex request's own.
+    var hostMessage: String? = nil
     var source: ConversationRequestSource
 
     /// It asks the person questions rather than for an approval (a plan review is an approval).
@@ -510,12 +513,12 @@ struct ConversationRequest: Identifiable, Equatable, Sendable {
         }
     }
 
-    /// The decision context a Codex request carries: its messages and fields.
+    /// The decision context a Codex request carries: its messages and fields, or a host's messages for it.
     var codexContext: CodexRequestContextProjection? {
         switch source {
         case let .codexApproval(approval): CodexRequestContextProjection(params: approval.raw)
         case let .codexServerRequest(request): CodexRequestContextProjection(params: request.params)
-        case .transcript: nil
+        case .transcript: hostMessage.map { CodexRequestContextProjection(messages: [$0]) }
         }
     }
 }

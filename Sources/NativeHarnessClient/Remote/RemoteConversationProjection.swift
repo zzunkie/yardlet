@@ -357,6 +357,9 @@ enum RemoteConversationProjection {
         }
         item.title = RemoteText.short(request.title, RemoteText.titleLimit)
         item.detail = RemoteText.short(request.detail, isFull ? RemoteText.fullTextLimit : RemoteText.requestDetailLimit)
+        // The sentences the card shows above its form or answers, such as the one an MCP form asks with (§6.5).
+        item.message = RemoteText.short(request.codexContext?.messages.joined(separator: "\n\n"),
+                                        isFull ? RemoteText.fullTextLimit : RemoteText.requestDetailLimit)
         if let command = RemoteText.short(request.command, .max) {
             // A phone must not take a cut command for the whole one (§6).
             let capped = RemoteText.capped(command, isFull ? RemoteText.fullTextLimit : RemoteText.commandLimit)

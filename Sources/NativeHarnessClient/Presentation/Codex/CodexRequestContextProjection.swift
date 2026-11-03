@@ -12,6 +12,13 @@ struct CodexRequestContextProjection {
     let fields: [Field]
     var isEmpty: Bool { messages.isEmpty && fields.isEmpty }
 
+    /// The words a host's card shows with a request another Mac's window draws (`RemoteItem.message`), the
+    /// only context the host sends.
+    init(messages: [String]) {
+        self.messages = messages
+        fields = []
+    }
+
     init(params: JSONValue?) {
         var messages: [String] = []
         for key in ["reason", "message"] {

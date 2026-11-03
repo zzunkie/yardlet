@@ -367,7 +367,7 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
     }
 
     /// A Codex MCP form as the host's card has it, sent as the host sends it (its projection, through JSON) and
-    /// drawn by the remote window's card, beside the local card: the same fields, checks and answers.
+    /// drawn by the remote window's card, beside the local card: the same message, fields, checks and answers.
     func testAnMCPFormDrawsAsTheLocalCardDoes() async throws {
         let local = CodexRequestFormRestorationTests.form([
             "repo": .object(["type": .string("string"), "title": .string("Repository"), "description": .string("owner/name"),
@@ -388,6 +388,8 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
             return XCTFail("No form: \(String(describing: remote.form))")
         }
         XCTAssertEqual(remoteForm, localForm)
+        XCTAssertEqual(remote.codexContext?.messages, ["Create a repository for the new service."])
+        XCTAssertEqual(remote.codexContext?.messages, local.codexContext?.messages)
         XCTAssertEqual(remote.responses.map(\.title), local.responses.map(\.title))
         XCTAssertEqual(remote.responses.map(\.role), local.responses.map(\.role))
         // What Submit sends once filled in is what the host's card would send.
