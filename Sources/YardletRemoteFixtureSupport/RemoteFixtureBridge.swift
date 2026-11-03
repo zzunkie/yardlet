@@ -1731,7 +1731,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
     /// the person's words it passed on, a background command's notice, and a check-in Claude Code's own schedule sent.
     private static func childTurns(now: Date) -> [RemoteTurn] {
         var parent = user("child-2", "Check the footer at 320 pt as well, and tell me which links wrap.")
-        parent.sender = RemoteSender(kind: "task", name: "Fix the footer links", relation: "parent", quotes: [
+        parent.sender = RemoteSender(kind: "task", name: "Fix the footer links", relation: "parent", taskId: ID.idle, quotes: [
             .init(text: "Check the small phones too.", sentAt: now.addingTimeInterval(-50 * 60).ISO8601Format())
         ])
         var notice = user("child-3", "Background command \"Run the visual tests\" completed (exit code 0)")

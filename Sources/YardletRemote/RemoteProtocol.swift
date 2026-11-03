@@ -517,14 +517,18 @@ public struct RemoteSender: Codable, Equatable, Sendable {
     public var name: String?
     /// For `task`: `task`, `parent` (the task this one was started from) or `itself`.
     public var relation: String?
+    /// For `task`: the sending task's ID when it is another Yardlet task, which a client opens while the Mac lists it.
+    public var taskId: String?
     /// For `backgroundTask`: its status.
     public var status: String?
     public var quotes: [Quote]?
 
-    public init(kind: String, name: String? = nil, relation: String? = nil, status: String? = nil, quotes: [Quote]? = nil) {
+    public init(kind: String, name: String? = nil, relation: String? = nil, taskId: String? = nil, status: String? = nil,
+                quotes: [Quote]? = nil) {
         self.kind = kind
         self.name = name
         self.relation = relation
+        self.taskId = taskId
         self.status = status
         self.quotes = quotes
     }
