@@ -32,6 +32,7 @@ final class LocalTerminalHosting: TerminalHosting, @MainActor LocalProcessDelega
     private var flowDelegate: BackpressuredTerminalDelegate?
     private var flowID = UUID()
     private(set) var process: LocalProcess?
+    private var ownedSessionID: pid_t?
     private let folder: URL
     private let launch: ShellLaunchEnvironment
     private var columns = 80
@@ -82,6 +83,8 @@ final class LocalTerminalHosting: TerminalHosting, @MainActor LocalProcessDelega
         process.startProcess(executable: start.executable, args: start.arguments,
                              environment: start.environment, execName: start.processName,
                              currentDirectory: start.currentDirectory)
+        // The pinned SwiftTerm forkpty backend calls setsid; its session survives a fast-exiting leader.
+        if process.shellPid > 1 { ownedSessionID = process.shellPid }
         if process.running { onReady?() }
     }
 
@@ -103,10 +106,18 @@ final class LocalTerminalHosting: TerminalHosting, @MainActor LocalProcessDelega
         flowDelegate?.stop()
         flowDelegate = nil
         flowID = UUID()
-        if let process, process.running, process.shellPid > 0 {
-            NativeProcessTree.terminate(rootPID: process.shellPid)
-            process.terminate()
+        if let process, let ownedSessionID {
+            // Do not signal a stale leader PID after SwiftTerm reaped it. Dropping the process closes
+            // its descriptor without signaling; the delegate's stop also ends any post-exit drain wait.
+            if process.shellPid > 1, getsid(process.shellPid) == ownedSessionID {
+                process.terminate()
+                if getsid(process.shellPid) == ownedSessionID {
+                    NativeProcessTree.terminate(rootPID: process.shellPid)
+                }
+            }
+            NativeProcessTree.terminatePTYSession(ownedSessionID)
         }
+        ownedSessionID = nil
         process = nil
     }
 

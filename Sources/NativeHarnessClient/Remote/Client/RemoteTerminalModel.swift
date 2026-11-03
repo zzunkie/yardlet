@@ -93,7 +93,7 @@ final class RemoteTerminalStream {
             let chunk = data.subdata(in: offset..<min(data.count, offset + RemoteProtocol.maxTerminalChunkBytes))
             let current = generation
             model.requestInOrder(.terminalInput(taskID: taskID, terminalID: terminalID, data: chunk)) { [weak self] response in
-                guard let self, self.generation == current, !response.ok else { return }
+                guard let self, self.generation == current, self.phase == .running, !response.ok else { return }
                 self.fail(response.error)
             }
         }

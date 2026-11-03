@@ -87,17 +87,39 @@ final class RemoteHostModelTests: XCTestCase {
             id: task.id, hostTaskID: task.id, harness: .claudeCode, workspaceURL: folder, roots: [folder],
             projectID: nil, title: "Read terminal", depth: 0, permission: .standard, deadline: .now.advanced(by: .seconds(5))))
         XCTAssertTrue(terminalRead.text.contains("REMOTE_READY"))
-        // The same tab model creates and closes remote tabs and split terminals.
+        // Creating a tab must mount/start its new renderer, not keep TerminalPane's old @State session.
+        func shownSessions(in view: NSView) -> [NativeTerminalSession] {
+            let own = (view as? NativeTerminalView)?.session.map { [$0] } ?? []
+            return own + view.subviews.flatMap { shownSessions(in: $0) }
+        }
+        let tabsRender = WindowlessRender.Host(pane.frame(width: 520, height: 400),
+            size: NSSize(width: 520, height: 400), appearance: .light)
+        tabsRender.settle()
         let second = workspace.openTerminalTab(in: folder, launch: .isolatedZsh(in: folder), taskID: nil)
-        second.start()
+        try await waitUntil {
+            tabsRender.settle(passes: 1)
+            return second.isRunning && shownSessions(in: tabsRender.hosting).contains { $0 === second }
+        }
+        workspace.showTerminalTab(remote)
+        try await waitUntil {
+            tabsRender.settle(passes: 1)
+            return shownSessions(in: tabsRender.hosting).contains { $0 === remote }
+        }
+        workspace.showTerminalTab(second)
         workspace.splitTerminal(in: folder, launch: .isolatedZsh(in: folder), taskID: nil)
         let split = try XCTUnwrap(workspace.splitTerminal)
-        split.start()
-        try await waitUntil { bridge.terminals.sessions.count == 3 && second.isRunning && split.isRunning }
+        try await waitUntil {
+            tabsRender.settle(passes: 1)
+            return bridge.terminals.sessions.count == 3 && split.isRunning
+        }
         second.end(); split.end()
         workspace.showTerminalTab(remote)
-        try await waitUntil { bridge.terminals.sessions.count == 1 }
+        try await waitUntil {
+            tabsRender.settle(passes: 1)
+            return bridge.terminals.sessions.count == 1 && shownSessions(in: tabsRender.hosting).contains { $0 === remote }
+        }
         XCTAssertEqual(workspace.terminals.count, 1)
+        tabsRender.close()
         let output = try WindowlessRender.directory("remote-terminal-qa")
         for appearance in WindowlessRender.Appearance.allCases {
             let view = HStack(spacing: 1) {
@@ -122,6 +144,10 @@ final class RemoteHostModelTests: XCTestCase {
             remote.requestOpenLink(source: remoteView, link: "http://localhost:3000", params: [:])
             remote.requestOpenLink(source: remoteView, link: "file:///host-only/workspace/source.swift", params: [:])
             XCTAssertEqual(openedLinks.map(\.absoluteString), ["http://localhost:3000", "file:///host-only/workspace/source.swift"])
+            remote.requestOpenLink(source: remoteView, link: "custom-run://command", params: [:])
+            local.onOpenLink = { openedLinks.append($0) }
+            local.requestOpenLink(source: localView, link: "custom-run://command", params: [:])
+            XCTAssertEqual(openedLinks.count, 2, "Remote-origin links cannot launch an unrelated app on either Mac")
             let marker = "QUERY_" + appearance.suffix.uppercased()
             let query = #"python3 -c 'import os,tty,termios,select; old=termios.tcgetattr(0); tty.setraw(0); os.write(1,b"\x1b[6n"); data=b""; exec("while select.select([0],[],[],1)[0]:\n data+=os.read(0,1024)"); termios.tcsetattr(0,termios.TCSANOW,old); print("\#(marker)="+str(data.count(b"R")))'"#
             let queried = await remote.runWhenReady(query)
@@ -154,6 +180,17 @@ final class RemoteHostModelTests: XCTestCase {
             to: output.appending(path: "terminal-exit-local-remote-dark.png"))
         exitRender.close()
         try await waitUntil { local.hasEnded && remote.hasEnded }
+        // Repeated ordinary host-side closes must release server slots even without backpressure.
+        for _ in 0..<5 {
+            remote = newRemote(); remote.start()
+            try await waitUntil { remote.isRunning || remote.hasEnded }
+            XCTAssertTrue(remote.isRunning, "A previous host close must not retain a connection slot")
+            let closing = try XCTUnwrap(bridge.terminals.sessions.values.first?.session)
+            closing.end()
+            remote.send("x")
+            try await waitUntil { !remote.isRunning && bridge.terminals.sessions.isEmpty }
+            XCTAssertEqual((remote.hosting as? RemoteTerminalHosting)?.stream.closeReason, "closed")
+        }
         remote = newRemote(); remote.start()
         try await waitUntil { remote.isRunning && bridge.terminals.sessions.count == 1 }
         let revokedLocal = try XCTUnwrap(host.taskWorkspaces.loadedState(for: task.id)?.terminals.first)

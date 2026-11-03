@@ -1891,8 +1891,10 @@ and credentials never enter the audit log. Permission controls are available onl
 a remote request cannot enable them. File-write and settings permissions grant no terminal access.
 
 The host creates an ordinary terminal tab in the task's workspace and starts its PTY without a view.
-The local panel and the task's `read_terminal` tool see that same session. Closing the local tab,
-revoking the permission or closing the remote connection ends it. A session started headless keeps a bounded emulator
+The local panel and the task's `read_terminal` tool see that same session. Closing or restarting the local tab
+revokes its permit and explicitly ends the remote stream, including after process exit. Permission revocation or
+connection close also ends it. Cleanup includes remaining processes in the owned PTY session when its leader has
+already exited; it does not target another terminal's session. A session started headless keeps a bounded emulator
 with 5,000 scrollback lines for reads without a view; ordinary view-first sessions use their existing emulator.
 For headless sessions, each output chunk updates it without rebuilding
 a history string. The first local view adopts the same emulator, preserving its parser state, alternate screen
@@ -1905,7 +1907,9 @@ Unlike local task terminals, these sessions belong to a connection. Listing and 
 terminals, reconnecting to them, and transferring their screen state across connections remain follow-up work.
 A hidden panel retains its shell until the connection or task ends. Terminal control
 sequences cannot read or write either the client clipboard or the host clipboard when the remote-created
-shell is shown in a local panel. Exit status is the host's raw `waitpid` status;
+shell is shown in a local panel. Output-driven clipboard reads are also disabled for local task terminals;
+explicit user Paste is unchanged. Remote-origin links accept web, file and recognized task links through the task's
+routing callback, and do not launch unrelated application schemes. Exit status is the host's raw `waitpid` status;
 the client decodes its exit code or terminating signal as the local panel does. Links use the remote
 window's existing file and browser routing; without that route, the terminal never opens a host path
 or localhost address through the client's system applications.

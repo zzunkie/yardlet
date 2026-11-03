@@ -15,6 +15,25 @@ enum NativeProcessTree {
         _ = Darwin.waitpid(rootPID, &status, 0)
     }
 
+    /// A forkpty session can outlive its leader when a background job holds the slave open.
+    /// Session membership, not a dead/reused parent PID, identifies the remaining owned processes.
+    static func terminatePTYSession(_ sessionID: pid_t) {
+        guard sessionID > 1, sessionID != getsid(0) else { return }
+        for _ in 0..<3 {
+            let needed = proc_listallpids(nil, 0)
+            guard needed > 0 else { return }
+            var pids = [pid_t](repeating: 0, count: Int(needed) + 64)
+            let count = pids.withUnsafeMutableBytes { proc_listallpids($0.baseAddress, Int32($0.count)) }
+            let owned = pids.prefix(Int(max(0, count))).filter { $0 > 1 && getsid($0) == sessionID }
+            guard !owned.isEmpty else { return }
+            for pid in owned {
+                if getsid(pid) == sessionID { _ = Darwin.kill(pid, SIGHUP) }
+                if getsid(pid) == sessionID { _ = Darwin.kill(pid, SIGKILL) }
+            }
+            Darwin.usleep(10_000)
+        }
+    }
+
     /// Terminates a Foundation-owned process tree and lets `Process` reap its own child.
     /// Calling `waitpid` separately would leave Foundation believing the task is still running
     /// and makes `terminationStatus` raise an Objective-C exception.

@@ -19,6 +19,7 @@ final class RemoteTerminalBridge {
         guard sessions[terminalID] == nil else { return RemoteError(.badRequest) }
         let workspace = model.taskWorkspaces.state(for: task.id)
         let session = workspace.openTerminalTab(in: task.workspaceURL, launch: launch, taskID: task.id, allowsClipboard: false)
+        session.markRemoteOrigin()
         sessions[terminalID] = Entry(taskID: task.id.uuidString, session: session, permit: permit)
         guard let hosting = session.hosting as? LocalTerminalHosting else {
             session.end(); sessions[terminalID] = nil; return RemoteError(.unavailable)
@@ -26,6 +27,8 @@ final class RemoteTerminalBridge {
         session.onStop = { [weak self, weak session, weak hosting] in
             // Local Close/Restart must release a producer waiting for an ACK immediately.
             permit.revoke()
+            // Notify even if the process delegate already finished or its queued exit was discarded by revocation.
+            Task { await output(.exited(nil)) }
             self?.sessions[terminalID] = nil
             hosting?.outputConsumer = nil
             session?.onStop = nil
