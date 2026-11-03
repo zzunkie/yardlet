@@ -15,6 +15,14 @@ enum ConnectionEntryRoute: Equatable {
     static let harnesses = Self.settings(.harnesses, harness: nil)
 }
 
+/// What Settings › Usage draws: the overview the app reads anew in the page's body, whether counting is
+/// on, and when the limits were last read.
+struct SettingsUsageContext {
+    var overview: () -> TokenUsageOverview
+    var isCounting: () -> Bool
+    var limitsCheckedAt: () -> Date?
+}
+
 /// What the Accounts and Harnesses sections need from the app.
 struct SettingsAccountsContext {
     let runtimeSelections: RuntimeSelectionStore
@@ -57,6 +65,8 @@ struct SettingsCenterView: View {
     let instructions: YardletInstructionsStore?
     /// The routing evaluation's switch, shown with Yardlet Instructions; nil leaves it out.
     let evaluation: RoutingEvaluationStore?
+    /// Nil where the window does not count token usage (tests, fixtures); Usage is then left out.
+    let usage: SettingsUsageContext?
     /// Yardlet's lid helper; nil where the app has none (tests, fixtures), and General leaves its
     /// switch out.
     let lidHelper: LidSleepHelper?
@@ -112,6 +122,7 @@ struct SettingsCenterView: View {
         cliUpdates: CLIUpdateCenter? = nil,
         instructions: YardletInstructionsStore? = nil,
         evaluation: RoutingEvaluationStore? = nil,
+        usage: SettingsUsageContext? = nil,
         lidHelper: LidSleepHelper? = nil
     ) {
         self.size = size
@@ -122,12 +133,14 @@ struct SettingsCenterView: View {
         self.cliUpdates = cliUpdates
         self.instructions = instructions
         self.evaluation = evaluation
+        self.usage = usage
         self.lidHelper = lidHelper
         self.notificationCenter = notificationCenter
         _notifications = State(initialValue: SystemNotificationSettingsModel(center: notificationCenter))
         _section = State(initialValue: SettingsSection.initial(initialSection, available: SettingsSection.available(
             hasAccounts: accounts != nil, hasConnectors: connectors != nil, hasVault: vault != nil,
-            hasRemote: remote != nil, hasCLIUpdates: cliUpdates != nil, hasInstructions: instructions != nil)))
+            hasRemote: remote != nil, hasCLIUpdates: cliUpdates != nil, hasInstructions: instructions != nil,
+            hasUsage: usage != nil)))
         _accountCenter = State(initialValue: AccountCenterModel(
             connections: accounts?.connections ?? ProviderConnectionStore(),
             codexEnvironmentManager: accounts?.codexEnvironmentManager))
@@ -245,7 +258,7 @@ struct SettingsCenterView: View {
     private var sections: [SettingsSection] {
         SettingsSection.available(hasAccounts: accounts != nil, hasConnectors: connectors != nil, hasVault: vault != nil,
                                   hasRemote: remote != nil, hasCLIUpdates: cliUpdates != nil,
-                                  hasInstructions: instructions != nil)
+                                  hasInstructions: instructions != nil, hasUsage: usage != nil)
     }
 
     private func connectionContent(_ accounts: SettingsAccountsContext) -> some View {
@@ -319,6 +332,18 @@ struct SettingsCenterView: View {
             if let remote { RemoteSettingsView(service: remote) }
         case .cliUpdates:
             if let cliUpdates { CLIUpdateSettingsView(center: cliUpdates, runtimes: accounts?.runtimeSelections) }
+        case .usage:
+            if let usage {
+                // The page's counts, then its switch as the settings catalog draws it.
+                TokenUsagePage(
+                    overview: usage.overview, isCounting: usage.isCounting, limitsCheckedAt: usage.limitsCheckedAt,
+                    switchRow: AnyView(VStack(spacing: 0) {
+                        Divider()
+                        ForEach(YardletSettingCatalog.rows(in: .usage, context: settingsContext)) { setting in
+                            SettingsPreferenceRow(setting: setting, icon: settingsControlIcon(setting.symbol))
+                        }
+                    }))
+            }
         case .accounts, .harnesses:
             EmptyView()
         }
@@ -328,7 +353,8 @@ struct SettingsCenterView: View {
     private var settingsContext: YardletSettingsContext {
         YardletSettingsContext(
             vault: vault, remote: remote, cliUpdates: cliUpdates, instructions: instructions, evaluation: evaluation,
-            connections: accounts?.connections, hasConnectors: connectors != nil, lidHelper: lidHelper,
+            connections: accounts?.connections, hasConnectors: connectors != nil, hasUsage: usage != nil,
+            lidHelper: lidHelper,
             updateChecks: sparkle.map { sparkle in
                 YardletSettingSwitch(get: { sparkle.checksAutomatically }, set: { sparkle.checksAutomatically = $0 })
             })

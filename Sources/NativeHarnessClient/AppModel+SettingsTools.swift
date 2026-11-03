@@ -12,7 +12,7 @@ extension AppModel {
     var settingsContext: YardletSettingsContext {
         YardletSettingsContext(defaults: preferences, vault: settingsVault, remote: remoteControl, cliUpdates: cliUpdates,
                                instructions: yardletInstructions, evaluation: routingEvaluation, connections: connections,
-                               hasConnectors: connectorCenter != nil, lidHelper: lidSleepHelper,
+                               hasConnectors: connectorCenter != nil, hasUsage: true, lidHelper: lidSleepHelper,
                                updateChecks: settingsUpdateChecks)
     }
 

@@ -6,19 +6,20 @@ import XCTest
 final class SettingsStructureTests: XCTestCase {
     func testEverySectionIsOneSidebarEntryInOrder() {
         let all = SettingsSection.available(hasAccounts: true, hasConnectors: true, hasVault: true, hasRemote: true, hasCLIUpdates: true,
-                                            hasInstructions: true)
+                                            hasInstructions: true, hasUsage: true)
         XCTAssertEqual(all, SettingsSection.allCases)
         XCTAssertEqual(SettingsSection.available(hasAccounts: true, hasConnectors: true),
-            all.filter { $0 != .remote && $0 != .cliUpdates && $0 != .instructions && $0 != .vault })
+            all.filter { $0 != .remote && $0 != .cliUpdates && $0 != .instructions && $0 != .vault && $0 != .usage })
+        XCTAssertEqual(all[all.firstIndex(of: .accounts)! + 1], .usage, "Usage follows the accounts whose limits it shows")
         XCTAssertEqual(all.suffix(2), [.harnesses, .cliUpdates], "CLI Updates follows the harnesses it updates")
         XCTAssertEqual(Array(all.prefix(5)), [.general, .appearance, .notifications, .instructions, .accounts],
             "Yardlet Instructions is a personal setting, as the Codex app's custom instructions are, before the account")
         XCTAssertEqual(Set(all.map(\.title)).count, all.count, "No two entries share a name")
         XCTAssertEqual(SettingsSection.available(hasAccounts: false, hasConnectors: true, hasVault: true, hasRemote: true, hasCLIUpdates: true,
-                                                 hasInstructions: true),
+                                                 hasInstructions: true, hasUsage: true),
             all.filter { !$0.isConnectionSection })
         XCTAssertEqual(SettingsSection.available(hasAccounts: true, hasConnectors: false, hasVault: true, hasRemote: true, hasCLIUpdates: true,
-                                                 hasInstructions: true),
+                                                 hasInstructions: true, hasUsage: true),
             all.filter { $0 != .connectors })
         XCTAssertEqual(all.filter(\.isConnectionSection), [.accounts, .harnesses])
     }

@@ -125,6 +125,7 @@ struct SidebarAccountMenu: Equatable {
         identity: SidebarAccountIdentity,
         settingsSections: [SettingsSection],
         usage: [MenuBarMenu.UsageAccount] = [],
+        usageToday: String? = nil,
         updateIsWaiting: Bool = false,
         checksForUpdates: Bool = false,
         refreshing: Bool = false
@@ -139,13 +140,16 @@ struct SidebarAccountMenu: Equatable {
         }
         var sections = [Section(items: settings)]
         if settingsSections.contains(.accounts) {
+            // Today's count opens Settings › Usage, while it counts.
+            let today = usageToday.flatMap { line in settingsSections.contains(.usage)
+                ? [Item(destination: .settingsSection(.usage), title: line, systemName: "chart.bar.xaxis")] : nil } ?? []
             if usage.isEmpty {
                 sections.append(Section(items: [
                     Item(destination: .usage, title: L10n.string("Usage"),
                          systemName: "gauge.with.dots.needle.67percent"),
-                ]))
+                ] + today))
             } else {
-                sections.append(Section(title: L10n.string("Usage"), items: usage.map {
+                sections.append(Section(title: L10n.string("Usage"), items: today + usage.map {
                     Item(destination: .accountUsage($0.harness), title: $0.line, harness: $0.harness, help: $0.help,
                          subtitle: $0.detail.isEmpty ? nil : $0.detail)
                 }))
@@ -194,6 +198,8 @@ struct SidebarAccountMenuContext {
     var settingsSections: [SettingsSection] = SettingsSection.available(hasAccounts: true, hasConnectors: false)
     /// The Usage lines, read when the menu opens.
     var usage: () -> [MenuBarMenu.UsageAccount] = { [] }
+    /// Today's token count, first under Usage while Settings › Usage counts it.
+    var usageToday: () -> String? = { nil }
     /// Checks the accounts the Usage lines show (`AppModel.checkUsageAccounts`), started as the
     /// menu opens; the open menu takes the answers.
     var checkUsage: @MainActor () async -> Void = {}
@@ -211,7 +217,7 @@ struct SidebarAccountMenuContext {
     /// The menu as it is now.
     func menu() -> SidebarAccountMenu {
         SidebarAccountMenu.make(identity: identity, settingsSections: settingsSections, usage: usage(),
-                                updateIsWaiting: updateIsWaiting(), checksForUpdates: checksForUpdates,
+                                usageToday: usageToday(), updateIsWaiting: updateIsWaiting(), checksForUpdates: checksForUpdates,
                                 refreshing: refreshing())
     }
 }

@@ -1059,8 +1059,10 @@ struct MainWindow: View {
         return SidebarAccountMenuContext(
             identity: accountIdentity,
             settingsSections: SettingsSection.available(hasAccounts: true, hasConnectors: true, hasVault: true,
-                                                        hasRemote: model.remoteControl != nil),
+                                                        hasRemote: model.remoteControl != nil,
+                                                        hasUsage: settingsUsage != nil),
             usage: { connections.usageLines() },
+            usageToday: { [model] in model.tokenUsage.todayLine },
             checkUsage: { [model] in await model.checkUsageAccounts() },
             updateIsWaiting: { [updateWait] in updateWait?.isWaiting ?? false },
             checksForUpdates: sparkle != nil,
@@ -1700,6 +1702,8 @@ struct MainWindow: View {
                 isSuggestionOpen: { model.taskSuggestions.resolution(of: $0.id, in: $1) == nil },
                 notices: NewTaskHomeListsProjection.usageNotices(
                     choices: model.connections.menuBarUsageChoices(for: HarnessCatalog.builtIns.map(\.id))),
+                usage: model.tokenUsage.isEnabled ? { model.tokenUsageOverview() } : nil,
+                onOpenUsage: { presentSettings(.usage) },
                 now: model.scheduledTasks.displayNow,
                 windowHeight: windowSize.height > 0 ? windowSize.height : nil,
                 onMarkRead: { ids in Task { await model.store.markRead(ids: ids) } },
@@ -1719,8 +1723,31 @@ struct MainWindow: View {
         .environment(model.pullRequests)
         // A pane without a session keeps the shell's home focus path, not the focused task's.
         .environment(\.taskKeyboardFocus, homeKeyboardFocus)
-        // Its nearly spent limits are the Usage lines' readings.
-        .task { await model.checkUsageAccounts() }
+        // Its nearly spent limits are the Usage lines' readings. With the usage band shown they are read
+        // again every five minutes, as its pace needs readings a while apart (a reading under a minute old
+        // is kept).
+        .task(id: model.tokenUsage.isEnabled) {
+            await model.checkUsageAccounts()
+            while model.tokenUsage.isEnabled, !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(300))
+                guard !Task.isCancelled else { return }
+                await model.checkUsageAccounts()
+            }
+        }
+    }
+
+    /// Settings › Usage: the counts and limits the app reads anew in the page's body. A visual fixture
+    /// shows none of this Mac's.
+    private var settingsUsage: SettingsUsageContext? {
+        guard !model.usesVisualFixture else { return nil }
+        let model = model
+        return SettingsUsageContext(
+            overview: { model.tokenUsageOverview() }, isCounting: { model.tokenUsage.isEnabled },
+            limitsCheckedAt: {
+                MenuBarMenuProjection.limitAccounts(
+                    choices: model.connections.menuBarUsageChoices(for: HarnessCatalog.builtIns.map(\.id)))
+                    .compactMap(\.checkedAt).max()
+            })
     }
 
     /// A task the home answers in its composer's place: its conversation and composer as a side-panel
@@ -2400,6 +2427,7 @@ struct MainWindow: View {
                 cliUpdates: model.cliUpdates,
                 instructions: model.yardletInstructions,
                 evaluation: model.routingEvaluation,
+                usage: settingsUsage,
                 lidHelper: model.lidSleepHelper
             )
         }

@@ -83,6 +83,8 @@ struct MenuBarMenu: Equatable, Sendable {
 
     var sections: [Section] = []
     var usage: [UsageAccount] = []
+    /// Today's tokens and their API-equivalent cost, first under Usage, while Settings › Usage counts them.
+    var usageToday: String?
     var update: UpdateLine?
     /// The screen is kept unlocked while tasks work: the menu says so first, with a way to stop it.
     var keepsScreenAwake = false
@@ -249,6 +251,31 @@ enum MenuBarMenuProjection {
             }.first
             return (organization.map { "\(label) (\($0))" } ?? label, group, latest.metrics)
         }
+    }
+
+    /// The accounts with a limit as the Usage lines name them, for Settings › Usage and the Home band:
+    /// the name, the address alone, the harness whose mark it shows, its windows and when they were read.
+    static func limitAccounts(choices: [AccountChoice])
+        -> [(id: String, name: String, address: String, harness: HarnessKind, metrics: [AccountUsageMetric],
+             checkedAt: Date?)] {
+        usageReadings(choices: choices).map { account in
+            (account.group.id, account.name, account.group.identity.displayLabel, account.group.harnesses[0],
+             account.metrics, account.group.usageBlocks.compactMap(\.checkedAt).max())
+        }
+    }
+
+    /// Every account's name as the Usage lines write it, by the id of each of its choices
+    /// (`AccountChoice.id`), so a session's requests are counted against the account it ran on.
+    static func accountNames(choices: [AccountChoice]) -> [String: String] {
+        var names: [String: String] = [:]
+        for group in AccountGroupProjection.groups(from: choices) {
+            let label = group.identity.displayLabel
+            let organization = group.choices.lazy.compactMap {
+                AccountIdentityProjection.sharedOrganization($0.snapshot?.accountOrganization, of: label)
+            }.first
+            for choice in group.choices { names[choice.id] = organization.map { "\(label) (\($0))" } ?? label }
+        }
+        return names
     }
 
     /// The windows with 10% or less left (`AccountLimitWindow.isNearlySpent`), in the Usage lines'

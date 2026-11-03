@@ -3709,3 +3709,37 @@
 "Update Yardlet on the host to use this panel." = "이 패널을 사용하려면 호스트의 Yardlet을 업데이트하세요.";
 
 "This repository is outside the task's folders." = "이 저장소는 작업에 허용된 폴더 밖에 있습니다.";
+
+/* Token usage */
+"Cache reads" = "캐시 읽기";
+"New input" = "새 입력";
+"Cache writes" = "캐시 쓰기";
+"7 days" = "7일";
+"30 days" = "30일";
+"Daily usage" = "날마다 쓴 양";
+"%@ tokens" = "%@ 토큰";
+"%@ API equivalent" = "API 환산 %@";
+"runs out in %@ at this pace" = "이 속도면 %@ 뒤 다 씀";
+"runs out in %@" = "%@ 뒤 다 씀";
+"At the last hour's pace this limit runs out %@." = "지난 한 시간의 속도로 쓰면 %@에 이 한도를 다 씁니다.";
+"Open Settings › Usage" = "설정 › 사용량 열기";
+"%@ tokens today" = "오늘 %@ 토큰";
+"Plan limits" = "요금제 한도";
+"Token usage" = "토큰 사용량";
+"Range" = "기간";
+"Tokens" = "토큰";
+"API equivalent" = "API 환산";
+"Requests" = "요청";
+"Read from cache" = "캐시에서 읽음";
+"API equivalent by day" = "날마다 API 환산";
+"By kind" = "종류별";
+"Where it went" = "어디에 썼나";
+"Group by" = "묶기";
+"API equivalent is an estimate at the providers' public API prices (%@). A subscription pays in plan limits, not dollars. A model without a price is counted in tokens only." = "API 환산은 공급사의 공개 API 단가(%@)로 셈한 추정입니다. 구독에서는 돈이 나가지 않고 요금제 한도가 줄어듭니다. 단가가 없는 모델은 토큰만 셉니다.";
+"Counted from this Mac's Claude Code and Codex transcripts, read %@. Nothing is sent anywhere." = "이 Mac의 Claude Code·Codex 대화 기록에서 셉니다(%@ 읽음). 밖으로 보내는 것은 없습니다.";
+"Last 14 days, API equivalent" = "최근 14일 API 환산";
+"No price" = "단가 없음";
+"Counting this Mac's transcripts…" = "이 Mac의 대화 기록을 세는 중…";
+"Count token usage" = "토큰 사용량 세기";
+"Reads only the new lines of Claude Code's and Codex's transcripts on this Mac and keeps the counts for a year. Turning it off deletes the counts; the transcripts stay as they are." = "이 Mac에 있는 Claude Code·Codex 대화 기록에서 새로 쓰인 줄만 읽고, 센 값을 1년 동안 둡니다. 끄면 센 값을 지우고, 대화 기록은 그대로 둡니다.";
+"Not started in Yardlet" = "Yardlet 밖에서 시작함";
