@@ -18,7 +18,7 @@ final class ConversationRewindRenderingTests: XCTestCase {
         let directory = try WindowlessRender.directory("rewind-qa")
         for appearance in [ColorScheme.light, .dark] {
             let view = VStack(alignment: .leading, spacing: 16) {
-                ConversationEditBanner(edit: edit, onCancel: {})
+                ConversationEditBanner(canCancel: edit.preparedProviderSessionID == nil, onCancel: {})
                 Divider()
                 FileRewindPreviewContent(result: result)
             }.padding(12).frame(width: 480).background(ParityTheme.input).environment(\.colorScheme, appearance)

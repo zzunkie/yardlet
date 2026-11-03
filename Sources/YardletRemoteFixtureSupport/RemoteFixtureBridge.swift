@@ -20,7 +20,11 @@ import YardletRemote
 /// is busy and a failure for the one that cannot start; Pause and Resume act as on the Mac. Since then (§15.22) a phone
 /// opens what a task made: each project's tasks have a folder of their own in a temporary folder, and "Summarize the
 /// crash reports" lists two outputs, a PDF beside its folder and a PNG inside it, and names a text file in its folder;
-/// a file beside them that is neither is refused. Nothing else is read from or written to the Mac.
+/// a file beside them that is neither is refused. Since 2026-11-03 (§15.23) a task's composer settings change (Bypass
+/// permissions and Full access only once confirmed), "Check the footer on mobile" reads its settings first as a task
+/// not connected to its harness does, each task offers its slash commands that may run from elsewhere (Compact, a new
+/// chat, Codex's fork and Plan mode), and a task's latest message is edited and its turns forked as on the Mac. Nothing
+/// else is read from or written to the Mac.
 public actor RemoteFixtureBridge: RemoteBridge {
     public enum ID {
         public static let approval = "0F1E0001-0000-4000-8000-000000000001"
@@ -55,6 +59,10 @@ public actor RemoteFixtureBridge: RemoteBridge {
         var queue: [RemoteItem] = []
         /// The account the task runs under (the plan limit task's list, §15.17).
         var account = "fixture-home"
+        /// Its composer's settings (§15.23), and whether they were read, as a task not connected to its harness reads
+        /// them when a menu opens.
+        var settings: [RemoteSetting] = []
+        var settingsRead = true
     }
 
     /// A scheduled task as the Mac keeps it (§15.21): when, where its runs go, whether it is on, and its runs.
@@ -160,7 +168,12 @@ public actor RemoteFixtureBridge: RemoteBridge {
             Entry(task: Self.task(ID.secret, "Connect the staging database", .codex, ID.website, at(9)),
                   turns: Self.secretTurns(now: now), pendingRequest: ("secret_fixture_1", .input))
         ]
-        entries = entries.map(Self.withState)
+        entries = entries.map { entry in
+            var entry = Self.withState(entry)
+            entry.settings = Self.taskSettings(for: Harness(id: entry.task.harness) ?? .claude)
+            entry.settingsRead = entry.task.id != ID.child
+            return entry
+        }
         order = entries.map(\.task.id)
         tasks = Dictionary(uniqueKeysWithValues: entries.map { ($0.task.id, $0) })
         schedules = Self.schedules(now: now)
@@ -193,13 +206,20 @@ public actor RemoteFixtureBridge: RemoteBridge {
         return RemoteSnapshot(projects: projects, tasks: listed.map(\.task), newestRequestIDs: requests,
                               requestSummaries: summaries,
                               newTask: RemoteNewTask(harness: "claude-code", harnessName: "Claude Code"), followUp: .steer,
-                              scheduledTasks: true, taskFiles: true)
+                              scheduledTasks: true, taskFiles: true, taskControls: true)
     }
 
-    /// The task's turns, and the messages queued behind its running turn at the end of the last one.
+    /// The task's turns with what each offers (§15.23), and the messages queued behind its running turn at the end of
+    /// the last one.
     public func conversation(of taskID: String) -> RemoteConversation? {
         guard let entry = tasks[taskID] else { return nil }
         var turns = entry.turns
+        for index in turns.indices {
+            let options = Self.turnOptions(turns[index], in: entry)
+            if !options.isEmpty, let header = turns[index].items.firstIndex(where: { $0.kind == .turn }) {
+                turns[index].items[header].options = options
+            }
+        }
         if !entry.queue.isEmpty, let last = turns.indices.last {
             turns[last].items += entry.queue.map { queued in
                 var item = queued
@@ -226,6 +246,16 @@ public actor RemoteFixtureBridge: RemoteBridge {
 
     public func perform(_ command: RemoteCommand) async -> RemoteError? {
         switch command {
+        case let .editMessage(taskID, turnID, text):
+            guard let entry = tasks[taskID] else { return RemoteError(.notFound) }
+            guard let turn = entry.turns.first(where: { $0.id == turnID }),
+                  Self.turnOptions(turn, in: entry).contains("edit") else {
+                return RemoteError(.notAllowed, "This message can no longer be edited")
+            }
+            // The turn goes, and the edited message starts it again.
+            tasks[taskID]?.turns.removeAll { $0.id == turnID }
+            startReply(to: text, in: taskID)
+            return nil
         case let .sendMessage(taskID, text, images, followUp, files):
             guard tasks[taskID] != nil else { return RemoteError(.notFound) }
             guard images.isEmpty || tasks[taskID]?.task.acceptsImages == true else { return RemoteError(.notAllowed) }
@@ -622,6 +652,167 @@ public actor RemoteFixtureBridge: RemoteBridge {
             return .success(RemoteItemDetail(output: Self.sampleOutput(for: item.title ?? "")))
         default:
             return .failure(RemoteError(.unavailable))
+        }
+    }
+
+    // MARK: - A task's controls (§15.23)
+
+    public func taskSettings(taskID: String, prepare: Bool) async -> Result<[RemoteSetting], RemoteError> {
+        guard tasks[taskID] != nil else { return .failure(RemoteError(.notFound)) }
+        if prepare, tasks[taskID]?.settingsRead == false {
+            // As the Mac connects a task to its harness to read its settings when a menu opens.
+            await pause(0.5)
+            tasks[taskID]?.settingsRead = true
+        }
+        guard let entry = tasks[taskID] else { return .failure(RemoteError(.notFound)) }
+        return .success(Self.shownSettings(entry))
+    }
+
+    public func setTaskSetting(taskID: String, setting id: String, value: String,
+                               confirmed: Bool) async -> Result<[RemoteSetting], RemoteError> {
+        guard let entry = tasks[taskID] else { return .failure(RemoteError(.notFound)) }
+        guard let index = entry.settings.firstIndex(where: { $0.id == id }), entry.settings[index].role != "plan" else {
+            return .failure(RemoteError(.notAllowed, "The task's composer has no such setting"))
+        }
+        guard entry.settingsRead else { return .failure(RemoteError(.notAllowed, "Read the choices first")) }
+        guard let choice = entry.settings[index].choices.first(where: { $0.value == value }) else {
+            return .failure(RemoteError(.notAllowed, "The menu does not offer that choice now"))
+        }
+        guard choice.confirm == nil || confirmed else { return .failure(RemoteError(.notAllowed, "This choice is confirmed first")) }
+        await pause(0.2)
+        tasks[taskID]?.settings[index].value = value
+        tasks[taskID]?.settings[index].elevated = choice.confirm != nil ? true : nil
+        handler?(.taskSettings(taskID))
+        return .success(Self.shownSettings(tasks[taskID] ?? entry))
+    }
+
+    public func composerCommands(taskID: String) async -> Result<[RemoteComposerCommand], RemoteError> {
+        guard let entry = tasks[taskID] else { return .failure(RemoteError(.notFound)) }
+        return .success(Self.commands(for: entry))
+    }
+
+    public func runComposerCommand(taskID: String, command name: String, arguments: String?) async -> Result<String?, RemoteError> {
+        guard let entry = tasks[taskID] else { return .failure(RemoteError(.notFound)) }
+        guard let command = Self.commands(for: entry).first(where: { $0.name == name }) else {
+            return .failure(RemoteError(.notAllowed, "The task's composer offers no such command here"))
+        }
+        guard arguments == nil || command.argumentHint != nil else {
+            return .failure(RemoteError(.notAllowed, "/\(name) takes nothing after it"))
+        }
+        if entry.task.running, ["compact", "clear", "new"].contains(name) {
+            return .failure(RemoteError(.busy, "Available when \(entry.task.harnessName) finishes this turn"))
+        }
+        switch name {
+        case "compact":
+            guard let turnID = entry.turns.last?.id else { return .failure(RemoteError(.notAllowed, "Nothing to compact yet")) }
+            counter += 1
+            var notice = RemoteItem(id: "i:\(turnID)-compacted-\(counter)", turnId: turnID, kind: .notice)
+            notice.text = "Context compacted"
+            Task { [notice] in await self.append(notice, to: taskID, after: 0.6) }
+            return .success(nil)
+        case "clear", "new":
+            return .success(blankTask(like: entry))
+        case "fork":
+            return forkTask(entry, through: nil).map(Optional.some)
+        case "plan-mode":
+            if entry.settings.first?.role == "plan" {
+                tasks[taskID]?.settings.removeFirst()
+            } else {
+                tasks[taskID]?.settings.insert(RemoteSetting(id: "planMode", name: "Plan mode", value: "plan", choices: [],
+                                                             role: "plan"), at: 0)
+            }
+            handler?(.taskSettings(taskID))
+            return .success(nil)
+        default:
+            return .failure(RemoteError(.notAllowed))
+        }
+    }
+
+    public func forkTask(taskID: String, turnID: String?) async -> Result<String, RemoteError> {
+        guard let entry = tasks[taskID] else { return .failure(RemoteError(.notFound)) }
+        return forkTask(entry, through: turnID)
+    }
+
+    private func append(_ item: RemoteItem, to taskID: String, after seconds: Double) async {
+        await pause(seconds)
+        appendItem(item, to: taskID)
+    }
+
+    /// A fork from a turn (Codex) or of the whole conversation from the latest turn (Claude Code), nested under the task.
+    private func forkTask(_ entry: Entry, through turnID: String?) -> Result<String, RemoteError> {
+        guard let turn = turnID.map({ id in entry.turns.first { $0.id == id } }) ?? entry.turns.last,
+              Self.turnOptions(turn, in: entry).contains("fork"),
+              let end = entry.turns.firstIndex(where: { $0.id == turn.id }) else {
+            return .failure(RemoteError(.notAllowed, "This turn cannot be forked now"))
+        }
+        counter += 1
+        let id = String(format: "0F1E2%03d-0000-4000-8000-%012d", counter % 1000, counter)
+        var fork = Entry(task: Self.task(id, "Fork of \(entry.task.title)", Harness(id: entry.task.harness) ?? .claude,
+                                         entry.task.projectId ?? "chats", RemoteJSON.milliseconds(Date()), parent: entry.task.id),
+                         turns: Array(entry.turns[...end]))
+        fork.settings = entry.settings
+        tasks[id] = Self.withState(fork)
+        order.insert(id, at: 0)
+        handler?(.tasks)
+        return .success(id)
+    }
+
+    /// A blank task in the same project, harness and settings: Claude Code's `/clear`, Codex's New chat.
+    private func blankTask(like entry: Entry) -> String {
+        counter += 1
+        let id = String(format: "0F1E3%03d-0000-4000-8000-%012d", counter % 1000, counter)
+        var blank = Entry(task: Self.task(id, "New task", Harness(id: entry.task.harness) ?? .claude, entry.task.projectId ?? "chats",
+                                          RemoteJSON.milliseconds(Date())), turns: [])
+        blank.settings = entry.settings
+        tasks[id] = Self.withState(blank)
+        order.insert(id, at: 0)
+        handler?(.tasks)
+        return id
+    }
+
+    /// What a turn offers, by the Mac's rules: Codex forks from any finished turn and edits its latest request once
+    /// every turn finished; Claude Code edits its latest message and forks its whole conversation from its latest turn,
+    /// while idle.
+    private static func turnOptions(_ turn: RemoteTurn, in entry: Entry) -> [String] {
+        let finished = turn.items.first { $0.kind == .turn }.map { $0.status != "running" } ?? false
+        let isLast = entry.turns.last?.id == turn.id
+        let hasRequest = turn.items.contains { $0.kind == .user && $0.queued != true && $0.shell != true }
+        let idle = !entry.task.running
+        if entry.task.harness == "codex" {
+            return (isLast && idle && hasRequest ? ["edit"] : []) + (finished ? ["fork"] : [])
+        }
+        return isLast && idle && hasRequest ? ["edit", "fork"] : []
+    }
+
+    /// The settings as the composer shows them now: before they were read, each menu reads them first.
+    private static func shownSettings(_ entry: Entry) -> [RemoteSetting] {
+        entry.settingsRead ? entry.settings : entry.settings.map { setting in
+            var setting = setting
+            if setting.role != "plan" { setting.prepare = true }
+            return setting
+        }
+    }
+
+    /// The slash commands a task's composer offers that may run from elsewhere, in its list's words.
+    private static func commands(for entry: Entry) -> [RemoteComposerCommand] {
+        switch entry.task.harness {
+        case "codex":
+            let plan = entry.settings.first?.role == "plan"
+            return [
+                RemoteComposerCommand(name: "compact", title: "Compact", description: "Compact this chat's context", runs: true),
+                RemoteComposerCommand(name: "fork", title: "Fork chat", description: "Fork this chat", runs: true),
+                RemoteComposerCommand(name: "new", title: "New chat", description: "Start a blank chat in the same workspace", runs: true),
+                RemoteComposerCommand(name: "plan-mode", title: "Plan mode",
+                                      description: plan ? "Turn plan mode off" : "Turn plan mode on", runs: true)
+            ]
+        case "claude-code":
+            return [
+                RemoteComposerCommand(name: "compact", description: "Clear conversation history but keep a summary in context",
+                                      argumentHint: "<optional custom summarization instructions>"),
+                RemoteComposerCommand(name: "clear", description: "Start a new conversation and keep this chat.")
+            ]
+        default:
+            return []
         }
     }
 
@@ -1237,6 +1428,40 @@ public actor RemoteFixtureBridge: RemoteBridge {
             ]
         case .opencode:
             return []
+        }
+    }
+
+    /// A task's composer settings, as the Mac's bottom row names them (§15.23): its permissions, then the model menu.
+    private static func taskSettings(for harness: Harness) -> [RemoteSetting] {
+        typealias Choice = RemoteSetting.Choice
+        let menu = settings(for: harness).filter { $0.id != "permissionMode" }.map { setting in
+            var setting = setting
+            setting.role = setting.id == "model" ? "model" : "effort"
+            return setting
+        }
+        switch harness {
+        case .claude:
+            let bypass = RemoteSetting.Confirmation(
+                title: "Bypass permission checks?", message: "Claude Code will change files and run commands without asking.",
+                button: "Use bypass permissions")
+            return [RemoteSetting(id: "permissionMode", name: "Permission mode", value: "default", choices: [
+                Choice(value: "default", name: "Manual"), Choice(value: "acceptEdits", name: "Accept edits"),
+                Choice(value: "plan", name: "Plan"), Choice(value: "auto", name: "Auto"),
+                Choice(value: "bypassPermissions", name: "Bypass permissions", confirm: bypass)], role: "permission")] + menu
+        case .codex:
+            let full = RemoteSetting.Confirmation(
+                title: "Allow full access?",
+                message: "Codex will run commands, use the internet, and create and edit files anywhere on this Mac without asking.",
+                button: "Allow full access")
+            return [RemoteSetting(id: "runLocation", name: "Permissions", value: "automatic", choices: [
+                Choice(value: "automatic", name: "Default"), Choice(value: "readOnly", name: "Read-only"),
+                Choice(value: "workspaceWrite", name: "Workspace write"),
+                Choice(value: "dangerFullAccess", name: "Full access", confirm: full)], role: "permission")] + menu
+        case .opencode:
+            var permission = RemoteSetting(id: "permissions", name: "Permissions", value: "", choices: [], role: "permission")
+            permission.title = "On request"
+            permission.note = "Protected actions ask before they run. Approve or deny them from the request card."
+            return [permission]
         }
     }
 

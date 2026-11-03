@@ -9,8 +9,9 @@ with the sidebar's attention states, reads a task's conversation (latest first, 
 it streams), sends a message to a task, answers a pending approval (allow once or deny), stops a running
 turn, and marks a task read. It also answers questions and plan reviews, starting a task (on a
 harness, model and worktree the phone picks), images, a line's output and diffs, suggested and queued messages,
-continuing a task a plan limit stopped under another account, answering a browser handoff, and push
-notifications. Nothing else: no settings, connectors, file browsing or terminals. Yardlet on another
+continuing a task a plan limit stopped under another account, answering a browser handoff, push
+notifications, and a task's model, effort and permission mode, slash commands, edit and fork (§15.23). Nothing else:
+no app settings, connectors, file browsing or terminals. Yardlet on another
 computer is a client of the same protocol, as a phone is (§18).
 
 **One version.** The JSON messages of §2 and §4–§8 travel inside a Noise IK channel (§11–§16), over any
@@ -201,7 +202,7 @@ means the Mac accepted the command; what happens next arrives as events.
   appears as an ordinary `user` item in its turn.
 - `text`: trimmed; 1–32,000 characters. Plain text only, no attachments.
 - Errors: `emptyMessage`, `tooLarge`, `unsupportedCommand` (the first word is a slash command such as
-  `/clear` or `/model` — commands stay on the Mac), `busy` (the Mac is editing a message in this task,
+  `/clear` or `/model` — commands stay on the Mac, but for those `runComposerCommand` runs, §15.23), `busy` (the Mac is editing a message in this task,
   switching its account, or another app holds the conversation), `notFound`.
 
 #### `answerApproval`
@@ -489,7 +490,7 @@ The provider's notices beside the turn (a model reroute, a warning) and context 
 | `invalidCursor` | the cursor no longer names a place in the conversation |
 | `tooManySubscriptions` | more than 8 subscribed tasks |
 | `requestNotFound` | the request is not waiting any more |
-| `notAllowed` | that answer or action is not offered now |
+| `notAllowed` | that answer, action, setting, command, edit or fork is not offered now |
 | `unavailable` | the task is not connected to its harness on the Mac |
 | `notRunning` | nothing to stop |
 | `emptyMessage` | `sendMessage.text` is empty |
@@ -573,6 +574,8 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
 - 2026-11-03, timings and a rule: the Mac pings the relay every 15 s instead of 30 s and gives up on it after 45 s
   instead of 90 s, and opens its room again at once after it stayed open (§14.2); a phone whose connection was up
   and closes with 4404, 4409 or no code tries again quietly for about 10 s (§14.3).
+- 2026-11-03, v2 only: a task's settings, slash commands, Edit message and Fork from here, and their change event
+  (§15.23).
 
 ## 11. v2 transport
 
@@ -1333,6 +1336,120 @@ task's own folders that the conversation names. Until now files went only from t
   part of the path the phone asked for), never its path, so the person can see what a phone opened. The same line
   (device, task, file and result) is written at most once a minute.
 
+### 15.23 A task's settings, slash commands, edit and fork
+
+Added on 2026-11-03. Another device changes an existing task the way the Mac's task composer and turns do: the model,
+effort and permission mode in the composer's bottom row, the slash commands that may run from elsewhere, the latest
+message's Edit message, and Fork from here. Each acts through the path the Mac's own control takes.
+
+- The snapshot carries `taskControls: true` when the Mac answers the requests below. A phone offers them only then.
+- ```json
+  {"id": "40", "type": "taskSettings", "taskId": "4C1F…"}
+  ```
+
+  ```json
+  {"re": "40", "ok": true, "taskId": "4C1F…", "settings": [
+    {"id": "permissionMode", "name": "Permission mode", "role": "permission", "value": "default",
+     "choices": [{"value": "default", "name": "Manual"}, {"value": "acceptEdits", "name": "Accept edits"},
+                 {"value": "bypassPermissions", "name": "Bypass permissions",
+                  "confirm": {"title": "Bypass permission checks?",
+                              "message": "Claude Code will change files and run commands without asking.",
+                              "button": "Use bypass permissions"}}]},
+    {"id": "model", "name": "Model", "role": "model", "value": "opus",
+     "choices": [{"value": "opus", "name": "Opus 5.5"}, {"value": "sonnet", "name": "Sonnet 5.5"}]},
+    {"id": "effort", "name": "Effort", "role": "effort", "value": "high",
+     "choices": [{"value": "medium", "name": "Medium"}, {"value": "high", "name": "High"}]}]}
+  ```
+
+  The settings the task's composer shows in its bottom row, in its order, with §15.16's shape and the names in the
+  Mac's language. `role` says which control holds each: `mode` (the provider's own mode menu), `plan` (Codex's Plan
+  indicator, sent only while Plan mode is on, with no choices; the `plan-mode` command below turns it off),
+  `permission`, and `model`, `effort` and `speed`, which share the model menu. Absent roles are left out of the row,
+  and a role a phone does not know is skipped. `elevated: true`: the value now lifts the sandbox or skips asking (the
+  Mac draws it in orange). A permission control with nothing to choose has no choices, `value` `""`, its words in
+  `title` and what its menu says in `note`. A choice with `confirm` is one the Mac's menu asks about first (Bypass
+  permissions, Codex's Full access), in the Mac's words: the phone asks the same before it sends it.
+- `prepare: true` on a setting: the Mac's menu reads its choices before it opens (a task not connected to its
+  harness, or a Codex model list not read yet). The phone shows the value now, and when the person opens that menu it
+  asks `{"type": "taskSettings", "taskId": "4C1F…", "prepare": true}`, which reads them first, as opening the Mac's
+  menu does: a task not connected yet connects to its harness and reads its saved settings (no turn starts), up to
+  about 10 s. Choices of a setting that still has `prepare` are not applied. `taskSettings` is not a command. Errors:
+  `notFound`.
+- ```json
+  {"id": "41", "type": "setTaskSetting", "taskId": "4C1F…", "setting": "permissionMode", "value": "bypassPermissions",
+   "confirmed": true}
+  ```
+
+  A command: the menu's choice, applied as the Mac's composer applies it. `confirmed: true` is required for a choice
+  with `confirm`, once the person said yes. The answer carries `settings`, the controls after the change, once the
+  provider took it (or after about 10 s). Errors: `notFound`, `notAllowed` (no such setting, a value the menu does not
+  offer now, a setting that still has `prepare`, or a choice with `confirm` without `confirmed`).
+- `{"event": "taskSettingsChanged", "taskId": "4C1F…"}` goes to a connection that asked for the task's `taskSettings`
+  since it subscribed to it, when they change by any path (the Mac's own menus, another device, the provider leaving
+  plan mode). It carries nothing; the phone asks for `taskSettings` again. Unsubscribing ends it.
+- ```json
+  {"id": "42", "type": "composerCommands", "taskId": "4C1F…"}
+  ```
+
+  ```json
+  {"re": "42", "ok": true, "taskId": "4C1F…", "commands": [
+    {"name": "compact", "description": "Clear conversation history but keep a summary in context",
+     "argumentHint": "<optional custom summarization instructions>"},
+    {"name": "clear", "description": "Start a new conversation and keep this chat."}]}
+  ```
+
+  The slash commands the task's composer lists that may run from another device, in its list's order and words:
+  Claude Code's `/compact` and `/clear`; the Codex app's Compact, Fork chat, New chat, Plan mode and its speed
+  (`service-tier:…`). Commands that change files, settings or accounts, need a window of the Mac's (code review,
+  rename, a side chat, status), or are the sidebar's (pin, archive, §15.10) are not listed, nor are a Codex task's
+  skills. `title` is the list's own name for a command where it shows one in place of `/name`; `group` its heading;
+  `argumentHint` the words it takes after its name, absent when it takes none. `runs: true`: choosing it runs it at
+  once (the Codex app's); otherwise choosing it types `/name ` into the draft, and sending that draft runs it. Not a
+  command. Errors: `notFound`.
+- ```json
+  {"id": "43", "type": "runComposerCommand", "taskId": "4C1F…", "command": "compact", "arguments": "Keep the API notes"}
+  ```
+
+  A command: runs it as the Mac's composer does. `arguments` (≤ 4,000 characters) only for a command with an
+  `argumentHint`. A command that starts a task (`clear`, `new`, `fork`) answers with its `taskId`, listed before the
+  answer as a new task is (§15.5); the Mac's window does not switch to it. `compact`, `clear` and `new` wait for the
+  task's turn to end, as on the Mac. Errors: `notFound`, `notAllowed` (not listed now, or `arguments` it does not take),
+  `busy` (a turn runs, the task is changing, or another app holds it), `tooLarge`, `unavailable` (the task's folder is
+  gone), `internal` (the new task did not start).
+- The `turn` item of a turn that offers them carries `options`: `edit` (the turn's Edit message: Codex's latest request
+  once every turn has finished, Claude Code's latest message while the task is idle) and `fork` (Fork from here: a
+  finished Codex turn, or a Claude Code task's latest turn while idle, which forks its whole conversation). An edit is
+  offered only when the message's `text` came whole (not `truncated`). Restoring files stays on the Mac.
+- ```json
+  {"id": "44", "type": "editMessage", "taskId": "4C1F…", "turnId": "3F2A…", "text": "Run only the unit tests"}
+  ```
+
+  A command: Edit message and Send, as on the Mac. The turn is replaced by the edited message and a new turn starts;
+  the message's pictures stay with it, and `text` (as `sendMessage`'s) takes the place of its words. Whatever the
+  Mac's composer for the task held comes back to it afterwards. Errors: `notFound`, `notAllowed` (the turn offers no
+  edit now, or the provider refused it; `message` says why), `busy` (a message is being edited on the Mac, messages
+  wait in the task's queue, or the task is changing), `emptyMessage`, `tooLarge`, `unsupportedCommand`.
+- ```json
+  {"id": "45", "type": "forkTask", "taskId": "4C1F…", "turnId": "3F2A…"}
+  ```
+
+  ```json
+  {"re": "45", "ok": true, "taskId": "9D02…"}
+  ```
+
+  A command: Fork from here on the turn that offers `fork` (`turnId` absent: the latest turn). The fork is a task of
+  its own, nested under the task in the sidebar and listed before the answer; the Mac's window does not switch to it.
+  Errors: `notFound`, `notAllowed` (the turn offers no fork now), `internal` (the fork did not start).
+- The audit log (§4.4) names each command's type and task, never a setting's value, a command's arguments or a
+  message's text.
+- **For the Android app:** read `taskControls` from the snapshot; on opening a task, ask `taskSettings` and draw each
+  role in the composer's controls (a menu per setting, the model menu holding `model`, `effort` and `speed`), asking
+  `taskSettings` with `prepare` when the person opens a menu whose setting has it, asking again on
+  `taskSettingsChanged`, and showing `confirm` as a dialog before `setTaskSetting` with `confirmed`. Ask
+  `composerCommands` when the slash list opens (a typed `/` or the "+" menu) and run a chosen command by its `runs`;
+  open the `taskId` a command or `forkTask` answers with. Offer Edit message and Fork from here on the turns whose
+  `turn` item lists them; an edit puts the message's text in the composer and sends it with `editMessage`.
+
 ## 16. Push notifications
 
 The Mac pushes to a device that registered (§15.6) and **has no open v2 connection**, for these
@@ -1376,6 +1493,12 @@ device's push key, associated data the UTF-8 bytes of `yardlet-push/1`, over the
   turned itself off after three failed starts, and Run now fails again; "Weekend trip reminder" is a one-off in
   Chats that ran (no `canResume`). Run now starts or continues a task after a moment (`busy` meanwhile), and while
   that task works a second Run now records a skip.
+- Its tasks' controls (§15.23): every task has settings in the Mac's words ("Bypass permissions" and Codex's "Full
+  access" with `confirm`), and "Check the footer on mobile" has `prepare` until a `taskSettings` with `prepare` reads
+  them. Claude Code tasks list `/compact` and `/clear`, Codex tasks Compact, Fork chat, New chat and Plan mode (which
+  adds or removes the `plan` setting). Compact adds "Context compacted" to the last turn; `/clear` and New chat start a
+  blank task, and a fork copies the turns into a task nested under its own. An idle task's latest turn offers `edit`,
+  which starts it again with the edited message, and `fork`; a Codex task offers `fork` on every finished turn.
 - Its tasks' files (§15.22) are in the fixture's own temporary folder, which it prints when it starts: each project's
   tasks share a folder (`Yardlet`, `Website`, `Chats`). "Summarize the crash reports" lists `crash-summary.pdf`, in a
   `Desktop` folder beside its own, and `reports/crash-chart.png`; its conversation names `reports/crash-notes.txt`.
@@ -1406,8 +1529,10 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   (§15.22). An output, or a file a conversation's link names, is read with `readFile` into a folder of its own in
   this Mac's temporary folder, readable only by the person, and opened there in Quick Look (from the output's
   menu, in its own app or Finder); the copies go when the window closes. A file link never opens the same path on
-  this Mac. Settings, slash commands, changing an existing task's model, editing a message, creating or editing a
-  schedule and the side panels stay on the host.
+  this Mac. From a host that offers them (§15.23), the task's model, effort and permission mode show in the
+  composer's own controls (a choice the host asks about first is asked about here too), the slash commands that may
+  run from here in "+" and a typed `/` list, and a turn's Edit message and Fork from here. Settings, connectors, the
+  context ring, creating or editing a schedule and the side panels stay on the host.
 - **Paths:** as §11.4. While a host's window is open it browses Bonjour (§11.3) for the instance with the
   discovery id of the host key it saved, and resolves it to the host's name and port (`Name.local:47616`; the
   system resolves the name when connecting). Those addresses go first, never saved, then the direct addresses the

@@ -20,13 +20,14 @@ struct ConversationRewindActions {
 }
 
 struct ConversationEditBanner: View {
-    let edit: ConversationEditState
+    /// The provider has not taken the edit yet, so it can still be cancelled.
+    let canCancel: Bool
     let onCancel: () -> Void
     var body: some View {
         HStack {
             Label(L10n.string("Editing message"), systemImage: "pencil")
             Spacer()
-            if edit.preparedProviderSessionID == nil {
+            if canCancel {
                 Button(L10n.string("Cancel edit"), action: onCancel).buttonStyle(.plain)
             } else {
                 Text(L10n.string("Conversation changed. Send the edited message to continue."))

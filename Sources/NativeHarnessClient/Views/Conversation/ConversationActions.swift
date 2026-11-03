@@ -60,6 +60,9 @@ struct ConversationActions {
     var restoreDraft: ((CodexComposerDraft) -> Void)? = nil
     /// The edits and file restores the provider carries out itself.
     var rewind: ConversationRewindActions? = nil
+    /// Puts a turn's latest message back in the composer to edit and send again, by the turn's ID and the message's
+    /// words: another Mac's turn, whose edit that Mac carries out (docs/REMOTE_PROTOCOL.md §15.23).
+    var editTurnMessage: ((String, String) -> Void)? = nil
 
     // MARK: The task around the conversation
 

@@ -14,6 +14,8 @@ public enum RemoteBridgeChange: Equatable, Sendable {
     case conversation(String)
     /// Something `scheduledTasks` reads may have changed: a schedule, a run, or the task of its latest run (§15.21).
     case schedules
+    /// A task's composer controls changed since `taskSettings` last read them (§15.23).
+    case taskSettings(String)
 }
 
 /// What a command asks of the Mac.
@@ -37,6 +39,8 @@ public enum RemoteCommand: Equatable, Sendable {
     /// Run now, Pause and Resume of a schedule (§15.21).
     case runScheduledTask(scheduleID: String)
     case setScheduledTaskEnabled(scheduleID: String, enabled: Bool)
+    /// Edit message on the task's latest message, then Send, as the Mac's turn and composer do (§15.23).
+    case editMessage(taskID: String, turnID: String, text: String)
 }
 
 /// The path a connection came over (§11.1), for Settings.
@@ -115,6 +119,19 @@ public protocol RemoteBridge: AnyObject, Sendable {
     func taskOutputs(taskID: String) async -> Result<[RemoteOutput], RemoteError>
     /// The task's folders and outputs, which a `readFile` of the task is checked against (§15.22).
     func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError>
+    /// The controls the task's composer shows for its settings (§15.23); `prepare` reads the choices first, as opening
+    /// the Mac's menu does. Told as `.taskSettings` when they change since this read. A bridge that answers this,
+    /// `setTaskSetting`, `composerCommands`, `runComposerCommand`, `forkTask` and `editMessage` says so in its snapshot
+    /// (`taskControls`).
+    func taskSettings(taskID: String, prepare: Bool) async -> Result<[RemoteSetting], RemoteError>
+    /// Applies a choice as the Mac's menu does; the controls after it.
+    func setTaskSetting(taskID: String, setting: String, value: String, confirmed: Bool) async -> Result<[RemoteSetting], RemoteError>
+    /// The slash commands the task's composer offers that may run from another device.
+    func composerCommands(taskID: String) async -> Result<[RemoteComposerCommand], RemoteError>
+    /// Runs one as the Mac's composer does; the task it started, when it started one.
+    func runComposerCommand(taskID: String, command: String, arguments: String?) async -> Result<String?, RemoteError>
+    /// Fork from here on a turn, or the task's whole conversation where the Mac forks only that; the new task.
+    func forkTask(taskID: String, turnID: String?) async -> Result<String, RemoteError>
 }
 
 extension RemoteBridge {
@@ -135,6 +152,27 @@ extension RemoteBridge {
     }
 
     public func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+
+    public func taskSettings(taskID: String, prepare: Bool) async -> Result<[RemoteSetting], RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+
+    public func setTaskSetting(taskID: String, setting: String, value: String,
+                               confirmed: Bool) async -> Result<[RemoteSetting], RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+
+    public func composerCommands(taskID: String) async -> Result<[RemoteComposerCommand], RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+
+    public func runComposerCommand(taskID: String, command: String, arguments: String?) async -> Result<String?, RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+
+    public func forkTask(taskID: String, turnID: String?) async -> Result<String, RemoteError> {
         .failure(RemoteError(.unavailable))
     }
 }
@@ -200,6 +238,8 @@ public actor RemoteServer {
         var receivesScheduleEvents = false
         /// A desktop in use (`presence`, §18): phone pushes wait while one is.
         var isPresent = false
+        /// Subscribed tasks whose `taskSettings` it read, so it is told when they change (§15.23).
+        var followsSettings: Set<String> = []
         /// The file it read last (the path the Mac read) and where its next part starts (§15.22): a read that goes on
         /// from there is not written to the audit log again.
         var fileRead: FileRead?
@@ -859,6 +899,66 @@ public actor RemoteServer {
             }
         case let .readFile(taskID, path, offset):
             await readFile(envelope.id, taskID: taskID, path: path, offset: offset, on: id)
+        case let .taskSettings(taskID, prepare):
+            let result = await bridge.taskSettings(taskID: taskID, prepare: prepare)
+            respondSettings(envelope.id, taskID: taskID, result, on: id)
+        case let .setTaskSetting(taskID, setting, value, confirmed):
+            var settings: [RemoteSetting]?
+            await command(envelope.id, request: request, on: id) {
+                switch await self.bridge.setTaskSetting(taskID: taskID, setting: setting, value: value, confirmed: confirmed) {
+                case let .success(after):
+                    settings = after
+                    return nil
+                case let .failure(error):
+                    return error
+                }
+            } answer: { response in
+                response.settings = settings
+            }
+            if settings != nil, connections[id]?.subscriptions[taskID] != nil { connections[id]?.followsSettings.insert(taskID) }
+        case let .composerCommands(taskID):
+            switch await bridge.composerCommands(taskID: taskID) {
+            case let .success(commands):
+                var response = RemoteResponse(re: envelope.id)
+                response.taskId = taskID
+                response.commands = commands
+                respond(response, to: id)
+            case let .failure(error):
+                respond(.failure(envelope.id, error), to: id)
+            }
+        case let .runComposerCommand(taskID, name, arguments):
+            var started: String?
+            await command(envelope.id, request: request, on: id) {
+                if (arguments?.count ?? 0) > RemoteProtocol.maxAnswerCharacters { return RemoteError(.tooLarge) }
+                switch await self.bridge.runComposerCommand(taskID: taskID, command: name, arguments: arguments) {
+                case let .success(taskID):
+                    started = taskID
+                    return nil
+                case let .failure(error):
+                    return error
+                }
+            } answer: { response in
+                response.taskId = started
+            }
+        case let .editMessage(taskID, turnID, text):
+            await command(envelope.id, request: request, on: id) {
+                if let error = Self.validateMessage(text) { return error }
+                return await self.bridge.perform(.editMessage(taskID: taskID, turnID: turnID,
+                                                              text: text.trimmingCharacters(in: .whitespacesAndNewlines)))
+            }
+        case let .forkTask(taskID, turnID):
+            var forked: String?
+            await command(envelope.id, request: request, on: id) {
+                switch await self.bridge.forkTask(taskID: taskID, turnID: turnID) {
+                case let .success(taskID):
+                    forked = taskID
+                    return nil
+                case let .failure(error):
+                    return error
+                }
+            } answer: { response in
+                response.taskId = forked
+            }
         case let .uploadFile(part):
             guard let deviceID = connection.deviceID else { return }
             switch uploads.receive(part, from: deviceID, now: now()) {
@@ -885,6 +985,7 @@ public actor RemoteServer {
             response.scheduledTasks = published?.scheduledTasks == true ? true : nil
             response.taskFiles = published?.taskFiles == true && RemoteFileReader.isSupported ? true : nil
             response.presence = true
+            response.taskControls = published?.taskControls == true ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)
             connections[id]?.receivesTaskEvents = true
@@ -894,6 +995,7 @@ public actor RemoteServer {
             await loadOlder(envelope.id, taskID: taskID, cursor: cursor, on: id)
         case let .unsubscribeTask(taskID):
             connections[id]?.subscriptions[taskID] = nil
+            connections[id]?.followsSettings.remove(taskID)
             respond(RemoteResponse(re: envelope.id), to: id)
             await updateWatched()
         case let .sendMessage(taskID, text, images, followUp, ids):
@@ -930,10 +1032,11 @@ public actor RemoteServer {
         perform: () async -> RemoteError?, answer: (inout RemoteResponse) -> Void = { _ in }
     ) async {
         let error = await perform()
-        // A new task is listed (`tasksChanged`) before the answer naming it, so the phone can open it.
-        if error == nil, case .createTask = request { tasksDirty = true; await refreshTasks(force: true) }
         var response = RemoteResponse(re: requestID)
         if error == nil { answer(&response) }
+        // A new task (`createTask`, a fork, a new chat) is listed (`tasksChanged`) before the answer naming it, so the
+        // phone can open it.
+        if error == nil, response.taskId != nil { tasksDirty = true; await refreshTasks(force: true) }
         respond(error.map { .failure(requestID, $0) } ?? response, to: id)
         audit?.record(device: connections[id]?.deviceID, type: request.type, task: request.taskID,
                       schedule: request.scheduleID, result: error?.code.rawValue ?? "ok", at: now())
@@ -997,6 +1100,22 @@ public actor RemoteServer {
         guard auditedReads[key] == nil else { return }
         auditedReads[key] = time
         audit?.record(device: device, type: "readFile", task: task, file: file, result: result, at: time)
+    }
+
+    /// A task's settings as `taskSettings` answers them (§15.23). A connection subscribed to the task is told when they
+    /// change from now on.
+    private func respondSettings(_ requestID: String, taskID: String, _ result: Result<[RemoteSetting], RemoteError>,
+                                 on id: UUID) {
+        switch result {
+        case let .success(settings):
+            var response = RemoteResponse(re: requestID)
+            response.taskId = taskID
+            response.settings = settings
+            respond(response, to: id)
+            if connections[id]?.subscriptions[taskID] != nil { connections[id]?.followsSettings.insert(taskID) }
+        case let .failure(error):
+            respond(.failure(requestID, error), to: id)
+        }
     }
 
     /// The finished uploads a message names (§15.20), sent by this connection's device.
@@ -1130,6 +1249,7 @@ public actor RemoteServer {
             guard var subscription = connection.subscriptions[taskID], subscription.generation < generation else { continue }
             guard let conversation else {
                 connections[id]?.subscriptions[taskID] = nil
+                connections[id]?.followsSettings.remove(taskID)
                 var ended = RemoteEvent(.conversationEnded)
                 ended.taskId = taskID
                 ended.reason = "removed"
@@ -1205,6 +1325,13 @@ public actor RemoteServer {
                 try? await Task.sleep(for: interval)
                 self.schedulesTimer = nil
                 await self.refreshSchedules()
+            }
+        case let .taskSettings(taskID):
+            // The bridge tells only of a change since the last read; the phone reads them again.
+            var event = RemoteEvent(.taskSettingsChanged)
+            event.taskId = taskID
+            for (id, connection) in connections where connection.followsSettings.contains(taskID) {
+                send(event, to: id)
             }
         }
     }

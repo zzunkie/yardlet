@@ -486,7 +486,9 @@ struct ConversationTimeline: View {
             }
             handlers.fork = actions.forkCodexTurn.map { fork in { fork(turnID) } }
         case .presented:
-            break
+            // Another Mac's turn offers its edit and fork as that Mac's own turn does, and that Mac carries them out.
+            if let edit = actions.editTurnMessage { handlers.editMessage = { target in edit(turnID, target.text) } }
+            if turn.actions.canFork, let branch = actions.branch { handlers.fork = { branch(.turn(turnID)) } }
         case .transcript:
             // A transcript request goes back to the composer only where the task can take it.
             handlers.edit = actions.restoreDraft

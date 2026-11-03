@@ -29,6 +29,12 @@ import XCTest
 /// - `remote-host-new-*.png`: a new task with the host's project, harness and model menus.
 /// - `remote-host-form-*.png`: an MCP form waiting in the host window.
 /// - `remote-host-offline-*.png`: the host gone, its list and conversation kept under the banner.
+///
+/// A task's controls (§15.23), against the app's own model as the host, beside the local conversation and composer:
+/// - `remote-controls-codex-*.png` and `local-controls-codex-*.png`: a Codex task's bottom row and its turns' Edit
+///   message and Fork from here.
+/// - `remote-controls-edit-*.png` and `local-controls-edit-*.png`: the same task editing its latest request.
+/// - `remote-controls-claude-*.png` and `local-controls-claude-*.png`: a Claude Code task in Bypass permissions.
 @MainActor
 final class RemoteHostWindowRenderingTests: XCTestCase {
     func testTheConnectWindowAndAHostWindowDraw() async throws {
@@ -438,6 +444,125 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                                                         latestTurnIsComplete: status != .waitingForApproval), actions: actions)
             .environment(\.transcriptWorkspaceURL, folder)
             .background(ParityTheme.canvas)
+    }
+
+    /// A task's controls (§15.23) against the app's own model as the host, beside the same task drawn by the local
+    /// conversation and composer: a Codex task's turns with Edit message and Fork from here and its bottom row once the
+    /// model menu read its list, the same task editing its latest message, and a Claude Code task in Bypass permissions.
+    func testATasksControlsDrawAsTheLocalComposerAndTurnsDo() async throws {
+        let folder = URL(filePath: "/tmp/remote-render/yardlet", directoryHint: .isDirectory)
+        let codexAdapter = FakeHarnessAdapter(kind: .codex)
+        let claudeAdapter = FakeHarnessAdapter(kind: .claudeCode)
+        var thread = CodexTaskState.empty
+        XCTAssertTrue(CodexTaskReducer().applySnapshot(.object([
+            "id": .string("provider-thread"),
+            "turns": .array([RemoteTaskControlsTests.codexTurn(1), RemoteTaskControlsTests.codexTurn(2)])
+        ]), to: &thread))
+        let parser = SessionRecord(harness: .codex, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/codex"),
+                                   title: "Tidy the parser", providerSessionID: "provider-thread")
+        let guide = SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                  title: "Write the migration guide", status: .completed,
+                                  updatedAt: Date().addingTimeInterval(-60), providerSessionID: "claude-session",
+                                  completionState: .completed)
+        let guideEntries = [TranscriptEntry(content: .user(text: "Write a migration guide for the new session index")),
+                            TranscriptEntry(content: .assistant(text: "The guide is in docs/MIGRATION.md.", isStreaming: false))]
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteHostWindowRenderingTests.controls")))
+        let host = AppModel(store: SessionStore(sessions: [parser, guide], repository: InMemorySessionRepository()),
+                            runtimeSelections: RuntimeSelectionStore(defaults: defaults),
+                            registry: HarnessRegistry { kind, _ in kind == .codex ? codexAdapter : claudeAdapter },
+                            initialTranscripts: [guide.id: guideEntries], initialCodexPresentation: [parser.id: thread],
+                            transcriptRepository: UserDefaultsTranscriptRepository(defaults: defaults),
+                            sessionTitleResolver: { _ in nil }, restoresIndexOnLaunch: false)
+        await codexAdapter.emitPresentation(thread, for: parser.id)
+        let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(model: host))
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                        name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let hosts = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                        hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
+        let paired = try await hosts.pair(link: link.absoluteString)
+        let model = try XCTUnwrap(hosts.model(for: paired.id))
+        try await waitUntil { model.hasSnapshot && model.taskControls }
+        let size = NSSize(width: 1280, height: 820)
+        let column = NSSize(width: size.width - ParityTheme.sidebarWidth - 21, height: size.height - ParityTheme.paneToolbarHeight)
+
+        // A Codex task once its model menu read the list: the same row, and the same edit and fork on its turns.
+        let parserID = parser.id.uuidString
+        model.select(.task(parserID))
+        try await waitUntil { model.conversations[parserID]?.isLoaded == true && model.taskSettings[parserID] != nil }
+        await model.readTaskSettings(parserID, prepare: true)
+        try await waitUntil { model.taskSettings[parserID]?.contains { $0.role == "model" && $0.prepare == nil } == true }
+        try await render("remote-controls-codex", size: size, titled: true, title: model.name) {
+            RemoteHostView(model: model, directory: hosts).environment(\.revealsSentMessageActions, true)
+        } check: { elements in
+            XCTAssertTrue(elements.contains { $0.label == L10n.string("Permissions") }, elements.description)
+        }
+        let localDraft = TaskComposerDraft()
+        try await render("local-controls-codex", size: column, titled: false) {
+            localTask(host, parser, draft: localDraft).environment(\.revealsSentMessageActions, true)
+        }
+
+        // Editing the latest request: the banner and the request's words in the composer, here and there.
+        let request = try XCTUnwrap(model.conversations[parserID]?.presentation.turns.last?.actions.editLatest)
+        let drafts = RemoteComposerDrafts()
+        drafts.draft(for: parserID).text = request.text
+        drafts.edits[parserID] = RemoteMessageEdit(turnID: "turn-2", previousText: "", previousAttachments: [])
+        try await render("remote-controls-edit", size: size, titled: true, title: model.name) {
+            RemoteHostView(model: model, directory: hosts, drafts: drafts)
+        }
+        localDraft.text = request.text
+        try await render("local-controls-edit", size: column, titled: false) {
+            localTask(host, parser, draft: localDraft, editing: true)
+        }
+
+        // A Claude Code task in Bypass permissions, asked about once on each side, drawn in orange.
+        let guideID = guide.id.uuidString
+        model.select(.task(guideID))
+        try await waitUntil { model.conversations[guideID]?.isLoaded == true && model.taskSettings[guideID] != nil }
+        await model.readTaskSettings(guideID, prepare: true)
+        model.setTaskSetting(guideID, id: ClaudeLaunchOption.permissionMode, value: ClaudePermissionMode.bypassPermissions,
+                             confirmed: true)
+        try await waitUntil { model.taskSettings[guideID]?.first { $0.role == "permission" }?.elevated == true }
+        try await render("remote-controls-claude", size: size, titled: true, title: model.name) {
+            RemoteHostView(model: model, directory: hosts).environment(\.revealsSentMessageActions, true)
+        }
+        let guideNow = try XCTUnwrap(host.store.sessions.first { $0.id == guide.id })
+        try await render("local-controls-claude", size: column, titled: false) {
+            localTask(host, guideNow, draft: TaskComposerDraft()).environment(\.revealsSentMessageActions, true)
+        }
+        hosts.close(paired.id)
+        await host.shutdown()
+    }
+
+    /// The local task as the window draws it from the host's own model: its conversation, then its composer with the
+    /// bottom row its menus read.
+    private func localTask(_ host: AppModel, _ session: SessionRecord, draft: TaskComposerDraft,
+                           editing: Bool = false) -> some View {
+        // As the window offers them: Codex forks a turn, any other harness where its adapter forks.
+        var actions = ConversationActions()
+        actions.forkCodexTurn = { _ in }
+        actions.branch = host.canBranch(session) ? { _ in } : nil
+        actions.rewind = ConversationRewindActions(beginCodexEdit: { _ in }, beginClaudeEdit: { _ in }, cancelEdit: {},
+                                                   loadFilePoints: { [] }, previewFiles: { _ in throw CancellationError() },
+                                                   restoreFiles: { _ in throw CancellationError() })
+        let codex = host.composerCodexCapabilities(for: session)
+        let source: ConversationSource = session.harness == .codex
+            ? .codex(host.codexPresentationBySessionID[session.id] ?? .empty, workspaceURL: session.workspaceURL, historySelection: nil)
+            : .transcript(entries: host.transcriptBySessionID[session.id] ?? [], harness: session.harness, status: session.status,
+                          latestTurnIsComplete: session.completionState == .completed)
+        return VStack(spacing: 0) {
+            ConversationTimeline(source: source, actions: actions)
+                .environment(\.transcriptWorkspaceURL, session.workspaceURL)
+            if editing { ConversationEditBanner(canCancel: true, onCancel: {}) }
+            PromptComposer(
+                harness: session.harness, composerDraft: draft, modes: codex.modes, selectedModeID: codex.selectedModeID,
+                modelCatalog: codex.modelCatalog, runLocation: codex.selectedRunLocation, providerSession: session,
+                providerCapabilities: host.composerProviderCapabilities(for: session), isProviderAttached: host.isAttached(session.id),
+                isRunning: false, codexHasThread: session.providerSessionID != nil, workspaceURL: session.workspaceURL,
+                actions: ComposerActions(runCodexCommand: session.harness == .codex ? { _ in } : nil))
+        }
+        .background(ParityTheme.canvas)
     }
 
     // MARK: - Helpers

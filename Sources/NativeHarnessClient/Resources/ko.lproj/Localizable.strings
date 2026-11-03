@@ -1430,6 +1430,7 @@
 "The fork was created, but its history could not be loaded: %@" = "분기한 대화는 생성되었지만 기록을 불러오지 못했습니다: %@";
 
 "This message can no longer be edited." = "이 메시지는 더 이상 편집할 수 없습니다.";
+"A message is being edited in this task." = "이 작업에서 메시지를 편집하고 있습니다.";
 "Stop the current turn before editing a message." = "메시지를 편집하려면 현재 턴을 먼저 중단하세요.";
 "Stop active work before rewinding this conversation." = "대화를 되돌리려면 진행 중인 작업을 먼저 중단하세요.";
 "File restore is unavailable." = "파일을 복원할 수 없습니다.";

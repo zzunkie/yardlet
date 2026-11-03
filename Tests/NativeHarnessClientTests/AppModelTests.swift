@@ -3827,6 +3827,9 @@ actor FakeHarnessAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresent
     private(set) var sentPrompts: [String] = []
     private(set) var forkedFromSessionIDs: [UUID] = []
     private(set) var forkedThroughTurnIDs: [String?] = []
+    private(set) var compactedSessionIDs: [UUID] = []
+    /// The edits `CodexConversationEditing` prepared, by the turn each replaces.
+    private(set) var preparedEditTargets: [String] = []
     func lastSentPrompt() -> String? { sentPrompts.last }
     private(set) var codexSubmissions: [(CodexComposerDraft, CodexTurnSubmission)] = []
     private var suspendNextCodexSubmission = false
@@ -4353,6 +4356,9 @@ actor FakeHarnessAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresent
         return try await fork(session, newLocalSessionID: newLocalSessionID)
     }
     func startWorkingTreeReview(in session: HarnessSessionHandle) async throws {}
+    func compactConversation(in session: HarnessSessionHandle) async throws {
+        compactedSessionIDs.append(session.localSessionID)
+    }
 
     func activeTurnID(for session: HarnessSessionHandle) -> String? {
         activeCodexTurnIDs[session.localSessionID]
@@ -4554,6 +4560,13 @@ actor FakeHarnessAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresent
         let pair = AsyncStream<HarnessEventEnvelope>.makeStream()
         streams[localSessionID] = pair.stream
         continuations[localSessionID] = pair.continuation
+    }
+}
+
+/// A Codex double takes an edit of its latest request as the App Server's rollback would, without a history to change.
+extension FakeHarnessAdapter: CodexConversationEditing {
+    func prepareConversationEdit(_ edit: ConversationEditState, in session: HarnessSessionHandle) async throws {
+        preparedEditTargets.append(edit.targetID)
     }
 }
 

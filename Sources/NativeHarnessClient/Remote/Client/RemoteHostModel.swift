@@ -59,6 +59,10 @@ final class RemoteHostModel: Identifiable {
     private(set) var conversations: [String: RemoteConversationModel] = [:]
     /// The last command the host refused, in a line for the window.
     var commandError: String?
+    /// The host answers a task's settings, slash commands, edit and fork (§15.23).
+    private(set) var taskControls = false
+    /// Each open task's composer settings as the host last answered them (§15.23).
+    var taskSettings: [String: [RemoteSetting]] = [:]
 
     /// Called for each `attention` event, for a notification of the host's task.
     @ObservationIgnored var onAttention: ((RemoteEvent) -> Void)?
@@ -194,8 +198,12 @@ final class RemoteHostModel: Identifiable {
         case .conversationEnded:
             guard let taskID = event.taskId else { return }
             conversations[taskID] = nil
+            taskSettings[taskID] = nil
             subscribed.removeAll { $0 == taskID }
             applyTasks(changed: [], removed: [taskID])
+        case .taskSettingsChanged:
+            guard let taskID = event.taskId, conversations[taskID] != nil else { return }
+            Task { await readTaskSettings(taskID) }
         case .closing:
             closingReason = event.reason
         case .schedulesChanged:
@@ -215,6 +223,7 @@ final class RemoteHostModel: Identifiable {
             followUp = response.followUp
             offersSchedules = response.scheduledTasks == true
             offersTaskFiles = response.taskFiles == true
+            taskControls = response.taskControls == true
             hasSnapshot = true
             hostTakesPresence = response.presence == true
             toldPresence = nil
@@ -295,6 +304,7 @@ final class RemoteHostModel: Identifiable {
         while subscribed.count > Self.keptSubscriptions {
             let dropped = subscribed.removeFirst()
             conversations[dropped] = nil
+            taskSettings[dropped] = nil
             send(.unsubscribeTask(taskID: dropped))
         }
         guard isConnected else { return }
@@ -302,6 +312,8 @@ final class RemoteHostModel: Identifiable {
             guard let conversation = self?.conversations[taskID] else { return }
             if response.ok {
                 conversation.load(response.items ?? [], cursor: response.cursor, hasOlder: response.hasOlder == true)
+                // Read once subscribed, so the host tells of their changes from now on.
+                Task { await self?.readTaskSettings(taskID) }
             } else if response.error?.code == .notFound {
                 self?.conversations[taskID] = nil
             }

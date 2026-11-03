@@ -47,7 +47,13 @@ struct RemoteHostWindow: View {
 struct RemoteHostView: View {
     let model: RemoteHostModel
     let directory: RemoteHostDirectory
-    @State private var drafts = RemoteComposerDrafts()
+    @State private var drafts: RemoteComposerDrafts
+
+    init(model: RemoteHostModel, directory: RemoteHostDirectory, drafts: RemoteComposerDrafts = RemoteComposerDrafts()) {
+        self.model = model
+        self.directory = directory
+        _drafts = State(initialValue: drafts)
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -72,7 +78,8 @@ struct RemoteHostView: View {
         switch model.selection {
         case let .task(taskID):
             if let conversation = model.conversations[taskID] {
-                RemoteTaskView(model: model, conversation: conversation, draft: drafts.draft(for: taskID))
+                RemoteTaskView(model: model, conversation: conversation, draft: drafts.draft(for: taskID),
+                               editing: Binding(get: { drafts.edits[taskID] }, set: { drafts.edits[taskID] = $0 }))
                     .id(taskID)
             }
         case .newTask:
@@ -141,11 +148,14 @@ extension RemoteHostView {
     }
 }
 
-/// Each task's unsent words, kept on this Mac while the window is open (a host's own drafts stay there).
+/// Each task's unsent words and the message it edits, kept on this Mac while the window is open (a host's own drafts
+/// stay there).
 @MainActor
+@Observable
 final class RemoteComposerDrafts {
-    private var drafts: [String: TaskComposerDraft] = [:]
-    let newTask = TaskComposerDraft()
+    @ObservationIgnored private var drafts: [String: TaskComposerDraft] = [:]
+    @ObservationIgnored let newTask = TaskComposerDraft()
+    var edits: [String: RemoteMessageEdit] = [:]
 
     func draft(for taskID: String) -> TaskComposerDraft {
         if let draft = drafts[taskID] { return draft }
@@ -446,6 +456,8 @@ struct RemoteTaskView: View {
     let model: RemoteHostModel
     let conversation: RemoteConversationModel
     let draft: TaskComposerDraft
+    /// A turn's message being edited in the composer (§15.23).
+    @Binding var editing: RemoteMessageEdit?
     /// An answer that leaves a rule behind, asked about once more before it goes.
     @State private var standingAnswer: (requestID: String, action: PermissionRequestAction)?
     /// The rail is shown, as the local rail is unless the person hid it; it draws only where it fits.
@@ -495,6 +507,13 @@ struct RemoteTaskView: View {
             header
             ConversationTimeline(source: .presented(conversation.presentation), actions: actions,
                                  isLoading: !conversation.isLoaded, diagnosticID: nil)
+            if let editing {
+                ConversationEditBanner(canCancel: true) {
+                    draft.text = editing.previousText
+                    draft.attachments = editing.previousAttachments
+                    self.editing = nil
+                }
+            }
             VStack(alignment: .leading, spacing: 8) {
                 if let error = model.commandError {
                     Text(error)
@@ -510,7 +529,8 @@ struct RemoteTaskView: View {
                 if let limit = conversation.usageLimit, !(limit.options ?? []).isEmpty {
                     RemoteUsageLimitBar(model: model, taskID: conversation.taskID, limit: limit)
                 }
-                RemoteComposer(model: model, taskID: conversation.taskID, draft: draft, queued: conversation.queued)
+                RemoteComposer(model: model, taskID: conversation.taskID, draft: draft, queued: conversation.queued,
+                               editing: $editing)
             }
             // Where the local composer sits under its conversation.
             .frame(maxWidth: ParityTheme.contentWidth)
@@ -574,6 +594,13 @@ struct RemoteTaskView: View {
         actions.respondToCodexRequest = { id, response in respond(id, .codex(response)) }
         actions.loadMoreCodexTurns = { [model, taskID = conversation.taskID] in model.loadOlder(taskID) }
         actions.loadLineDetail = { [model, taskID = conversation.taskID] itemID in model.loadDetail(taskID, itemID: itemID) }
+        if model.taskControls {
+            // A turn's edit and fork, as the host's turn offers them (§15.23).
+            actions.editTurnMessage = { turnID, text in beginEdit(turnID: turnID, text: text) }
+            actions.branch = { [model, taskID = conversation.taskID] point in
+                if case let .turn(turnID) = point { model.fork(taskID, turnID: turnID) } else { model.fork(taskID, turnID: nil) }
+            }
+        }
         return actions
     }
 
@@ -642,6 +669,16 @@ struct RemoteTaskView: View {
     private var outputsMoment: String {
         guard let task else { return "" }
         return "\(task.attention.rawValue)-\(task.running)-\(task.running ? 0 : task.lastActivityAt)"
+    }
+
+    /// The message goes into the composer to edit, as the local turn's Edit message puts it there; what the composer
+    /// held waits to come back if the edit is cancelled.
+    private func beginEdit(turnID: String, text: String) {
+        let previous = editing.map { ($0.previousText, $0.previousAttachments) } ?? (draft.text, draft.attachments)
+        editing = RemoteMessageEdit(turnID: turnID, previousText: previous.0, previousAttachments: previous.1)
+        draft.text = text
+        draft.attachments = []
+        draft.notice = nil
     }
 }
 

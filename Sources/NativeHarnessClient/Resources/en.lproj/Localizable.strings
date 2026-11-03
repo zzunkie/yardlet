@@ -1430,6 +1430,7 @@
 "The fork was created, but its history could not be loaded: %@" = "The fork was created, but its history could not be loaded: %@";
 
 "This message can no longer be edited." = "This message can no longer be edited.";
+"A message is being edited in this task." = "A message is being edited in this task.";
 "Stop the current turn before editing a message." = "Stop the current turn before editing a message.";
 "Stop active work before rewinding this conversation." = "Stop active work before rewinding this conversation.";
 "File restore is unavailable." = "File restore is unavailable.";
