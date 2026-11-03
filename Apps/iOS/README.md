@@ -39,7 +39,7 @@ Paste the pairing URL it prints into "Paste a Pairing Link", or open it in the S
 
 **Screens without touching them:** a debug build reads launch arguments for screenshots and checks: `-demo YES` starts
 the demo, `-openTask <task ID>` opens a task, and `-sheet newTask`, `-sheet settings` or `-sheet taskSettings` opens
-that sheet, for example:
+that sheet, and `-openLink '<pairing link>'` opens a link as another app would, for example:
 
 ```bash
 xcrun simctl launch booted com.zzunkie.yardlet.remote -demo YES -openTask 0F1E0001-0000-4000-8000-000000000001

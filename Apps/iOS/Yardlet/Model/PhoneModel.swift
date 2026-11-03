@@ -47,7 +47,9 @@ final class PhoneModel {
         hosts = store.all().filter { keys.load(hostID: $0.id) != nil }
         if let host = hosts.first(where: { $0.id == selectedHostID }) ?? hosts.first { show(host) }
         #if DEBUG
-        // Screenshots and checks without touching the screen: `-demo YES [-openTask <task ID>]` at launch.
+        // Screenshots and checks without touching the screen: `-demo YES [-openTask <task ID>]` at launch, and
+        // `-openLink <pairing link>` as if another app opened it.
+        if let link = UserDefaults.standard.string(forKey: "openLink"), let url = URL(string: link) { open(url) }
         if UserDefaults.standard.bool(forKey: "demo") {
             Task {
                 await startDemo()

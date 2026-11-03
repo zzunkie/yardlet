@@ -1,9 +1,13 @@
 import SwiftUI
+import UIKit
 import YardletRemote
 
 struct RootView: View {
     @Environment(PhoneModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
+
+    /// App Lock covers the app while it is locked, and whenever it is not in front with the lock on (the app switcher).
+    private var isCovered: Bool { model.lock.isLocked || (model.lock.isEnabled && scenePhase != .active) }
 
     var body: some View {
         @Bindable var model = model
@@ -15,21 +19,20 @@ struct RootView: View {
                 WelcomeView()
             }
         }
-        .overlay {
-            if model.lock.isLocked || (model.lock.isEnabled && scenePhase != .active) {
-                LockView(lock: model.lock)
-            }
+        .onChange(of: isCovered, initial: true) { _, covered in
+            LockCover.shared.show(covered, lock: model.lock)
         }
-        .alert("Connect to this Mac?", isPresented: Binding(get: { model.linkToConfirm != nil },
-                                                            set: { if !$0 { model.linkToConfirm = nil } }),
+        // A link opened while the app is locked is asked about once it is unlocked, not over the lock.
+        .alert("Connect to this Mac?", isPresented: Binding(get: { model.linkToConfirm != nil && !isCovered },
+                                                            set: { if !$0 && !isCovered { model.linkToConfirm = nil } }),
                presenting: model.linkToConfirm) { link in
             Button("Connect") { Task { await model.pair(link) } }
             Button("Cancel", role: .cancel) {}
         } message: { link in
             Text("This link pairs this phone with \(link.name). Connect only to a Mac you use; it will see this phone's name and can send it notifications.")
         }
-        .alert("Couldn't connect", isPresented: Binding(get: { model.pairingError != nil },
-                                                       set: { if !$0 { model.pairingError = nil } })) {
+        .alert("Couldn't connect", isPresented: Binding(get: { model.pairingError != nil && !isCovered },
+                                                       set: { if !$0 && !isCovered { model.pairingError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(model.pairingError ?? "")
@@ -53,5 +56,28 @@ struct LockView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
         .task { await lock.unlock() }
+    }
+}
+
+/// App Lock's cover, in a window of its own above the app's, so a sheet or an alert open when the app locked stays
+/// under it too.
+@MainActor
+final class LockCover {
+    static let shared = LockCover()
+    private var window: UIWindow?
+
+    func show(_ covered: Bool, lock: AppLock) {
+        guard covered else {
+            window?.isHidden = true
+            return
+        }
+        if window == nil {
+            guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
+            let window = UIWindow(windowScene: scene)
+            window.windowLevel = .alert + 1
+            window.rootViewController = UIHostingController(rootView: LockView(lock: lock))
+            self.window = window
+        }
+        window?.isHidden = false
     }
 }
