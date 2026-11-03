@@ -739,6 +739,30 @@ final class RemoteBridgeTests: XCTestCase {
         await model.shutdown()
     }
 
+    func testWorkspaceFileIndexUsesTheReadFileBoundary() async throws {
+        let manager = FileManager.default
+        let base = manager.temporaryDirectory.appending(path: "remote-index-\(UUID())")
+        let root = base.appending(path: "workspace")
+        try manager.createDirectory(at: root.appending(path: "Sources"), withIntermediateDirectories: true)
+        defer { try? manager.removeItem(at: base) }
+        try Data("safe".utf8).write(to: root.appending(path: "Sources/main.swift"))
+        try Data("private".utf8).write(to: base.appending(path: "secret.txt"))
+        try manager.createSymbolicLink(at: root.appending(path: "linked.txt"), withDestinationURL: base.appending(path: "secret.txt"))
+        try manager.createSymbolicLink(at: root.appending(path: "outside"), withDestinationURL: base)
+        let session = SessionRecord(harness: .claudeCode, workspaceURL: root, runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Files")
+        let model = try Self.model(sessions: [session], transcripts: [:])
+        let bridge = AppModelRemoteBridge(model: model)
+        let scope = try await bridge.fileScope(taskID: session.id.uuidString).get()
+        let index = try RemoteFileReader.index(in: scope).get()
+        XCTAssertEqual(index.paths, ["Sources/main.swift"])
+        XCTAssertFalse(index.isLimited)
+        XCTAssertEqual(try RemoteFileReader.read(index.paths[0], offset: 0, in: scope).get().data, Data("safe".utf8))
+        if case let .failure(error) = RemoteFileReader.index(in: .init(folder: base), home: root.path) {
+            XCTAssertEqual(error.code, .notFound)
+        } else { XCTFail("A folder containing home must not enumerate") }
+        await model.shutdown()
+    }
+
     // MARK: - Browser tabs (§15.25)
 
     /// A task's browser tabs for the remote are the ones its panel lists, pictured through the agent's screenshot call
