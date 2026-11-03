@@ -6,8 +6,14 @@ import Foundation
 protocol TerminalHosting: AnyObject {
     var onOutput: ((ArraySlice<UInt8>) -> Void)? { get set }
     var onExit: ((Int32?) -> Void)? { get set }
+    var onReady: (() -> Void)? { get set }
+    var isReady: Bool { get }
+    var statusMessage: String? { get }
     var processID: Int32? { get }
     var foregroundProcessGroup: Int32? { get }
+    var workspaceURL: URL? { get }
+    var isAtPrompt: Bool? { get }
+    func refreshPromptState() async -> Bool?
     func start()
     func send(_ bytes: ArraySlice<UInt8>)
     func resize(columns: Int, rows: Int)
@@ -19,6 +25,12 @@ protocol TerminalHosting: AnyObject {
 final class LocalTerminalHosting: TerminalHosting, @MainActor LocalProcessDelegate {
     var onOutput: ((ArraySlice<UInt8>) -> Void)?
     var onExit: ((Int32?) -> Void)?
+    var onReady: (() -> Void)?
+    var isReady: Bool { process?.running == true }
+    var statusMessage: String? { nil }
+    var outputConsumer: (@Sendable (TerminalStreamUpdate) async -> Void)?
+    private var flowDelegate: BackpressuredTerminalDelegate?
+    private var flowID = UUID()
     private(set) var process: LocalProcess?
     private let folder: URL
     private let launch: ShellLaunchEnvironment
@@ -30,21 +42,47 @@ final class LocalTerminalHosting: TerminalHosting, @MainActor LocalProcessDelega
         self.launch = launch
     }
 
+    var workspaceURL: URL? { folder }
     var processID: Int32? { process.map(\.shellPid) }
+    var isAtPrompt: Bool? {
+        guard let group = foregroundProcessGroup, let processID else { return nil }
+        return group == processID
+    }
+    func refreshPromptState() async -> Bool? { isAtPrompt }
     var foregroundProcessGroup: Int32? {
-        guard let process, process.running, process.childfd >= 0 else { return nil }
+        guard let process, process.childfd >= 0 else { return nil }
         let group = tcgetpgrp(process.childfd)
         return group > 0 ? group : nil
     }
 
     func start() {
         guard process == nil else { return }
-        let process = LocalProcess(delegate: self, dispatchQueue: .main)
+        let process: LocalProcess
+        if let outputConsumer {
+            let token = UUID()
+            flowID = token
+            let delegate = BackpressuredTerminalDelegate(columns: columns, rows: rows, display: { [weak self] bytes in
+                await MainActor.run {
+                    guard let self, self.flowID == token else { return }
+                    self.onOutput?(bytes[...])
+                }
+            }, exited: { [weak self] status in
+                await MainActor.run {
+                    guard let self, self.flowID == token else { return }
+                    self.onExit?(status)
+                }
+            }, consume: outputConsumer)
+            flowDelegate = delegate
+            process = LocalProcess(delegate: delegate, dispatchQueue: delegate.queue)
+        } else {
+            process = LocalProcess(delegate: self, dispatchQueue: .main)
+        }
         self.process = process
         let start = launch.start(in: folder)
         process.startProcess(executable: start.executable, args: start.arguments,
                              environment: start.environment, execName: start.processName,
                              currentDirectory: start.currentDirectory)
+        if process.running { onReady?() }
     }
 
     func send(_ bytes: ArraySlice<UInt8>) {
@@ -55,12 +93,16 @@ final class LocalTerminalHosting: TerminalHosting, @MainActor LocalProcessDelega
     func resize(columns: Int, rows: Int) {
         self.columns = max(1, min(columns, 500))
         self.rows = max(1, min(rows, 300))
+        flowDelegate?.resize(columns: self.columns, rows: self.rows)
         guard let process, process.running else { return }
         var size = getWindowSize()
         _ = PseudoTerminalHelpers.setWinSize(masterPtyDescriptor: process.childfd, windowSize: &size)
     }
 
     func stop() {
+        flowDelegate?.stop()
+        flowDelegate = nil
+        flowID = UUID()
         if let process, process.running, process.shellPid > 0 {
             NativeProcessTree.terminate(rootPID: process.shellPid)
             process.terminate()

@@ -30,7 +30,19 @@ final class TerminalCommandHandoffTests: XCTestCase {
         XCTAssertTrue(ready)
         try await waitUntil { output.contains("HEADLESS_READY") && output.contains("30 100") }
         XCTAssertTrue(output.contains("HEADLESS_READY"))
+        XCTAssertTrue(session.bufferText.contains("HEADLESS_READY"), "The agent reads a headless session through the emulator")
         XCTAssertTrue(output.contains("30 100"))
+        session.send(#"printf '\033[?1049h'; printf '%1100000s' '' | tr ' ' x; printf '\033[2J\033[HSTATE_AFTER_BURST\n'"# + "\r")
+        try await waitUntil { session.bufferText.contains("STATE_AFTER_BURST") }
+        let view = session.view {
+            NativeTerminalView(frame: .zero, font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+                options: TerminalOptions(scrollback: 5_000))
+        }
+        XCTAssertTrue(view.getTerminal().isCurrentBufferAlternate, "Mounting adopts parser state even after more than 1 MiB")
+        XCTAssertTrue(view.getTerminal().unwrappedText.contains("STATE_AFTER_BURST"))
+        session.send(#"printf '\033[?1049l'"# + "\r")
+        try await waitUntil { !view.getTerminal().isCurrentBufferAlternate }
+        XCTAssertTrue(view.getTerminal().unwrappedText.contains("HEADLESS_READY"), "The normal buffer survives the alternate screen")
         session.end()
         XCTAssertFalse(session.isRunning)
         XCTAssertFalse(session.hasShell)
@@ -493,7 +505,7 @@ final class TerminalCommandHandoffTests: XCTestCase {
     /// background, which it leaves to its layer, nor its text where it sits (drawn by an ancestor, the
     /// text lands to the right of the view): the capture is laid over the terminal's background, and
     /// each terminal, captured on its own, is put back in its place.
-    private static func asShown(_ host: WindowlessRender.Host<some View>,
+    static func asShown(_ host: WindowlessRender.Host<some View>,
                                 appearance: WindowlessRender.Appearance) throws -> NSBitmapImageRep {
         let window = try host.capture().bitmap
         let image = try XCTUnwrap(window.cgImage)
@@ -579,7 +591,7 @@ final class TerminalCommandHandoffTests: XCTestCase {
 
         // The pane learns the shell exited when SwiftTerm reports the process ended, which can come after
         // SwiftTerm's own `process.running` turns false on the terminal closing.
-        let shell = try XCTUnwrap(host.hosting.terminalView?.processDelegate as? NativeTerminalSession)
+        let shell = try XCTUnwrap(host.hosting.terminalView?.session)
         workspace.handOffToTerminal("exit")
         try waitUntilSettled(in: host) { !shell.isRunning }
         workspace.handOffToTerminal(#"printf 'B10-%s-%s\n' new "${B10_SHELL:-unset}""#)

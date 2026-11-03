@@ -57,6 +57,8 @@ final class RemoteHostModel: Identifiable {
     var showsSchedules = false
     /// The host's scheduled tasks, and its tasks' outputs and files, read when shown.
     let schedules = RemoteHostSchedules()
+    let terminals = RemoteTerminalModel()
+    private(set) var offersTerminals = false
     let files: RemoteHostFiles
     /// The host sends a conversation as its own timeline draws it (§15.24), which this Mac asks for.
     @ObservationIgnored private(set) var sendsFullConversation = false
@@ -106,6 +108,7 @@ final class RemoteHostModel: Identifiable {
                                          clientKey: clientKey, hello: hello, session: session, timing: timing)
         schedules.model = self
         files.model = self
+        terminals.model = self
         browser.hostName = host.name
         browser.send = { [weak self] request, onResponse in self?.requestInOrder(request, onResponse: onResponse) }
     }
@@ -152,6 +155,7 @@ final class RemoteHostModel: Identifiable {
     }
 
     func stop() {
+        terminals.close()
         reader?.cancel()
         reader = nil
         stopDiscovery?()
@@ -197,12 +201,15 @@ final class RemoteHostModel: Identifiable {
             connection = .connected(path)
             resync()
         case let .waiting(retryAt, _):
+            terminals.disconnected()
             failPending()
             connection = .unreachable(retryAt: retryAt)
         case .revoked:
+            terminals.disconnected()
             failPending()
             connection = .removed
         case .stopped:
+            terminals.disconnected()
             failPending()
             connection = .stopped
         }
@@ -237,7 +244,7 @@ final class RemoteHostModel: Identifiable {
         case .tabFrame, .browserTabsChanged:
             browser.receive(event)
         case .terminalOutput, .terminalClosed:
-            break
+            terminals.receive(event)
         case .revoked, .linked, .linkRefused, .linkRequest, .linkResolved:
             break
         }
@@ -255,6 +262,7 @@ final class RemoteHostModel: Identifiable {
             offersTaskFiles = response.taskFiles == true
             offersReview = response.reviewReading == true
             offersWorkspaceFiles = response.workspaceFiles == true
+            offersTerminals = response.terminals == true
             taskControls = response.taskControls == true
             let full = response.fullConversation == true
             if full != sendsFullConversation {
@@ -289,6 +297,7 @@ final class RemoteHostModel: Identifiable {
     }
 
     private func applyTasks(changed: [RemoteTask], removed: [String]) {
+        terminals.removeTasks(removed)
         guard !changed.isEmpty || !removed.isEmpty else { return }
         var next = tasks
         let gone = Set(removed)

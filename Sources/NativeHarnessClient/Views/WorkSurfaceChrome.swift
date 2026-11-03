@@ -336,13 +336,13 @@ struct WorkSurfaceHeader<Trailing: View>: View {
                     .font(.callout)
                     .lineLimit(1).truncationMode(.middle)
                     .allowsHitTesting(false)
-                    .accessibilityValue(workspaceURL.lastPathComponent)
+                    .accessibilityValue(workspaceURL.isFileURL ? workspaceURL.lastPathComponent : "")
                 ParityIconButton(systemName: "xmark", help: L10n.string("Close tab"), action: onClose)
             }
             .padding(.leading, 10).padding(.trailing, 2)
             .frame(height: 30)
         }
-        .background { TabDragHandle().help(workspaceURL.path(percentEncoded: false)) }
+        .background { TabDragHandle().help(workspaceURL.isFileURL ? workspaceURL.path(percentEncoded: false) : "") }
         .background(ParityTheme.selectedFill, in: RoundedRectangle(cornerRadius: 9))
         .layoutPriority(1)
     }

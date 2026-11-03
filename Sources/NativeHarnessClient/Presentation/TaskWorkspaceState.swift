@@ -153,7 +153,7 @@ struct TaskWorkspaceSnapshot: Codable, Equatable {
 @MainActor
 enum TerminalTabTitle {
     static func defaultTitle(of shell: NativeTerminalSession) -> String {
-        let folder = shell.workspaceURL.lastPathComponent
+        let folder = shell.workspaceURL.isFileURL ? shell.workspaceURL.lastPathComponent : L10n.string("Terminal")
         return shell.number > 1 ? "\(folder) \(shell.number)" : folder
     }
 
@@ -248,6 +248,8 @@ final class TaskWorkspaceState {
     /// in the task it starts. The Claude app and the Codex app give each session or thread several
     /// terminal tabs. Never saved.
     @ObservationIgnored private var terminalTabs: [NativeTerminalSession] = []
+    /// Supplies another host for the same terminal tabs; nil keeps the local terminal.
+    @ObservationIgnored var terminalFactory: ((URL, ShellLaunchEnvironment, UUID?) -> NativeTerminalSession)?
     /// The tab the terminal panel shows.
     @ObservationIgnored private var shownTerminalTab: NativeTerminalSession?
     /// The tab shown beside it while the terminal is split.
@@ -330,8 +332,9 @@ final class TaskWorkspaceState {
 
     /// The terminal's + : a new tab in `folder`, shown, its shell started.
     @discardableResult
-    func openTerminalTab(in folder: URL, launch: ShellLaunchEnvironment, taskID: UUID?) -> NativeTerminalSession {
+    func openTerminalTab(in folder: URL, launch: ShellLaunchEnvironment, taskID: UUID?, allowsClipboard: Bool = true) -> NativeTerminalSession {
         let session = makeTerminal(in: folder, launch: launch, taskID: taskID)
+        if !allowsClipboard { session.disableClipboardAccess() }
         terminalTabs.append(session)
         shownTerminalTab = session
         terminalStartRequested = true
@@ -387,7 +390,8 @@ final class TaskWorkspaceState {
     }
 
     private func makeTerminal(in folder: URL, launch: ShellLaunchEnvironment, taskID: UUID?) -> NativeTerminalSession {
-        let session = NativeTerminalSession(workspaceURL: folder, launch: launch, taskID: taskID)
+        let session = terminalFactory?(folder, launch, taskID)
+            ?? NativeTerminalSession(workspaceURL: folder, launch: launch, taskID: taskID)
         let taken = Set(terminalTabs.map(\.number))
         session.number = (1...).first { !taken.contains($0) }!
         adoptTerminal(session)

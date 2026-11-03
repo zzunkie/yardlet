@@ -1890,6 +1890,26 @@ holds at most 128 windows and flushes the oldest when full. The bytes and their 
 and credentials never enter the audit log. Permission controls are available only on the host;
 a remote request cannot enable them. File-write and settings permissions grant no terminal access.
 
+The host creates an ordinary terminal tab in the task's workspace and starts its PTY without a view.
+The local panel and the task's `read_terminal` tool see that same session. Closing the local tab,
+revoking the permission or closing the remote connection ends it. A session started headless keeps a bounded emulator
+with 5,000 scrollback lines for reads without a view; ordinary view-first sessions use their existing emulator.
+For headless sessions, each output chunk updates it without rebuilding
+a history string. The first local view adopts the same emulator, preserving its parser state, alternate screen
+and scrollback without replay. Only the host emulator answers terminal queries; remote renderers forward user input.
+
+The desktop client uses the local Terminal panel through a byte-stream provider. It shows connection
+and refusal states, acknowledges output after feeding its emulator, and never reopens or repeats input
+on reconnect. The panel states that closing the window or losing the connection ends its terminals.
+Unlike local task terminals, these sessions belong to a connection. Listing and attaching pre-existing host
+terminals, reconnecting to them, and transferring their screen state across connections remain follow-up work.
+A hidden panel retains its shell until the connection or task ends. Terminal control
+sequences cannot read or write either the client clipboard or the host clipboard when the remote-created
+shell is shown in a local panel. Exit status is the host's raw `waitpid` status;
+the client decodes its exit code or terminating signal as the local panel does. Links use the remote
+window's existing file and browser routing; without that route, the terminal never opens a host path
+or localhost address through the client's system applications.
+
 ## 16. Push notifications
 
 The Mac pushes to a device that registered (§15.6) and **has no open v2 connection**, for these

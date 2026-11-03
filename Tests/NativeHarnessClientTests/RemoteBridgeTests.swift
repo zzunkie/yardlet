@@ -10,6 +10,67 @@ import XCTest
 /// window's own model calls — on a fake adapter, so no provider runs.
 @MainActor
 final class RemoteBridgeTests: XCTestCase {
+    func testHeadlessTerminalBackpressurePreservesOutputBeforeExit() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "remote-terminal-tail-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let task = SessionRecord(harness: .claudeCode, workspaceURL: folder,
+            runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Terminal output")
+        let model = try Self.model(sessions: [task], transcripts: [:])
+        let bridge = AppModelRemoteBridge(model: model)
+        bridge.terminals.launch = .isolatedZsh(in: folder)
+        let permit = RemoteTerminalPermit()
+        let sink = PausedTerminalSink()
+        addTeardownBlock {
+            await sink.resume()
+            await bridge.closeTerminal(taskID: task.id.uuidString, terminalID: "tail")
+            await model.shutdown()
+        }
+        let opened = await bridge.openTerminal(taskID: task.id.uuidString, terminalID: "tail", columns: 100, rows: 30,
+            permit: permit) { update in await sink.accept(update) }
+        XCTAssertNil(opened)
+        let session = try XCTUnwrap(model.taskWorkspaces.loadedState(for: task.id)?.terminals.first)
+        try await waitUntil { session.isAtPrompt && session.bufferText.contains("%") }
+        let command = #"printf 'BEGIN_PAYLOAD\n'; printf '%1100000s' '' | tr ' ' x; printf '\nEND_PAYLOAD\n'; exit 7"# + "\r"
+        let sent = await bridge.terminalInput(taskID: task.id.uuidString, terminalID: "tail", data: Data(command.utf8), permit: permit)
+        XCTAssertNil(sent)
+        try await waitUntil { await sink.isPaused }
+        XCTAssertTrue(session.isRunning, "The PTY must wait for its consumer instead of dropping output or closing")
+        await sink.resume()
+        try await waitUntil { await sink.hasExited }
+        let bytes = await sink.bytes
+        let begin = try XCTUnwrap(bytes.range(of: Data("BEGIN_PAYLOAD\r\n".utf8)))
+        let end = try XCTUnwrap(bytes.range(of: Data("\r\nEND_PAYLOAD\r\n".utf8)))
+        let payload = bytes[begin.upperBound..<end.lowerBound]
+        XCTAssertEqual(payload.count, 1_100_000)
+        XCTAssertTrue(payload.allSatisfy { $0 == UInt8(ascii: "x") })
+        let exitCode = await sink.exitCode
+        XCTAssertEqual(exitCode, 7 << 8, "The exit follows EOF and every output chunk, as raw waitpid status")
+        await bridge.closeTerminal(taskID: task.id.uuidString, terminalID: "tail")
+
+        // A host-side close revokes the actual capacity gate, not only the PTY process.
+        let stoppedPermit = RemoteTerminalPermit()
+        let stoppedSink = PausedTerminalSink()
+        await stoppedSink.resume()
+        let again = await bridge.openTerminal(taskID: task.id.uuidString, terminalID: "stop", columns: 100, rows: 30,
+            permit: stoppedPermit) { update in
+                _ = await stoppedPermit.enqueue(update)
+                await stoppedSink.accept(update)
+            }
+        XCTAssertNil(again)
+        let stopped = try XCTUnwrap(model.taskWorkspaces.loadedState(for: task.id)?.terminals.first)
+        defer { stoppedPermit.revoke(); stopped.end() }
+        try await waitUntil { stopped.isAtPrompt && stopped.bufferText.contains("%") }
+        _ = await bridge.terminalInput(taskID: task.id.uuidString, terminalID: "stop",
+            data: Data((#"printf '%1100000s' '' | tr ' ' x"# + "\r").utf8), permit: stoppedPermit)
+        try await waitUntil { stoppedPermit.isWaitingForCapacity }
+        stopped.end()
+        XCTAssertFalse(stoppedPermit.isValid)
+        XCTAssertTrue(bridge.terminals.sessions.isEmpty)
+        try await waitUntil { await stoppedSink.hasExited }
+        await model.shutdown()
+    }
+
     // MARK: - Projection from timeline fixtures
 
     func testAClaudeTurnReadsAsTheTimelineDrawsIt() throws {
@@ -1511,4 +1572,25 @@ final class InMemoryRemoteQueueRepository: CodexQueueRepository {
     }
     func loadShellDeliveries(for sessionID: UUID) -> [ClaudeShellDelivery] { shell[sessionID] ?? [] }
     func saveShellDeliveries(_ deliveries: [ClaudeShellDelivery], for sessionID: UUID) { shell[sessionID] = deliveries }
+}
+
+private actor PausedTerminalSink {
+    private(set) var bytes = Data()
+    private(set) var isPaused = false
+    private(set) var hasExited = false
+    private(set) var exitCode: Int32?
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+    func accept(_ update: RemoteTerminalUpdate) async {
+        switch update {
+        case let .output(data):
+            bytes.append(data)
+            if !isPaused, !released, bytes.count >= 300_000 {
+                isPaused = true
+                await withCheckedContinuation { continuation = $0 }
+            }
+        case let .exited(status): exitCode = status; hasExited = true
+        }
+    }
+    func resume() { released = true; continuation?.resume(); continuation = nil }
 }

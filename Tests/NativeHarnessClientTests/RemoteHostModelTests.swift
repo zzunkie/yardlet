@@ -1,4 +1,5 @@
 import AppKit
+@preconcurrency import SwiftTerm
 import SwiftUI
 import Foundation
 import Observation
@@ -13,6 +14,161 @@ import XCTest
 /// the change, and what a window showed shown again when it reopens.
 @MainActor
 final class RemoteHostModelTests: XCTestCase {
+    /// A real host PTY belongs to its normal workspace, yet runs before either panel has a view.
+    func testRemoteTerminalUsesTheHostsSessionAndEndsWhenPermissionIsRemoved() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "remote-terminal-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteTerminal")))
+        let host = AppModel(store: SessionStore(repository: InMemorySessionRepository()),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults),
+            registry: HarnessRegistry { _, _ in FakeHarnessAdapter(kind: .claudeCode) }, restoresIndexOnLaunch: false)
+        let created = await host.createSession(harness: .claudeCode, workspaceURL: folder,
+            runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Run in terminal")
+        let task = try XCTUnwrap(created)
+        let bridge = AppModelRemoteBridge(model: host)
+        bridge.terminals.launch = .isolatedZsh(in: folder)
+        let stack = try await LoopbackStack(bridge: bridge, port: 47876)
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+            name: "Host", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+            hello: RemoteHandshakeHello(name: "Client", platform: "macos", appVersion: "test"))
+        let paired = try await directory.pair(link: link.absoluteString)
+        let client = try XCTUnwrap(directory.model(for: paired.id))
+        defer { directory.close(paired.id) }
+        try await waitUntil { client.hasSnapshot }
+        XCTAssertTrue(client.offersTerminals)
+        let stream = client.terminals.makeStream(taskID: task.id.uuidString)
+        let denied = NativeTerminalSession(workspaceURL: folder, hosting: RemoteTerminalHosting(stream: stream))
+        denied.start()
+        try await waitUntil { if case .failed = stream.phase { return true }; return false }
+        XCTAssertFalse(denied.isRunning)
+        denied.end()
+        XCTAssertTrue(bridge.terminals.sessions.isEmpty)
+        try await stack.server.setPermission(.terminal, allowed: true, for: try XCTUnwrap(client.host.deviceID))
+        weak var abandoned: RemoteTerminalStream?
+        do {
+            let closing = client.terminals.makeStream(taskID: task.id.uuidString)
+            abandoned = closing
+            closing.start()
+            closing.stop()
+        }
+        XCTAssertNil(abandoned)
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            client.requestInOrder(.ping) { _ in continuation.resume() }
+        }
+        try await waitUntil { bridge.terminals.sessions.isEmpty }
+        let pane = RemoteTerminalPane(model: client, taskID: task.id.uuidString, onClose: {})
+        let workspace = pane.workspace
+        func newRemote() -> NativeTerminalSession {
+            let pane = RemoteTerminalPane(model: client, taskID: task.id.uuidString, onClose: {})
+            return pane.workspace.terminal(in: pane.workspaceURL, launch: .isolatedZsh(in: folder), taskID: nil)
+        }
+        var remote = newRemote()
+        defer { remote.end() }
+        remote.start()
+        remote.resize(columns: 100, rows: 30)
+        try await waitUntil { remote.isRunning && bridge.terminals.sessions.count == 1 }
+        let local = try XCTUnwrap(host.taskWorkspaces.loadedState(for: task.id)?.terminals.first)
+        XCTAssertTrue(local.isRunning)
+        try await waitUntil { Project.isSamePath(remote.workspaceURL, folder) }
+        var clipboardReads = 0, clipboardWrites = 0
+        local.clipboard = TerminalClipboard(read: { clipboardReads += 1; return Data("test-only".utf8) },
+            write: { _ in clipboardWrites += 1 })
+        XCTAssertFalse(local.allowsClipboard)
+        try await waitUntil { local.isAtPrompt && remote.bufferText.contains("%") }
+        let sent = await remote.runWhenReady("printf 'REMOTE_%s\\n' READY; stty size")
+        XCTAssertTrue(sent, "Readiness is checked on the host")
+        try await waitUntil { local.bufferText.contains("REMOTE_READY") && remote.bufferText.contains("30 100") }
+        XCTAssertTrue(remote.bufferText.contains("REMOTE_READY"))
+        let terminalRead = host.readTerminal(.object([:]), caller: SessionToolCaller(
+            id: task.id, hostTaskID: task.id, harness: .claudeCode, workspaceURL: folder, roots: [folder],
+            projectID: nil, title: "Read terminal", depth: 0, permission: .standard, deadline: .now.advanced(by: .seconds(5))))
+        XCTAssertTrue(terminalRead.text.contains("REMOTE_READY"))
+        // The same tab model creates and closes remote tabs and split terminals.
+        let second = workspace.openTerminalTab(in: folder, launch: .isolatedZsh(in: folder), taskID: nil)
+        second.start()
+        workspace.splitTerminal(in: folder, launch: .isolatedZsh(in: folder), taskID: nil)
+        let split = try XCTUnwrap(workspace.splitTerminal)
+        split.start()
+        try await waitUntil { bridge.terminals.sessions.count == 3 && second.isRunning && split.isRunning }
+        second.end(); split.end()
+        workspace.showTerminalTab(remote)
+        try await waitUntil { bridge.terminals.sessions.count == 1 }
+        XCTAssertEqual(workspace.terminals.count, 1)
+        let output = try WindowlessRender.directory("remote-terminal-qa")
+        for appearance in WindowlessRender.Appearance.allCases {
+            let view = HStack(spacing: 1) {
+                TerminalPane(session: local, tabs: TerminalTabsContext(workspace: host.taskWorkspaces.state(for: task.id),
+                    folder: folder, launch: .isolatedZsh(in: folder), taskID: task.id),
+                    isInSidePanel: true, onClose: {}).frame(width: 520)
+                pane.frame(width: 520)
+            }.environment(\.colorScheme, appearance.colorScheme)
+            let rendered = WindowlessRender.Host(view, size: NSSize(width: 1041, height: 400), appearance: appearance)
+            rendered.settle(passes: 8)
+            let localView = local.view { TerminalView(frame: .zero) }
+            XCTAssertNil(local.clipboardRead(source: localView))
+            local.clipboardCopy(source: localView, content: Data("test-only".utf8))
+            XCTAssertEqual(clipboardReads, 0)
+            XCTAssertEqual(clipboardWrites, 0)
+            let remoteView = remote.view { TerminalView(frame: .zero) }
+            remote.onOpenLink = nil
+            remote.requestOpenLink(source: remoteView, link: "file:///host-only/workspace/source.swift", params: [:])
+            XCTAssertNotNil(remote.actionError, "A host file never falls back to opening a client file")
+            var openedLinks: [URL] = []
+            remote.onOpenLink = { openedLinks.append($0) }
+            remote.requestOpenLink(source: remoteView, link: "http://localhost:3000", params: [:])
+            remote.requestOpenLink(source: remoteView, link: "file:///host-only/workspace/source.swift", params: [:])
+            XCTAssertEqual(openedLinks.map(\.absoluteString), ["http://localhost:3000", "file:///host-only/workspace/source.swift"])
+            let marker = "QUERY_" + appearance.suffix.uppercased()
+            let query = #"python3 -c 'import os,tty,termios,select; old=termios.tcgetattr(0); tty.setraw(0); os.write(1,b"\x1b[6n"); data=b""; exec("while select.select([0],[],[],1)[0]:\n data+=os.read(0,1024)"); termios.tcsetattr(0,termios.TCSANOW,old); print("\#(marker)="+str(data.count(b"R")))'"#
+            let queried = await remote.runWhenReady(query)
+            XCTAssertTrue(queried)
+            try await waitUntil { remote.bufferText.contains(marker + "=1") || !remote.isRunning }
+            guard remote.isRunning else {
+                XCTFail("Terminal closed: \((remote.hosting as? RemoteTerminalHosting)?.stream.closeReason ?? "unknown")")
+                await host.shutdown()
+                return
+            }
+            XCTAssertFalse(remote.bufferText.contains(marker + "=2"), "Only the host answers DSR with both renderers mounted")
+            try WindowlessRender.writePNG(TerminalCommandHandoffTests.asShown(rendered, appearance: appearance),
+                to: output.appending(path: "terminal-local-remote-\(appearance.suffix).png"))
+            rendered.close()
+        }
+        let exitRender = WindowlessRender.Host(HStack(spacing: 1) {
+            TerminalPane(session: local, tabs: TerminalTabsContext(workspace: host.taskWorkspaces.state(for: task.id),
+                folder: folder, launch: .isolatedZsh(in: folder), taskID: task.id),
+                isInSidePanel: true, onClose: {}).frame(width: 520)
+            pane.frame(width: 520)
+        }.environment(\.colorScheme, .dark), size: NSSize(width: 1041, height: 400), appearance: .dark)
+        exitRender.settle(passes: 4)
+        remote.send("exit 7\r")
+        try await waitUntil { remote.exitCode == 7 && bridge.terminals.sessions.isEmpty }
+        XCTAssertNil(remote.terminationSignal)
+        XCTAssertFalse(local.hasEnded, "A visible exited host tab keeps its output")
+        XCTAssertFalse(remote.hasEnded, "A visible exited client tab keeps its output")
+        exitRender.settle(passes: 4)
+        try WindowlessRender.writePNG(TerminalCommandHandoffTests.asShown(exitRender, appearance: .dark),
+            to: output.appending(path: "terminal-exit-local-remote-dark.png"))
+        exitRender.close()
+        try await waitUntil { local.hasEnded && remote.hasEnded }
+        remote = newRemote(); remote.start()
+        try await waitUntil { remote.isRunning && bridge.terminals.sessions.count == 1 }
+        let revokedLocal = try XCTUnwrap(host.taskWorkspaces.loadedState(for: task.id)?.terminals.first)
+        try await stack.server.setPermission(.terminal, allowed: false, for: try XCTUnwrap(client.host.deviceID))
+        try await waitUntil { !remote.isRunning && revokedLocal.hasEnded && bridge.terminals.sessions.isEmpty }
+        XCTAssertTrue(host.taskWorkspaces.loadedState(for: task.id)?.terminals.isEmpty == true)
+        // Re-enabling requires an explicit new open; disconnect closes that session too.
+        try await stack.server.setPermission(.terminal, allowed: true, for: try XCTUnwrap(client.host.deviceID))
+        remote = newRemote(); remote.start()
+        try await waitUntil { remote.isRunning && bridge.terminals.sessions.count == 1 }
+        directory.close(paired.id)
+        try await waitUntil { bridge.terminals.sessions.isEmpty }
+        await host.shutdown()
+    }
+
     /// The client uses the same Files panel, reading from a real host workspace over the encrypted loopback.
     func testWorkspaceFilesReadAndRenderTheHostsFilesWithoutWriting() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "remote-files-\(UUID())")

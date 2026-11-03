@@ -3772,3 +3772,24 @@
 "Save and discard changes in the task's workspace." = "Save and discard changes in the task's workspace.";
 
 "Write files" = "Write files";
+"Connection lost" = "Connection lost";
+
+"The remote terminal was closed." = "The remote terminal was closed.";
+
+"The remote terminal is unavailable." = "The remote terminal is unavailable.";
+
+"Allow Terminal for this device in the host's Remote Connections settings." = "Allow Terminal for this device in the host's Remote Connections settings.";
+
+"The host's remote terminal limit has been reached. Close an unused terminal." = "The host's remote terminal limit has been reached. Close an unused terminal.";
+
+"The command was not sent because the shell prompt could not be confirmed." = "The command was not sent because the shell prompt could not be confirmed.";
+
+"Restarting clears the terminal's output and stops any commands that are running." = "Restarting clears the terminal's output and stops any commands that are running.";
+
+"Closing this terminal stops any commands that are running." = "Closing this terminal stops any commands that are running.";
+
+"Closing these terminals stops any commands that are running." = "Closing these terminals stops any commands that are running.";
+
+"Open this address in the remote task's browser." = "Open this address in the remote task's browser.";
+
+"Closing this window or losing the connection ends its terminals." = "Closing this window or losing the connection ends its terminals.";
