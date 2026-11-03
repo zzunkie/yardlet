@@ -171,6 +171,8 @@ final class RemoteProtocolTests: XCTestCase {
             (.text(""), .badRequest), (.text(String(repeating: "a", count: 4_001)), .tooLarge), (.key(""), .badRequest),
             // Under 4,000 characters, but each a family of several scalars: past the bytes.
             (.text(String(repeating: "👨‍👩‍👧‍👦", count: 1_000)), .tooLarge),
+            // One character with a mark combined onto it many times: a key name of one character, past its bytes.
+            (.key("e" + String(repeating: "\u{301}", count: 40)), .badRequest), (.key("Shift+ArrowLeft"), nil),
             (RemoteTabInput(kind: .navigate, action: "home"), .badRequest), (RemoteTabInput(kind: .navigate, action: "back"), nil),
             (RemoteTabInput(kind: .click, x: 1, y: 2, modifiers: ["hyper"]), .badRequest),
             // A field its kind does not take, such as text riding on a click, is refused.

@@ -974,9 +974,11 @@ final class RemoteBridgeTests: XCTestCase {
         try await waitUntilAsync { tab.emulation == nil && metrics().last == .string("cleared") }
     }
 
-    /// The second review of §15.25's host: a page that moves while it is pictured or driven is not sent or driven past
-    /// the address checked, a file page outside the task's hides its title too, a popup a remote click opened asks on
-    /// the Mac before another app opens, a download a remote click started stops as it begins, and the phone's size
+    /// The second and third reviews of §15.25's host: a page that moves while it is pictured or driven, even away and
+    /// back to the same address, is not sent or driven past the page checked; a file page outside the task's hides its
+    /// title, also from the page the tab moves to next; a popup a remote click opened asks on the Mac before another app
+    /// opens, also after the agent read the tab, and so does one the agent's page opened; the host refuses a remote
+    /// click's downloads before the click goes; and the phone's sizes asked meanwhile make one change, the latest, which
     /// never comes back after the agent's later one.
     func testARemoteDevicesInputHoldsAcrossMovesPopupsDownloadsAndSizes() async throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "remote-tab-moves-\(UUID().uuidString)")
@@ -1009,17 +1011,42 @@ final class RemoteBridgeTests: XCTestCase {
         let listed = try await bridge.browserTabs(taskID: taskID).get()
         XCTAssertEqual(listed.first?.url, "file://")
         XCTAssertNil(listed.first?.title, "a file outside the task's is not named by its title either")
+        // Nor is the page it moves to next named by that file's title before it names itself.
+        connection.eventHandler?(.address(tab: tab.id, url: "https://github.com/login"))
+        let next = try await bridge.browserTabs(taskID: taskID).get()
+        XCTAssertEqual(next.first?.url, "https://github.com/login")
+        XCTAssertNil(next.first?.title)
+        connection.eventHandler?(.title(tab: tab.id, title: "Sign in to GitHub"))
+        let named = try await bridge.browserTabs(taskID: taskID).get()
+        XCTAssertEqual(named.first?.title, "Sign in to GitHub")
 
-        // Moved there during a click: the steps after the move are not sent.
+        // Away to a file outside the task's and back while pictured: the picture may be of the page between; it does not go.
         connection.eventHandler?(.address(tab: tab.id, url: inside))
         connection.onCall = { method in
-            if method == "Input.dispatchMouseEvent" { connection.eventHandler?(.address(tab: tab.id, url: "file:///etc/hosts")) }
+            guard method == "Page.captureScreenshot" else { return }
+            connection.eventHandler?(.address(tab: tab.id, url: "file:///etc/hosts"))
+            connection.eventHandler?(.address(tab: tab.id, url: inside))
+        }
+        let roundTrip = await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 640, maxHeight: 640)
+        guard case .failure = roundTrip else { return XCTFail("A page that left and came back during its picture was sent") }
+
+        // Away and back during a click: the steps after the move are not sent, though the address is the one checked.
+        connection.onCall = { method in
+            guard method == "Input.dispatchMouseEvent" else { return }
+            connection.eventHandler?(.address(tab: tab.id, url: "file:///etc/hosts"))
+            connection.eventHandler?(.address(tab: tab.id, url: inside))
         }
         var before = connection.calls.count
+        let sentBefore = connection.sent.count
         let clicked = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .click(x: 5, y: 5), permit: RemoteTabPermit())
         XCTAssertEqual(clicked?.code, .notAllowed)
         XCTAssertEqual(connection.calls.dropFirst(before).filter { $0.method == "Input.dispatchMouseEvent" }.count, 1,
                        "only the step before the move")
+        // The host was told to refuse the tab's downloads before the click went.
+        let clickSent = Array(connection.sent.dropFirst(sentBefore))
+        let refused = try XCTUnwrap(clickSent.firstIndex(of: .refuseDownloads(tab: tab.id, isRefused: true)))
+        let firstStep = try XCTUnwrap(clickSent.firstIndex { if case .devTools(_, let message) = $0 { message.contains("Input.dispatchMouseEvent") } else { false } })
+        XCTAssertLessThan(refused, firstStep)
         connection.onCall = nil
         connection.eventHandler?(.address(tab: tab.id, url: "https://github.com/login"))
 
@@ -1038,23 +1065,34 @@ final class RemoteBridgeTests: XCTestCase {
             XCTAssertEqual(refusal?.code, .notAllowed, button)
         }
 
-        // A popup a remote click opened asks on the Mac before another app opens, and its download stops.
+        // A popup a remote click opened asks on the Mac before another app opens, though the agent read the tab between.
         let clickedOpen = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .click(x: 5, y: 5), permit: RemoteTabPermit())
         XCTAssertNil(clickedOpen)
+        tab.noteAgentActivity()
         connection.eventHandler?(.popupOpened(tab: 90, opener: tab.id, url: "https://github.com/share", background: false))
         let popup = try XCTUnwrap(client.tabs(forSession: task.id).first { $0.id == 90 })
         connection.eventHandler?(.externalApp(tab: popup.id, request: BrowserExternalAppRequest(
             url: "mailto:team@example.test", origin: "https://github.com", userGesture: true, remembered: true)))
         XCTAssertTrue(apps.opened.isEmpty)
         XCTAssertNotNil(popup.externalAppQuestion)
-        connection.eventHandler?(.download(tab: tab.id, download: BrowserDownload(
-            id: 3, state: .started, fileName: "big.iso", path: "/tmp/big.iso", receivedBytes: 0, totalBytes: -1)))
-        XCTAssertTrue(connection.sent.contains(.cancelDownload(tab: tab.id, download: 3)))
-        // The person's own click here downloads as before.
+        // A blocked pop-up it opens as a tab of the task refuses downloads from its first request.
+        connection.eventHandler?(.newWindow(tab: tab.id, url: "https://github.com/notes.pdf", background: false, userGesture: true))
+        let opened = try XCTUnwrap(client.tabs(forSession: task.id).last)
+        XCTAssertTrue(connection.sent.contains(.refuseDownloads(tab: opened.id, isRefused: true)))
+        // The person's own click here takes downloads again, before it goes.
+        let ownBefore = connection.sent.count
         tab.send(.mouse(tab: tab.id, input: BrowserMouseInput(kind: .down, x: 5, y: 5, button: .left)))
-        connection.eventHandler?(.download(tab: tab.id, download: BrowserDownload(
-            id: 4, state: .started, fileName: "notes.pdf", path: "/tmp/notes.pdf", receivedBytes: 0, totalBytes: -1)))
-        XCTAssertFalse(connection.sent.contains(.cancelDownload(tab: tab.id, download: 4)))
+        XCTAssertEqual(Array(connection.sent.dropFirst(ownBefore)).prefix(1),
+                       [.refuseDownloads(tab: tab.id, isRefused: false)])
+
+        // A popup the agent's input opened asks before another app opens, as the agent's own page does.
+        tab.noteAgentActivity()
+        connection.eventHandler?(.popupOpened(tab: 91, opener: tab.id, url: "https://github.com/compose", background: false))
+        let agents = try XCTUnwrap(client.tabs(forSession: task.id).first { $0.id == 91 })
+        connection.eventHandler?(.externalApp(tab: agents.id, request: BrowserExternalAppRequest(
+            url: "mailto:team@example.test", origin: "https://github.com", userGesture: true, remembered: true)))
+        XCTAssertTrue(apps.opened.isEmpty)
+        XCTAssertNotNil(agents.externalAppQuestion)
 
         // The agent sizes the tab right after a phone did: the agent's size stays, and the phone's end leaves it.
         before = connection.calls.count
@@ -1069,6 +1107,22 @@ final class RemoteBridgeTests: XCTestCase {
         let widths = connection.calls.dropFirst(before).filter { $0.method == "Emulation.setDeviceMetricsOverride" }
             .compactMap { $0.params["width"]?.integerValue }
         XCTAssertEqual(widths.last, 1024)
+
+        // Sizes a phone asks for while another change runs make one change when its turn comes: the latest.
+        before = connection.calls.count
+        var askedMeanwhile = false
+        connection.onCall = { method in
+            guard method == "Emulation.setDeviceMetricsOverride", !askedMeanwhile else { return }
+            askedMeanwhile = true
+            for width in [390, 400, 410] {
+                tab.sizeForRemote(BrowserViewportEmulation(width: width, height: 844, mobile: true, owner: .remote))
+            }
+        }
+        try await tab.emulate(BrowserViewportEmulation(width: 800, height: 600, owner: .agent))
+        try await waitUntilAsync { tab.emulation?.width == 410 }
+        connection.onCall = nil
+        XCTAssertEqual(connection.calls.dropFirst(before).filter { $0.method == "Emulation.setDeviceMetricsOverride" }
+            .compactMap { $0.params["width"]?.integerValue }, [800, 410])
     }
 
     private static let frame = BrowserFrame(layer: .view, surface: 1, pixelWidth: 2560, pixelHeight: 1600, sequence: 1,

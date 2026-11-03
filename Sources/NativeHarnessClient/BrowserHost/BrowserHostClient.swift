@@ -953,7 +953,8 @@ final class BrowserHostClient {
         tab.lastExternalAppRequest = .now
         guard let url = URL(string: request.url), let scheme = url.scheme?.lowercased(), let app = externalApps.appName(for: url)
         else { return report(.noApp) }
-        let byAgent = tab.isDrivenByAgent
+        // A tab the agent opened, or the agent's input in another tab opened, is the agent's until someone here uses it.
+        let byAgent = tab.isDrivenByAgent || (tab.openedByAgent && tab.lastPersonInput == nil)
         // Another app on this Mac opens only when someone at this Mac chose it: a remote device's click asks here.
         if !tab.isDrivenByRemote,
            BrowserExternalAppPolicy.opensWithoutAsking(scheme: scheme, remembered: request.remembered, byAgent: byAgent) {
@@ -1174,12 +1175,6 @@ final class BrowserHostClient {
             adoptPopup(id, opener: tabs[openerID], url: url, background: background)
         case .download(let id, let download):
             guard let tab = tabs[id] else { return }
-            // A remote device's click does not save files on this Mac: the download stops as it begins, and the panel
-            // says so, for the person here to download it.
-            if download.state == .started, tab.isDrivenByRemote {
-                connection?.send(.cancelDownload(tab: id, download: download.id))
-                tab.receive(.remoteDownloadStopped(tab: id, fileName: download.fileName))
-            }
             tab.receive(event)
             // A tab a page opened only to download (a target=_blank link to a file) never shows a page. As
             // in Chrome it closes and its opener comes back, once the download ends: CEF reports nothing
@@ -1259,6 +1254,10 @@ final class BrowserTab {
     private(set) var isClosed = false
     /// The page's current address, as the host last reported it.
     private(set) var currentURL: String?
+    /// How many times the main frame's address changed or it started another document: what was checked at one count
+    /// is that page only, and a page that left and came back to the same address counts on (a remote device's picture
+    /// and input, docs/REMOTE_PROTOCOL.md §15.25).
+    private(set) var navigations = 0
     /// The last address that was a page (not empty, not about:blank), to open again.
     private(set) var lastPageURL: String?
     /// A restored tab that has not loaded: the address it opens at when a panel shows it or the agent uses it
@@ -1288,6 +1287,9 @@ final class BrowserTab {
     /// The page's title and navigation state, as the host last reported them, for a panel that
     /// fronts the tab later.
     private(set) var title = ""
+    /// The address the page was at when it set `title`: a page the tab moved to keeps the last one's title until it
+    /// names itself.
+    private(set) var titleAddress: String?
     private(set) var isLoading = false
     private(set) var canGoBack = false
     private(set) var canGoForward = false
@@ -1376,9 +1378,15 @@ final class BrowserTab {
     /// When the person's last input came from a remote device (`notePersonInput(remote:)`).
     private var lastRemoteInput: ContinuousClock.Instant?
     /// A page the remote device's input drove opened the tab (`BrowserHostClient.openWindow`, `adoptPopup`).
-    fileprivate(set) var remoteOpener = false
-    /// What the tab's emulation was before a phone's (`emulateForRemote`); nil while no phone's holds.
+    fileprivate(set) var remoteOpener = false {
+        didSet { tellDownloads() }
+    }
+    /// Whether the host was last told to refuse the tab's downloads (`refuseDownloads`).
+    private var refusesDownloads = false
+    /// What the tab's emulation was before a phone's (`sizeForRemote`); nil while no phone's holds.
     private var emulationBeforeRemote: BrowserViewportEmulation??
+    /// The phone's size asked for last and not yet applied (`.some(nil)`: no phone's), which the queued change takes.
+    private var remoteSize: BrowserViewportEmulation??
     /// The last change of the emulation, which the next waits for (`inEmulationOrder`).
     private var emulationChanges: Task<Void, Never>?
     /// How many times the person brought the tab in front of its task (`BrowserHostClient.show`).
@@ -1529,9 +1537,11 @@ final class BrowserTab {
         case .mouse(_, let input) where input.kind == .down:
             lastPersonInput = .now
             lastPersonUse = .now
+            tellDownloads()
         case .key(_, let input) where input.kind == .rawDown:
             lastPersonInput = .now
             lastPersonUse = .now
+            tellDownloads()
         case .key(_, let input) where input.kind == .character:
             hadPersonEdits = true
         case .composition(_, .commit):
@@ -1576,36 +1586,52 @@ final class BrowserTab {
         lastPersonUse = now
         if remote { lastRemoteInput = now }
         if edits { hadPersonEdits = true }
+        tellDownloads()
     }
 
-    /// The person's last input to the page came from a remote device, after the agent's, or a page the remote device's
-    /// input drove opened this tab and no one here has used it since: what the page asks now (another app to open, a
-    /// download) waits for someone at this Mac.
+    /// The person's last input to the page came from a remote device, or a page the remote device's input drove opened
+    /// this tab and no one here has used it since: what the page asks now (another app to open, a download) waits for
+    /// someone at this Mac. The agent's use of the tab since, a read included, does not end it; the person's own input
+    /// here does.
     var isDrivenByRemote: Bool {
-        guard !isDrivenByAgent else { return false }
         if let remote = lastRemoteInput { return remote == lastPersonInput }
         return remoteOpener && lastPersonInput == nil
     }
 
-    // MARK: A remote device's size (docs/REMOTE_PROTOCOL.md §15.25)
-
-    /// A phone watches the tab at its own size: the emulation the tab had before is kept, to take again after. In order
-    /// with every other change (`inEmulationOrder`).
-    func emulateForRemote(_ emulation: BrowserViewportEmulation) async throws {
-        try await inEmulationOrder {
-            if self.emulation?.owner != .remote { self.emulationBeforeRemote = .some(self.emulation) }
-            try await self.applyEmulation(emulation)
-        }
+    /// Tells the host to refuse the tab's downloads while a remote device drove it last, or to take them again once
+    /// someone here used it: sent before the input that changed it goes, so a download that input starts is refused
+    /// before it begins (the host also refuses those of a pop-up such a page opens).
+    private func tellDownloads() {
+        let refuses = isDrivenByRemote
+        guard refuses != refusesDownloads else { return }
+        refusesDownloads = refuses
+        client?.send(.refuseDownloads(tab: id, isRefused: refuses))
     }
 
-    /// No phone watches the tab: it takes the size and emulation it had before, unless the person or the agent set
-    /// another since; the agent's own goes if its turn ended meanwhile, as it would have.
-    func endRemoteEmulation() async {
-        try? await inEmulationOrder {
-            guard let before = self.emulationBeforeRemote else { return }
-            self.emulationBeforeRemote = nil
-            guard self.emulation?.owner == .remote else { return }
-            try await self.applyEmulation(before?.owner == .agent && !self.isInAgentTurn ? nil : before)
+    // MARK: A remote device's size (docs/REMOTE_PROTOCOL.md §15.25)
+
+    /// A phone watches the tab at `emulation`'s size, or no phone does any more (nil): the tab then takes the size and
+    /// emulation it had before, unless the person or the agent set another since, and the agent's own goes if its turn
+    /// ended meanwhile, as it would have. The change runs in order with every other (`inEmulationOrder`) and reads the
+    /// size asked for when its turn comes: sizes asked for while earlier changes run make one change, the latest.
+    func sizeForRemote(_ emulation: BrowserViewportEmulation?) {
+        let queued = remoteSize != nil
+        remoteSize = .some(emulation)
+        guard !queued else { return }
+        Task { [weak self] in
+            try? await self?.inEmulationOrder { [weak self] in
+                guard let self, let asked = self.remoteSize else { return }
+                self.remoteSize = nil
+                if let asked {
+                    if self.emulation?.owner != .remote { self.emulationBeforeRemote = .some(self.emulation) }
+                    try await self.applyEmulation(asked)
+                } else {
+                    guard let before = self.emulationBeforeRemote else { return }
+                    self.emulationBeforeRemote = nil
+                    guard self.emulation?.owner == .remote else { return }
+                    try await self.applyEmulation(before?.owner == .agent && !self.isInAgentTurn ? nil : before)
+                }
+            }
         }
     }
 
@@ -1906,6 +1932,7 @@ final class BrowserTab {
             devTools.receive(message)
         case .address(_, let url):
             currentURL = url
+            navigations += 1
             if !url.isEmpty, url != "about:blank", client?.carriesFilledValue(url) != true { lastPageURL = url }
             // Another site's icon is not this page's; the same site's stays until its own arrives.
             if favicon != nil, URL(string: url)?.host() != faviconHost {
@@ -1916,6 +1943,7 @@ final class BrowserTab {
             let title = client?.carriesFilledValue(title) == true ? "" : title
             if title != self.title { noteChangeWhileHidden() }
             self.title = title
+            titleAddress = currentURL
         case .favicon(_, let url, let png):
             noteChangeWhileHidden()
             favicon = png.isEmpty ? nil : png
@@ -1976,6 +2004,7 @@ final class BrowserTab {
             // Chrome keeps the first 25 (PopupBlockerTabHelper kMaximumNumberOfPopups).
             if blockedPopups.count < 25 { blockedPopups.append(url) }
         case .newDocument:
+            navigations += 1
             blockedPopups = []
             externalAppQuestion = nil
             documentStartedAt = .now

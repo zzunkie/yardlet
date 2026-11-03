@@ -53,10 +53,8 @@ final class RemoteTabBridge {
     private var paintTold: Set<UUID> = []
     private var listTold: Set<UUID> = []
     private var observesWaits = false
-    /// The phone size each tab is drawn at now, and each tab's latest change of it: a change that a later one replaced
-    /// before it ran does not run.
+    /// The phone size each tab is drawn at now.
     private var sized: [BrowserTabID: (tab: BrowserTab, viewport: RemoteTabViewport)] = [:]
-    private var sizeChanges: [BrowserTabID: Int] = [:]
 
     init(model: AppModel, environment: Environment) {
         self.model = model
@@ -97,6 +95,8 @@ final class RemoteTabBridge {
             ?? (tab.handoff != nil && tab.handoff?.answer == nil ? waits.first { $0.tabKey == nil } : nil)
         var listed = RemoteBrowserTab(tabId: tab.key.uuidString)
         listed.title = tab.title.isEmpty ? nil : RemoteText.short(tab.title, RemoteText.titleLimit)
+        // A `file:` page's title is that file's name: the page the tab moved to does not show it before it names itself.
+        if let titled = tab.titleAddress, titled != tab.currentURL, titled.lowercased().hasPrefix("file:") { listed.title = nil }
         if let address = tab.currentURL ?? tab.pendingAddress, !address.isEmpty {
             // A page whose address carries a value the vault filled is named by its site only, as it is kept.
             listed.url = client.carriesFilledValue(address) ? URL(string: address).flatMap(Self.origin) : address
@@ -198,25 +198,15 @@ final class RemoteTabBridge {
         followed[session] = entry
     }
 
-    /// Draws the tab at a phone's size, as `browser_resize` does, or takes it back to how it was.
+    /// Draws the tab at a phone's size, as `browser_resize` does, or takes it back to how it was: in the tab's order of
+    /// emulation changes, the latest size asked for when its turn comes (`BrowserTab.sizeForRemote`).
     private func size(_ tab: BrowserTab, to viewport: RemoteTabViewport?) {
         guard sized[tab.id]?.viewport != viewport else { return }
         if viewport == nil, sized[tab.id] == nil { return }
         if let viewport { sized[tab.id] = (tab, viewport) } else { sized[tab.id] = nil }
-        let change = sizeChanges[tab.id, default: 0] + 1
-        sizeChanges[tab.id] = change
-        // Each change runs in the tab's order of emulation changes; one a later change replaced before it ran is
-        // skipped, so an older size never comes back.
-        Task { [weak self] in
-            guard self?.sizeChanges[tab.id] == change else { return }
-            if let viewport {
-                try? await tab.emulateForRemote(BrowserViewportEmulation(
-                    width: viewport.width, height: viewport.height, mobile: viewport.mobile ?? (viewport.width < 768),
-                    owner: .remote))
-            } else {
-                await tab.endRemoteEmulation()
-            }
-        }
+        tab.sizeForRemote(viewport.map {
+            BrowserViewportEmulation(width: $0.width, height: $0.height, mobile: $0.mobile ?? ($0.width < 768), owner: .remote)
+        })
     }
 
     private func tabsChanged(_ session: UUID) {
@@ -276,10 +266,11 @@ final class RemoteTabBridge {
         guard tab.crash == nil, tab.openFailure == nil else {
             return .failure(RemoteError(.unavailable, "The page cannot be pictured now"))
         }
-        // The address checked is the one pictured: a page that moved meanwhile is not.
-        let address = tab.currentURL
-        if let refusal = await outsideFiles(address, taskID: taskID) { return .failure(refusal) }
-        guard tab.currentURL == address else { return .failure(RemoteError(.unavailable, "The page moved")) }
+        // The page checked is the one pictured: one that moved meanwhile is not, also when it came back to the same
+        // address (`BrowserTab.navigations`).
+        let page = tab.navigations
+        if let refusal = await outsideFiles(tab.currentURL, taskID: taskID) { return .failure(refusal) }
+        guard tab.navigations == page else { return .failure(RemoteError(.unavailable, "The page moved")) }
         do {
             let metrics = try await tab.devTools.send("Page.getLayoutMetrics", timeout: Self.captureTimeout)
             let visual = metrics["cssVisualViewport"]
@@ -302,8 +293,8 @@ final class RemoteTabBridge {
             guard let data = shot["data"]?.stringValue.flatMap({ Data(base64Encoded: $0) }) else {
                 return .failure(RemoteError(.internal, "The browser returned no image"))
             }
-            // The page went elsewhere while it was pictured: that picture is not sent.
-            guard tab.currentURL == address else { return .failure(RemoteError(.unavailable, "The page moved")) }
+            // The page went elsewhere while it was pictured, even if it came back: that picture is not sent.
+            guard tab.navigations == page else { return .failure(RemoteError(.unavailable, "The page moved")) }
             return .success(RemoteTabFrame(image: data, mediaType: "image/jpeg", width: Int((width * fit).rounded()),
                                            height: Int((height * fit).rounded()), viewportWidth: width, viewportHeight: height))
         } catch {
@@ -403,8 +394,8 @@ final class RemoteTabBridge {
 
     static let inputTimeout: Duration = .seconds(5)
 
-    /// One step of input: sent only while the watch holds, nothing is over the page and the page is one the task may
-    /// show, checked right before it goes.
+    /// One step of input: sent only while the watch holds, nothing is over the page and the page is the one the input
+    /// was checked on, right before it goes.
     private func send(_ tab: BrowserTab, _ method: String, _ params: [String: JSONValue], _ permit: RemoteTabPermit,
                       _ scope: PageScope) async throws {
         if let refusal = await stepRefusal(tab, permit, scope) { throw refusal }
@@ -420,10 +411,12 @@ final class RemoteTabBridge {
         return blocked(tab)
     }
 
-    /// The page addresses an input checked against the task's files: a step to a page that moved since is checked again.
+    /// The page an input goes to: checked against the task's files at its first step, and each step after goes only
+    /// while the tab shows that page (`BrowserTab.navigations`); after a move, even back to the same address, the rest
+    /// of the input is not sent.
     final class PageScope {
         let taskID: String
-        private var checked: String??
+        private var page: Int?
 
         init(taskID: String) {
             self.taskID = taskID
@@ -431,12 +424,11 @@ final class RemoteTabBridge {
 
         @MainActor
         func check(_ tab: BrowserTab, bridge: RemoteTabBridge) async -> RemoteError? {
-            let address = tab.currentURL
-            if case .some(address) = checked { return nil }
-            if let refusal = await bridge.outsideFiles(address, taskID: taskID) { return refusal }
-            // The page moved during the check: the next step checks where it is.
-            guard tab.currentURL == address else { return RemoteError(.notAllowed, "The page moved") }
-            checked = .some(address)
+            if let page { return tab.navigations == page ? nil : RemoteError(.notAllowed, "The page moved") }
+            let navigations = tab.navigations
+            if let refusal = await bridge.outsideFiles(tab.currentURL, taskID: taskID) { return refusal }
+            guard tab.navigations == navigations else { return RemoteError(.notAllowed, "The page moved") }
+            page = navigations
             return nil
         }
     }

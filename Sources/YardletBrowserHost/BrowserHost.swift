@@ -232,6 +232,8 @@ final class BrowserHost {
             }
         case "cancelDownload":
             yardlet_cef_cancel_download(Int32(fields["download"] as? Int ?? -1))
+        case "refuseDownloads":
+            if fields["isRefused"] as? Bool == true { refusedDownloadTabs.insert(tab) } else { refusedDownloadTabs.remove(tab) }
         case "permissionResult":
             let results = ["allow": 0, "block": 1, "dismiss": 2]
             guard let prompt = fields["prompt"] as? Int, let result = (fields["result"] as? String).flatMap({ results[$0] })
@@ -544,6 +546,7 @@ final class BrowserHost {
             openTabs.remove(tab)
             chromiumWindows?.closed(tab)
             waitingTabs[tab] = nil
+            refusedDownloadTabs.remove(tab)
             deferredDevTools[tab] = nil
             surfaces?.forget(key: "\(tab).view")
             surfaces?.forget(key: "\(tab).popup")
@@ -574,7 +577,10 @@ final class BrowserHost {
         case YardletCEFEventDocumentStart.rawValue:
             send(["newDocument": ["tab": tab, "url": text ?? ""]])
         case YardletCEFEventPopupOpened.rawValue:
-            send(["popupOpened": ["tab": tab, "opener": Int(detail ?? "") ?? -1, "url": text ?? "", "background": value != 0]])
+            let opener = Int(detail ?? "") ?? -1
+            // A pop-up of a page whose downloads are refused is refused too, from its first request.
+            if refusedDownloadTabs.contains(opener) { refusedDownloadTabs.insert(tab) }
+            send(["popupOpened": ["tab": tab, "opener": opener, "url": text ?? "", "background": value != 0]])
         case YardletCEFEventPopupShow.rawValue:
             if value == 0 {
                 popupRects[tab] = nil
@@ -713,8 +719,14 @@ final class BrowserHost {
     }
 
     /// Downloads go to the user's Downloads folder under the suggested name, numbered when the
-    /// name is taken ("report (1).pdf").
+    /// name is taken ("report (1).pdf"). A tab whose downloads are refused (`refuseDownloads`) gets
+    /// no path, and CEF then cancels the download before anything is written (Alloy style).
     func downloadPath(tab: Int, id: Int32, suggestedName: String) -> String? {
+        if refusedDownloadTabs.contains(tab) || refusedDownloadIDs.contains(id) {
+            refusedDownloadIDs.insert(id)
+            send(["remoteDownloadStopped": ["tab": tab, "fileName": suggestedName.isEmpty ? "download" : suggestedName]])
+            return nil
+        }
         guard !arguments.downloadsPath.isEmpty else { return nil }
         let directory = URL(filePath: arguments.downloadsPath, directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -734,6 +746,13 @@ final class BrowserHost {
     }
 
     func download(tab: Int, id: Int32, state: Int32, path: String, received: Int64, total: Int64) {
+        // A refused download (`downloadPath`) is not the panel's: it says only that it was not downloaded. One whose
+        // first report comes before its path was asked for is refused by the tab it starts in; one the panel already
+        // showed goes on to its end there.
+        if !announcedDownloads.contains(id), refusedDownloadIDs.contains(id) || refusedDownloadTabs.contains(tab) {
+            if state >= 2 { refusedDownloadIDs.remove(id) } else { refusedDownloadIDs.insert(id) }
+            return
+        }
         let states = ["started", "inProgress", "completed", "cancelled", "interrupted"]
         var stateName = states[max(0, min(4, Int(state)))]
         if stateName == "inProgress", !announcedDownloads.contains(id) {
@@ -747,6 +766,7 @@ final class BrowserHost {
         }
         if state >= 2 {
             announcedDownloads.remove(id)
+            refusedDownloadIDs.remove(id)
             lastDownloadProgress[id] = nil
             reservedDownloads.remove(URL(filePath: path).path)
         }
@@ -764,6 +784,9 @@ final class BrowserHost {
 
     private var reservedDownloads = Set<String>()
     private var announcedDownloads = Set<Int32>()
+    /// Tabs whose downloads are refused (`refuseDownloads`), and the downloads refused.
+    private var refusedDownloadTabs = Set<Int>()
+    private var refusedDownloadIDs = Set<Int32>()
     private var lastDownloadProgress: [Int32: UInt64] = [:]
 
     /// The same list as BrowserURLPolicy in the app; the bridge applies it to page navigations.

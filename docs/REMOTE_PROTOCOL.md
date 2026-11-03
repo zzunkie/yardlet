@@ -1613,7 +1613,7 @@ stays on the Mac.
   | `mouse` | `action` (`down`, `move`, `up`), `x`, `y`, `button`, `modifiers` | a drag (a slider, a puzzle) or a hover; a `move` with `button` drags |
   | `scroll` | `x`, `y`, `deltaX`, `deltaY` | a wheel at the point, in CSS pixels; positive scrolls the page right and down (a finger moving up is a positive `deltaY`) |
   | `text` | `text` (1–4,000 characters, at most 16,000 bytes as UTF-8) | committed text where the page's focus is, as an input method commits it: a phone keyboard's word or composed syllable, a paste of the phone's own clipboard |
-  | `key` | `key` | a key with modifiers joined by `+`: `Enter`, `Backspace`, `Delete`, `Tab`, `Escape`, `ArrowUp`…, `Home`, `End`, `PageUp`, `PageDown`, `Shift+Tab`, `Meta+a`, one character (US layout) |
+  | `key` | `key` | a key with modifiers joined by `+`: `Enter`, `Backspace`, `Delete`, `Tab`, `Escape`, `ArrowUp`…, `Home`, `End`, `PageUp`, `PageDown`, `Shift+Tab`, `Meta+a`, one character (US layout); at most 64 bytes as UTF-8 |
   | `navigate` | `action` (`back`, `forward`, `reload`) | the panel's Back, Forward and Reload |
 
   `button` is `left` (when absent); `middle` and `right` are `notAllowed` (a middle click pastes on some pages, a right
@@ -1625,18 +1625,21 @@ stays on the Mac.
   tools'), Insert and the function keys are `notAllowed`: the Mac's clipboard and windows are not the person's, so their
   own text comes as `text`. A connection's input goes to the page in the order sent, apart from its other requests
   (`unwatchTab` does not wait for it); at most 32 of its inputs wait at once (more is `rateLimited`); input whose watch
-  ended meanwhile sends nothing more, and each step is checked again just before it goes. Not a command. Errors:
-  `badRequest` (a field missing, out of range or not the kind's, an unknown key), `tooLarge` (text), `notFound` (the tab
-  closed), `notAllowed` (not the watched tab, or its watch ended; a passkey or site sign-in window, one whose tab
-  Chromium does not name, or a page's dialog is up, which the person answers on the Mac; a key or button that is not
-  taken; a `file:` page outside the task's files, also one the page moved to while the input went), `rateLimited`,
+  ended meanwhile sends nothing more, and each step is checked again just before it goes: an input's steps go to the
+  page its first step was checked on, and none after the page moved, even away and back to the same address. Not a
+  command. Errors: `badRequest` (a field missing, out of range or not the kind's, an unknown key or one past its bytes),
+  `tooLarge` (text), `notFound` (the tab closed), `notAllowed` (not the watched tab, or its watch ended; a passkey or
+  site sign-in window, one whose tab Chromium does not name, or a page's dialog is up, which the person answers on the
+  Mac; a key or button that is not taken; a `file:` page outside the task's files; the page moved while the input
+  went), `rateLimited`,
   `unavailable` (the page did not answer, or a password field could not be protected, below).
 - `{"type": "unwatchTab", "taskId": "4C1F…"}`: stops the watch. Closing the connection, removing the device, the remote
   turning off and the tab closing stop it too, input under way included. Not a command.
 - **What the Mac does:** only the listed task's own tabs, as its side panel and the agent's browser tools see them;
   never another task's or the Mac's own browsing. A watched tab paints while it is watched, as one a panel shows on
   screen, and goes back to how it was (hidden, and later let go by the memory saver) when no one watches it. A phone's
-  `viewport` draws it at that size while the phone watches (the smaller when two ask), and after the last such watch the
+  `viewport` draws it at that size while the phone watches (the smaller when two ask; sizes asked while another change
+  of the tab's size runs make one change, the latest), and after the last such watch the
   tab takes the size and emulation it had before: the person's from the panel, the agent's while its turn goes on, else
   its own. The tab the Mac's panel shows does not change. Input counts as the person's in that tab, as the panel's
   does: the memory saver keeps a page they typed in, and a character typed into a password field, as text or as a key,
@@ -1644,11 +1647,13 @@ stays on the Mac.
   manager is on, as for one typed in the panel; when the page cannot be marked, nothing is typed. A page's request to
   open another app on the Mac (a `mailto:` link, an app the site was always allowed) after a remote click waits for
   someone at the Mac to choose it there (`waiting` `externalApp`), and so does one from a tab such a page opened (a
-  popup), until someone uses that tab on the Mac. A download a remote click started (in the tab or a popup it opened)
-  stops as it begins and the Mac's panel says so; the person downloads it on the Mac to keep it. A `file:` page is shown and driven only when
-  `readFile` would serve it, or it is a folder inside the task's folders (§15.22), checked for the very address
-  pictured or driven: a page that moves during a picture is not sent, and a step of input after a move is checked
-  again. Another is listed as `file://`, without its title. Pictures show the page as it draws itself (a password field as dots) and are
+  popup), until someone uses that tab on the Mac; the agent's use of the tab since, a read included, does not change
+  that. While a remote click drove the tab last, its downloads, and those of a popup its page opens, are refused before
+  they begin (nothing is written) and the Mac's panel says so; the person downloads it on the Mac to keep it. A `file:`
+  page is shown and driven only when `readFile` would serve it, or it is a folder inside the task's folders (§15.22),
+  checked for the very page pictured or driven: a picture during which the page moved, even away and back to the same
+  address, is not sent. Another is listed as `file://`, without its title, and the page the tab moves to next shows no
+  title until it names itself. Pictures show the page as it draws itself (a password field as dots) and are
   made only while watched; the Mac keeps none. The audit log (§4.4) records each
   `watchTab` and, at most once a minute per device, task, kind and result, a `tabInput`'s kind (`click`, `text`, …),
   never what was typed. Chromium's own windows (a passkey, a site's sign-in), macOS prompts and a page's dialogs stay
