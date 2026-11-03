@@ -40,7 +40,9 @@ extension RemoteServer {
                 switch await permit.enqueue(update) {
                 case .notify: await self.receiveTerminalUpdates(terminalID)
                 case .overflow: await self.endTerminal(terminalID, reason: "outputOverflow")
-                case .queued, .ended: break
+                case .ended:
+                    if !permit.isValid { await self.endTerminal(terminalID, reason: "closed") }
+                case .queued: break
                 }
             }
             let currentPermission = await permissionError(.terminal, on: connection)
