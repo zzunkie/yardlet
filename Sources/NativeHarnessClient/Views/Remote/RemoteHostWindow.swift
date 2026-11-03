@@ -198,7 +198,10 @@ struct RemoteHostView: View {
                                editing: Binding(get: { drafts.edits[taskID] }, set: { drafts.edits[taskID] = $0 }),
                                titleBar: titleBar, find: drafts.find(for: taskID),
                                readingPosition: drafts.readingPosition(for: taskID), renderState: drafts.renderState(for: taskID),
-                               showsRail: $shell.showsRail, railFolds: $shell.railFolds, railPreferences: shell.railPreferences)
+                               showsRail: $shell.showsRail, railFolds: $shell.railFolds, railPreferences: shell.railPreferences,
+                               panels: Binding(get: { shell.panels[taskID] ?? .init() }, set: { shell.panels[taskID] = $0 }),
+                               layout: $shell.workspaceLayout,
+                               review: Binding(get: { shell.reviews[taskID] ?? .init() }, set: { shell.reviews[taskID] = $0 }))
                     .id(taskID)
             }
         case .newTask:
@@ -416,6 +419,11 @@ final class RemoteHostShell {
     var isShowingActivity = false
     var activityPlaces: [UUID: TaskAttentionPlace] = [:]
     var showsRail = true
+    /// Each task's side panel as the local task keeps its own (the tab shown, the tabs open), the panel's width, and each
+    /// task's Review choices.
+    var panels: [String: TaskSurfaceNavigationProjection.PanelState] = [:]
+    var workspaceLayout = TaskWorkspacePreferences()
+    var reviews: [String: DiffReviewPreferences] = [:]
     /// The rail's folded cards and the order the person gave them, as the local rail keeps them.
     var railFolds = SessionRailFolds()
     let railPreferences = SessionRailPreferenceStore()
@@ -779,6 +787,10 @@ struct RemoteTaskView: View {
     @Binding var showsRail: Bool
     @Binding var railFolds: SessionRailFolds
     let railPreferences: SessionRailPreferenceStore
+    /// The task's side panel, the panel's width and the task's Review choices, kept by the window.
+    @Binding var panels: TaskSurfaceNavigationProjection.PanelState
+    @Binding var layout: TaskWorkspacePreferences
+    @Binding var review: DiffReviewPreferences
     /// An answer that leaves a rule behind, asked about once more before it goes.
     @State private var standingAnswer: (requestID: String, action: PermissionRequestAction)?
     @State private var width: CGFloat = 0
@@ -810,33 +822,36 @@ struct RemoteTaskView: View {
         return conversation.presentation.withoutRequest(handed)
     }
 
-    private var drawsRail: Bool {
-        showsRail && task != nil && SessionRailPlacement.fits(sessionWidth: width, panelOpen: showsBrowser)
-    }
-
     var body: some View {
-        VStack(spacing: 0) {
-            RemoteTitleBar(context: titleBar) { header }
-            titleBar.banner
-            HStack(spacing: 0) {
-                conversationColumn
-                    .frame(minWidth: 360, maxWidth: .infinity)
-                if drawsRail, let session = model.sidebar.sessions.first(where: { $0.id.uuidString == conversation.taskID }) {
-                    Divider()
-                    RemoteTaskRail(
-                        session: session, projectName: projectName, options: settingsOptions, outputs: outputs,
-                        preferences: railPreferences, folds: $railFolds,
-                        choose: { [model, taskID = conversation.taskID] in model.chooseTaskSetting(taskID, $0) },
-                        prepareSettings: { [model, taskID = conversation.taskID] in await model.readTaskSettings(taskID, prepare: true) },
-                        open: { open($0, .viewer) }, openInItsApp: { open($0, .itsApp) }, revealInFinder: { open($0, .finder) })
+        // The local task's layout: the conversation, the rail beside it, and the side panel, whose tab strip shares the
+        // title bar's row.
+        TaskWorkspaceLayout(
+            showsTrailing: panels.trailingSurfaceID != nil, showsTerminal: false, preferences: $layout,
+            wantsRail: showsRail && railSession != nil,
+            onReturnToChat: closeSidePanel, onCloseTrailing: closeSidePanel,
+            chat: {
+                VStack(spacing: 0) {
+                    titleBar.banner
+                    conversationColumn
                 }
-                if showsBrowser {
-                    Rectangle().fill(ParityTheme.separator).frame(width: 1)
-                    RemoteBrowserPanel(model: model)
-                        .frame(minWidth: 380, idealWidth: 560, maxWidth: 760)
-                }
+            },
+            rail: { rail },
+            trailing: { sidePanel.environment(\.workSurfaceNavigation, sidePanelNavigation) },
+            bottom: { EmptyView() })
+        .environment(\.taskAreaHeader, TaskAreaHeader(height: ParityTheme.titleBarHeight, isTitleBar: true,
+                                                      content: AnyView(RemoteTitleBar(context: titleBar) { header })))
+        // The browser's panel follows the host's watch: a handoff's Show Tab opens its tab, the panel's ✕ closes it.
+        .onChange(of: showsBrowser) { _, shows in
+            let browser = TaskSurface.browser.rawValue
+            if shows, panels.trailingSurfaceID != browser { showSidePanelTab(browser) }
+            if !shows, panels.trailingTabs.contains(browser) {
+                panels = TaskSurfaceNavigationProjection.closingTrailingTab(browser, in: panels)
             }
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        }
+        .onChange(of: panels.trailingSurfaceID) { old, new in
+            let browser = TaskSurface.browser.rawValue
+            if new == browser, !showsBrowser { model.showBrowser(taskID: conversation.taskID) }
+            if old == browser, new != browser, showsBrowser { model.browser.hide() }
         }
         .focusedSceneValue(\.yardletConversationFind, find)
         .environment(\.taskSuggestionActions, suggestionActions)
@@ -855,6 +870,110 @@ struct RemoteTaskView: View {
     private var fileElsewhere: (@MainActor (URL) -> Void)? {
         guard model.offersTaskFiles else { return nil }
         return { url in open(url, .viewer) }
+    }
+
+    // MARK: Rail and side panel
+
+    /// The host's task as the sidebar reads it, for the rail.
+    private var railSession: SessionRecord? {
+        model.sidebar.sessions.first { $0.id.uuidString == conversation.taskID }
+    }
+
+    @ViewBuilder
+    private var rail: some View {
+        if let session = railSession {
+            RemoteTaskRail(
+                session: session, projectName: projectName, options: settingsOptions, outputs: outputs,
+                preferences: railPreferences, folds: $railFolds,
+                choose: { [model, taskID = conversation.taskID] in model.chooseTaskSetting(taskID, $0) },
+                prepareSettings: { [model, taskID = conversation.taskID] in await model.readTaskSettings(taskID, prepare: true) },
+                open: { open($0, .viewer) }, openInItsApp: { open($0, .itsApp) }, revealInFinder: { open($0, .finder) })
+        }
+    }
+
+    /// The side panel's tab, as the local task's: the launcher, Review, Files or the browser, each served by the host.
+    @ViewBuilder
+    private var sidePanel: some View {
+        switch panels.trailingSurfaceID {
+        case TaskSurfaceNavigationProjection.launcherID?:
+            SidePanelLauncher(workspaceURL: hostFolder, choices: sidePanelChoices, tasks: { [] }, onOpen: openSidePanel,
+                              onClose: { closeSidePanelTab(TaskSurfaceNavigationProjection.launcherID) })
+        case TaskSurface.diff.rawValue?:
+            RemoteReviewPane(model: model, taskID: conversation.taskID, review: $review,
+                             onClose: { closeSidePanelTab(TaskSurface.diff.rawValue) })
+        case "files"?:
+            RemoteFilesPane(model: model, taskID: conversation.taskID, onClose: { closeSidePanelTab("files") })
+                .id(conversation.taskID)
+        case TaskSurface.browser.rawValue?:
+            RemoteBrowserPanel(model: model)
+        default:
+            EmptyView()
+        }
+    }
+
+    /// The launcher's folder, which it shows nothing of for a host's task: the host's own panels read the host's folder.
+    private var hostFolder: URL {
+        railSession?.workspaceURL ?? URL(filePath: "/", directoryHint: .isDirectory)
+    }
+
+    /// The launcher's and the strip's + choices, as the local task's, each available where the host serves it. The
+    /// terminal and a side chat are not served from another Mac yet.
+    private var sidePanelChoices: [WorkSurfaceTab] {
+        TaskSidePanelTabs.choices(canOpenSideChat: false, offersReview: model.offersReview).map { choice in
+            var choice = choice
+            switch choice.id {
+            case TaskSurface.diff.rawValue: choice.isAvailable = model.offersReview
+            case "files": choice.isAvailable = model.offersWorkspaceFiles
+            case TaskSurface.browser.rawValue: choice.isAvailable = model.offersBrowser
+            case TaskSurface.terminal.rawValue: choice.isAvailable = false
+            default: break
+            }
+            return choice
+        }
+    }
+
+    /// The panels the title bar's buttons cannot show here.
+    private var unavailableSurfaces: Set<TaskSurface> {
+        var surfaces: Set<TaskSurface> = [.terminal]
+        if !model.offersReview { surfaces.insert(.diff) }
+        return surfaces
+    }
+
+    private var sidePanelNavigation: WorkSurfaceNavigation {
+        WorkSurfaceNavigation(
+            tabs: panels.trailingTabs.compactMap(sidePanelTab),
+            activeID: panels.trailingSurfaceID,
+            choices: sidePanelChoices,
+            select: { id in showSidePanelTab(id) },
+            open: { id in openSidePanel(id) },
+            closeTab: { id in closeSidePanelTab(id) },
+            closeTabs: { ids in for id in ids { closeSidePanelTab(id) } },
+            closePanel: { closeSidePanel() })
+    }
+
+    private func sidePanelTab(_ id: String) -> WorkSurfaceTab? {
+        if id == TaskSurface.browser.rawValue {
+            return WorkSurfaceTab(id: id, title: model.browser.watchedTab?.title ?? L10n.string("Browser"), systemName: "globe")
+        }
+        return TaskSidePanelTabs.tab(id, selectedFilePath: nil)
+    }
+
+    private func openSidePanel(_ id: String) {
+        guard sidePanelChoices.first(where: { $0.id == id })?.isAvailable != false
+                || id == TaskSurfaceNavigationProjection.launcherID else { return }
+        showSidePanelTab(id)
+    }
+
+    private func showSidePanelTab(_ id: String) {
+        panels = TaskSurfaceNavigationProjection.showing(id, in: panels)
+    }
+
+    private func closeSidePanelTab(_ id: String) {
+        panels = TaskSurfaceNavigationProjection.closingTrailingTab(id, in: panels)
+    }
+
+    private func closeSidePanel() {
+        panels.trailingSurfaceID = nil
     }
 
     private var conversationColumn: some View {
@@ -929,17 +1048,8 @@ struct RemoteTaskView: View {
             .font(.system(size: 12))
             .foregroundStyle(.tertiary)
             .lineLimit(1)
-        if model.offersBrowser {
-            ParityIconButton(systemName: "globe", help: showsBrowser ? L10n.string("Hide browser") : L10n.string("Show browser")) {
-                if showsBrowser { model.browser.hide() } else { model.showBrowser(taskID: conversation.taskID) }
-            }
-        }
-        if task != nil {
-            ParityIconButton(systemName: "sidebar.squares.right",
-                             help: L10n.string(drawsRail ? "Hide session rail" : "Show session rail")) {
-                showsRail = !drawsRail
-            }
-        }
+        TaskSurfaceControls(showsSessionRail: showsRail, onToggleSessionRail: { showsRail.toggle() }, panelState: $panels,
+                            unavailableSurfaces: unavailableSurfaces)
     }
 
     private var actions: ConversationActions {
