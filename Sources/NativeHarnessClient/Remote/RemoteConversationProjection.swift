@@ -274,8 +274,9 @@ enum RemoteConversationProjection {
         if isStreaming { item.streaming = true }
     }
 
-    /// Who sent a message that is not the person's (§6.2), in either detail: another task, with the person's words it
-    /// passed on, cut as the message's text is, or a background command's notice.
+    /// Who sent a message that is not the person's (§6.2), in either detail: another task, by its ID when it is another
+    /// Yardlet task and with the person's words it passed on, cut as the message's text is, or a background command's
+    /// notice.
     private static func sender(of item: ConversationItem, textLimit: Int) -> RemoteSender? {
         if let message = item.taskMessage {
             let relation = switch message.relation {
@@ -287,7 +288,9 @@ enum RemoteConversationProjection {
                 RemoteSender.Quote(text: RemoteText.capped($0.text, textLimit).text, sentAt: $0.sentAt)
             }
             return RemoteSender(kind: "task", name: RemoteText.short(message.senderName, RemoteText.titleLimit),
-                                relation: relation, quotes: quotes.isEmpty ? nil : quotes)
+                                relation: relation,
+                                taskId: message.relation == .itself ? nil : UUID(uuidString: message.senderID)?.uuidString,
+                                quotes: quotes.isEmpty ? nil : quotes)
         }
         if let notice = item.backgroundTaskNotice {
             return RemoteSender(kind: "backgroundTask", status: RemoteText.short(notice.status, RemoteText.titleLimit))

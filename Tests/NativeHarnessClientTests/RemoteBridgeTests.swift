@@ -373,6 +373,7 @@ final class RemoteBridgeTests: XCTestCase {
             XCTAssertEqual(sent[1].sender?.kind, "task")
             XCTAssertEqual(sent[1].sender?.name, "Fix the footer links")
             XCTAssertEqual(sent[1].sender?.relation, "parent")
+            XCTAssertEqual(sent[1].sender?.taskId, fromParent.senderID)
             let quoted = try XCTUnwrap(sent[1].sender?.quotes?.first?.text.count)
             if isFull { XCTAssertGreaterThan(quoted, RemoteText.userLimit) } else { XCTAssertEqual(quoted, RemoteText.userLimit) }
             XCTAssertEqual(sent[1].sender?.quotes?.first?.sentAt, "2026-11-03T09:12:00+09:00")
@@ -380,6 +381,12 @@ final class RemoteBridgeTests: XCTestCase {
             XCTAssertEqual(sent[3].scheduled, true)
             XCTAssertEqual(sent[3].sender, RemoteSender(kind: "claudeSchedule"))
         }
+        // Another Yardlet window draws them as its own timeline does, the task message under a link to the task that sent it.
+        let window = RemoteConversationModel(taskID: "T", harness: .claudeCode, hostName: "Mac Studio")
+        window.load(standard.turns.flatMap(\.items), cursor: nil, hasOlder: false)
+        let drawn = window.presentation.turns.flatMap(\.prompt)
+        XCTAssertEqual(drawn.compactMap(\.taskMessage?.senderID), [fromParent.senderID])
+        XCTAssertEqual(drawn.compactMap(\.backgroundTaskNotice?.status), ["completed"])
     }
 
     /// Full detail (§15.24) on a long conversation: a sent picture's preview is made once, off the main actor, and

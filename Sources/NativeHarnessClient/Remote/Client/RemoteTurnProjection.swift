@@ -141,7 +141,8 @@ enum RemoteTurnProjection {
             case "itself": .itself
             default: .task
             }
-            sent.taskMessage = TaskMessage(senderID: "", senderName: item.sender?.name, body: text, relation: relation,
+            sent.taskMessage = TaskMessage(senderID: item.sender?.taskId ?? "", senderName: item.sender?.name, body: text,
+                                           relation: relation,
                                            quotes: (item.sender?.quotes ?? []).map { .init(text: $0.text, sentAt: $0.sentAt) })
         case "backgroundTask":
             sent.backgroundTaskNotice = ClaudeTaskNotification(summary: text, status: item.sender?.status)
