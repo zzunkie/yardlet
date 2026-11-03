@@ -24,7 +24,6 @@ struct ComposerModelControl: View {
         }
         .buttonStyle(.borderless)
         .parityPointer()
-        .fixedSize()
         .disabled(isDisabled)
         .focused($isTriggerFocused)
         .taskFocus(.intelligence, isFocused: $isTriggerFocused, enabled: registersTaskFocus)
