@@ -54,8 +54,10 @@ final class BrowserAgentPage {
     var openFailure: () -> BrowserTabOpenFailure? = { nil }
     /// The size the host draws the tab at (`BrowserTab.viewport`); nil in tests.
     var viewport: () -> BrowserViewport? = { nil }
-    /// The agent acts on the page, as opposed to reading it (`BrowserTab.noteAgentInput`).
+    /// The agent acts on the page, as opposed to reading it (`BrowserTab.noteAgentInput`), and its act failed
+    /// (`BrowserTab.undoAgentInput`).
     var agentActs: () -> Void = {}
+    var agentActFailed: () -> Void = {}
     /// The screen size the tab's page is shown at, and who chose it (`BrowserTab.emulation`).
     var emulation: () -> BrowserViewportEmulation? = { nil }
     /// Shows the page at a screen size, or its own again (`BrowserTab.emulate`).

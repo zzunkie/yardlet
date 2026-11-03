@@ -1646,7 +1646,7 @@ stays on the Mac.
   does one from a tab such a page opened (a popup), until someone uses that tab on the Mac; the agent's use of the tab
   since does not change that. While a remote click drove the tab last, its downloads, and those of a popup its page
   opens, are refused before they begin (nothing is written), until someone uses the tab on the Mac or the agent acts on
-  it (a click, typing, a navigation; not a read), whose downloads are its own. The Mac's panel says so, and an empty tab
+  it (a click, typing, a navigation that reaches the page; not a read), whose downloads are its own. The Mac's panel says so, and an empty tab
   the page opened only for that download closes; the person downloads it on the Mac to keep it. A `file:` page, in the
   tab or in any of its frames (an iframe, an embed, a frame a link moved), is shown and driven only when `readFile`
   would serve it, or it is a folder inside the task's folders (§15.22), as the agent's tools hold them. It is checked
