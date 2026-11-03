@@ -5,12 +5,13 @@ import YardletRemote
 // person's own, and so does the phone. A `sender` kind the phone does not know draws as the person's message.
 
 /// A message another task sent: on the left under "Sent from {task}", in a quiet outlined box, with the person's own
-/// words the task passed on under it.
+/// words the task passed on under it. The label opens the sending task while the Mac lists it.
 struct MessageFromTask: View {
     let item: RemoteItem
+    let session: HostSession
 
     var body: some View {
-        ReceivedMessage(symbol: "bubble.left.and.bubble.right", label: label) {
+        ReceivedMessage(symbol: "bubble.left.and.bubble.right", label: label, opens: sendingTask) {
             ReceivedText(text: item.text ?? "", lines: nil)
             ForEach(Array((item.sender?.quotes ?? []).enumerated()), id: \.offset) { _, quote in
                 QuotedWords(quote: quote)
@@ -21,6 +22,11 @@ struct MessageFromTask: View {
     private var label: String {
         if let name = item.sender?.name, !name.isEmpty { return String(localized: "Sent from \(name)") }
         return String(localized: "Sent from another task")
+    }
+
+    private var sendingTask: String? {
+        guard let id = item.sender?.taskId, session.task(id) != nil else { return nil }
+        return id
     }
 }
 
@@ -45,7 +51,7 @@ struct MessageFromSchedule: View {
     let item: RemoteItem
 
     var body: some View {
-        ReceivedMessage(symbol: "clock", label: label) {
+        ReceivedMessage(symbol: "clock", label: label, opens: nil) {
             if let text = item.text, !text.isEmpty { ReceivedText(text: text, lines: 2) }
         }
     }
@@ -56,18 +62,30 @@ struct MessageFromSchedule: View {
     }
 }
 
-/// Who sent a message that is not the person's, then what they sent, on the left.
+/// Who sent a message that is not the person's, then what they sent, on the left. With a task to open, the label is a
+/// link to it.
 private struct ReceivedMessage<Content: View>: View {
     let symbol: String
     let label: String
+    let opens: String?
     @ViewBuilder let content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label {
-                Text(label).lineLimit(1).truncationMode(.middle)
-            } icon: {
-                Image(systemName: symbol)
+            Group {
+                if let opens {
+                    NavigationLink(value: opens) {
+                        HStack(spacing: 4) {
+                            sender
+                            Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).accessibilityHidden(true)
+                        }
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(Text("Opens the task that sent this message"))
+                } else {
+                    sender
+                }
             }
             .font(.footnote)
             .foregroundStyle(.secondary)
@@ -76,6 +94,14 @@ private struct ReceivedMessage<Content: View>: View {
         }
         .padding(.trailing, 48)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var sender: some View {
+        Label {
+            Text(label).lineLimit(1).truncationMode(.middle)
+        } icon: {
+            Image(systemName: symbol)
+        }
     }
 }
 

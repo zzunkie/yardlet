@@ -209,7 +209,7 @@ struct ItemView: View {
             TurnHeaderView(item: item, isWorkOpen: isWorkOpen, toggleWork: toggleWork)
         case .user:
             switch item.sender?.kind {
-            case "task"?: MessageFromTask(item: item)
+            case "task"?: MessageFromTask(item: item, session: context.session)
             case "backgroundTask"?: BackgroundNotice(item: item)
             case "claudeSchedule"?: MessageFromSchedule(item: item)
             default: UserMessageView(item: item)

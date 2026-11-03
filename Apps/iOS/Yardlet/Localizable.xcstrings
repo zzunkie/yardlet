@@ -1019,6 +1019,16 @@
         }
       }
     },
+    "Opens the task that sent this message": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 메시지를 보낸 작업을 엽니다"
+          }
+        }
+      }
+    },
     "Other": {
       "localizations": {
         "ko": {
