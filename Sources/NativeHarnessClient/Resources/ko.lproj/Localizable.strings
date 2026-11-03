@@ -3750,3 +3750,11 @@
 "Count token usage" = "토큰 사용량 세기";
 "Reads only the new lines of Claude Code's and Codex's transcripts on this Mac and keeps the counts for a year. Turning it off deletes the counts; the transcripts stay as they are." = "이 Mac에 있는 Claude Code·Codex 대화 기록에서 새로 쓰인 줄만 읽고, 센 값을 1년 동안 둡니다. 끄면 센 값을 지우고, 대화 기록은 그대로 둡니다.";
 "Not started in Yardlet" = "Yardlet 밖에서 시작함";
+
+"Write files" = "파일 쓰기";
+
+"Change settings" = "설정 바꾸기";
+
+"Could not save device permissions. Try again." = "기기 권한을 저장하지 못했습니다. 다시 시도해 주세요.";
+
+"%@ for %@" = "%2$@의 %1$@";
