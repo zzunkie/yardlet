@@ -3760,3 +3760,11 @@
 "%@ for %@" = "%2$@의 %1$@";
 
 "Could not remove this device. It is still paired. Try again." = "기기를 제거하지 못했습니다. 아직 연결된 기기입니다. 다시 시도해 주세요.";
+
+"Permission is off, but the change could not be saved. Retry before restarting Yardlet." = "권한은 껐지만 저장하지 못했습니다. Yardlet을 다시 시작하기 전에 다시 시도해 주세요.";
+
+"Run shell commands as the host user." = "이 Mac의 사용자 권한으로 셸 명령을 실행합니다.";
+
+"Save and discard changes in the task's workspace." = "작업 폴더의 파일을 저장하거나 변경 내용을 버립니다.";
+
+"Change Yardlet settings on this Mac." = "이 Mac의 Yardlet 설정을 바꿉니다.";

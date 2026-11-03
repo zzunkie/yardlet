@@ -112,6 +112,37 @@ final class RemoteSettingsRenderingTests: XCTestCase {
         XCTAssertTrue(labels.contains(L10n.format("%@ for %@", L10n.string("Terminal"), device.name)))
     }
 
+    func testPermissionDenialStaysOffWhenSavingFailsAndCanRetry() async throws {
+        let fixture = try DeviceStoreWriteFailure()
+        defer { fixture.cleanUp() }
+        let store = RemoteDeviceStore(fileURL: fixture.file)
+        let (service, _) = try await makeService(store: store)
+        await service.reloadDevices()
+        let device = try XCTUnwrap(service.devices.first)
+        let first = PermissionEvents()
+        let second = PermissionEvents()
+        _ = await service.server.addPermissionsChangedHandler { first.append($0, $1) }
+        _ = await service.server.addPermissionsChangedHandler { second.append($0, $1) }
+        await service.setPermission(.terminal, allowed: true, for: device)
+        try fixture.block()
+        await service.setPermission(.terminal, allowed: false, for: device)
+        XCTAssertNotNil(service.permissionError)
+        XCTAssertTrue(service.canRetryPermissionChange)
+        XCTAssertEqual(service.devices.first?.permissions?.terminal, false)
+        XCTAssertEqual(first.values.last?.permissions.terminal, false)
+        XCTAssertEqual(first.values, second.values)
+        try render("remote-permissions-save-failed", service: service,
+                   in: WindowlessRender.directory("remote-qa"), size: NSSize(width: 820, height: 820))
+        try fixture.restore()
+        let beforeRetry = await RemoteDeviceStore(fileURL: fixture.file).device(device.id)
+        XCTAssertEqual(beforeRetry?.permissions?.terminal, true, "The warning must remain until the denied value is saved")
+        await service.retryPermissionChange()
+        XCTAssertNil(service.permissionError)
+        XCTAssertFalse(service.canRetryPermissionChange)
+        let afterRetry = await RemoteDeviceStore(fileURL: fixture.file).device(device.id)
+        XCTAssertEqual(afterRetry?.permissions?.terminal, false)
+    }
+
     func testFailedRemovalRetainsThePairedDeviceAndReportsFailure() async throws {
         let fixture = try DeviceStoreWriteFailure()
         defer { fixture.cleanUp() }

@@ -49,6 +49,7 @@ struct RemoteServerTabs {
     var pendingInputs: [UUID: Int] = [:]
     /// When each `tabInput` audit line was last written, by device, task, input kind and result.
     var auditedInputs: [String: Date] = [:]
+    var auditedWatches: [String: Date] = [:]
 }
 
 /// A task's browser tabs on a connection (§15.25): `watchTab` lists them and starts the watched tab's frames, each frame
@@ -70,7 +71,7 @@ extension RemoteServer {
             listed = found
         case let .failure(error):
             respond(.failure(requestID, error), to: id)
-            audit?.record(device: device, type: "watchTab", task: taskID, result: error.code.rawValue, at: now())
+            auditWatch(device: device, task: taskID, result: error.code.rawValue)
             return
         }
         if let tabID, !listed.contains(where: { $0.tabId == tabID }) {
@@ -100,7 +101,7 @@ extension RemoteServer {
         response.tabId = chosen
         response.tabs = listed
         respond(response, to: id)
-        audit?.record(device: device, type: "watchTab", task: taskID, result: "ok", at: now())
+        auditWatch(device: device, task: taskID, result: "ok")
         await reportWatchedTabs()
         scheduleTabFrame(on: id)
     }
@@ -316,6 +317,15 @@ extension RemoteServer {
         guard watched != tabs.reported else { return }
         tabs.reported = watched
         await bridge.setWatchedTabs(watched)
+    }
+
+    private func auditWatch(device: String?, task: String, result: String) {
+        let time = now()
+        tabs.auditedWatches = tabs.auditedWatches.filter { time.timeIntervalSince($0.value) < Self.inputAuditWindow }
+        let key = [device ?? "", task, result].joined(separator: "\u{0}")
+        guard tabs.auditedWatches[key] == nil else { return }
+        tabs.auditedWatches[key] = time
+        audit?.record(device: device, type: "watchTab", task: task, result: result, at: time)
     }
 
     /// The audit log gets the kind of input and its task, never what was typed, the same line at most once a minute.

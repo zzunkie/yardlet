@@ -163,7 +163,7 @@ public struct RemotePushRegistration: Codable, Equatable, Sendable {
 }
 
 /// Additional host access is granted only in this Mac's paired-device settings.
-public enum RemoteDevicePermission: String, Codable, CaseIterable, Sendable {
+public enum RemoteDevicePermission: String, Codable, CaseIterable, Hashable, Sendable {
     case terminal, fileWrites, settings
 }
 
@@ -294,7 +294,7 @@ public actor RemoteDeviceStore {
         devices.first { $0.id == id }
     }
 
-    /// Persists before publishing, so a failed write cannot grant access for this process alone.
+    /// Grants persist before publication. Denials take effect in memory even when saving fails.
     @discardableResult
     public func setPermission(_ permission: RemoteDevicePermission, allowed: Bool, for id: String) throws -> RemoteDevice? {
         guard let index = devices.firstIndex(where: { $0.id == id }) else { return nil }
@@ -302,8 +302,17 @@ public actor RemoteDeviceStore {
         var permissions = updated[index].permissions ?? RemoteDevicePermissions()
         permissions[permission] = allowed
         updated[index].permissions = permissions
+        if !allowed { devices = updated }
         try Self.writeChecked(updated, to: fileURL)
         devices = updated
+        return devices[index]
+    }
+
+    /// A new registration never inherits an earlier grant, even when its key was already known.
+    public func resetPermissions(_ id: String) throws -> RemoteDevice? {
+        guard let index = devices.firstIndex(where: { $0.id == id }) else { return nil }
+        devices[index].permissions = RemoteDevicePermissions()
+        try Self.writeChecked(devices, to: fileURL)
         return devices[index]
     }
 

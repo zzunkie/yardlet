@@ -361,16 +361,34 @@ final class RemoteControlService {
     private(set) var permissionError: String?
     private(set) var removalError: String?
     private(set) var removingDeviceIDs: Set<String> = []
-    private(set) var updatingDevicePermissions: Set<String> = []
+    private(set) var updatingDevicePermissions: [String: Set<RemoteDevicePermission>] = [:]
+    private struct FailedPermissionChange {
+        var deviceID: String
+        var permission: RemoteDevicePermission
+        var allowed: Bool
+    }
+    private var failedPermissionChange: FailedPermissionChange?
+    var canRetryPermissionChange: Bool { failedPermissionChange != nil }
+
+    func retryPermissionChange() async {
+        guard let change = failedPermissionChange, let device = devices.first(where: { $0.id == change.deviceID }) else { return }
+        await setPermission(change.permission, allowed: change.allowed, for: device)
+    }
 
     func setPermission(_ permission: RemoteDevicePermission, allowed: Bool, for device: RemoteDevice) async {
-        guard updatingDevicePermissions.insert(device.id).inserted else { return }
-        defer { updatingDevicePermissions.remove(device.id) }
+        guard updatingDevicePermissions[device.id, default: []].insert(permission).inserted else { return }
+        defer {
+            updatingDevicePermissions[device.id]?.remove(permission)
+            if updatingDevicePermissions[device.id]?.isEmpty == true { updatingDevicePermissions[device.id] = nil }
+        }
         do {
             try await server.setPermission(permission, allowed: allowed, for: device.id)
             permissionError = nil
+            failedPermissionChange = nil
         } catch {
-            permissionError = L10n.string("Could not save device permissions. Try again.")
+            permissionError = allowed ? L10n.string("Could not save device permissions. Try again.")
+                : L10n.string("Permission is off, but the change could not be saved. Retry before restarting Yardlet.")
+            failedPermissionChange = FailedPermissionChange(deviceID: device.id, permission: permission, allowed: allowed)
         }
         await reloadDevices()
     }

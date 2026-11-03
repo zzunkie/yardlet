@@ -1047,6 +1047,20 @@ public enum RemoteRequest: Equatable, Sendable {
         }
     }
 
+    /// Every request explicitly declares its additional host permission. New requests must extend
+    /// this exhaustive switch; task-specific controls retain their established paired-device access.
+    public var requiredPermission: RemoteDevicePermission? {
+        switch self {
+        case .snapshot, .subscribeTask, .loadOlder, .unsubscribeTask, .ping, .sendMessage, .answerApproval,
+             .stopTurn, .markRead, .answerQuestion, .reviewPlan, .createTask, .newTaskOptions, .limitAccounts,
+             .continueWithAccount, .setAutoContinue, .actOnQueued, .answerHandoff, .chooseAnswer, .uploadFile, .registerPush,
+             .unregisterPush, .forgetDevice, .itemDetail, .actOnSuggestion, .setPinned, .archiveTask, .answerLink,
+             .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled, .taskOutputs, .readFile, .presence,
+             .taskSettings, .setTaskSetting, .composerCommands, .runComposerCommand, .editMessage, .forkTask, .watchTab,
+             .unwatchTab, .tabFrameAck, .tabInput: nil
+        }
+    }
+
     /// The task a request names.
     public var taskID: String? {
         switch self {

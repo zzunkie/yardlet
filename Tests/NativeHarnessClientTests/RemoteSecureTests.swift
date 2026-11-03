@@ -134,9 +134,12 @@ final class RemoteSecureTests: XCTestCase {
         let again = try await harness.phone(key: phoneKey, hello: RemoteHandshakeHello(name: "Pixel 9"))
         XCTAssertEqual(again.reply.deviceId, deviceID)
         XCTAssertNil(again.reply.paired)
+        try await harness.server.setPermission(.terminal, allowed: true, for: deviceID)
         // The same phone repeating the pairing (it lost the answer) is the same device.
         let repeated = try await harness.phone(key: phoneKey, hello: RemoteHandshakeHello(name: "Pixel 9", pair: secret))
         XCTAssertEqual(repeated.reply.deviceId, deviceID)
+        let retriedDevice = await harness.devices.device(deviceID)
+        XCTAssertEqual(retriedDevice?.permissions?.terminal, true)
         // Another phone with the spent secret is refused.
         let other = try await harness.phone(key: .generate(), hello: RemoteHandshakeHello(name: "Other", pair: secret))
         XCTAssertEqual(other.reply.error?.code, .pairingUnavailable)
@@ -145,6 +148,16 @@ final class RemoteSecureTests: XCTestCase {
         let stranger = try await harness.phone(key: .generate(), hello: RemoteHandshakeHello(name: "Stranger"))
         XCTAssertEqual(stranger.reply.error?.code, .unknownDevice)
         try await stranger.waitUntilClosed(.revoked)
+
+        let changes = PermissionEvents()
+        _ = await harness.server.addPermissionsChangedHandler { changes.append($0, $1) }
+        let newTicket = await harness.server.openPairing()
+        let fresh = try await harness.phone(key: phoneKey, hello: RemoteHandshakeHello(
+            name: "Pixel 9", pair: RemoteEncoding.base64url(newTicket.secret)))
+        XCTAssertEqual(fresh.reply.deviceId, deviceID)
+        let resetDevice = await harness.devices.device(deviceID)
+        XCTAssertEqual(resetDevice?.permissions, RemoteDevicePermissions())
+        XCTAssertEqual(changes.values.last?.permissions, RemoteDevicePermissions())
 
         // Removing the device closes its connection and its key stops working.
         try await harness.server.revoke(deviceID)
@@ -184,8 +197,9 @@ final class RemoteSecureTests: XCTestCase {
         let shownEarly = await harness.server.status.linkRequest
         XCTAssertNil(shownEarly)
 
+        let linkingKey = RemoteKeyPair.generate()
         let (newPhone, linkCode, reveal) = try await PipePhone.link(server: harness.server, macStatic: harness.identity.noise,
-                                                                     name: "Pixel 10", platform: "android")
+                                                                     phoneKey: linkingKey, name: "Pixel 10", platform: "android")
         XCTAssertEqual(reveal?.ok, true)
         let code = try XCTUnwrap(linkCode)
         XCTAssertEqual(code.count, 6)
@@ -202,10 +216,17 @@ final class RemoteSecureTests: XCTestCase {
         XCTAssertEqual(lateRequest.requestId, request.requestId)
         let status = await harness.server.status
         XCTAssertEqual(status.linkRequest?.code, code)
+        // A key may become paired elsewhere while the account-link approval is still pending.
+        let existing = await harness.devices.addSecure(name: "Pixel 10", publicKey: linkingKey.publicKey,
+                                                       platform: "android")
+        try await harness.server.setPermission(.terminal, allowed: true, for: existing.id)
         let approved = try await paired.request(#"{"id":"2","type":"answerLink","requestId":"\#(request.requestId ?? "")","approve":true}"#)
         XCTAssertTrue(approved.ok)
         let linked = try await newPhone.event(.linked)
         XCTAssertNotNil(linked.deviceId)
+        let linkedDevice = await harness.devices.device(existing.id)
+        XCTAssertEqual(linked.deviceId, existing.id)
+        XCTAssertEqual(linkedDevice?.permissions, RemoteDevicePermissions())
         let now = try await newPhone.request(#"{"id":"3","type":"snapshot"}"#)
         XCTAssertEqual(now.tasks?.count, 2)
         let resolved = try await paired.event(.linkResolved)
