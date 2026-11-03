@@ -335,8 +335,7 @@ struct ScheduledTaskEditor: View {
     }
 
     private func choose(_ choice: ComposerSessionChoice, harness: HarnessKind, models: NewTaskModelSource) {
-        guard case let .providerOption(id, value) = choice,
-              let chosen = NewTaskModelProjection.choosing(id, value: value, harness: harness, choice: draft.modelChoice,
+        guard let chosen = NewTaskModelProjection.choosing(choice, harness: harness, choice: draft.modelChoice,
                                                            catalogs: models.catalogs, connection: selectedConnection,
                                                            workspaceURL: workspaceURL) else { return }
         draft.modelChoice = chosen

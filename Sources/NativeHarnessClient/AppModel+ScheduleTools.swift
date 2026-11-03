@@ -7,7 +7,8 @@ import YardletAgentTools
 // person's own Scheduled tasks use, so a schedule an agent makes is the same record, runs the same
 // way and is changed, paused or deleted in the same place. What a call leaves out comes from the task
 // that made it, as the Claude app fills `cwd` and `notifySessionId` from the calling session: its
-// harness, the folder it came from, its project and account, and its Auto or Bypass permissions.
+// harness, the folder it came from, its project and account, and its Auto or Bypass permissions (on
+// another harness, its level in that harness's terms, as `create_task` gives a child).
 //
 // Where the Claude app and the Codex app ask before a change, the harness's own approval asks in
 // Yardlet too (Claude Code's request card; Codex as its approval setting and the tool's annotations
@@ -119,9 +120,15 @@ extension AppModel: ScheduleToolHandling {
         guard let host = store.sessions.first(where: { $0.id == caller.hostTaskID }),
               let mode = Self.unaskedPermissionMode(of: host) else { return }
         guard (await systemNotificationCenter.authorization()).isDeliverable else { return }
+        // A new task's runs use the schedule's own permission, which may be another harness's.
+        let destination = schedule.destination
+        let runMode = destination.mode == .newTask
+            ? destination.modelChoice?.permissionName(for: destination.harness)
+                ?? (destination.harness == .claudeCode ? L10n.string("Manual") : L10n.string("Default"))
+            : ClaudePermissionMode.displayName(mode) ?? mode
         await systemNotificationCenter.post(SystemNotification(
             title: L10n.format("%@ scheduled a task: “%@”", host.harness.displayName, schedule.name),
-            body: L10n.format("Its runs will use %@ mode.", ClaudePermissionMode.displayName(mode) ?? mode),
+            body: L10n.format("Its runs will use %@ mode.", runMode),
             identifier: "yardlet-agent-schedule-\(schedule.id.uuidString)",
             target: SystemNotificationTarget(sessionID: host.id)))
     }
@@ -207,18 +214,26 @@ extension AppModel: ScheduleToolHandling {
     }
 
     /// Why a new task's runs would do more without asking than the caller may, or nil: a Claude Code run in a
-    /// mode freer than the caller's (`scheduleModeCeiling`), or any other harness's run from a read-only caller,
-    /// since only Claude Code's mode is kept with a schedule.
+    /// mode freer than the caller's (`scheduleModeCeiling`), a Codex run at a level above the caller's, or any
+    /// other harness's run from a read-only caller, since only Claude Code's and Codex's permissions are kept
+    /// with a schedule.
     private func scheduleFreedomRefusal(_ destination: ScheduleDestination, caller: SessionToolCaller) -> String? {
-        if destination.harness == .claudeCode {
-            let mode = destination.modelChoice?.permissionMode
-            guard ClaudePermissionMode.freedom(mode) > scheduleModeCeiling(caller) else { return nil }
-            return "its runs would use \(mode.map(Self.claudeAppMode) ?? "default") mode, which does more without "
-                + "asking than this task may; the person can change it in Scheduled tasks."
+        let harness = destination.harness
+        let named = destination.modelChoice?.toolPermission(for: harness) ?? "default"
+        switch harness {
+        case .claudeCode:
+            guard ClaudePermissionMode.freedom(destination.modelChoice?.permissionMode) > scheduleModeCeiling(caller)
+            else { return nil }
+        case .codex:
+            let options = destination.modelChoice?.providerOptions(for: harness) ?? [:]
+            guard TaskPermissionLevel.level(harness: harness, options: options) > caller.permission else { return nil }
+        default:
+            guard caller.permission == .readOnly else { return nil }
+            return "a read-only task schedules new tasks only on Claude Code and Codex, whose runs keep reading only; "
+                + "the person can schedule others in Scheduled tasks."
         }
-        guard caller.permission == .readOnly else { return nil }
-        return "a read-only task schedules new tasks only on Claude Code, whose runs keep plan mode; the person can "
-            + "schedule others in Scheduled tasks."
+        return "its runs would use \(named) mode, which does more without asking than this task may; the person can "
+            + "change it in Scheduled tasks."
     }
 
     /// A schedule's name: the one given, on one line, or the prompt's first words.
@@ -476,7 +491,7 @@ extension AppModel: ScheduleToolHandling {
             nestedUnderTaskId: isNew ? destination.parentTaskID?.uuidString : nil,
             model: isNew ? destination.modelChoice?.model : nil,
             effort: isNew ? destination.modelChoice?.effort : nil,
-            permissionMode: isNew ? destination.modelChoice?.permissionMode.map(Self.claudeAppMode) : nil,
+            permissionMode: isNew ? destination.modelChoice?.toolPermission(for: destination.harness) : nil,
             prompt: promptLength.map { schedule.prompt.count > $0 ? String(schedule.prompt.prefix($0)) + "…" : schedule.prompt }
                 ?? schedule.prompt)
     }
@@ -509,8 +524,8 @@ extension AppModel: ScheduleToolHandling {
             if destination.startsInNewWorktree { place += ", in a new worktree" }
             var words = "a new \(destination.harness.displayName) task \(place)"
             if let model = destination.modelChoice?.model { words += ", on \(model)" }
-            if destination.harness == .claudeCode {
-                let mode = destination.modelChoice?.permissionMode.map(Self.claudeAppMode)
+            if Self.permissionKey(for: destination.harness) != nil {
+                let mode = destination.modelChoice?.toolPermission(for: destination.harness)
                 words += mode.map { ", in \($0) mode" } ?? ", in the default permission mode"
             }
             words += destination.parentTaskID.map { ", nested under task \($0.uuidString)" } ?? ", as a top-level task"
@@ -530,11 +545,6 @@ extension AppModel: ScheduleToolHandling {
         case .expired?: "its time passed while it could not run"
         case nil: nil
         }
-    }
-
-    /// Yardlet's Manual is the Claude app's `default`.
-    static func claudeAppMode(_ mode: String) -> String {
-        mode == ClaudePermissionMode.manual ? "default" : mode
     }
 
     /// A time as the tools spell it: ISO 8601 in the Mac's local time, with its offset.
@@ -669,13 +679,15 @@ extension AppModel: ScheduleToolHandling {
 
         // Model, effort and permission mode, in the harness's own values. A new Claude Code schedule made
         // from a Claude Code task in Auto or Bypass permissions keeps that mode, as the Claude app's does;
-        // otherwise its runs start in the default mode.
+        // otherwise its runs start at the caller's level in the harness's terms, as its child tasks do: a
+        // caller that runs without asking makes runs that do not ask (Bypass permissions, Full access), one
+        // that reads only makes runs that read only, and any other runs in the default mode.
         var choice = (keepsBase && !harnessChanged ? destination.modelChoice : nil) ?? NewTaskModelChoice(model: nil)
         if !keepsBase || harnessChanged {
-            // A caller that reads only makes runs that read only, as its child tasks do.
-            let readsOnly = scheduleModeCeiling(caller) < ClaudePermissionMode.freedom(nil)
-            choice.permissionMode = harness == .claudeCode
-                ? host.flatMap(Self.unaskedPermissionMode) ?? (readsOnly ? ClaudePermissionMode.plan : nil) : nil
+            choice.permissionMode = Self.permissionKey(for: harness).flatMap { key in
+                (harness == .claudeCode ? host.flatMap(Self.unaskedPermissionMode) : nil)
+                    ?? Self.permissionOptions(for: harness, level: caller.permission)[key]
+            }
         }
         if let model = arguments[Key.model]?.stringValue?.trimmingCharacters(in: .whitespaces) {
             choice.model = model.isEmpty ? nil : model
@@ -684,20 +696,12 @@ extension AppModel: ScheduleToolHandling {
             choice.effort = effort.isEmpty ? nil : effort
         }
         if let mode = arguments[Key.permissionMode]?.stringValue?.trimmingCharacters(in: .whitespaces) {
-            guard harness == .claudeCode else {
-                return .failure(SessionToolError(message: "permissionMode is for Claude Code; a "
-                    + "\(harness.displayName) run uses that harness's own default permissions."))
-            }
-            guard let value = OtherAppScheduleImport.claudePermissionMode(mode) else {
-                return .failure(SessionToolError(message: "permissionMode must be one of "
-                    + ScheduleToolCatalog.permissionModes.joined(separator: ", ") + "."))
-            }
             // A schedule does not do more without asking than the task that makes it may.
-            if ClaudePermissionMode.freedom(value) > scheduleModeCeiling(caller) {
-                return .failure(SessionToolError(message: "permissionMode \(mode) lets each run do more without "
-                    + "asking than this task may; the person can choose it in Scheduled tasks."))
+            switch sessionToolPermission(mode, harness: harness, caller: caller, subject: "each run",
+                                         personChooses: "Scheduled tasks") {
+            case let .success(value): choice.permissionMode = value
+            case let .failure(error): return .failure(error)
             }
-            choice.permissionMode = value
         }
         if harness == .codex, choice.model == nil, choice.effort != nil {
             return .failure(SessionToolError(message: "Codex takes an effort only with its model."))

@@ -249,6 +249,83 @@ final class ScheduledTaskTests: XCTestCase {
         let chatSubmission = try model.scheduledSubmission(for: chat, at: date(16, 22)).get()
         XCTAssertNil(chatSubmission.workspaceURL)
         XCTAssertFalse(chatSubmission.startsInNewWorktree, "A chat has no repository for a worktree")
+
+        // Codex's permission goes with its model, under the keys its task keeps them; a Codex schedule saved
+        // before it existed starts in Codex's Default, as it did.
+        model.runtimeSelections.select(URL(filePath: "/usr/bin/true"), for: .codex)
+        let old = try JSONDecoder().decode(ScheduleDestination.self, from: Data(#"""
+            {"mode":"newTask","harness":"codex","modelChoice":{"model":"gpt-6","effort":"high"},"startsInNewWorktree":false}
+            """#.utf8))
+        XCTAssertNil(old.modelChoice?.permissionMode)
+        var codex = ScheduledTask(name: "Sweep", prompt: "Go.", trigger: .daily(ScheduleTime(hour: 2, minute: 0)),
+                                  destination: old)
+        let selection = CodexModelSelection(model: "gpt-6", reasoningEffort: "high", serviceTier: nil).storedValue
+        XCTAssertEqual(try model.scheduledSubmission(for: codex, at: date(16, 22)).get().providerOptions,
+                       [CodexModelSelection.storageKey: try XCTUnwrap(selection)])
+        codex.destination.modelChoice?.permissionMode = CodexRunLocation.dangerFullAccess.rawValue
+        let reread = try JSONDecoder().decode(ScheduledTask.self, from: JSONEncoder().encode(codex))
+        XCTAssertEqual(reread, codex)
+        XCTAssertEqual(try model.scheduledSubmission(for: reread, at: date(16, 22)).get().providerOptions,
+                       [CodexModelSelection.storageKey: try XCTUnwrap(selection),
+                        CodexRunLocation.storageKey: CodexRunLocation.dangerFullAccess.rawValue])
+    }
+
+    /// A Codex run's thread starts with the schedule's permission, in the requests the App Server takes:
+    /// the thread's approval policy and sandbox, then each turn's sandbox policy. Without one it starts as
+    /// every Codex task did.
+    func testACodexRunsThreadStartsWithTheSchedulesPermission() async throws {
+        let executable = root.appending(path: "codex")
+        try Data("#!/bin/sh\nprintf 'codex-cli 0.163.0\\n'\n".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        func thread(_ id: String) -> JSONValue { .object(["thread": .object(["id": .string(id)])]) }
+        func turn(_ id: String) -> JSONValue { .object(["turn": .object(["id": .string(id)])]) }
+        let transport = FakeCodexTransport(responses: [
+            "initialize": [.object(["platformOs": .string("macos")])],
+            "thread/start": [thread("thread-full"), thread("thread-default")],
+            "turn/start": [turn("turn-full"), turn("turn-default")]
+        ])
+        let adapter = YHPCodexCompatibilityAdapter(adapter: CodexAdapter(executableURL: executable, transport: transport),
+                                                   manifest: HarnessProtocolCompatibilityManifest.codex())
+        let defaults = SuggestionVolatileDefaults()
+        let runtimes = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
+        runtimes.select(executable, for: .codex)
+        let clock = Clock(date(16, 20))
+        let model = AppModel(
+            store: SessionStore(repository: InMemorySessionRepository()), runtimeSelections: runtimes,
+            registry: HarnessRegistry { _, _ in adapter }, preferences: defaults,
+            codexHistorySelectionRepository: UserDefaultsCodexHistorySelectionRepository(defaults: defaults),
+            chatWorkspaceHome: root.appending(path: "home", directoryHint: .isDirectory),
+            sessionTitleResolver: { _ in nil }, sessionTitleRetryCount: 0, restoresIndexOnLaunch: false)
+        model.scheduledTasks.now = { clock.now }
+        model.scheduledTasks.calendar = { [seoul] in seoul }
+        let project = model.projects.ensureProject(forRoot: try folder("app"), name: "App")
+        var full = dailySchedule(project: project, prompt: "Sweep stale branches.")
+        full.destination.harness = .codex
+        full.destination.modelChoice = NewTaskModelChoice(model: nil, permissionMode: CodexRunLocation.dangerFullAccess.rawValue)
+        var plain = dailySchedule(project: project, prompt: "Summarize the open issues.")
+        plain.destination.harness = .codex
+        model.scheduledTasks.create(full)
+        await model.scheduledTasks.runNow(full.id)
+        try await waitUntil { await transport.requestMethods.filter { $0 == "turn/start" }.count == 1 }
+        model.scheduledTasks.create(plain)
+        await model.scheduledTasks.runNow(plain.id)
+        try await waitUntil { await transport.requestMethods.filter { $0 == "turn/start" }.count == 2 }
+
+        let requests = await transport.requests
+        let starts = requests.filter { $0.method == "thread/start" }
+        let turns = requests.filter { $0.method == "turn/start" }
+        XCTAssertEqual(starts.first?.params["approvalPolicy"]?.stringValue, "never")
+        XCTAssertEqual(starts.first?.params["sandbox"]?.stringValue, "danger-full-access")
+        XCTAssertEqual(turns.first?.params["approvalPolicy"]?.stringValue, "never")
+        XCTAssertEqual(turns.first?.params["sandboxPolicy"]?["type"]?.stringValue, "dangerFullAccess")
+        XCTAssertEqual(starts.last?.params["approvalPolicy"]?.stringValue, "on-request")
+        XCTAssertEqual(starts.last?.params["sandbox"]?.stringValue, "workspace-write")
+        XCTAssertNil(turns.last?.params["sandboxPolicy"], "Codex's Default keeps the thread's own")
+        let runTask = try XCTUnwrap(model.scheduledTasks.schedule(id: full.id)?.state.runs.first?.taskID)
+        let task = try XCTUnwrap(model.store.sessions.first { $0.id == runTask })
+        XCTAssertEqual(task.providerOptions[CodexRunLocation.storageKey], CodexRunLocation.dangerFullAccess.rawValue,
+                       "The task keeps it, so its composer and a resume show and send the same")
+        await model.shutdown()
     }
 
     // MARK: - Accounts

@@ -560,11 +560,18 @@ extension AppModel: SessionToolHandling {
         if let refusal = sessionToolSpawnRefusal(caller: caller) {
             return .failure("Not created: \(refusal)", .refused, retry: .no)
         }
-        let options: [String: String]
+        var options: [String: String]
         switch Self.providerOptions(for: harness, model: arguments["model"]?.stringValue,
                                     effort: arguments["effort"]?.stringValue) {
         case let .success(value): options = sessionToolInheritedOptions(harness: harness, caller: caller, chosen: value)
         case let .failure(error): return error.result("Not created")
+        }
+        if let mode = arguments["permissionMode"]?.stringValue?.trimmingCharacters(in: .whitespaces) {
+            switch sessionToolPermission(mode, harness: harness, caller: caller, subject: "the task",
+                                         personChooses: "New Task") {
+            case let .success(permission): options = Self.options(options, withPermission: permission, harness: harness)
+            case let .failure(error): return error.result("Not created")
+            }
         }
         guard let runtime = runtimeSelections.selectedURL(for: harness) else {
             return .failure("Not created: \(harness.displayName) is not set up in Yardlet.", .refused, retry: .no)
@@ -1304,6 +1311,50 @@ extension AppModel: SessionToolHandling {
         case (.antigravityCLI, .readOnly): [AntigravityPermissionMode.optionID: AntigravityPermissionMode.plan]
         default: [:]
         }
+    }
+
+    /// The option key a harness's permission is kept under, where the session tools choose one.
+    static func permissionKey(for harness: HarnessKind) -> String? {
+        switch harness {
+        case .claudeCode: ClaudeLaunchOption.permissionMode
+        case .codex: CodexRunLocation.storageKey
+        default: nil
+        }
+    }
+
+    /// The permission a call names for a new task of `harness` (`permissionMode`, in that harness's own
+    /// values), as `NewTaskModelChoice.permissionMode` keeps it: nil is Codex's Default. Refused for a value
+    /// the harness does not have, and for one that does more without asking than the caller may (Claude
+    /// Code's mode against `scheduleModeCeiling`, any other harness's level against the caller's), which
+    /// only the person chooses.
+    func sessionToolPermission(_ value: String, harness: HarnessKind, caller: SessionToolCaller,
+                               subject: String, personChooses place: String) -> Result<String?, SessionToolError> {
+        guard Self.permissionKey(for: harness) != nil else {
+            return .failure(SessionToolError(message: "permissionMode is for Claude Code and Codex; a "
+                + "\(harness.displayName) task uses that harness's own default permissions."))
+        }
+        guard let choice = NewTaskModelChoice.permission(fromTool: value, harness: harness) else {
+            let values = harness == .codex ? ScheduleToolCatalog.codexPermissionModes : ScheduleToolCatalog.permissionModes
+            return .failure(SessionToolError(message: "permissionMode for \(harness.displayName) must be one of "
+                + values.joined(separator: ", ") + "."))
+        }
+        let freer = harness == .claudeCode
+            ? ClaudePermissionMode.freedom(choice.permissionMode) > scheduleModeCeiling(caller)
+            : TaskPermissionLevel.level(harness: harness, options: choice.providerOptions(for: harness)) > caller.permission
+        guard !freer else {
+            return .failure(SessionToolError(message: "permissionMode \(value) lets \(subject) do more without asking "
+                + "than this task may; the person can choose it in \(place)."))
+        }
+        return .success(choice.permissionMode)
+    }
+
+    /// `options` with `permission` (as `sessionToolPermission` gives it) in place of the one they held.
+    static func options(_ options: [String: String], withPermission permission: String?,
+                        harness: HarnessKind) -> [String: String] {
+        guard let key = permissionKey(for: harness) else { return options }
+        var options = options
+        options[key] = permission
+        return options
     }
 
     static func inheritedOptions(_ parent: [String: String], harness: HarnessKind,

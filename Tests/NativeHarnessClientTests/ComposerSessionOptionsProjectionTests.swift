@@ -459,10 +459,20 @@ final class ComposerSessionOptionsProjectionTests: XCTestCase {
             choice: NewTaskModelChoice(model: nil, permissionMode: "plan"), catalogs: catalogs, connection: nil, workspaceURL: nil)
         XCTAssertEqual(chosen.permission?.title, L10n.string("Plan"))
 
-        // Codex's sandbox policy applies to a running thread's turns, so a new task does not offer it.
+        // Codex's permission, with the same control, choices and Full access question as a task's composer;
+        // the thread starts with it.
         let codex = ComposerSessionOptionsProjection.newTask(harness: .codex, choice: nil, catalogs: catalogs,
                                                             connection: nil, workspaceURL: nil)
-        XCTAssertNil(codex.permission)
+        let codexPermission = try XCTUnwrap(codex.permission)
+        XCTAssertEqual(codexPermission, ComposerSessionOptionsProjection.codexPermission(.automatic))
+        XCTAssertEqual(codexPermission.title, L10n.string("Default"))
+        XCTAssertEqual(codexPermission.apply.choice(id: NewTaskModelProjection.codexPermissionID, value: "dangerFullAccess"),
+                       .codexRunLocation(.dangerFullAccess))
+        let fullAccess = ComposerSessionOptionsProjection.newTask(harness: .codex,
+            choice: NewTaskModelChoice(model: nil, permissionMode: "dangerFullAccess"), catalogs: catalogs, connection: nil,
+            workspaceURL: nil)
+        XCTAssertEqual(fullAccess.permission?.title, L10n.string("Full access"))
+        XCTAssertEqual(fullAccess.permission?.isElevated, true)
         XCTAssertNil(codex.commands)
         XCTAssertNotNil(codex.model)
         XCTAssertEqual(codex.submission, .codexDraft)
@@ -496,14 +506,32 @@ final class ComposerSessionOptionsProjectionTests: XCTestCase {
             choice: nil, catalogs: catalogs, connection: nil, workspaceURL: nil))
         XCTAssertEqual(choice.providerOptions(for: .claudeCode), ["model": "opus", "permissionMode": "acceptEdits"])
 
+        // Codex's permission is kept the same way, under the key its task keeps it.
+        catalogs.recordCodex(Fixtures.codexCatalog.models, for: nil)
+        var codex = try XCTUnwrap(NewTaskModelProjection.choosing(.codexRunLocation(.dangerFullAccess), harness: .codex,
+            choice: nil, catalogs: catalogs, connection: nil, workspaceURL: nil))
+        XCTAssertEqual(codex, NewTaskModelChoice(model: nil, permissionMode: "dangerFullAccess"))
+        XCTAssertEqual(codex.providerOptions(for: .codex), [CodexRunLocation.storageKey: "dangerFullAccess"])
+        let model = try XCTUnwrap(Fixtures.codexCatalog.models.first)
+        codex = try XCTUnwrap(NewTaskModelProjection.choosing("model", value: model.model, harness: .codex,
+            choice: codex, catalogs: catalogs, connection: nil, workspaceURL: nil))
+        XCTAssertEqual(codex.model, model.model)
+        XCTAssertEqual(codex.permissionMode, "dangerFullAccess", "Choosing a model keeps the permission")
+        XCTAssertNil(NewTaskModelProjection.choosing(.codexRunLocation(.automatic), harness: .codex, choice: codex,
+            catalogs: catalogs, connection: nil, workspaceURL: nil)?.permissionMode, "Default keeps none")
+        XCTAssertNil(NewTaskModelProjection.choosing(.codexRunLocation(.readOnly), harness: .claudeCode, choice: nil,
+            catalogs: catalogs, connection: nil, workspaceURL: nil))
+
         // A draft saved before the field existed still decodes, with no mode.
         let old = try JSONDecoder().decode(NewTaskModelChoice.self, from: Data(#"{"model":"opus","effort":"high"}"#.utf8))
         XCTAssertEqual(old, NewTaskModelChoice(model: "opus", effort: "high"))
         let draft = NewTaskDraft()
         draft.modelChoices[.claudeCode] = choice
+        draft.modelChoices[.codex] = codex
         let restored = NewTaskDraft()
         restored.apply(try JSONDecoder().decode(HomeDraftSnapshot.self, from: JSONEncoder().encode(draft.snapshot)))
         XCTAssertEqual(restored.modelChoices[.claudeCode]?.permissionMode, "acceptEdits")
+        XCTAssertEqual(restored.modelChoices[.codex], codex, "Remembered per harness, as model and effort are")
     }
 
     func testANewClaudeTaskLaunchesInTheChosenPermissionMode() async throws {

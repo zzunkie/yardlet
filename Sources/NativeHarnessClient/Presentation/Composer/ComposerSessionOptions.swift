@@ -394,7 +394,8 @@ enum ComposerSessionOptionsProjection {
         ComposerPermissionSlot(
             title: location.displayName,
             selector: ProviderCapabilitySelector(
-                id: "runLocation", name: L10n.string("Permissions"), description: nil, category: "permission",
+                id: NewTaskModelProjection.codexPermissionID, name: L10n.string("Permissions"), description: nil,
+                category: "permission",
                 currentValue: location.rawValue,
                 choices: CodexRunLocation.allCases.map { .init(value: $0.rawValue, name: $0.displayName, description: nil) }),
             confirmations: [CodexRunLocation.dangerFullAccess.rawValue: .init(
@@ -634,6 +635,10 @@ extension ComposerSessionOptionsProjection {
         if harness == .antigravityCLI {
             options.permission = antigravityLaunchPermission(choice?.permissionMode)
         }
+        if harness == .codex {
+            // The same control and choices as a Codex task's composer; the thread starts with the choice.
+            options.permission = codexPermission(choice?.codexRunLocation ?? .automatic)
+        }
         return options
     }
 
@@ -706,6 +711,39 @@ enum NewTaskModelProjection {
         return selectors
     }
 
+    /// The remembered choice after a pick in the new-task screen's controls, or nil when they do not
+    /// offer it: a selector's value, or Codex's permission.
+    static func choosing(_ picked: ComposerSessionChoice, harness: HarnessKind, choice: NewTaskModelChoice?,
+                         catalogs: HarnessModelCatalogStore, connection: ProviderConnection?,
+                         workspaceURL: URL?) -> NewTaskModelChoice? {
+        switch picked {
+        case let .providerOption(id, value):
+            choosing(id, value: value, harness: harness, choice: choice, catalogs: catalogs, connection: connection,
+                     workspaceURL: workspaceURL)
+        case let .codexRunLocation(location):
+            harness == .codex ? choosing(location, choice: choice) : nil
+        case let .codexModel(selection):
+            harness == .codex ? choosing(selection, choice: choice) : nil
+        }
+    }
+
+    /// The ID of Codex's permission selector (`ComposerSessionOptionsProjection.codexPermission`).
+    nonisolated static let codexPermissionID = "runLocation"
+
+    /// Codex's choice with `location` as its permission; Default keeps none.
+    static func choosing(_ location: CodexRunLocation, choice: NewTaskModelChoice?) -> NewTaskModelChoice {
+        var chosen = choice ?? NewTaskModelChoice(model: nil)
+        chosen.permissionMode = location == .automatic ? nil : location.rawValue
+        return chosen
+    }
+
+    /// Codex's choice on `selection`, keeping its permission.
+    static func choosing(_ selection: CodexModelSelection, choice: NewTaskModelChoice?) -> NewTaskModelChoice {
+        var chosen = NewTaskModelChoice(selection)
+        chosen.permissionMode = choice?.permissionMode
+        return chosen
+    }
+
     /// The remembered choice after picking `value` for `id`, or nil when the list does not offer it.
     static func choosing(_ id: String, value: String, harness: HarnessKind, choice: NewTaskModelChoice?,
                          catalogs: HarnessModelCatalogStore, connection: ProviderConnection?,
@@ -727,9 +765,12 @@ enum NewTaskModelProjection {
                 .map { NewTaskModelChoice(model: id == "model" ? $0.model : choice?.model, effort: $0.effort,
                                           permissionMode: choice?.permissionMode) }
         case .codex:
+            if id == codexPermissionID {
+                return CodexRunLocation(rawValue: value).map { choosing($0, choice: choice) }
+            }
             let catalog = codexCatalog(choice: choice, catalogs: catalogs, connection: connection)
             return CodexModelMenuProjection.selection(id: id, value: value, catalog: catalog)
-                .map { NewTaskModelChoice($0) }
+                .map { choosing($0, choice: choice) }
         case .antigravityCLI:
             var chosen = choice ?? NewTaskModelChoice(model: nil)
             switch id {

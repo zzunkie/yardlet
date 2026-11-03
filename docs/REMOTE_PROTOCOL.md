@@ -1079,9 +1079,9 @@ that does not know them ignores them.
   `harnesses`: what that composer offers, in its order. `settings` (optional, as `createTask` takes them): the picks
   made so far, so a setting that depends on another (an effort on its model) answers as it would after them; a pick
   the menus do not offer is `notAllowed`.
-- `settings`: the new-task screen's model menu (model, effort) and, where the harness launches in one, its
-  permission mode, each with its value now and its choices. Choices the Mac asks to confirm (Bypass permissions,
-  full access) are left out. When the Mac has not read the harness's model list for this account yet it reads it
+- `settings`: the new-task screen's model menu (model, effort) and, where the harness starts in one, its
+  permission (Claude Code's `permissionMode`, Codex's `runLocation`), each with its value now and its choices. Choices
+  the Mac asks to confirm (Bypass permissions, full access) are left out. When the Mac has not read the harness's model list for this account yet it reads it
   first, as opening the menu does (up to about 10 s); until then the menu holds only the value now.
 - `worktree`: present for a project in a Git repository, whether the Mac starts its tasks there in a new
   worktree now.

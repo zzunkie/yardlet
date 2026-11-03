@@ -224,46 +224,9 @@ struct ComposerPermissionControl: View {
     }
 
     private var menu: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ComposerPermissionHeader(value: slot.title, hasPendingPermission: slot.hasPendingRequest)
-            Divider()
-            if slot.showsChoices, let selector = slot.selector {
-                if let description = selector.description, !description.isEmpty {
-                    Text(description)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 9)
-                }
-                ForEach(selector.choices) { choice in
-                    let isSelected = choice.value == selector.currentValue
-                    IntelligencePickerRow(isEnabled: slot.canChoose || isSelected) {
-                        choose(choice, in: selector, isSelected: isSelected)
-                    } content: {
-                        ComposerOptionChoiceLabel(choice: choice, isSelected: isSelected)
-                    }
-                    .focused($focusedChoice, equals: choice.value)
-                }
-                if !slot.canChoose { ComposerDetachedNotice() }
-            } else if let explanation = slot.explanation {
-                Label {
-                    Text(explanation.text)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: explanation.icon)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-            }
+        ComposerPermissionMenu(slot: slot, focusedChoice: $focusedChoice) { choice, selector, isSelected in
+            choose(choice, in: selector, isSelected: isSelected)
         }
-        .padding(.vertical, 6)
-        .background(ParityTheme.elevated)
-        .frame(width: 264, alignment: .leading)
         .onAppear {
             if opensFromKeyboard { focusedChoice = slot.selector?.choices.first?.value }
         }
@@ -299,6 +262,57 @@ struct ComposerPermissionControl: View {
         } else {
             onChoose(applied)
         }
+    }
+}
+
+/// The permission control's menu: the policy now, then the provider's description and choices, or
+/// what the session says about permissions without them.
+struct ComposerPermissionMenu: View {
+    let slot: ComposerPermissionSlot
+    var focusedChoice: FocusState<String?>.Binding
+    let onChoose: (ProviderCapabilityChoice, ProviderCapabilitySelector, _ isSelected: Bool) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ComposerPermissionHeader(value: slot.title, hasPendingPermission: slot.hasPendingRequest)
+            Divider()
+            if slot.showsChoices, let selector = slot.selector {
+                if let description = selector.description, !description.isEmpty {
+                    Text(description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                }
+                ForEach(selector.choices) { choice in
+                    let isSelected = choice.value == selector.currentValue
+                    IntelligencePickerRow(isEnabled: slot.canChoose || isSelected) {
+                        onChoose(choice, selector, isSelected)
+                    } content: {
+                        ComposerOptionChoiceLabel(choice: choice, isSelected: isSelected)
+                    }
+                    .focused(focusedChoice, equals: choice.value)
+                }
+                if !slot.canChoose { ComposerDetachedNotice() }
+            } else if let explanation = slot.explanation {
+                Label {
+                    Text(explanation.text)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: explanation.icon)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+            }
+        }
+        .padding(.vertical, 6)
+        .background(ParityTheme.elevated)
+        .frame(width: 264, alignment: .leading)
     }
 }
 

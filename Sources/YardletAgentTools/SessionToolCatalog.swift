@@ -76,6 +76,8 @@ package enum SessionToolCatalog {
         + "list_projects.")
     private static let model = property("string", "A model id the harness accepts.")
     private static let effort = property("string", "A reasoning effort the model accepts.")
+    private static let permissionMode = ScheduleToolCatalog.permissionModeProperty(
+        "Its permissions, in its harness's own values, in place of the default above.")
     private static let account = property("string", "An account id or name from list_accounts, of the harness it "
         + "runs on. Defaults to the one list_accounts names as automaticChoice.")
     private static let personQuotes: ToolJSON = .object([
@@ -183,6 +185,7 @@ package enum SessionToolCatalog {
                 "harness": harness,
                 "model": model,
                 "effort": effort,
+                "permissionMode": permissionMode,
                 "account": account,
                 "project": property("string", "A project name or folder path. Defaults to this task's folder."),
                 "chat": property("boolean", "true starts it as a chat with no project, in a new folder of its own, "
@@ -210,6 +213,7 @@ package enum SessionToolCatalog {
                 "prompt": property("string", "The subagent's task."),
                 "model": model,
                 "effort": effort,
+                "permissionMode": permissionMode,
                 "account": account,
                 "folder": property("string", "A folder of this task's project. Defaults to this task's folder."),
                 "background": property("boolean", "Return an agent id at once; wait_tasks returns the answer."),

@@ -117,11 +117,48 @@ final class ComposerSessionControlsRenderingTests: XCTestCase {
             }
             let elements = try ComposerUnificationFixtures.render(scenario, into: directory)
             // The same session controls as the task composer, for what the task can start with:
-            // Claude Code's permission mode (its launch flag), and no Codex sandbox policy, which
-            // applies to a running thread's turns.
+            // Claude Code's permission mode (its launch flag) and Codex's permission (its thread's).
             let permissions = elements.first { $0.label == L10n.string("Permissions") }
-            XCTAssertEqual(permissions?.value, harness == .claudeCode ? L10n.string("Manual") : nil, harness.rawValue)
+            let expected: [HarnessKind: String] = [.claudeCode: L10n.string("Manual"), .codex: L10n.string("Default")]
+            XCTAssertEqual(permissions?.value, expected[harness], harness.rawValue)
             XCTAssertEqual(elements.contains { $0.label == L10n.string("Model") }, harness != .openCode, harness.rawValue)
         }
+
+        // Codex with Full access chosen, and its menu as the control opens it: the task composer's four choices.
+        let draft = NewTaskDraft()
+        draft.workspaceURL = ComposerUnificationFixtures.workspace
+        draft.projectID = project.id
+        draft.harness = .codex
+        draft.text = "Clean up the release branches"
+        draft.modelChoices[.codex] = NewTaskModelChoice(model: nil, permissionMode: CodexRunLocation.dangerFullAccess.rawValue)
+        let slot = try XCTUnwrap(ComposerSessionOptionsProjection.newTask(harness: .codex, choice: draft.modelChoices[.codex],
+            catalogs: catalogs, connection: nil, workspaceURL: draft.workspaceURL).permission)
+        let scenario = ComposerUnificationFixtures.Scenario(name: "new-task-codex-full-access", size: NSSize(width: 860, height: 560)) {
+            AnyView(VStack(alignment: .leading, spacing: 12) {
+                NewTaskHome(recentSessions: [], projects: [project], draft: draft, runtimeSelections: runtimes,
+                    connections: connections, models: NewTaskModelSource(catalogs: catalogs) { _, _, _, _ in },
+                    onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {},
+                    onCreate: { _ in nil })
+                    .frame(height: 280)
+                PermissionMenuPreview(slot: slot)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .padding(.leading, 24)
+            })
+        }
+        let elements = try ComposerUnificationFixtures.render(scenario, into: directory)
+        XCTAssertEqual(elements.first { $0.label == L10n.string("Permissions") }?.value, L10n.string("Full access"))
+        for location in CodexRunLocation.allCases {
+            XCTAssertTrue(elements.contains { $0.label.contains(location.displayName) }, location.rawValue)
+        }
+    }
+}
+
+/// The permission control's menu drawn on its own, as its popover shows it, so a render needs no window of its own.
+private struct PermissionMenuPreview: View {
+    let slot: ComposerPermissionSlot
+    @FocusState private var focused: String?
+
+    var body: some View {
+        ComposerPermissionMenu(slot: slot, focusedChoice: $focused) { _, _, _ in }
     }
 }

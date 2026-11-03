@@ -756,7 +756,7 @@ private struct NewTaskComposer: View {
     }
 
     /// The task composer's session controls, for what the new task starts with: the model and
-    /// effort beside Start, and the permission mode where the harness launches in one. Choices
+    /// effort beside Start, and the permission where the harness takes one at its start. Choices
     /// are remembered for the harness and become the task's own.
     @ViewBuilder private func sessionControls(_ placement: ComposerSessionControls.Placement) -> some View {
         if let harness = draft.harness, let options = sessionOptions {
@@ -770,8 +770,8 @@ private struct NewTaskComposer: View {
     }
 
     private func choose(_ choice: ComposerSessionChoice, for harness: HarnessKind) {
-        guard let models, case let .providerOption(id, value) = choice,
-              let chosen = NewTaskModelProjection.choosing(id, value: value, harness: harness,
+        guard let models,
+              let chosen = NewTaskModelProjection.choosing(choice, harness: harness,
                   choice: draft.modelChoices[harness], catalogs: models.catalogs,
                   connection: selectedConnection, workspaceURL: draft.workspaceURL) else { return }
         draft.modelChoices[harness] = chosen

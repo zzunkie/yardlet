@@ -70,8 +70,9 @@ final class ScheduleToolTests: XCTestCase {
         XCTAssertEqual(properties, ["name", "prompt", "cronExpression", "fireAt", "continueTaskId", "harness", "project",
                                     "chat", "useWorktree", "topLevel", "model", "effort", "permissionMode"])
         XCTAssertEqual(create["inputSchema"]?["properties"]?["permissionMode"]?["enum"],
-                       .array(["default", "plan", "acceptEdits", "auto", "dontAsk", "bypassPermissions"].map { .string($0) }),
-                       "The Claude app's own modes")
+                       .array(["default", "plan", "acceptEdits", "auto", "dontAsk", "bypassPermissions", "readOnly",
+                               "workspaceWrite", "dangerFullAccess"].map { .string($0) }),
+                       "The Claude app's own modes, then Codex's own permissions")
         let update = try XCTUnwrap(ScheduleToolCatalog.definition(named: "update_scheduled_task")?.json)
         XCTAssertEqual(update["inputSchema"]?["properties"]?["enabled"]?["type"], .string("boolean"))
         let runs = try XCTUnwrap(ScheduleToolCatalog.definition(named: "list_task_runs")?.json)
@@ -159,6 +160,12 @@ final class ScheduleToolTests: XCTestCase {
         XCTAssertTrue(elsewhere.detail.contains(L10n.format("Project or folder: %@", "site")), elsewhere.detail)
         XCTAssertTrue(elsewhere.detail.contains(L10n.format("Its runs will use %@ mode.", L10n.string("Accept edits"))),
                       elsewhere.detail)
+        let onCodex = try XCTUnwrap(ScheduleToolApproval.request(
+            toolName: "mcp__yardlet__create_scheduled_task",
+            input: .object(["prompt": .string("Go."), "fireAt": .string("2026-10-18T09:00:00+09:00"),
+                            "harness": .string("codex"), "permissionMode": .string("dangerFullAccess")])))
+        XCTAssertTrue(onCodex.detail.contains(L10n.format("Its runs will use %@ mode.", L10n.string("Full access"))),
+                      "In the words of Codex's own control: \(onCodex.detail)")
         XCTAssertNil(ScheduleToolApproval.request(toolName: "mcp__scheduled-tasks__create_scheduled_task",
                                                   input: .object([:])), "The Claude app's own tool is its own")
         XCTAssertNil(ScheduleToolApproval.request(toolName: "mcp__yardlet__list_task_runs", input: .object([:])))
@@ -390,6 +397,33 @@ final class ScheduleToolTests: XCTestCase {
         ], from: fixture.claude)
         XCTAssertTrue(auto.isError, "Nor in a mode freer than the caller's own: \(auto.text)")
         XCTAssertEqual(model.scheduledTasks.schedules.count, 3)
+
+        // Codex's permissions in Codex's own values, no freer than the caller's level (a harness's default asks).
+        let fullAccess = await call(model, "create_scheduled_task", [
+            "prompt": "Clean up.", "cronExpression": "0 3 * * *", "harness": "codex", "permissionMode": "dangerFullAccess"
+        ], from: fixture.caller)
+        XCTAssertTrue(fullAccess.isError, fullAccess.text)
+        XCTAssertTrue(fullAccess.text.contains("lets each run do more without asking than this task may"), fullAccess.text)
+        let claudeWords = await call(model, "create_scheduled_task", [
+            "prompt": "Clean up.", "cronExpression": "0 3 * * *", "harness": "codex", "permissionMode": "plan"
+        ], from: fixture.caller)
+        XCTAssertTrue(claudeWords.text.contains("must be one of default, readOnly, workspaceWrite, dangerFullAccess"),
+                      claudeWords.text)
+        let readOnly = await call(model, "create_scheduled_task", [
+            "prompt": "Read the logs.", "cronExpression": "0 3 * * *", "harness": "codex", "permissionMode": "readOnly"
+        ], from: fixture.caller)
+        XCTAssertFalse(readOnly.isError, readOnly.text)
+        XCTAssertTrue(readOnly.text.contains("a new Codex task in"), readOnly.text)
+        XCTAssertTrue(readOnly.text.contains("in readOnly mode"), readOnly.text)
+        let codexSchedule = try XCTUnwrap(model.scheduledTasks.schedules.last)
+        XCTAssertEqual(codexSchedule.destination.modelChoice, NewTaskModelChoice(model: nil, permissionMode: "readOnly"))
+        XCTAssertEqual(model.scheduleToolEntry(codexSchedule).permissionMode, "readOnly")
+        let plain = await call(model, "create_scheduled_task", [
+            "prompt": "Read the logs.", "cronExpression": "0 4 * * *", "harness": "codex"
+        ], from: fixture.caller)
+        XCTAssertTrue(plain.text.contains("in the default permission mode"), plain.text)
+        XCTAssertNil(model.scheduledTasks.schedules.last?.destination.modelChoice, "Codex's Default, as before")
+        XCTAssertEqual(model.scheduledTasks.schedules.count, 5)
         await model.shutdown()
     }
 
@@ -503,7 +537,34 @@ final class ScheduleToolTests: XCTestCase {
                        from: auto.claude)
         XCTAssertEqual(auto.model.scheduledTasks.schedules.first?.destination.modelChoice?.permissionMode, "auto")
         XCTAssertEqual(auto.notifications.posts.count, 1)
+        // Auto is the standard level, so a Codex schedule's runs keep Codex's Default.
+        _ = await call(auto.model, "create_scheduled_task", ["prompt": "Go.", "fireAt": "2026-10-18T09:00:00+09:00",
+                                                             "harness": "codex"], from: auto.claude)
+        XCTAssertNil(auto.model.scheduledTasks.schedules.last?.destination.modelChoice)
         await auto.model.shutdown()
+
+        // On Codex, a caller that runs without asking makes runs with Full access, as its Codex child would, says
+        // so in Codex's words, and each run's task starts with it. A caller that asks may not rewrite its prompt.
+        let bypass = try Fixture(root: root, calendar: seoul, now: date(17, 20), claudeMode: "bypassPermissions")
+        let onCodex = await call(bypass.model, "create_scheduled_task", [
+            "name": "Nightly sweep", "prompt": "Sweep stale branches.", "cronExpression": "0 2 * * *", "harness": "codex"
+        ], from: bypass.claude)
+        XCTAssertFalse(onCodex.isError, onCodex.text)
+        XCTAssertTrue(onCodex.text.contains("in dangerFullAccess mode"), onCodex.text)
+        let sweep = try XCTUnwrap(bypass.model.scheduledTasks.schedules.first)
+        XCTAssertEqual(sweep.destination.modelChoice?.permissionMode, CodexRunLocation.dangerFullAccess.rawValue)
+        XCTAssertNil(sweep.destination.accountID, "Another harness's new-task account when it runs")
+        XCTAssertEqual(bypass.notifications.posts.last?.body, L10n.format("Its runs will use %@ mode.", L10n.string("Full access")))
+        let ran = await call(bypass.model, "run_scheduled_task", ["scheduleId": sweep.id.uuidString], from: bypass.claude)
+        XCTAssertFalse(ran.isError, ran.text)
+        let runTask = try XCTUnwrap(bypass.model.scheduledTasks.schedule(id: sweep.id)?.state.runs.first?.taskID)
+        let started = try XCTUnwrap(bypass.model.store.sessions.first { $0.id == runTask })
+        XCTAssertEqual(started.harness, .codex)
+        XCTAssertEqual(started.providerOptions[CodexRunLocation.storageKey], CodexRunLocation.dangerFullAccess.rawValue)
+        let rewrittenSweep = await call(bypass.model, "update_scheduled_task",
+                                   ["scheduleId": sweep.id.uuidString, "prompt": "Push to main."], from: bypass.caller)
+        XCTAssertTrue(rewrittenSweep.isError && rewrittenSweep.text.contains("dangerFullAccess mode"), rewrittenSweep.text)
+        await bypass.model.shutdown()
     }
 
     func testATaskAScheduleStartedAsksInEveryModeAndCannotRunOrDeleteItsOwn() async throws {
@@ -819,7 +880,7 @@ final class ScheduleToolTests: XCTestCase {
             clock = Clock(now)
             let defaults = SuggestionVolatileDefaults()
             let runtimes = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
-            for harness in [HarnessKind.openCode, .claudeCode] { runtimes.select(runtime, for: harness) }
+            for harness in [HarnessKind.openCode, .claudeCode, .codex] { runtimes.select(runtime, for: harness) }
             let sessions = [caller, claude]
             let adapter = adapter
             model = AppModel(
