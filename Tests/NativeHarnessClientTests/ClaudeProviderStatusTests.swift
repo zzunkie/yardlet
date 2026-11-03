@@ -57,6 +57,45 @@ final class ClaudeProviderStatusTests: XCTestCase {
         XCTAssertEqual(ProviderNoticeText.limitHeadline(limit), L10n.string("Session limit reached"))
     }
 
+    /// A saved conversation keeps the CLI's words for a refused request but not its limit report, so
+    /// the card read back from it, after a relaunch or for a task whose CLI is not running, takes the
+    /// limit and reset from those words, as of when the record was written. Without them it had no
+    /// reset, and nothing to continue with once the reset passed.
+    func testACardReadBackFromASavedConversationNamesItsResetFromTheCLIsWords() throws {
+        let cases: [(written: String, words: String, window: HarnessRateLimit.Window?, model: String?, resetsAt: String?)] = [
+            ("2026-11-02T18:41:24.456Z", "You've hit your session limit · resets 3:50am (Asia/Seoul)",
+             .session, nil, "2026-11-02T18:50:00Z"),
+            // A time already past that day is the next day's.
+            ("2026-11-01T14:24:37.120Z", "You've hit your session limit · resets 1:50am (Asia/Seoul)",
+             .session, nil, "2026-11-01T16:50:00Z"),
+            ("2026-10-29T08:07:38.000Z", "You've hit your session limit · resets 5:40pm (Asia/Tokyo)",
+             .session, nil, "2026-10-29T08:40:00Z"),
+            ("2026-11-03T02:09:43.000Z", "You've hit your weekly limit · resets Nov 5 at 8am (Asia/Seoul)",
+             .weekly, nil, "2026-11-04T23:00:00Z"),
+            ("2026-12-28T10:00:00.000Z", "You've hit your Opus limit · resets Jan 2, 2027 at 9:30pm (America/New_York) · progress saved",
+             .model, "Opus", "2027-01-03T02:30:00Z"),
+            ("2026-11-03T02:09:43.000Z", "You've hit your limit", nil, nil, nil)
+        ]
+        for example in cases {
+            var projection = ClaudeSessionProjection()
+            var builder = TranscriptBuilder()
+            builder.appendUser("Refactor the parser")
+            let record: [String: Any] = [
+                "type": "assistant", "timestamp": example.written, "error": "rate_limit", "isApiErrorMessage": true,
+                "message": ["role": "assistant", "model": "<synthetic>", "content": [["type": "text", "text": example.words]]]
+            ]
+            let frame = try JSONDecoder().decode(JSONValue.self, from: JSONSerialization.data(withJSONObject: record))
+            projection.payloads(from: frame).forEach { builder.apply($0) }
+            guard case let .usageLimit(limit) = builder.entries.last?.content else {
+                return XCTFail("The record reads as the limit card: \(example.words)")
+            }
+            XCTAssertEqual(limit.window, example.window, example.words)
+            XCTAssertEqual(limit.model, example.model, example.words)
+            XCTAssertEqual(limit.resetsAt, example.resetsAt.flatMap { try? Date($0, strategy: .iso8601) }, example.words)
+            XCTAssertEqual(limit.message, example.words)
+        }
+    }
+
     func testAReportAfterTheCLIsMessageFillsInTheSameCard() throws {
         var projection = ClaudeSessionProjection()
         var builder = TranscriptBuilder()

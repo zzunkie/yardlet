@@ -121,14 +121,11 @@ struct ConversationTimeline: View {
         let railTurns = rows.turns(drawnIn: turns)
         let hasEarlierTurns = hasEarlierTurns(presentation.earlier, firstDrawn: railTurns.first, rows: rows)
         let _ = rendering.keep(turnIDs: turns.map(\.id))
+        // Every turn is told the limit card that offers to continue, which can be in an earlier turn
+        // than the last (notices Claude wrote after it open turns of their own). It changes only as a
+        // card comes or the task moves past it, not with each entry added, so a turn is not drawn
+        // again for each of them.
         let context = itemContext(presentation)
-        // The transcript's last entry is in the last turn. An earlier turn is not told it, so what it
-        // is offered stays the same as entries are added, and it is not drawn again for each of them.
-        let earlierTurnContext = {
-            var earlier = context
-            earlier.lastEntryID = nil
-            return earlier
-        }()
         let wholeAnchors = ConversationAnchorResolver(presentation: whole, threadID: threadID)
         let latestRequestID = latestRequest.id(latestTurnID: railTurns.last?.id) { wholeAnchors.isRenamed($0, as: $1) }
         HStack(spacing: 0) {
@@ -163,7 +160,7 @@ struct ConversationTimeline: View {
                     ForEach(turns) { turn in
                         let part = rows.part(of: turn.id)
                         let host = ConversationTurnHost(
-                            turn: turn, part: part, context: turn.id == turns.last?.id ? context : earlierTurnContext,
+                            turn: turn, part: part, context: context,
                             handlers: handlers(for: turn, turnID: rows.turnID(of: turn.id)), renderState: rendering
                         ).equatable()
                         // A part goes on from the one before as the items of one turn do. Only a part
@@ -450,10 +447,10 @@ struct ConversationTimeline: View {
     private func itemContext(_ presentation: ConversationPresentation) -> ConversationItemContext {
         var context = ConversationItemContext(harness: presentation.harness, workspaceURL: workspaceURL, actions: actions)
         if case let .transcript(transcript, _, _, _) = source {
-            context.lastEntryID = transcript.entries.last?.id
+            context.limitCardEntryID = UsageLimitContinuation.card(in: transcript.entries)?.id
         } else if case let .usageLimit(_, entryID)? = presentation.turns.last?.outcome {
             // A Codex limit card is named after its turn, so the last turn's card is the latest.
-            context.lastEntryID = entryID
+            context.limitCardEntryID = entryID
         }
         return context
     }

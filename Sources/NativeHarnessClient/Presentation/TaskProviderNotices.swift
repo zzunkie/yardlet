@@ -10,8 +10,8 @@ struct TaskProviderNotices {
     /// A lost connection cut the task's turn off, and it continues once the network is back
     /// (`ConnectionResumePolicy`).
     var reconnecting = false
-    /// The limit card whose automatic continue is armed.
-    var autoContinueEntryID: UUID?
+    /// The reset the armed automatic continue waits for; the task's limit card naming it is armed.
+    var autoContinueResetsAt: Date?
     /// The task is idle and not being moved to another account, so a limit card can act.
     var canContinue = false
     /// Why the last attempt to continue under another account was refused.
@@ -19,7 +19,7 @@ struct TaskProviderNotices {
     var accounts: @MainActor () -> UsageLimitAccounts? = { nil }
     var refreshAccounts: @MainActor () async -> Void = {}
     var continueWithAccount: @MainActor (ProviderConnection) -> Void = { _ in }
-    var setAutoContinue: @MainActor (_ enabled: Bool, _ entryID: UUID, _ resetsAt: Date) -> Void = { _, _, _ in }
+    var setAutoContinue: @MainActor (_ enabled: Bool, _ resetsAt: Date) -> Void = { _, _ in }
     /// Continues the task under its own account from a limit card whose reset has passed; nil where
     /// its harness has no such continue.
     var continueAfterReset: (@MainActor (_ entryID: UUID) -> Void)?

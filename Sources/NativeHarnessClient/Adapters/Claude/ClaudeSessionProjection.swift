@@ -57,7 +57,7 @@ struct ClaudeSessionProjection: Sendable {
         // The CLI words a refused request as an assistant message marked with the error's
         // category. A plan limit is shown as its own card, not as the model's answer.
         if frame["type"]?.stringValue == "assistant", frame["error"]?.stringValue == "rate_limit" {
-            return [.usageLimitReached(stoppedTurn(message: assistantText(frame)))]
+            return [.usageLimitReached(stoppedTurn(message: assistantText(frame), in: frame))]
         }
 
         if frame["type"]?.stringValue == "assistant" {
@@ -149,7 +149,7 @@ struct ClaudeSessionProjection: Sendable {
                 // without its own limit message becomes that card instead of a generic error.
                 if turnLimit != nil { continue }
                 if rejectedThisTurn {
-                    result.append(.usageLimitReached(stoppedTurn(message: frame["result"]?.stringValue)))
+                    result.append(.usageLimitReached(stoppedTurn(message: frame["result"]?.stringValue, in: frame)))
                 } else {
                     result.append(payload)
                 }
@@ -193,13 +193,20 @@ struct ClaudeSessionProjection: Sendable {
         return payloads
     }
 
-    /// The limit that stopped this turn: the latest rejection the CLI reported, or a bare
-    /// rejection when it named none.
-    private mutating func stoppedTurn(message: String?) -> HarnessRateLimit {
+    /// The limit that stopped this turn: the latest rejection the CLI reported, or the one its own
+    /// words name when it reported none, as in a saved conversation, which keeps the words but not
+    /// the report. The words' reset is read as of when the record was written.
+    private mutating func stoppedTurn(message: String?, in frame: JSONValue? = nil) -> HarnessRateLimit {
         var limit = latestRateLimit.flatMap { $0.status == .rejected ? $0 : nil }
             ?? HarnessRateLimit(status: .rejected)
         let trimmed = message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         limit.message = trimmed.isEmpty ? turnLimit?.message : trimmed
+        if limit.resetsAt == nil, let words = limit.message, let named = ClaudeEventProjector.rateLimit(inMessage: words,
+            writtenAt: frame?["timestamp"]?.stringValue.flatMap(ClaudeSubagentTranscriptReader.timestamp) ?? Date()) {
+            limit.window = limit.window ?? named.window
+            limit.model = limit.model ?? named.model
+            limit.resetsAt = named.resetsAt
+        }
         turnLimit = limit
         return limit
     }

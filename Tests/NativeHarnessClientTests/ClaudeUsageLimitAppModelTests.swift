@@ -55,12 +55,13 @@ import XCTest
         let fixture = try makeFixture()
         let model = fixture.model
         model.usageLimitResumeGrace = .zero
-        let task = try await limitedTask(in: fixture)
+        // The CLI names the reset in whole seconds.
+        let task = try await limitedTask(in: fixture, resetsAt: Date().addingTimeInterval(2))
         let transport = try XCTUnwrap(fixture.transports.all.first)
-        let card = try await waitForLimitCard(in: model, task: task)
+        let resetsAt = try await limitCardReset(in: model, task: task)
 
-        model.setUsageLimitAutoContinue(true, entryID: card, resetsAt: Date().addingTimeInterval(0.3), for: task)
-        XCTAssertEqual(model.usageLimitAutoContinue[task.id]?.entryID, card)
+        model.setUsageLimitAutoContinue(true, resetsAt: resetsAt, for: task)
+        XCTAssertEqual(model.usageLimitAutoContinue[task.id]?.resetsAt, resetsAt)
         let early = await transport.sentValues.count
         XCTAssertEqual(early, 0, "Nothing is sent before the reset")
         try await waitUntil {
@@ -101,12 +102,12 @@ import XCTest
         let fixture = try makeFixture()
         let model = fixture.model
         model.usageLimitResumeGrace = .zero
-        let task = try await limitedTask(in: fixture)
+        let task = try await limitedTask(in: fixture, resetsAt: Date().addingTimeInterval(2))
         let transport = try XCTUnwrap(fixture.transports.all.first)
-        let card = try await waitForLimitCard(in: model, task: task)
+        let resetsAt = try await limitCardReset(in: model, task: task)
 
         // Something arrived after the card: the task is no longer where the limit left it.
-        model.setUsageLimitAutoContinue(true, entryID: card, resetsAt: Date().addingTimeInterval(0.3), for: task)
+        model.setUsageLimitAutoContinue(true, resetsAt: resetsAt, for: task)
         await transport.emit(.object([
             "type": .string("assistant"),
             "message": .object(["content": .array([.object(["type": .string("text"), "text": .string("Late note")])])])
@@ -117,12 +118,80 @@ import XCTest
         XCTAssertTrue(afterChange.isEmpty)
 
         // A message the user sends takes over from an armed continue at once.
-        model.setUsageLimitAutoContinue(true, entryID: card, resetsAt: Date().addingTimeInterval(0.3), for: task)
+        model.setUsageLimitAutoContinue(true, resetsAt: resetsAt, for: task)
         await model.send(HarnessUserInput(text: "Use the other approach"), to: task)
         XCTAssertNil(model.usageLimitAutoContinue[task.id])
         try await Task.sleep(for: .milliseconds(600))
         let sent = await transport.sentValues.compactMap { $0["message"]?["content"]?.stringValue }
         XCTAssertEqual(sent, ["Use the other approach"])
+    }
+
+    /// An armed continue outlasts a relaunch, which Claude Code's own wait does not, and goes once the
+    /// reset has passed, to the card read back from the task's saved conversation: that card names its
+    /// reset only in the CLI's words, and the notice of a subagent the same limit stopped follows it.
+    func testAnArmedContinueOutlastsARelaunchAndGoesToTheCardReadBack() async throws {
+        let fixture = try makeFixture()
+        var zone = Calendar(identifier: .gregorian)
+        zone.timeZone = try XCTUnwrap(TimeZone(identifier: "Asia/Seoul"))
+        // The CLI's words name the reset to the minute: one that passed while Yardlet was closed.
+        let resetsAt = try XCTUnwrap(zone.dateInterval(of: .minute, for: Date().addingTimeInterval(-300))?.start)
+        let time = DateFormatter()
+        time.locale = Locale(identifier: "en_US_POSIX")
+        time.timeZone = zone.timeZone
+        time.dateFormat = "h:mma"
+        let words = "You've hit your session limit · resets \(time.string(from: resetsAt).lowercased()) (Asia/Seoul)"
+        let task = SessionRecord(harness: .claudeCode, workspaceURL: fixture.shared, runtimeExecutableURL: fixture.cli,
+            title: "Limit", titleOrigin: .manual, status: .failed, providerSessionID: UUID().uuidString.lowercased(),
+            connection: fixture.first)
+        let written = resetsAt.addingTimeInterval(-600)
+        let notice = """
+            <task-notification>
+            <task-id>a56354ab8ecfc0f4e</task-id>
+            <status>failed</status>
+            <summary>Agent "Review the parser" failed: \(words)</summary>
+            </task-notification>
+            """
+        try savedConversation([
+            ["type": "user", "timestamp": written.addingTimeInterval(-5),
+             "message": ["role": "user", "content": "Refactor the parser"]],
+            ["type": "assistant", "timestamp": written, "error": "rate_limit", "isApiErrorMessage": true,
+             "message": ["role": "assistant", "model": "<synthetic>", "content": [["type": "text", "text": words]]]],
+            ["type": "user", "timestamp": written.addingTimeInterval(0.2), "origin": ["kind": "task-notification"],
+             "message": ["role": "user", "content": notice]]
+        ], of: task, in: fixture)
+        let repository = InMemorySessionRepository(sessions: [task])
+
+        // Armed before the quit, while the reset was still ahead.
+        let before = fixture.makeModel(SessionStore(sessions: [task], repository: repository))
+        before.usageLimitResumeGrace = .seconds(3_600)
+        before.setUsageLimitAutoContinue(true, resetsAt: resetsAt, for: task)
+        await before.shutdown()
+        XCTAssertEqual(UsageLimitAutoContinue.load(from: fixture.defaults)[task.id]?.resetsAt, resetsAt)
+
+        let store = SessionStore(repository: repository)
+        try await store.restore()
+        let after = fixture.makeModel(store)
+        after.usageLimitResumeGrace = .zero
+        await after.refreshNativeClaudeConversation(for: try XCTUnwrap(store.sessions.first))
+        let entries = after.transcriptBySessionID[task.id] ?? []
+        let card = try XCTUnwrap(UsageLimitContinuation.card(in: entries), "\(entries.map(\.content))")
+        XCTAssertNotEqual(card.id, entries.last?.id, "The subagent's notice follows the card")
+        guard case let .usageLimit(limit) = card.content else { return XCTFail("A limit card") }
+        XCTAssertEqual(limit.resetsAt, resetsAt)
+        XCTAssertEqual(limit.window, .session)
+
+        await after.continueWorkInterruptedByRestart()
+        try await waitUntil { fixture.transports.all.last != nil }
+        let transport = try XCTUnwrap(fixture.transports.all.last)
+        try await waitUntil {
+            await transport.sentValues.contains { $0["message"]?["content"]?.stringValue == UsageLimitContinuation.afterReset }
+        }
+        let configuration = await transport.configuration
+        XCTAssertEqual(configuration?.providerSessionID, task.providerSessionID, "The same conversation continues")
+        XCTAssertEqual(after.store.sessions.first?.connection, fixture.first)
+        XCTAssertNil(after.usageLimitAutoContinue[task.id])
+        XCTAssertTrue(UsageLimitAutoContinue.load(from: fixture.defaults).isEmpty, "It goes once")
+        await after.shutdown()
     }
 
     func testRetriesWarningsAndReportsFollowTheRunningTask() async throws {
@@ -213,6 +282,9 @@ import XCTest
 
     private struct Fixture {
         let model: AppModel
+        let defaults: UserDefaults
+        /// Another app model on the same preferences and saved conversations, as at the next launch.
+        let makeModel: @MainActor (SessionStore) -> AppModel
         let shared: URL
         let cli: URL
         let first: ProviderConnection
@@ -254,18 +326,25 @@ import XCTest
         var initialize: [String: JSONValue] = ["models": .array([])]
         if let currentPermissionMode { initialize["current_permission_mode"] = .string(currentPermissionMode) }
         let transports = TransportLog(initializeResponse: .object(initialize))
-        let model = AppModel(store: SessionStore(repository: InMemorySessionRepository()),
-            runtimeSelections: RuntimeSelectionStore(discoversRuntimes: false),
-            registry: HarnessRegistry { _, url in
-                YHPProviderCompatibilityAdapter(
-                    adapter: ClaudeAdapter(executableURL: url, transportFactory: { _ in transports.make() }),
-                    manifest: HarnessProtocolCompatibilityManifest.claude()
-                )
-            }, restoresIndexOnLaunch: false)
-        for home in [first, next, signedOut, separate] { try model.connections.save(connection(home)) }
-        addTeardownBlock { await model.shutdown() }
-        return Fixture(model: model, shared: shared, cli: cli, first: connection(first), next: connection(next),
-            signedOut: connection(signedOut), transports: transports)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("NativeHarnessClientTests.UsageLimit")))
+        let homes = [first, next, signedOut, separate].map(connection)
+        let makeModel: @MainActor (SessionStore) -> AppModel = { store in
+            let model = AppModel(store: store,
+                runtimeSelections: RuntimeSelectionStore(discoversRuntimes: false),
+                registry: HarnessRegistry { _, url in
+                    YHPProviderCompatibilityAdapter(
+                        adapter: ClaudeAdapter(executableURL: url, transportFactory: { _ in transports.make() }),
+                        manifest: HarnessProtocolCompatibilityManifest.claude()
+                    )
+                }, preferences: defaults, transcriptRepository: UserDefaultsTranscriptRepository(defaults: defaults),
+                restoresIndexOnLaunch: false)
+            for home in homes { try? model.connections.save(home) }
+            self.addTeardownBlock { await model.shutdown() }
+            return model
+        }
+        let model = makeModel(SessionStore(repository: InMemorySessionRepository()))
+        return Fixture(model: model, defaults: defaults, makeModel: makeModel, shared: shared, cli: cli,
+            first: connection(first), next: connection(next), signedOut: connection(signedOut), transports: transports)
     }
 
     private func limitedTask(in fixture: Fixture, resetsAt: Date = Date().addingTimeInterval(3_600)) async throws
@@ -303,6 +382,36 @@ import XCTest
                 "result": .string(text), "session_id": .string("s")
             ])
         ]
+    }
+
+    private func limitCardReset(in model: AppModel, task: SessionRecord) async throws -> Date {
+        let card = try await waitForLimitCard(in: model, task: task)
+        let limit = model.transcriptBySessionID[task.id]?.first { $0.id == card }.flatMap { entry -> HarnessRateLimit? in
+            if case let .usageLimit(limit) = entry.content { return limit }
+            return nil
+        }
+        return try XCTUnwrap(limit?.resetsAt, "The card names its reset")
+    }
+
+    /// Writes a task's saved conversation where its account's CLI keeps it, each record after the one
+    /// before.
+    private func savedConversation(_ records: [[String: Any]], of task: SessionRecord, in fixture: Fixture) throws {
+        let folder = fixture.shared.appending(path: "projects/project")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var parent: String?
+        let lines = try records.map { record in
+            var record = record
+            let uuid = UUID().uuidString.lowercased()
+            record["uuid"] = uuid
+            record["parentUuid"] = parent ?? NSNull()
+            record["sessionId"] = task.providerSessionID
+            record["timestamp"] = (record["timestamp"] as? Date)?.ISO8601Format(
+                Date.ISO8601FormatStyle(includingFractionalSeconds: true))
+            parent = uuid
+            return String(decoding: try JSONSerialization.data(withJSONObject: record), as: UTF8.self)
+        }
+        try Data((lines.joined(separator: "\n") + "\n").utf8)
+            .write(to: folder.appending(path: "\(task.providerSessionID ?? "").jsonl"))
     }
 
     private func waitForLimitCard(in model: AppModel, task: SessionRecord) async throws -> UUID {

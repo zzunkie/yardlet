@@ -1097,6 +1097,43 @@ struct ClaudeEventProjector: Sendable {
         )
     }
 
+    /// The limit and its reset as the CLI's own words for a refused request name them, which is all a
+    /// saved conversation keeps: 2.1.291 writes "You've hit your session limit · resets 3:50am
+    /// (Asia/Seoul)", and the day too when the reset is more than a day out, "… · resets Nov 5 at
+    /// 8am (Asia/Seoul)". A reset without a day is the next such time after `writtenAt`, and one
+    /// without a year is in that year; the zone is the one the words name, else this Mac's.
+    static func rateLimit(inMessage message: String, writtenAt: Date) -> HarnessRateLimit? {
+        guard let reset = message.firstMatch(
+            of: /resets (?:([A-Z][a-z]{2}) (\d{1,2})(?:, (\d{4}))?(?: at|,) )?(\d{1,2})(?::(\d{2}))?([ap]m)(?: \(([^)]+)\))?/
+        ), let hour = Int(reset.4), (1...12).contains(hour) else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = reset.7.flatMap { TimeZone(identifier: String($0)) } ?? .current
+        var time = DateComponents(hour: hour % 12 + (reset.6 == "pm" ? 12 : 0), minute: reset.5.flatMap { Int($0) } ?? 0)
+        let resetsAt: Date?
+        if let month = reset.1 {
+            let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+            guard let index = months.firstIndex(of: String(month)) else { return nil }
+            time.year = reset.3.flatMap { Int($0) } ?? calendar.component(.year, from: writtenAt)
+            time.month = index + 1
+            time.day = reset.2.flatMap { Int($0) }
+            resetsAt = calendar.date(from: time)
+        } else {
+            resetsAt = calendar.nextDate(after: writtenAt, matching: time, matchingPolicy: .nextTime)
+        }
+        guard let resetsAt else { return nil }
+        let window = message.firstMatch(of: /^You've hit your (session|weekly|Opus|Sonnet|Fable|usage credit) limit/)
+            .flatMap { match -> (window: HarnessRateLimit.Window, model: String?)? in
+                switch match.1 {
+                case "session": (.session, nil)
+                case "weekly": (.weekly, nil)
+                case "usage credit": (.overage, nil)
+                default: (.model, String(match.1))
+                }
+            }
+        return HarnessRateLimit(status: .rejected, window: window?.window, model: window?.model, resetsAt: resetsAt,
+            message: message)
+    }
+
     /// The CLI's names for its plan limits: `five_hour` is the session limit, `seven_day` the
     /// weekly one, and each other weekly limit covers one model. The CLI itself calls
     /// `seven_day_overage_included` its Fable limit.

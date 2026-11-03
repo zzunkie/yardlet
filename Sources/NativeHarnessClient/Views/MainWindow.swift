@@ -1233,7 +1233,7 @@ struct MainWindow: View {
             limitWarning: model.rateLimitWarningBySessionID[session.id],
             resumedAfterRestart: resumedAfterRestart,
             reconnecting: reconnecting,
-            autoContinueEntryID: model.usageLimitAutoContinue[session.id]?.entryID,
+            autoContinueResetsAt: model.usageLimitAutoContinue[session.id]?.resetsAt,
             canContinue: canContinue,
             switchError: model.usageLimitSwitchErrorBySessionID[session.id],
             accounts: { model.usageLimitAccountOptions(for: session) },
@@ -1241,8 +1241,8 @@ struct MainWindow: View {
             continueWithAccount: { connection in
                 Task { await model.continueAfterUsageLimit(using: connection, for: session) }
             },
-            setAutoContinue: { enabled, entryID, resetsAt in
-                model.setUsageLimitAutoContinue(enabled, entryID: entryID, resetsAt: resetsAt, for: session)
+            setAutoContinue: { enabled, resetsAt in
+                model.setUsageLimitAutoContinue(enabled, resetsAt: resetsAt, for: session)
             },
             continueAfterReset: { entryID in
                 Task { await model.continueAfterUsageLimitReset(entryID: entryID, for: session) }

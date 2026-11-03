@@ -198,21 +198,26 @@ final class AppModelRemoteBridge: RemoteBridge {
         guard !options.isEmpty else { return conversation }
         var conversation = conversation
         conversation.turns[turn].items[index].options = options
-        if model.usageLimitAutoContinue[session.id]?.entryID == card.entryID {
+        if model.usageLimitAutoContinue[session.id]?.waits(for: card.resetsAt) == true {
             conversation.turns[turn].items[index].autoContinue = true
         }
         return conversation
     }
 
-    /// The limit card that may act now: the transcript's last entry, of a Claude Code task that is
-    /// idle and not being moved, as the Mac's card decides (`TaskProviderNotices.canContinue`).
+    /// The limit card that may act now: the one the task continues from (`UsageLimitContinuation.card`),
+    /// of a Claude Code task that is idle and not being moved, as the Mac's card decides
+    /// (`TaskProviderNotices.canContinue`).
     private static func latestLimit(_ presentation: ConversationPresentation, of session: SessionRecord,
                                     in model: AppModel) -> (turnID: String, entryID: UUID, resetsAt: Date?)? {
         guard session.harness == .claudeCode, session.status != .running, session.status != .waitingForApproval,
               !model.switchingAccounts.contains(session.id), !model.sessionMutations.contains(session.id),
-              let turn = presentation.turns.last, case let .usageLimit(limit, entryID)? = turn.outcome,
-              model.transcriptBySessionID[session.id]?.last?.id == entryID else { return nil }
-        return (turn.id, entryID, limit.resetsAt.flatMap { $0 > Date() ? $0 : nil })
+              let card = UsageLimitContinuation.card(in: model.transcriptBySessionID[session.id] ?? []),
+              case let .usageLimit(limit) = card.content,
+              let turn = presentation.turns.last(where: { turn in
+                  if case let .usageLimit(_, entryID)? = turn.outcome { return entryID == card.id }
+                  return false
+              }) else { return nil }
+        return (turn.id, card.id, limit.resetsAt.flatMap { $0 > Date() ? $0 : nil })
     }
 
     /// What became of each suggested task, which the chip reads from the app rather than the turn
@@ -484,7 +489,7 @@ final class AppModelRemoteBridge: RemoteBridge {
             guard let session = session(taskID) else { return RemoteError(.notFound) }
             guard let card = Self.latestLimit(presentation(of: session, in: model), of: session, in: model),
                   let resetsAt = card.resetsAt else { return RemoteError(.notAllowed) }
-            model.setUsageLimitAutoContinue(enabled, entryID: card.entryID, resetsAt: resetsAt, for: session)
+            model.setUsageLimitAutoContinue(enabled, resetsAt: resetsAt, for: session)
             return nil
         case let .answerHandoff(taskID, requestID, answer):
             guard let session = session(taskID) else { return RemoteError(.notFound) }

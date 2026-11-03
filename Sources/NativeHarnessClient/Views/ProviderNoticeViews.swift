@@ -7,7 +7,8 @@ import SwiftUI
 struct UsageLimitCard: View {
     let entryID: UUID
     let limit: HarnessRateLimit
-    /// Only the transcript's last entry offers to continue; a later turn has moved past it.
+    /// Only the card the task continues from offers to continue (`UsageLimitContinuation.card`); a
+    /// later turn has moved past it.
     let isLatest: Bool
     /// The task's notices and limit actions; without them the card only reports the limit.
     var notices: TaskProviderNotices? = nil
@@ -77,7 +78,7 @@ struct UsageLimitCard: View {
                     if let resetsAt = limit.resetsAt, resetsAt > now {
                         Toggle(L10n.string("Auto-continue when limits reset"), isOn: Binding(
                             get: { isArmed },
-                            set: { notices.setAutoContinue($0, entryID, resetsAt) }
+                            set: { notices.setAutoContinue($0, resetsAt) }
                         ))
                         .toggleStyle(.paritySwitch)
                         .controlSize(.mini)
@@ -119,7 +120,9 @@ struct UsageLimitCard: View {
     private var windows: [AccountLimitWindow] { AccountLimitWindow.windows(reportedBy: limit) }
 
     private var offersActions: Bool { isLatest && notices?.canContinue == true }
-    private var isArmed: Bool { isLatest && notices?.autoContinueEntryID == entryID }
+    private var isArmed: Bool {
+        isLatest && UsageLimitAutoContinue.isSameReset(notices?.autoContinueResetsAt, limit.resetsAt)
+    }
 
     /// The reset, or once armed when the task continues; the CLI's own words when it named no
     /// reset.

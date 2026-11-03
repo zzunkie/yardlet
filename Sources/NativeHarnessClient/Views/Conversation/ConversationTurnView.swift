@@ -26,10 +26,10 @@ struct ConversationTurnHandlers {
 struct ConversationTurnOffers: Equatable, Sendable {
     let harness: HarnessKind
     let workspaceURL: URL
-    let lastEntryID: UUID?
+    let limitCardEntryID: UUID?
     let handlers: [Bool]
     let actions: [Bool]
-    let autoContinueEntryID: UUID?
+    let autoContinueResetsAt: Date?
     let canContinue: Bool
     let switchError: String?
     let limitWarning: HarnessRateLimit?
@@ -38,7 +38,7 @@ struct ConversationTurnOffers: Equatable, Sendable {
     init(context: ConversationItemContext, handlers: ConversationTurnHandlers) {
         harness = context.harness
         workspaceURL = context.workspaceURL
-        lastEntryID = context.lastEntryID
+        limitCardEntryID = context.limitCardEntryID
         self.handlers = [handlers.retry != nil, handlers.edit != nil, handlers.fork != nil,
                          handlers.editMessage != nil, handlers.restoreFiles != nil, handlers.implementPlan != nil,
                          handlers.answerQuestion != nil]
@@ -46,7 +46,7 @@ struct ConversationTurnOffers: Equatable, Sendable {
         self.actions = [actions.chooseOption != nil, actions.answer != nil, actions.showHarnessSettings != nil,
                         actions.subtaskControls != nil, actions.subtaskControls?.stop != nil,
                         actions.providerNotices != nil, actions.rewind != nil, actions.runInTerminal != nil]
-        autoContinueEntryID = actions.providerNotices?.autoContinueEntryID
+        autoContinueResetsAt = actions.providerNotices?.autoContinueResetsAt
         canContinue = actions.providerNotices?.canContinue ?? false
         switchError = actions.providerNotices?.switchError
         limitWarning = actions.providerNotices?.limitWarning
@@ -438,10 +438,10 @@ struct ConversationTurnView: View, Equatable {
                 onShowHarnessSettings: error.entryID == nil || retry != nil ? nil : context.actions.showHarnessSettings
             )
         case let .usageLimit(limit, entryID):
-            // Only the transcript's last entry offers to continue, under another account or once
-            // the limit resets (D7: a Codex limit names no reset and has no account to move to).
+            // Only the card the task continues from offers to continue, under another account or
+            // once the limit resets (D7: a Codex limit names no reset and has no account to move to).
             UsageLimitCard(
-                entryID: entryID, limit: limit, isLatest: entryID == context.lastEntryID,
+                entryID: entryID, limit: limit, isLatest: entryID == context.limitCardEntryID,
                 notices: context.actions.providerNotices
             )
         }

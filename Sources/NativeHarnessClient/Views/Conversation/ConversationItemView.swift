@@ -6,8 +6,9 @@ struct ConversationItemContext {
     /// The task's folder, which Codex cards resolve paths and file changes against.
     let workspaceURL: URL
     let actions: ConversationActions
-    /// The transcript's last entry, whose limit card is the one that offers to continue.
-    var lastEntryID: UUID? = nil
+    /// The limit card that offers to continue: the one the task continues from
+    /// (`UsageLimitContinuation.card`), or a Codex task's last turn's.
+    var limitCardEntryID: UUID? = nil
 }
 
 /// One item of a turn, drawn from its normalized `kind` with one card per kind, whatever the harness:

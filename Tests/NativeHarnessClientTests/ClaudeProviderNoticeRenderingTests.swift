@@ -31,7 +31,7 @@ final class ClaudeProviderNoticeRenderingTests: XCTestCase {
             retry: HarnessProviderRetry(attempt: 3, maxRetries: 10, cause: .overloaded),
             limitWarning: HarnessRateLimit(status: .warning, window: .weekly,
                 resetsAt: Date().addingTimeInterval(4 * 86_400), usedFraction: 0.91),
-            autoContinueEntryID: armed,
+            autoContinueResetsAt: model.resetsAt,
             canContinue: true,
             accounts: { accounts }
         )
@@ -85,7 +85,9 @@ final class ClaudeProviderNoticeRenderingTests: XCTestCase {
     /// In the conversation, only the latest entry's limit card offers to continue, the armed one
     /// shows its switch on, and compactions read where they happened. Once the latest limit has
     /// reset, as for a task the person comes back to after it, that card offers Resume in place of
-    /// the switch, and Resume continues from that card.
+    /// the switch, and Resume continues from that card. So does a card followed only by the notice
+    /// of a subagent the same limit stopped, which Claude has not answered (a saved conversation
+    /// read back after a relaunch shows it after the card).
     func testTheConversationOffersToContinueOnlyFromTheLatestLimit() throws {
         let directory = try WindowlessRender.directory("claude-provider-notices-qa")
         let earlier = TranscriptEntry(content: .usageLimit(HarnessRateLimit(
@@ -99,7 +101,14 @@ final class ClaudeProviderNoticeRenderingTests: XCTestCase {
             status: .rejected, window: .session, resetsAt: Date().addingTimeInterval(-600),
             message: "You've hit your session limit · resets 3pm"
         )))
-        func entries(endingWith latest: TranscriptEntry) -> [TranscriptEntry] {
+        let notice = TranscriptEntry(content: .user(text: """
+            <task-notification>
+            <task-id>a56354ab8ecfc0f4e</task-id>
+            <status>failed</status>
+            <summary>Agent "Review the parser" failed: You've hit your session limit · resets 3pm</summary>
+            </task-notification>
+            """))
+        func entries(endingWith latest: TranscriptEntry, then after: [TranscriptEntry] = []) -> [TranscriptEntry] {
             [
                 TranscriptEntry(content: .user(text: "Summarize the open issues")),
                 TranscriptEntry(content: .assistant(text: "Reading the tracker.", isStreaming: false)),
@@ -109,22 +118,24 @@ final class ClaudeProviderNoticeRenderingTests: XCTestCase {
                                                                               tokensAfter: 41_230))),
                 TranscriptEntry(content: .assistant(text: "There are three open issues.", isStreaming: false)),
                 latest
-            ]
+            ] + after
         }
         var resumed: [UUID] = []
-        let notices = TaskProviderNotices(autoContinueEntryID: waiting.id, canContinue: true,
+        guard case let .usageLimit(armed) = waiting.content else { return XCTFail("A limit card") }
+        let notices = TaskProviderNotices(autoContinueResetsAt: armed.resetsAt, canContinue: true,
                                           continueAfterReset: { resumed.append($0) })
-        func conversation(endingWith latest: TranscriptEntry) -> TaskConversationView {
+        func conversation(endingWith latest: TranscriptEntry, then after: [TranscriptEntry] = []) -> TaskConversationView {
             TaskConversationView(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp/yardlet"),
-                                 entries: entries(endingWith: latest), sessionStatus: .ready,
+                                 entries: entries(endingWith: latest, then: after), sessionStatus: .ready,
                                  actions: ConversationActions(providerNotices: notices))
         }
         let sizes = [NSSize(width: 1_280, height: 920), NSSize(width: 920, height: 920)]
-        for (latest, name) in [(waiting, "conversation"), (reset, "conversation-reset")] {
+        for (latest, after, name) in [(waiting, [], "conversation"), (reset, [], "conversation-reset"),
+                                      (reset, [notice], "conversation-reset-notice")] {
             for appearance in WindowlessRender.Appearance.allCases {
                 for size in sizes {
-                    let drawing = try ConversationDrawing.draw(conversation(endingWith: latest), size: size,
-                                                               appearance: appearance)
+                    let drawing = try ConversationDrawing.draw(conversation(endingWith: latest, then: after),
+                                                               size: size, appearance: appearance)
                     try WindowlessRender.writePNG(drawing.capture.bitmap, to: directory.appending(
                         path: "\(name)-\(Int(size.width))-\(appearance.suffix).png"))
                     let listed = drawing.elements.map(\.description).joined(separator: "\n")
@@ -147,12 +158,13 @@ final class ClaudeProviderNoticeRenderingTests: XCTestCase {
             }
         }
 
-        let host = WindowlessRender.Host(
-            conversation(endingWith: reset).frame(width: sizes[0].width, height: sizes[0].height, alignment: .top),
-            size: sizes[0], appearance: .light)
-        defer { host.close() }
-        host.settle()
-        XCTAssertTrue(host.hosting.pressButton(labeled: L10n.string("Resume")))
-        XCTAssertEqual(resumed, [reset.id])
+        for after in [[], [notice]] {
+            let host = WindowlessRender.Host(conversation(endingWith: reset, then: after)
+                .frame(width: sizes[0].width, height: sizes[0].height, alignment: .top), size: sizes[0], appearance: .light)
+            defer { host.close() }
+            host.settle()
+            XCTAssertTrue(host.hosting.pressButton(labeled: L10n.string("Resume")))
+        }
+        XCTAssertEqual(resumed, [reset.id, reset.id])
     }
 }

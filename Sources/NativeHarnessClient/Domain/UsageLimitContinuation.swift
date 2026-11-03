@@ -1,12 +1,43 @@
 import Foundation
 
-/// An armed automatic continue for one limit card, with the task identity it was armed for.
-/// The continue message is sent only while the task still matches all of it.
-struct UsageLimitAutoContinue: Equatable, Sendable {
-    let entryID: UUID
+/// An armed automatic continue for the task's limit card, with the task identity it was armed for.
+/// The continue message is sent only while the task still matches all of it. The card is known by
+/// the reset it names rather than by its entry: a conversation read back from Claude's saved history
+/// after a relaunch holds the same card under another entry ID.
+struct UsageLimitAutoContinue: Codable, Equatable, Sendable {
     let resetsAt: Date
     let providerSessionID: String?
     let connection: ProviderConnection?
+
+    /// Whether a limit card names this reset.
+    func waits(for reset: Date?) -> Bool {
+        Self.isSameReset(reset, resetsAt)
+    }
+
+    /// The CLI's report names a reset to the second and its own words to the minute, so a card read
+    /// back from its words names the same reset as the live card did.
+    static func isSameReset(_ one: Date?, _ other: Date?) -> Bool {
+        guard let one, let other else { return false }
+        return abs(one.timeIntervalSince(other)) < 60
+    }
+
+    static let preferenceKey = "Yardlet.usageLimitAutoContinue"
+
+    /// The armed continues a relaunch arms again, by task.
+    static func load(from defaults: UserDefaults) -> [UUID: Self] {
+        guard let data = defaults.data(forKey: preferenceKey),
+              let saved = try? JSONDecoder().decode([String: Self].self, from: data) else { return [:] }
+        return Dictionary(uniqueKeysWithValues: saved.compactMap { key, value in UUID(uuidString: key).map { ($0, value) } })
+    }
+
+    static func save(_ armed: [UUID: Self], to defaults: UserDefaults) {
+        guard !armed.isEmpty, let data = try? JSONEncoder().encode(
+            Dictionary(uniqueKeysWithValues: armed.map { ($0.key.uuidString, $0.value) })) else {
+            defaults.removeObject(forKey: preferenceKey)
+            return
+        }
+        defaults.set(data, forKey: preferenceKey)
+    }
 }
 
 /// What a task stopped by a plan limit sends to pick up where it stopped. The words go to the model,
@@ -21,6 +52,21 @@ enum UsageLimitContinuation {
     /// The same request after moving to another account, which has not reset anything.
     static let afterAccountSwitch =
         "I hit my usage limit while you were working, and I've switched to another account now. Please continue from where you left off."
+
+    /// The limit card a stopped task continues from: the transcript's last entry, or the last one
+    /// before notices Claude Code wrote itself when background work ended after it, which no turn
+    /// has answered. A subagent the same limit stopped reports so right after the card, and the CLI
+    /// waits for the reset before it answers.
+    static func card(in entries: [TranscriptEntry]) -> TranscriptEntry? {
+        for entry in entries.reversed() {
+            switch entry.content {
+            case .usageLimit: return entry
+            case let .user(text, _) where ClaudeTaskNotification.parse(text) != nil: continue
+            default: return nil
+            }
+        }
+        return nil
+    }
 }
 
 /// The words a task shows for its provider's plan limits, retries and compaction, in the Claude

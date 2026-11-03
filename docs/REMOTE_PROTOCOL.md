@@ -1080,10 +1080,12 @@ that does not know them ignores them.
 
 ### 15.17 Plan limits
 
-- The `error` item with `errorKind` `usageLimit` (§6.7) on the latest turn of an idle task carries the limit
-  card's actions in `options`: `continueWithAccount` (another saved account shares the task's history) and
+- The `error` item with `errorKind` `usageLimit` (§6.7) of an idle task's latest limit card carries the card's
+  actions in `options`: `continueWithAccount` (another saved account shares the task's history) and
   `autoContinue` (the task continues once the limit resets; Claude Code, when the limit names its reset), and
-  `autoContinue: true` while that is armed.
+  `autoContinue: true` while that is armed. The card is on the latest turn, or on the one before turns that only
+  Claude Code's own unanswered notices opened (a subagent the same limit stopped). An armed continue still waits
+  after the Mac's Yardlet relaunches.
 - ```json
   {"id": "25", "type": "limitAccounts", "taskId": "4C1F…"}
   ```

@@ -5434,7 +5434,7 @@ final class AppModel {
         try await rebind(current, to: connection)
         guard let updated = store.sessions.first(where: { $0.id == current.id }) else { return }
         if let armed {
-            setUsageLimitAutoContinue(true, entryID: armed.entryID, resetsAt: armed.resetsAt, for: updated)
+            setUsageLimitAutoContinue(true, resetsAt: armed.resetsAt, for: updated)
         }
         guard hadRuntime else { return }
         do { try await attach(updated, resumesExistingSession: updated.providerSessionID != nil) }
@@ -5482,57 +5482,91 @@ final class AppModel {
         await send(HarnessUserInput(text: UsageLimitContinuation.afterAccountSwitch), to: updated)
     }
 
-    /// Arms or disarms the automatic continue for one limit card. Armed, the task sends the
-    /// continue message once the limit has reset, unless it changed in the meantime.
-    func setUsageLimitAutoContinue(_ enabled: Bool, entryID: UUID, resetsAt: Date, for session: SessionRecord) {
+    /// Arms or disarms the automatic continue for the task's limit card, the one naming `resetsAt`.
+    /// Armed, the task sends the continue message once the limit has reset, unless it changed in the
+    /// meantime. A relaunch arms it again (`restoreUsageLimitAutoContinues`).
+    func setUsageLimitAutoContinue(_ enabled: Bool, resetsAt: Date, for session: SessionRecord) {
         cancelUsageLimitAutoContinue(for: session.id)
         guard enabled, let current = store.sessions.first(where: { $0.id == session.id }),
               current.harness == .claudeCode else { return }
-        let armed = UsageLimitAutoContinue(entryID: entryID, resetsAt: resetsAt,
-            providerSessionID: current.providerSessionID, connection: current.connection)
-        usageLimitAutoContinue[current.id] = armed
-        let wait = Duration.seconds(max(0, resetsAt.timeIntervalSinceNow)) + usageLimitResumeGrace
-        usageLimitAutoContinueTasks[current.id] = Task { [weak self] in
+        arm(UsageLimitAutoContinue(resetsAt: resetsAt, providerSessionID: current.providerSessionID,
+            connection: current.connection), for: current.id)
+    }
+
+    private func arm(_ armed: UsageLimitAutoContinue, for sessionID: UUID) {
+        usageLimitAutoContinue[sessionID] = armed
+        saveUsageLimitAutoContinues()
+        let wait = Duration.seconds(max(0, armed.resetsAt.timeIntervalSinceNow)) + usageLimitResumeGrace
+        usageLimitAutoContinueTasks[sessionID] = Task { [weak self] in
             // The continuous clock keeps counting while the Mac sleeps, so a reset that passed
             // during sleep is acted on at wake.
             try? await Task.sleep(for: wait)
             guard !Task.isCancelled else { return }
-            await self?.continueAfterUsageLimitReset(current.id, armed: armed)
+            await self?.continueAfterUsageLimitReset(sessionID, armed: armed)
         }
     }
 
     private func cancelUsageLimitAutoContinue(for sessionID: UUID) {
         usageLimitAutoContinueTasks.removeValue(forKey: sessionID)?.cancel()
-        if usageLimitAutoContinue[sessionID] != nil { usageLimitAutoContinue.removeValue(forKey: sessionID) }
+        if usageLimitAutoContinue[sessionID] != nil {
+            usageLimitAutoContinue.removeValue(forKey: sessionID)
+            saveUsageLimitAutoContinues()
+        }
     }
 
     private func continueAfterUsageLimitReset(_ sessionID: UUID, armed: UsageLimitAutoContinue) async {
         guard usageLimitAutoContinue[sessionID] == armed else { return }
         usageLimitAutoContinue.removeValue(forKey: sessionID)
         usageLimitAutoContinueTasks.removeValue(forKey: sessionID)
+        saveUsageLimitAutoContinues()
         await sendContinueAfterReset(to: sessionID, leftAs: armed)
+    }
+
+    /// The armed continues, written as they change, so that one armed before a quit, a crash or an
+    /// update still waits for its reset after the relaunch (Claude Code itself drops its wait when it
+    /// relaunches).
+    private func saveUsageLimitAutoContinues() {
+        guard !isVisualFixture else { return }
+        UsageLimitAutoContinue.save(usageLimitAutoContinue, to: preferences)
+    }
+
+    /// Arms again, at launch, the continues armed before the last quit, for the tasks still on the same
+    /// conversation and account; a reset that passed meanwhile continues the task now, within the day
+    /// a cut-off turn continues in (`RestartResumePolicy.maxAge`). Whether the task still stands at
+    /// the card is checked when the message would go.
+    private func restoreUsageLimitAutoContinues(now: Date) {
+        for (id, armed) in UsageLimitAutoContinue.load(from: preferences)
+        where now < armed.resetsAt.addingTimeInterval(RestartResumePolicy.maxAge) {
+            guard let session = store.sessions.first(where: { $0.id == id }), session.harness == .claudeCode,
+                  session.providerSessionID == armed.providerSessionID, session.connection == armed.connection,
+                  usageLimitAutoContinue[id] == nil else { continue }
+            arm(armed, for: id)
+        }
+        saveUsageLimitAutoContinues()
     }
 
     /// A limit card's Resume once its limit has reset, for a task the person comes back to: the
     /// message the armed continue sends at the reset, sent now under the task's own account. The
-    /// card must still be the task's last entry and its reset time past.
+    /// card must still be the one the task continues from (`UsageLimitContinuation.card`) and its
+    /// reset time past.
     func continueAfterUsageLimitReset(entryID: UUID, for session: SessionRecord) async {
         flushTranscriptDeltas(for: session.id)
         guard let current = store.sessions.first(where: { $0.id == session.id }), current.harness == .claudeCode,
-              let card = transcriptBuilders[current.id]?.entries.last, card.id == entryID,
+              let card = UsageLimitContinuation.card(in: transcriptBuilders[current.id]?.entries ?? []), card.id == entryID,
               case let .usageLimit(limit) = card.content, let resetsAt = limit.resetsAt, resetsAt <= Date() else { return }
-        await sendContinueAfterReset(to: current.id, leftAs: UsageLimitAutoContinue(entryID: entryID,
+        await sendContinueAfterReset(to: current.id, leftAs: UsageLimitAutoContinue(
             resetsAt: resetsAt, providerSessionID: current.providerSessionID, connection: current.connection))
     }
 
     /// The continue message goes only to the task exactly as it was left: the same conversation
-    /// and account, idle, nothing after the limit card, and no message being edited.
+    /// and account, idle, still at the limit card naming that reset, and no message being edited.
     private func sendContinueAfterReset(to sessionID: UUID, leftAs left: UsageLimitAutoContinue) async {
         flushTranscriptDeltas(for: sessionID)
         guard let session = store.sessions.first(where: { $0.id == sessionID }),
               session.providerSessionID == left.providerSessionID, session.connection == left.connection,
               session.status != .running, session.status != .waitingForApproval,
-              transcriptBuilders[sessionID]?.entries.last?.id == left.entryID,
+              let card = UsageLimitContinuation.card(in: transcriptBuilders[sessionID]?.entries ?? []),
+              case let .usageLimit(limit) = card.content, left.waits(for: limit.resetsAt),
               composerDrafts.tasks.draft(for: sessionID).editState == nil,
               !switchingAccounts.contains(sessionID), !sessionMutations.contains(sessionID) else { return }
         await send(HarnessUserInput(text: UsageLimitContinuation.afterReset), to: session)
@@ -5613,6 +5647,7 @@ final class AppModel {
         guard !isVisualFixture else { return }
         // These start once the cut-off turns below are planned, and their tasks wait for them.
         continueAccountTaskMoves()
+        restoreUsageLimitAutoContinues(now: now)
         // Before any turn continues, so that a caller asking after its subagents finds them.
         let waitedFor = restoreAgentRunsCutOffByQuit()
         await continueTurnsCutOffByRestart(now: now)
