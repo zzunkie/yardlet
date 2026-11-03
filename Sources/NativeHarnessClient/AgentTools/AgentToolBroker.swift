@@ -296,7 +296,14 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     func list(_ call: AgentToolCall) async -> AgentToolList? {
         guard let sessionID = authorizedSession(call) else { return nil }
         let tools = await tools(for: sessionID)
-        return AgentToolList(tools: tools, fingerprint: AgentToolListWatching.fingerprint(of: tools))
+        return AgentToolList(tools: tools, fingerprint: await Self.fingerprint(of: tools))
+    }
+
+    /// Encoding a connector catalog can take hundreds of milliseconds; never run it on the UI actor.
+    private nonisolated static func fingerprint(of tools: [ToolJSON]) async -> String {
+        await Task.detached(priority: .utility) {
+            AgentToolListWatching.fingerprint(of: tools)
+        }.value
     }
 
     private func tools(for sessionID: UUID) async -> [ToolJSON] {
@@ -365,7 +372,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     /// turns; a task in a turn keeps them until `taskTurnEnded`.
     private func tellToolListChanges(to sessionID: UUID) async {
         guard toolListWatches[sessionID]?.isEmpty == false, tokens[sessionID] != nil, !isTaskInTurn(sessionID) else { return }
-        let current = AgentToolListWatching.fingerprint(of: await tools(for: sessionID))
+        let current = await Self.fingerprint(of: await tools(for: sessionID))
         // A turn may have begun while the list was made.
         guard !isTaskInTurn(sessionID) else { return }
         for (id, watch) in toolListWatches[sessionID] ?? [:] where watch.fingerprint != current {
