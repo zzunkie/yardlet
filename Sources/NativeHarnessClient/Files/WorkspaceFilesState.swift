@@ -43,12 +43,18 @@ final class WorkspaceFilesState {
     @ObservationIgnored private var loadID = UUID()
     @ObservationIgnored private var indexID = UUID()
 
-    init(preferences: WorkspaceFilePreferences = .init()) { self.preferences = preferences }
-    var isDirty: Bool { document.flatMap { preferences.drafts?[$0.path] } != nil }
-    var canEdit: Bool { document?.isEditable == true && document?.sourceDigest != nil && !isSaving }
+    @ObservationIgnored let provider: any WorkspaceFiles
+    var isLocal: Bool { provider.isLocal }
+
+    init(preferences: WorkspaceFilePreferences = .init(), provider: any WorkspaceFiles = LocalWorkspaceFiles()) {
+        self.preferences = preferences
+        self.provider = provider
+    }
+    var isDirty: Bool { isLocal && document.flatMap { preferences.drafts?[$0.path] } != nil }
+    var canEdit: Bool { isLocal && document?.isEditable == true && document?.sourceDigest != nil && !isSaving }
 
     func edit(_ text: String) {
-        guard let document, document.isEditable, let digest = document.sourceDigest else { return }
+        guard isLocal, let document, document.isEditable, let digest = document.sourceDigest else { return }
         var draft = preferences.drafts?[document.path] ?? .init(text: document.text, originalText: document.text, digest: digest, encoding: document.encoding)
         draft.text = text
         var drafts = preferences.drafts ?? [:]
@@ -78,7 +84,7 @@ final class WorkspaceFilesState {
     }
 
     func save(in workspace: URL) async {
-        guard !isSaving, let document, let draft = preferences.drafts?[document.path] else { return }
+        guard isLocal, !isSaving, let document, let draft = preferences.drafts?[document.path] else { return }
         let path = document.path
         isSaving = true; saveError = nil
         defer { isSaving = false }
@@ -118,9 +124,8 @@ final class WorkspaceFilesState {
         indexID = id
         isIndexing = true
         indexError = nil
-        let worker = Task.detached(priority: .utility) { try WorkspaceFileService.index(in: workspace) }
         do {
-            let result = try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+            let result = try await provider.index(in: workspace)
             try Task.checkCancellation()
             guard indexID == id else { return }
             index = result
@@ -132,7 +137,13 @@ final class WorkspaceFilesState {
 
     /// A file link the person clicked: a file outside the task's folder opens read-only.
     func open(_ url: URL, in workspace: URL) {
-        do { open(try WorkspaceFileLocation.opening(url, in: workspace), in: workspace) }
+        do {
+            guard isLocal else {
+                open(.init(relativePath: url.isFileURL ? url.path(percentEncoded: false) : url.relativeString), in: workspace)
+                return
+            }
+            open(try WorkspaceFileLocation.opening(url, in: workspace), in: workspace)
+        }
         catch {
             loadTask?.cancel()
             loadID = UUID()
@@ -155,32 +166,28 @@ final class WorkspaceFilesState {
         let id = UUID()
         loadID = id
         if refresh || document?.path != location.relativePath { document = nil }
-        // An image or a PDF shows as itself, whatever its bytes would read as.
-        if let media = WorkspaceFileMedia(WorkspaceFileLocation.url(for: location.relativePath, in: workspace)),
-           FileManager.default.fileExists(atPath: media.url.path(percentEncoded: false)) {
-            self.media = media
-            isLoading = false
-            return
-        }
         media = nil
         isLoading = true
-        let draft = preferences.drafts?[location.relativePath]
+        let draft = isLocal ? preferences.drafts?[location.relativePath] : nil
+        let provider = provider
         loadTask = Task { [weak self] in
-            // Reading, decoding, line offsets and colors stay off the main thread, a draft's too.
-            let worker = Task.detached(priority: .utility) {
-                let file = try WorkspaceFileService.read(location, in: workspace)
-                let shown = draft.map {
-                    WorkspaceFileDocument(path: file.path, text: $0.text, sourceDigest: $0.digest, encoding: $0.encoding)
-                }
-                return (file: file, draft: shown)
-            }
             do {
-                let result = try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+                let content = try await provider.read(location, in: workspace)
+                try Task.checkCancellation()
+                var shown: WorkspaceFileDocument?
+                if case let .document(file) = content, let draft {
+                    shown = await Task.detached(priority: .utility) {
+                        WorkspaceFileDocument(path: file.path, text: draft.text, sourceDigest: draft.digest, encoding: draft.encoding)
+                    }.value
+                }
                 guard let self, !Task.isCancelled, self.loadID == id else { return }
-                if let shown = result.draft, let draft {
-                    self.document = shown
-                    if result.file.sourceDigest != draft.digest { self.saveError = WorkspaceFileError.changedOnDisk.localizedDescription }
-                } else { self.document = result.file; self.saveError = nil }
+                switch content {
+                case let .media(media): self.media = media
+                case let .document(file):
+                    self.document = shown ?? file
+                    self.saveError = draft.map { file.sourceDigest != $0.digest } == true
+                        ? WorkspaceFileError.changedOnDisk.localizedDescription : nil
+                }
                 self.isLoading = false
             } catch {
                 guard let self, !Task.isCancelled, self.loadID == id else { return }

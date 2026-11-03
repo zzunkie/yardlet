@@ -968,6 +968,20 @@ public actor RemoteServer {
             case let .failure(error):
                 respond(.failure(envelope.id, error), to: id)
             }
+        case let .workspaceFiles(taskID):
+            switch await bridge.fileScope(taskID: taskID) {
+            case let .success(scope):
+                let result = await RemoteFileReader.perform { RemoteFileReader.index(in: scope) }
+                switch result {
+                case let .success(index):
+                    var response = RemoteResponse(re: envelope.id)
+                    response.filePaths = index.paths
+                    response.filesLimited = index.isLimited
+                    respond(response, to: id)
+                case let .failure(error): respond(.failure(envelope.id, error), to: id)
+                }
+            case let .failure(error): respond(.failure(envelope.id, error), to: id)
+            }
         case let .readFile(taskID, path, offset):
             await readFile(envelope.id, taskID: taskID, path: path, offset: offset, on: id)
         case let .taskSettings(taskID, prepare):
@@ -1064,6 +1078,7 @@ public actor RemoteServer {
             response.followUp = published?.followUp
             response.scheduledTasks = published?.scheduledTasks == true ? true : nil
             response.taskFiles = published?.taskFiles == true && RemoteFileReader.isSupported ? true : nil
+            response.workspaceFiles = response.taskFiles
             response.presence = true
             response.taskControls = published?.taskControls == true ? true : nil
             response.fullConversation = published?.fullConversation == true ? true : nil
