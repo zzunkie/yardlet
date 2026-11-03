@@ -190,7 +190,9 @@ final class HostSession: Identifiable {
             closingReason = event.reason
         case .revoked:
             connection = .removed
-        case .attention, .schedulesChanged, .linked, .linkRefused, .linkRequest, .linkResolved:
+        case .attention, .schedulesChanged, .linked, .linkRefused, .linkRequest, .linkResolved, .tabFrame,
+             .browserTabsChanged:
+            // Not shown on the phone yet: schedules, link requests and a task's browser tab (§15.21, §15.11).
             break
         }
     }
