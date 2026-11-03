@@ -3754,3 +3754,21 @@
 "Permission is off for now. Recovery could not be saved; retry before restarting Yardlet." = "Permission is off for now. Recovery could not be saved; retry before restarting Yardlet.";
 
 "Permission stays off after restarting. Retry saving the settings." = "Permission stays off after restarting. Retry saving the settings.";
+
+"%@ for %@" = "%@ for %@";
+
+"Change Yardlet settings on this Mac." = "Change Yardlet settings on this Mac.";
+
+"Change settings" = "Change settings";
+
+"Could not remove this device. It is still paired. Try again." = "Could not remove this device. It is still paired. Try again.";
+
+"Could not save device permissions. Try again." = "Could not save device permissions. Try again.";
+
+"Permission is off, but the change could not be saved. Retry before restarting Yardlet." = "Permission is off, but the change could not be saved. Retry before restarting Yardlet.";
+
+"Run shell commands as the host user." = "Run shell commands as the host user.";
+
+"Save and discard changes in the task's workspace." = "Save and discard changes in the task's workspace.";
+
+"Write files" = "Write files";
