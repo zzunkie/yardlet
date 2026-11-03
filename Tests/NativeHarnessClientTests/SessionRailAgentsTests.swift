@@ -92,6 +92,26 @@ final class SessionRailAgentsTests: XCTestCase {
         XCTAssertEqual(rail.rollup(.agents), L10n.string("Needs approval"))
     }
 
+    func testRepeatedPromptsKeepDistinctStableCallIdentities() throws {
+        var builder = TranscriptBuilder()
+        builder.appendUser("Review twice")
+        for id in ["first", "second"] {
+            builder.apply(.activityStarted(HarnessActivity(
+                id: id, kind: "mcp__yardlet__run_agent", title: "run_agent",
+                input: #"{"harness":"codex","prompt":"Review the change"}"#)))
+        }
+        let before = try XCTUnwrap(SessionRailAgents.make(harness: .claudeCode, entries: builder.entries, codexState: nil))
+        XCTAssertEqual(before.agents.count, 2)
+        XCTAssertEqual(Set(before.agents.map(\.id)).count, 2)
+        builder.apply(.activityCompleted(HarnessActivity(
+            id: "first", kind: "mcp__yardlet__run_agent", title: "run_agent",
+            input: #"{"harness":"codex","prompt":"Review the change"}"#, output: "Done")))
+        let after = try XCTUnwrap(SessionRailAgents.make(harness: .claudeCode, entries: builder.entries, codexState: nil))
+        XCTAssertEqual(Set(after.agents.map(\.id)), Set(before.agents.map(\.id)))
+        XCTAssertEqual(after.agents.filter { $0.status == .running }.count, 1)
+        XCTAssertEqual(after.agents.filter { $0.status == .completed }.count, 1)
+    }
+
     /// Codex child threads come from the thread's own calls, with the state they last reported; once
     /// the task's turn ended, a child it last saw running is no longer called running.
     func testCodexChildThreadsFollowTheStatesTheThreadReported() throws {

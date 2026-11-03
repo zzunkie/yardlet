@@ -362,6 +362,7 @@ struct SessionRailAgents: Equatable {
     private static func yardletAgents(harness: HarnessKind, entries: [TranscriptEntry], codexState: CodexTaskState?,
                                       runs: [Run]) -> [Agent] {
         struct Call {
+            var id: String
             var agentID: UUID?
             var prompt: String
             var harness: HarnessKind?
@@ -381,11 +382,11 @@ struct SessionRailAgents: Equatable {
             case .failed: .failed
             case .stopped: .stopped
             }
-            let call = Call(agentID: agentID.flatMap(UUID.init(uuidString:)), prompt: prompt,
+            let call = Call(id: activity.id, agentID: agentID.flatMap(UUID.init(uuidString:)), prompt: prompt,
                             harness: arguments?["harness"]?.stringValue.map(ConversationAgentRunProjection.harness(named:)),
                             model: arguments?["model"]?.stringValue, phase: status, startedAt: entry.createdAt)
             // The same call reported again (its result) replaces what it said while it ran.
-            if let index = calls.lastIndex(where: { $0.prompt == prompt && ($0.agentID == nil || $0.agentID == call.agentID) }),
+            if let index = calls.lastIndex(where: { $0.id == call.id }),
                calls[index].phase == .running {
                 calls[index].agentID = call.agentID ?? calls[index].agentID
                 calls[index].phase = status
@@ -403,7 +404,7 @@ struct SessionRailAgents: Equatable {
                 case "failed": .failed
                 default: tool.errorMessage == nil ? .completed : .failed
                 }
-                calls.append(Call(agentID: agentID.flatMap(UUID.init(uuidString:)), prompt: prompt,
+                calls.append(Call(id: "\(turn.id):\(item.id)", agentID: agentID.flatMap(UUID.init(uuidString:)), prompt: prompt,
                                   harness: tool.arguments["harness"]?.stringValue.map(HarnessKind.init(rawValue:)),
                                   model: tool.arguments["model"]?.stringValue, phase: status,
                                   startedAt: item.startedAt ?? turn.startedAt))
@@ -416,7 +417,7 @@ struct SessionRailAgents: Equatable {
             let index = call.agentID.flatMap { id in unmatched.firstIndex { $0.id == id } }
                 ?? unmatched.firstIndex { $0.prompt == call.prompt }
             let run = index.map { unmatched.remove(at: $0) }
-            agents.append(agent(harness: harness, run: run, call: (call.agentID, call.prompt, call.harness, call.model,
+            agents.append(agent(harness: harness, run: run, call: (call.id, call.agentID, call.prompt, call.harness, call.model,
                                                                     call.phase, call.startedAt)))
         }
         // Subagents its own subagents ran, which its transcript does not show.
@@ -428,7 +429,7 @@ struct SessionRailAgents: Equatable {
 
     private static func agent(
         harness: HarnessKind, run: Run?,
-        call: (agentID: UUID?, prompt: String, harness: HarnessKind?, model: String?, phase: Agent.Status, startedAt: Date?)?
+        call: (id: String, agentID: UUID?, prompt: String, harness: HarnessKind?, model: String?, phase: Agent.Status, startedAt: Date?)?
     ) -> Agent {
         let agentID = run?.id ?? call?.agentID
         let prompt = run?.prompt ?? call?.prompt ?? ""
@@ -447,7 +448,7 @@ struct SessionRailAgents: Equatable {
             call?.phase ?? .completed
         }
         let requests = run?.requests ?? []
-        return Agent(id: agentID.map { "agent:\($0.uuidString)" } ?? "agent-prompt:\(prompt.hashValue)",
+        return Agent(id: agentID.map { "agent:\($0.uuidString)" } ?? "agent-call:\(call?.id ?? "")",
                      kind: .yardletAgent(agentID: agentID, prompt: prompt),
                      title: ConversationSubagent.name(asked: prompt) ?? AgentRun.label(harness: agentHarness, model: model),
                      harnessLabel: AgentRun.harnessLabel(harness: agentHarness ?? harness, model: model),
