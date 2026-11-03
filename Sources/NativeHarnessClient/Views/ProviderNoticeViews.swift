@@ -72,6 +72,8 @@ struct UsageLimitCard: View {
                                 }, maxListHeight: 330)
                                 .padding(16).frame(width: 610)
                         }
+                    } else if let hostAccounts = notices.hostAccounts {
+                        UsageLimitHostAccountMenu(load: hostAccounts, choose: notices.continueWithHostAccount)
                     }
                     // Before the reset the task can wait for it; once it has passed, as when the
                     // person comes back after it, the task continues where it stopped on a press.
@@ -132,6 +134,37 @@ struct UsageLimitCard: View {
             return L10n.format("Auto-resuming at %@", ProviderNoticeText.resetTime(resetsAt, now: now))
         }
         return ProviderNoticeText.limitReset(limit, now: now) ?? limit.message
+    }
+}
+
+/// "Continue with another account" for a task on another Mac: the accounts that Mac lists, read as the menu
+/// first shows, each by its name and plan.
+private struct UsageLimitHostAccountMenu: View {
+    let load: @MainActor () async -> [UsageLimitHostAccount]
+    let choose: @MainActor (String) -> Void
+    @State private var accounts: [UsageLimitHostAccount]?
+
+    var body: some View {
+        Menu {
+            if let accounts {
+                ForEach(accounts) { account in
+                    Button([account.name, account.detail].compactMap { $0 }.joined(separator: " · ")) { choose(account.id) }
+                }
+                if accounts.isEmpty { Text(L10n.string("No other account can continue this task.")) }
+            } else {
+                Text(L10n.string("Loading…"))
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(L10n.string("Continue with another account"))
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .parityPointer()
+        .task { accounts = await load() }
     }
 }
 

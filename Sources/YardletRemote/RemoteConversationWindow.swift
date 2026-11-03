@@ -126,10 +126,35 @@ public struct RemoteConversationWindow: Sendable {
 
     /// About how many bytes an item takes in a page, as `Limits.maxBytes` counts them.
     public static func estimatedBytes(_ item: RemoteItem) -> Int {
-        let texts = [item.text, item.title, item.detail, item.command, item.message, item.explanation]
+        let texts = [item.text, item.title, item.detail, item.command, item.message, item.explanation,
+                     item.subagent?.input, item.subagent?.output, item.subagent?.copyText, item.providerNotice?.message,
+                     item.providerNotice?.details]
         return 160 + texts.reduce(0) { $0 + ($1?.utf8.count ?? 0) }
             + (item.steps?.reduce(0) { $0 + $1.text.utf8.count + 40 } ?? 0)
             + (item.questions?.reduce(0) { $0 + $1.utf8.count } ?? 0)
+            + (item.sender?.quotes?.reduce(0) { $0 + $1.text.utf8.count + 40 } ?? 0)
+            // Base64 takes a third more than the bytes.
+            + (item.images?.reduce(0) { $0 + $1.data.count * 4 / 3 + 80 } ?? 0)
+    }
+
+    /// `changes` in consecutive parts of about `maxBytes` each, at least one change a part: applied one event after
+    /// another, in order, they are the same changes (§5.3), and no event outgrows a message (§13.2).
+    public static func parts(of changes: [RemoteChange], maxBytes: Int) -> [[RemoteChange]] {
+        var parts: [[RemoteChange]] = []
+        var part: [RemoteChange] = []
+        var bytes = 0
+        for change in changes {
+            let size = change.item.map(estimatedBytes) ?? 80
+            if !part.isEmpty, bytes + size > maxBytes {
+                parts.append(part)
+                part = []
+                bytes = 0
+            }
+            part.append(change)
+            bytes += size
+        }
+        if !part.isEmpty { parts.append(part) }
+        return parts
     }
 
     // MARK: - Changes

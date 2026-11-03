@@ -21,6 +21,9 @@ struct ConversationPresentation: Equatable, Sendable {
     var pendingRequestIDs: Set<String> = []
     /// The latest turn's token usage (Codex only, for now).
     var tokenUsage: CodexThreadTokenUsage? = nil
+    /// The limit card the task continues from, where the conversation came from another Mac whose host decides it
+    /// (docs/REMOTE_PROTOCOL.md §15.17); nil where the timeline reads it from the record (`UsageLimitContinuation.card`).
+    var limitCardEntryID: UUID? = nil
 }
 
 /// Turns before the first one shown.

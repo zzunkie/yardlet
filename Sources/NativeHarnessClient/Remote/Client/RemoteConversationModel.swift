@@ -20,6 +20,9 @@ final class RemoteConversationModel {
     private(set) var isLoadingOlder = false
     /// What lines opened so far hold (§15.8), by item ID.
     private(set) var details: [String: RemoteItemDetail] = [:]
+    /// The latest plan limit, with what its card offers (§15.17): the host offers its actions on the card the task
+    /// continues from, which notices Claude Code wrote after it can leave a few turns back.
+    private(set) var usageLimit: RemoteItem?
     /// Each suggested task's item, which says what became of it (§15.9), by suggestion ID: the chips read
     /// it as they draw.
     private(set) var suggestions: [String: RemoteItem] = [:]
@@ -108,11 +111,6 @@ final class RemoteConversationModel {
         items.latest(within: limits)
     }
 
-    /// The latest turn's plan limit, with what its card offers (§15.17).
-    var usageLimit: RemoteItem? {
-        guard let last = items.runs.last else { return nil }
-        return last.items.last { $0.kind == .error && $0.errorKind == "usageLimit" && $0.inWork != true }
-    }
 
     /// A run as it was last projected: its turn, and its suggested tasks' items.
     private struct Projected {
@@ -151,9 +149,15 @@ final class RemoteConversationModel {
             turns.append(turn)
         }
         projected = kept
+        var limit: RemoteItem?
+        if let index = turns.lastIndex(where: { if case .usageLimit? = $0.outcome { true } else { false } }) {
+            limit = items.runs[index].items.last { $0.kind == .error && $0.errorKind == "usageLimit" && $0.inWork != true }
+        }
+        if limit != usageLimit { usageLimit = limit }
         var next = ConversationPresentation(harness: harness, turns: turns)
         next.earlier = hasOlder ? .provider(cursor: cursor ?? "") : .none
         next.pendingRequestIDs = pending
+        if let limit, limit.options?.isEmpty == false { next.limitCardEntryID = RemoteTurnProjection.uuid(limit.id) }
         presentation = next
         if suggestions != self.suggestions { self.suggestions = suggestions }
         let waiting = items.runs.last?.items.filter { $0.queued == true } ?? []

@@ -209,6 +209,11 @@ public actor RemoteFixtureBridge: RemoteBridge {
                               scheduledTasks: true, taskFiles: true, taskControls: true)
     }
 
+    /// The fixture's tasks hold nothing beyond the phone's projection (§15.24).
+    public func conversation(of taskID: String, detail: RemoteConversationDetail) -> RemoteConversation? {
+        conversation(of: taskID)
+    }
+
     /// The task's turns with what each offers (§15.23), and the messages queued behind its running turn at the end of
     /// the last one.
     public func conversation(of taskID: String) -> RemoteConversation? {

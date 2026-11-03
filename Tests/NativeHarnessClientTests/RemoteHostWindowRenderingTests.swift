@@ -21,6 +21,9 @@ import XCTest
 /// - `remote-host-schedules-*.png` and `local-schedules-*.png`: the scheduled tasks list beside a schedule.
 /// - `remote-form-*.png` and `local-form-*.png`: a Codex MCP form's card, the remote one read from what the host
 ///   sends for it.
+/// - In full detail (§15.24), `remote-full-*.png` and `local-full-*.png`: `answer`, an answer past the phone's 32,000
+///   characters; `pictures`, a message's two pictures; `limit`, a plan limit's card with its windows and Auto-continue;
+///   `codex`, a Codex turn opened, with a model reroute, a compaction, a subagent and a proposed plan.
 ///
 /// Against the fixture host (`RemoteFixtureBridge`), which streams and answers:
 /// - `remote-connect-*.png`: File › Connect to Mac… with one paired Mac.
@@ -417,6 +420,202 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
     }
 
     /// The chips' actions as the local window gives them, with where and with what Start starts each.
+    /// What the host's own cards draw beyond a phone's lines (§15.24), in the same state here and there: a long answer
+    /// whole, a message's pictures, a plan limit's card with its windows and actions, and a Codex turn's notice,
+    /// compaction, subagent and proposed plan.
+    func testTheHostsFullConversationDrawsAsTheLocalTimelineDoes() async throws {
+        let folder = URL(filePath: "/tmp/remote-render/yardlet", directoryHint: .isDirectory)
+        let claude = URL(filePath: "/tmp/claude"), codex = URL(filePath: "/tmp/codex")
+        let now = Date()
+        func task(_ harness: HarnessKind, _ title: String, minutesAgo: Double, thread: String? = nil) -> SessionRecord {
+            SessionRecord(harness: harness, workspaceURL: folder, runtimeExecutableURL: harness == .codex ? codex : claude,
+                          title: title, status: .completed, updatedAt: now.addingTimeInterval(-60 * minutesAgo),
+                          providerSessionID: thread, completionState: .completed)
+        }
+        let answer = task(.claudeCode, "Write the migration guide", minutesAgo: 1)
+        let pictures = task(.claudeCode, "Fix the login page", minutesAgo: 2)
+        let limit = task(.claudeCode, "Refactor the session store", minutesAgo: 3)
+        let plan = task(.codex, "Plan the sync engine", minutesAgo: 4, thread: "thread-plan")
+        let child = task(.codex, "Survey the sync libraries", minutesAgo: 5, thread: "thread-child")
+
+        // Past the phone's 32,000 characters, so its last paragraph is what a phone never reads.
+        let guide = (1...12).map { step in
+            "**Step \(step).** Move the next table to the new schema, then run the migration tests. "
+                + String(repeating: "Keep the old index until the new one is verified. ", count: 70)
+        }.joined(separator: "\n\n") + "\n\n**Last:** remove the compatibility view once every reader moved."
+        XCTAssertGreaterThan(guide.count, RemoteText.assistantLimit)
+        let answerEntries = [TranscriptEntry(content: .user(text: "Write the migration guide for the new schema")),
+                             TranscriptEntry(content: .assistant(text: guide, isStreaming: false))]
+
+        let imageFolder = FileManager.default.temporaryDirectory.appending(path: "remote-render-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: imageFolder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: imageFolder) }
+        let shots = try [("login-page.png", NSColor.systemBlue), ("error-dialog.png", NSColor.systemOrange)].map { name, color in
+            let url = imageFolder.appending(path: name)
+            try Self.picture(color: color, label: name).write(to: url)
+            return TranscriptImageAttachment(url: url)
+        }
+        let pictureEntries = [TranscriptEntry(content: .user(text: "The login button overlaps the error dialog", images: shots)),
+                              TranscriptEntry(content: .assistant(text: "The dialog now sits below the button.", isStreaming: false))]
+
+        let report = HarnessRateLimit(status: .rejected, window: .session, resetsAt: now.addingTimeInterval(2 * 3600),
+                                      usedFraction: 1, windows: [
+                                          .init(window: .session, model: nil, usedFraction: 1, resetsAt: now.addingTimeInterval(2 * 3600)),
+                                          .init(window: .weekly, model: nil, usedFraction: 0.62,
+                                                resetsAt: now.addingTimeInterval(4 * 24 * 3600))])
+        // A subagent the same limit stopped reports so after the card, in a turn of its own; the card is still the one
+        // the task continues from (`UsageLimitContinuation.card`).
+        let limitEntries = [TranscriptEntry(content: .user(text: "Split the session store into its reader and writer")),
+                            TranscriptEntry(content: .usageLimit(report)),
+                            TranscriptEntry(content: .user(text: "<task-notification>\n<task-id>a5</task-id>\n<status>failed</status>\n"
+                                + "<summary>Agent \"Review the store\" failed: You've hit your session limit</summary>\n</task-notification>"))]
+
+        let decoder = CodexTaskDecoder()
+        var thread = try XCTUnwrap(decoder.thread(from: .object(["id": .string("thread-plan")])))
+        thread.turns = [try XCTUnwrap(decoder.turn(from: .object([
+            "id": .string("turn-1"), "status": .string("completed"), "durationMs": .integer(120_000),
+            "items": .array([
+                .object(["id": .string("user-1"), "type": .string("userMessage"),
+                         "content": .array([.object(["type": .string("text"), "text": .string("Plan the sync engine")])])]),
+                .object(["id": .string("turn-1:notice:0"), "type": .string(CodexNoticeItem.itemType),
+                         "kind": .string("modelRerouted"), "message": .string("gpt-5.5"), "fromModel": .string("gpt-6"),
+                         "reason": .string("highRiskCyberActivity")]),
+                .object(["id": .string("compact-1"), "type": .string("contextCompaction")]),
+                .object(["id": .string("agent-1"), "type": .string("collabAgentToolCall"), "tool": .string("spawn_agent"),
+                         "status": .string("completed"), "senderThreadId": .string("thread-plan"),
+                         "receiverThreadIds": .array([.string("thread-child")]), "agentsStates": .object([:]),
+                         "prompt": .string("Survey the sync libraries and compare their conflict handling"),
+                         "model": .string("gpt-5.5")]),
+                .object(["id": .string("plan-1"), "type": .string("plan"),
+                         "text": .string("1. Store each change with its vector clock.\n2. Merge on read.\n3. Compact the log nightly.")]),
+                .object(["id": .string("answer-1"), "type": .string("agentMessage"), "phase": .string("final_answer"),
+                         "text": .string("The plan is above. Say the word and I'll implement it.")])
+            ])
+        ]), fallbackID: "turn-1"))]
+        let codexState = CodexTaskState(thread: thread)
+
+        let sessions = [answer, pictures, limit, plan, child]
+        let transcripts = [answer.id: answerEntries, pictures.id: pictureEntries, limit.id: limitEntries]
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteHostWindowRenderingTests")))
+        let host = AppModel(store: SessionStore(sessions: sessions, repository: InMemorySessionRepository(sessions: sessions)),
+                            runtimeSelections: RuntimeSelectionStore(defaults: defaults), initialTranscripts: transcripts,
+                            initialCodexPresentation: [plan.id: codexState], restoresIndexOnLaunch: false)
+        let stack = try await LoopbackStack(name: "Mac Studio",
+                                            bridge: AppModelRemoteBridge(model: host, makePreview: RemoteImagePreviewMaker.make))
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                        name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let hosts = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                        hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
+        let paired = try await hosts.pair(link: link.absoluteString)
+        let model = try XCTUnwrap(hosts.model(for: paired.id))
+        try await waitUntil { model.hasSnapshot && model.sendsFullConversation }
+        let size = NSSize(width: 1280, height: 820)
+        let column = NSSize(width: size.width - ParityTheme.sidebarWidth - 21, height: size.height - ParityTheme.paneToolbarHeight)
+        func open(_ session: SessionRecord, until ready: @escaping (ConversationPresentation) -> Bool) async throws -> ConversationPresentation {
+            model.select(.task(session.id.uuidString))
+            let conversation = try XCTUnwrap(model.conversations[session.id.uuidString])
+            try await waitUntil { conversation.isLoaded && ready(conversation.presentation) }
+            return conversation.presentation
+        }
+        func transcript(_ entries: [TranscriptEntry]) -> ConversationPresentation {
+            TranscriptConversationProjection.presentation(from: entries, harness: .claudeCode, status: .completed,
+                                                          latestTurnIsComplete: true)
+        }
+
+        // The whole answer, not the phone's first 32,000 characters: Show more opens it to its last paragraph here as there.
+        let remoteAnswer = try await open(answer) { !$0.turns.isEmpty }
+        XCTAssertEqual(remoteAnswer.turns.last?.answers.map(\.kind), transcript(answerEntries).turns.last?.answers.map(\.kind))
+        let more = { (label: String) in label == L10n.string("Show more") }
+        let latest = { (label: String) in label == L10n.string("Latest response") }
+        try await render("remote-full-answer", size: size, model: model, hosts: hosts, opening: more, press: latest)
+        try await render("local-full-answer", size: column, titled: false, opening: more, press: latest) {
+            localTimeline(answerEntries, folder: folder, status: .completed)
+        }
+
+        // The message's pictures as small previews, once the host made them.
+        let remotePictures = try await open(pictures) { presentation in
+            guard case let .userMessage(_, images)? = presentation.turns.first?.prompt.first?.kind else { return false }
+            return images.count == 2 && images.allSatisfy { $0.url?.scheme == "data" }
+        }
+        guard case let .userMessage(_, previews)? = remotePictures.turns.first?.prompt.first?.kind else { return XCTFail() }
+        XCTAssertEqual(previews.map(\.name), shots.map(\.name))
+        try await render("remote-full-pictures", size: size, model: model, hosts: hosts)
+        try await render("local-full-pictures", size: column, titled: false) {
+            localTimeline(pictureEntries, folder: folder, status: .completed)
+        }
+
+        // The limit card with the windows the provider reported, and what the host's card offers: continuing once
+        // the limit resets (no other account is saved there).
+        let limitOutcome = { (presentation: ConversationPresentation) in presentation.turns.lazy.compactMap(\.outcome).last }
+        let remoteLimit = try await open(limit) { limitOutcome($0) != nil }
+        guard case let .usageLimit(remoteReport, _)? = limitOutcome(remoteLimit),
+              case let .usageLimit(localReport, _)? = limitOutcome(transcript(limitEntries)) else { return XCTFail() }
+        XCTAssertEqual(remoteLimit.turns.count, transcript(limitEntries).turns.count)
+        XCTAssertEqual(remoteLimit.turns.last?.prompt.map(\.backgroundTaskNotice),
+                       transcript(limitEntries).turns.last?.prompt.map(\.backgroundTaskNotice))
+        XCTAssertEqual(remoteReport.windows.map(\.window), localReport.windows.map(\.window))
+        XCTAssertEqual(remoteReport.window, localReport.window)
+        try await waitUntil { model.conversations[limit.id.uuidString]?.usageLimit?.options == ["autoContinue"] }
+        let toggle = L10n.string("Auto-continue when limits reset")
+        try await render("remote-full-limit", size: size, model: model, hosts: hosts) { elements in
+            XCTAssertTrue(elements.contains { $0.label == toggle }, elements.description)
+        }
+        var limitActions = ConversationActions()
+        limitActions.providerNotices = TaskProviderNotices(canContinue: true)
+        try await render("local-full-limit", size: column, titled: false) {
+            localTimeline(limitEntries, folder: folder, status: .completed, actions: limitActions)
+        } check: { elements in
+            XCTAssertTrue(elements.contains { $0.label == toggle }, elements.description)
+        }
+
+        // A Codex turn: the reroute beside it, and in its work the compaction and the subagent, whose child thread
+        // opens as the host's task it runs in; the proposed plan in its card above the answer.
+        let remotePlan = try await open(plan) { !$0.turns.isEmpty }
+        let localPlan = CodexConversationProjection.presentation(codexState, workspaceURL: folder, historySelection: nil)
+        let remoteTurn = try XCTUnwrap(remotePlan.turns.last), localTurn = try XCTUnwrap(localPlan.turns.last)
+        XCTAssertEqual(remoteTurn.notices.map(\.kind), localTurn.notices.map(\.kind))
+        XCTAssertEqual(remoteTurn.answers.map(\.kind), localTurn.answers.map(\.kind))
+        let kinds = { (turn: ConversationTurn) in
+            turn.work.compactMap { item -> String? in
+                switch item.kind {
+                case .compaction: "compaction"
+                case let .subagent(subagent): "subagent \(subagent.title) \(subagent.input ?? "") \(subagent.model ?? "")"
+                default: nil
+                }
+            }
+        }
+        XCTAssertEqual(kinds(remoteTurn), kinds(localTurn))
+        let routes = remoteTurn.work.compactMap { item -> [ConversationSubagentRoute]? in
+            if case let .subagent(subagent) = item.kind { return subagent.routes }
+            return nil
+        }
+        XCTAssertEqual(routes, [[.codexThread(child.id.uuidString)]])
+        let worked = { (label: String) in label.contains(L10n.format("Worked for %lld minutes", 2)) }
+        try await render("remote-full-codex", size: size, model: model, hosts: hosts, press: worked)
+        try await render("local-full-codex", size: column, titled: false, press: worked) {
+            ConversationTimeline(source: .codex(codexState, workspaceURL: folder, historySelection: nil))
+                .environment(\.transcriptWorkspaceURL, folder)
+                .background(ParityTheme.canvas)
+        }
+        hosts.close(paired.id)
+        await host.shutdown()
+    }
+
+    /// A picture to send: a field of one color with its name.
+    private static func picture(color: NSColor, label: String) throws -> Data {
+        let image = NSImage(size: NSSize(width: 1200, height: 800), flipped: false) { rect in
+            color.setFill()
+            rect.fill()
+            (label as NSString).draw(at: NSPoint(x: 60, y: 360), withAttributes: [
+                .font: NSFont.systemFont(ofSize: 96, weight: .semibold), .foregroundColor: NSColor.white])
+            return true
+        }
+        let bitmap = try XCTUnwrap(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+        return try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+    }
+
     private func localSuggestionActions(_ model: AppModel, session: SessionRecord) -> TaskSuggestionActions {
         TaskSuggestionActions(
             resolution: { model.taskSuggestions.resolution(of: $0, in: session.id) },
@@ -436,8 +635,9 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
 
     /// The local timeline of a Claude Code task waiting on the person, whose cards can answer as the window's do.
     private func localTimeline(_ entries: [TranscriptEntry], folder: URL,
-                               status: SessionStatus = .waitingForApproval) -> some View {
-        var actions = ConversationActions()
+                               status: SessionStatus = .waitingForApproval,
+                               actions: ConversationActions = ConversationActions()) -> some View {
+        var actions = actions
         actions.chooseOption = { _, _ in }
         actions.answer = { _, _ in }
         return ConversationTimeline(source: .transcript(entries: entries, harness: .claudeCode, status: status,
@@ -570,18 +770,19 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
     private func render(_ name: String, size: NSSize, model: RemoteHostModel, hosts: RemoteHostDirectory,
                         opensDetails: Bool = false,
                         check: ([WindowlessRender.AccessibilityElement]) -> Void = { _ in },
-                        press: ((String) -> Bool)? = nil) async throws {
+                        opening: ((String) -> Bool)? = nil, press: ((String) -> Bool)? = nil) async throws {
         try await render(name, size: size, titled: true, title: model.name, subtitle: RemoteConnectionText.line(model.connection),
-                         press: press) {
+                         opening: opening, press: press) {
             RemoteHostView(model: model, directory: hosts)
                 .environment(\.opensDetailsForReview, opensDetails)
         } check: { check($0) }
     }
 
     /// Draws the view in an unshown window of `size`, in both appearances; a titled window draws its title
-    /// bar too, as the host's window shows its name and connection there.
+    /// bar too, as the host's window shows its name and connection there. What `opening` matches is pressed until
+    /// nothing does (Show more on a long answer), then what `press` matches once.
     private func render<Content: View>(_ name: String, size: NSSize, titled: Bool, title: String = "", subtitle: String = "",
-                                       press: ((String) -> Bool)? = nil,
+                                       opening: ((String) -> Bool)? = nil, press: ((String) -> Bool)? = nil,
                                        @ViewBuilder content: () -> Content,
                                        check: ([WindowlessRender.AccessibilityElement]) -> Void = { _ in }) async throws {
         let directory = try WindowlessRender.directory("remote-qa")
@@ -605,14 +806,25 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                 await Task.yield()
                 try await Task.sleep(for: .milliseconds(15))
             }
-            // A folded line opened as the person would, through the accessibility tree.
-            if let press {
-                XCTAssertTrue(hosting.pressAccessibilityElement(where: press), "Nothing to open in \(name)")
+            func settle() async throws {
                 for _ in 0..<10 {
                     Self.turnRunLoop(hosting)
                     await Task.yield()
                     try await Task.sleep(for: .milliseconds(15))
                 }
+            }
+            // Folded parts opened, and a line pressed, as the person would, through the accessibility tree.
+            if let opening {
+                var opened = 0
+                while opened < 20, hosting.pressAccessibilityElement(where: opening) {
+                    opened += 1
+                    try await settle()
+                }
+                XCTAssertGreaterThan(opened, 0, "Nothing to open in \(name)")
+            }
+            if let press {
+                XCTAssertTrue(hosting.pressAccessibilityElement(where: press), "Nothing to press in \(name)")
+                try await settle()
             }
             let frame = titled ? (hosting.superview ?? hosting) : hosting
             let bitmap = try WindowlessRender.capture(frame)

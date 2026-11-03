@@ -26,6 +26,17 @@ struct TaskProviderNotices {
     /// The account the task runs under, for a limit card to offer its resets; nil where its
     /// harness reports none.
     var usageReset: @MainActor () -> (choice: AccountChoice, context: UsageResetContext)? = { nil }
+    /// For a task on another Mac (docs/REMOTE_PROTOCOL.md §15.17): the accounts that Mac can continue it under,
+    /// read when the card's menu opens, in place of `accounts`. Nil for this Mac's own tasks.
+    var hostAccounts: (@MainActor () async -> [UsageLimitHostAccount])? = nil
+    var continueWithHostAccount: @MainActor (_ accountID: String) -> Void = { _ in }
+}
+
+/// An account another Mac can continue a task under: its ID there, its name and its plan, as that Mac lists it.
+struct UsageLimitHostAccount: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let detail: String?
 }
 
 /// What a limit card's "Continue with another account" opens: the task's account list, with the

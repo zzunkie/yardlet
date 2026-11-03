@@ -8,7 +8,19 @@ import YardletRemote
 /// Mac shows (`ConversationLineWording`), and each request offers only the answers the Mac's card
 /// offers that the phone may give (`RemoteApprovalPolicy`). Outputs, file contents and diffs are left
 /// out, and fetched one line at a time by `itemDetail` (§15.8); text is capped.
+///
+/// A subscription's full detail (§15.24) adds what the Mac's own cards read beyond a line: a sent message's
+/// pictures as small previews, a subagent's card, a compaction's marker, a provider's notice, a created
+/// schedule's row and a plan limit's windows, each from the same normalized item, and text capped far higher.
 enum RemoteConversationProjection {
+    /// What full detail reads from the app beside a turn.
+    struct Full {
+        /// Previews of the turn's sent pictures, by their URL; a picture without one counts in `imageCount` only.
+        var previews: [URL: Data] = [:]
+        /// The listed tasks the turn's Codex child threads run in, by thread ID.
+        var childTasks: [String: String] = [:]
+    }
+
     static func conversation(_ presentation: ConversationPresentation, workspaceURL: URL?) -> RemoteConversation {
         conversation(presentation, workspaceURL: workspaceURL) {
             turn($0, harness: presentation.harness, workspaceURL: workspaceURL)
@@ -23,26 +35,26 @@ enum RemoteConversationProjection {
         RemoteConversation(turns: uniqued(presentation.turns.map(project)), hasEarlier: presentation.earlier != .none)
     }
 
-    static func turn(_ turn: ConversationTurn, harness: HarnessKind, workspaceURL: URL?) -> RemoteTurn {
+    static func turn(_ turn: ConversationTurn, harness: HarnessKind, workspaceURL: URL?, full: Full? = nil) -> RemoteTurn {
         var items: [RemoteItem] = []
         func add(_ item: RemoteItem?) { if let item { items.append(item) } }
         for item in turn.prompt + turn.notices {
-            add(self.item(item, turnID: turn.id, harness: harness, workspaceURL: workspaceURL, inWork: false))
+            add(self.item(item, turnID: turn.id, harness: harness, workspaceURL: workspaceURL, inWork: false, full: full))
         }
         let headerIndex = items.count
         if let plan = turn.plan { add(self.plan(plan, turnID: turn.id)) }
         let kept = Set(turn.workKeptWhenFolded.map(\.id))
         for item in turn.work {
             add(self.item(item, turnID: turn.id, harness: harness, workspaceURL: workspaceURL,
-                          inWork: !kept.contains(item.id)))
+                          inWork: !kept.contains(item.id), full: full))
         }
         for item in turn.answers {
-            add(self.item(item, turnID: turn.id, harness: harness, workspaceURL: workspaceURL, inWork: false))
+            add(self.item(item, turnID: turn.id, harness: harness, workspaceURL: workspaceURL, inWork: false, full: full))
         }
         if let outcome = turn.outcome {
-            add(self.outcome(outcome, id: "outcome:\(turn.id)", turnID: turn.id, inWork: false))
+            add(self.outcome(outcome, id: "outcome:\(turn.id)", turnID: turn.id, inWork: false, isFull: full != nil))
         }
-        for request in turn.requests { add(self.request(request, turnID: turn.id, inWork: false)) }
+        for request in turn.requests { add(self.request(request, turnID: turn.id, inWork: false, isFull: full != nil)) }
         items.insert(header(turn, workCount: items.filter { $0.inWork == true }.count), at: headerIndex)
         return RemoteTurn(id: turn.id, items: items)
     }
@@ -131,30 +143,45 @@ enum RemoteConversationProjection {
     // MARK: - Items
 
     static func item(
-        _ item: ConversationItem, turnID: String, harness: HarnessKind, workspaceURL: URL?, inWork: Bool
+        _ item: ConversationItem, turnID: String, harness: HarnessKind, workspaceURL: URL?, inWork: Bool, full: Full? = nil
     ) -> RemoteItem? {
         var result = RemoteItem(id: "i:\(item.id)", turnId: turnID, kind: .activity)
         if inWork { result.inWork = true }
+        let userLimit = full == nil ? RemoteText.userLimit : RemoteText.fullTextLimit
         switch item.kind {
         case let .userMessage(text, images):
             result.kind = .user
-            setText(&result, text, RemoteText.userLimit)
+            setText(&result, text, userLimit)
             if !images.isEmpty { result.imageCount = images.count }
+            if let full {
+                let previews = images.compactMap { image in
+                    image.url.flatMap { full.previews[$0] }.map { RemoteImagePreview(data: $0, name: image.name) }
+                }
+                if !previews.isEmpty { result.images = previews }
+            }
             if let comments = item.promptAttachments?.comments.count, comments > 0 { result.diffCommentCount = comments }
+            if full != nil { result.sender = sender(of: item) }
         case let .scheduledTaskMessage(message):
             result.kind = .user
-            setText(&result, message.instructions, RemoteText.userLimit)
+            setText(&result, message.instructions, userLimit)
             result.scheduled = true
+            if full != nil, let schedule = message.claudeSchedule {
+                if case let .task(name) = schedule {
+                    result.sender = RemoteSender(kind: "claudeSchedule", name: name)
+                } else {
+                    result.sender = RemoteSender(kind: "claudeSchedule")
+                }
+            }
         case let .shellCommand(command, _):
             result.kind = .user
-            setText(&result, command.command, RemoteText.userLimit)
+            setText(&result, command.command, userLimit)
             result.shell = true
         case let .answer(text, isStreaming):
-            assistant(&result, text, role: "answer", isStreaming: isStreaming)
+            assistant(&result, text, role: "answer", isStreaming: isStreaming, isFull: full != nil)
         case let .commentary(text, isStreaming):
-            assistant(&result, text, role: "commentary", isStreaming: isStreaming)
+            assistant(&result, text, role: "commentary", isStreaming: isStreaming, isFull: full != nil)
         case let .proposedPlan(text, isWriting):
-            assistant(&result, text, role: "proposedPlan", isStreaming: isWriting)
+            assistant(&result, text, role: "proposedPlan", isStreaming: isWriting, isFull: full != nil)
         case let .reasoning(summary, detail, isStreaming):
             // The Mac draws a summary row, or a "Thinking" line while it streams or has a body.
             let summary = RemoteText.short(summary, RemoteText.detailLimit)
@@ -198,6 +225,10 @@ enum RemoteConversationProjection {
             activity(&result, "subagent", subagent.title, item.phase)
             result.detail = RemoteText.short(subagent.detail ?? subagent.status, RemoteText.detailLimit)
             if subagent.isApproved { result.approved = true }
+            if let full {
+                result.subagent = self.subagent(subagent, full: full)
+                result.subagent?.copyText = RemoteText.short(item.copyDetails, RemoteText.fullSubagentLimit)
+            }
         case let .taskSuggestion(suggestion):
             activity(&result, "taskSuggestion", suggestion.title ?? firstLine(suggestion.prompt), item.phase)
             result.detail = RemoteText.short(suggestion.tldr, RemoteText.detailLimit)
@@ -206,25 +237,74 @@ enum RemoteConversationProjection {
         case let .scheduleCreated(creation):
             // A tool line on the phone, which has no Scheduled tasks to open.
             activity(&result, "tool", L10n.format("Created scheduled task: %@", creation.name), item.phase)
+            if full != nil { result.schedule = RemoteScheduleCreation(id: creation.scheduleID.uuidString, name: creation.name) }
         case let .notice(notice):
             result.kind = .notice
             result.text = RemoteText.short(notice.displayMessage, RemoteText.detailLimit)
+            if full != nil {
+                result.providerNotice = RemoteProviderNotice(
+                    kind: notice.kind.rawValue, message: RemoteText.capped(notice.message, RemoteText.requestDetailLimit).text,
+                    details: RemoteText.short(notice.details, RemoteText.requestDetailLimit), fromModel: notice.fromModel,
+                    reason: notice.reason, path: notice.path)
+            }
         case let .compaction(compaction):
             result.kind = .notice
             result.text = RemoteText.short(ProviderNoticeText.compaction(compaction), RemoteText.detailLimit)
+            if full != nil {
+                result.compaction = RemoteCompaction(
+                    phase: compaction.phase.rawValue, tokensBefore: compaction.tokensBefore, tokensAfter: compaction.tokensAfter,
+                    message: RemoteText.short(compaction.message, RemoteText.errorLimit))
+            }
         case let .request(request):
-            return self.request(request, turnID: turnID, inWork: inWork)
+            return self.request(request, turnID: turnID, inWork: inWork, isFull: full != nil)
         case let .outcome(outcome):
-            return self.outcome(outcome, id: "i:\(item.id)", turnID: turnID, inWork: inWork)
+            return self.outcome(outcome, id: "i:\(item.id)", turnID: turnID, inWork: inWork, isFull: full != nil)
         }
         return result
     }
 
-    private static func assistant(_ item: inout RemoteItem, _ text: String, role: String, isStreaming: Bool) {
+    private static func assistant(_ item: inout RemoteItem, _ text: String, role: String, isStreaming: Bool, isFull: Bool) {
         item.kind = .assistant
         item.role = role
-        setText(&item, text, RemoteText.assistantLimit)
+        setText(&item, text, isFull ? RemoteText.fullTextLimit : RemoteText.assistantLimit)
         if isStreaming { item.streaming = true }
+    }
+
+    /// Who sent a message that is not the person's (§15.24): another task, with the person's words it passed on, or a
+    /// background command's notice.
+    private static func sender(of item: ConversationItem) -> RemoteSender? {
+        if let message = item.taskMessage {
+            let relation = switch message.relation {
+            case .task: "task"
+            case .parent: "parent"
+            case .itself: "itself"
+            }
+            let quotes = message.quotes.map {
+                RemoteSender.Quote(text: RemoteText.capped($0.text, RemoteText.fullTextLimit).text, sentAt: $0.sentAt)
+            }
+            return RemoteSender(kind: "task", name: RemoteText.short(message.senderName, RemoteText.titleLimit),
+                                relation: relation, quotes: quotes.isEmpty ? nil : quotes)
+        }
+        if let notice = item.backgroundTaskNotice {
+            return RemoteSender(kind: "backgroundTask", status: RemoteText.short(notice.status, RemoteText.titleLimit))
+        }
+        return nil
+    }
+
+    /// A subagent's card as the Mac draws it (§15.24): what it was asked and reported, its model, and the listed
+    /// tasks its Codex child threads run in.
+    private static func subagent(_ subagent: ConversationSubagent, full: Full) -> RemoteSubagent {
+        let threads = subagent.routes.compactMap { route -> String? in
+            if case let .codexThread(threadID) = route { return threadID }
+            return nil
+        }
+        let tasks = threads.compactMap { full.childTasks[$0] }
+        return RemoteSubagent(
+            kind: subagent.kind, detail: RemoteText.short(subagent.detail, RemoteText.requestDetailLimit),
+            input: RemoteText.short(subagent.input, RemoteText.fullSubagentLimit),
+            output: RemoteText.short(subagent.output, RemoteText.fullSubagentLimit),
+            model: subagent.model, harnessLabel: subagent.harnessLabel, background: subagent.isBackground ? true : nil,
+            taskIds: tasks.isEmpty ? nil : tasks)
     }
 
     /// A line's words as the Mac draws them (§6.4), each part capped as the title is.
@@ -257,7 +337,7 @@ enum RemoteConversationProjection {
 
     // MARK: - Requests, plans, outcomes
 
-    static func request(_ request: ConversationRequest, turnID: String, inWork: Bool) -> RemoteItem {
+    static func request(_ request: ConversationRequest, turnID: String, inWork: Bool, isFull: Bool = false) -> RemoteItem {
         var item = RemoteItem(id: "req:\(request.id)", turnId: turnID, kind: .approval)
         if inWork { item.inWork = true }
         item.requestId = request.id
@@ -276,10 +356,10 @@ enum RemoteConversationProjection {
         case .rejected: "rejected"
         }
         item.title = RemoteText.short(request.title, RemoteText.titleLimit)
-        item.detail = RemoteText.short(request.detail, RemoteText.requestDetailLimit)
+        item.detail = RemoteText.short(request.detail, isFull ? RemoteText.fullTextLimit : RemoteText.requestDetailLimit)
         if let command = RemoteText.short(request.command, .max) {
             // A phone must not take a cut command for the whole one (§6).
-            let capped = RemoteText.capped(command, RemoteText.commandLimit)
+            let capped = RemoteText.capped(command, isFull ? RemoteText.fullTextLimit : RemoteText.commandLimit)
             item.command = capped.text
             if capped.truncated { item.truncated = true }
         }
@@ -287,7 +367,7 @@ enum RemoteConversationProjection {
         case let .choices(questions):
             item.questions = questions.compactMap { RemoteText.short($0.question, RemoteText.questionLimit) }
         case let .planReview(plan):
-            item.text = RemoteText.short(plan, RemoteText.planTextLimit)
+            item.text = RemoteText.short(plan, isFull ? RemoteText.fullTextLimit : RemoteText.planTextLimit)
         case let .freeText(questions):
             item.questions = questions.compactMap { RemoteText.short($0.text, RemoteText.questionLimit) }
         case let .mcpForm(form):
@@ -388,22 +468,38 @@ enum RemoteConversationProjection {
         return item
     }
 
-    private static func outcome(_ outcome: ConversationTurnOutcome, id: String, turnID: String, inWork: Bool) -> RemoteItem {
+    private static func outcome(_ outcome: ConversationTurnOutcome, id: String, turnID: String, inWork: Bool,
+                                isFull: Bool) -> RemoteItem {
         var item = RemoteItem(id: id, turnId: turnID, kind: .error)
         if inWork { item.inWork = true }
         switch outcome {
         case let .error(error):
             item.errorKind = "error"
             item.title = RemoteText.short(error.title, RemoteText.titleLimit)
-            item.message = RemoteText.short(error.summary.isEmpty ? error.message : error.summary, RemoteText.errorLimit)
+            // The card's details and copy keep the provider's whole text.
+            item.message = isFull ? RemoteText.short(error.message, RemoteText.fullTextLimit)
+                : RemoteText.short(error.summary.isEmpty ? error.message : error.summary, RemoteText.errorLimit)
             item.recoverable = error.isRecoverable
         case let .usageLimit(limit, _):
             item.errorKind = "usageLimit"
             item.title = RemoteText.short(ProviderNoticeText.limitHeadline(limit), RemoteText.titleLimit)
             item.message = RemoteText.short(limit.message ?? ProviderNoticeText.limitReset(limit), RemoteText.errorLimit)
             item.resetsAt = limit.resetsAt.map(RemoteJSON.milliseconds)
+            if isFull { item.limit = self.limit(limit) }
         }
         return item
+    }
+
+    /// The limit as the provider reported it, which the card words in the reader's language (§15.24).
+    private static func limit(_ limit: HarnessRateLimit) -> RemoteLimit {
+        RemoteLimit(
+            status: limit.status.rawValue, window: limit.window?.rawValue, model: limit.model, usedFraction: limit.usedFraction,
+            overage: limit.isUsingOverage ? true : nil,
+            windows: limit.windows.isEmpty ? nil : limit.windows.map {
+                RemoteLimit.Window(window: $0.window.rawValue, model: $0.model, usedFraction: $0.usedFraction,
+                                   resetsAt: $0.resetsAt.map(RemoteJSON.milliseconds))
+            },
+            message: RemoteText.short(limit.message, RemoteText.errorLimit))
     }
 
     // MARK: - Text

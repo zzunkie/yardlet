@@ -339,6 +339,61 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(answer.streaming, true)
     }
 
+    /// Full detail (§15.24) on a long conversation: a sent picture's preview is made once, off the main actor, and
+    /// projects again only the turn that holds it; a streaming answer projects only its turn, in each detail.
+    func testAFullConversationProjectsOnlyTheTurnsAChangeTouches() async throws {
+        let session = SessionRecord(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp/remote-full", directoryHint: .isDirectory),
+                                    runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Long", status: .running)
+        var entries: [TranscriptEntry] = []
+        for turn in 0..<300 {
+            let images = turn >= 297 ? [TranscriptImageAttachment(url: URL(filePath: "/tmp/remote-full/picture-\(turn).png"))] : nil
+            entries.append(TranscriptEntry(content: .user(text: "Message \(turn)", images: images)))
+            entries.append(TranscriptEntry(content: .assistant(text: "Done \(turn)", isStreaming: false)))
+        }
+        let model = try Self.model(sessions: [session], transcripts: [session.id: entries])
+        final class Count: @unchecked Sendable {
+            private let lock = NSLock()
+            private var count = 0
+            var value: Int { lock.withLock { count } }
+            func add() { lock.withLock { count += 1 } }
+        }
+        let made = Count(), changes = Count()
+        let bridge = AppModelRemoteBridge(model: model) { url, _ in
+            made.add()
+            return Data(url.lastPathComponent.utf8)
+        }
+        bridge.setChangeHandler { change in if case .conversation = change { changes.add() } }
+        let taskID = session.id.uuidString
+        bridge.setWatchedTasks([taskID])
+        let first = try XCTUnwrap(bridge.conversation(of: taskID, detail: .full))
+        XCTAssertEqual(bridge.projectedTurnCount, 300)
+        XCTAssertTrue(first.turns.allSatisfy { $0.items.first?.images == nil })
+        // Each preview tells its own turn once it is made.
+        try await waitUntil { made.value == 3 && changes.value >= 3 }
+        let previewed = try XCTUnwrap(bridge.conversation(of: taskID, detail: .full))
+        XCTAssertEqual(bridge.projectedTurnCount, 303)
+        XCTAssertEqual(previewed.turns.suffix(3).map { $0.items.first?.images?.first?.data },
+                       (297..<300).map { Data("picture-\($0).png".utf8) })
+        XCTAssertEqual(previewed.turns.suffix(3).map { $0.items.first?.imageCount }, [1, 1, 1])
+
+        // A phone reads the same conversation in its own detail; the two keep their turns apart.
+        let basic = try XCTUnwrap(bridge.conversation(of: taskID))
+        XCTAssertEqual(bridge.projectedTurnCount, 603)
+        XCTAssertNil(basic.turns.last?.items.first?.images)
+        for index in 1...20 {
+            let before = changes.value
+            var streamed = entries
+            streamed[streamed.count - 1].content = .assistant(text: "Done 299" + String(repeating: " word", count: index),
+                                                             isStreaming: true)
+            model.transcripts[session.id] = streamed
+            try await waitUntil { changes.value > before }
+            _ = bridge.conversation(of: taskID, detail: .full)
+            _ = bridge.conversation(of: taskID)
+        }
+        XCTAssertEqual(bridge.projectedTurnCount, 643)
+        XCTAssertEqual(made.value, 3)
+    }
+
     // MARK: - Tasks
 
     func testTheSnapshotIsTheSidebarsTasksWithItsAttention() async throws {

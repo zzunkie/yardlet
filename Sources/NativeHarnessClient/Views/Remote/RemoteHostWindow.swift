@@ -448,9 +448,9 @@ private struct RemoteTaskRow: View {
 
 // MARK: - A task
 
-/// A task of the host: its conversation in the app's own timeline, the queue's chips, the plan limit's
-/// actions, and the composer; beside it, as the local session rail, the task's outputs when the host serves
-/// its files (§15.22). Suggested tasks' chips act through the host (§15.9), and a file a link names or an
+/// A task of the host: its conversation in the app's own timeline, with the plan limit's actions on its card,
+/// the queue's chips, and the composer; beside it, as the local session rail, the task's outputs when the host
+/// serves its files (§15.22). Suggested tasks' chips act through the host (§15.9), and a file a link names or an
 /// output is read from the host and opened here (`RemoteHostFiles`).
 struct RemoteTaskView: View {
     let model: RemoteHostModel
@@ -526,9 +526,6 @@ struct RemoteTaskView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                if let limit = conversation.usageLimit, !(limit.options ?? []).isEmpty {
-                    RemoteUsageLimitBar(model: model, taskID: conversation.taskID, limit: limit)
-                }
                 RemoteComposer(model: model, taskID: conversation.taskID, draft: draft, queued: conversation.queued,
                                editing: $editing)
             }
@@ -601,7 +598,33 @@ struct RemoteTaskView: View {
                 if case let .turn(turnID) = point { model.fork(taskID, turnID: turnID) } else { model.fork(taskID, turnID: nil) }
             }
         }
+        // A subagent's child thread is the host's task it runs in (§15.24).
+        actions.openCodexSubagent = { [model] taskID in model.select(.task(taskID)) }
+        actions.providerNotices = limitActions
         return actions
+    }
+
+    /// What the latest limit card offers, as the host offers it (§15.17): continuing under another account that
+    /// shares the task's history, and continuing once the limit resets.
+    private var limitActions: TaskProviderNotices? {
+        guard let limit = conversation.usageLimit, let options = limit.options, !options.isEmpty else { return nil }
+        let taskID = conversation.taskID
+        var notices = TaskProviderNotices()
+        notices.canContinue = true
+        // An armed continue is known by the reset it waits for, as on the host.
+        if limit.autoContinue == true, let resetsAt = limit.resetsAt {
+            notices.autoContinueResetsAt = Date(timeIntervalSince1970: TimeInterval(resetsAt) / 1000)
+        }
+        notices.setAutoContinue = { [model] enabled, _ in model.send(.setAutoContinue(taskID: taskID, enabled: enabled)) }
+        if options.contains("continueWithAccount") {
+            notices.hostAccounts = { [model] in
+                let response = await model.response(to: .limitAccounts(taskID: taskID))
+                return (response.accounts ?? []).filter { $0.available == true }
+                    .map { UsageLimitHostAccount(id: $0.id, name: $0.name, detail: $0.detail) }
+            }
+            notices.continueWithHostAccount = { [model] id in model.send(.continueWithAccount(taskID: taskID, accountID: id)) }
+        }
+        return notices
     }
 
     private func respond(_ requestID: String, _ route: ConversationRequestRoute) {
@@ -679,56 +702,5 @@ struct RemoteTaskView: View {
         draft.text = text
         draft.attachments = []
         draft.notice = nil
-    }
-}
-
-/// The plan limit card's actions (§15.17): continue under another account that shares the task's history,
-/// and continuing on its own once the limit resets.
-private struct RemoteUsageLimitBar: View {
-    let model: RemoteHostModel
-    let taskID: String
-    let limit: RemoteItem
-    @State private var accounts: [RemoteAccount]?
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "gauge.with.dots.needle.100percent")
-                .foregroundStyle(.orange)
-            Text(limit.title ?? L10n.string("Usage limit reached"))
-                .font(.callout)
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            if limit.options?.contains("autoContinue") == true {
-                Toggle(L10n.string("Auto-continue when limits reset"), isOn: Binding(
-                    get: { limit.autoContinue == true },
-                    set: { enabled in model.send(.setAutoContinue(taskID: taskID, enabled: enabled)) }))
-                    .toggleStyle(.checkbox)
-                    .controlSize(.small)
-            }
-            if limit.options?.contains("continueWithAccount") == true {
-                Menu(L10n.string("Continue with…")) {
-                    if let accounts {
-                        ForEach(accounts.filter { $0.available == true }, id: \.id) { account in
-                            Button([account.name, account.detail].compactMap { $0 }.joined(separator: " · ")) {
-                                model.send(.continueWithAccount(taskID: taskID, accountID: account.id))
-                            }
-                        }
-                        if !accounts.contains(where: { $0.available == true }) {
-                            Text(L10n.string("No other account can continue this task."))
-                        }
-                    } else {
-                        Text(L10n.string("Loading…"))
-                    }
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .task {
-                    let response = await model.response(to: .limitAccounts(taskID: taskID))
-                    accounts = response.accounts ?? []
-                }
-            }
-        }
-        .padding(10)
-        .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 10))
     }
 }

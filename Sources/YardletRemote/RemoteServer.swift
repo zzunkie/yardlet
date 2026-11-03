@@ -96,6 +96,9 @@ public protocol RemoteBridge: AnyObject, Sendable {
     func snapshot() async -> RemoteSnapshot
     /// A listed task's conversation as loaded now; nil for a task not listed.
     func conversation(of taskID: String) async -> RemoteConversation?
+    /// The same with what the Mac's own cards draw too (§15.24). A bridge that answers it says so in its snapshot
+    /// (`fullConversation`); one that does not answers as `conversation(of:)`.
+    func conversation(of taskID: String, detail: RemoteConversationDetail) async -> RemoteConversation?
     /// Reads the task's latest saved history, as opening it on the Mac does (no model turn).
     func prepareConversation(of taskID: String) async
     /// Asks the provider for turns before the loaded ones.
@@ -261,7 +264,13 @@ public actor RemoteServer {
         var window: RemoteConversationWindow
         /// The fetch the window last showed; an older fetch that returns late is dropped.
         var generation: Int
+        /// What the phone asked to be sent of each item (§15.24).
+        var detail: RemoteConversationDetail = .basic
     }
+
+    /// What one `conversation` event carries at most, well within a message (§13.2): a part of a full
+    /// conversation's changes can hold long answers and pictures.
+    static let maxChangesBytes = 2 * 1024 * 1024
 
     /// A link request from message 1 until it is answered (§12.1).
     private struct PendingLink {
@@ -986,11 +995,12 @@ public actor RemoteServer {
             response.taskFiles = published?.taskFiles == true && RemoteFileReader.isSupported ? true : nil
             response.presence = true
             response.taskControls = published?.taskControls == true ? true : nil
+            response.fullConversation = published?.fullConversation == true ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)
             connections[id]?.receivesTaskEvents = true
-        case let .subscribeTask(taskID):
-            await subscribe(envelope.id, taskID: taskID, on: id)
+        case let .subscribeTask(taskID, detail):
+            await subscribe(envelope.id, taskID: taskID, detail: detail, on: id)
         case let .loadOlder(taskID, cursor):
             await loadOlder(envelope.id, taskID: taskID, cursor: cursor, on: id)
         case let .unsubscribeTask(taskID):
@@ -1157,14 +1167,14 @@ public actor RemoteServer {
 
     // MARK: - Conversations
 
-    private func subscribe(_ requestID: String, taskID: String, on id: UUID) async {
+    private func subscribe(_ requestID: String, taskID: String, detail: RemoteConversationDetail, on id: UUID) async {
         guard let connection = connections[id] else { return }
         guard connection.subscriptions[taskID] != nil
                 || connection.subscriptions.count < configuration.maxSubscriptions else {
             respond(.failure(requestID, RemoteError(.tooManySubscriptions)), to: id)
             return
         }
-        let (generation, conversation) = await fetch(taskID)
+        let (generation, conversation) = await fetch(taskID, detail: detail)
         guard connections[id] != nil else { return }
         guard let conversation else {
             respond(.failure(requestID, RemoteError(.notFound, "No task \(taskID)")), to: id)
@@ -1172,7 +1182,7 @@ public actor RemoteServer {
         }
         var window = RemoteConversationWindow(limits: configuration.windowLimits)
         let page = window.open(conversation)
-        connections[id]?.subscriptions[taskID] = Subscription(window: window, generation: generation)
+        connections[id]?.subscriptions[taskID] = Subscription(window: window, generation: generation, detail: detail)
         var response = RemoteResponse(re: requestID)
         response.taskId = taskID
         response.items = page.items
@@ -1192,7 +1202,8 @@ public actor RemoteServer {
         }
         var askedProvider = false
         while true {
-            let (generation, conversation) = await fetch(taskID)
+            let detail = connections[id]?.subscriptions[taskID]?.detail ?? .basic
+            let (generation, conversation) = await fetch(taskID, detail: detail)
             guard var subscription = connections[id]?.subscriptions[taskID] else {
                 respond(.failure(requestID, RemoteError(.notSubscribed)), to: id)
                 return
@@ -1236,32 +1247,38 @@ public actor RemoteServer {
         }
     }
 
-    private func fetch(_ taskID: String) async -> (Int, RemoteConversation?) {
+    private func fetch(_ taskID: String, detail: RemoteConversationDetail) async -> (Int, RemoteConversation?) {
         fetchGeneration += 1
         let generation = fetchGeneration
-        return (generation, await bridge.conversation(of: taskID))
+        return (generation, await bridge.conversation(of: taskID, detail: detail))
     }
 
+    /// Reads the conversation once for each detail its subscriptions asked for, and sends each the changes.
     private func refreshConversation(_ taskID: String) async {
-        guard connections.values.contains(where: { $0.subscriptions[taskID] != nil }) else { return }
-        let (generation, conversation) = await fetch(taskID)
-        for (id, connection) in connections {
-            guard var subscription = connection.subscriptions[taskID], subscription.generation < generation else { continue }
-            guard let conversation else {
-                connections[id]?.subscriptions[taskID] = nil
-                connections[id]?.followsSettings.remove(taskID)
-                var ended = RemoteEvent(.conversationEnded)
-                ended.taskId = taskID
-                ended.reason = "removed"
-                send(ended, to: id)
-                continue
+        let details = Set(connections.values.compactMap { $0.subscriptions[taskID]?.detail })
+        var ended = false
+        for detail in [RemoteConversationDetail.basic, .full] where details.contains(detail) {
+            let (generation, conversation) = await fetch(taskID, detail: detail)
+            for (id, connection) in connections {
+                guard var subscription = connection.subscriptions[taskID], subscription.detail == detail,
+                      subscription.generation < generation else { continue }
+                guard let conversation else {
+                    connections[id]?.subscriptions[taskID] = nil
+                    connections[id]?.followsSettings.remove(taskID)
+                    var event = RemoteEvent(.conversationEnded)
+                    event.taskId = taskID
+                    event.reason = "removed"
+                    send(event, to: id)
+                    continue
+                }
+                subscription.generation = generation
+                let update = subscription.window.update(conversation)
+                connections[id]?.subscriptions[taskID] = subscription
+                send(update, of: taskID, to: id)
             }
-            subscription.generation = generation
-            let update = subscription.window.update(conversation)
-            connections[id]?.subscriptions[taskID] = subscription
-            send(update, of: taskID, to: id)
+            if conversation == nil { ended = true }
         }
-        if conversation == nil { await updateWatched() }
+        if ended { await updateWatched() }
     }
 
     /// A window's update as its event: changes, the window again whole, or nothing.
@@ -1270,10 +1287,12 @@ public actor RemoteServer {
         case .unchanged:
             break
         case let .changes(changes):
-            var event = RemoteEvent(.conversation)
-            event.taskId = taskID
-            event.changes = changes
-            send(event, to: id)
+            for part in RemoteConversationWindow.parts(of: changes, maxBytes: Self.maxChangesBytes) {
+                var event = RemoteEvent(.conversation)
+                event.taskId = taskID
+                event.changes = part
+                send(event, to: id)
+            }
         case let .reset(page):
             var event = RemoteEvent(.conversationReset)
             event.taskId = taskID

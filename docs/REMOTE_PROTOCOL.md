@@ -147,6 +147,9 @@ badge read (`TaskAttentionProjection`, `SidebarTaskIndicatorProjection`).
   with a fresh page. Up to 8 tasks per connection (`tooManySubscriptions`).
 - Subscribing reads the task's latest saved history the way opening the task on the Mac does (it
   never starts a model turn); what that read adds arrives as events.
+- `detail` (optional, v2): `"full"` asks for what the Mac's own cards draw beyond this section's items, from a Mac
+  whose snapshot carries `fullConversation: true` (§15.24). The page, `loadOlder` pages and events of the
+  subscription all come in that detail. Absent, or a value the Mac does not know, is the shape of §6.
 
 #### `loadOlder`
 
@@ -303,7 +306,8 @@ again, which sends a fresh page. After a `loadOlder` response, the changes the n
 through meanwhile follow at once as a `conversation` event.
 
 A streaming answer is the same item sent again with its text so far. Sent at most about five times a
-second per task.
+second per task. Changes too large for one message (§13.2) come as several `conversation` events in a row, each a
+part of them in order; applying each as it arrives is the same.
 
 #### `conversationReset`
 
@@ -567,7 +571,9 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
 - 2026-11-02, v2 only: scheduled tasks, Run now, Pause and Resume, and their change event (§15.21); a task's outputs
   and the files in its folders (§15.22).
 - 2026-11-03: `presence` and held pushes (§16, §18).
-- 2026-11-03: a line's words in parts, `words` (§6.4), and a choice's catalog key, `text` (§15.19).
+- 2026-11-03: a line's words in parts, `words` (§6.4), and a choice's catalog key, `text` (§15.19). Later the same day:
+  a subscription's full detail (§15.24), with the snapshot's `fullConversation`; a `conversation` event's changes may
+  come in several events in a row (§5.3, §15.24).
 - 2026-11-02, a rule restated: `parentTaskId` (§4.1) is the task the Mac's sidebar draws the task under, so a task
   whose parent is in another list, pinned apart or in a split view comes without one, as the sidebar lists it.
   Before, it was the task it was started from whenever that task was listed anywhere.
@@ -1452,6 +1458,68 @@ message's Edit message, and Fork from here. Each acts through the path the Mac's
   open the `taskId` a command or `forkTask` answers with. Offer Edit message and Fork from here on the turns whose
   `turn` item lists them; an edit puts the message's text in the composer and sends it with `editMessage`.
 
+### 15.24 A conversation in full detail
+
+Added on 2026-11-03. Yardlet on another computer (§18) draws a task's conversation with the Mac's own cards, and asks
+for what they read beyond §6's items. A phone keeps §6.
+
+- The snapshot carries `fullConversation: true` when the Mac answers `subscribeTask` with `"detail": "full"` (§4.2).
+  A subscription asks for it once; its page, `loadOlder` pages and events then hold the same items in the same order,
+  with the same IDs, as §6, and the fields below besides. Nothing else differs: lines still read their output and
+  diffs with `itemDetail` (§15.8), and requests answer as §15.19.
+- **Longer text.** `text` of `user` and `assistant` items, a request's `text`, `detail` and `command`, and an error's
+  `message` (the provider's whole text, not its summary) are cut at 200,000 characters instead of §6's limits, with
+  `truncated: true` as before.
+- **`images`** on a `user` item: the pictures the message sent, as small previews the Mac makes once, `{"type":
+  "image/jpeg", "data": "<base64>", "name": "login-page.png"}`, at most 480 pixels on the long side, in the message's
+  order. A picture the Mac cannot read (or one on the web, which it never fetches) has none, and a preview being made
+  arrives as a change once it is ready; `imageCount` still counts them all, so a client shows the rest by name.
+- **`sender`** on a `user` item someone other than the person sent, whose words are its `text`: another task's
+  message, `{"kind": "task", "name": "Fix the footer", "relation": "parent", "quotes": [{"text": "…", "sentAt":
+  "2026-11-03T09:12:00+09:00"}]}` (`relation` `task`, `parent` or `itself`; `quotes`, the person's own messages it
+  passed on); a background command's or agent's notice that opened the turn, `{"kind": "backgroundTask", "status":
+  "failed"}`; or, beside `scheduled: true`, a prompt Claude Code's own schedule sent, `{"kind": "claudeSchedule",
+  "name": "Morning check"}` (no `name` for a check-in). A `scheduled` item without it is a Codex automation's.
+- **`subagent`** on an `activity` item with `activity` `subagent`, the subagent card's own fields (its title and status
+  are the item's):
+
+  ```json
+  "subagent": {"kind": "spawn_agent", "detail": "thread-7c1…", "input": "Survey the sync libraries…",
+               "output": "…", "model": "gpt-5.5", "harnessLabel": "Codex · gpt-5.5", "background": true,
+               "taskIds": ["9D02…"], "copyText": "…"}
+  ```
+
+  `input` and `output` are cut at 64,000 characters. `taskIds`: the listed tasks a Codex subagent's child threads run
+  in, which its "Open child task" opens; a child the Mac does not list yet has none. `copyText`: what the card's copy
+  button takes.
+- **`compaction`** on a `notice` item that is a context compaction: `{"phase": "completed", "tokensBefore": 180000,
+  "tokensAfter": 42000}`, `phase` `started`, `completed` or `failed` with the provider's `message`.
+- **`providerNotice`** on a `notice` item a provider sent beside a turn: `{"kind": "modelRerouted", "message": "gpt-5.5",
+  "fromModel": "gpt-6", "reason": "highRiskCyberActivity"}`; `kind` `modelRerouted`, `warning`, `configWarning` or
+  `deprecationNotice`, with `details` and a config file's `path` when it names one. A client words it itself.
+- **`schedule`** on the `activity` item of a schedule an agent created (§15.21): `{"id": "6B0E…", "name": "Morning
+  check"}`, the schedule's ID and the name the call gave.
+- **`limit`** on an `error` item with `errorKind` `usageLimit`: the limit as the provider reported it, which a client
+  words itself (its `title` and `message` are the Mac's words):
+
+  ```json
+  "limit": {"status": "rejected", "window": "session", "usedFraction": 1.0,
+            "windows": [{"window": "session", "usedFraction": 1.0, "resetsAt": 1792170000000},
+                        {"window": "weekly", "usedFraction": 0.62, "resetsAt": 1792500000000}]}
+  ```
+
+  `status` `allowed`, `warning` or `rejected`; `window` and each window's `window` `session`, `weekly`, `model` or
+  `overage`, with the `model` a weekly limit covers; `overage: true` while paid extra usage covers requests; `message`,
+  the provider's own words. When it resets is the item's `resetsAt`, and its actions are §15.17's: the card that
+  carries `options` is the one the task continues from, which may sit before turns that only Claude Code's own
+  notices opened, and `autoContinue: true` marks the armed continue, which the Mac keeps by the reset it waits for.
+- **Size.** A page still holds about 384 KB of items besides its first turn (previews count by their bytes), and a
+  `conversation` event at most about 2 MiB; larger changes come as several events in a row (§5.3).
+- **For the Android app:** nothing changes until it asks. To draw the same cards it would send `"detail": "full"` to a
+  Mac with `fullConversation`, decode the previews' JPEG, and word notices and limits from their kinds as its own
+  strings, keeping `title` and `text` as the fallback for a kind it does not know. Full detail costs more over the
+  relay, so a phone on mobile data may prefer §6.
+
 ## 16. Push notifications
 
 The Mac pushes to a device that registered (§15.6) and **has no open v2 connection**, for these
@@ -1489,7 +1557,8 @@ device's push key, associated data the UTF-8 bytes of `yardlet-push/1`, over the
   `npx wrangler dev --local --port 8787`, no sign-in); `--relay-public ws://10.0.2.2:8787` is the relay address
   phones are told. `--approve-links` approves a link request (§12.1) three seconds after it arrives.
 - The fixture's v2 tasks add a plan review, an answerable question, a suggested task, lines with details,
-  and taking `createTask`, `setPinned` and `archiveTask`.
+  and taking `createTask`, `setPinned` and `archiveTask`. It does not announce `fullConversation` (§15.24) and
+  answers every subscription in §6's shape.
 - Its scheduled tasks (§15.21): "Summarize new crash reports" runs every morning and its last run started "Summarize
   the crash reports"; "Check the footer links" is paused and continues "Fix the footer links"; "Nightly screenshots"
   turned itself off after three failed starts, and Run now fails again; "Weekend trip reminder" is a one-off in
@@ -1521,7 +1590,9 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   own language when its catalog has the key (§15.19), so two Macs set to different languages each read the card in
   their own.
 - **What it does:** what a phone does (§4–§6, §15), on a larger screen: the host's sidebar and its marks, a task's
-  conversation in Yardlet's own timeline, a line's output and diffs when it opens (§15.8), every answer the host's
+  conversation in Yardlet's own timeline with the host's own cards from its full detail (§15.24: whole answers, a
+  message's pictures, subagents, compactions, notices, proposed plans and the limit card with its windows and
+  actions), a line's output and diffs when it opens (§15.8), every answer the host's
   card gives (§15.19; one that leaves a rule behind is asked about once more), an MCP form filled in on Yardlet's
   own form card and sent with the host's Submit and its `values`, questions and plan reviews, the queue's actions,
   the plan limit's actions, Stop, Pin and Archive, new tasks with the host's choices (§15.16), and pictures and

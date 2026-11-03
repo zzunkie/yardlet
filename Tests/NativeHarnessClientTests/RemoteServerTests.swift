@@ -146,6 +146,47 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertEqual(awaited12, .notFound)
     }
 
+    /// A subscription in full detail (§15.24) reads the bridge's full conversation while a phone's beside it keeps its
+    /// own, and changes too large for one message go out as several events that, applied in order, are the change.
+    func testAFullSubscriptionReadsItsOwnDetailAndLargeChangesGoInParts() async throws {
+        let harness = try await ServerHarness()
+        let phone = try await harness.authenticatedPhone()
+        let desktop = try await harness.authenticatedPhone()
+        let basic = RemoteConversation(turns: [RemoteProtocolTests.turn("t1", items: 2)])
+        var full = basic
+        full.turns[0].items[0].images = [RemoteImagePreview(data: Data(repeating: 7, count: 64), name: "shot.png")]
+        await harness.bridge.setConversation(basic, for: "A")
+        await harness.bridge.setConversation(full, for: "A", detail: .full)
+        await harness.send(#"{"id":"1","type":"subscribeTask","taskId":"A"}"#, on: phone)
+        await harness.send(#"{"id":"1","type":"subscribeTask","taskId":"A","detail":"full"}"#, on: desktop)
+        let phonePage = try await phone.response("1").items
+        XCTAssertEqual(phonePage, basic.turns[0].items)
+        let desktopPage = try await desktop.response("1").items
+        var held = try XCTUnwrap(desktopPage)
+        XCTAssertEqual(held, full.turns[0].items)
+
+        var turns = full.turns
+        turns.append(RemoteTurn(id: "t2", items: (0..<30).map { index in
+            var item = RemoteItem(id: "i:answer-\(index)", turnId: "t2", kind: .assistant)
+            item.text = String(repeating: "Long answer. ", count: 15_000)
+            return item
+        }))
+        await harness.bridge.setConversation(RemoteConversation(turns: turns), for: "A", detail: .full)
+        await harness.bridge.signal(.conversation("A"))
+        var seq = 0
+        var events = 0
+        while held.count < turns.flatMap(\.items).count {
+            let event = try await desktop.event(.conversation, after: seq)
+            seq = event.seq ?? seq
+            events += 1
+            let size = (event.changes ?? []).reduce(0) { $0 + ($1.item?.text?.utf8.count ?? 0) }
+            XCTAssertLessThanOrEqual(size, RemoteServer.maxChangesBytes)
+            held = RemoteProtocolTests.strictlyApplying(event.changes ?? [], to: held)
+        }
+        XCTAssertEqual(held, turns.flatMap(\.items))
+        XCTAssertEqual(events, 3)
+    }
+
     /// A change read while older turns load is not lost: the page goes first, then the changes to the
     /// newer turns, and every change names only items the phone holds by then.
     func testAChangeReadWhileOlderTurnsLoadFollowsThePage() async throws {
@@ -605,6 +646,7 @@ actor FakeBridge: RemoteBridge {
     private var handler: (@Sendable (RemoteBridgeChange) -> Void)?
     private var current = FakeBridge.snapshot
     private var conversations: [String: RemoteConversation] = [:]
+    private var fullConversations: [String: RemoteConversation] = [:]
     private var earlier: [String: RemoteConversation] = [:]
     private var nextFailure: RemoteError?
     private(set) var commands: [RemoteCommand] = []
@@ -618,6 +660,9 @@ actor FakeBridge: RemoteBridge {
     func setChangeHandler(_ handler: @escaping @Sendable (RemoteBridgeChange) -> Void) { self.handler = handler }
     func snapshot() -> RemoteSnapshot { current }
     func conversation(of taskID: String) -> RemoteConversation? { conversations[taskID] }
+    func conversation(of taskID: String, detail: RemoteConversationDetail) -> RemoteConversation? {
+        detail == .full ? fullConversations[taskID] ?? conversations[taskID] : conversations[taskID]
+    }
     func prepareConversation(of taskID: String) { preparedTasks.append(taskID) }
     func loadEarlierConversation(of taskID: String) {
         if let earlier = earlier.removeValue(forKey: taskID) { conversations[taskID] = earlier }
@@ -653,7 +698,9 @@ actor FakeBridge: RemoteBridge {
         self.outputs[taskID] = outputs
     }
     func setSnapshot(_ snapshot: RemoteSnapshot) { current = snapshot }
-    func setConversation(_ conversation: RemoteConversation?, for taskID: String) { conversations[taskID] = conversation }
+    func setConversation(_ conversation: RemoteConversation?, for taskID: String, detail: RemoteConversationDetail = .basic) {
+        if detail == .full { fullConversations[taskID] = conversation } else { conversations[taskID] = conversation }
+    }
     func setEarlier(_ conversation: RemoteConversation, for taskID: String) { earlier[taskID] = conversation }
     func failNext(_ error: RemoteError) { nextFailure = error }
     func signal(_ change: RemoteBridgeChange) { handler?(change) }

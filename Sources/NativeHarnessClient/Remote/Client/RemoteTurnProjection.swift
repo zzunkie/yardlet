@@ -9,6 +9,10 @@ import YardletRemote
 /// requests still waiting. Lines keep the host's words (`ConversationTool.Kind.worded`) and read their output
 /// and changes when opened (§15.8). Each request offers the answers the host's card gives (§15.19), sent
 /// back by the routes `RemoteConversationActions` reads.
+///
+/// What a host sends in full detail (§15.24) becomes the item the host's own card draws: a sent message's
+/// pictures, a subagent, a created schedule, a compaction, a provider's notice and a plan limit's windows. A
+/// proposed plan and a notice are drawn by the card a Codex item has, so one is made from the host's fields.
 enum RemoteTurnProjection {
     /// Answers carried by a provider option, by the prefix of its ID.
     enum Route {
@@ -36,7 +40,7 @@ enum RemoteTurnProjection {
             case .user where isBeforeHeader:
                 turn.prompt.append(message(item))
             case .notice where isBeforeHeader:
-                turn.notices.append(line(item, details: details))
+                turn.notices.append(card(item) ?? line(item, details: details))
             case .plan:
                 turn.plan = plan(item)
             case .error where item.inWork != true:
@@ -91,9 +95,9 @@ enum RemoteTurnProjection {
         case .assistant:
             let text = item.text ?? ""
             let streaming = item.streaming == true
+            if item.role == "proposedPlan" { return proposedPlan(item, text: text, isWriting: streaming) }
             let kind: ConversationItemKind = switch item.role {
             case "commentary": .commentary(text: text, isStreaming: streaming)
-            // A proposed plan is the agent's Markdown, drawn as its message.
             default: .answer(text: text, isStreaming: streaming)
             }
             return ConversationItem(id: item.id, kind: kind, phase: streaming ? .running : .completed,
@@ -104,7 +108,7 @@ enum RemoteTurnProjection {
         case .activity where item.activity == "taskSuggestion" && item.suggestionId != nil:
             return taskSuggestion(item)
         case .activity, .notice:
-            return line(item, details: details)
+            return card(item) ?? line(item, details: details)
         case .approval:
             return ConversationItem(id: item.id, kind: .request(request(item, hostName: hostName)), phase: .completed,
                                     source: source(item, .plan("")))
@@ -116,10 +120,87 @@ enum RemoteTurnProjection {
         }
     }
 
+    /// A sent message: the person's, or one someone else sent as the host draws it (§15.24): another task's under its
+    /// name, a background command's notice, a schedule's prompt.
     private static func message(_ item: RemoteItem) -> ConversationItem {
         let text = item.text ?? ""
-        return ConversationItem(id: item.id, kind: .userMessage(text: text, images: []), phase: .completed,
-                                source: source(item, .user(text: text)))
+        let record = source(item, .user(text: text))
+        if item.scheduled == true {
+            var claude: ClaudeScheduledPrompt.Kind?
+            if item.sender?.kind == "claudeSchedule" { claude = item.sender?.name.map { .task(name: $0) } ?? .checkIn }
+            let message = ConversationScheduledTaskMessage(instructions: text, automationID: nil, currentTimeISO: "",
+                                                           claudeSchedule: claude)
+            return ConversationItem(id: item.id, kind: .scheduledTaskMessage(message), phase: .completed, source: record)
+        }
+        var sent = ConversationItem(id: item.id, kind: .userMessage(text: text, images: images(item)), phase: .completed,
+                                    source: record)
+        switch item.sender?.kind {
+        case "task":
+            let relation: TaskMessage.Relation = switch item.sender?.relation {
+            case "parent": .parent
+            case "itself": .itself
+            default: .task
+            }
+            sent.taskMessage = TaskMessage(senderID: "", senderName: item.sender?.name, body: text, relation: relation,
+                                           quotes: (item.sender?.quotes ?? []).map { .init(text: $0.text, sentAt: $0.sentAt) })
+        case "backgroundTask":
+            sent.backgroundTaskNotice = ClaudeTaskNotification(summary: text, status: item.sender?.status)
+        default:
+            break
+        }
+        return sent
+    }
+
+    /// A sent message's pictures: the host's previews (§15.24), and for each one it sent no preview of, the name
+    /// a picture shows on the Mac once its file is gone.
+    private static func images(_ item: RemoteItem) -> [TranscriptImageAttachment] {
+        let previews = (item.images ?? []).compactMap { image in
+            URL(string: "data:\(image.type);base64,\(image.data.base64EncodedString())")
+                .map { TranscriptImageAttachment(url: $0, name: image.name) }
+        }
+        let missing = max(0, (item.imageCount ?? 0) - previews.count)
+        return previews + Array(repeating: TranscriptImageAttachment(url: nil, name: nil), count: missing)
+    }
+
+    /// A proposed plan in its card, which reads the plan as a Codex item does: one made from the host's words,
+    /// written while they stream.
+    private static func proposedPlan(_ item: RemoteItem, text: String, isWriting: Bool) -> ConversationItem {
+        let record = CodexItemState(id: item.id, lifecycle: isWriting ? .inProgress : .completed, content: .plan(text: text),
+                                    raw: .null)
+        return ConversationItem(id: item.id, kind: .proposedPlan(text: text, isWriting: isWriting),
+                                phase: isWriting ? .running : .completed, source: .codex(record, turnID: item.turnId))
+    }
+
+    /// What the host's own card draws, when it sent it in full detail (§15.24): a subagent, a created schedule, a
+    /// compaction or a provider's notice. Nil leaves the item a line in the host's words.
+    private static func card(_ item: RemoteItem) -> ConversationItem? {
+        var record = source(item, .activity(HarnessActivity(id: item.id, kind: item.activity ?? "other", title: item.title ?? ""),
+                                            state: activityState(item.status)))
+        let kind: ConversationItemKind
+        if let subagent = item.subagent {
+            kind = .subagent(ConversationSubagent(
+                title: item.title ?? "", status: nil, detail: subagent.detail,
+                // A child thread opens as the host's task it runs in.
+                routes: (subagent.taskIds ?? []).map(ConversationSubagentRoute.codexThread), isApproved: item.approved == true,
+                kind: subagent.kind, input: subagent.input, output: subagent.output, isBackground: subagent.background == true,
+                model: subagent.model, harnessLabel: subagent.harnessLabel))
+        } else if let schedule = item.schedule, let id = UUID(uuidString: schedule.id) {
+            kind = .scheduleCreated(ConversationScheduleCreation(scheduleID: id, name: schedule.name))
+        } else if let compaction = item.compaction, let phase = HarnessContextCompaction.Phase(rawValue: compaction.phase) {
+            kind = .compaction(HarnessContextCompaction(phase: phase, tokensBefore: compaction.tokensBefore,
+                                                        tokensAfter: compaction.tokensAfter, message: compaction.message))
+        } else if let notice = item.providerNotice, let noticeKind = CodexNoticeItem.Kind(rawValue: notice.kind) {
+            let content = CodexNoticeItem(kind: noticeKind, message: notice.message, details: notice.details,
+                                          fromModel: notice.fromModel, reason: notice.reason, path: notice.path)
+            kind = .notice(content)
+            record = .codex(CodexItemState(id: item.id, lifecycle: .completed, content: .notice(content), raw: .null),
+                            turnID: item.turnId)
+        } else {
+            return nil
+        }
+        var card = ConversationItem(id: item.id, kind: kind, phase: phase(item.status), source: record)
+        card.copyDetails = item.subagent?.copyText
+        return card
     }
 
     /// A call, a step or a notice as one line in the host's words, which reads its output and changes once
@@ -181,11 +262,28 @@ enum RemoteTurnProjection {
     }
 
     private static func outcome(_ item: RemoteItem) -> ConversationTurnOutcome {
-        // A plan limit reads as the turn's error here; the limit's own actions sit above the composer.
-        let message = [item.message, item.resetsAt.map { L10n.format("Resets %@", date($0).formatted(date: .omitted, time: .shortened)) }]
-            .compactMap { $0 }.joined(separator: "\n")
-        return .error(ConversationTurnError(title: item.title, message: message, isRecoverable: item.recoverable == true,
+        if item.errorKind == "usageLimit" { return .usageLimit(limit(item), entryID: uuid(item.id)) }
+        return .error(ConversationTurnError(title: item.title, message: item.message ?? "", isRecoverable: item.recoverable == true,
                                             entryID: uuid(item.id)))
+    }
+
+    /// A plan limit as the host's card reads it: the provider's report when the host sent it (§15.24), else when
+    /// it resets and the host's words, which name the reset only when it knows none.
+    private static func limit(_ item: RemoteItem) -> HarnessRateLimit {
+        let resetsAt = item.resetsAt.map(date)
+        guard let limit = item.limit else {
+            return HarnessRateLimit(status: .rejected, resetsAt: resetsAt, message: resetsAt == nil ? item.message : nil)
+        }
+        let windows = (limit.windows ?? []).compactMap { window in
+            HarnessRateLimit.Window(rawValue: window.window).map {
+                HarnessRateLimit.WindowUsage(window: $0, model: window.model, usedFraction: window.usedFraction,
+                                             resetsAt: window.resetsAt.map(date))
+            }
+        }
+        return HarnessRateLimit(status: HarnessRateLimit.Status(rawValue: limit.status) ?? .rejected,
+                                window: limit.window.flatMap(HarnessRateLimit.Window.init(rawValue:)), model: limit.model,
+                                resetsAt: resetsAt, usedFraction: limit.usedFraction, isUsingOverage: limit.overage == true,
+                                windows: windows, message: limit.message)
     }
 
     // MARK: - Requests

@@ -236,11 +236,13 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var taskFiles: Bool
     /// The bridge answers a task's settings, slash commands, edit and fork (§15.23).
     public var taskControls: Bool
+    /// The bridge answers `subscribeTask` with `"detail": "full"` (§15.24).
+    public var fullConversation: Bool
 
     public init(projects: [RemoteProject] = [], tasks: [RemoteTask] = [], newestRequestIDs: [String: String] = [:],
                 requestSummaries: [String: String] = [:], newTask: RemoteNewTask? = nil,
                 followUp: RemoteFollowUpMode? = nil, scheduledTasks: Bool = false, taskFiles: Bool = false,
-                taskControls: Bool = false) {
+                taskControls: Bool = false, fullConversation: Bool = false) {
         self.projects = projects
         self.tasks = tasks
         self.newestRequestIDs = newestRequestIDs
@@ -250,6 +252,7 @@ public struct RemoteSnapshot: Equatable, Sendable {
         self.scheduledTasks = scheduledTasks
         self.taskFiles = taskFiles
         self.taskControls = taskControls
+        self.fullConversation = fullConversation
     }
 
     public static let empty = RemoteSnapshot()
@@ -413,6 +416,22 @@ public struct RemoteItem: Codable, Equatable, Sendable {
     public var recoverable: Bool?
     public var resetsAt: Int64?
 
+    // A subscription's full detail only (§15.24): what the Mac's own cards draw beyond the phone's line.
+    /// A sent message's images, as small previews.
+    public var images: [RemoteImagePreview]?
+    /// Who sent a `user` item that is not the person's.
+    public var sender: RemoteSender?
+    /// A subagent's card.
+    public var subagent: RemoteSubagent?
+    /// A context compaction's marker.
+    public var compaction: RemoteCompaction?
+    /// A provider's notice row.
+    public var providerNotice: RemoteProviderNotice?
+    /// A schedule an agent created, as its row.
+    public var schedule: RemoteScheduleCreation?
+    /// A plan limit's card.
+    public var limit: RemoteLimit?
+
     public init(id: String, turnId: String, kind: Kind) {
         self.id = id
         self.turnId = turnId
@@ -445,6 +464,187 @@ public enum RemoteText {
     public static let errorLimit = 2_000
     public static let stepLimit = 500
     public static let stepCount = 50
+    /// What a subscription's full detail allows a message's, an answer's, a request's or an error's text (§15.24).
+    public static let fullTextLimit = 200_000
+    /// A subagent's input and output in full detail, as a line's output (§15.8).
+    public static let fullSubagentLimit = 64_000
+}
+
+/// How much of a conversation a subscription asks for (§4.2): the phone's projection, or what the Mac's own
+/// timeline draws (`"full"`, §15.24).
+public enum RemoteConversationDetail: String, Codable, Sendable {
+    case basic
+    case full
+}
+
+/// A sent image as a small preview (§15.24): JPEG bytes and the name it was sent under.
+public struct RemoteImagePreview: Codable, Equatable, Sendable {
+    public var type: String
+    public var data: Data
+    public var name: String?
+
+    public init(type: String = "image/jpeg", data: Data, name: String? = nil) {
+        self.type = type
+        self.data = data
+        self.name = name
+    }
+}
+
+/// Who sent a `user` item other than the person (§15.24); its words are the item's `text`.
+public struct RemoteSender: Codable, Equatable, Sendable {
+    /// One of the person's own messages the sending task passed on, and when the person sent it (ISO 8601).
+    public struct Quote: Codable, Equatable, Sendable {
+        public var text: String
+        public var sentAt: String?
+
+        public init(text: String, sentAt: String? = nil) {
+            self.text = text
+            self.sentAt = sentAt
+        }
+    }
+
+    /// `task` (another task's message), `backgroundTask` (a background command's or agent's notice that opened the
+    /// turn) or `claudeSchedule` (a prompt Claude Code's own schedule sent).
+    public var kind: String
+    /// The sending task's name, or a named schedule's.
+    public var name: String?
+    /// For `task`: `task`, `parent` (the task this one was started from) or `itself`.
+    public var relation: String?
+    /// For `backgroundTask`: its status.
+    public var status: String?
+    public var quotes: [Quote]?
+
+    public init(kind: String, name: String? = nil, relation: String? = nil, status: String? = nil, quotes: [Quote]? = nil) {
+        self.kind = kind
+        self.name = name
+        self.relation = relation
+        self.status = status
+        self.quotes = quotes
+    }
+}
+
+/// A subagent as the Mac's card draws it (§15.24); its title and status are the item's.
+public struct RemoteSubagent: Codable, Equatable, Sendable {
+    /// The provider's own name for the call (`Agent`, `Task`, `spawn_agent`).
+    public var kind: String?
+    /// What the card shows beside its title: the threads it reached, or the agent's path.
+    public var detail: String?
+    public var input: String?
+    public var output: String?
+    public var model: String?
+    /// The harness and model in full ("Codex · gpt-5.5") for a subagent on another harness than its task.
+    public var harnessLabel: String?
+    public var background: Bool?
+    /// The listed tasks its child threads run in, which "Open child task" opens.
+    public var taskIds: [String]?
+    /// What the card's copy button takes.
+    public var copyText: String?
+
+    public init(kind: String? = nil, detail: String? = nil, input: String? = nil, output: String? = nil,
+                model: String? = nil, harnessLabel: String? = nil, background: Bool? = nil, taskIds: [String]? = nil,
+                copyText: String? = nil) {
+        self.kind = kind
+        self.detail = detail
+        self.input = input
+        self.output = output
+        self.model = model
+        self.harnessLabel = harnessLabel
+        self.background = background
+        self.taskIds = taskIds
+        self.copyText = copyText
+    }
+}
+
+/// The provider summarizing earlier conversation (§15.24).
+public struct RemoteCompaction: Codable, Equatable, Sendable {
+    /// `started`, `completed` or `failed`.
+    public var phase: String
+    public var tokensBefore: UInt64?
+    public var tokensAfter: UInt64?
+    /// Why it failed, in the provider's words.
+    public var message: String?
+
+    public init(phase: String, tokensBefore: UInt64? = nil, tokensAfter: UInt64? = nil, message: String? = nil) {
+        self.phase = phase
+        self.tokensBefore = tokensBefore
+        self.tokensAfter = tokensAfter
+        self.message = message
+    }
+}
+
+/// A provider's notice beside a turn (§15.24): a model reroute or a warning.
+public struct RemoteProviderNotice: Codable, Equatable, Sendable {
+    /// `modelRerouted`, `warning`, `configWarning` or `deprecationNotice`.
+    public var kind: String
+    /// The model the request went to, or the notice's text.
+    public var message: String
+    public var details: String?
+    public var fromModel: String?
+    public var reason: String?
+    public var path: String?
+
+    public init(kind: String, message: String, details: String? = nil, fromModel: String? = nil, reason: String? = nil,
+                path: String? = nil) {
+        self.kind = kind
+        self.message = message
+        self.details = details
+        self.fromModel = fromModel
+        self.reason = reason
+        self.path = path
+    }
+}
+
+/// A schedule an agent created (§15.24): the schedule's ID (§15.21) and the name the call gave.
+public struct RemoteScheduleCreation: Codable, Equatable, Sendable {
+    public var id: String
+    public var name: String
+
+    public init(id: String, name: String) {
+        self.id = id
+        self.name = name
+    }
+}
+
+/// A plan limit as the provider reported it (§15.24); when it resets is the item's `resetsAt`.
+public struct RemoteLimit: Codable, Equatable, Sendable {
+    public struct Window: Codable, Equatable, Sendable {
+        /// `session`, `weekly`, `model` or `overage`.
+        public var window: String
+        public var model: String?
+        /// The share of the window used; above 1 past the cap.
+        public var usedFraction: Double
+        public var resetsAt: Int64?
+
+        public init(window: String, model: String? = nil, usedFraction: Double, resetsAt: Int64? = nil) {
+            self.window = window
+            self.model = model
+            self.usedFraction = usedFraction
+            self.resetsAt = resetsAt
+        }
+    }
+
+    /// `allowed`, `warning` or `rejected`.
+    public var status: String
+    /// The window that limits the account now.
+    public var window: String?
+    public var model: String?
+    public var usedFraction: Double?
+    /// Paid extra usage covers the requests.
+    public var overage: Bool?
+    public var windows: [Window]?
+    /// The provider's own words for the request it stopped.
+    public var message: String?
+
+    public init(status: String, window: String? = nil, model: String? = nil, usedFraction: Double? = nil,
+                overage: Bool? = nil, windows: [Window]? = nil, message: String? = nil) {
+        self.status = status
+        self.window = window
+        self.model = model
+        self.usedFraction = usedFraction
+        self.overage = overage
+        self.windows = windows
+        self.message = message
+    }
 }
 
 /// A turn of a conversation as the bridge hands it to the server: its ID and its items in order.
@@ -719,7 +919,8 @@ public enum RemoteSuggestionAction: String, Codable, Sendable, CaseIterable {
 /// A request a client sends, after decoding.
 public enum RemoteRequest: Equatable, Sendable {
     case snapshot
-    case subscribeTask(taskID: String)
+    /// `detail` `full` is v2's, to a Mac that announces it (§15.24).
+    case subscribeTask(taskID: String, detail: RemoteConversationDetail = .basic)
     case loadOlder(taskID: String, cursor: String)
     case unsubscribeTask(taskID: String)
     case ping
@@ -822,7 +1023,7 @@ public enum RemoteRequest: Equatable, Sendable {
     /// The task a request names.
     public var taskID: String? {
         switch self {
-        case let .subscribeTask(id), let .loadOlder(id, _), let .unsubscribeTask(id), let .sendMessage(id, _, _, _, _),
+        case let .subscribeTask(id, _), let .loadOlder(id, _), let .unsubscribeTask(id), let .sendMessage(id, _, _, _, _),
              let .answerApproval(id, _, _, _), let .stopTurn(id), let .markRead(id), let .answerQuestion(id, _, _),
              let .reviewPlan(id, _, _, _), let .itemDetail(id, _), let .actOnSuggestion(id, _, _), let .setPinned(id, _),
              let .archiveTask(id), let .limitAccounts(id), let .continueWithAccount(id, _), let .setAutoContinue(id, _),
@@ -918,6 +1119,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var command: String?
         var arguments: String?
         var turnId: String?
+        var detail: String?
     }
 
     private struct WireImage: Codable {
@@ -976,7 +1178,8 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         case "subscribeTask", "unsubscribeTask", "stopTurn", "markRead", "loadOlder", "sendMessage", "answerApproval":
             guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
             switch type {
-            case "subscribeTask": request = .subscribeTask(taskID: taskID)
+            // A detail the Mac does not know reads as the phone's (§2).
+            case "subscribeTask": request = .subscribeTask(taskID: taskID, detail: wire.detail == "full" ? .full : .basic)
             case "unsubscribeTask": request = .unsubscribeTask(taskID: taskID)
             case "stopTurn": request = .stopTurn(taskID: taskID)
             case "markRead": request = .markRead(taskID: taskID)
@@ -1174,7 +1377,10 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         switch request {
         case .snapshot, .ping:
             break
-        case let .subscribeTask(taskID), let .unsubscribeTask(taskID), let .stopTurn(taskID), let .markRead(taskID):
+        case let .subscribeTask(taskID, detail):
+            wire.taskId = taskID
+            wire.detail = detail == .full ? detail.rawValue : nil
+        case let .unsubscribeTask(taskID), let .stopTurn(taskID), let .markRead(taskID):
             wire.taskId = taskID
         case let .loadOlder(taskID, cursor):
             wire.taskId = taskID
@@ -1370,6 +1576,8 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var schedules: [RemoteSchedule]?
     /// `snapshot` on v2: the Mac answers `taskOutputs` and `readFile` (§15.22).
     public var taskFiles: Bool?
+    /// `snapshot` on v2: the Mac answers `subscribeTask` with `"detail": "full"` (§15.24).
+    public var fullConversation: Bool?
     /// `taskOutputs` (§15.22).
     public var outputs: [RemoteOutput]?
     /// `readFile` (§15.22): the absolute path the Mac read, the file's name, type, size and modification time, and

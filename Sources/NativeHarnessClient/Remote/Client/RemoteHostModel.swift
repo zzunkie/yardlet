@@ -55,6 +55,8 @@ final class RemoteHostModel: Identifiable {
     /// The host's scheduled tasks, and its tasks' outputs and files, read when shown.
     let schedules = RemoteHostSchedules()
     let files: RemoteHostFiles
+    /// The host sends a conversation as its own timeline draws it (§15.24), which this Mac asks for.
+    @ObservationIgnored private(set) var sendsFullConversation = false
     private(set) var selection: Selection = .none
     private(set) var conversations: [String: RemoteConversationModel] = [:]
     /// The last command the host refused, in a line for the window.
@@ -224,6 +226,12 @@ final class RemoteHostModel: Identifiable {
             offersSchedules = response.scheduledTasks == true
             offersTaskFiles = response.taskFiles == true
             taskControls = response.taskControls == true
+            let full = response.fullConversation == true
+            if full != sendsFullConversation {
+                sendsFullConversation = full
+                // Pages read before this answer came in the other detail.
+                for taskID in subscribed { subscribe(taskID) }
+            }
             hasSnapshot = true
             hostTakesPresence = response.presence == true
             toldPresence = nil
@@ -308,7 +316,7 @@ final class RemoteHostModel: Identifiable {
             send(.unsubscribeTask(taskID: dropped))
         }
         guard isConnected else { return }
-        request(.subscribeTask(taskID: taskID)) { [weak self] response in
+        request(.subscribeTask(taskID: taskID, detail: sendsFullConversation ? .full : .basic)) { [weak self] response in
             guard let conversation = self?.conversations[taskID] else { return }
             if response.ok {
                 conversation.load(response.items ?? [], cursor: response.cursor, hasOlder: response.hasOlder == true)

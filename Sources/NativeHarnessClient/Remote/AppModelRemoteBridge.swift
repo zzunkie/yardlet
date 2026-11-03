@@ -14,14 +14,28 @@ import YardletRemote
 /// asks and kept until the task's conversation changes, since a file comes in many parts; which of its
 /// files a phone may open is decided in `RemoteFileReader`. A task's settings, commands, edit and fork (§15.23) are in
 /// `AppModelRemoteBridge+TaskControls`.
+///
+/// A conversation is read in the detail each subscription asked for (§15.24), each kept and projected turn
+/// by turn on its own; full detail's picture previews are made off the main actor, and the turn that holds
+/// one is projected again once it is ready.
 @MainActor
 final class AppModelRemoteBridge: RemoteBridge {
+    /// A task's conversation in one detail.
+    private struct ConversationKey: Hashable {
+        let id: UUID
+        let detail: RemoteConversationDetail
+    }
+
     private(set) weak var model: AppModel?
     private(set) var changeHandler: (@Sendable (RemoteBridgeChange) -> Void)?
     private var cachedSnapshot: RemoteSnapshot?
-    private var cachedConversations: [UUID: RemoteConversation] = [:]
+    private var cachedConversations: [ConversationKey: RemoteConversation] = [:]
     private var projectionCaches: [UUID: ConversationProjectionCache] = [:]
-    private var turnMemos: [UUID: [String: (turn: ConversationTurn, remote: RemoteTurn)]] = [:]
+    private var turnMemos: [ConversationKey: [String: (turn: ConversationTurn, remote: RemoteTurn)]] = [:]
+    /// Sent pictures as small previews for full detail; nil where the platform makes none.
+    private let previews: RemoteImagePreviews?
+    /// How many turns were projected so far: a change projects only the turns it touched.
+    private(set) var projectedTurnCount = 0
     private(set) var watched: Set<UUID> = []
     private var cachedSchedules: [RemoteSchedule]?
     private var cachedOutputs: [UUID: [SessionRailContent.Output]] = [:]
@@ -33,8 +47,10 @@ final class AppModelRemoteBridge: RemoteBridge {
     var answeredSettings: [UUID: [RemoteSetting]] = [:]
     var watchesSettings: Set<UUID> = []
 
-    init(model: AppModel) {
+    init(model: AppModel, makePreview: RemoteImagePreviews.Make? = nil) {
         self.model = model
+        previews = makePreview.map(RemoteImagePreviews.init(make:))
+        previews?.onReady = { [weak self] askers in self?.previewsReady(askers) }
     }
 
     func setChangeHandler(_ handler: @escaping @Sendable (RemoteBridgeChange) -> Void) {
@@ -73,6 +89,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.scheduledTasks = true
         snapshot.taskFiles = true
         snapshot.taskControls = true
+        snapshot.fullConversation = true
         let listed = Dictionary(model.sidebarSessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for index in snapshot.tasks.indices {
             guard let id = UUID(uuidString: snapshot.tasks[index].id), let session = listed[id] else { continue }
@@ -141,21 +158,27 @@ final class AppModelRemoteBridge: RemoteBridge {
     }
 
     func conversation(of taskID: String) -> RemoteConversation? {
+        conversation(of: taskID, detail: .basic)
+    }
+
+    func conversation(of taskID: String, detail: RemoteConversationDetail) -> RemoteConversation? {
         guard let model, let id = UUID(uuidString: taskID) else { return nil }
-        if let cached = cachedConversations[id] { return cached }
+        let key = ConversationKey(id: id, detail: detail)
+        if let cached = cachedConversations[key] { return cached }
         let conversation = withObservationTracking {
-            listedSession(id).map { conversation(of: $0, in: model) }
+            listedSession(id).map { conversation(of: $0, detail: detail, in: model) }
         } onChange: { [weak self] in
             Task { @MainActor in self?.conversationChanged(id) }
         }
-        if let conversation { cachedConversations[id] = conversation }
+        if let conversation { cachedConversations[key] = conversation }
         return conversation
     }
 
     /// The conversation the task's `ConversationTimeline` draws: the Codex thread once it has turns,
     /// else the shared transcript, with the earlier history the provider still holds and a provider
     /// retry on the running turn's status line, as the timeline adds them.
-    private func conversation(of session: SessionRecord, in model: AppModel) -> RemoteConversation {
+    private func conversation(of session: SessionRecord, detail: RemoteConversationDetail,
+                              in model: AppModel) -> RemoteConversation {
         if projectionCaches[session.id] == nil { projectionCaches[session.id] = ConversationProjectionCache() }
         var presentation = presentation(of: session, in: model)
         if Self.codexState(of: session, in: model) == nil, model.hasEarlierClaudeHistory(session) {
@@ -167,19 +190,23 @@ final class AppModelRemoteBridge: RemoteBridge {
         }
         // What Yardlet holds in the task, as the Mac's timeline draws it.
         presentation.appendHeldRequests(model.heldRequests(in: session.id))
-        var memos = turnMemos[session.id] ?? [:]
+        let key = ConversationKey(id: session.id, detail: detail)
+        var memos = turnMemos[key] ?? [:]
         var kept: [String: (turn: ConversationTurn, remote: RemoteTurn)] = [:]
         let conversation = RemoteConversationProjection.conversation(presentation, workspaceURL: session.workspaceURL) { turn in
             if let memo = memos[turn.id], memo.turn == turn {
                 kept[turn.id] = memo
                 return memo.remote
             }
-            let remote = RemoteConversationProjection.turn(turn, harness: presentation.harness, workspaceURL: session.workspaceURL)
+            let remote = RemoteConversationProjection.turn(
+                turn, harness: presentation.harness, workspaceURL: session.workspaceURL,
+                full: detail == .full ? full(turn, of: session, in: model) : nil)
+            projectedTurnCount += 1
             kept[turn.id] = (turn, remote)
             return remote
         }
         memos = kept
-        turnMemos[session.id] = memos
+        turnMemos[key] = memos
         var result = RemoteConversationProjection.queued(model.followUps.queue(for: session.id),
                                                          policy: FollowUpPolicy(harness: session.harness), into: conversation)
         for wait in model.browserHandoffWaits[session.id] ?? [] {
@@ -283,15 +310,59 @@ final class AppModelRemoteBridge: RemoteBridge {
         }
     }
 
+    /// What full detail reads beside one of the task's turns (§15.24): its sent pictures' previews, asked for once
+    /// and told to the turn when made, and the listed tasks its Codex child threads run in, as "Open child task"
+    /// finds them on the Mac.
+    private func full(_ turn: ConversationTurn, of session: SessionRecord,
+                      in model: AppModel) -> RemoteConversationProjection.Full {
+        var full = RemoteConversationProjection.Full()
+        let asker = RemoteImagePreviews.Asker(taskID: session.id, turnID: turn.id)
+        for item in turn.prompt + turn.notices + turn.work + turn.answers {
+            switch item.kind {
+            case let .userMessage(_, images):
+                guard let previews else { continue }
+                for url in images.compactMap(\.url) where full.previews[url] == nil {
+                    full.previews[url] = previews.preview(url, for: asker)
+                }
+            case let .subagent(subagent):
+                for case let .codexThread(threadID) in subagent.routes {
+                    guard let child = TaskLineage.task(continuing: threadID, harness: .codex, among: model.store.sessions,
+                                                       environmentScope: session.environmentScope,
+                                                       connection: session.connection),
+                          listedSession(child) != nil else { continue }
+                    full.childTasks[threadID] = child.uuidString
+                }
+            default:
+                continue
+            }
+        }
+        return full
+    }
+
+    /// Previews made since a turn asked for them: those turns are projected again, and their tasks' phones told.
+    private func previewsReady(_ askers: Set<RemoteImagePreviews.Asker>) {
+        for asker in askers {
+            let key = ConversationKey(id: asker.taskID, detail: .full)
+            turnMemos[key]?[asker.turnID] = nil
+            cachedConversations[key] = nil
+        }
+        for id in Set(askers.map(\.taskID)) where watched.contains(id) {
+            changeHandler?(.conversation(id.uuidString))
+        }
+    }
+
     func setWatchedTasks(_ taskIDs: Set<String>) {
         watched = Set(taskIDs.compactMap(UUID.init(uuidString:)))
         model?.remoteWatchedTaskIDs = watched
         for id in Array(projectionCaches.keys) where !watched.contains(id) {
             projectionCaches[id] = nil
-            turnMemos[id] = nil
-            cachedConversations[id] = nil
+            for detail in [RemoteConversationDetail.basic, .full] {
+                turnMemos[ConversationKey(id: id, detail: detail)] = nil
+                cachedConversations[ConversationKey(id: id, detail: detail)] = nil
+            }
         }
         for id in Array(answeredSettings.keys) where !watched.contains(id) { answeredSettings[id] = nil }
+        if watched.isEmpty { previews?.removeAll() }
     }
 
     private func tasksChanged() {
@@ -312,7 +383,8 @@ final class AppModelRemoteBridge: RemoteBridge {
     }
 
     private func conversationChanged(_ id: UUID) {
-        cachedConversations[id] = nil
+        cachedConversations[ConversationKey(id: id, detail: .basic)] = nil
+        cachedConversations[ConversationKey(id: id, detail: .full)] = nil
         changeHandler?(.conversation(id.uuidString))
     }
 

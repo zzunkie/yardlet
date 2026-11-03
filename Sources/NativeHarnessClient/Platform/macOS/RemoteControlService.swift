@@ -141,7 +141,7 @@ final class RemoteControlService {
             .appending(path: YardletProduct.storageDirectoryName, directoryHint: .isDirectory)
             .appending(path: "remote", directoryHint: .isDirectory)
         return RemoteControlService(
-            bridge: AppModelRemoteBridge(model: model),
+            bridge: AppModelRemoteBridge(model: model, makePreview: RemoteImagePreviewMaker.make),
             deviceStore: RemoteDeviceStore(fileURL: folder.appending(path: "devices.json")),
             audit: RemoteAuditLog(fileURL: folder.appending(path: "audit.log")),
             identityStore: KeychainRemoteIdentityStore.live(),
