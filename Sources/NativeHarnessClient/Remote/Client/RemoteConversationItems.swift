@@ -41,6 +41,28 @@ struct RemoteConversationItems {
         for run in runs { for item in run.items { runOf[item.id] = run } }
     }
 
+    /// The latest runs within a page's limits, counted as the host counts a page's turns
+    /// (`RemoteConversationWindow`), at least one; `isWhole` is false when earlier items were left out.
+    /// It reads only the runs it takes.
+    func latest(within limits: RemoteConversationWindow.Limits) -> (items: [RemoteItem], isWhole: Bool) {
+        var start = runs.endIndex
+        var items = 0
+        var bytes = 0
+        while start > runs.startIndex {
+            let run = runs[start - 1]
+            let runBytes = run.items.reduce(0) { $0 + RemoteConversationWindow.estimatedBytes($1) }
+            let taken = runs.endIndex - start
+            if taken > 0, taken >= limits.maxTurns || items + run.items.count > limits.maxItems
+                || bytes + runBytes > limits.maxBytes {
+                break
+            }
+            start -= 1
+            items += run.items.count
+            bytes += runBytes
+        }
+        return (runs[start...].flatMap(\.items), start == runs.startIndex)
+    }
+
     /// A `loadOlder` page, before everything held.
     mutating func prepend(_ items: [RemoteItem]) {
         var added = Self.runs(of: items)

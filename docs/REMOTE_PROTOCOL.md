@@ -1378,16 +1378,26 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   queue's actions, the plan limit's actions, Stop, Pin and Archive, new tasks with the host's choices (§15.16), and
   pictures and files (§15.14, §15.20). Settings, slash commands, changing an existing task's model, editing a
   message, the side panels and scheduled tasks stay on the host.
-- **Paths:** as §11.4, without Bonjour: the direct addresses the host named last (kept across networks, at most 8)
-  at once, the relay 0.7 s later. While on the relay it tries the direct addresses again every minute. It pings
-  every 25 s, takes a connection that heard nothing for 60 s for gone, and connects again with backoff from 1 s to
-  30 s. After every new connection it reads the snapshot and its open conversations again.
+- **Paths:** as §11.4. While a host's window is open it browses Bonjour (§11.3) for the instance with the
+  discovery id of the host key it saved, and resolves it to the host's name and port (`Name.local:47616`; the
+  system resolves the name when connecting). Those addresses go first, never saved, then the direct addresses the
+  host named last (kept across networks, at most 8), all at once, and the relay 0.7 s later. While on the relay it
+  tries the direct addresses again every minute and as soon as Bonjour finds the host; an address found while it
+  waits to connect again starts the next attempt at once. It pings every 25 s, takes a connection that heard
+  nothing for 60 s for gone, and connects again with backoff from 1 s to 30 s. After every new connection it reads
+  the snapshot and its open conversations again.
 - **Order:** responses and events are applied in the order they arrive, so a subscription's page comes before the
   changes to it (§5.3). It keeps at most 6 conversations subscribed, letting go of the one shown longest ago.
 - **What stays on the client:** `~/.yardlet/remote/hosts.json` (each host's name, static key, direct addresses,
-  relay room and device ID; removed with the last host) and one Keychain item per host for its private key. Nothing
-  listens and nothing runs while no host window is open. Removing a host sends `forgetDevice` (§15.6) when the host
-  can be reached and deletes both. Conversations stay in memory while the window is open.
+  relay room and device ID; removed with the last host), one Keychain item per host for its private key, and what
+  each host's window last showed, in `~/Library/Caches/<bundle identifier>/remote/<host>/` (folder 0700, files
+  0600): the snapshot's projects and tasks, and the latest page of each conversation open last (at most 6, each cut
+  to the size of Yardlet's first page, §4.2: 10 whole turns, 120 items, about 384 KB). Reopening the window shows
+  them at once, before it connects; the snapshot and subscriptions replace them once it does. The cache is written a
+  moment after changes stop (at least every 10 s while they go on) and when the window closes, a conversation only
+  when it changed. Nothing listens and nothing runs while no host window is open. Removing a host sends
+  `forgetDevice` (§15.6) when the host can be reached and deletes all three; a cache folder whose host is no longer
+  saved is removed when Yardlet starts.
 - **Notifications:** while a host's window is open, a task that starts waiting, finishes or fails posts a notification
   named after the host, which opens the task there.
 - **In use:** a host whose snapshot carries `presence: true` takes `{"type": "presence", "active": true}` (or `false`);

@@ -43,16 +43,21 @@ struct KeychainRemoteClientKeys: RemoteClientKeyStoring {
 }
 
 extension RemoteHostDirectory {
-    /// The app's: the hosts in `~/.yardlet/remote/hosts.json`, their keys in the Keychain, and this Mac
-    /// named as it names itself.
+    /// The app's: the hosts in `~/.yardlet/remote/hosts.json`, their keys in the Keychain, what their
+    /// windows last showed in `~/Library/Caches/<bundle identifier>/remote/`, Bonjour to find them, and this
+    /// Mac named as it names itself.
     static func live() -> RemoteHostDirectory {
         let file = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: YardletProduct.storageDirectoryName, directoryHint: .isDirectory)
             .appending(path: "remote", directoryHint: .isDirectory)
             .appending(path: "hosts.json")
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appending(path: Bundle.main.bundleIdentifier ?? YardletProduct.bundleIdentifier, directoryHint: .isDirectory)
+            .appending(path: "remote", directoryHint: .isDirectory)
         let hello = RemoteHandshakeHello(
             name: Host.current().localizedName ?? "Mac", platform: "macos",
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")
-        return RemoteHostDirectory(store: RemoteHostStore(fileURL: file), keys: KeychainRemoteClientKeys.live(), hello: hello)
+        return RemoteHostDirectory(store: RemoteHostStore(fileURL: file), keys: KeychainRemoteClientKeys.live(), hello: hello,
+                                   cacheRoot: caches, discovery: .bonjour)
     }
 }

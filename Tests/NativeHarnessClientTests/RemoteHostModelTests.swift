@@ -6,8 +6,8 @@ import XCTest
 
 /// A host's window model (`RemoteHostModel`) following the fixture host on loopback: pairing by its link,
 /// the task list, a conversation read into the app's conversation model, an approval answered with the
-/// host card's own answer, a line's output read when it opens, and a long conversation changed in
-/// proportion to the change.
+/// host card's own answer, a line's output read when it opens, a long conversation changed in proportion to
+/// the change, and what a window showed shown again when it reopens.
 @MainActor
 final class RemoteHostModelTests: XCTestCase {
     func testAWindowPairsFollowsATaskAndAnswersItsApprovalAsTheHostsCard() async throws {
@@ -141,6 +141,89 @@ final class RemoteHostModelTests: XCTestCase {
         await host.shutdown()
     }
 
+    /// What a window last showed stays for its next opening (docs/REMOTE_PROTOCOL.md §18): the list and an open
+    /// conversation show before the host is reached, the host's own replace them once it is, here found on a
+    /// new port by a stand-in for Bonjour, and removing the host removes them.
+    func testAReopenedWindowShowsWhatItLastShowedUntilTheHostAnswers() async throws {
+        let stack = try await LoopbackStack()
+        defer { stack.stop() }
+        let root = FileManager.default.temporaryDirectory.appending(path: "remote-cache-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let finder = FakeDiscovery()
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                        name: "Loopback", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                            hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"),
+                                            cacheRoot: root, discovery: finder.discovery)
+        let host = try await directory.pair(link: link.absoluteString)
+        let idle = RemoteFixtureBridge.ID.idle
+        func prompt(_ conversation: RemoteConversationModel) -> String? {
+            conversation.presentation.turns.flatMap(\.prompt).lazy.compactMap { item -> String? in
+                if case let .userMessage(text, _) = item.kind { return text }
+                return nil
+            }.first
+        }
+
+        let first = try XCTUnwrap(directory.model(for: host.id))
+        XCTAssertEqual(finder.watched, [RemoteIdentity.discoveryID(for: stack.identity.noise.publicKey)])
+        try await waitUntil { first.hasSnapshot }
+        first.select(.task(idle))
+        let read = try XCTUnwrap(first.conversations[idle])
+        try await waitUntil { read.isLoaded }
+        XCTAssertEqual(prompt(read), "Find the footer links that 404")
+        // Written as the window closes, in a folder only this user can read.
+        directory.close(host.id)
+        XCTAssertFalse(finder.isWatching)
+        let folder = root.appending(path: host.id, directoryHint: .isDirectory)
+        let listFile = folder.appending(path: "list.json")
+        let pageFile = folder.appending(path: "conversation-\(RemoteEncoding.base64url(Data(idle.utf8))).json")
+        try await waitUntil { FileManager.default.fileExists(atPath: listFile.path) }
+        func mode(_ url: URL) throws -> Int? { try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int }
+        XCTAssertEqual(try mode(folder), 0o700)
+        XCTAssertEqual(try mode(listFile), 0o600)
+        XCTAssertEqual(try mode(pageFile), 0o600)
+
+        // Marked here, so the test tells what the cache shows from what the host sends.
+        var list = try JSONDecoder().decode(RemoteHostCache.List.self, from: Data(contentsOf: listFile))
+        XCTAssertEqual(list.conversations, [idle])
+        let index = try XCTUnwrap(list.tasks.firstIndex { $0.id == idle })
+        list.tasks[index].title = "Fix the footer links (cached)"
+        try JSONEncoder().encode(list).write(to: listFile)
+        var page = try JSONDecoder().decode(RemoteHostCache.Page.self, from: Data(contentsOf: pageFile))
+        let user = try XCTUnwrap(page.items.firstIndex { $0.kind == .user })
+        page.items[user].text = "Find the footer links (cached)"
+        try JSONEncoder().encode(page).write(to: pageFile)
+
+        // The host can't be reached where it was: the window shows what it last showed, at once.
+        stack.listener.stop()
+        let second = try XCTUnwrap(directory.model(for: host.id))
+        try await waitUntil { second.task(idle)?.title == "Fix the footer links (cached)" }
+        XCTAssertFalse(second.hasSnapshot)
+        XCTAssertFalse(second.isConnected)
+        second.select(.task(idle))
+        let shown = try XCTUnwrap(second.conversations[idle])
+        XCTAssertTrue(shown.isLoaded)
+        XCTAssertEqual(prompt(shown), "Find the footer links (cached)")
+
+        // Found on the network on another port: the host's own list and page replace them, and the found
+        // address is not saved as one the host named.
+        let moved = RemoteSecureListener(server: stack.server, staticKey: stack.identity.noise, port: 0, advertisement: nil,
+                                         loopbackOnly: true)
+        moved.start()
+        defer { moved.stop() }
+        let address = "127.0.0.1:\(try await RemoteSecureTests.waitForPort(moved))"
+        finder.report([address])
+        try await waitUntil { second.hasSnapshot && second.task(idle)?.title == "Fix the footer links" }
+        XCTAssertEqual(second.connection, .connected(.direct(address)))
+        try await waitUntil { prompt(shown) == "Find the footer links that 404" }
+        XCTAssertFalse(directory.host(host.id)?.direct.contains(address) ?? true)
+
+        // Removing the host removes what it showed, and the folder of all hosts with its last one.
+        await directory.forget(host.id)
+        try await waitUntil { !FileManager.default.fileExists(atPath: root.path) }
+    }
+
     func testALongConversationProjectsOnlyTheTurnsAChangeTouches() throws {
         let conversation = RemoteConversationModel(taskID: "T", harness: .claudeCode, hostName: "Mac Studio")
         var page: [RemoteItem] = []
@@ -221,5 +304,26 @@ final class RemoteHostModelTests: XCTestCase {
         items.prepend([item("z1", "Z"), item("a0", "A")])
         XCTAssertEqual(items.items.map(\.id), ["z1", "a0", "a1", "a2", "a3", "b2"])
         XCTAssertEqual(items.runs.map(\.turnID), ["Z", "A", "B"])
+    }
+}
+
+/// A stand-in for Bonjour: the test says when the host is found and where.
+@MainActor
+private final class FakeDiscovery {
+    private(set) var watched: [String] = []
+    private var found: RemoteHostDiscovery.Found?
+
+    var isWatching: Bool { found != nil }
+
+    var discovery: RemoteHostDiscovery {
+        RemoteHostDiscovery { [self] discoveryID, found in
+            watched.append(discoveryID)
+            self.found = found
+            return { [self] in self.found = nil }
+        }
+    }
+
+    func report(_ addresses: [String]) {
+        found?(addresses)
     }
 }

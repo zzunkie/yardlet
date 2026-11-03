@@ -45,10 +45,11 @@ public enum RemoteClientPath: Equatable, Sendable {
     case relay
 }
 
-/// One host as a client follows it: it races the direct addresses and the relay, keeps the connection
-/// alive with `ping`, moves from the relay to a direct path when one completes, and connects again with
-/// backoff when the connection drops (§11.4, §13.3). What arrives comes out of `inbound` in the order it
-/// arrived, responses and events together, so a client applies them in that order (§5.3).
+/// One host as a client follows it: it races the addresses found on the network, the direct addresses and
+/// the relay, keeps the connection alive with `ping`, moves from the relay to a direct path when one
+/// completes, and connects again with backoff when the connection drops (§11.4, §13.3). What arrives comes
+/// out of `inbound` in the order it arrived, responses and events together, so a client applies them in that
+/// order (§5.3).
 public actor RemoteHostConnection {
     public enum State: Equatable, Sendable {
         case idle
@@ -99,6 +100,11 @@ public actor RemoteHostConnection {
     private var keepalive: Task<Void, Never>?
     private var upgrade: Task<Void, Never>?
     private var pingCounter = 0
+    /// What Bonjour resolved for the host now (§11.3), tried before the addresses it named; never saved.
+    private var discovered: [String] = []
+    /// An attempt is racing; an address found meanwhile is tried as soon as it ends.
+    private var racing = false
+    private var foundWhileRacing = false
 
     public init(target: RemoteHostTarget, clientKey: RemoteKeyPair, hello: RemoteHandshakeHello,
                 session: URLSession = .shared, timing: Timing = Timing()) {
@@ -147,6 +153,25 @@ public actor RemoteHostConnection {
         self.target = target
     }
 
+    /// The addresses Bonjour resolved for the host, each time they change (§11.3): they go first among the
+    /// direct candidates. A new one is tried at once (§11.4): from the relay, and in place of waiting out
+    /// a backoff.
+    public func discovered(_ addresses: [String]) {
+        let added = !Set(addresses).isSubset(of: discovered)
+        discovered = addresses
+        guard running, added else { return }
+        if path == .relay {
+            tryDirectUpgrade()
+        } else if socket == nil {
+            if racing {
+                foundWhileRacing = true
+            } else {
+                attempt = 0
+                connectSoon(after: 0)
+            }
+        }
+    }
+
     /// Sends a request under `id` (unique among the client's requests). False when no connection is open:
     /// no response will come for it.
     public func send(id: String, _ request: RemoteRequest) -> Bool {
@@ -169,8 +194,11 @@ public actor RemoteHostConnection {
     private func connect() async {
         guard running, socket == nil else { return }
         continuation.yield(.state(.connecting))
-        let result = await Self.race(Self.candidates(target, includeRelay: true, timing: timing), clientKey: clientKey,
-                                     hostKey: target.hostKey, hello: hello, session: session)
+        racing = true
+        foundWhileRacing = false
+        let result = await Self.race(Self.candidates(target, discovered: discovered, includeRelay: true, timing: timing),
+                                     clientKey: clientKey, hostKey: target.hostKey, hello: hello, session: session)
+        racing = false
         guard running, !Task.isCancelled else {
             if case let .success(won) = result { won.socket.close() }
             return
@@ -178,13 +206,14 @@ public actor RemoteHostConnection {
         switch result {
         case let .success(won):
             adopt(won)
+            if foundWhileRacing { tryDirectUpgrade() }
         case let .failure(failure):
             if Self.isRevoked(failure) {
                 running = false
                 continuation.yield(.state(.revoked))
                 return
             }
-            let delay = timing.backoff[min(attempt, timing.backoff.count - 1)]
+            let delay = foundWhileRacing ? 0 : timing.backoff[min(attempt, timing.backoff.count - 1)]
             attempt += 1
             continuation.yield(.state(.waiting(retryAt: Date().addingTimeInterval(delay), reason: failure.reason)))
             connectSoon(after: delay)
@@ -209,7 +238,7 @@ public actor RemoteHostConnection {
         startKeepalive(current)
         upgrade?.cancel()
         upgrade = nil
-        if won.path == .relay, !target.direct.isEmpty {
+        if won.path == .relay {
             upgrade = Task { [weak self, interval = timing.directRetryInterval] in
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(interval))
@@ -262,11 +291,11 @@ public actor RemoteHostConnection {
 
     /// While on the relay: a direct path that completes takes over (§11.4).
     private func tryDirectUpgrade() {
-        guard path == .relay, !target.direct.isEmpty else { return }
-        let target = target, clientKey = clientKey, hello = hello, session = session, timing = timing
+        let candidates = Self.candidates(target, discovered: discovered, includeRelay: false, timing: timing)
+        guard path == .relay, !candidates.isEmpty else { return }
+        let hostKey = target.hostKey, clientKey = clientKey, hello = hello, session = session
         Task { [weak self] in
-            let result = await Self.race(Self.candidates(target, includeRelay: false, timing: timing), clientKey: clientKey,
-                                         hostKey: target.hostKey, hello: hello, session: session)
+            let result = await Self.race(candidates, clientKey: clientKey, hostKey: hostKey, hello: hello, session: session)
             guard case let .success(won) = result else { return }
             await self?.upgradeTo(won)
         }
@@ -295,8 +324,12 @@ public actor RemoteHostConnection {
         var path: RemoteClientPath
     }
 
-    static func candidates(_ target: RemoteHostTarget, includeRelay: Bool, timing: Timing) -> [Candidate] {
-        var candidates = Array(NSOrderedSet(array: target.direct)).compactMap { $0 as? String }.compactMap { host in
+    /// The addresses found on the network first, then the ones the host named, each once, at once; the
+    /// relay after them.
+    static func candidates(_ target: RemoteHostTarget, discovered: [String] = [], includeRelay: Bool,
+                           timing: Timing) -> [Candidate] {
+        let direct = Array(NSOrderedSet(array: discovered + target.direct)).compactMap { $0 as? String }
+        var candidates = direct.compactMap { host in
             RemoteHostTarget.directURL(host).map {
                 Candidate(url: $0, path: .direct(host), delay: 0, timeout: timing.directTimeout)
             }

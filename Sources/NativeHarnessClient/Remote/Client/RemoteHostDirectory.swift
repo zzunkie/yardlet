@@ -8,8 +8,8 @@ import YardletRemote
 /// The other Macs this one paired with as a client, and the ones open in windows now (File › Connect to
 /// Mac…). Nothing runs until a host's window opens: no listener, no daemon, no login item, only outgoing
 /// connections while a window is open. What stays on this Mac is the list of hosts
-/// (`~/.yardlet/remote/hosts.json`) and a key per host; removing a host removes both and asks the host to
-/// forget this Mac.
+/// (`~/.yardlet/remote/hosts.json`), a key per host and what each host's window last showed
+/// (`RemoteHostCache`); removing a host removes all three and asks the host to forget this Mac.
 @MainActor
 @Observable
 final class RemoteHostDirectory {
@@ -42,17 +42,24 @@ final class RemoteHostDirectory {
     @ObservationIgnored private let hello: RemoteHandshakeHello
     @ObservationIgnored private let session: URLSession
     @ObservationIgnored private let timing: RemoteHostConnection.Timing
+    /// Where each host's window keeps what it last showed; nil keeps nothing.
+    @ObservationIgnored private let cacheRoot: URL?
+    @ObservationIgnored private let discovery: RemoteHostDiscovery?
     /// Each host's `attention` events, for notifications.
     @ObservationIgnored var onAttention: ((RemoteHostModel, RemoteEvent) -> Void)?
 
     init(store: RemoteHostStore, keys: any RemoteClientKeyStoring, hello: RemoteHandshakeHello,
-         session: URLSession = .shared, timing: RemoteHostConnection.Timing = .init()) {
+         session: URLSession = .shared, timing: RemoteHostConnection.Timing = .init(), cacheRoot: URL? = nil,
+         discovery: RemoteHostDiscovery? = nil) {
         self.store = store
         self.keys = keys
         self.hello = hello
         self.session = session
         self.timing = timing
+        self.cacheRoot = cacheRoot
+        self.discovery = discovery
         hosts = store.all()
+        if let cacheRoot { RemoteHostCache.removeAll(in: cacheRoot, except: Set(hosts.map(\.id))) }
     }
 
     func host(_ id: String) -> RemoteSavedHost? {
@@ -63,7 +70,9 @@ final class RemoteHostDirectory {
     func model(for hostID: String) -> RemoteHostModel? {
         if let model = models[hostID] { return model }
         guard let host = store.host(hostID), let key = keys.load(hostID: hostID) else { return nil }
-        let model = RemoteHostModel(host: host, clientKey: key, hello: hello, store: store, session: session, timing: timing)
+        let cache = cacheRoot.flatMap { RemoteHostCache.folder(in: $0, hostID: hostID) }.map { RemoteHostCache(folder: $0) }
+        let model = RemoteHostModel(host: host, clientKey: key, hello: hello, store: store, session: session, timing: timing,
+                                    cache: cache, discovery: discovery)
         model.onAttention = { [weak self, weak model] event in
             guard let self, let model else { return }
             onAttention?(model, event)
@@ -123,7 +132,8 @@ final class RemoteHostDirectory {
     }
 
     /// Removes a host: the host is asked to forget this Mac when it can be reached now (§15.6), then its
-    /// entry and key go. A host that cannot be reached keeps this Mac in its device list until removed there.
+    /// entry, key and cache go. A host that cannot be reached keeps this Mac in its device list until removed
+    /// there.
     func forget(_ hostID: String) async {
         if let model = models[hostID], model.isConnected {
             _ = await model.response(to: .forgetDevice)
@@ -131,6 +141,7 @@ final class RemoteHostDirectory {
             await Self.askToForget(target: target, key: key, hello: hello, session: session, timing: timing)
         }
         models.removeValue(forKey: hostID)?.stop()
+        if let folder = cacheRoot.flatMap({ RemoteHostCache.folder(in: $0, hostID: hostID) }) { RemoteHostCache.remove(folder) }
         keys.delete(hostID: hostID)
         store.remove(hostID)
         hosts = store.all()

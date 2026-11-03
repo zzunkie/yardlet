@@ -99,7 +99,7 @@
         </dict>
     </array>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>Yardlet lets your phone find this Mac on the same Wi-Fi when the phone remote is on.</string>
+    <string>When remote connections are on, your phone or another Mac can find this Mac on the same network. When this Mac connects to another Mac, Yardlet looks for that Mac on the same network.</string>
     <key>NSBonjourServices</key>
     <array>
         <string>_yardlet._tcp</string>

@@ -7,8 +7,9 @@ import YardletRemote
 
 /// Another Mac's Yardlet as this one follows it in a window of its own (docs/REMOTE_PROTOCOL.md, as a phone
 /// follows it): its projects and tasks, the conversations open in the window, and every command, each sent
-/// through the host's own paths. Nothing of the host's is stored here but its entry in `RemoteHostStore`:
-/// provider sign-ins, sessions and histories stay on the host, and what this model holds goes with it.
+/// through the host's own paths. Nothing of the host's is stored here but its entry in `RemoteHostStore` and
+/// what the window last showed (`RemoteHostCache`), shown again at once when the window opens until the
+/// host's own arrives: provider sign-ins, sessions and histories stay on the host.
 ///
 /// Responses and events are applied in the order they arrive (`RemoteHostConnection.inbound`): a
 /// subscription's page before the changes to it. After every new connection the list and the open
@@ -53,6 +54,9 @@ final class RemoteHostModel: Identifiable {
     @ObservationIgnored var onAttention: ((RemoteEvent) -> Void)?
     @ObservationIgnored private let connector: RemoteHostConnection
     @ObservationIgnored private let store: RemoteHostStore?
+    @ObservationIgnored private let cache: RemoteHostCache?
+    @ObservationIgnored private let discovery: RemoteHostDiscovery?
+    @ObservationIgnored private var stopDiscovery: (@MainActor @Sendable () -> Void)?
     @ObservationIgnored private var reader: Task<Void, Never>?
     @ObservationIgnored private var pending: [String: (RemoteResponse) -> Void] = [:]
     @ObservationIgnored private var nextRequest = 0
@@ -65,10 +69,13 @@ final class RemoteHostModel: Identifiable {
     @ObservationIgnored static let keptSubscriptions = 6
 
     init(host: RemoteSavedHost, clientKey: RemoteKeyPair, hello: RemoteHandshakeHello, store: RemoteHostStore?,
-         session: URLSession = .shared, timing: RemoteHostConnection.Timing = .init()) {
+         session: URLSession = .shared, timing: RemoteHostConnection.Timing = .init(), cache: RemoteHostCache? = nil,
+         discovery: RemoteHostDiscovery? = nil) {
         id = host.id
         self.host = host
         self.store = store
+        self.cache = cache
+        self.discovery = discovery
         connector = RemoteHostConnection(target: host.target ?? RemoteHostTarget(hostKey: Data(), direct: []),
                                          clientKey: clientKey, hello: hello, session: session, timing: timing)
     }
@@ -83,11 +90,18 @@ final class RemoteHostModel: Identifiable {
     func start() {
         guard reader == nil else { return }
         connection = .connecting
+        cache?.open(for: self)
         let stream = connector.inbound
         reader = Task { [weak self] in
             for await inbound in stream {
                 guard let self else { return }
                 self.handle(inbound)
+            }
+        }
+        // The host on this network, found by its key (§11.3): its addresses go first in the race.
+        if let discovery, let key = host.target?.hostKey {
+            stopDiscovery = discovery.watch(RemoteIdentity.discoveryID(for: key)) { [connector] addresses in
+                Task { await connector.discovered(addresses) }
             }
         }
         Task { await connector.start() }
@@ -96,6 +110,9 @@ final class RemoteHostModel: Identifiable {
     func stop() {
         reader?.cancel()
         reader = nil
+        stopDiscovery?()
+        stopDiscovery = nil
+        cache?.close()
         Task { await connector.stop() }
         failPending()
         connection = .stopped
@@ -117,6 +134,7 @@ final class RemoteHostModel: Identifiable {
         case let .event(event):
             handle(event)
         }
+        cache?.changed()
     }
 
     private func handle(_ state: RemoteHostConnection.State) {
@@ -216,6 +234,15 @@ final class RemoteHostModel: Identifiable {
         tasks.first { $0.id == id }
     }
 
+    /// The list as the window last showed it (`RemoteHostCache`), until the host's own arrives.
+    func showCached(_ list: RemoteHostCache.List) {
+        guard !hasSnapshot else { return }
+        projects = list.projects
+        tasks = list.tasks
+        newTask = list.newTask
+        followUp = list.followUp
+    }
+
     // MARK: - Showing tasks
 
     func select(_ selection: Selection) {
@@ -225,13 +252,16 @@ final class RemoteHostModel: Identifiable {
         guard case let .task(taskID) = selection else { return }
         if conversations[taskID] == nil {
             let harness = HarnessKind(rawValue: task(taskID)?.harness ?? HarnessKind.claudeCode.rawValue)
-            conversations[taskID] = RemoteConversationModel(taskID: taskID, harness: harness, hostName: host.name)
+            let conversation = RemoteConversationModel(taskID: taskID, harness: harness, hostName: host.name)
+            conversations[taskID] = conversation
+            cache?.show(taskID, in: conversation)
             subscribe(taskID)
         } else {
             subscribed.removeAll { $0 == taskID }
             subscribed.append(taskID)
         }
-        if task(taskID)?.unread == true { send(.markRead(taskID: taskID)) }
+        // A task shown before the host is reached (from the cache, or while it is away) stays unread there.
+        if isConnected, task(taskID)?.unread == true { send(.markRead(taskID: taskID)) }
     }
 
     private func subscribe(_ taskID: String) {

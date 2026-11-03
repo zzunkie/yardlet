@@ -28,6 +28,8 @@ final class RemoteConversationModel {
     @ObservationIgnored var hostName: String
     /// How many turns were projected so far: a change projects only the turns it touched.
     @ObservationIgnored private(set) var projectedTurnCount = 0
+    /// Bumped whenever what it holds changes, so the window's cache writes it again only then.
+    @ObservationIgnored private(set) var revision = 0
 
     init(taskID: String, harness: HarnessKind, hostName: String) {
         self.taskID = taskID
@@ -93,6 +95,11 @@ final class RemoteConversationModel {
         return nil
     }
 
+    /// The latest whole turns within a page's limits, for the window's cache (`RemoteHostCache`).
+    func latestItems(within limits: RemoteConversationWindow.Limits) -> (items: [RemoteItem], isWhole: Bool) {
+        items.latest(within: limits)
+    }
+
     /// The latest turn's plan limit, with what its card offers (§15.17).
     var usageLimit: RemoteItem? {
         guard let last = items.runs.last else { return nil }
@@ -100,6 +107,7 @@ final class RemoteConversationModel {
     }
 
     private func publish() {
+        revision += 1
         var turns: [ConversationTurn] = []
         turns.reserveCapacity(items.runs.count)
         var kept: [ObjectIdentifier: (version: Int, turn: ConversationTurn)] = [:]

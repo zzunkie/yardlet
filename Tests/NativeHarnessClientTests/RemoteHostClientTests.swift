@@ -4,8 +4,8 @@ import XCTest
 @testable import YardletRemoteFixtureSupport
 
 /// Yardlet as a client of another Mac's Yardlet (`RemoteHostConnection`), against the fixture host on
-/// loopback (`LoopbackStack`): pairing by link, the request and event stream in order, and a removed
-/// device that stops trying.
+/// loopback (`LoopbackStack`): pairing by link, the request and event stream in order, a removed device
+/// that stops trying, and an address found on the network tried at once.
 final class RemoteHostClientTests: XCTestCase {
     func testAClientPairsByLinkFollowsTasksAndStopsWhenRemoved() async throws {
         let stack = try await LoopbackStack()
@@ -101,6 +101,57 @@ final class RemoteHostClientTests: XCTestCase {
         XCTAssertEqual(RemoteHostConnection.candidates(RemoteHostTarget(hostKey: Data(count: 32), direct: [],
                                                                         relayURL: "https://relay.example.test", room: "abc"),
                                                        includeRelay: true, timing: .init()).map(\.delay), [0])
+        // What Bonjour found goes first, each address once (§11.4).
+        let found = RemoteHostConnection.candidates(target, discovered: ["Mac-Studio.local:47616", "192.168.0.2:47616"],
+                                                    includeRelay: true, timing: .init())
+        XCTAssertEqual(found.map(\.path), [.direct("Mac-Studio.local:47616"), .direct("192.168.0.2:47616"),
+                                           .direct("[fd7a::1]:47616"), .relay])
+        XCTAssertEqual(found.map(\.delay), [0, 0, 0, 0.7])
+    }
+
+    /// Bonjour finding the host (§11.4): an address found while waiting out a backoff is tried now, and one
+    /// found while on the relay moves the connection to it.
+    func testAnAddressFoundOnTheNetworkIsTriedAtOnce() async throws {
+        let stack = try await LoopbackStack()
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret, name: "Loopback",
+                                          hosts: ["127.0.0.1:\(stack.port)"])
+        let key = RemoteKeyPair.generate()
+        let hello = RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test")
+        _ = try await RemoteHostConnection.pair(try XCTUnwrap(link.url.flatMap(RemoteSecurePairingURL.parse)), clientKey: key,
+                                                hello: hello)
+        let found = "127.0.0.1:\(stack.port)"
+        func path(_ inbox: Inbox) -> RemoteClientPath? {
+            if case let .connected(path, _)? = inbox.lastState { return path }
+            return nil
+        }
+
+        // The address the host named is gone and the next attempt is ten minutes off: the found one is tried now.
+        var timing = RemoteHostConnection.Timing()
+        timing.backoff = [600]
+        let waiting = RemoteHostConnection(target: RemoteHostTarget(hostKey: link.macKey, direct: ["127.0.0.1:1"]),
+                                           clientKey: key, hello: hello, timing: timing)
+        let waits = Inbox(waiting.inbound)
+        await waiting.start()
+        _ = try await waits.waitFor("waiting") { if case .waiting? = $0.lastState { true } else { nil } }
+        await waiting.discovered([found])
+        _ = try await waits.waitFor("connected") { path($0) == .direct(found) ? true : nil }
+        await waiting.stop()
+
+        // On the relay (here the same listener under the relay's path), a found address takes over.
+        let relayed = RemoteHostConnection(target: RemoteHostTarget(hostKey: link.macKey, direct: [], relayURL: "ws://\(found)",
+                                                                    room: "room"), clientKey: key, hello: hello)
+        let inbox = Inbox(relayed.inbound)
+        await relayed.start()
+        _ = try await inbox.waitFor("on the relay") { path($0) == .relay ? true : nil }
+        await relayed.discovered([found])
+        _ = try await inbox.waitFor("on the direct path") { path($0) == .direct(found) ? true : nil }
+        let sent = await relayed.send(id: "1", .snapshot)
+        XCTAssertTrue(sent)
+        let snapshot = try await inbox.response("1")
+        XCTAssertTrue(snapshot.ok)
+        await relayed.stop()
     }
 
     func testSavedHostsLiveInOnePrivateFileThatGoesWithTheLastHost() throws {

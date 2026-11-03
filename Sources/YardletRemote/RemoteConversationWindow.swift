@@ -124,7 +124,8 @@ public struct RemoteConversationWindow: Sendable {
         return start
     }
 
-    static func estimatedBytes(_ item: RemoteItem) -> Int {
+    /// About how many bytes an item takes in a page, as `Limits.maxBytes` counts them.
+    public static func estimatedBytes(_ item: RemoteItem) -> Int {
         let texts = [item.text, item.title, item.detail, item.command, item.message, item.explanation]
         return 160 + texts.reduce(0) { $0 + ($1?.utf8.count ?? 0) }
             + (item.steps?.reduce(0) { $0 + $1.text.utf8.count + 40 } ?? 0)

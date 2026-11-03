@@ -9,3 +9,5 @@
 "NSCalendarsFullAccessUsageDescription" = "Apple 캘린더 커넥터를 켜면 Yardlet의 작업이 캘린더를 읽고 바꿀 수 있습니다. 또는 Yardlet에서 실행 중인 명령이 캘린더를 사용하려고 합니다.";
 "NSRemindersFullAccessUsageDescription" = "Apple 미리 알림 커넥터를 켜면 Yardlet의 작업이 미리 알림을 읽고 추가할 수 있습니다. 또는 Yardlet에서 실행 중인 명령이 미리 알림을 사용하려고 합니다.";
 "NSContactsUsageDescription" = "Apple 연락처 커넥터를 켜면 Yardlet의 작업이 연락처를 찾아볼 수 있습니다. 또는 Yardlet에서 실행 중인 명령이 연락처를 사용하려고 합니다.";
+/* 로컬 네트워크 권한 창: 휴대폰이나 다른 Mac이 이 Mac을 찾고, 이 Mac이 연결할 호스트를 찾는 Bonjour. */
+"NSLocalNetworkUsageDescription" = "원격 연결을 켜 두면 휴대폰이나 다른 Mac이 같은 네트워크에서 이 Mac을 찾을 수 있습니다. 이 Mac에서 다른 Mac에 연결할 때도 Yardlet이 같은 네트워크에서 그 Mac을 찾습니다.";
