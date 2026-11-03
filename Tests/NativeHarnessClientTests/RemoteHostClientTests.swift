@@ -69,7 +69,7 @@ final class RemoteHostClientTests: XCTestCase {
         XCTAssertFalse(streamed.isEmpty)
 
         // Removed on the host: the connection is told so and stops.
-        await stack.server.revoke(deviceID)
+        try await stack.server.revoke(deviceID)
         _ = try await inbox.waitFor("revoked") { $0.lastState == .revoked ? true : nil }
         let again = await connection.send(id: "3", .ping)
         XCTAssertFalse(again)

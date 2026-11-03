@@ -749,7 +749,7 @@ final class RemoteServerTests: XCTestCase {
         try await waitUntilAsync { await harness.bridge.tabInputs.count == 1 }
         let devices = await harness.devices.all()
         let device = try XCTUnwrap(devices.first?.id)
-        await harness.server.revoke(device)
+        try await harness.server.revoke(device)
         try await waitUntilAsync { await harness.bridge.permitsAtEnd.count == 1 }
         let permits = await harness.bridge.permitsAtEnd
         XCTAssertEqual(permits, [false], "the removed device's input saw its watch end")
@@ -806,7 +806,7 @@ final class RemoteServerTests: XCTestCase {
         let connected = await harness.server.status.connectedDeviceIDs
         XCTAssertEqual(connected, [deviceID])
 
-        await harness.server.revoke(deviceID)
+        try await harness.server.revoke(deviceID)
         _ = try await phone.event(.revoked)
         try await phone.waitUntilClosed(.revoked)
         let again = await harness.server.acceptHandshake(RemoteHandshakeHello(name: "Pixel"), publicKey: key, channel: TestChannel(), path: .local)

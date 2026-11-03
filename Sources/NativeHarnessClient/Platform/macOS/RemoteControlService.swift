@@ -358,8 +358,9 @@ final class RemoteControlService {
         Task { await server.cancelPairing() }
     }
 
-    /// Removes a paired device; it is disconnected at once and its key or token stops working.
     private(set) var permissionError: String?
+    private(set) var removalError: String?
+    private(set) var removingDeviceIDs: Set<String> = []
     private(set) var updatingDevicePermissions: Set<String> = []
 
     func setPermission(_ permission: RemoteDevicePermission, allowed: Bool, for device: RemoteDevice) async {
@@ -375,7 +376,14 @@ final class RemoteControlService {
     }
 
     func remove(_ device: RemoteDevice) async {
-        await server.revoke(device.id)
+        guard removingDeviceIDs.insert(device.id).inserted else { return }
+        defer { removingDeviceIDs.remove(device.id) }
+        do {
+            try await server.revoke(device.id)
+            removalError = nil
+        } catch {
+            removalError = L10n.string("Could not remove this device. It is still paired. Try again.")
+        }
         await reloadDevices()
     }
 

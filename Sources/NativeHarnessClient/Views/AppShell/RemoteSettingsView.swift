@@ -293,6 +293,7 @@ struct RemoteSettingsView: View {
                     Button(L10n.string("Remove"), role: .destructive) { deviceToRemove = device }
                         .controlSize(.small)
                         .accessibilityLabel(L10n.format("Remove %@", device.name))
+                        .disabled(service.removingDeviceIDs.contains(device.id))
                 }
                 .padding(.vertical, 12)
                 VStack(alignment: .leading, spacing: 8) {
@@ -302,6 +303,9 @@ struct RemoteSettingsView: View {
                 }
                 .padding(.leading, 42)
                 .padding(.bottom, 12)
+            }
+            if let error = service.removalError {
+                Text(error).font(.caption).foregroundStyle(.red).padding(.bottom, 12)
             }
             if let error = service.permissionError {
                 Text(error).font(.caption).foregroundStyle(.red).padding(.bottom, 12)
