@@ -89,13 +89,26 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertEqual(received, 300 * 1024)
         XCTAssertTrue(phone.events(.terminalClosed).isEmpty)
         XCTAssertTrue(permit.isValid)
-        let blockedBurst = Task { await harness.bridge.floodTerminal(terminal) }
+        let cancelledBurst = Task { await harness.bridge.floodTerminal(terminal) }
         try await waitUntil { permit.isWaitingForCapacity }
-        await harness.server.closed(connection)
+        cancelledBurst.cancel()
         try await waitUntil { await harness.bridge.completedTerminalBursts == 2 }
-        await blockedBurst.value
+        await cancelledBurst.value
         XCTAssertFalse(permit.isValid)
         try await waitUntil { await harness.bridge.closedTerminals.contains(terminal) }
+
+        await harness.server.receive(RemoteRequestEnvelope(id: "again", request: .openTerminal(taskID: "A")).encoded(), on: connection)
+        let reopened = try await phone.response("again")
+        let second = try XCTUnwrap(reopened.terminalId)
+        let secondHeldPermit = await harness.bridge.terminalPermit(second)
+        let secondPermit = try XCTUnwrap(secondHeldPermit)
+        let blockedBurst = Task { await harness.bridge.floodTerminal(second) }
+        try await waitUntil { secondPermit.isWaitingForCapacity }
+        await harness.server.closed(connection)
+        try await waitUntil { await harness.bridge.completedTerminalBursts == 3 }
+        await blockedBurst.value
+        XCTAssertFalse(secondPermit.isValid)
+        try await waitUntil { await harness.bridge.closedTerminals.contains(second) }
         let invalid = RemoteRequestEnvelope(id: "bad", request: .terminalResize(taskID: "A", terminalID: terminal, columns: 0, rows: 1))
         guard case .failure = RemoteRequestEnvelope.decode(invalid.encoded()) else { return XCTFail("Invalid size accepted") }
     }
