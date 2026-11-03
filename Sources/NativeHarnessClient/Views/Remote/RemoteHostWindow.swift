@@ -198,7 +198,7 @@ struct RemoteHostView: View {
                                editing: Binding(get: { drafts.edits[taskID] }, set: { drafts.edits[taskID] = $0 }),
                                titleBar: titleBar, find: drafts.find(for: taskID),
                                readingPosition: drafts.readingPosition(for: taskID), renderState: drafts.renderState(for: taskID),
-                               showsRail: $shell.showsRail)
+                               showsRail: $shell.showsRail, railFolds: $shell.railFolds, railPreferences: shell.railPreferences)
                     .id(taskID)
             }
         case .newTask:
@@ -395,6 +395,8 @@ struct RemoteHostView: View {
             if case let .session(id, isPinned) = target { model.send(.setPinned(taskID: id.uuidString, pinned: !isPinned)) }
         }
         commands.archive = { id in model.send(.archiveTask(taskID: id.uuidString)) }
+        commands.shownTaskID = shownTaskID
+        commands.toggleSessionRail = { shell.showsRail.toggle() }
         commands.showArchivedTasks = nil
         if model.newTask != nil { commands.newTask = { showNewTask() } }
         return commands
@@ -414,6 +416,9 @@ final class RemoteHostShell {
     var isShowingActivity = false
     var activityPlaces: [UUID: TaskAttentionPlace] = [:]
     var showsRail = true
+    /// The rail's folded cards and the order the person gave them, as the local rail keeps them.
+    var railFolds = SessionRailFolds()
+    let railPreferences = SessionRailPreferenceStore()
     /// The sidebar's project actions are the host's (`TaskSidebar.managesProjects`); this store only stands in for them.
     let projects = ProjectStore()
     /// The window's tabs once it has two or more, as the local window's: what each shows, the shown one following what
@@ -772,6 +777,8 @@ struct RemoteTaskView: View {
     let renderState: ConversationRenderState
     /// The rail is shown, as the local rail is unless the person hid it; it draws only where it fits.
     @Binding var showsRail: Bool
+    @Binding var railFolds: SessionRailFolds
+    let railPreferences: SessionRailPreferenceStore
     /// An answer that leaves a rule behind, asked about once more before it goes.
     @State private var standingAnswer: (requestID: String, action: PermissionRequestAction)?
     @State private var width: CGFloat = 0
@@ -779,6 +786,17 @@ struct RemoteTaskView: View {
     @State private var preview: URL?
 
     private var task: RemoteTask? { model.task(conversation.taskID) }
+
+    /// The task's settings as the composer's bottom row reads them, from a host that sent them.
+    private var settingsOptions: ComposerSessionOptions? {
+        model.taskSettings[conversation.taskID].map { RemoteTaskSettingsProjection.options($0, task: task) }
+    }
+
+    /// The project the task is listed under, or Chats.
+    private var projectName: String {
+        guard let projectID = task?.projectId else { return L10n.string("Chats") }
+        return model.projects.first { $0.id == projectID && $0.kind != .chats }?.name ?? L10n.string("Chats")
+    }
 
     private var outputs: [RemoteOutput] { model.offersTaskFiles ? model.files.outputs[conversation.taskID] ?? [] : [] }
 
@@ -793,7 +811,7 @@ struct RemoteTaskView: View {
     }
 
     private var drawsRail: Bool {
-        showsRail && !outputs.isEmpty && SessionRailPlacement.fits(sessionWidth: width, panelOpen: showsBrowser)
+        showsRail && task != nil && SessionRailPlacement.fits(sessionWidth: width, panelOpen: showsBrowser)
     }
 
     var body: some View {
@@ -803,10 +821,14 @@ struct RemoteTaskView: View {
             HStack(spacing: 0) {
                 conversationColumn
                     .frame(minWidth: 360, maxWidth: .infinity)
-                if drawsRail {
+                if drawsRail, let session = model.sidebar.sessions.first(where: { $0.id.uuidString == conversation.taskID }) {
                     Divider()
-                    RemoteTaskRail(outputs: outputs, open: { open($0, .viewer) }, openInItsApp: { open($0, .itsApp) },
-                                   revealInFinder: { open($0, .finder) })
+                    RemoteTaskRail(
+                        session: session, projectName: projectName, options: settingsOptions, outputs: outputs,
+                        preferences: railPreferences, folds: $railFolds,
+                        choose: { [model, taskID = conversation.taskID] in model.chooseTaskSetting(taskID, $0) },
+                        prepareSettings: { [model, taskID = conversation.taskID] in await model.readTaskSettings(taskID, prepare: true) },
+                        open: { open($0, .viewer) }, openInItsApp: { open($0, .itsApp) }, revealInFinder: { open($0, .finder) })
                 }
                 if showsBrowser {
                     Rectangle().fill(ParityTheme.separator).frame(width: 1)
@@ -912,7 +934,7 @@ struct RemoteTaskView: View {
                 if showsBrowser { model.browser.hide() } else { model.showBrowser(taskID: conversation.taskID) }
             }
         }
-        if !outputs.isEmpty {
+        if task != nil {
             ParityIconButton(systemName: "sidebar.squares.right",
                              help: L10n.string(drawsRail ? "Hide session rail" : "Show session rail")) {
                 showsRail = !drawsRail

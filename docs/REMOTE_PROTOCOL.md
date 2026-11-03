@@ -1768,7 +1768,9 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   The Task and View menus and their keys act on it as on the local window (new task, previous and next task, the next
   one needing attention, Pin, Archive, the sidebar, the activity view, Find in the conversation), and it has the local
   window's tabs (New Tab, Close Tab, Reopen Closed Tab, the next and previous tab, a row's Open in New Tab, ⌃1–⌃9 for the
-  pinned rows). Its home lists the host's projects with what their tasks need, as the local home does. What the host does not
+  pinned rows). Its home lists the host's projects with what their tasks need, as the local home does, and a task's
+  session rail is the local rail: where the task runs (its project and harness; the folder stays the host's), its
+  settings (§15.23), chosen there through the host, and its outputs (§15.22). What the host does not
   take from another device yet (rename, mark as unread, move, nest, delete, the projects' own actions, the archived
   list) shows dimmed.
 - **What it does:** what a phone does (§4–§6, §15), on a larger screen: the host's sidebar and its marks, a task's

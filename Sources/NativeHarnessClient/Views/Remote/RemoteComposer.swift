@@ -141,10 +141,7 @@ struct RemoteComposer: View {
 
     /// A menu's choice; one the host's menu asks about first was asked about here too (`ComposerPermissionControl`).
     private func choose(_ choice: ComposerSessionChoice) {
-        guard case let .providerOption(id, value) = choice,
-              let setting = model.taskSettings[taskID]?.first(where: { $0.id == id }) else { return }
-        let confirmed = setting.role == "permission" && setting.choices.first { $0.value == value }?.confirm != nil
-        model.setTaskSetting(taskID, id: id, value: value, confirmed: confirmed)
+        model.chooseTaskSetting(taskID, choice)
     }
 
     private func prepareSettings() async {
