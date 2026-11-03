@@ -11,6 +11,7 @@ struct RemoteBrowserPanel: View {
     let model: RemoteHostModel
     @State private var stripWidth: CGFloat = 0
     @State private var address = ""
+    @State private var submittedAddress = false
     @FocusState private var addressFocused: Bool
     private var browser: RemoteBrowserModel { model.browser }
 
@@ -26,7 +27,10 @@ struct RemoteBrowserPanel: View {
             if !addressFocused { address = url ?? "" }
         }
         .onChange(of: addressFocused) { _, focused in
-            if !focused { address = browser.watchedTab?.url ?? "" }
+            if !focused {
+                if !submittedAddress { address = browser.watchedTab?.url ?? "" }
+                submittedAddress = false
+            }
         }
     }
 
@@ -34,16 +38,20 @@ struct RemoteBrowserPanel: View {
 
     /// The tabs as wide as their titles up to the strip's tab width, sharing the strip evenly once they do not fit.
     private var header: some View {
-        let room = stripWidth - 44 - CGFloat(max(browser.tabs.count - 1, 0)) * PanelTabMetrics.spacing
-        let tabWidth = min(PanelTabMetrics.maxWidth, max(PanelTabMetrics.markWidth, room / CGFloat(max(browser.tabs.count, 1))))
+        let room = stripWidth - 76 - CGFloat(max(browser.tabs.count - 1, 0)) * PanelTabMetrics.spacing
+        let tabWidth = min(PanelTabMetrics.maxWidth, max(76, room / CGFloat(max(browser.tabs.count, 1))))
         return HStack(spacing: PanelTabMetrics.spacing) {
-            ForEach(browser.tabs, id: \.tabId) { tab in
-                HStack(spacing: 0) {
-                    RemoteBrowserTabButton(tab: tab, isShown: tab.tabId == browser.tabID, maxWidth: tabWidth - 24) {
-                        browser.select(tab.tabId)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: PanelTabMetrics.spacing) {
+                    ForEach(browser.tabs, id: \.tabId) { tab in
+                        HStack(spacing: 0) {
+                            RemoteBrowserTabButton(tab: tab, isShown: tab.tabId == browser.tabID, maxWidth: tabWidth - 24) {
+                                browser.select(tab.tabId)
+                            }
+                            ParityIconButton(systemName: "xmark", help: L10n.string("Close tab")) { browser.closeTab(tab.tabId) }
+                                .disabled(!browser.canControlTabs)
+                        }
                     }
-                    ParityIconButton(systemName: "xmark", help: L10n.string("Close tab")) { browser.closeTab(tab.tabId) }
-                        .disabled(!browser.canControlTabs)
                 }
             }
             Spacer(minLength: 0)
@@ -74,7 +82,7 @@ struct RemoteBrowserPanel: View {
                 .font(.callout.monospaced())
                 .focused($addressFocused)
                 .disabled(!browser.canControlTabs)
-                .onSubmit { browser.openAddress(address); addressFocused = false }
+                .onSubmit { submittedAddress = true; browser.openAddress(address); addressFocused = false }
                 .padding(.horizontal, 10)
                 .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .leading)
                 .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 7))

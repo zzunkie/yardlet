@@ -487,13 +487,14 @@ final class BrowserPanelTabsQATests: XCTestCase {
             showSignInPage(in: page, sequence: 1)
             try await settle(local) { false }
             try draw(local, "local-handoff", appearance)
+            let localBitmap = try local.capture().bitmap
             let localBar = controls(in: local).filter { ["I'm done", "Decline"].map(L10n.string).contains($0.label) }
             XCTAssertEqual(Set(localBar.map(\.label)), Set(["I'm done", "Decline"].map(L10n.string)))
             local.close()
 
             // This Mac as a host, followed by another Mac's window on loopback.
             let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(
-                model: model, browser: RemoteTabBridge.Environment(client: { client })))
+                model: model, browser: RemoteTabBridge.Environment(client: { client })), port: 47876)
             defer { stack.stop() }
             let ticket = await stack.server.openPairing()
             let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
@@ -521,6 +522,18 @@ final class BrowserPanelTabsQATests: XCTestCase {
             orderIn(window)
             try await settle(window) { false }
             try draw(window, "remote-handoff", appearance)
+            let remoteBitmap = try window.capture().bitmap
+            let pair = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+                pixelsWide: localBitmap.pixelsWide + remoteBitmap.pixelsWide,
+                pixelsHigh: max(localBitmap.pixelsHigh, remoteBitmap.pixelsHigh), bitsPerSample: 8,
+                samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: pair)
+            localBitmap.draw(in: NSRect(x: 0, y: 0, width: localBitmap.pixelsWide, height: localBitmap.pixelsHigh))
+            remoteBitmap.draw(in: NSRect(x: localBitmap.pixelsWide, y: 0, width: remoteBitmap.pixelsWide, height: remoteBitmap.pixelsHigh))
+            NSGraphicsContext.restoreGraphicsState()
+            try WindowlessRender.writePNG(pair, to: try WindowlessRender.directory(Self.folder)
+                .appending(path: "browser-controls-pair-\(appearance.suffix).png"))
             // With the handed tab in the panel, the request is the panel's bar alone, as on this Mac: no card.
             let answers = ["I'm done", "Decline"].map(L10n.string)
             let remoteBar = controls(in: window).filter { answers.contains($0.label) }
@@ -540,6 +553,19 @@ final class BrowserPanelTabsQATests: XCTestCase {
             let done = try XCTUnwrap(controls(in: window).filter { $0.label == L10n.string("I'm done") }.first)
             XCTAssertTrue(WindowlessRender.withAccessibilityTree { done.object.accessibilityPerformPress?() ?? false })
             try await waitUntilAsync { tab.handoff?.answer == .done }
+            // The address and close travel through the authenticated connection to this task's browser.
+            XCTAssertTrue(remote.browser.canControlTabs)
+            let priorCount = client.tabs(forSession: task.id).count
+            XCTAssertTrue(remote.openHostBrowserLink(URL(string: "http://localhost:3000/preview")!, taskID: task.id.uuidString))
+            try await NativeHarnessClientTests.waitUntil { client.tabs(forSession: task.id).count == priorCount + 1 }
+            let opened = try XCTUnwrap(client.tab(forSession: task.id))
+            standIn.load(opened.id, "http://localhost:3000/preview", title: "Preview")
+            try await NativeHarnessClientTests.waitUntil { remote.browser.tabID == opened.key.uuidString }
+            remote.browser.openAddress("localhost:4000/next")
+            try await NativeHarnessClientTests.waitUntil { standIn.sent.contains(.navigate(tab: opened.id, url: "http://localhost:4000/next")) }
+            remote.browser.closeTab(opened.key.uuidString)
+            try await NativeHarnessClientTests.waitUntil { client.tabs(forSession: task.id).count == priorCount }
+            XCTAssertTrue(standIn.closed.contains(opened.id))
             window.close()
             remote.browser.hide()
             try await waitUntilAsync { !tab.isRemotelyWatched }

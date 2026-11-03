@@ -13,6 +13,36 @@ import XCTest
 /// the change, and what a window showed shown again when it reopens.
 @MainActor
 final class RemoteHostModelTests: XCTestCase {
+    func testBrowserSelectionSurvivesDelayedNavigationReplies() {
+        let browser = RemoteBrowserModel()
+        browser.canControlTabs = true
+        var pending: [(RemoteRequest, ((RemoteResponse) -> Void)?)] = []
+        browser.send = { pending.append(($0, $1)) }
+        browser.show(taskID: "task", tabID: "first")
+        var initial = RemoteResponse(re: "initial")
+        initial.tabId = "first"
+        pending[0].1?(initial)
+        browser.openAddress("localhost:3000", inNewTab: true)
+        let opened = pending.last!.1
+        browser.select("chosen")
+        var selected = RemoteResponse(re: "selected")
+        selected.tabId = "chosen"
+        pending.last!.1?(selected)
+        var late = RemoteResponse(re: "late")
+        late.tabId = "new"
+        opened?(late)
+        XCTAssertEqual(browser.tabID, "chosen", "a later selection wins over an earlier open request")
+        // An older watch reply must not replace a newer selection either.
+        browser.select("second")
+        let earlierWatch = pending.last!.1
+        browser.select("third")
+        selected.tabId = "third"
+        pending.last!.1?(selected)
+        late.tabId = "second"
+        earlierWatch?(late)
+        XCTAssertEqual(browser.tabID, "third")
+    }
+
     /// The client uses the same Files panel, reading from a real host workspace over the encrypted loopback.
     func testWorkspaceFilesReadAndRenderTheHostsFilesWithoutWriting() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "remote-files-\(UUID())")

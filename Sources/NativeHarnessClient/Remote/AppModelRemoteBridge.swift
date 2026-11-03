@@ -78,6 +78,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.followUp = model.followUpMode == .steer ? .steer : .queue
         snapshot.reviewReading = true
         snapshot.browserTabs = browser.isAvailable
+        snapshot.tabControls = browser.isAvailable
         return snapshot
     }
 

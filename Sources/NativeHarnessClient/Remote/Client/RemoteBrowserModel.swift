@@ -38,6 +38,8 @@ final class RemoteBrowserModel {
     @ObservationIgnored private var scroll: (x: Double, y: Double, deltaX: Double, deltaY: Double)?
     @ObservationIgnored private var scrollFlush: Task<Void, Never>?
     /// What the watch asked for, to ask again when the panel grows past it.
+    @ObservationIgnored private var selectionRevision = 0
+    @ObservationIgnored private var watchRevision = 0
     @ObservationIgnored private var watchedSize: (width: Int, height: Int)?
 
     var watchedTab: RemoteBrowserTab? { tabs.first { $0.tabId == tabID } }
@@ -46,6 +48,7 @@ final class RemoteBrowserModel {
 
     /// Opens the panel on the task's browser: the tab named, else the one its host's panel shows.
     func show(taskID: String, tabID: String? = nil) {
+        selectionRevision += 1
         if self.taskID != taskID {
             tabs = []
             self.tabID = nil
@@ -58,6 +61,8 @@ final class RemoteBrowserModel {
     }
 
     func hide() {
+        selectionRevision += 1
+        watchRevision += 1
         guard let taskID else { return }
         send(.unwatchTab(taskID: taskID), nil)
         self.taskID = nil
@@ -75,6 +80,7 @@ final class RemoteBrowserModel {
     }
 
     func select(_ tabID: String) {
+        selectionRevision += 1
         guard tabID != self.tabID else { return }
         watch(tabID)
     }
@@ -89,12 +95,14 @@ final class RemoteBrowserModel {
 
     private func watch(_ tabID: String?) {
         guard let taskID else { return }
+        watchRevision += 1
+        let revision = watchRevision
         let size = pictureSize
         watchedSize = size
         if tabID != self.tabID { frame = nil }
         self.tabID = tabID
         send(.watchTab(taskID: taskID, tabID: tabID, maxWidth: size.width, maxHeight: size.height)) { [weak self] response in
-            guard let self, self.taskID == taskID else { return }
+            guard let self, self.taskID == taskID, self.watchRevision == revision else { return }
             if response.ok {
                 self.tabs = response.tabs ?? []
                 self.isListed = true
@@ -139,8 +147,10 @@ final class RemoteBrowserModel {
     /// Opens on the host, so loopback addresses refer to the host's development servers.
     func openAddress(_ address: String, inNewTab: Bool = false) {
         guard canControlTabs, let taskID else { return }
+        selectionRevision += 1
+        let revision = selectionRevision
         send(.openTab(taskID: taskID, tabID: inNewTab ? nil : tabID, address: address)) { [weak self] response in
-            guard let self, self.taskID == taskID else { return }
+            guard let self, self.taskID == taskID, self.selectionRevision == revision else { return }
             if response.ok { self.watch(response.tabId) }
             else { self.refusal = Self.refusal(response.error, host: self.hostName) }
         }

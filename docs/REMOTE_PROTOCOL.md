@@ -1589,8 +1589,8 @@ for what they read beyond §6's items. A phone keeps §6.
 Added on 2026-11-03. The phone sees a task's browser tab and uses it, for a step only the person can take while away: a
 sign-in, a two-factor code, an approval button, often the tab a browser handoff (§15.18) gave them. The Mac sends
 pictures of the tab's visible page while the phone watches it, and the phone's taps, scrolling and typing go to the
-page as the Mac's own browser panel sends the person's. Opening other addresses, other tabs or the Mac's own browsing
-stays on the Mac.
+page as the Mac's own browser panel sends the person's. Hosts advertising `tabControls` also accept addresses and
+tab closes within the watched task (§15.30); browsing outside a task stays on the Mac.
 
 - The snapshot carries `browserTabs: true` when the Mac answers the requests below (it has a browser engine). A phone
   offers a task's browser only then.
@@ -1972,9 +1972,9 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   Back, Forward and Reload, the handoff's bar, and the watched tab's page, which takes clicks, drags, the trackpad,
   keys and the input method's committed text (what it is still composing shows on the client until committed; ⌘V
   types the client's own clipboard; secure keyboard entry is on while the page's password field has the keyboard); it
-  sends no `viewport`, so the tab keeps its size. A handoff's card has Show Tab, which opens it there. Settings,
-  connectors, the context ring, creating or editing a schedule, the other side panels, opening addresses and closing
-  tabs stay on the host.
+  sends no `viewport`, so the tab keeps its size. A handoff's card has Show Tab, which opens it there. With `tabControls`,
+  the address field, new-tab button and tab close buttons act on the host (§15.30); loopback links open there too.
+  Settings, connectors, the context ring, creating or editing a schedule and the other side panels stay on the host.
 - **Paths:** as §11.4. While a host's window is open it browses Bonjour (§11.3) for the instance with the
   discovery id of the host key it saved, and resolves it to the host's name and port (`Name.local:47616`; the
   system resolves the name when connecting). Those addresses go first, never saved, then the direct addresses the

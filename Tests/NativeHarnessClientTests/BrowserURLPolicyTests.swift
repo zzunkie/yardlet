@@ -16,6 +16,8 @@ final class BrowserURLPolicyTests: XCTestCase {
     func testAddressInputResolves() throws {
         XCTAssertEqual(try BrowserURLPolicy.resolve("example.com/path"), "https://example.com/path")
         XCTAssertEqual(try BrowserURLPolicy.resolve("localhost:3000"), "http://localhost:3000")
+        XCTAssertEqual(try BrowserURLPolicy.resolve("localhost.:3000"), "http://localhost.:3000")
+        XCTAssertTrue(BrowserURLPolicy.isLoopback("::1"))
         XCTAssertEqual(try BrowserURLPolicy.resolve("127.0.0.1:8080/x"), "http://127.0.0.1:8080/x")
         XCTAssertEqual(try BrowserURLPolicy.resolve("  http://example.com  "), "http://example.com")
         XCTAssertEqual(try BrowserURLPolicy.resolve("/tmp/page.html"), "file:///tmp/page.html")

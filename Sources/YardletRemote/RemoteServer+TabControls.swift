@@ -5,24 +5,26 @@ extension RemoteServer {
     func tabControl(_ requestID: String, request: RemoteRequest, on id: UUID) {
         guard let watch = tabs.watches[id], watch.taskID == request.taskID else {
             respond(.failure(requestID, RemoteError(.notAllowed, "Watch the task's browser first")), to: id)
+            audit?.record(device: connections[id]?.deviceID, type: request.type, task: request.taskID, result: "notAllowed", at: now())
             return
         }
         guard tabs.pendingInputs[id, default: 0] < RemoteProtocol.maxPendingTabInputs else {
             respond(.failure(requestID, RemoteError(.rateLimited)), to: id)
+            audit?.record(device: connections[id]?.deviceID, type: request.type, task: request.taskID, result: "rateLimited", at: now())
             return
         }
         tabs.pendingInputs[id, default: 0] += 1
         let earlier = tabs.inputs[id]
         let permit = watch.permit
+        let device = connections[id]?.deviceID
         tabs.inputs[id] = Task { [weak self] in
             await earlier?.value
-            await self?.performTabControl(requestID, request: request, permit: permit, on: id)
+            await self?.performTabControl(requestID, request: request, permit: permit, device: device, on: id)
         }
     }
 
-    private func performTabControl(_ requestID: String, request: RemoteRequest, permit: RemoteTabPermit, on id: UUID) async {
+    private func performTabControl(_ requestID: String, request: RemoteRequest, permit: RemoteTabPermit, device: String?, on id: UUID) async {
         defer { if let left = tabs.pendingInputs[id] { tabs.pendingInputs[id] = left > 1 ? left - 1 : nil } }
-        let device = connections[id]?.deviceID
         var response = RemoteResponse(re: requestID)
         if !permit.isValid {
             response = .failure(requestID, RemoteError(.notAllowed))

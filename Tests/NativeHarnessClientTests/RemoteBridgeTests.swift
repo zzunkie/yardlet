@@ -870,6 +870,32 @@ final class RemoteBridgeTests: XCTestCase {
         let foreign = await bridge.tabInput(taskID: other.id.uuidString, tabID: tabID, input: .click(x: 10, y: 10), permit: RemoteTabPermit())
         XCTAssertEqual(foreign?.code, .notFound)
 
+        // Address changes and closes obey the same task, window, file and lifetime boundaries.
+        let underDialog = await bridge.openTab(taskID: taskID, tabID: tabID, address: "localhost:3000", permit: RemoteTabPermit())
+        if case let .failure(error) = underDialog { XCTAssertEqual(error.code, .notAllowed) }
+        else { XCTFail("An address opened under a passkey window") }
+        let closeUnderDialog = await bridge.closeTab(taskID: taskID, tabID: tabID, permit: RemoteTabPermit())
+        XCTAssertEqual(closeUnderDialog?.code, .notAllowed)
+        connection.eventHandler?(.chromiumWindow(isShown: false, titles: [], kinds: [], ids: [], tabs: []))
+        let foreignClose = await bridge.closeTab(taskID: other.id.uuidString, tabID: tabID, permit: RemoteTabPermit())
+        XCTAssertEqual(foreignClose?.code, .notFound)
+        let revoked = RemoteTabPermit()
+        revoked.revoke()
+        let unopened = await bridge.openTab(taskID: taskID, tabID: nil, address: "https://example.com", permit: revoked)
+        if case let .failure(error) = unopened { XCTAssertEqual(error.code, .notAllowed) }
+        else { XCTFail("A cancelled watch opened a tab") }
+        for address in ["file:///etc/hosts", "javascript:alert(1)", "mailto:test@example.com"] {
+            let rejected = await bridge.openTab(taskID: taskID, tabID: nil, address: address, permit: RemoteTabPermit())
+            if case .success = rejected { XCTFail("Opened an address outside the remote boundary") }
+        }
+        let navigation = try await bridge.openTab(taskID: taskID, tabID: tabID,
+                                                  address: "localhost:3000/preview", permit: RemoteTabPermit()).get()
+        XCTAssertEqual(navigation, tabID)
+        XCTAssertTrue(connection.sent.contains(.navigate(tab: signIn.id, url: "http://localhost:3000/preview")))
+        let closed = await bridge.closeTab(taskID: taskID, tabID: tabID, permit: RemoteTabPermit())
+        XCTAssertNil(closed)
+        XCTAssertTrue(connection.sent.contains(.requestClose(tab: signIn.id)))
+
         // No one watches: the tab hides again as one no panel shows.
         await bridge.setWatchedTabs([])
         try await waitUntilAsync { connection.visibility(of: signIn).last == true }
