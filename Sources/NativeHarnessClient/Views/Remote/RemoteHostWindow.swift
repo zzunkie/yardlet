@@ -73,7 +73,7 @@ struct RemoteHostView: View {
                         TitleBarSidebarPart(
                             isSidebarVisible: true, width: shell.sidebarWidth.shown(inWindowWidth: windowWidth),
                             onToggleSidebar: toggleSidebar, onNewTask: showNewTask,
-                            activityToggle: ActivityViewToggle(isOn: shell.isShowingActivity, needsAttention: needsAttention,
+                            activityToggle: ActivityViewToggle(isOn: isActivityShown, needsAttention: needsAttention,
                                                                toggle: toggleActivity))
                         if model.showsSchedules {
                             RemoteScheduleList(model: model)
@@ -361,16 +361,22 @@ struct RemoteHostView: View {
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) { shell.isSidebarVisible.toggle() }
     }
 
-    /// Turns the activity view on, keeping where its tasks are listed while it stays on, or off.
+    /// Whether the sidebar shows the activity view: the scheduled tasks show in its place while it stays on.
+    private var isActivityShown: Bool { shell.isSidebarVisible && shell.isShowingActivity && !model.showsSchedules }
+
+    /// Turns the activity view on, keeping where its tasks are listed while it stays on, or off while it shows.
+    /// Over the scheduled tasks, or with the sidebar hidden, it shows it.
     private func toggleActivity() {
+        let wasShown = isActivityShown
         model.showsSchedules = false
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
-            if shell.isShowingActivity {
+            if wasShown {
                 shell.isShowingActivity = false
                 shell.activityPlaces = [:]
             } else {
                 let mirror = model.sidebar
-                shell.activityPlaces = TaskAttentionProjection.places(of: mirror.sessions, details: mirror.details)
+                shell.activityPlaces = TaskAttentionProjection.places(
+                    of: mirror.sessions, details: mirror.details, kept: shell.isShowingActivity ? shell.activityPlaces : [:])
                 shell.isShowingActivity = true
                 shell.isSidebarVisible = true
             }
