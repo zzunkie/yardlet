@@ -194,7 +194,7 @@ actor CodexEnvironmentManager {
     }
 
     func processEnvironment(
-        base: [String: String] = ProcessInfo.processInfo.environment,
+        base: [String: String] = RuntimeProcessEnvironment.app,
         scope: SessionEnvironmentScope = .native
     ) throws -> CodexProcessEnvironment {
         if scope == .yardlet, materializedSnapshot() == nil {
