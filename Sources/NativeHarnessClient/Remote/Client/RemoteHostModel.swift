@@ -473,7 +473,9 @@ final class RemoteHostModel: Identifiable {
             commandError = L10n.string("The file is too large to send.")
         case let .failure(.refused(error)):
             commandError = Self.message(for: error, host: name)
-        case .failure(.unreadable), .failure(.cancelled):
+        case .failure(.unreadable):
+            commandError = L10n.format("Couldn't read %@, or it is empty.", url.lastPathComponent)
+        case .failure(.cancelled):
             break
         }
         return nil

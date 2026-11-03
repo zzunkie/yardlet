@@ -2065,6 +2065,7 @@
 "Slash commands run on %@." = "슬래시 명령은 %@에서 실행하세요.";
 "That isn't offered for this task now." = "지금 이 작업에서는 할 수 없습니다.";
 "The file is too large to send." = "파일이 너무 커서 보낼 수 없습니다.";
+"Couldn't read %@, or it is empty." = "%@ 파일을 읽을 수 없거나 파일이 비어 있습니다.";
 "The link works once, for 5 minutes. Pair once while both Macs are together; from then on this Mac connects on the same network, over Tailscale or through the Yardlet server." = "링크는 5분 동안 한 번만 쓸 수 있습니다. 두 Mac이 같은 자리에 있을 때 한 번 연결해 두면, 그다음부터는 같은 네트워크나 Tailscale, Yardlet 서버로 연결됩니다.";
 "The message is too long." = "메시지가 너무 깁니다.";
 "This Mac is no longer paired." = "이 Mac은 더 이상 연결되어 있지 않습니다.";

@@ -1259,9 +1259,10 @@ in parts first, then a message or a new task names it.
   sends from `received` again. The Mac keeps an unfinished upload for 30 minutes after its last part, and a finished
   one until a message takes it or 30 minutes pass; when Yardlet starts again it removes whatever no message took.
   An `uploadId` is used once: a first part under an ID used before is refused. A part the Mac fails to write ends
-  the upload, and the phone starts the file again under a new ID. Not a command; at most 4 uploads open per device
-  (`busy`). Errors: `badRequest` (also a used ID), `tooLarge` (over 500 MiB, or the Mac's disk would keep less than
-  2 GB free), `notFound` (an unknown or expired upload at an offset after 0), `busy`.
+  the upload, and the phone starts the file again under a new ID. Not a command. At most 4 uploads are open per device: a
+  phone does not say when it gives up on a file, so a fifth first part drops the device's unfinished upload that went
+  longest without a part, which then answers `notFound`. Errors: `badRequest` (also a used ID), `tooLarge` (over 500 MiB, or the Mac's disk would keep less than
+  2 GB free), `notFound` (an unknown, expired or dropped upload at an offset after 0).
 - `sendMessage` and `createTask` take `files: ["<uploadId>", …]`, at most 20, each finished and named once. The Mac writes each
   file in a folder of its own under its temporary folder (never the task's folder), named as the phone named it
   without any path, readable only by the person and never executable, and sends it as its composer sends a dropped

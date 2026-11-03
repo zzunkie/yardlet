@@ -178,6 +178,35 @@ final class RemoteHostClientTests: XCTestCase {
         await connection.stop()
     }
 
+    /// A retry asked for during a race that the relay then wins does not send the connection back to the direct
+    /// address that did not answer; only an address Bonjour found meanwhile is worth trying from the relay.
+    func testARetryDuringARaceTheRelayWinsDoesNotTryTheSameAddressAgain() async throws {
+        let stack = try await LoopbackStack()
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret, name: "Loopback",
+                                          hosts: ["127.0.0.1:\(stack.port)"])
+        let key = RemoteKeyPair.generate()
+        let hello = RemoteHandshakeHello(name: "iPhone", platform: "ios", appVersion: "test")
+        _ = try await RemoteHostConnection.pair(link, clientKey: key, hello: hello)
+        let silent = SilentListener()
+        let port = try await silent.start()
+        defer { silent.stop() }
+        var timing = RemoteHostConnection.Timing()
+        timing.directTimeout = 30
+        let connection = RemoteHostConnection(target: RemoteHostTarget(hostKey: link.macKey, direct: ["127.0.0.1:\(port)"],
+                                                                       relayURL: "ws://127.0.0.1:\(stack.port)", room: "room"),
+                                              clientKey: key, hello: hello, timing: timing)
+        let inbox = Inbox(connection.inbound)
+        await connection.start()
+        try await waitUntil { silent.accepted == 1 }
+        await connection.reconnectNow()
+        _ = try await inbox.waitFor("on the relay") { if case .connected(.relay, _)? = $0.lastState { true } else { nil } }
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(silent.accepted, 1, "the direct address that did not answer was tried again")
+        await connection.stop()
+    }
+
     /// A file goes up only while the host takes it forward (§15.20): an answer that holds no more than before, or more
     /// than the file, ends the upload instead of sending the same part again, and removing the attachment stops it.
     func testAFileGoesUpOnlyWhileTheHostTakesItForward() async throws {

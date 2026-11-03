@@ -82,13 +82,17 @@ struct RemoteUploadStore {
         }
         guard size <= RemoteProtocol.maxFileBytes else { return .failure(RemoteError(.tooLarge, "A file is at most 500 MiB")) }
         guard part.data.count <= size else { return .failure(RemoteError(.badRequest, "The part runs past the file's size")) }
-        guard uploads.values.filter({ $0.deviceID == deviceID && !$0.isFinished }).count < Self.openPerDevice else {
-            return .failure(RemoteError(.busy, "At most four uploads at once"))
-        }
         let folder = directory.appending(path: part.uploadID, directoryHint: .isDirectory)
         // An ID once used names a folder another message may still read: never reuse or remove it.
         guard !FileManager.default.fileExists(atPath: folder.path(percentEncoded: false)) else {
             return .failure(RemoteError(.badRequest, "That upload ID was used already"))
+        }
+        // A phone does not say when it gave up on a file (the attachment removed, the file started again under a new
+        // ID), so a fifth upload makes room by dropping the device's unfinished one that went longest without a part,
+        // rather than every later file being refused until that one expires.
+        let open = uploads.filter { $0.value.deviceID == deviceID && !$0.value.isFinished }
+        if open.count >= Self.openPerDevice, let stalest = open.min(by: { $0.value.lastPartAt < $1.value.lastPartAt }) {
+            drop(stalest.key)
         }
         let upload = Upload(deviceID: deviceID, name: Self.safeName(name), mediaType: part.mediaType, size: size,
                             received: part.data.count, lastPartAt: now, folder: folder)
