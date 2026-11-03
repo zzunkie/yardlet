@@ -58,7 +58,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Macs")
                 } footer: {
-                    Text("Pair a Mac from Yardlet on it: Settings › Remote › Pair a device. Swipe a Mac to remove it; it forgets this phone too.")
+                    Text("To pair a Mac, open Yardlet › Settings… › Remote on it and choose Pair… beside Pair a device. Swipe a Mac to remove it; it forgets this phone too.")
                 }
 
                 Section {
