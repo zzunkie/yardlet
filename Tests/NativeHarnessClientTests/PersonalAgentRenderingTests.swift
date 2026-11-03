@@ -23,9 +23,24 @@ final class PersonalAgentRenderingTests: XCTestCase {
         let railTitles = [L10n.string("Show session rail"), L10n.string("Hide session rail")]
         let showsTaskRail = { host.accessibilityElements().contains { railTitles.contains($0.label) } }
         XCTAssertTrue(showsTaskRail(), "The shown task's header offers its session rail")
+        // The title bar's bell is on only while the Tasks tab shows the activity view; pressed over another tab, it
+        // shows the view rather than turning it off.
+        let turnOff = L10n.string("Turn off activity view")
+        let bell = { host.accessibilityElements().first { $0.label.hasPrefix(L10n.string("View activity")) || $0.label == turnOff } }
+        let showsActivity = { host.accessibilityElements().contains { $0.label == L10n.string("Priority") || $0.value == L10n.string("Priority") } }
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: try XCTUnwrap(bell()?.label)))
+        await host.settle(until: { bell()?.label == turnOff && showsActivity() })
         // The words below Scheduled tasks switch the list to personal agents; Home and Scheduled tasks stay.
         XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
         let showsPersonalAgents = { host.accessibilityElements().contains { $0.label == "Dots" || $0.value == "Dots" } }
+        await host.settle(until: showsPersonalAgents)
+        XCTAssertNotEqual(bell()?.label, turnOff, "The bell is drawn on over Personal agents")
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: try XCTUnwrap(bell()?.label)))
+        await host.settle(until: { !showsPersonalAgents() && bell()?.label == turnOff })
+        XCTAssertTrue(showsActivity(), "The bell pressed over Personal agents did not show the activity view")
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: turnOff))
+        await host.settle(until: { bell()?.label != turnOff && !showsActivity() })
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Personal agents")))
         await host.settle(until: showsPersonalAgents)
         try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "personal-section-window.png"))
         XCTAssertFalse(showsTaskRail(), "The hidden coding task's rail and panels stay off the personal-agent screen")

@@ -266,12 +266,19 @@ struct MainWindow: View {
         )
     }
 
-    /// Turns the activity view on, keeping the places its tasks are listed at, or off. Over the
-    /// archived tasks it comes back on.
+    /// Whether the sidebar shows the activity view: the Tasks tab lists it, not the archived tasks.
+    /// Personal agents and Mail show in its place while it stays on for Tasks.
+    private var isActivityShown: Bool {
+        isSidebarVisible && sidebarSection == .tasks && isShowingActivity && !isShowingArchivedTasks
+    }
+
+    /// Turns the activity view on, keeping the places its tasks are listed at, or off while it shows.
+    /// Over the archived tasks, Personal agents or Mail, or with the sidebar hidden, it shows it.
     private func toggleActivity() {
+        let wasShown = isActivityShown
         sidebarSection = .tasks
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
-            if isShowingActivity, !isShowingArchivedTasks {
+            if wasShown {
                 isShowingActivity = false
                 activityPlaces = [:]
             } else {
@@ -2099,7 +2106,7 @@ struct MainWindow: View {
             onToggleSidebar: toggleSidebar,
             onNewTask: showNewTask,
             activityToggle: ActivityViewToggle(
-                isOn: isShowingActivity && !isShowingArchivedTasks,
+                isOn: isActivityShown,
                 needsAttention: model.attentionBadgeCount > 0,
                 toggle: toggleActivity
             )
