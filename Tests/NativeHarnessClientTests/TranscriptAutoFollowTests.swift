@@ -241,15 +241,7 @@ final class TranscriptAutoFollowTests: XCTestCase {
     }
 
     /// A trackpad scroll with its phases, which is how SwiftUI tells a reader's scroll from layout.
-    /// A phased trackpad scroll only moves while the display is awake (a locked or sleeping Mac
-    /// stops the scroll animation), so those checks are skipped rather than reported as failures.
-    fileprivate func requireAwakeDisplay() throws {
-        try XCTSkipIf(CGDisplayIsAsleep(CGMainDisplayID()) != 0, "Scrolling needs an awake display")
-        // The display can wake for a moment while the screen stays locked; scrolling stops then too.
-        let session = CGSessionCopyCurrentDictionary() as? [String: Any]
-        try XCTSkipIf((session?["CGSSessionScreenIsLocked"] as? Bool) == true, "Scrolling needs an unlocked screen")
-    }
-
+    /// It only moves while the display is awake and unlocked (`requireAwakeDisplay`).
     fileprivate func userScroll(_ scroll: NSScrollView, up points: Int32, in hosting: NSView) {
         let steps: [(phase: Int64, delta: Int32)] = [(1, 0)] + Array(repeating: (2, points / 6), count: 6) + [(4, 0)]
         for step in steps {

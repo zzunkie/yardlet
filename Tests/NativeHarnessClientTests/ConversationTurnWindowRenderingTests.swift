@@ -94,11 +94,9 @@ final class ConversationTurnWindowRenderingTests: XCTestCase {
         ), passes: 16)
         defer { host.close() }
         XCTAssertEqual(drawnTurnCount(host), 58, "turns 3 to 60; the ones before it stay out")
-        // Bringing the match into view is an animated scroll, which a locked or sleeping Mac stops
-        // (`TranscriptAutoFollowTests`), so only that check waits for an awake, unlocked display.
-        try XCTSkipIf(CGDisplayIsAsleep(CGMainDisplayID()) != 0, "Scrolling needs an awake display")
-        let session = CGSessionCopyCurrentDictionary() as? [String: Any]
-        try XCTSkipIf((session?["CGSSessionScreenIsLocked"] as? Bool) == true, "Scrolling needs an unlocked screen")
+        // Bringing the match into view is an animated scroll, which a locked or sleeping Mac stops,
+        // so only that check waits for an awake, unlocked display.
+        try requireAwakeDisplay()
         let shown = host.accessibilityElements(visibleOnly: true).map(\.description).joined(separator: "\n")
         XCTAssertTrue(shown.contains("Answer 3"), "the history match is in view:\n\(shown)")
     }
