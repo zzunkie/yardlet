@@ -181,8 +181,17 @@ final class BrowserHostVisibilityTests: XCTestCase {
 
         client.setPanelOccluded(false, on: tab)
         XCTAssertEqual(visibility(of: tab), [false, true, false, true, false], "back on screen: shown, with a fresh frame")
+
+        // Back on screen while the agent's use keeps the engine drawing the tab: the panel, which may hold no frame of it
+        // (a new view), still asks for one.
+        client.setPanelOccluded(true, on: tab)
+        tab.noteAgentActivity()
+        let drawn = visibility(of: tab)
+        XCTAssertEqual(drawn.suffix(2), [true, false])
+        client.setPanelOccluded(false, on: tab)
+        XCTAssertEqual(visibility(of: tab), drawn + [false], "a fresh frame though the engine draws the tab already")
         client.detachPanel(from: tab)
-        XCTAssertEqual(visibility(of: tab).last, true)
+        try await waitUntil { self.visibility(of: tab).last == true }
     }
 
     func testAPanelsOwnTabHidesAsSoonAsThePanelIsOffScreen() throws {

@@ -43,7 +43,8 @@ site sets and deletes host-only, /shapes/login (SHAPES_LOGIN below), for picking
 /pick (PICK below), and for the agent's browser use /viewport (what the page sees of its screen size, device and color
 scheme, and a tap target), /frames (an open and a closed shadow root, a frame from this site and one from another that
 holds a frame from this site again) and /handoff (a check only the person passes), and for video /media (MEDIA below)
-with the files media-fixtures.swift wrote to the output directory's media folder under /media/<name>.
+with the files media-fixtures.swift wrote to the output directory's media folder under /media/<name>, and for a tab
+shown again after it was hidden /idle?n=N (one color edge to edge, IDLE_PAGE below).
 Each records what the page received in window.qa."""
 import time
 import argparse
@@ -1331,6 +1332,11 @@ SAVER_FORM = """<!doctype html><meta charset="utf-8"><title>Saver form</title><h
 <label>Name <input id="name" value=""></label>"""
 SAVER_CSP = """<!doctype html><meta charset="utf-8"><title>Saver CSP</title><h1>No script of its own</h1>"""
 SAVER_NEXT = """<!doctype html><meta charset="utf-8"><title>Saver next</title><h1>Next page</h1>"""
+# A still page in one color edge to edge, so a panel that shows nothing (white) and one that shows the page differ in
+# any pixel (BrowserHostIdleReturnQA).
+IDLE_PAGE = """<!doctype html><meta charset="utf-8"><title>Idle NUMBER</title>
+<style>html,body{margin:0;height:100%;background:rgb(32,96,192);color:#fff;font:32px -apple-system,system-ui}</style>
+<h1 style="margin:0;padding:24px">Idle page NUMBER</h1>"""
 
 # Video a site shows before it is posted, as X does when an MP4 is attached, and streams, as X and YouTube do with
 # Media Source Extensions: what the page says it can play, whether each of /media's files plays from a blob address, as
@@ -1623,6 +1629,9 @@ class Handler(BaseHTTPRequestHandler):
             headers = dict(headers, **{'Content-Security-Policy': "default-src 'none'; script-src 'none'"})
         elif self.path.startswith('/saver/next'):
             payload = SAVER_NEXT.encode()
+        elif self.path.startswith('/idle'):
+            query = dict(part.partition('=')[::2] for part in self.path.partition('?')[2].split('&') if part)
+            payload = IDLE_PAGE.replace('NUMBER', html.escape(query.get('n', '0'))).encode()
         else:
             payload = PAGE.encode()
         self.send(payload, headers)
