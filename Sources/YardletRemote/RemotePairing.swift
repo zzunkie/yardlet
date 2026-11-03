@@ -335,11 +335,11 @@ public actor RemoteDeviceStore {
     }
 
     @discardableResult
-    public func remove(_ id: String) -> Bool {
-        let count = devices.count
-        devices.removeAll { $0.id == id }
-        guard devices.count != count else { return false }
-        save()
+    public func remove(_ id: String) throws -> Bool {
+        let updated = devices.filter { $0.id != id }
+        guard updated.count != devices.count else { return false }
+        try Self.writeChecked(updated, to: fileURL)
+        devices = updated
         return true
     }
 

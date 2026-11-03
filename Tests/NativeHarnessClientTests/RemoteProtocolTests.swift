@@ -410,7 +410,7 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertEqual(known?.id, device.id)
         let stranger = await reopened.authenticate(publicKey: Data(repeating: 5, count: 32), name: nil)
         XCTAssertNil(stranger)
-        await reopened.remove(device.id)
+        try await reopened.remove(device.id)
         let removed = await reopened.authenticate(publicKey: key, name: nil)
         XCTAssertNil(removed)
     }

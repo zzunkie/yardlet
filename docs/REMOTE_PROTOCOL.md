@@ -1794,7 +1794,11 @@ for editing device permissions or managing another device. Each operation protec
 must check the live device store and return `notAllowed` unless allowed. A handshake's device snapshot is not
 an authorization cache. Removing the device also denies access. Granting one permission does not grant the others.
 
-The host persists a change before publishing it; a failed save keeps the previous permission and shows an error.
+The host persists a change before publishing it; a failed save keeps the previous permission and shows an error. Device removal is published only after it has been saved. A failed save keeps the paired entry and shows a removal
+error. `forgetDevice` acknowledges success only after durable removal. A failed removal responds with `internal`
+and closes affected connections transiently, without announcing revocation; the retained pairing may reconnect.
+Outstanding work stays cancelled, and a removal still being saved returns `unavailable` to other connections.
+
 Each change writes an audit line with device ID, `type: "permission.terminal"` (or `.fileWrites` or `.settings`),
 and `result: "allowed"` or `"notAllowed"`; a failed save records `"failed"`. No device name, credential,
 command, file contents or settings values are recorded. Consumers of long-lived resources must end the affected

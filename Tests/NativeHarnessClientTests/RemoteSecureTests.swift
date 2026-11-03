@@ -147,7 +147,7 @@ final class RemoteSecureTests: XCTestCase {
         try await stranger.waitUntilClosed(.revoked)
 
         // Removing the device closes its connection and its key stops working.
-        await harness.server.revoke(deviceID)
+        try await harness.server.revoke(deviceID)
         try await first.waitUntilClosed(.revoked)
         let removed = try await harness.phone(key: phoneKey, hello: RemoteHandshakeHello(name: "Pixel 9"))
         XCTAssertEqual(removed.reply.error?.code, .unknownDevice)
@@ -523,7 +523,7 @@ final class RemoteSecureTests: XCTestCase {
         print("RemoteSecureTests: the room opened again \(reopened) after the cut, the phone was back \(ContinuousClock.now - cut) after it")
         XCTAssertLessThan(reopened, .seconds(3))
 
-        await harness.server.revoke(try XCTUnwrap(again.reply.deviceId))
+        try await harness.server.revoke(try XCTUnwrap(again.reply.deviceId))
         let closed = try await again.closeCode()
         XCTAssertEqual(closed, Int(RemoteCloseCode.revoked.rawValue))
     }

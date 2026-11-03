@@ -112,19 +112,61 @@ final class RemoteSettingsRenderingTests: XCTestCase {
         XCTAssertTrue(labels.contains(L10n.format("%@ for %@", L10n.string("Terminal"), device.name)))
     }
 
+    func testFailedRemovalRetainsThePairedDeviceAndReportsFailure() async throws {
+        let fixture = try DeviceStoreWriteFailure()
+        defer { fixture.cleanUp() }
+        let store = RemoteDeviceStore(fileURL: fixture.file)
+        let audit = RemoteAuditLog(fileURL: fixture.root.appendingPathComponent("audit.log"))
+        let (service, identity) = try await makeService(store: store, audit: audit)
+        let key = RemoteKeyPair.generate()
+        let ticket = await service.server.openPairing()
+        let phone = try await PipePhone.connect(server: service.server, macStatic: identity.noise, phoneKey: key,
+            hello: RemoteHandshakeHello(name: "Test phone", pair: RemoteEncoding.base64url(ticket.secret)),
+            targetKey: identity.noise.publicKey, expectsReply: true)
+        let deviceID = try XCTUnwrap(phone.reply.deviceId)
+        await service.reloadDevices()
+        let device = try XCTUnwrap(service.devices.first(where: { $0.id == deviceID }))
+        await service.setPermission(.terminal, allowed: true, for: device)
+        try fixture.block()
+        await service.remove(device)
+        XCTAssertNotNil(service.removalError)
+        XCTAssertTrue(service.devices.contains { $0.id == deviceID })
+        try await phone.waitUntilClosed(.unavailable)
+        // The unsuccessful attempt must not leave a permanent in-memory revocation behind.
+        let reconnected = try await PipePhone.connect(server: service.server, macStatic: identity.noise, phoneKey: key,
+            hello: RemoteHandshakeHello(name: "Test phone"), targetKey: identity.noise.publicKey, expectsReply: true)
+        XCTAssertTrue(reconnected.reply.ok)
+        let failed = try await reconnected.request(#"{"id":"forget","type":"forgetDevice"}"#)
+        XCTAssertFalse(failed.ok)
+        XCTAssertEqual(failed.error?.code, .internal)
+        try await reconnected.waitUntilClosed(.unavailable)
+        try render("remote-removal-failed", service: service,
+                   in: WindowlessRender.directory("remote-qa"), size: NSSize(width: 820, height: 820))
+        try fixture.restore()
+        let restarted = await RemoteDeviceStore(fileURL: fixture.file).device(deviceID)
+        XCTAssertNotNil(restarted)
+        XCTAssertEqual(restarted?.permissions?.terminal, true)
+        XCTAssertNotNil(service.removalError, "A retained pairing must never have been reported as removed")
+        await service.remove(device)
+        XCTAssertNil(service.removalError)
+        let removed = await RemoteDeviceStore(fileURL: fixture.file).device(deviceID)
+        XCTAssertNil(removed)
+        XCTAssertEqual(audit.entries().filter { $0.type == "revoke" }.map(\.result), ["failed", "failed", "ok"])
+    }
+
     // MARK: - Helpers
 
-    private func makeService() async throws -> (RemoteControlService, RemoteIdentity) {
+    private func makeService(store supplied: RemoteDeviceStore? = nil, audit: RemoteAuditLog? = nil) async throws -> (RemoteControlService, RemoteIdentity) {
         let suite = testDefaultsSuite("RemoteSettingsRenderingTests")
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defaults.set("wss://relay.example.test", forKey: RemoteControlService.relayURLKey)
-        let store = RemoteDeviceStore(fileURL: nil)
+        let store = supplied ?? RemoteDeviceStore(fileURL: nil)
         // Yardlet on a laptop paired before, last seen yesterday.
         _ = await store.addSecure(name: "MacBook Air", publicKey: Data(repeating: 3, count: 32), platform: "macos",
                                   now: Date().addingTimeInterval(-86_400))
         let identity = RemoteIdentity.generate()
         let service = RemoteControlService(
-            bridge: FakeBridge(), deviceStore: store, audit: nil, identityStore: RemoteMemoryIdentityStore(identity),
+            bridge: FakeBridge(), deviceStore: store, audit: audit, identityStore: RemoteMemoryIdentityStore(identity),
             defaults: defaults, environment: [:],
             interfaces: {
                 [RemoteInterfaceAddress(interface: "en0", address: "192.168.0.12", family: .ipv4),
@@ -165,4 +207,27 @@ final class RemoteSettingsRenderingTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
         }
     }
+}
+
+/// A deterministic persistence failure without depending on the test runner's filesystem privileges.
+private struct DeviceStoreWriteFailure {
+    let root: URL
+    let directory: URL
+    let displaced: URL
+    var file: URL { directory.appendingPathComponent("devices.json") }
+    init() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("remote-store-" + UUID().uuidString)
+        directory = root.appendingPathComponent("data")
+        displaced = root.appendingPathComponent("saved")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+    func block() throws {
+        try FileManager.default.moveItem(at: directory, to: displaced)
+        try Data().write(to: directory)
+    }
+    func restore() throws {
+        try FileManager.default.removeItem(at: directory)
+        try FileManager.default.moveItem(at: displaced, to: directory)
+    }
+    func cleanUp() { try? FileManager.default.removeItem(at: root) }
 }

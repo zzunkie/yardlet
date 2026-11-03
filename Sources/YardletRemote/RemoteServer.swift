@@ -368,6 +368,7 @@ public actor RemoteServer {
     private var linkTimes: [Date] = []
     /// Devices removed while this server runs: a handshake that read one before it went is refused.
     private var revokedDeviceIDs: Set<String> = []
+    private var removingDeviceIDs: Set<String> = []
     private var pushSender: (@Sendable (RemotePushRequest) async -> RemotePushResult)?
     /// Pushes held while a desktop is in use, the latest per task (§18).
     private var heldPushes: [HeldPush] = []
@@ -567,6 +568,10 @@ public actor RemoteServer {
         } else {
             return refuse(.unknownDevice, "This phone is not paired with this Mac", .revoked)
         }
+        // A removal still being saved is temporary, never a permanent revocation notice.
+        guard !removingDeviceIDs.contains(device.id) else {
+            return refuse(.unavailable, "Device settings are being saved", .unavailable)
+        }
         // Removed while this handshake read the device list.
         guard !revokedDeviceIDs.contains(device.id) else {
             return refuse(.unknownDevice, "This phone is not paired with this Mac", .revoked)
@@ -763,13 +768,34 @@ public actor RemoteServer {
 
     /// Removes a device and disconnects it at once. The pairing it may have just spent goes too, so the
     /// same key cannot pair again with it.
-    public func revoke(_ deviceID: String) async {
+    public func revoke(_ deviceID: String) async throws {
+        try await revoke(deviceID, reply: nil)
+    }
+
+    private func revoke(_ deviceID: String, reply: (request: String, connection: UUID)?) async throws {
+        guard removingDeviceIDs.insert(deviceID).inserted else {
+            let error = RemoteError(.unavailable, "Device settings are being saved")
+            if let reply { respond(.failure(reply.request, error), to: reply.connection) }
+            throw error
+        }
+        defer { removingDeviceIDs.remove(deviceID) }
+        let alreadyRevoked = revokedDeviceIDs.contains(deviceID)
         revokedDeviceIDs.insert(deviceID)
         spentPairing = nil
-        // What its connections' watches still do ends before the list is saved (§15.25), and they take no request
-        // meanwhile; they close once it is, so the device is gone from the list when the phone hears it.
+        // End outstanding work while persistence is in flight. A failed removal reconnects with the
+        // retained device record, instead of reviving any input already cancelled by this attempt.
         for (id, connection) in connections where connection.deviceID == deviceID { endTabWatch(on: id) }
-        await devices.remove(deviceID)
+        do {
+            try await devices.remove(deviceID)
+        } catch {
+            if !alreadyRevoked { revokedDeviceIDs.remove(deviceID) }
+            if let reply { respond(.failure(reply.request, RemoteError(.internal, "The device could not be removed")), to: reply.connection) }
+            for (id, connection) in connections where connection.deviceID == deviceID { close(id, .unavailable) }
+            audit?.record(device: deviceID, type: "revoke", task: nil, result: "failed", at: now())
+            throw error
+        }
+        // A successful acknowledgement never precedes durable removal.
+        if let reply { respond(RemoteResponse(re: reply.request), to: reply.connection) }
         for (id, connection) in connections where connection.deviceID == deviceID {
             send(RemoteEvent(.revoked), to: id)
             close(id, .revoked)
@@ -846,7 +872,10 @@ public actor RemoteServer {
         }
         if let deviceID = connection.deviceID {
             await devices.seen(deviceID, now: now())
-            // Being removed (`revoke`): its connections close once the list is saved.
+            // A pending removal may still fail; only a committed removal is permanent.
+            guard !removingDeviceIDs.contains(deviceID) else {
+                return respond(.failure(envelope.id, RemoteError(.unavailable)), to: id)
+            }
             guard !revokedDeviceIDs.contains(deviceID) else {
                 return respond(.failure(envelope.id, RemoteError(.unknownDevice)), to: id)
             }
@@ -904,8 +933,10 @@ public actor RemoteServer {
             respond(RemoteResponse(re: envelope.id), to: id)
             await reloadPushDevices()
         case .forgetDevice:
-            respond(RemoteResponse(re: envelope.id), to: id)
-            if let deviceID = connection.deviceID { await revoke(deviceID) }
+            if let deviceID = connection.deviceID {
+                // The transaction sends its response after persistence, before ending the connection.
+                try? await revoke(deviceID, reply: (envelope.id, id))
+            }
         case let .itemDetail(taskID, itemID):
             switch await bridge.itemDetail(taskID: taskID, itemID: itemID) {
             case let .success(detail):
