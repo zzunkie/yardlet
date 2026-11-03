@@ -79,7 +79,9 @@ final class BrowserHostPaneController {
     @ObservationIgnored var fileChooser: any BrowserFileChooserPresenting = BrowserFileChooserPanel()
     /// Pop-ups the page opened without a click, which the browser blocked (`BrowserTab.blockedPopups`): Chrome's
     /// "Pop-ups blocked" in the address field, from which the person opens one.
-    private(set) var blockedPopups: [String] = []
+    private(set) var blockedPopupRequests: [BrowserBlockedPopup] = []
+    var blockedPopups: [String] { blockedPopupRequests.map(\.url) }
+    private(set) var popupsAllowed = false
     /// The vault (docs/BROWSER_VAULT_DESIGN.md §8): what the person signed in with, offered for saving;
     /// the vault filling this tab for an agent (the header says so); a passkey being made; a new item's draft.
     var vaultOffer: BrowserVaultSaveOffer?
@@ -333,7 +335,8 @@ final class BrowserHostPaneController {
         isLoading = false
         permissionPrompt = nil
         externalAppQuestion = nil
-        blockedPopups = []
+        blockedPopupRequests = []
+        popupsAllowed = false
     }
 
     func retry() {
@@ -361,7 +364,8 @@ final class BrowserHostPaneController {
         permissionPrompt = tab.permissionPrompt
         externalAppQuestion = tab.externalAppQuestion
         alwaysAllowExternalApp = false
-        blockedPopups = tab.blockedPopups
+        blockedPopupRequests = tab.blockedPopupRequests
+        popupsAllowed = tab.popupsAllowed
         clearError()
         // A tab the host could not open says why, though it failed before this panel showed it.
         if let failure = tab.openFailure { errorMessage = Self.message(for: failure) }
@@ -918,12 +922,13 @@ final class BrowserHostPaneController {
             }
         case .permissionPrompt, .permissionPromptDismissed:
             permissionPrompt = tab?.permissionPrompt
-        case .externalAppHandled, .newDocument, .newWindow:
+        case .externalAppHandled, .newDocument, .newWindow, .blockedPopup, .blockedPopupRemoved, .popupPermission, .openedTab:
             if externalAppQuestion != tab?.externalAppQuestion {
                 externalAppQuestion = tab?.externalAppQuestion
                 alwaysAllowExternalApp = false
             }
-            blockedPopups = tab?.blockedPopups ?? []
+            blockedPopupRequests = tab?.blockedPopupRequests ?? []
+            popupsAllowed = tab?.popupsAllowed ?? false
         case .download(_, let download):
             record(download)
         case .remoteDownloadStopped(_, let name):
@@ -949,7 +954,8 @@ final class BrowserHostPaneController {
             isLoading = false
             permissionPrompt = nil
             externalAppQuestion = nil
-            blockedPopups = []
+            blockedPopupRequests = []
+            popupsAllowed = false
             errorMessage = L10n.format("The browser process ended (%@).", reason)
         default:
             break
@@ -1080,7 +1086,19 @@ final class BrowserHostPaneController {
     func openBlockedPopup(_ url: String) {
         guard let tab else { return }
         client.openBlockedPopup(url, from: tab)
-        blockedPopups = tab.blockedPopups
+        blockedPopupRequests = tab.blockedPopupRequests
+        popupsAllowed = tab.popupsAllowed
+    }
+
+    func openBlockedPopup(_ popup: BrowserBlockedPopup) {
+        guard let tab else { return }
+        client.openBlockedPopup(popup, from: tab)
+        blockedPopupRequests = tab.blockedPopupRequests
+    }
+
+    func setPopupsAllowed(_ allowed: Bool) {
+        guard let tab else { return }
+        client.setPopupsAllowed(allowed, for: tab)
     }
 
     /// "Open ‹app›?" in Chrome's words: who asks, and what the box would allow.
@@ -1515,7 +1533,7 @@ struct BrowserHostPane: View {
                 .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 7))
                 .overlay { RoundedRectangle(cornerRadius: 7).stroke(ParityTheme.separator) }
                 .anchorPreference(key: BrowserAddressFieldBounds.self, value: .bounds) { $0 }
-            if !controller.blockedPopups.isEmpty { blockedPopupsMenu }
+            if !controller.blockedPopups.isEmpty || controller.popupsAllowed { blockedPopupsMenu }
             ParityIconButton(systemName: "arrow.right", help: L10n.string("Open")) { controller.submitAddress() }
             .disabled(controller.addressInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             if controller.showsVaultKey(for: controller.tab?.currentURL) { vaultKeyButton }
@@ -1651,19 +1669,15 @@ struct BrowserHostPane: View {
     /// which opens from here.
     private var blockedPopupsMenu: some View {
         Menu {
-            Section(L10n.string("Pop-ups blocked")) {
-                ForEach(controller.blockedPopups, id: \.self) { url in
-                    Button(url) { controller.openBlockedPopup(url) }
-                }
-            }
+            BrowserPopupMenuContent(controller: controller)
         } label: {
-            Image(systemName: "rectangle.on.rectangle.slash")
+            Image(systemName: controller.popupsAllowed ? "rectangle.on.rectangle" : "rectangle.on.rectangle.slash")
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help(L10n.string("Pop-ups were blocked on this page."))
-        .accessibilityLabel(L10n.string("Pop-ups were blocked on this page."))
+        .help(L10n.string(controller.popupsAllowed ? "Pop-ups are allowed on this site." : "Pop-ups were blocked on this page."))
+        .accessibilityLabel(L10n.string(controller.popupsAllowed ? "Pop-ups are allowed on this site." : "Pop-ups were blocked on this page."))
     }
 
     /// Chrome's save bubble, as a bar above the page: the person just signed in with a password the vault
@@ -2113,5 +2127,25 @@ struct BrowserWalletFillBar: View {
         .background(.background)
         .overlay(alignment: .bottom) { Rectangle().fill(ParityTheme.separator).frame(height: 1) }
         .accessibilityElement(children: .contain)
+    }
+}
+
+/// Shared by the address-field menu and its offscreen rendering check.
+struct BrowserPopupMenuContent: View {
+    var controller: BrowserHostPaneController
+
+    var body: some View {
+        if !controller.blockedPopupRequests.isEmpty {
+            Section(L10n.string("Pop-ups blocked")) {
+                ForEach(controller.blockedPopupRequests) { popup in
+                    Button(popup.url.isEmpty ? "about:blank" : popup.url) { controller.openBlockedPopup(popup) }
+                }
+            }
+            Divider()
+        }
+        Button(L10n.string(controller.popupsAllowed
+               ? "Stop allowing pop-ups from this site" : "Always allow pop-ups from this site")) {
+            controller.setPopupsAllowed(!controller.popupsAllowed)
+        }
     }
 }

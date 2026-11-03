@@ -153,6 +153,18 @@ final class BrowserHost {
             yardlet_cef_set_viewport(Int32(tab), number(viewport["width"]), number(viewport["height"]),
                                      number(viewport["scale"], default: 1), number(viewport["screenX"]),
                                      number(viewport["screenY"]), frameRate(viewport))
+        case "openBlockedPopup":
+            guard let popupTab = fields["popupTab"] as? Int else { return }
+            guard blockedPopupSources[popupTab]?.opener == tab else { return }
+            yardlet_cef_open_blocked_popup(Int32(tab), Int32(popupTab))
+            // Page code may replace window.open or reuse a named target without making a new window.
+            // Do not leave an opening indicator or its one-shot request behind indefinitely.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                guard let self, self.blockedPopupSources[popupTab]?.opener == tab else { return }
+                yardlet_cef_cancel_blocked_popup(Int32(tab), Int32(popupTab))
+            }
+        case "popupPermission":
+            yardlet_cef_popup_permission(Int32(tab), (fields["allowed"] as? Bool).map { $0 ? 1 : 0 } ?? -1, fields["url"] as? String ?? "")
         case "navigate":
             guard let url = fields["url"] as? String else { return }
             // A waiting tab loads this address once it can.
@@ -543,6 +555,7 @@ final class BrowserHost {
         case YardletCEFEventBeforeClose.rawValue:
             // One line per browser that went, for reading host.log: a closed tab's page may outlive the close.
             FileHandle.standardError.write(Data("browser closed tab=\(tab)\n".utf8))
+            blockedPopupSources = blockedPopupSources.filter { $0.value.opener != tab }
             openTabs.remove(tab)
             chromiumWindows?.closed(tab)
             waitingTabs[tab] = nil
@@ -570,16 +583,28 @@ final class BrowserHost {
         case YardletCEFEventConsole.rawValue:
             send(["console": ["tab": tab, "level": Int(value >> 16), "message": text ?? "",
                               "source": detail ?? "", "line": Int(value & 0xFFFF)]])
+        case YardletCEFEventPopupRemoved.rawValue:
+            blockedPopupSources.removeValue(forKey: Int(value))
+            send(["blockedPopupRemoved": ["tab": tab, "popupTab": Int(value)]])
+        case YardletCEFEventPopupRetained.rawValue:
+            blockedPopupSources[Int(value)] = (opener: tab, refusesDownloads: refusedDownloadTabs.contains(tab))
+            send(["blockedPopup": ["tab": tab, "popupTab": Int(value), "url": text ?? ""]])
+        case YardletCEFEventPopupPermission.rawValue:
+            send(["popupPermission": ["tab": tab, "allowed": value != 0]])
         case YardletCEFEventPopupBlocked.rawValue:
             send(["newWindow": ["tab": tab, "url": text ?? "", "background": value & 1 != 0, "userGesture": value & 2 != 0]])
         case YardletCEFEventExternalProtocol.rawValue:
             externalProtocol(tab: tab, url: text ?? "", source: detail ?? "", userGesture: value & 1 != 0)
         case YardletCEFEventDocumentStart.rawValue:
+            blockedPopupSources = blockedPopupSources.filter { $0.value.opener != tab }
             send(["newDocument": ["tab": tab, "url": text ?? ""]])
         case YardletCEFEventPopupOpened.rawValue:
             let opener = Int(detail ?? "") ?? -1
             // A pop-up of a page whose downloads are refused is refused too, from its first request.
-            if refusedDownloadTabs.contains(opener) { refusedDownloadTabs.insert(tab) }
+            let original = blockedPopupSources.removeValue(forKey: tab)
+            if refusedDownloadTabs.contains(opener) || original?.refusesDownloads == true {
+                refusedDownloadTabs.insert(tab)
+            }
             send(["popupOpened": ["tab": tab, "opener": opener, "url": text ?? "", "background": value != 0]])
         case YardletCEFEventPopupShow.rawValue:
             if value == 0 {
@@ -786,6 +811,7 @@ final class BrowserHost {
     private var announcedDownloads = Set<Int32>()
     /// Tabs whose downloads are refused (`refuseDownloads`), and the downloads refused.
     private var refusedDownloadTabs = Set<Int>()
+    private var blockedPopupSources: [Int: (opener: Int, refusesDownloads: Bool)] = [:]
     private var refusedDownloadIDs = Set<Int32>()
     private var lastDownloadProgress: [Int32: UInt64] = [:]
 

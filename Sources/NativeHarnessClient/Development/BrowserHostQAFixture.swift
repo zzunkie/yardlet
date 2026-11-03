@@ -150,6 +150,14 @@ private final class BrowserHostQARunner {
             }
             return await finish()
         }
+        if BrowserHostQAFixture.argument("ui-fixture-browser-check-only") == "popups" {
+            if let controller = await openPanel(label: "popups", address: base), let view = controller.view {
+                do { try await exercisePopups(controller, view) } catch { check("popups", false, error.localizedDescription) }
+                await closePanel()
+                client.closeTabs(forSession: session)
+            }
+            return await finish()
+        }
         // `--ui-fixture-browser-check-only=checkout` runs a card checkout and the issuer's check alone.
         if BrowserHostQAFixture.argument("ui-fixture-browser-check-only") == "checkout" {
             if let controller = await openPanel(label: "checkout", address: base), let view = controller.view {
@@ -1785,7 +1793,7 @@ private final class BrowserHostQARunner {
         }
         for (name, step) in [
             ("dialogs", exerciseDialogs), ("file chooser and drop", exerciseFileChooserAndDrop),
-            ("download", exerciseDownload), ("URL policy", exercisePolicy), ("checkout", exerciseCheckout), ("tabs", exerciseTabs),
+            ("download", exerciseDownload), ("URL policy", exercisePolicy), ("checkout", exerciseCheckout), ("popups", exercisePopups), ("tabs", exerciseTabs),
             ("passkey", exercisePasskey), ("accessibility", exerciseAccessibility)
         ] as [(String, (BrowserHostPaneController, BrowserHostView) async throws -> Void)] {
             do { try await step(controller, view) } catch { check(name, false, error.localizedDescription) }
@@ -1919,6 +1927,133 @@ private final class BrowserHostQARunner {
         controller.addressInput = base
         controller.submitAddress()
         _ = await waitUntil(.seconds(5)) { controller.title == "Browser QA" }
+    }
+
+    /// Uses real input for activation and only loopback pages for issuer callbacks.
+    private func exercisePopups(_ controller: BrowserHostPaneController, _ view: BrowserHostView) async throws {
+        var results: [String: JSONValue] = [:]
+        defer { record["popups"] = .object(results) }
+        let page = base + "popups"
+        try await load(controller, page, title: "Popup QA")
+        guard let opener = controller.tab else { throw QAFailure("no popup opener") }
+        let isolatedSession = UUID()
+        let isolatedFirst = try client.openTab(forSession: isolatedSession, url: page, viewport: .offscreenDefault)
+        _ = await waitUntil(.seconds(10)) { isolatedFirst.title == "Popup QA" && !isolatedFirst.isLoading }
+        let tookProfile = MacBrowserHost.shared.takeOwnProfile(for: isolatedSession, site: "127.0.0.1", how: "QA")
+        _ = await waitUntil(.seconds(10)) {
+            let tab = self.client.tab(key: isolatedFirst.key, forSession: isolatedSession)
+            return tab !== isolatedFirst && tab?.title == "Popup QA" && tab?.isLoading == false
+        }
+        let isolated = client.tab(key: isolatedFirst.key, forSession: isolatedSession)
+        defer { client.closeTabs(forSession: isolatedSession) }
+        func read(_ expression: String) async -> String {
+            let response = try? await opener.devTools.send("Runtime.evaluate", [
+                "expression": .string(expression), "returnByValue": .bool(true), "userGesture": .bool(false)
+            ])
+            return response?["result"]?["value"]?.stringValue ?? ""
+        }
+        func replied(_ kind: String) async -> Bool {
+            await waitUntilAsync(.seconds(10)) {
+                await read("String(window.qa.replies.includes('\(kind)'))") == "true"
+            }
+        }
+        func closePopups() async {
+            for tab in client.tabs(forSession: session) where tab !== opener { tab.close() }
+            _ = await waitUntil(.seconds(5)) { controller.tab === opener }
+        }
+        func reset() async throws {
+            await closePopups()
+            let address = page + "?fresh=\(UUID().uuidString)"
+            controller.addressInput = address
+            controller.submitAddress()
+            guard await waitUntil(.seconds(15), { opener.currentURL == address && opener.title == "Popup QA" && !opener.isLoading }) else {
+                throw QAFailure("popup fixture did not reload")
+            }
+            _ = try await opener.devTools.send("Runtime.evaluate", [
+                "expression": .string("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))"),
+                "awaitPromise": .bool(true), "userGesture": .bool(false)
+            ])
+        }
+        for kind in ["fetch", "timer"] {
+            try await reset()
+            click(view, at: try await center(controller, "#\(kind)"))
+            let answer = await replied(kind)
+            let attempts = await read("JSON.stringify(window.qa.attempts)")
+            check("popups: a click followed by \(kind) retains transient activation and opener", answer && opener.blockedPopups.isEmpty, attempts)
+            results[kind] = .string(attempts)
+        }
+        try await reset()
+        let frame = try await evaluate(controller, "(() => { const r=document.querySelector('#frame').getBoundingClientRect(); return r.x+','+r.y; })()")
+            .split(separator: ",").compactMap { Double($0) }
+        if frame.count == 2 { click(view, at: NSPoint(x: frame[0] + 2 + 140, y: frame[1] + 2 + 40)) }
+        let frameAnswered = await replied("frame")
+        check("popups: a cross-origin iframe click followed by fetch preserves opener", frameAnswered, "reply \(frameAnswered)")
+
+        try await reset()
+        click(view, at: try await center(controller, "#expired"))
+        let expired = await waitUntil(.seconds(12)) { !opener.blockedPopups.isEmpty }
+        let attempts = await read("JSON.stringify(window.qa.attempts)")
+        check("popups: an expired activation returns null and is listed", expired && client.tabs(forSession: session).count == 1
+                && attempts.contains("\"active\":false") && attempts.contains("\"returned\":false"), attempts)
+        results["expired"] = .string(attempts)
+        let earlyReply = await read("String(window.qa.replies.includes('expired'))")
+        check("popups: a blocked request does not execute before it is opened", earlyReply == "false", "reply before reveal \(earlyReply)")
+        capturePanel(view, named: "popups-blocked.png")
+        await capturePopupMenu(controller)
+        if let blocked = opener.blockedPopups.first {
+            controller.openBlockedPopup(blocked)
+            let answered = await replied("expired")
+            let popup = client.tabs(forSession: session).first { $0 !== opener }
+            let loaded = await waitUntil(.seconds(10)) { popup?.title == "Popup has opener" }
+            check("popups: opening the blocked request preserves its opener callback", answered && loaded && opener.blockedPopups.isEmpty,
+                  "reply \(answered), title \(popup?.title ?? "none")")
+        } else { check("popups: opening the blocked request preserves its opener callback", false, "no blocked request") }
+
+        try await reset()
+        controller.setPopupsAllowed(true)
+        let allowed = await waitUntil(.seconds(5)) { controller.popupsAllowed }
+        _ = try await evaluate(controller, "openQA('allowed')", userGesture: false)
+        let allowedReply = await replied("allowed")
+        check("popups: always allow opens without a gesture and preserves opener", allowed && allowedReply && opener.blockedPopups.isEmpty,
+              "permission \(allowed), reply \(allowedReply)")
+        if let isolated {
+            _ = try await isolated.devTools.send("Runtime.evaluate", ["expression": .string("openQA('isolated')"), "userGesture": .bool(false)])
+            let isolatedBlocked = await waitUntil(.seconds(5)) { !isolated.blockedPopups.isEmpty }
+            check("popups: always allow stays in its browser profile", tookProfile && isolatedBlocked && !isolated.popupsAllowed,
+                  "own profile \(tookProfile), blocked \(isolatedBlocked)")
+        } else { check("popups: always allow stays in its browser profile", false, "no isolated tab") }
+        try await reset()
+        check("popups: always allow survives a new document", controller.popupsAllowed, "allowed \(controller.popupsAllowed)")
+        controller.setPopupsAllowed(false)
+        let revoked = await waitUntil(.seconds(5)) { !controller.popupsAllowed }
+        _ = try await evaluate(controller, "openQA('revoked')", userGesture: false)
+        let blockedAgain = await waitUntil(.seconds(5)) { !opener.blockedPopups.isEmpty }
+        check("popups: revoking always allow restores blocking", revoked && blockedAgain, "revoked \(revoked), blocked \(blockedAgain)")
+        try await reset()
+        check("popups: navigation clears retained requests", opener.blockedPopups.isEmpty, "remaining \(opener.blockedPopups.count)")
+    }
+
+    /// Draws the same content used by the popup menu without ordering a window on screen.
+    private func capturePopupMenu(_ controller: BrowserHostPaneController) async {
+        for (appearance, suffix) in [(NSAppearance.Name.aqua, "light"), (.darkAqua, "dark")] {
+            let content = NSHostingView(rootView: VStack(alignment: .leading, spacing: 10) {
+                BrowserPopupMenuContent(controller: controller)
+            }.padding(16).frame(width: 420).background(Color(nsColor: .windowBackgroundColor)))
+            content.appearance = NSAppearance(named: appearance)
+            let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 420, height: 220),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = content
+            content.layoutSubtreeIfNeeded()
+            let size = content.fittingSize
+            window.setContentSize(NSSize(width: 420, height: max(120, size.height)))
+            content.layoutSubtreeIfNeeded()
+            await Task.yield()
+            if let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
+                content.cacheDisplay(in: content.bounds, to: bitmap)
+                try? bitmap.representation(using: .png, properties: [:])?.write(to: output.appending(path: "popups-menu-\(suffix).png"))
+            }
+            window.orderOut(nil)
+        }
     }
 
     // MARK: A card checkout
