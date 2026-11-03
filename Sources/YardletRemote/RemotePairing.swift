@@ -228,6 +228,11 @@ public struct RemoteDevice: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public struct RemoteDevicePermissionSnapshot: Sendable {
+    public var device: RemoteDevice
+    public var generation: UInt64
+}
+
 /// The paired devices, in a file only the person can read (`~/.yardlet/remote/devices.json` for the
 /// app; a test or the fixture passes its own folder, or none to keep them in memory).
 public actor RemoteDeviceStore {
@@ -252,6 +257,7 @@ public actor RemoteDeviceStore {
 
     private let fileURL: URL?
     private var devices: [RemoteDevice]
+    private var permissionGenerations: [String: UInt64] = [:]
     /// A seen time is written at most this often per device.
     private let seenWriteInterval: TimeInterval = 60
 
@@ -294,10 +300,29 @@ public actor RemoteDeviceStore {
         devices.first { $0.id == id }
     }
 
+    public func device(publicKey: Data) -> RemoteDevice? {
+        let key = RemoteEncoding.base64url(publicKey)
+        return devices.first { $0.publicKey == key }
+    }
+
+    public func permissionSnapshot(_ id: String) -> RemoteDevicePermissionSnapshot? {
+        device(id).map { RemoteDevicePermissionSnapshot(device: $0, generation: permissionGenerations[id, default: 0]) }
+    }
+
+    /// Invalidates queued grants and clears effective rights before any registration can wait or fail.
+    public func denyPermissionsInMemory(_ id: String) -> RemoteDevicePermissionSnapshot? {
+        guard let index = devices.firstIndex(where: { $0.id == id }) else { return nil }
+        permissionGenerations[id, default: 0] &+= 1
+        devices[index].permissions = RemoteDevicePermissions()
+        return permissionSnapshot(id)
+    }
+
     /// Grants persist before publication. Denials take effect in memory even when saving fails.
     @discardableResult
-    public func setPermission(_ permission: RemoteDevicePermission, allowed: Bool, for id: String) throws -> RemoteDevice? {
+    public func setPermission(_ permission: RemoteDevicePermission, allowed: Bool, for id: String,
+                              expectedGeneration: UInt64? = nil) throws -> RemoteDevice? {
         guard let index = devices.firstIndex(where: { $0.id == id }) else { return nil }
+        if let expectedGeneration, permissionGenerations[id, default: 0] != expectedGeneration { throw RemoteError(.notAllowed) }
         var updated = devices
         var permissions = updated[index].permissions ?? RemoteDevicePermissions()
         permissions[permission] = allowed
@@ -309,9 +334,12 @@ public actor RemoteDeviceStore {
     }
 
     /// A new registration never inherits an earlier grant, even when its key was already known.
-    public func resetPermissions(_ id: String) throws -> RemoteDevice? {
+    public func resetPermissions(_ id: String, expectedGeneration: UInt64, name: String, now: Date) throws -> RemoteDevice? {
         guard let index = devices.firstIndex(where: { $0.id == id }) else { return nil }
+        guard permissionGenerations[id, default: 0] == expectedGeneration else { throw RemoteError(.notAllowed) }
         devices[index].permissions = RemoteDevicePermissions()
+        if !name.isEmpty { devices[index].name = name }
+        devices[index].lastSeenAt = now
         try Self.writeChecked(devices, to: fileURL)
         return devices[index]
     }
