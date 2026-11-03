@@ -840,7 +840,7 @@ public actor RemoteServer {
             }
         case let .registerPush(provider, token):
             guard let deviceID = connection.deviceID,
-                  let key = await devices.setPush(deviceID, provider: String(provider.prefix(32)), token: String(token.prefix(4096))) else {
+                  let key = await devices.setPush(deviceID, provider: provider, token: String(token.prefix(4096))) else {
                 respond(.failure(envelope.id, RemoteError(.internal)), to: id)
                 return
             }

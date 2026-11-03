@@ -616,6 +616,10 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
   on a browser handoff's item (§15.18). A limit on the messages the Mac holds unhandled per connection and in all (§7).
 - 2026-11-03: `announces` (§5.2) on a finish the Mac does not announce itself, which pushes (§16) no longer ring for;
   `createTask` takes `"chats"` before the snapshot lists Chats (§15.5).
+- 2026-11-03, not only additions: pushes to iOS through APNs. `registerPush`'s `provider` is `fcm`, `apns` or
+  `apns-sandbox`, and the Mac refuses any other with `badRequest` (§15.6); the Mac's `push` to the relay names the
+  `provider`, and the relay sends `apns` and `apns-sandbox` pushes through APNs (§14.2, §16). A push's `collapse` is
+  at most 64 bytes rather than 64 characters.
 
 ## 11. v2 transport
 
@@ -800,7 +804,7 @@ more Noise transport messages:
 
 One room per Mac. The relay keeps a room only in memory while its Mac is connected; it stores nothing
 and logs no frame contents. What it sees: rooms, IP addresses, when sockets open and close, frame sizes
-and times, and a push's FCM token while sending it.
+and times, and a push's token (FCM's registration token or APNs' device token) while sending it.
 
 ### 14.2 The Mac's socket
 
@@ -823,15 +827,29 @@ and times, and a push's FCM token while sending it.
 8. Push, at most 60 a minute per room:
 
    ```json
-   {"t": "push", "id": "p3", "to": "<FCM registration token>", "urgent": true, "collapse": "<≤ 64 chars>", "ttl": 3600,
-    "data": {"v": "1", "k": "<push key id>", "y": "<sealed payload>"}}
+   {"t": "push", "id": "p3", "provider": "fcm", "to": "<the device's token>", "urgent": true, "collapse": "<≤ 64 bytes>",
+    "ttl": 3600, "data": {"v": "1", "k": "<push key id>", "y": "<sealed payload>"}}
    ```
 
-   The relay sends `data` as an FCM HTTP v1 data message (`android.priority` HIGH when `urgent`, else
-   NORMAL; `collapse_key`; `ttl`) and answers `{"t": "pushed", "id": "p3", "ok": true}` or
-   `{"t": "pushed", "id": "p3", "ok": false, "error": "unregistered"}`. Errors: `unregistered` (the
-   token is gone: forget it), `invalid`, `rateLimited`, `unavailable`, `notConfigured` (the relay has
-   no FCM credentials).
+   `provider` and `to` are what the device registered (§15.6); a push without `provider` goes through FCM. The
+   relay sends `data`:
+
+   - `fcm`: as an FCM HTTP v1 data message (`android.priority` HIGH when `urgent`, else NORMAL; `collapse_key`;
+     `ttl`).
+   - `apns`, `apns-sandbox`: as `POST https://api.push.apple.com/3/device/<to>` or
+     `https://api.sandbox.push.apple.com/3/device/<to>`, with the relay's APNs provider token (an ES256 JWT of its
+     key ID and team ID, signed with its APNs key and used for 50 minutes), `apns-topic` the iOS app's bundle ID,
+     `apns-collapse-id` the `collapse` and `apns-expiration` `ttl` seconds from now. The `data` fields sit beside
+     `aps` at the top of the payload. An urgent push is an alert (`apns-push-type: alert`, `apns-priority: 10`,
+     `"aps": {"alert": {"title-loc-key": "PUSH_FALLBACK_TITLE", "loc-key": "PUSH_FALLBACK_BODY"},
+     "mutable-content": 1, "sound": "default"}`); any other is a background push (`apns-push-type: background`,
+     `apns-priority: 5`, `"aps": {"content-available": 1}`).
+
+   It answers `{"t": "pushed", "id": "p3", "ok": true}` or `{"t": "pushed", "id": "p3", "ok": false, "error":
+   "unregistered"}`. Errors: `unregistered` (the token is gone: forget it; FCM answered 404 or `UNREGISTERED`, APNs
+   410 or 400 `BadDeviceToken` or `DeviceTokenNotForTopic`), `invalid` (a field or the provider is wrong, or the
+   service refused the message), `rateLimited`, `unavailable` (the service failed, could not be reached or refused the
+   relay's credentials), `notConfigured` (the relay has no credentials for that provider).
 
 ### 14.3 A phone's socket
 
@@ -971,6 +989,9 @@ characters). Errors as §15.3.
 {"re": "15", "ok": true, "pushKey": "<32 bytes>", "pushKeyId": "<16 hex>"}
 ```
 
+- `provider` is `fcm` (Android; `token` is the FCM registration token), `apns` (an iOS build signed for production:
+  TestFlight or the App Store) or `apns-sandbox` (an iOS build signed for development); for APNs `token` is the device
+  token in lowercase hex. Any other provider is `badRequest`.
 - Registering again (a new token) keeps the push key. `{"type": "unregisterPush"}` stops pushes.
 - `{"type": "forgetDevice"}`: the phone unpairs itself; the Mac answers `ok`, removes the device and
   closes (4403).
@@ -1720,10 +1741,14 @@ device's push key, associated data the UTF-8 bytes of `yardlet-push/1`, over the
 - A waiting link request (§15.11) is pushed too, urgent:
   `{"event": "linkRequest", "requestId", "name", "platform", "code", "expiresAt", "macName", "sentAt"}`.
 - `data.k` is the push key id, so a phone paired with several Macs knows which key opens it. `collapse` is
-  the first 16 hex characters of `SHA-256(taskId)`; `ttl` 3,600 s. FCM data messages hold at most 4 KB,
-  so titles are cut to 200 characters.
+  the first 16 hex characters of `SHA-256(taskId)`; `ttl` 3,600 s. FCM data messages and APNs payloads hold at
+  most 4 KB, so titles are cut to 200 characters.
 - The phone shows the notification itself, from the decrypted event, as it does for live `attention`
   events; on the lock screen only a public version ("Approval requested").
+- Through APNs (§14.2) an urgent push is an alert that the iOS app's Notification Service Extension opens with the
+  push key and rewrites from the event; the alert's own text is the app's, shown only when the extension cannot
+  open it. A push that is not urgent is a background push, which iOS hands the app when it chooses and may hold
+  back.
 
 ## 17. v2 fixture and test vectors
 

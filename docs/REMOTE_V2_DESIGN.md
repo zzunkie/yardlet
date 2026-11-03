@@ -260,7 +260,7 @@ account shows that person's Macs and lets them add a new phone. End-to-end encry
 - The lock screen shows only "There is an approval request" (the public version); after unlocking, the task title and
   summary appear.
 - FCM needs a Firebase project (free). A build without a project does not register for notifications and uses only
-  "Background notifications". iOS uses the same shape with APNs (next step).
+  "Background notifications". iOS gets the same sealed payload through APNs (REMOTE_PROTOCOL §14.2, §16).
 
 ## 5. What the phone does
 
@@ -741,7 +741,7 @@ are done by the person, and secret values never go in command arguments, docs or
 | Track | Contents | Verification |
 |---|---|---|
 | Mac (`YardletRemote`, `NativeHarnessClient/Remote`) | Noise, secure channel, keys (keychain), v2 listener and Bonjour, relay client, sending notifications, new requests, settings screen, fixture server v2 | cacophony vectors, broader server and end-to-end tests, settings render |
-| Relay (`relay/`, TypeScript) | Worker + Room DO, signature verification, joining, FCM HTTP v1 | Vitest (workerd), joining with the Mac fixture through `wrangler dev` |
+| Relay (`relay/`, TypeScript) | Worker + Room DO, signature verification, joining, FCM HTTP v1 and APNs | Vitest (workerd), joining with the Mac fixture through `wrangler dev` |
 | Android (separate repository) | Noise (BouncyCastle X25519, the platform's ChaCha20-Poly1305), route race, Bonjour (NsdManager), several Macs, questions, plans and new tasks, notifications (FCM optional), screens, demo mode | The same vectors, MockWebServer, the fixture (direct) and `wrangler dev` (relay) on the emulator, the demo in airplane mode |
 
 ## 14. Facts needed for the Play release (2026-10-24, from the code)

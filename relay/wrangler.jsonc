@@ -13,8 +13,9 @@
     { "tag": "v1", "new_sqlite_classes": ["Room"] },
     { "tag": "v2", "new_sqlite_classes": ["Account"] }
   ]
-  // Secrets (`wrangler secret put`): FCM_SERVICE_ACCOUNT, FCM_PROJECT_ID, GITHUB_CLIENT_ID,
-  // GITHUB_CLIENT_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, AUTH_STATE_SECRET.
+  // Secrets (`wrangler secret put`): FCM_SERVICE_ACCOUNT, FCM_PROJECT_ID, APNS_KEY, APNS_KEY_ID,
+  // APNS_TEAM_ID, APNS_TOPIC, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+  // AUTH_STATE_SECRET.
   // PUBLIC_URL, the relay's https base (e.g. "https://relay.example.test"): a secret too, so the deployed
   // address stays out of git; a later `wrangler deploy` keeps it.
 }

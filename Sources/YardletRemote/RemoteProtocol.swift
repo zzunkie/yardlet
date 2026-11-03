@@ -54,6 +54,8 @@ public enum RemoteProtocol {
     /// harness made (a request, an item, a suggestion, an answer's choice) (§7).
     public static let maxOwnIDBytes = 64
     public static let maxProviderIDBytes = 256
+    /// Where a device's pushes go (§15.6): FCM, or APNs for an iOS build signed for production or for development.
+    public static let pushProviders: Set<String> = ["fcm", "apns", "apns-sandbox"]
 }
 
 // MARK: - Errors
@@ -1322,6 +1324,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             guard let provider = required(wire.provider), let token = required(wire.token) else {
                 return fail(.badRequest, "Missing provider or token")
             }
+            guard RemoteProtocol.pushProviders.contains(provider) else { return fail(.badRequest, "Unknown push provider") }
             request = .registerPush(provider: provider, token: token)
         case "unregisterPush":
             request = .unregisterPush

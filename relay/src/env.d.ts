@@ -9,6 +9,11 @@ declare namespace Cloudflare {
     /** The Firebase service account's JSON key. */
     FCM_SERVICE_ACCOUNT?: string;
     FCM_PROJECT_ID?: string;
+    /** The APNs auth key's `.p8` text (PKCS#8 PEM), its key ID, the team ID and the iOS app's bundle ID. */
+    APNS_KEY?: string;
+    APNS_KEY_ID?: string;
+    APNS_TEAM_ID?: string;
+    APNS_TOPIC?: string;
     GITHUB_CLIENT_ID?: string;
     GITHUB_CLIENT_SECRET?: string;
     GOOGLE_CLIENT_ID?: string;

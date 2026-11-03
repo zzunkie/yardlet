@@ -14,6 +14,9 @@ const serviceAccount = JSON.stringify({
   private_key: `-----BEGIN PRIVATE KEY-----\n${pkcs8}\n-----END PRIVATE KEY-----\n`,
 });
 const publicKey = JSON.stringify(await crypto.subtle.exportKey("jwk", pair.publicKey));
+const apnsPair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+const apnsPkcs8 = Buffer.from(await crypto.subtle.exportKey("pkcs8", apnsPair.privateKey)).toString("base64");
+const apnsPublicKey = JSON.stringify(await crypto.subtle.exportKey("jwk", apnsPair.publicKey));
 const stateSecret = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");
 
 const wrangler = { configPath: "./wrangler.jsonc" };
@@ -30,6 +33,11 @@ export default defineConfig({
                 FCM_PROJECT_ID: "relay-test",
                 FCM_SERVICE_ACCOUNT: serviceAccount,
                 TEST_FCM_PUBLIC_JWK: publicKey,
+                APNS_KEY: `-----BEGIN PRIVATE KEY-----\n${apnsPkcs8.match(/.{1,64}/g)!.join("\n")}\n-----END PRIVATE KEY-----\n`,
+                APNS_KEY_ID: "KEY1234567",
+                APNS_TEAM_ID: "TEAM123456",
+                APNS_TOPIC: "app.example.remote",
+                TEST_APNS_PUBLIC_JWK: apnsPublicKey,
                 GITHUB_CLIENT_ID: "github-client-id",
                 GITHUB_CLIENT_SECRET: "github-client-secret",
                 GOOGLE_CLIENT_ID: "google-client-id",

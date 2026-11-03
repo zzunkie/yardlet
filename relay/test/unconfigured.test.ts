@@ -6,11 +6,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("answers notConfigured without FCM credentials", async () => {
+it("answers notConfigured without FCM or APNs credentials", async () => {
   const fetch = vi.spyOn(globalThis, "fetch");
   const { mac } = await openMac();
   mac.ws.send(JSON.stringify({ t: "push", id: "p1", to: "registration-token-1", urgent: true, data: { v: "1" } }));
   expect(await mac.json()).toEqual({ t: "pushed", id: "p1", ok: false, error: "notConfigured" });
+  mac.ws.send(JSON.stringify({ t: "push", id: "p2", provider: "apns", to: "00fe", urgent: true, data: { v: "1" } }));
+  expect(await mac.json()).toEqual({ t: "pushed", id: "p2", ok: false, error: "notConfigured" });
   expect(fetch).not.toHaveBeenCalled();
 });
 

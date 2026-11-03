@@ -5,6 +5,7 @@ import { openMac, type Peer } from "./helpers";
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const FCM_URL = "https://fcm.googleapis.com/v1/projects/relay-test/messages:send";
+const DEVICE = "00fe".repeat(16);
 
 interface Captured {
   url: string;
@@ -40,6 +41,20 @@ function fakeGoogle(fcm: (body: Record<string, any>) => Response = () => Respons
   return requests;
 }
 
+/** Answers APNs; `apns` decides its response. */
+function fakeApple(apns: (request: Captured) => Response = () => new Response(null, { headers: { "apns-id": crypto.randomUUID() } })) {
+  const requests: Captured[] = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    const captured = { url: request.url, headers: request.headers, body: await request.text() };
+    requests.push(captured);
+    return apns(captured);
+  });
+  return requests;
+}
+
+const decode = (part: string) => JSON.parse(new TextDecoder().decode(fromBase64Url(part)!));
+
 async function pushed(mac: Peer, count = 1): Promise<Record<string, unknown>[]> {
   const replies = [];
   for (let i = 0; i < count; i += 1) replies.push(await mac.json());
@@ -66,7 +81,6 @@ describe("push", () => {
     const form = new URLSearchParams(tokenRequests[0].body);
     expect(form.get("grant_type")).toBe("urn:ietf:params:oauth:grant-type:jwt-bearer");
     const [header, claims, signature] = form.get("assertion")!.split(".");
-    const decode = (part: string) => JSON.parse(new TextDecoder().decode(fromBase64Url(part)!));
     expect(decode(header)).toEqual({ alg: "RS256", typ: "JWT" });
     const payload = decode(claims);
     expect(payload).toMatchObject({
@@ -130,5 +144,125 @@ describe("push", () => {
     expect(replies.filter((r) => r.ok === true)).toHaveLength(60);
     expect(replies.filter((r) => r.ok === false)).toEqual([{ t: "pushed", id: "p60", ok: false, error: "rateLimited" }]);
     expect(requests.filter((r) => r.url === FCM_URL)).toHaveLength(60);
+  });
+
+  // First APNs test in this file: the provider token is cached for the isolate.
+  it("signs one APNs provider token and sends alerts and background pushes", async () => {
+    const requests = fakeApple();
+    const { mac } = await openMac();
+    const before = Math.floor(Date.now() / 1000);
+
+    mac.ws.send(push("a1", { provider: "apns", to: DEVICE }));
+    expect(await pushed(mac)).toEqual([{ t: "pushed", id: "a1", ok: true }]);
+    mac.ws.send(push("a2", { provider: "apns-sandbox", to: DEVICE, urgent: false, collapse: "fedcba9876543210", ttl: 60 }));
+    expect(await pushed(mac)).toEqual([{ t: "pushed", id: "a2", ok: true }]);
+    const after = Math.floor(Date.now() / 1000);
+
+    expect(requests.map((r) => r.url)).toEqual([
+      `https://api.push.apple.com/3/device/${DEVICE}`,
+      `https://api.sandbox.push.apple.com/3/device/${DEVICE}`,
+    ]);
+    const apnsHeaders = (r: Captured) => Object.fromEntries([...r.headers].filter(([name]) => name.startsWith("apns-")));
+    const [alert, background] = requests;
+    expect(apnsHeaders(alert)).toEqual({
+      "apns-topic": "app.example.remote",
+      "apns-push-type": "alert",
+      "apns-priority": "10",
+      "apns-collapse-id": "0123456789abcdef",
+      "apns-expiration": expect.any(String),
+    });
+    expect(Number(alert.headers.get("apns-expiration"))).toBeGreaterThanOrEqual(before + 3600);
+    expect(Number(alert.headers.get("apns-expiration"))).toBeLessThanOrEqual(after + 3600);
+    expect(apnsHeaders(background)).toMatchObject({
+      "apns-push-type": "background",
+      "apns-priority": "5",
+      "apns-collapse-id": "fedcba9876543210",
+    });
+    expect(JSON.parse(alert.body)).toEqual({
+      aps: {
+        alert: { "title-loc-key": "PUSH_FALLBACK_TITLE", "loc-key": "PUSH_FALLBACK_BODY" },
+        "mutable-content": 1,
+        sound: "default",
+      },
+      v: "1",
+      k: "0011223344556677",
+      y: "c2VhbGVk",
+    });
+    expect(JSON.parse(background.body)).toEqual({ aps: { "content-available": 1 }, v: "1", k: "0011223344556677", y: "c2VhbGVk" });
+
+    const authorization = alert.headers.get("authorization")!;
+    expect(background.headers.get("authorization")).toBe(authorization);
+    const [scheme, jwt] = authorization.split(" ");
+    expect(scheme).toBe("bearer");
+    const [header, claims, signature] = jwt.split(".");
+    expect(decode(header)).toEqual({ alg: "ES256", kid: "KEY1234567" });
+    const payload = decode(claims);
+    expect(payload).toEqual({ iss: "TEAM123456", iat: expect.any(Number) });
+    expect(payload.iat).toBeGreaterThanOrEqual(before);
+    expect(payload.iat).toBeLessThanOrEqual(after);
+    const publicKey = await crypto.subtle.importKey(
+      "jwk",
+      JSON.parse((env as unknown as { TEST_APNS_PUBLIC_JWK: string }).TEST_APNS_PUBLIC_JWK),
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["verify"],
+    );
+    const signed = new TextEncoder().encode(`${header}.${claims}`);
+    expect(await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, publicKey, fromBase64Url(signature)!, signed)).toBe(true);
+
+    // Apple takes a new token at most every 20 minutes and refuses one older than 60: one serves 50.
+    const now = Date.now;
+    vi.spyOn(Date, "now").mockImplementation(() => now.call(Date) + 50 * 60_000);
+    mac.ws.send(push("a3", { provider: "apns", to: DEVICE }));
+    expect(await pushed(mac)).toEqual([{ t: "pushed", id: "a3", ok: true }]);
+    expect(requests[2].headers.get("authorization")).not.toBe(authorization);
+  });
+
+  it("maps APNs errors and signs a fresh token after Apple refuses one", async () => {
+    // Made when the room asks, so the room can read their bodies.
+    const answers: [number, string?][] = [
+      [410, "Unregistered"],
+      [400, "BadDeviceToken"],
+      [400, "DeviceTokenNotForTopic"],
+      [400, "BadCollapseId"],
+      [413, "PayloadTooLarge"],
+      [429, "TooManyRequests"],
+      [503, "ServiceUnavailable"],
+      [403, "ExpiredProviderToken"],
+      [200],
+    ];
+    const requests = fakeApple(() => {
+      const [status, reason] = answers.shift()!;
+      return reason ? Response.json({ reason }, { status }) : new Response(null, { status });
+    });
+    const { mac } = await openMac();
+    const errors = [];
+    for (let i = 0; i < 9; i += 1) {
+      mac.ws.send(push(`a${i}`, { provider: "apns", to: DEVICE }));
+      errors.push((await mac.json()).error);
+    }
+    expect(errors).toEqual([
+      "unregistered",
+      "unregistered",
+      "unregistered",
+      "invalid",
+      "invalid",
+      "rateLimited",
+      "unavailable",
+      "unavailable",
+      undefined,
+    ]);
+    const tokens = requests.map((r) => r.headers.get("authorization"));
+    expect(new Set(tokens.slice(0, 8)).size).toBe(1);
+    expect(tokens[8]).not.toBe(tokens[0]);
+
+    // Refused before reaching Apple: a provider the relay does not know, a token that names no device.
+    mac.ws.send(push("x1", { provider: "webpush", to: DEVICE }));
+    mac.ws.send(push("x2", { provider: "apns", to: "not/a/token" }));
+    expect(await pushed(mac, 2)).toEqual([
+      { t: "pushed", id: "x1", ok: false, error: "invalid" },
+      { t: "pushed", id: "x2", ok: false, error: "unregistered" },
+    ]);
+    expect(requests).toHaveLength(9);
   });
 });

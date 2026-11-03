@@ -333,16 +333,20 @@ public final class RemoteRelayClient: @unchecked Sendable {
                 pushCounter += 1
                 let id = "p\(pushCounter)"
                 pushWaiters[id] = continuation
-                let message: [String: Any] = [
-                    "t": "push", "id": id, "to": request.token, "urgent": request.urgent, "collapse": request.collapse,
-                    "ttl": 3600, "data": ["v": "1", "k": request.keyID, "y": request.sealed]
-                ]
-                enqueue(.string(Self.json(message)), on: task)
+                enqueue(.string(Self.pushMessage(request, id: id)), on: task)
                 queue.asyncAfter(deadline: .now() + 15) { [weak self] in
                     self?.pushWaiters.removeValue(forKey: id)?.resume(returning: .failed)
                 }
             }
         }
+    }
+
+    /// The relay's `push` message (§14.2): the relay sends it through the provider the device registered with.
+    static func pushMessage(_ request: RemotePushRequest, id: String) -> String {
+        json([
+            "t": "push", "id": id, "provider": request.provider, "to": request.token, "urgent": request.urgent,
+            "collapse": request.collapse, "ttl": 3600, "data": ["v": "1", "k": request.keyID, "y": request.sealed]
+        ])
     }
 
     private static func json(_ object: [String: Any]) -> String {
