@@ -15,3 +15,7 @@ Packaging/RelayURL
 
 # Maintainers' working notes: a separate checkout, or a link to one in a worktree.
 /docs/internal
+
+# Xcode per-user state (Apps/iOS).
+xcuserdata/
+Apps/iOS/Signing.local.xcconfig

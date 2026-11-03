@@ -1,0 +1,4 @@
+// The team that signs the app and its extension comes from Signing.local.xcconfig beside this file, which git ignores,
+// so the repository keeps no team ID. Write `DEVELOPMENT_TEAM = <your team ID>` there to sign for a device or for
+// TestFlight; a Simulator build needs no team (`CODE_SIGNING_ALLOWED=NO`).
+#include? "Signing.local.xcconfig"

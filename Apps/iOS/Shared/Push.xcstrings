@@ -1,0 +1,146 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "A new device": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "새 기기"
+          }
+        }
+      }
+    },
+    "A task failed": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업이 실패했습니다"
+          }
+        }
+      }
+    },
+    "A task finished": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업이 끝났습니다"
+          }
+        }
+      }
+    },
+    "Approval requested": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "승인 요청"
+          }
+        }
+      }
+    },
+    "Browser tab": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "브라우저 탭"
+          }
+        }
+      }
+    },
+    "Connection request": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결 요청"
+          }
+        }
+      }
+    },
+    "Connection request · %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결 요청 · %@"
+          }
+        }
+      }
+    },
+    "Failed": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "실패"
+          }
+        }
+      }
+    },
+    "Finished": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "끝났습니다"
+          }
+        }
+      }
+    },
+    "Number %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "번호 %@"
+          }
+        }
+      }
+    },
+    "Question": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "질문"
+          }
+        }
+      }
+    },
+    "Tap to review": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "눌러서 확인하세요"
+          }
+        }
+      }
+    },
+    "Untitled task": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "제목 없는 작업"
+          }
+        }
+      }
+    },
+    "Waiting on a browser tab": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "브라우저 탭에서 기다립니다"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

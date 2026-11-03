@@ -1,0 +1,1958 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "%@ couldn't do that.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 그 작업을 하지 못했습니다."
+          }
+        }
+      }
+    },
+    "%@ doesn't offer that choice now. Pick again.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 지금 그 선택지를 쓸 수 없습니다. 다시 고르세요."
+          }
+        }
+      }
+    },
+    "%@ is changing this task. Try again in a moment.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 이 작업을 바꾸는 중입니다. 잠시 뒤 다시 시도하세요."
+          }
+        }
+      }
+    },
+    "%@ no longer lists it.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 이 작업이 더 이상 없습니다."
+          }
+        }
+      }
+    },
+    "%@ no longer lists this task.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 이 작업이 더 이상 없습니다."
+          }
+        }
+      }
+    },
+    "%@ offers no settings for this task now.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지금 %@에서 이 작업에 바꿀 설정이 없습니다."
+          }
+        }
+      }
+    },
+    "%@ removed this phone. Pair it again to connect.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 이 휴대폰을 지웠습니다. 다시 연결하려면 새로 짝지으세요."
+          }
+        }
+      }
+    },
+    "%@: %lld%% used": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "new",
+            "value": "%1$@: %2$lld%% used"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@: %2$lld%% 사용"
+          }
+        }
+      }
+    },
+    "%lld images": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld image"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld images"
+                }
+              }
+            }
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사진 %lld장"
+          }
+        }
+      }
+    },
+    "%lld photos": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld photo"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld photos"
+                }
+              }
+            }
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사진 %lld장"
+          }
+        }
+      }
+    },
+    "%lld steps": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld step"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld steps"
+                }
+              }
+            }
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld단계"
+          }
+        }
+      }
+    },
+    "%lld subtasks": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld subtask"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld subtasks"
+                }
+              }
+            }
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "하위 작업 %lld개"
+          }
+        }
+      }
+    },
+    "+%lld": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%lld"
+          }
+        }
+      }
+    },
+    "Add Photos": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사진 추가"
+          }
+        }
+      }
+    },
+    "After This Turn (Queue)": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이번 턴이 끝난 뒤(대기열)"
+          }
+        }
+      }
+    },
+    "Agent": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "에이전트"
+          }
+        }
+      }
+    },
+    "Allow Once": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "한 번만 허용"
+          }
+        }
+      }
+    },
+    "Allow camera access in Settings, or paste the pairing link instead.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "설정에서 카메라 접근을 허용하거나, 연결 링크를 붙여 넣으세요."
+          }
+        }
+      }
+    },
+    "Allow for This Session": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 세션 동안 허용"
+          }
+        }
+      }
+    },
+    "Allowed: %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "허용함: %@"
+          }
+        }
+      }
+    },
+    "Answer": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "답변"
+          }
+        }
+      }
+    },
+    "Answered: %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "답함: %@"
+          }
+        }
+      }
+    },
+    "App Lock": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "앱 잠금"
+          }
+        }
+      }
+    },
+    "Approval requested": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "승인 요청"
+          }
+        }
+      }
+    },
+    "Approvals, questions and finished tasks, sent by your Mac while Yardlet is closed. Their content is encrypted for this phone; Apple and the relay can't read it.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yardlet이 닫혀 있는 동안 Mac이 승인 요청, 질문, 끝난 작업을 알립니다. 내용은 이 휴대폰만 열 수 있게 암호화되어 Apple과 중계 서버는 읽지 못합니다."
+          }
+        }
+      }
+    },
+    "Approve Plan": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "계획 승인"
+          }
+        }
+      }
+    },
+    "Archive": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "보관"
+          }
+        }
+      }
+    },
+    "Archive this task?": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 작업을 보관할까요?"
+          }
+        }
+      }
+    },
+    "Asks for Face ID or your passcode each time you open Yardlet.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yardlet을 열 때마다 Face ID나 암호를 묻습니다."
+          }
+        }
+      }
+    },
+    "Awaiting an answer": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "답변 대기 중"
+          }
+        }
+      }
+    },
+    "Awaiting approval": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "승인 대기 중"
+          }
+        }
+      }
+    },
+    "Browser tab waiting": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "브라우저 탭에서 기다리는 중"
+          }
+        }
+      }
+    },
+    "Can't reach %@ right now.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지금은 %@에 연결할 수 없습니다."
+          }
+        }
+      }
+    },
+    "Can't reach %@. Trying again…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 연결할 수 없습니다. 다시 시도하는 중…"
+          }
+        }
+      }
+    },
+    "Can't reach your Mac. Check that Yardlet is running and remote connections are on, and that this phone is on the same Wi-Fi or the Mac connects from outside.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac에 연결할 수 없습니다. Mac에서 Yardlet이 실행 중이고 원격 연결이 켜져 있는지, 이 휴대폰이 같은 Wi-Fi에 있거나 Mac에서 바깥 연결이 켜져 있는지 확인하세요."
+          }
+        }
+      }
+    },
+    "Cancel": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "취소"
+          }
+        }
+      }
+    },
+    "Choose": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "선택"
+          }
+        }
+      }
+    },
+    "Connect": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결"
+          }
+        }
+      }
+    },
+    "Connect to this Mac?": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 Mac과 연결할까요?"
+          }
+        }
+      }
+    },
+    "Connect to your Mac": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac에 연결"
+          }
+        }
+      }
+    },
+    "Connected directly": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "직접 연결됨"
+          }
+        }
+      }
+    },
+    "Connected through the relay": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "중계 서버로 연결됨"
+          }
+        }
+      }
+    },
+    "Connecting to %@…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 연결하는 중…"
+          }
+        }
+      }
+    },
+    "Connecting…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결하는 중…"
+          }
+        }
+      }
+    },
+    "Continue": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "계속"
+          }
+        }
+      }
+    },
+    "Continue With": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이어서 쓸 계정"
+          }
+        }
+      }
+    },
+    "Continue when the limit resets": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "한도가 초기화되면 이어서 하기"
+          }
+        }
+      }
+    },
+    "Continue with Another Account…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다른 계정으로 이어서 하기…"
+          }
+        }
+      }
+    },
+    "Couldn't connect": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결하지 못했습니다"
+          }
+        }
+      }
+    },
+    "Couldn't connect. Try again.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결하지 못했습니다. 다시 시도하세요."
+          }
+        }
+      }
+    },
+    "Current": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "현재"
+          }
+        }
+      }
+    },
+    "Decline": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "거절"
+          }
+        }
+      }
+    },
+    "Denied: %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "거부함: %@"
+          }
+        }
+      }
+    },
+    "Deny": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "거부"
+          }
+        }
+      }
+    },
+    "Deny and Say What to Do Instead…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "거부하고 대신 할 일 알리기…"
+          }
+        }
+      }
+    },
+    "Dismiss": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "닫기"
+          }
+        }
+      }
+    },
+    "Dismissed": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "닫음"
+          }
+        }
+      }
+    },
+    "Do It Here": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "여기서 하기"
+          }
+        }
+      }
+    },
+    "Done": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "완료"
+          }
+        }
+      }
+    },
+    "Done here": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "여기서 함"
+          }
+        }
+      }
+    },
+    "Expired: %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "만료됨: %@"
+          }
+        }
+      }
+    },
+    "Failed": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "실패"
+          }
+        }
+      }
+    },
+    "I'm Done": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다 했어요"
+          }
+        }
+      }
+    },
+    "Input requested": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "입력 요청"
+          }
+        }
+      }
+    },
+    "It leaves the list on %@ too. You can find it there under archived tasks.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@의 목록에서도 빠집니다. 그곳의 보관된 작업에서 다시 찾을 수 있습니다."
+          }
+        }
+      }
+    },
+    "Keep Planning": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "계속 계획하기"
+          }
+        }
+      }
+    },
+    "Keep Planning…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "계속 계획하기…"
+          }
+        }
+      }
+    },
+    "Last connected %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "마지막 연결 %@"
+          }
+        }
+      }
+    },
+    "Leave Demo": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "둘러보기 끝내기"
+          }
+        }
+      }
+    },
+    "Macs": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac"
+          }
+        }
+      }
+    },
+    "Macs and Settings": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac과 설정"
+          }
+        }
+      }
+    },
+    "Message": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메시지"
+          }
+        }
+      }
+    },
+    "Message to the running task": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "실행 중인 작업에 보낼 메시지"
+          }
+        }
+      }
+    },
+    "Model and Permissions": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "모델과 권한"
+          }
+        }
+      }
+    },
+    "More": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "더 보기"
+          }
+        }
+      }
+    },
+    "More answers are on your Mac.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다른 답은 Mac에서 할 수 있습니다."
+          }
+        }
+      }
+    },
+    "New Task": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "새 작업"
+          }
+        }
+      }
+    },
+    "New Worktree": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "새 worktree"
+          }
+        }
+      }
+    },
+    "No Tasks": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업 없음"
+          }
+        }
+      }
+    },
+    "No messages yet.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "아직 메시지가 없습니다."
+          }
+        }
+      }
+    },
+    "Not connected": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결 안 됨"
+          }
+        }
+      }
+    },
+    "Not reachable": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결할 수 없음"
+          }
+        }
+      }
+    },
+    "Nothing is running.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "실행 중인 것이 없습니다."
+          }
+        }
+      }
+    },
+    "Nothing more to show.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "더 보여 줄 내용이 없습니다."
+          }
+        }
+      }
+    },
+    "Notifications": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "알림"
+          }
+        }
+      }
+    },
+    "OK": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "확인"
+          }
+        }
+      }
+    },
+    "On": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "켬"
+          }
+        }
+      }
+    },
+    "On your Mac, choose Copy link under the pairing code, and paste it here.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac에서 연결 코드 아래의 Copy link를 누른 뒤 여기에 붙여 넣으세요."
+          }
+        }
+      }
+    },
+    "On your Mac, open Yardlet › Settings › Remote and choose Pair a device. Then scan the code it shows.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac의 Yardlet에서 설정 › Remote › Pair a device를 누른 뒤, 화면에 뜬 코드를 스캔하세요."
+          }
+        }
+      }
+    },
+    "Open Settings": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "설정 열기"
+          }
+        }
+      }
+    },
+    "Other": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "기타"
+          }
+        }
+      }
+    },
+    "Other answer": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "직접 답하기"
+          }
+        }
+      }
+    },
+    "PUSH_FALLBACK_BODY": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Something changed on your Mac. Open Yardlet to see it."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac에서 새 소식이 있습니다. Yardlet을 열어 확인하세요."
+          }
+        }
+      }
+    },
+    "PUSH_FALLBACK_TITLE": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yardlet"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yardlet"
+          }
+        }
+      }
+    },
+    "Pair a Mac": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac 연결"
+          }
+        }
+      }
+    },
+    "Pair a Mac from Yardlet on it: Settings › Remote › Pair a device. Swipe a Mac to remove it; it forgets this phone too.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac의 Yardlet에서 설정 › Remote › Pair a device로 연결합니다. Mac을 밀어서 지우면 그 Mac도 이 휴대폰을 잊습니다."
+          }
+        }
+      }
+    },
+    "Paired %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에 연결함"
+          }
+        }
+      }
+    },
+    "Pairing Link": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결 링크"
+          }
+        }
+      }
+    },
+    "Paste a Pairing Link": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "연결 링크 붙여 넣기"
+          }
+        }
+      }
+    },
+    "Pin": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "고정"
+          }
+        }
+      }
+    },
+    "Pinned": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "고정됨"
+          }
+        }
+      }
+    },
+    "Plan ready for review": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "검토할 계획"
+          }
+        }
+      }
+    },
+    "Point the camera at the code on your Mac.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "카메라를 Mac 화면의 코드에 맞추세요."
+          }
+        }
+      }
+    },
+    "Privacy Policy": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "개인정보 처리방침"
+          }
+        }
+      }
+    },
+    "Project": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "프로젝트"
+          }
+        }
+      }
+    },
+    "Proposed plan": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "제안된 계획"
+          }
+        }
+      }
+    },
+    "Question": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "질문"
+          }
+        }
+      }
+    },
+    "Queue": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대기열"
+          }
+        }
+      }
+    },
+    "Reading what %@ offers…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 고를 수 있는 것을 읽는 중…"
+          }
+        }
+      }
+    },
+    "Reconnecting…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다시 연결하는 중…"
+          }
+        }
+      }
+    },
+    "Remote connections are off on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 원격 연결이 꺼져 있습니다."
+          }
+        }
+      }
+    },
+    "Remove": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "제거"
+          }
+        }
+      }
+    },
+    "Remove %@?": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@을(를) 제거할까요?"
+          }
+        }
+      }
+    },
+    "Remove Photo": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사진 빼기"
+          }
+        }
+      }
+    },
+    "Removed this phone": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 휴대폰을 지움"
+          }
+        }
+      }
+    },
+    "Resets %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 초기화"
+          }
+        }
+      }
+    },
+    "Retry": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다시 시도"
+          }
+        }
+      }
+    },
+    "Run only the unit tests": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "단위 테스트만 실행해"
+          }
+        }
+      }
+    },
+    "Running": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "실행 중"
+          }
+        }
+      }
+    },
+    "Scan QR Code": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "QR 코드 스캔"
+          }
+        }
+      }
+    },
+    "Search tasks": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업 검색"
+          }
+        }
+      }
+    },
+    "Send": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "보내기"
+          }
+        }
+      }
+    },
+    "Send Answer": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "답 보내기"
+          }
+        }
+      }
+    },
+    "Send Now": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지금 보내기"
+          }
+        }
+      }
+    },
+    "Send Now (Steer)": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지금 보내기(조정)"
+          }
+        }
+      }
+    },
+    "Sent on schedule": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "예약으로 보냄"
+          }
+        }
+      }
+    },
+    "Settings": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "설정"
+          }
+        }
+      }
+    },
+    "Show Earlier Messages": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이전 메시지 보기"
+          }
+        }
+      }
+    },
+    "Show Less": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "접기"
+          }
+        }
+      }
+    },
+    "Show Whole Plan": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "계획 전체 보기"
+          }
+        }
+      }
+    },
+    "Showing the end of the output.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "출력의 끝부분입니다."
+          }
+        }
+      }
+    },
+    "Skip this question": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 질문 건너뛰기"
+          }
+        }
+      }
+    },
+    "Slash commands run on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "슬래시 명령은 %@에서 실행하세요."
+          }
+        }
+      }
+    },
+    "Something went wrong": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "문제가 생겼습니다"
+          }
+        }
+      }
+    },
+    "Source Code": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "소스 코드"
+          }
+        }
+      }
+    },
+    "Split the migration first": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "마이그레이션부터 나눠"
+          }
+        }
+      }
+    },
+    "Start": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "시작"
+          }
+        }
+      }
+    },
+    "Started": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "시작됨"
+          }
+        }
+      }
+    },
+    "Steer": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "조정"
+          }
+        }
+      }
+    },
+    "Stop": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "중지"
+          }
+        }
+      }
+    },
+    "Stop and Send": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "멈추고 보내기"
+          }
+        }
+      }
+    },
+    "Stopped": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "중지됨"
+          }
+        }
+      }
+    },
+    "Stopped at a usage limit": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사용 한도로 멈춤"
+          }
+        }
+      }
+    },
+    "Tasks you start on %@ or here show up in this list.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@이나 여기서 시작한 작업이 이 목록에 나옵니다."
+          }
+        }
+      }
+    },
+    "That isn't offered for this task now.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "지금 이 작업에서는 할 수 없습니다."
+          }
+        }
+      }
+    },
+    "The demo couldn't start.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "둘러보기를 시작하지 못했습니다."
+          }
+        }
+      }
+    },
+    "The message is too long.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "메시지가 너무 깁니다."
+          }
+        }
+      }
+    },
+    "The rest of this change is on your Mac.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 변경의 나머지는 Mac에서 볼 수 있습니다."
+          }
+        }
+      }
+    },
+    "The tab is open on your Mac. Choose I'm Done once you finished the step there or elsewhere.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "탭은 Mac에 열려 있습니다. 그곳이나 다른 곳에서 단계를 마쳤으면 다 했어요를 누르세요."
+          }
+        }
+      }
+    },
+    "Thinking…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "생각하는 중…"
+          }
+        }
+      }
+    },
+    "This answer leaves a rule on your Mac beyond this task.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 답은 이 작업 밖에도 남는 규칙을 Mac에 만듭니다."
+          }
+        }
+      }
+    },
+    "This code expired or was already used. Show a new one on your Mac and scan it again.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "만료되었거나 이미 쓴 코드입니다. Mac에서 새 코드를 띄우고 다시 스캔하세요."
+          }
+        }
+      }
+    },
+    "This isn't a Yardlet pairing link.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yardlet 연결 링크가 아닙니다."
+          }
+        }
+      }
+    },
+    "This link pairs this phone with %@. Connect only to a Mac you use; it will see this phone's name and can send it notifications.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 링크는 이 휴대폰을 %@과(와) 연결합니다. 직접 쓰는 Mac에만 연결하세요. 연결하면 그 Mac이 이 휴대폰의 이름을 보고 알림을 보낼 수 있습니다."
+          }
+        }
+      }
+    },
+    "This phone stops following its tasks, and the Mac forgets this phone. Pair again to connect.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 휴대폰에서 그 Mac의 작업을 더 보지 않고, Mac도 이 휴대폰을 잊습니다. 다시 쓰려면 새로 연결하세요."
+          }
+        }
+      }
+    },
+    "This request was already answered.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이미 답한 요청입니다."
+          }
+        }
+      }
+    },
+    "This task is gone": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "없어진 작업입니다"
+          }
+        }
+      }
+    },
+    "Too many requests. Try again in a moment.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "요청이 너무 많습니다. 잠시 뒤 다시 시도하세요."
+          }
+        }
+      }
+    },
+    "Try Without a Mac": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac 없이 둘러보기"
+          }
+        }
+      }
+    },
+    "Turn On Notifications": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "알림 켜기"
+          }
+        }
+      }
+    },
+    "Turn On Notifications in Settings": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "설정에서 알림 켜기"
+          }
+        }
+      }
+    },
+    "Turn off App Lock": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "앱 잠금 끄기"
+          }
+        }
+      }
+    },
+    "Turn on App Lock": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "앱 잠금 켜기"
+          }
+        }
+      }
+    },
+    "Unlock": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "잠금 해제"
+          }
+        }
+      }
+    },
+    "Unlock Yardlet": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yardlet 잠금 해제"
+          }
+        }
+      }
+    },
+    "Unpin": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "고정 해제"
+          }
+        }
+      }
+    },
+    "Unread": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "읽지 않음"
+          }
+        }
+      }
+    },
+    "Untitled task": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "제목 없는 작업"
+          }
+        }
+      }
+    },
+    "Update Yardlet on your Mac to connect this phone.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 휴대폰을 연결하려면 Mac의 Yardlet을 업데이트하세요."
+          }
+        }
+      }
+    },
+    "Usage limit reached": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "사용 한도에 도달했습니다"
+          }
+        }
+      }
+    },
+    "Version": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "버전"
+          }
+        }
+      }
+    },
+    "Waiting for You": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "기다리는 작업"
+          }
+        }
+      }
+    },
+    "What should change?": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "무엇을 바꿀까요?"
+          }
+        }
+      }
+    },
+    "What should it do instead?": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대신 무엇을 할까요?"
+          }
+        }
+      }
+    },
+    "What should it do?": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "무엇을 할까요?"
+          }
+        }
+      }
+    },
+    "When to Send": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "보낼 때"
+          }
+        }
+      }
+    },
+    "Worked for %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 동안 작업함"
+          }
+        }
+      }
+    },
+    "Write a message first.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "먼저 메시지를 쓰세요."
+          }
+        }
+      }
+    },
+    "Yardlet can't use the camera.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yardlet이 카메라를 쓸 수 없습니다."
+          }
+        }
+      }
+    },
+    "Yardlet is locked": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yardlet이 잠겨 있습니다"
+          }
+        }
+      }
+    },
+    "Yardlet quit on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@에서 Yardlet이 종료되었습니다."
+          }
+        }
+      }
+    },
+    "You're looking at a demo Mac.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "둘러보기용 Mac을 보고 있습니다."
+          }
+        }
+      }
+    },
+    "Your Mac is busy with other connections. Try again in a moment.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac에 다른 연결이 많습니다. 잠시 뒤 다시 시도하세요."
+          }
+        }
+      }
+    },
+    "now": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "방금"
+          }
+        }
+      }
+    },
+    "yardlet-remote://pair?…": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "yardlet-remote://pair?…"
+          }
+        }
+      }
+    },
+    "−%lld": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "−%lld"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

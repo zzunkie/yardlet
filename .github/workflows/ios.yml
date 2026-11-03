@@ -1,0 +1,51 @@
+name: iOS app
+
+# Builds the phone app (Apps/iOS) for the iOS Simulator, unsigned: the app and its notification service extension
+# against YardletRemote, the package target they share with the Mac. It runs only when one of them, or what they
+# build from, changes, so a pull request that touches neither spends no macOS time on it.
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/ios.yml
+      - Apps/iOS/**
+      - Sources/YardletRemote/**
+      - Sources/YardletRemoteFixtureSupport/**
+      - Package.swift
+      - Package.resolved
+  pull_request:
+    paths:
+      - .github/workflows/ios.yml
+      - Apps/iOS/**
+      - Sources/YardletRemote/**
+      - Sources/YardletRemoteFixtureSupport/**
+      - Package.swift
+      - Package.resolved
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build for the iOS Simulator
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Show the toolchain
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i ios
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild -project Apps/iOS/Yardlet.xcodeproj -scheme Yardlet \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath .build/ios \
+            -onlyUsePackageVersionsFromResolvedFile CODE_SIGNING_ALLOWED=NO build
