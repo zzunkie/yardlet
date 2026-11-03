@@ -133,9 +133,11 @@ final class ConversationReopenGapTests: XCTestCase {
 /// conversation is laid out at the height its frame takes, and in the drawn window the space between
 /// the previous turn's last line and the latest request is the turn spacing, not an empty band.
 ///
+/// This whole-window render matrix belongs to the nightly rendering suite. The two small
+/// `ConversationReopenGapTests` above keep the original text-layout regression in the PR check.
 /// Images go to `.build/reopen-gap/`.
 @MainActor
-final class ConversationReopenGapWindowTests: XCTestCase {
+final class ConversationReopenGapRenderingTests: XCTestCase {
     typealias Window = ConversationBlankFrameTests.Window
 
     /// The most the drawn space above the latest request may be: the turns' spacing (15) and the
