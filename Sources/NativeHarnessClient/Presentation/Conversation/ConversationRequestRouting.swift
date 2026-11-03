@@ -82,15 +82,15 @@ extension ConversationRequest {
 enum ConversationRequestResponses {
     /// A question form: submit what was picked.
     static var questions: [ConversationRequestResponse] {
-        [.init(title: L10n.string("Submit answers"), role: .primary, route: .structured)]
+        [.init(LocalizedText("Submit answers"), role: .primary, route: .structured)]
     }
 
     /// A plan review: keep planning (with the reason typed on the card, or a plain deny), or
     /// approve.
     static var planReview: [ConversationRequestResponse] {
         [
-            .init(title: L10n.string("Keep planning"), role: .destructive, route: .structured),
-            .init(title: L10n.string("Approve plan"), role: .primary, route: .decision(.allow))
+            .init(LocalizedText("Keep planning"), role: .destructive, route: .structured),
+            .init(LocalizedText("Approve plan"), role: .primary, route: .decision(.allow))
         ]
     }
 
@@ -99,8 +99,8 @@ enum ConversationRequestResponses {
     static func plain(providerActions: [PermissionRequestAction]) -> [ConversationRequestResponse] {
         guard !providerActions.isEmpty else {
             return [
-                .init(title: L10n.string("Deny"), role: .destructive, route: .decision(.deny)),
-                .init(title: L10n.string("Allow"), role: .primary, route: .decision(.allow))
+                .init(LocalizedText("Deny"), role: .destructive, route: .decision(.deny)),
+                .init(LocalizedText("Allow"), role: .primary, route: .decision(.allow))
             ]
         }
         let prominent = PermissionActionPreference.preferred(from: providerActions, decision: .allow)
@@ -108,7 +108,7 @@ enum ConversationRequestResponses {
         return ordered.map { action in
             let role: ConversationRequestResponse.Role = action.decision == .deny ? .destructive
                 : action.id == prominent?.id ? .primary : .secondary
-            return .init(title: action.label, role: role, route: .providerAction(action))
+            return .init(title: action.label, role: role, route: .providerAction(action), text: action.labelText)
         }
     }
 }

@@ -159,11 +159,14 @@ enum RemoteConversationProjection {
             // The Mac draws a summary row, or a "Thinking" line while it streams or has a body.
             let summary = RemoteText.short(summary, RemoteText.detailLimit)
             guard summary != nil || isStreaming || detail?.isEmpty == false else { return nil }
-            activity(&result, "reasoning", isStreaming ? L10n.string("Thinking") : L10n.string("Thought process"), item.phase)
+            let verb = isStreaming ? L10n.string("Thinking") : L10n.string("Thought process")
+            activity(&result, "reasoning", verb, item.phase)
+            result.words = words([ConversationLineWords(verb: verb)])
             result.detail = summary
         case let .command(command):
             let words = ConversationLineWording.command(command, phase: item.phase, harness: harness)
             activity(&result, "command", words.map(\.text).joined(separator: ", "), item.phase)
+            result.words = self.words(words)
             if !ConversationLineWording.showsWholeCommand(command, words: words) {
                 result.detail = RemoteText.short(firstLine(command.command), RemoteText.detailLimit)
             }
@@ -175,6 +178,7 @@ enum RemoteConversationProjection {
             let verb = rows.first?.verb ?? L10n.string("Edited")
             activity(&result, "fileChange", [verb, rows.map(\.fileName).joined(separator: ", ")]
                 .filter { !$0.isEmpty }.joined(separator: " "), item.phase)
+            result.words = words([ConversationLineWords(verb: verb, trailing: rows.map(\.fileName).joined(separator: ", "))])
             let counts = rows.compactMap(\.lineCounts)
             if !counts.isEmpty {
                 result.additions = counts.reduce(0) { $0 + $1.additions }
@@ -186,6 +190,7 @@ enum RemoteConversationProjection {
         case let .tool(tool):
             let words = ConversationLineWording.tool(tool, phase: item.phase, harness: harness, workspaceURL: workspaceURL)
             activity(&result, "tool", words.text, item.phase)
+            result.words = self.words([words])
             result.detail = RemoteText.short(tool.errorMessage, RemoteText.detailLimit)
             if tool.isApproved { result.approved = true }
             if tool.output?.isEmpty == false || tool.diff != nil { result.hasDetail = true }
@@ -220,6 +225,16 @@ enum RemoteConversationProjection {
         item.role = role
         setText(&item, text, RemoteText.assistantLimit)
         if isStreaming { item.streaming = true }
+    }
+
+    /// A line's words as the Mac draws them (§6.4), each part capped as the title is.
+    private static func words(_ lines: [ConversationLineWords]) -> [RemoteLineWords]? {
+        let words = lines.prefix(8).map { line in
+            RemoteLineWords(leading: RemoteText.short(oneLine(line.leading), RemoteText.titleLimit),
+                            verb: RemoteText.capped(oneLine(line.verb), RemoteText.titleLimit).text,
+                            trailing: RemoteText.short(oneLine(line.trailing), RemoteText.titleLimit))
+        }
+        return words.isEmpty ? nil : words
     }
 
     private static func activity(_ item: inout RemoteItem, _ kind: String, _ title: String, _ phase: ConversationItemPhase) {
@@ -482,7 +497,8 @@ enum RemoteApprovalPolicy {
             case .destructive: "destructive"
             }
             return RemoteChoice(id: String(index), title: RemoteText.capped(response.title, RemoteText.titleLimit).text,
-                                role: role, standing: leavesStandingRule(response.route) ? true : nil)
+                                role: role, standing: leavesStandingRule(response.route) ? true : nil,
+                                text: response.text.map(RemoteLocalizedText.init))
         }
     }
 
@@ -587,5 +603,32 @@ enum RemoteApprovalPolicy {
     static func hasMoreOnMac(_ request: ConversationRequest, phoneAnswers: Int) -> Bool {
         guard request.state == .pending else { return false }
         return request.form != nil || request.unanswerableReason != nil || request.responses.count > phoneAnswers
+    }
+}
+
+extension RemoteLocalizedText {
+    /// Words the Mac made from its catalog, as a client reads them (§15.19).
+    init(_ text: LocalizedText) {
+        self.init(key: text.isVerbatim ? nil : text.key, text: text.isVerbatim ? text.key : nil,
+                  args: text.args.isEmpty ? nil : text.args.map(RemoteLocalizedText.init))
+    }
+}
+
+extension LocalizedText {
+    /// Words another Mac sent with their key; nil when they carry neither a key nor words.
+    init?(_ remote: RemoteLocalizedText) {
+        if let key = remote.key {
+            var args: [LocalizedText] = []
+            for arg in remote.args ?? [] {
+                guard let text = LocalizedText(arg) else { return nil }
+                args.append(text)
+            }
+            self.init(key)
+            self.args = args
+        } else if let text = remote.text {
+            self = .verbatim(text)
+        } else {
+            return nil
+        }
     }
 }

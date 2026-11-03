@@ -47,13 +47,13 @@ enum CodexMCPElicitation: Equatable, Sendable {
     /// declined or cancelled.
     var responses: [ConversationRequestResponse] {
         var responses: [ConversationRequestResponse] = [
-            .init(title: L10n.string("Decline"), role: .destructive,
+            .init(LocalizedText("Decline"), role: .destructive,
                   route: .codex(.mcpElicitation(action: .decline))),
-            .init(title: L10n.string("Cancel"), role: .secondary,
+            .init(LocalizedText("Cancel"), role: .secondary,
                   route: .codex(.mcpElicitation(action: .cancel)))
         ]
         if case let .form(form) = self {
-            responses.append(.init(title: L10n.string("Submit"), role: .primary,
+            responses.append(.init(LocalizedText("Submit"), role: .primary,
                                    route: form.fields.isEmpty
                                        ? .codex(.mcpElicitation(action: .accept, content: .object([:])))
                                        : .structured))

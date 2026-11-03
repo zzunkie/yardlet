@@ -372,6 +372,8 @@ public struct RemoteItem: Codable, Equatable, Sendable {
     public var approved: Bool?
     /// `itemDetail` has more for this line: output or diffs (v2, §15.8).
     public var hasDetail: Bool?
+    /// The line's words, one entry per line the Mac draws (§6.4); `title` is them joined.
+    public var words: [RemoteLineWords]?
     // suggested task (v2, §15.9)
     public var suggestionId: String?
     public var suggestionState: String?
@@ -538,12 +540,44 @@ public struct RemoteChoice: Codable, Equatable, Sendable {
     public var role: String
     /// It leaves a rule beyond this task; the phone asks once more.
     public var standing: Bool?
+    /// The catalog key `title` was made from, for a client that shows it in its own language (§15.19).
+    public var text: RemoteLocalizedText?
 
-    public init(id: String, title: String, role: String, standing: Bool? = nil) {
+    public init(id: String, title: String, role: String, standing: Bool? = nil, text: RemoteLocalizedText? = nil) {
         self.id = id
         self.title = title
         self.role = role
         self.standing = standing
+        self.text = text
+    }
+}
+
+/// Words given as the Mac's catalog key and the arguments filled into it, each again a key or words as they
+/// are (`text`), so a client with the same catalog shows them in its own language (§15.19).
+public struct RemoteLocalizedText: Codable, Equatable, Sendable {
+    public var key: String?
+    /// Words as they are (a path, a host name), when there is no key.
+    public var text: String?
+    public var args: [RemoteLocalizedText]?
+
+    public init(key: String? = nil, text: String? = nil, args: [RemoteLocalizedText]? = nil) {
+        self.key = key
+        self.text = text
+        self.args = args
+    }
+}
+
+/// One line's words as the Mac draws them (§6.4): what was done (`verb`, drawn muted) and what it was done
+/// to, before and after it, in the order the Mac's language puts them.
+public struct RemoteLineWords: Codable, Equatable, Sendable {
+    public var leading: String?
+    public var verb: String
+    public var trailing: String?
+
+    public init(leading: String? = nil, verb: String, trailing: String? = nil) {
+        self.leading = leading
+        self.verb = verb
+        self.trailing = trailing
     }
 }
 

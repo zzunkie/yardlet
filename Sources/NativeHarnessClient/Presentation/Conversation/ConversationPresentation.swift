@@ -374,9 +374,9 @@ struct ConversationTool: Equatable, Sendable {
         case review
         case hook
         case unknown(type: String?)
-        /// A line that came worded: what another Mac's Yardlet shows for the call, in its words
-        /// (docs/REMOTE_PROTOCOL.md §6.4).
-        case worded(String)
+        /// A line that came worded: what another Mac's Yardlet shows for the call, in its words, one entry per
+        /// line it draws (docs/REMOTE_PROTOCOL.md §6.4).
+        case worded([ConversationLineWords])
     }
 
     var kind: Kind
@@ -582,6 +582,16 @@ struct ConversationRequestResponse: Equatable, Sendable {
     var title: String
     var role: Role
     var route: ConversationRequestRoute
+    /// The catalog key `title` was made from, which another Mac's Yardlet shows in its own language
+    /// (docs/REMOTE_PROTOCOL.md §15.19); nil for a provider's own words.
+    var text: LocalizedText? = nil
+}
+
+extension ConversationRequestResponse {
+    /// An answer Yardlet words itself.
+    init(_ text: LocalizedText, role: Role, route: ConversationRequestRoute) {
+        self.init(title: text.resolved, role: role, route: route, text: text)
+    }
 }
 
 /// How an answer reaches the provider.

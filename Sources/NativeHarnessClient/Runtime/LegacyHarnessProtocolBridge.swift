@@ -1802,7 +1802,8 @@ actor LegacyHarnessProtocolBridge {
                 label: action.label,
                 behavior: action.decision == .allow ? .allow : .deny,
                 role: role,
-                intent: action.kind
+                intent: action.kind,
+                labelText: action.labelText
             )
         }
     }

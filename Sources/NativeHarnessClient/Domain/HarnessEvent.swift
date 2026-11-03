@@ -18,6 +18,22 @@ struct PermissionRequestAction: Codable, Equatable, Sendable {
     let label: String
     let decision: PermissionDecision
     let kind: String?
+    /// The catalog key `label` was made from, when Yardlet worded it rather than the provider; nil for a
+    /// provider's own label and for actions saved before it existed.
+    var labelText: LocalizedText? = nil
+
+    init(id: String, label: String, decision: PermissionDecision, kind: String?) {
+        self.id = id
+        self.label = label
+        self.decision = decision
+        self.kind = kind
+    }
+
+    /// An action Yardlet words itself.
+    init(id: String, text: LocalizedText, decision: PermissionDecision, kind: String?) {
+        self.init(id: id, label: text.resolved, decision: decision, kind: kind)
+        labelText = text
+    }
 }
 
 /// One choice the provider listed for a question it asked. Yardlet renders these and never

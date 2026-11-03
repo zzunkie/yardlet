@@ -385,6 +385,9 @@ struct HarnessProtocolPermissionAction: Codable, Equatable, Sendable {
     let behavior: HarnessProtocolPermissionBehavior
     let role: HarnessProtocolPermissionActionRole
     let intent: String?
+    /// The catalog key Yardlet worded `label` from (`PermissionRequestAction.labelText`); absent for a
+    /// provider's own label.
+    var labelText: LocalizedText? = nil
 }
 
 struct HarnessProtocolPermissionRequest: Codable, Equatable, Sendable {

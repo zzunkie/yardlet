@@ -331,8 +331,8 @@ enum ConversationLineWording {
         if harness == .claudeCode, let words = claudeTool(tool, phase: phase, localize: localize) {
             return words
         }
-        // Already worded where it came from: shown as it is, as what the line is about.
-        if case let .worded(line) = tool.kind { return ConversationLineWords(verb: "", trailing: line) }
+        // Already worded where it came from: shown as it is.
+        if case let .worded(lines) = tool.kind { return lines.first ?? ConversationLineWords(verb: "") }
         let verb = tool.kind.label
         let subject = tool.name.isEmpty || tool.name == verb ? "" : relative(tool.name, to: workspaceURL)
         switch tool.kind {
@@ -563,6 +563,12 @@ extension CodexNoticeItem {
 }
 
 extension ConversationTool.Kind {
+    /// A worded line's lines, as they came.
+    var wordedLines: [ConversationLineWords]? {
+        if case let .worded(lines) = self { return lines }
+        return nil
+    }
+
     /// The badge beside a call's title: the provider's own tool kind, or what Codex calls the item.
     var label: String {
         switch self {
@@ -575,7 +581,7 @@ extension ConversationTool.Kind {
         case .review: L10n.string("Review")
         case .hook: L10n.string("Hook")
         case let .unknown(type): type ?? L10n.string("Unknown item")
-        case let .worded(line): line
+        case let .worded(lines): lines.map(\.text).joined(separator: ", ")
         }
     }
 }

@@ -193,14 +193,14 @@ enum ClaudePermissionSuggestions {
         [
             PermissionRequestAction(
                 id: ActionID.allow,
-                label: L10n.string("Allow"),
+                text: LocalizedText("Allow"),
                 decision: .allow,
                 kind: "allow_once"
             ),
             offer.action,
             PermissionRequestAction(
                 id: ActionID.deny,
-                label: L10n.string("Deny"),
+                text: LocalizedText("Deny"),
                 decision: .deny,
                 kind: "reject_once"
             )
@@ -250,9 +250,9 @@ enum ClaudePermissionSuggestions {
         if settings.isEmpty {
             action = PermissionRequestAction(
                 id: ActionID.allowForSession,
-                label: sessionMode.flatMap { modeNames[$0] }.map {
-                    L10n.format("Allow and switch to %@ mode for this session", L10n.string($0))
-                } ?? L10n.string("Allow for session"),
+                text: sessionMode.flatMap { modeNames[$0] }.map {
+                    LocalizedText("Allow and switch to %@ mode for this session", LocalizedText($0))
+                } ?? LocalizedText("Allow for session"),
                 decision: .allow,
                 kind: ActionID.allowForSession
             )
@@ -260,12 +260,13 @@ enum ClaudePermissionSuggestions {
             // A rule kept in a file and a mode switch kept for the session are two scopes one
             // label cannot name; the native dialog never offers them as one row either.
             guard sessionMode == nil else { return nil }
-            let places = settings.map(placeName).joined(separator: ", ")
+            let places = settings.map(placeName)
+            // The places as one argument: each a key, or a file name as it is, joined in the reader's language.
+            let joined = places.count == 1 ? places[0] : LocalizedText.verbatim(places.map(\.resolved).joined(separator: ", "))
             action = PermissionRequestAction(
                 id: ActionID.allowAlways,
-                label: settings.contains("userSettings")
-                    ? L10n.format("Always allow in every project (saved to %@)", places)
-                    : L10n.format("Always allow in this project (saved to %@)", places),
+                text: LocalizedText(settings.contains("userSettings") ? "Always allow in every project (saved to %@)"
+                                        : "Always allow in this project (saved to %@)", joined),
                 decision: .allow,
                 kind: ActionID.allowAlways
             )
@@ -275,11 +276,11 @@ enum ClaudePermissionSuggestions {
 
     /// Where each settings destination is kept, in the words the card shows. The project files are
     /// relative to the task's project; user settings follow the account's Claude Code home.
-    private static func placeName(_ destination: String) -> String {
+    private static func placeName(_ destination: String) -> LocalizedText {
         switch destination {
-        case "projectSettings": L10n.string("shared .claude/settings.json")
-        case "userSettings": L10n.string("Claude Code user settings")
-        default: ".claude/settings.local.json"
+        case "projectSettings": LocalizedText("shared .claude/settings.json")
+        case "userSettings": LocalizedText("Claude Code user settings")
+        default: .verbatim(".claude/settings.local.json")
         }
     }
 }

@@ -46,8 +46,8 @@ enum CodexRequestResponseProjection {
             command: command(approval.raw),
             state: state,
             responses: state == .pending ? [
-                .init(title: L10n.string("Deny"), role: .destructive, route: .decision(.deny)),
-                .init(title: L10n.string("Allow"), role: .primary, route: .decision(.allow))
+                .init(LocalizedText("Deny"), role: .destructive, route: .decision(.deny)),
+                .init(LocalizedText("Allow"), role: .primary, route: .decision(.allow))
             ] : [],
             toolCallID: approval.itemID,
             method: approval.method,
@@ -59,49 +59,49 @@ enum CodexRequestResponseProjection {
     /// first and the plain allow last and prominent. Each value is what the Codex request card
     /// sent for the same button.
     static func responses(for request: CodexServerRequestState) -> [ConversationRequestResponse] {
-        let allow = L10n.string("Allow")
-        let allowForSession = L10n.string("Allow for session")
-        let deny = L10n.string("Deny")
+        let allow = LocalizedText("Allow")
+        let allowForSession = LocalizedText("Allow for session")
+        let deny = LocalizedText("Deny")
         switch request.kind {
         case .commandExecutionApproval:
             if let offered = CodexCommandApprovalOptions(params: request.params) { return offered.responses }
             return [
-                .init(title: deny, role: .destructive, route: .codex(.command(.decline))),
-                .init(title: allowForSession, role: .secondary, route: .codex(.command(.acceptForSession))),
-                .init(title: allow, role: .primary, route: .codex(.command(.accept)))
+                .init(deny, role: .destructive, route: .codex(.command(.decline))),
+                .init(allowForSession, role: .secondary, route: .codex(.command(.acceptForSession))),
+                .init(allow, role: .primary, route: .codex(.command(.accept)))
             ]
         case .fileChangeApproval:
             return [
-                .init(title: deny, role: .destructive, route: .codex(.fileChange(.decline))),
-                .init(title: allowForSession, role: .secondary, route: .codex(.fileChange(.acceptForSession))),
-                .init(title: allow, role: .primary, route: .codex(.fileChange(.accept)))
+                .init(deny, role: .destructive, route: .codex(.fileChange(.decline))),
+                .init(allowForSession, role: .secondary, route: .codex(.fileChange(.acceptForSession))),
+                .init(allow, role: .primary, route: .codex(.fileChange(.accept)))
             ]
         case .permissionsApproval:
             let requested = request.params?["permissions"] ?? .object([:])
             return [
-                .init(title: deny, role: .destructive,
+                .init(deny, role: .destructive,
                       route: .codex(.permissions(permissions: .object([:]), scope: .turn, strictAutoReview: nil))),
-                .init(title: allowForSession, role: .secondary,
+                .init(allowForSession, role: .secondary,
                       route: .codex(.permissions(permissions: requested, scope: .session, strictAutoReview: nil))),
-                .init(title: allow, role: .primary,
+                .init(allow, role: .primary,
                       route: .codex(.permissions(permissions: requested, scope: .turn, strictAutoReview: nil)))
             ]
         case .applyPatchApproval, .execCommandApproval:
             return [
-                .init(title: deny, role: .destructive,
+                .init(deny, role: .destructive,
                       route: .codex(.legacyReview(.denied(rejection: L10n.string("Denied"))))),
-                .init(title: allowForSession, role: .secondary, route: .codex(.legacyReview(.approvedForSession))),
-                .init(title: allow, role: .primary, route: .codex(.legacyReview(.approved)))
+                .init(allowForSession, role: .secondary, route: .codex(.legacyReview(.approvedForSession))),
+                .init(allow, role: .primary, route: .codex(.legacyReview(.approved)))
             ]
         case .toolUserInput:
-            return [.init(title: L10n.string("Send answer"), role: .primary, route: .structured)]
+            return [.init(LocalizedText("Send answer"), role: .primary, route: .structured)]
         case .mcpElicitation:
             if let approval = CodexMCPToolApproval(params: request.params) { return approval.responses }
             return CodexMCPElicitation(params: request.params).responses
         case .dynamicToolCall:
             return [
-                .init(title: deny, role: .destructive, route: .codex(.dynamicToolCall(contentItems: [], success: false))),
-                .init(title: allow, role: .primary, route: .codex(.dynamicToolCall(contentItems: [], success: true)))
+                .init(deny, role: .destructive, route: .codex(.dynamicToolCall(contentItems: [], success: false))),
+                .init(allow, role: .primary, route: .codex(.dynamicToolCall(contentItems: [], success: true)))
             ]
         case .authenticationRefresh, .attestation, .currentTime, .unknown:
             return []
@@ -246,22 +246,22 @@ struct CodexMCPToolApproval: Equatable {
 
     var responses: [ConversationRequestResponse] {
         var responses: [ConversationRequestResponse] = [
-            .init(title: L10n.string("Deny"), role: .destructive, route: .codex(.mcpElicitation(action: .decline)))
+            .init(LocalizedText("Deny"), role: .destructive, route: .codex(.mcpElicitation(action: .decline)))
         ]
         if persistModes.contains("always") {
-            responses.append(.init(title: L10n.string("Always allow"), role: .secondary, route: .codex(Self.accept("always"))))
+            responses.append(.init(LocalizedText("Always allow"), role: .secondary, route: .codex(Self.accept("always"))))
         }
         let session = persistModes.contains("session") ? "session" : nil
         if isComputerUse {
-            responses.append(.init(title: L10n.string("Allow this conversation"), role: .primary,
+            responses.append(.init(LocalizedText("Allow this conversation"), role: .primary,
                                    route: .codex(Self.accept(session))))
             return responses
         }
         if let session {
-            responses.append(.init(title: L10n.string("Allow this conversation"), role: .secondary,
+            responses.append(.init(LocalizedText("Allow this conversation"), role: .secondary,
                                    route: .codex(Self.accept(session))))
         }
-        responses.append(.init(title: L10n.string("Allow once"), role: .primary, route: .codex(Self.accept(nil))))
+        responses.append(.init(LocalizedText("Allow once"), role: .primary, route: .codex(Self.accept(nil))))
         return responses
     }
 
@@ -321,7 +321,7 @@ struct CodexCommandApprovalOptions: Equatable {
         let allows = decisions.compactMap { decision in Self.breadth(decision).map { (decision, $0) } }
             .sorted { $0.1 < $1.1 }.map(\.0)
         func response(_ decision: CodexCommandApprovalDecision, _ role: ConversationRequestResponse.Role) -> ConversationRequestResponse {
-            .init(title: Self.title(decision), role: role, route: .codex(.command(decision)))
+            .init(Self.text(decision), role: role, route: .codex(.command(decision)))
         }
         return denials.map { response($0, .destructive) }
             + allows.dropFirst().map { response($0, .secondary) }
@@ -341,15 +341,20 @@ struct CodexCommandApprovalOptions: Equatable {
     }
 
     static func title(_ decision: CodexCommandApprovalDecision) -> String {
+        text(decision).resolved
+    }
+
+    static func text(_ decision: CodexCommandApprovalDecision) -> LocalizedText {
         switch decision {
-        case .accept: L10n.string("Allow")
-        case .acceptForSession: L10n.string("Allow for session")
+        case .accept: LocalizedText("Allow")
+        case .acceptForSession: LocalizedText("Allow for session")
         case let .acceptWithExecpolicyAmendment(prefix):
-            L10n.format("Always allow commands starting with “%@”", prefix.joined(separator: " "))
-        case let .applyNetworkPolicyAmendment(host, .allow): L10n.format("Always allow %@", host)
-        case let .applyNetworkPolicyAmendment(host, .deny): L10n.format("Always block %@", host)
-        case .decline: L10n.string("Deny")
-        case .cancel: L10n.string("Deny and stop")
+            LocalizedText("Always allow commands starting with “%@”", .verbatim(prefix.joined(separator: " ")))
+        case let .applyNetworkPolicyAmendment(host, .allow): LocalizedText("Always allow %@", .verbatim(host))
+        case let .applyNetworkPolicyAmendment(host, .deny): LocalizedText("Always block %@", .verbatim(host))
+        case .decline: LocalizedText("Deny")
+        case .cancel: LocalizedText("Deny and stop")
         }
     }
+
 }

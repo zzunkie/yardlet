@@ -146,6 +146,56 @@ final class RemoteBridgeTests: XCTestCase {
             harness: .claudeCode, status: .waitingForApproval, latestTurnIsComplete: false)
     }
 
+    /// A card's answers go with the catalog keys they were made from and a line with its words, so another
+    /// Mac's Yardlet shows them in its own language and draws the verb as the Mac does (§6.4, §15.19).
+    func testAnswersCarryTheirKeysAndLinesTheirWords() throws {
+        let offer = ClaudePermissionSuggestionOffer(
+            action: PermissionRequestAction(id: ClaudePermissionSuggestions.ActionID.allowAlways,
+                                            text: LocalizedText("Always allow in this project (saved to %@)",
+                                                                .verbatim(".claude/settings.local.json")),
+                                            decision: .allow, kind: ClaudePermissionSuggestions.ActionID.allowAlways),
+            updates: [])
+        let request = PermissionRequest(id: "bash-1", title: "Bash", detail: nil, command: "swift test",
+                                        actions: ClaudePermissionSuggestions.actions(for: offer))
+        let entries = [
+            TranscriptEntry(content: .user(text: "Run the tests")),
+            TranscriptEntry(content: .activity(HarnessActivity(id: "toolu-read", kind: "Read", title: "Read",
+                                                                input: #"{"file_path":"/tmp/remote-fixture/Parser.swift"}"#),
+                                               state: .completed)),
+            TranscriptEntry(content: .permission(request, state: .pending))
+        ]
+        let presentation = TranscriptConversationProjection.presentation(
+            from: entries, harness: .claudeCode, status: .waitingForApproval, latestTurnIsComplete: false)
+        let turn = try XCTUnwrap(RemoteConversationProjection.conversation(presentation, workspaceURL: URL(filePath: "/tmp/remote-fixture"))
+            .turns.last)
+        let pending = try XCTUnwrap(turn.items.last { $0.kind == .approval })
+        let choices = try XCTUnwrap(pending.choices)
+        XCTAssertEqual(choices.map { $0.text?.key }, ["Deny", "Allow", "Always allow in this project (saved to %@)"])
+        XCTAssertEqual(choices.last?.text?.args, [RemoteLocalizedText(text: ".claude/settings.local.json")])
+        let read = try XCTUnwrap(turn.items.first { $0.kind == .activity })
+        let words = try XCTUnwrap(read.words?.first)
+        XCTAssertEqual(words.verb, L10n.string("claude.read.done"))
+        XCTAssertEqual(words.trailing, "Parser.swift")
+        XCTAssertEqual(read.title, ConversationLineWords(leading: words.leading ?? "", verb: words.verb,
+                                                         trailing: words.trailing ?? "").text)
+
+        // A client shows a key in its own language, here a Korean one reading an English Mac's answer, and the
+        // Mac's words where its catalog lacks the key or the key does not take the arguments sent.
+        let korean: (String) -> String? = { key in
+            let value = L10n.string(key, languageCode: "ko")
+            return value == key ? nil : value
+        }
+        var english = try XCTUnwrap(choices.last)
+        english.title = "Always allow in this project (saved to .claude/settings.local.json)"
+        XCTAssertEqual(RemoteTurnProjection.title(of: english, lookup: korean), "이 프로젝트에서 항상 허용 (.claude/settings.local.json에 저장)")
+        english.text = RemoteLocalizedText(key: "A key no catalog has")
+        XCTAssertEqual(RemoteTurnProjection.title(of: english, lookup: korean), english.title)
+        english.text = RemoteLocalizedText(key: "Always allow in this project (saved to %@)")
+        XCTAssertEqual(RemoteTurnProjection.title(of: english, lookup: korean), english.title, "One argument short")
+        XCTAssertEqual(LocalizedText.placeholderCount("Exit code %lld"), -1)
+        XCTAssertEqual(LocalizedText.placeholderCount("%2$@ and %1$@, 100%%"), 2)
+    }
+
     func testAPlainApprovalOffersAllowOnceTheSessionsAllowAndDenyAndAStandingRuleStaysOnTheMac() throws {
         func pending(_ actions: [PermissionRequestAction]) -> ConversationRequest? {
             let request = PermissionRequest(id: "r", title: "Run", detail: nil, command: "ls", actions: actions)

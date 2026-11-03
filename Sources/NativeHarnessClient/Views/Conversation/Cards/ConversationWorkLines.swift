@@ -514,7 +514,7 @@ struct ConversationWorkLine: View, Equatable {
         let images = tool.previewImages
         let isLoading = tool.loadsDetailOnOpen && tool.output == nil && tool.diffs.isEmpty && tool.diff == nil
         return ConversationStatusLine(
-            words: [ConversationLineWording.tool(tool, phase: item.phase, harness: harness, workspaceURL: workspaceURL)],
+            words: tool.kind.wordedLines ?? [ConversationLineWording.tool(tool, phase: item.phase, harness: harness, workspaceURL: workspaceURL)],
             phase: item.phase,
             hasDetail: !texts.isEmpty || tool.mcpResult?.isEmpty == false || tool.diff != nil || !tool.diffs.isEmpty
                 || !tool.images.isEmpty || tool.loadsDetailOnOpen,

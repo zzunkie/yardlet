@@ -24,6 +24,11 @@ enum L10n {
         activeBundle.localizedString(forKey: key, value: key, table: nil)
     }
 
+    /// The key's words, or `fallback` when the catalog does not have the key.
+    static func string(_ key: String, fallback: String) -> String {
+        activeBundle.localizedString(forKey: key, value: fallback, table: nil)
+    }
+
     static func string(_ key: String, languageCode: String) -> String {
         guard let path = activeBundle.path(forResource: languageCode, ofType: "lproj"),
               let localizedBundle = Bundle(path: path) else {

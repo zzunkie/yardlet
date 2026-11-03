@@ -484,13 +484,15 @@ actor YHPCompatibilityAdapter: VersionedHarnessAdapter {
             permissionActions[localSessionID] = sessionActions
             let outwardActions = isCompatibilityFallback(permission.actions)
                 ? []
-                : permission.actions.map { action in
-                    PermissionRequestAction(
+                : permission.actions.map { action -> PermissionRequestAction in
+                    var outward = PermissionRequestAction(
                         id: action.id,
                         label: action.label,
                         decision: action.behavior == .allow ? .allow : .deny,
                         kind: action.intent
                     )
+                    outward.labelText = action.labelText
+                    return outward
                 }
             return .permissionRequested(PermissionRequest(
                 id: permission.id,

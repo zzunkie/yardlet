@@ -394,6 +394,11 @@ Unknown kinds: skip them. Text fields are capped (`truncated: true` when cut).
 - `activity`: `command`, `fileChange`, `tool`, `subagent`, `reasoning`, `taskSuggestion`, `other`.
 - `title` (≤ 300 characters): the line the Mac shows, in the provider app's words and the Mac's
   language ("Read Parser.swift", "Edited Package.swift", "Searched TODO", "Thinking").
+- `words` (optional, since 2026-11-03): the same line in parts, one entry per line the Mac draws (a command the
+  Mac reads as several, such as two files read in one `&&`): `{"leading": "…", "verb": "Read", "trailing":
+  "Parser.swift"}`, `leading` and `trailing` absent when empty, each part ≤ 300 characters. The Mac draws `verb`
+  muted and the rest plain, in the order its language puts them; `title` is the parts joined with spaces, and the
+  entries joined with ", ". A client that draws lines as the Mac does reads `words`; any other reads `title`.
 - `detail` (≤ 500 characters, optional): the command when the title does not show it whole, a
   reasoning summary, an error message, a suggested task's summary.
 - `status`: `running`, `completed`, `failed`, `stopped`.
@@ -561,6 +566,7 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
 - 2026-11-02, v2 only: scheduled tasks, Run now, Pause and Resume, and their change event (§15.21); a task's outputs
   and the files in its folders (§15.22).
 - 2026-11-03: `presence` and held pushes (§16, §18).
+- 2026-11-03: a line's words in parts, `words` (§6.4), and a choice's catalog key, `text` (§15.19).
 - 2026-11-02, a rule restated: `parentTaskId` (§4.1) is the task the Mac's sidebar draws the task under, so a task
   whose parent is in another list, pinned apart or in a split view comes without one, as the sidebar lists it.
   Before, it was the task it was started from whenever that task was listed anywhere.
@@ -1135,6 +1141,20 @@ shows, instead of the few §4.4 and §15.13 name.
   `destructive` (a denial). `standing: true`: the answer leaves a rule beyond this task (a settings file, a policy,
   an MCP tool allowed for good, an exec or network policy amendment). The phone asks once more before it sends one
   (REMOTE_V2_DESIGN 5.3). The ids name the answers of this request only.
+- Since 2026-11-03 a choice Yardlet worded itself also carries `text`, the Mac's catalog key `title` was made from
+  and the arguments filled into it, each again a key or words as they are:
+
+  ```json
+  {"id": "2", "title": "Always allow in this project (saved to .claude/settings.local.json)", "role": "secondary",
+   "standing": true,
+   "text": {"key": "Always allow in this project (saved to %@)", "args": [{"text": ".claude/settings.local.json"}]}}
+  ```
+
+  A key is the English text of Yardlet's string catalog (`Localizable.strings`); `%@` and `%1$@` take the
+  arguments in order. A client whose own catalog has the key shows it in its language, filling the arguments the
+  same way; otherwise, or when the key's format does not take exactly the arguments sent, it shows `title`. A
+  provider's own words (an ACP agent's option names) carry no `text`. An Android client can keep its own table from
+  these keys to its strings, and fall back to `title` for any key it lacks.
 - Answering:
 
   ```json
@@ -1372,6 +1392,9 @@ link from §12 (copied on the host, pasted or opened as a `yardlet-remote` link;
 chooses Connect), and each paired host opens in a window of its own. The host lists it among its devices with the
 `platform` `macos` it sends in message 1, and removes it as it removes a phone.
 
+- **In its own words:** it draws a line's `words` as the Mac does, its verb muted (§6.4), and a choice's `text` in its
+  own language when its catalog has the key (§15.19), so two Macs set to different languages each read the card in
+  their own.
 - **What it does:** what a phone does (§4–§6, §15), on a larger screen: the host's sidebar and its marks, a task's
   conversation in Yardlet's own timeline, a line's output and diffs when it opens (§15.8), every answer the host's
   card gives (§15.19; one that leaves a rule behind is asked about once more), questions and plan reviews, the

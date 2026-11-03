@@ -117,7 +117,10 @@ enum RemoteTurnProjection {
     /// opened.
     private static func line(_ item: RemoteItem, details: [String: RemoteItemDetail]) -> ConversationItem {
         let title = item.kind == .notice ? item.text ?? "" : item.title ?? ""
-        var tool = ConversationTool(kind: .worded(title), name: "", status: item.status)
+        // The host's words, its verb drawn muted as here (§6.4); a host that sends none gives the whole title.
+        let lines = item.words.map { $0.map { ConversationLineWords(leading: $0.leading ?? "", verb: $0.verb, trailing: $0.trailing ?? "") } }
+        var tool = ConversationTool(kind: .worded(lines ?? [ConversationLineWords(verb: "", trailing: title)]), name: "",
+                                    status: item.status)
         tool.isApproved = item.approved == true
         tool.detail = item.detail
         if let additions = item.additions, let deletions = item.deletions {
@@ -215,13 +218,13 @@ enum RemoteTurnProjection {
         default:
             if item.formFields == nil, let choices = item.choices, !choices.isEmpty {
                 let actions = choices.map { choice in
-                    PermissionRequestAction(id: Route.choice + choice.id, label: choice.title,
+                    PermissionRequestAction(id: Route.choice + choice.id, label: title(of: choice),
                                             decision: choice.role == "destructive" ? .deny : .allow,
                                             kind: choice.standing == true ? Route.standing : nil)
                 }
                 request.providerActions = actions
                 request.responses = zip(choices, actions).map { choice, action in
-                    .init(title: choice.title, role: role(choice.role), route: .providerAction(action))
+                    .init(title: action.label, role: role(choice.role), route: .providerAction(action))
                 }
             } else if item.formFields == nil, item.choices == nil {
                 // A host from before every answer of its card was offered (§15.13).
@@ -239,6 +242,12 @@ enum RemoteTurnProjection {
             request.unanswerableReason = item.macNote ?? L10n.format("Answer this on %@.", hostName)
         }
         return request
+    }
+
+    /// An answer in this Mac's language when the host sent the key it was made from and this Mac's catalog has
+    /// it (§15.19); otherwise the host's own words.
+    static func title(of choice: RemoteChoice, lookup: (String) -> String? = L10n.lookup) -> String {
+        choice.text.flatMap(LocalizedText.init).flatMap { $0.resolved(lookup) } ?? choice.title
     }
 
     private static func question(_ step: RemoteQuestionStep) -> PermissionQuestion {
