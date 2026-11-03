@@ -16,7 +16,7 @@ struct PersonalAgentIdentity: Hashable, Codable, Sendable {
     let roomID: String
 }
 
-struct PersonalAgent: Identifiable, Equatable, Sendable {
+struct PersonalAgent: Identifiable, Equatable, Sendable, Codable {
     let id: PersonalAgentIdentity
     let name: String
     let rootThreadID: String?
@@ -84,13 +84,32 @@ enum PersonalAgentSpriteLayout {
 
 /// A dot's static picture as its profile names it. The location is a signed provider URL: only the
 /// transport reads it, and it never appears in a description, a log or a saved file.
-struct PersonalAgentAvatar: Equatable, Sendable, CustomStringConvertible, CustomDebugStringConvertible {
+struct PersonalAgentAvatar: Equatable, Sendable, Codable, CustomStringConvertible, CustomDebugStringConvertible {
     let location: String
     /// What tells one picture from the next: its snapshot's content hash when the profile has one.
     let version: String
 
+    init(location: String, version: String) {
+        self.location = location
+        self.version = version
+    }
+
     var description: String { "PersonalAgentAvatar(\(version))" }
     var debugDescription: String { description }
+
+    private enum CodingKeys: String, CodingKey { case version }
+
+    /// Saved as its version alone: a picture read back has no location, and only a profile read
+    /// from the provider gives one to read it from.
+    init(from decoder: any Decoder) throws {
+        location = ""
+        version = try decoder.container(keyedBy: CodingKeys.self).decode(String.self, forKey: .version)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+    }
 }
 
 /// A dot's task in its Activity: running first, then by when it last changed.
@@ -137,8 +156,8 @@ struct PersonalAgentComputer: Identifiable, Equatable, Sendable {
     let availability: Availability
 }
 
-struct PersonalAgentMessage: Identifiable, Equatable, Sendable {
-    enum Author: Equatable, Sendable { case person, agent, other(String), unknown }
+struct PersonalAgentMessage: Identifiable, Equatable, Sendable, Codable {
+    enum Author: Equatable, Sendable, Codable { case person, agent, other(String), unknown }
     let id: String
     let author: Author
     let text: String
@@ -176,7 +195,7 @@ struct PersonalAgentMessage: Identifiable, Equatable, Sendable {
 }
 
 /// The quoted parent a reply carries, one level deep.
-struct PersonalAgentReplyPreview: Equatable, Sendable {
+struct PersonalAgentReplyPreview: Equatable, Sendable, Codable {
     static let characterLimit = 280
     let messageID: String
     let text: String
@@ -191,7 +210,7 @@ struct PersonalAgentReplyTarget: Codable, Hashable, Sendable {
     let rootID: String
 }
 
-struct PersonalAgentAttachment: Equatable, Sendable {
+struct PersonalAgentAttachment: Equatable, Sendable, Codable {
     let fileID: String?
     let name: String
     let type: String
@@ -239,7 +258,7 @@ struct PersonalAgentAttachment: Equatable, Sendable {
 }
 
 /// A picture's width and height in pixels, both positive.
-struct PersonalAgentPixelSize: Equatable, Sendable {
+struct PersonalAgentPixelSize: Equatable, Sendable, Codable {
     let width: Int
     let height: Int
 

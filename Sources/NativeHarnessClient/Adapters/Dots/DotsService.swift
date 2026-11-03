@@ -92,6 +92,9 @@ actor DotsService: PersonalAgentClient {
 
     func agents() async throws -> [PersonalAgent] {
         let auth = try await credentials()
+        // The primary selection does not depend on the list, so it is read beside the list's pages, which
+        // follow each other. A failure of either fails the read, the list's first, as when they ran in turn.
+        async let primaryRead = read("/tbo/primary")
         var items: [JSONValue] = [], cursor: String?, seen = Set<String>()
         repeat {
             var query = [URLQueryItem(name: "limit", value: "25"), URLQueryItem(name: "include_room_preview", value: "false")]
@@ -103,7 +106,7 @@ actor DotsService: PersonalAgentClient {
             if let cursor, !seen.insert(cursor).inserted { throw PersonalAgentFailure.invalidResponse }
             guard items.count <= 1_000 else { throw PersonalAgentFailure.invalidResponse }
         } while cursor != nil
-        let primary = try await read("/tbo/primary")
+        let primary = try await primaryRead
         let agents = try DotsProjection.agents(catalog: .object(["items": .array(items)]), primary: primary,
                                                accountID: auth.identity.account, userID: auth.identity.user)
         profileRoots = Dictionary(agents.compactMap { agent in agent.rootThreadID.map { (agent.id, $0) } },
@@ -117,10 +120,13 @@ actor DotsService: PersonalAgentClient {
             throw PersonalAgentFailure.accountChanged
         }
         let path = "/messaging/rooms/" + component(agent.id.roomID)
-        let room = try await read(path)
         var query = [URLQueryItem(name: "limit", value: "20")]
         if let before { query.append(.init(name: "before", value: before)) }
-        let page = try await read(path + "/messages", query: query)
+        // The room and its page are read side by side and checked together, the room's failure first.
+        async let roomRead = read(path)
+        async let pageRead = read(path + "/messages", query: query)
+        let room = try await roomRead
+        let page = try await pageRead
         let projected = try DotsProjection.messages(page, room: room, agent: agent)
         if let before, projected.before == before {
             return .init(messages: projected.messages, before: nil, roomLifecycle: projected.roomLifecycle)
@@ -134,10 +140,12 @@ actor DotsService: PersonalAgentClient {
         guard !rootID.isEmpty else { throw PersonalAgentFailure.invalidResponse }
         try await verify(agent)
         let path = "/messaging/rooms/" + component(agent.id.roomID)
-        let room = try await read(path)
         var query = [URLQueryItem(name: "limit", value: "20"), URLQueryItem(name: "reply_root_message_id", value: rootID)]
         if let before { query.append(.init(name: "before", value: before)) }
-        let page = try await read(path + "/messages", query: query)
+        async let roomRead = read(path)
+        async let pageRead = read(path + "/messages", query: query)
+        let room = try await roomRead
+        let page = try await pageRead
         let projected = try DotsProjection.messages(page, room: room, agent: agent, thread: true)
         if let before, projected.before == before {
             return .init(messages: projected.messages, before: nil, roomLifecycle: projected.roomLifecycle)

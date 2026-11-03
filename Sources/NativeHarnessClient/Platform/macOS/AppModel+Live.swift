@@ -80,6 +80,7 @@ extension AppModel {
             )
             model.accountAssignments = AccountAssignmentLog(
                 fileURL: storageRootURL.appending(path: AccountAssignmentLog.fileName))
+            model.personalAgentReadings = PersonalAgentReadings(cache: PersonalAgentCacheFiles.live)
             return model
         } catch {
             return AppModel(

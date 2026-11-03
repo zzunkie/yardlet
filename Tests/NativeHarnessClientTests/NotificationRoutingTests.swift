@@ -133,8 +133,22 @@ final class NotificationRoutingTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("PersonalAgentNotifications")))
         XCTAssertTrue(PersonalAgentNotificationPreference.isOn(in: defaults), "On by default")
         defaults.set("codex:home", forKey: PersonalAgentNotificationPreference.accountKey)
+        // What was kept of the dots in the user's Caches goes with the setting, and nothing more is kept.
+        let caches = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: caches) }
+        let kept = caches.appending(path: "personal-agents")
+        let readings = PersonalAgentReadings(cache: PersonalAgentCacheFiles(directory: kept))
+        model.personalAgentReadings = readings
+        readings.noteAgents([dot], source: "codex:home|home")
+        await readings.settle()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: kept.path))
         defaults.set(false, forKey: PersonalAgentNotificationPreference.key)
         model.followPersonalAgents(defaults: defaults, force: true)
+        await readings.settle()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: caches.path), "Turned off, nothing of the dots stays")
+        readings.noteAgents([dot], source: "codex:home|home")
+        await readings.settle()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: caches.path), "Off, nothing is written")
         XCTAssertNil(defaults.object(forKey: PersonalAgentNotificationPreference.accountKey))
         XCTAssertNil(model.personalAgentWatch.source)
         // A window that reads dots while it is off records nothing.

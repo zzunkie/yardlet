@@ -33,9 +33,10 @@ that cannot be read and a sheet of another size leave the still snapshot; the ne
 connection reads the pet and its sheet again.
 
 Pictures and sheets are read without the account credential from the provider's
-signed storage, bounded in size, kept in memory only and dropped when the account
-changes; until a picture arrives, or if it cannot be read, the dot's initial stands
-in.
+signed storage and bounded in size. Their bytes are kept by version with the dots'
+reading (see "Kept readings" below), so a picture or sheet of the same version is
+not read again; until a picture arrives, or if it cannot be read, the dot's initial
+stands in.
 
 The conversation opens on the latest page of the room. Reaching its top reads the
 next earlier page once, keeping the message you were reading in place; a failure
@@ -239,8 +240,40 @@ when a window reads that account's dots. Settings › Notifications › **Person
 messages** turns it off (it is on by default): the reader stops, the marks go and the
 remembered account is forgotten.
 
-The reading cache is in memory only. It is scoped to the chosen runtime/account
-connection. A changed login clears the old view and asks the person to reconnect.
+## Kept readings
+
+What a window last read of an account's dots is shown at once by the next window
+and, after a launch, before the provider answers: the dot list, each dot's newest
+messages as shown (one page, at most 20), and the bytes of the profile pictures and
+pet sheets. Nothing kept counts as read now: the window reads the provider as
+before, and its answer replaces what was shown, edits and deletions included, so a
+message deleted at the provider goes and does not come back. The same page read
+again draws nothing again. Selection, drafts, reading position, details, Activity,
+Outputs, replies and the room's observation stay with each window and are not kept.
+
+The dots' list is read beside the account's primary selection, and a room's newest
+page beside the room, each still checked against the login it began under.
+
+Between launches the readings live in `~/Library/Caches/Yardlet/personal-agents/`,
+one folder per account and user named by a digest, never by an ID; folders are
+private to the user (0700) and files too (0600), written whole off the main thread.
+A folder holds only the dots of its latest list: a room or picture the list no
+longer names is deleted. They are kept per account choice and home, and shown only
+for the account and user they were read under; another account read through the
+same choice replaces them. No credential, signed location, draft or input-request
+answer is written.
+
+They are deleted, so nothing stays behind:
+
+- when Settings › Notifications › **Personal agent messages** is off: turning it off
+  deletes the folder, and nothing is written while it stays off (the windows of one
+  run still share what they read in memory);
+- when a read finds the account's login ended or changed (signed out, or signed in
+  as someone else): that account's folder;
+- when the account is removed from Yardlet's accounts, by **Remove from List** or **Sign Out
+  and Delete**: that account's folder.
+
+Deleting the folder by hand is always safe; it costs only the instant first view.
 No credentials, messages, provider history or browser profile are copied into the
 Yardlet session index.
 

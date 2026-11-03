@@ -49,8 +49,11 @@ extension AppModel {
         let state = [isOn ? "on" : "off", defaults.string(forKey: accountKey)]
         guard force || state != personalAgentPreferenceState else { return }
         personalAgentPreferenceState = state
+        // The dots are kept in the user's Caches for the next launch only while the setting is on.
+        personalAgentReadings.keepsFiles = isOn
         guard isOn else {
-            // Turned off, nothing of it stays: the connection, the unread marks and the account it followed.
+            // Turned off, nothing of it stays: the connection, the unread marks, the account it followed
+            // and what was kept of the dots.
             personalAgentWatch.stop()
             if defaults.object(forKey: accountKey) != nil { defaults.removeObject(forKey: accountKey) }
             return

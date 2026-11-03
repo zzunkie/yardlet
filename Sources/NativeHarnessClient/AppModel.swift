@@ -369,6 +369,9 @@ final class AppModel {
     var mailReveal: MailThreadKey?
     /// The app's watch on the dots the person last opened (`AppModel+PersonalAgentNotifications`).
     @ObservationIgnored let personalAgentWatch = PersonalAgentWatch()
+    /// What the windows last read of each account's dots, shared by them and, in the app, kept in the
+    /// user's Caches for the next launch (`PersonalAgentReadings`).
+    @ObservationIgnored var personalAgentReadings = PersonalAgentReadings()
     @ObservationIgnored var personalAgentPreferenceObserver: (any NSObjectProtocol)?
     /// The setting and account the watch last followed, so an unrelated setting changes nothing.
     @ObservationIgnored var personalAgentPreferenceState: [String?] = []
@@ -563,6 +566,13 @@ final class AppModel {
         self.connections.selection = composerDrafts.home.connectionSelection
         self.connections.onSelectionChange = { [weak composerDrafts] selection in
             composerDrafts?.home.connectionSelection = selection
+        }
+        // A Codex account that leaves Yardlet takes what was kept of its dots with it.
+        self.connections.onRemove = { [weak self] connection in
+            guard let self, connection.harness == .codex else { return }
+            let home = connection.homePath ?? self.codexEnvironmentManager?.paths.nativeHomeURL.path()
+                ?? CodexEnvironmentPaths.live().nativeHomeURL.path()
+            self.personalAgentReadings.forget(source: connection.id + "|" + home)
         }
         if !restoresIndexOnLaunch { taskWorkspaces.restoreSelection(in: store) }
         importFolderPreferencesIfNeeded(legacyProjectFolderPreferences)
