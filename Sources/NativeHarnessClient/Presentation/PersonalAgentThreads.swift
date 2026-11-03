@@ -71,10 +71,12 @@ struct PersonalAgentThread: Identifiable, Equatable, Sendable {
         return words.count > 120 ? String(words.prefix(119)) + "…" : words
     }
 
-    private static func folder(_ path: String?) -> String? {
-        guard let path, path.hasPrefix("/") else { return nil }
-        let last = path.split(separator: "/").last.map(String.init)
-        return last?.isEmpty == false ? last : nil
+    /// A computer may be a Windows one, whose paths separate folders with a backslash and may come
+    /// as `C:\…` or `/C:\…`; either separator ends a folder's name.
+    static func folder(_ path: String?) -> String? {
+        guard let path, path.hasPrefix("/") || path.hasPrefix("\\") || path.dropFirst().hasPrefix(":") else { return nil }
+        let last = path.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init)
+        return last?.isEmpty == false && last?.hasSuffix(":") == false ? last : nil
     }
 }
 
