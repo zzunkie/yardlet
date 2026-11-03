@@ -926,6 +926,8 @@ final class BrowserHostPaneController {
             blockedPopups = tab?.blockedPopups ?? []
         case .download(_, let download):
             record(download)
+        case .remoteDownloadStopped(_, let name):
+            showNotice(L10n.format("%@ was not downloaded: a click from another device started it. Download it here to keep it.", name))
         case .findResult(_, let result):
             findResult = result
         case .accessibilityTree, .accessibilityLocations, .scrollOffset:

@@ -689,6 +689,348 @@ final class RemoteBridgeTests: XCTestCase {
         await model.shutdown()
     }
 
+    // MARK: - Browser tabs (§15.25)
+
+    /// A task's browser tabs for the remote are the ones its panel lists, pictured through the agent's screenshot call
+    /// at the size asked for, and driven by the agent's trusted input, which counts as the person's. A password typed
+    /// keeps the agent's scripts off the page before it goes in, as one typed in the panel does; the Mac's clipboard is
+    /// not pasted, and nothing reaches a tab under a passkey window. A watched tab paints until no one watches it, and
+    /// its many draws are told once until it is pictured. Another task's tabs are not this task's.
+    func testATasksBrowserTabsArePicturedAndDrivenAsThePanelsAre() async throws {
+        let folder = URL(filePath: "/tmp/remote-bridge-browser", directoryHint: .isDirectory)
+        let task = SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                 title: "Publish the notes")
+        let other = SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                  title: "Something else")
+        let model = try Self.model(sessions: [task, other], transcripts: [:])
+        let connection = AnsweringHostConnection()
+        let client = BrowserHostClient(idleGrace: .seconds(60), agentVisibleWindow: .milliseconds(20)) { connection }
+        let bridge = AppModelRemoteBridge(model: model, browser: RemoteTabBridge.Environment(
+            client: { client }, usesMacEditingCommands: true, marksTypedSecrets: { true }))
+        let signals = SignalRecorder()
+        bridge.setChangeHandler { signals.record($0) }
+        XCTAssertTrue(bridge.snapshot().browserTabs)
+
+        let docs = try client.openTab(forSession: task.id, url: "https://docs.github.com", viewport: .offscreenDefault)
+        let signIn = try client.newTab(forSession: task.id, url: "https://github.com/login", viewport: .offscreenDefault,
+                                       select: true)
+        _ = try client.openTab(forSession: other.id, url: "https://example.com/private", viewport: .offscreenDefault)
+        connection.eventHandler?(.title(tab: signIn.id, title: "Sign in to GitHub"))
+        connection.eventHandler?(.address(tab: signIn.id, url: "https://github.com/login"))
+        model.browserHandoffWaits[task.id] = [BrowserHandoffWait(notice: "yardlet-handoff-7", tabKey: signIn.key,
+                                                                 reason: "Sign in so I can publish")]
+        let listed = try await bridge.browserTabs(taskID: task.id.uuidString).get()
+        XCTAssertEqual(listed.map(\.tabId), [docs.key.uuidString, signIn.key.uuidString])
+        XCTAssertEqual(listed.map(\.active), [nil, true])
+        XCTAssertEqual(listed[1].title, "Sign in to GitHub")
+        XCTAssertEqual(listed[1].url, "https://github.com/login")
+        XCTAssertEqual(listed[1].requestId, "yardlet-handoff-7")
+        XCTAssertEqual(listed[1].reason, "Sign in so I can publish")
+        XCTAssertFalse(RemoteJSON.string(listed).contains("private"), "another task's tab is not listed")
+        guard case let .failure(unknown) = await bridge.browserTabs(taskID: UUID().uuidString) else { return XCTFail("An unknown task listed") }
+        XCTAssertEqual(unknown.code, .notFound)
+        let watch = { (tab: BrowserTab) in RemoteTabWatch(taskID: task.id.uuidString, tabID: tab.key.uuidString) }
+        let tabID = signIn.key.uuidString
+        let taskID = task.id.uuidString
+
+        // Watched, the tab paints while no panel shows it; its draws are told once until it is pictured.
+        try await waitUntilAsync { connection.visibility(of: signIn).last == true }
+        await bridge.setWatchedTabs([watch(signIn)])
+        XCTAssertEqual(connection.visibility(of: signIn).last, false, "a watched tab is shown to its engine")
+        for _ in 0..<5 { connection.eventHandler?(.frame(tab: signIn.id, frame: Self.frame)) }
+        connection.eventHandler?(.frame(tab: docs.id, frame: Self.frame))
+        XCTAssertEqual(signals.changes.filter { if case .tabPainted = $0 { true } else { false } },
+                       [.tabPainted(taskID: taskID, tabID: tabID)])
+
+        connection.layout = (width: 1280, height: 800, pageY: 120, ratio: 2)
+        let frame = try await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 640, maxHeight: 1600).get()
+        XCTAssertEqual(frame.image, Data("JPEG".utf8))
+        XCTAssertEqual([frame.width, frame.height], [640, 400])
+        XCTAssertEqual([frame.viewportWidth, frame.viewportHeight], [1280, 800])
+        let shot = try XCTUnwrap(connection.calls.last { $0.method == "Page.captureScreenshot" }?.params)
+        XCTAssertEqual(shot["format"]?.stringValue, "jpeg")
+        XCTAssertEqual(shot["quality"]?.integerValue, 60)
+        XCTAssertEqual(shot["clip"]?["y"]?.doubleValue, 120)
+        XCTAssertEqual(shot["clip"]?["scale"]?.doubleValue, 0.25, "half the page's CSS pixels, at a device scale of 2")
+        connection.eventHandler?(.frame(tab: signIn.id, frame: Self.frame))
+        XCTAssertEqual(signals.changes.filter { if case .tabPainted = $0 { true } else { false } }.count, 2,
+                       "told again after the picture")
+
+        // A click and keys are the agent's trusted input, and the person's.
+        let unwatched = connection.calls.count
+        let clicked = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .click(x: 320, y: 145), permit: RemoteTabPermit())
+        XCTAssertNil(clicked)
+        XCTAssertEqual(connection.calls.dropFirst(unwatched).map(\.method), Array(repeating: "Input.dispatchMouseEvent", count: 3))
+        XCTAssertEqual(connection.calls.dropFirst(unwatched).compactMap { $0.params["type"]?.stringValue },
+                       ["mouseMoved", "mousePressed", "mouseReleased"])
+        XCTAssertEqual(connection.calls.last?.params["x"]?.doubleValue, 320)
+        XCTAssertNotNil(signIn.lastPersonUse, "the remote's input is the person's")
+        let backspace = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .key("Backspace"), permit: RemoteTabPermit())
+        XCTAssertNil(backspace)
+        XCTAssertEqual(connection.calls.last { $0.params["type"]?.stringValue == "rawKeyDown" }?.params["commands"],
+                       .array([.string("deleteBackward")]))
+        let paste = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .key("Meta+v"), permit: RemoteTabPermit())
+        XCTAssertEqual(paste?.code, .notAllowed, "the Mac's clipboard is not the person's")
+
+        // Typed into a password field: the page is held from the agent's scripts before the text goes in.
+        connection.eventHandler?(.passwordField(tab: signIn.id, isFocused: true))
+        let focused = try await bridge.browserTabs(taskID: taskID).get()
+        XCTAssertEqual(focused[1].passwordField, true)
+        XCTAssertFalse(signIn.vaultFills.holdShownDocument(in: []))
+        let before = connection.calls.count
+        let typed = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .text("hunter2"), permit: RemoteTabPermit())
+        XCTAssertNil(typed)
+        let typing = connection.calls.dropFirst(before).map(\.method)
+        XCTAssertEqual(typing.first, "Page.getFrameTree")
+        XCTAssertEqual(typing.last, "Input.insertText")
+        XCTAssertTrue(signIn.vaultFills.holdShownDocument(in: []))
+
+        // The panel's Back; nothing under a passkey window; another task's tab is not found.
+        let back = await bridge.tabInput(taskID: taskID, tabID: tabID, input: RemoteTabInput(kind: .navigate, action: "back"), permit: RemoteTabPermit())
+        XCTAssertNil(back)
+        XCTAssertTrue(connection.sent.contains(.navigation(tab: signIn.id, action: .back)))
+        connection.eventHandler?(.chromiumWindow(isShown: true, titles: ["Use a passkey"], kinds: ["passkey"], ids: [4],
+                                                 tabs: [signIn.id]))
+        let underWindow = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .click(x: 10, y: 10), permit: RemoteTabPermit())
+        XCTAssertEqual(underWindow?.code, .notAllowed)
+        let foreign = await bridge.tabInput(taskID: other.id.uuidString, tabID: tabID, input: .click(x: 10, y: 10), permit: RemoteTabPermit())
+        XCTAssertEqual(foreign?.code, .notFound)
+
+        // No one watches: the tab hides again as one no panel shows.
+        await bridge.setWatchedTabs([])
+        try await waitUntilAsync { connection.visibility(of: signIn).last == true }
+        let told = signals.changes.count
+        connection.eventHandler?(.frame(tab: signIn.id, frame: Self.frame))
+        connection.eventHandler?(.title(tab: signIn.id, title: "GitHub"))
+        XCTAssertEqual(signals.changes.count, told, "a tab no one watches tells nothing")
+    }
+
+    /// What a remote device may not do through a task's tab, each checked where the input is sent (the security review of
+    /// §15.25): keys outside characters and the editing and moving keys, and every spelling of the clipboard's commands;
+    /// typing into a password field the page cannot be marked for; anything once its watch ended, or while a Chromium
+    /// window whose tab is not known is up (Back included); a `file:` page outside the task's files, shown or driven; and
+    /// opening another app on this Mac from a remote click without asking here. A phone's size draws the tab as a phone
+    /// while it watches, and the tab takes back the size it had before, the agent's while its turn goes on.
+    func testARemoteDeviceDrivesOnlyWhatThePanelWouldAndSizesTheTabAsAPhone() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "remote-tab-files-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try Data("<p>notes</p>".utf8).write(to: folder.appending(path: "notes.html"))
+        let task = SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                 title: "Sign in")
+        let model = try Self.model(sessions: [task], transcripts: [:])
+        let connection = AnsweringHostConnection()
+        let client = BrowserHostClient(idleGrace: .seconds(60), agentVisibleWindow: .milliseconds(20)) { connection }
+        let apps = RecordingExternalApps()
+        client.externalApps = apps
+        let bridge = AppModelRemoteBridge(model: model, browser: RemoteTabBridge.Environment(
+            client: { client }, usesMacEditingCommands: true, marksTypedSecrets: { true }))
+        let tab = try client.openTab(forSession: task.id, url: "https://github.com/login", viewport: .offscreenDefault)
+        connection.eventHandler?(.address(tab: tab.id, url: "https://github.com/login"))
+        let taskID = task.id.uuidString, tabID = tab.key.uuidString
+        func input(_ input: RemoteTabInput, permit: RemoteTabPermit = RemoteTabPermit()) async -> RemoteError? {
+            await bridge.tabInput(taskID: taskID, tabID: tabID, input: input, permit: permit)
+        }
+
+        // Keys: characters and the editing and moving keys; never the clipboard, Insert or the function keys.
+        for key in ["a", "Shift+A", "Enter", "Shift+Tab", "Meta+a", "Alt+Backspace", "Meta+ArrowLeft", "Meta+z", "PageDown"] {
+            let refusal = await input(.key(key))
+            XCTAssertNil(refusal, key)
+        }
+        for key in ["Meta+v", "Control+v", "Shift+Insert", "Meta+Shift+v", "Meta+Alt+Shift+v", "Control+Shift+v", "Meta+c",
+                    "Control+x", "Shift+Delete", "Control+y", "Insert", "Control+Insert", "F5"] {
+            let refusal = await input(.key(key))
+            XCTAssertEqual(refusal?.code, .notAllowed, key)
+        }
+
+        // A character typed into a password field marks the page first, by text or by key; when it cannot, nothing goes.
+        connection.eventHandler?(.passwordField(tab: tab.id, isFocused: true))
+        var before = connection.calls.count
+        let keyed = await input(.key("s"))
+        XCTAssertNil(keyed)
+        XCTAssertEqual(connection.calls.dropFirst(before).first?.method, "Page.getFrameTree", "marked before the key")
+        connection.answersFrameTree = false
+        connection.eventHandler?(.newDocument(tab: tab.id, url: "https://github.com/login"))
+        before = connection.calls.count
+        let unmarked = await input(.text("hunter2"))
+        XCTAssertEqual(unmarked?.code, .unavailable)
+        XCTAssertFalse(connection.calls.dropFirst(before).contains { $0.method == "Input.insertText" }, "nothing typed unprotected")
+        let unmarkedKey = await input(.key("x"))
+        XCTAssertEqual(unmarkedKey?.code, .unavailable)
+        connection.answersFrameTree = true
+        connection.eventHandler?(.passwordField(tab: tab.id, isFocused: false))
+
+        // A watch that ended sends nothing more.
+        let ended = RemoteTabPermit()
+        ended.revoke()
+        before = connection.calls.count
+        let late = await input(.click(x: 5, y: 5), permit: ended)
+        XCTAssertEqual(late?.code, .notAllowed)
+        XCTAssertEqual(connection.calls.count, before)
+
+        // A sign-in window Chromium did not name a tab for keeps every tab from the remote, Back too.
+        connection.eventHandler?(.chromiumWindow(isShown: true, titles: ["Sign in"], kinds: ["signIn"], ids: [7], tabs: [-1]))
+        for refused in [RemoteTabInput.click(x: 5, y: 5), RemoteTabInput(kind: .navigate, action: "back")] {
+            let refusal = await input(refused)
+            XCTAssertEqual(refusal?.code, .notAllowed, "\(refused)")
+        }
+        XCTAssertFalse(connection.sent.contains(.navigation(tab: tab.id, action: .back)))
+        connection.eventHandler?(.chromiumWindow(isShown: false, titles: nil))
+
+        // Another app opens from a remote click only when someone here chooses it.
+        let clicked = await input(.click(x: 5, y: 5))
+        XCTAssertNil(clicked)
+        connection.eventHandler?(.externalApp(tab: tab.id, request: BrowserExternalAppRequest(
+            url: "mailto:team@example.test", origin: "https://github.com", userGesture: true, remembered: false)))
+        XCTAssertTrue(apps.opened.isEmpty, "a remote click's mailto: waits for the Mac")
+        XCTAssertNotNil(tab.externalAppQuestion)
+
+        // A file page: the task's own shows; one outside it is named by its scheme only, and neither pictured nor driven.
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: tabID)])
+        connection.eventHandler?(.address(tab: tab.id, url: folder.appending(path: "notes.html").absoluteString))
+        let own = await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 640, maxHeight: 640)
+        XCTAssertNotNil(try? own.get())
+        connection.eventHandler?(.address(tab: tab.id, url: "file:///etc/hosts"))
+        let outside = await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 640, maxHeight: 640)
+        guard case let .failure(refused) = outside else { return XCTFail("A file outside the task's was pictured") }
+        XCTAssertEqual(refused.code, .notAllowed)
+        let drivenOutside = await input(.click(x: 5, y: 5))
+        XCTAssertEqual(drivenOutside?.code, .notAllowed)
+        let listedOutside = try await bridge.browserTabs(taskID: taskID).get()
+        XCTAssertEqual(listedOutside.first?.url, "file://")
+        connection.eventHandler?(.address(tab: tab.id, url: "https://github.com/login"))
+
+        // A phone's own size, as `browser_resize` draws it, while it watches; then the size the tab had.
+        func metrics() -> [JSONValue] {
+            connection.calls.filter { $0.method == "Emulation.setDeviceMetricsOverride" || $0.method == "Emulation.clearDeviceMetricsOverride" }
+                .map { $0.method == "Emulation.clearDeviceMetricsOverride" ? .string("cleared") : $0.params["width"] ?? .null }
+        }
+        let phone = RemoteTabViewport(width: 390, height: 844, mobile: true)
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: tabID, viewport: phone)])
+        try await waitUntilAsync { tab.emulation?.owner == .remote && metrics().last == .integer(390) }
+        XCTAssertEqual(tab.emulation?.mobile, true)
+        XCTAssertTrue(connection.calls.contains { $0.method == "Emulation.setTouchEmulationEnabled" && $0.params["enabled"] == .bool(true) })
+        try await waitUntilAsync {
+            connection.calls.contains { $0.method == "Emulation.setUserAgentOverride" && $0.params["userAgent"]?.stringValue?.contains("Android") == true }
+        }
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: tabID)])
+        try await waitUntilAsync { tab.emulation == nil && metrics().last == .string("cleared") }
+
+        // Over the agent's size during its turn, the agent's comes back; once its turn ended, the tab's own.
+        tab.noteAgentActivity()
+        try await tab.emulate(BrowserViewportEmulation(width: 1024, height: 768, owner: .agent))
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: tabID, viewport: phone)])
+        try await waitUntilAsync { tab.emulation?.owner == .remote }
+        await bridge.setWatchedTabs([])
+        try await waitUntilAsync { tab.emulation?.owner == .agent && metrics().last == .integer(1024) }
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: tabID, viewport: phone)])
+        try await waitUntilAsync { tab.emulation?.owner == .remote }
+        await tab.endAgentEmulation()
+        XCTAssertEqual(tab.emulation?.owner, .remote, "the agent's turn ending leaves the phone's size")
+        await bridge.setWatchedTabs([])
+        try await waitUntilAsync { tab.emulation == nil && metrics().last == .string("cleared") }
+    }
+
+    /// The second review of §15.25's host: a page that moves while it is pictured or driven is not sent or driven past
+    /// the address checked, a file page outside the task's hides its title too, a popup a remote click opened asks on
+    /// the Mac before another app opens, a download a remote click started stops as it begins, and the phone's size
+    /// never comes back after the agent's later one.
+    func testARemoteDevicesInputHoldsAcrossMovesPopupsDownloadsAndSizes() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "remote-tab-moves-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try Data("<p>notes</p>".utf8).write(to: folder.appending(path: "notes.html"))
+        let inside = folder.appending(path: "notes.html").absoluteString
+        let task = SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                 title: "Sign in")
+        let model = try Self.model(sessions: [task], transcripts: [:])
+        let connection = AnsweringHostConnection()
+        let client = BrowserHostClient(idleGrace: .seconds(60), agentVisibleWindow: .milliseconds(20)) { connection }
+        let apps = RecordingExternalApps()
+        client.externalApps = apps
+        let bridge = AppModelRemoteBridge(model: model, browser: RemoteTabBridge.Environment(
+            client: { client }, usesMacEditingCommands: true, marksTypedSecrets: { true }))
+        let tab = try client.openTab(forSession: task.id, url: inside, viewport: .offscreenDefault)
+        connection.eventHandler?(.address(tab: tab.id, url: inside))
+        let taskID = task.id.uuidString, tabID = tab.key.uuidString
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: tabID)])
+
+        // Moved to a file outside the task's while it was pictured: the picture does not go.
+        connection.onCall = { method in
+            if method == "Page.captureScreenshot" { connection.eventHandler?(.address(tab: tab.id, url: "file:///etc/hosts")) }
+        }
+        let moved = await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 640, maxHeight: 640)
+        guard case .failure = moved else { return XCTFail("A page that moved during its picture was sent") }
+        connection.onCall = nil
+        connection.eventHandler?(.title(tab: tab.id, title: "/etc/hosts"))
+        let listed = try await bridge.browserTabs(taskID: taskID).get()
+        XCTAssertEqual(listed.first?.url, "file://")
+        XCTAssertNil(listed.first?.title, "a file outside the task's is not named by its title either")
+
+        // Moved there during a click: the steps after the move are not sent.
+        connection.eventHandler?(.address(tab: tab.id, url: inside))
+        connection.onCall = { method in
+            if method == "Input.dispatchMouseEvent" { connection.eventHandler?(.address(tab: tab.id, url: "file:///etc/hosts")) }
+        }
+        var before = connection.calls.count
+        let clicked = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .click(x: 5, y: 5), permit: RemoteTabPermit())
+        XCTAssertEqual(clicked?.code, .notAllowed)
+        XCTAssertEqual(connection.calls.dropFirst(before).filter { $0.method == "Input.dispatchMouseEvent" }.count, 1,
+                       "only the step before the move")
+        connection.onCall = nil
+        connection.eventHandler?(.address(tab: tab.id, url: "https://github.com/login"))
+
+        // The keys and buttons editing text takes, no more.
+        for key in ["Shift+A", "Alt+ArrowLeft", "Meta+Backspace", "Shift+Meta+z", "Meta+a", "Shift+Enter"] {
+            let refusal = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .key(key), permit: RemoteTabPermit())
+            XCTAssertNil(refusal, key)
+        }
+        for key in ["Meta+l", "Meta+o", "Meta+s", "Meta+p", "Alt+Meta+i", "Control+a", "Shift+Meta+a", "Alt+v", "Meta+Enter"] {
+            let refusal = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .key(key), permit: RemoteTabPermit())
+            XCTAssertEqual(refusal?.code, .notAllowed, key)
+        }
+        for button in ["middle", "right"] {
+            let refusal = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .click(x: 5, y: 5, button: button),
+                                                permit: RemoteTabPermit())
+            XCTAssertEqual(refusal?.code, .notAllowed, button)
+        }
+
+        // A popup a remote click opened asks on the Mac before another app opens, and its download stops.
+        let clickedOpen = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .click(x: 5, y: 5), permit: RemoteTabPermit())
+        XCTAssertNil(clickedOpen)
+        connection.eventHandler?(.popupOpened(tab: 90, opener: tab.id, url: "https://github.com/share", background: false))
+        let popup = try XCTUnwrap(client.tabs(forSession: task.id).first { $0.id == 90 })
+        connection.eventHandler?(.externalApp(tab: popup.id, request: BrowserExternalAppRequest(
+            url: "mailto:team@example.test", origin: "https://github.com", userGesture: true, remembered: true)))
+        XCTAssertTrue(apps.opened.isEmpty)
+        XCTAssertNotNil(popup.externalAppQuestion)
+        connection.eventHandler?(.download(tab: tab.id, download: BrowserDownload(
+            id: 3, state: .started, fileName: "big.iso", path: "/tmp/big.iso", receivedBytes: 0, totalBytes: -1)))
+        XCTAssertTrue(connection.sent.contains(.cancelDownload(tab: tab.id, download: 3)))
+        // The person's own click here downloads as before.
+        tab.send(.mouse(tab: tab.id, input: BrowserMouseInput(kind: .down, x: 5, y: 5, button: .left)))
+        connection.eventHandler?(.download(tab: tab.id, download: BrowserDownload(
+            id: 4, state: .started, fileName: "notes.pdf", path: "/tmp/notes.pdf", receivedBytes: 0, totalBytes: -1)))
+        XCTAssertFalse(connection.sent.contains(.cancelDownload(tab: tab.id, download: 4)))
+
+        // The agent sizes the tab right after a phone did: the agent's size stays, and the phone's end leaves it.
+        before = connection.calls.count
+        tab.noteAgentActivity()
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: tabID, viewport: RemoteTabViewport(width: 390, height: 844))])
+        let agent = Task { try await tab.emulate(BrowserViewportEmulation(width: 1024, height: 768, owner: .agent)) }
+        try await agent.value
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: tabID)])
+        try await waitUntilAsync { tab.emulation?.owner == .agent }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(tab.emulation?.width, 1024, "no phone's size came back")
+        let widths = connection.calls.dropFirst(before).filter { $0.method == "Emulation.setDeviceMetricsOverride" }
+            .compactMap { $0.params["width"]?.integerValue }
+        XCTAssertEqual(widths.last, 1024)
+    }
+
+    private static let frame = BrowserFrame(layer: .view, surface: 1, pixelWidth: 2560, pixelHeight: 1600, sequence: 1,
+                                            paintedAt: 0, source: "accelerated")
+
     // MARK: - Commands through the window's paths
 
     func testCommandsGoThroughTheComposerTheCardAndTheStopButton() async throws {
@@ -801,6 +1143,58 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertFalse(AppModel.keepsMacAwake(hasRunningWork: false, phoneCanAnswer: true, sessions: [idle]))
         XCTAssertTrue(AppModel.keepsMacAwake(hasRunningWork: true, phoneCanAnswer: false, sessions: [idle]))
     }
+}
+
+/// A browser host whose tabs answer DevTools as an idle page does: the layout `layout` names, a picture, and an empty
+/// result for anything else.
+@MainActor
+final class AnsweringHostConnection: BrowserHostConnection {
+    var eventHandler: ((BrowserHostEvent) -> Void)?
+    private(set) var sent: [BrowserHostCommand] = []
+    private(set) var calls: [(method: String, params: JSONValue)] = []
+    var layout = (width: 1280.0, height: 800.0, pageY: 0.0, ratio: 2.0)
+    /// Off: the page does not say which document it shows, as when it is between documents.
+    var answersFrameTree = true
+    /// Called with each DevTools method as it arrives, before it is answered.
+    var onCall: ((String) -> Void)?
+
+    func send(_ command: BrowserHostCommand) {
+        sent.append(command)
+        guard case .devTools(let tab, let message) = command,
+              let object = try? JSONDecoder().decode(JSONValue.self, from: Data(message.utf8)),
+              let id = object["id"]?.integerValue, let method = object["method"]?.stringValue else { return }
+        calls.append((method, object["params"] ?? .object([:])))
+        onCall?(method)
+        let result: String = switch method {
+        case "Page.getLayoutMetrics":
+            #"{"cssVisualViewport":{"clientWidth":\#(layout.width),"clientHeight":\#(layout.height),"pageX":0,"pageY":\#(layout.pageY)}}"#
+        case "Runtime.evaluate" where object["params"]?["expression"]?.stringValue?.contains("navigator.userAgent") == true:
+            #"{"result":{"type":"object","value":["Mozilla/5.0 (Macintosh) Chrome/154.0.0.0 Safari/537.36",[]]}}"#
+        case "Runtime.evaluate": #"{"result":{"type":"number","value":\#(layout.ratio)}}"#
+        case "Page.captureScreenshot": #"{"data":"\#(Data("JPEG".utf8).base64EncodedString())"}"#
+        case "Page.getFrameTree" where answersFrameTree:
+            #"{"frameTree":{"frame":{"id":"main","loaderId":"L1","url":"https://github.com/login"}}}"#
+        case "Page.getFrameTree": #"{"frameTree":{"frame":{}}}"#
+        default: "{}"
+        }
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated { self?.eventHandler?(.devTools(tab: tab, message: #"{"id":\#(id),"result":\#(result)}"#)) }
+        }
+    }
+
+    func terminate() {}
+
+    func visibility(of tab: BrowserTab) -> [Bool] {
+        sent.compactMap { if case .visibility(let id, let hidden) = $0, id == tab.id { hidden } else { nil } }
+    }
+}
+
+/// The Mac's other apps as the browser asks for them: every address has an app, and what was opened is kept.
+@MainActor
+final class RecordingExternalApps: BrowserExternalApps {
+    private(set) var opened: [URL] = []
+    func appName(for url: URL) -> String? { "Mail" }
+    func open(_ url: URL) { opened.append(url) }
 }
 
 final class SignalRecorder: @unchecked Sendable {

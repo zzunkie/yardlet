@@ -67,7 +67,14 @@ final class RemoteProtocolTests: XCTestCase {
             .runComposerCommand(taskID: "T1", command: "compact", arguments: "Keep the API notes"),
             .editMessage(taskID: "T1", turnID: "turn-3", text: "Run only the unit tests"),
             .forkTask(taskID: "T1", turnID: "turn-3"),
-            .forkTask(taskID: "T1", turnID: nil)
+            .forkTask(taskID: "T1", turnID: nil),
+            .watchTab(taskID: "T1", tabID: nil, maxWidth: nil, maxHeight: nil),
+            .watchTab(taskID: "T1", tabID: "K", maxWidth: 1080, maxHeight: 2000),
+            .unwatchTab(taskID: "T1"),
+            .tabFrameAck(taskID: "T1", tabID: "K", frame: 3),
+            .tabInput(taskID: "T1", tabID: "K", input: .click(x: 412.5, y: 236, clickCount: 2)),
+            .tabInput(taskID: "T1", tabID: "K", input: RemoteTabInput(kind: .scroll, x: 10, y: 20, deltaY: -120)),
+            .tabInput(taskID: "T1", tabID: "K", input: .text("안녕하세요"))
         ]
         for (index, request) in requests.enumerated() {
             let envelope = RemoteRequestEnvelope(id: "\(index)", request: request)
@@ -121,6 +128,75 @@ final class RemoteProtocolTests: XCTestCase {
         // An outcome a later Mac adds reads as a failure.
         let later = try JSONDecoder().decode(RemoteSchedule.Run.self, from: Data(#"{"at": 1, "outcome": "deferred", "line": "x"}"#.utf8))
         XCTAssertEqual(later.outcome, .failed)
+    }
+
+    /// §15.25 as the contract writes it: its requests and events read and write back the same JSON, none is a command,
+    /// and they have a rate of their own; an input that lacks what its kind needs is refused before it reaches a tab.
+    func testTheDocumentedBrowserTabRequestsDecode() throws {
+        let requests: [(String, RemoteRequest)] = [
+            (#"{"id": "40", "type": "watchTab", "taskId": "4C1F…", "maxWidth": 1080, "maxHeight": 2000}"#,
+             .watchTab(taskID: "4C1F…", tabID: nil, maxWidth: 1080, maxHeight: 2000)),
+            (#"{"id": "41", "type": "tabInput", "taskId": "4C1F…", "tabId": "9B21…", "input": {"kind": "click", "x": 412.5, "y": 236}}"#,
+             .tabInput(taskID: "4C1F…", tabID: "9B21…", input: .click(x: 412.5, y: 236))),
+            (#"{"id": "42", "type": "tabFrameAck", "taskId": "4C1F…", "tabId": "9B21…", "frame": 3}"#,
+             .tabFrameAck(taskID: "4C1F…", tabID: "9B21…", frame: 3)),
+            (#"{"id": "43", "type": "unwatchTab", "taskId": "4C1F…"}"#, .unwatchTab(taskID: "4C1F…")),
+            (#"{"id": "49", "type": "watchTab", "taskId": "4C1F…", "maxWidth": 1170, "viewport": {"width": 390, "height": 844, "mobile": true}}"#,
+             .watchTab(taskID: "4C1F…", tabID: nil, maxWidth: 1170, maxHeight: nil,
+                       viewport: RemoteTabViewport(width: 390, height: 844, mobile: true)))
+        ]
+        for (json, request) in requests {
+            let envelope = try decode(json)
+            XCTAssertEqual(envelope.request, request)
+            XCTAssertFalse(envelope.request.isCommand, json)
+            XCTAssertTrue(envelope.request.isTabTraffic, json)
+            XCTAssertEqual(envelope.request.taskID, "4C1F…")
+            let written = try XCTUnwrap(JSONSerialization.jsonObject(with: envelope.encoded()) as? NSDictionary)
+            XCTAssertEqual(written, try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? NSDictionary))
+        }
+        for json in [#"{"id":"44","type":"watchTab"}"#, #"{"id":"45","type":"watchTab","taskId":"T","maxWidth":5000}"#,
+                     #"{"id":"46","type":"tabFrameAck","taskId":"T","tabId":"K"}"#,
+                     #"{"id":"47","type":"tabInput","taskId":"T","tabId":"K"}"#,
+                     #"{"id":"48","type":"tabInput","taskId":"T","tabId":"K","input":{"kind":"swipe"}}"#,
+                     #"{"id":"50","type":"watchTab","taskId":"T","viewport":{"width":120,"height":844}}"#,
+                     #"{"id":"51","type":"watchTab","taskId":"T","viewport":{"width":390,"height":9000}}"#] {
+            guard case let .failure(failure) = RemoteRequestEnvelope.decode(Data(json.utf8)) else { return XCTFail(json) }
+            XCTAssertEqual(failure.error.code, .badRequest, json)
+        }
+        let problems: [(RemoteTabInput, RemoteErrorCode?)] = [
+            (.click(x: 1, y: 2), nil), (RemoteTabInput(kind: .click), .badRequest),
+            (.click(x: .nan, y: 2), .badRequest), (.click(x: 1, y: 2, button: "fourth"), .badRequest),
+            (RemoteTabInput(kind: .mouse, x: 1, y: 2, action: "down"), nil), (RemoteTabInput(kind: .mouse, x: 1, y: 2), .badRequest),
+            (RemoteTabInput(kind: .scroll, x: 1, y: 2), .badRequest), (RemoteTabInput(kind: .scroll, x: 1, y: 2, deltaX: 3), nil),
+            (.text(""), .badRequest), (.text(String(repeating: "a", count: 4_001)), .tooLarge), (.key(""), .badRequest),
+            // Under 4,000 characters, but each a family of several scalars: past the bytes.
+            (.text(String(repeating: "👨‍👩‍👧‍👦", count: 1_000)), .tooLarge),
+            (RemoteTabInput(kind: .navigate, action: "home"), .badRequest), (RemoteTabInput(kind: .navigate, action: "back"), nil),
+            (RemoteTabInput(kind: .click, x: 1, y: 2, modifiers: ["hyper"]), .badRequest),
+            // A field its kind does not take, such as text riding on a click, is refused.
+            (RemoteTabInput(kind: .click, x: 1, y: 2, text: String(repeating: "a", count: 3_000)), .badRequest),
+            (RemoteTabInput(kind: .text, x: 1, text: "a"), .badRequest), (RemoteTabInput(kind: .key, text: "a", key: "a"), .badRequest),
+            (RemoteTabInput(kind: .navigate, x: 1, action: "back"), .badRequest)
+        ]
+        for (input, code) in problems { XCTAssertEqual(input.problem?.code, code, "\(input)") }
+
+        let frame = #"""
+        {"event": "tabFrame", "seq": 51, "taskId": "4C1F…", "tabId": "9B21…", "frame": 3, "image": "SlBFRw==",
+         "mediaType": "image/jpeg", "width": 1080, "height": 675, "viewportWidth": 1280, "viewportHeight": 800}
+        """#
+        let event = try JSONDecoder().decode(RemoteEvent.self, from: Data(frame.utf8))
+        XCTAssertEqual(event.image, Data("JPEG".utf8))
+        XCTAssertEqual([event.width, event.height], [1080, 675])
+        XCTAssertEqual(event.viewportWidth, 1280)
+        let tabs = #"""
+        {"re": "40", "ok": true, "taskId": "4C1F…", "tabId": "9B21…",
+         "tabs": [{"tabId": "9B21…", "title": "Sign in to GitHub", "url": "https://github.com/login", "active": true,
+                   "waiting": "handoff", "requestId": "h", "reason": "Sign in", "passwordField": true}]}
+        """#
+        let watching = try JSONDecoder().decode(RemoteResponse.self, from: Data(tabs.utf8))
+        XCTAssertEqual(watching.tabs, [RemoteBrowserTab(tabId: "9B21…", title: "Sign in to GitHub", url: "https://github.com/login",
+                                                        active: true, waiting: "handoff", requestId: "h", reason: "Sign in",
+                                                        passwordField: true)])
     }
 
     /// §15.22 as the contract writes it: both requests read and write back the same JSON and are not commands, and both

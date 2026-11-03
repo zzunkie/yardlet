@@ -238,11 +238,14 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var taskControls: Bool
     /// The bridge answers `subscribeTask` with `"detail": "full"` (§15.24).
     public var fullConversation: Bool
+    /// The bridge shows a task's browser tabs and takes input for them (§15.25).
+    public var browserTabs: Bool
 
     public init(projects: [RemoteProject] = [], tasks: [RemoteTask] = [], newestRequestIDs: [String: String] = [:],
                 requestSummaries: [String: String] = [:], newTask: RemoteNewTask? = nil,
                 followUp: RemoteFollowUpMode? = nil, scheduledTasks: Bool = false, taskFiles: Bool = false,
-                taskControls: Bool = false, fullConversation: Bool = false) {
+                taskControls: Bool = false, fullConversation: Bool = false,
+                browserTabs: Bool = false) {
         self.projects = projects
         self.tasks = tasks
         self.newestRequestIDs = newestRequestIDs
@@ -253,6 +256,7 @@ public struct RemoteSnapshot: Equatable, Sendable {
         self.taskFiles = taskFiles
         self.taskControls = taskControls
         self.fullConversation = fullConversation
+        self.browserTabs = browserTabs
     }
 
     public static let empty = RemoteSnapshot()
@@ -405,6 +409,8 @@ public struct RemoteItem: Codable, Equatable, Sendable {
     public var choices: [RemoteChoice]?
     /// An MCP form's fields (§15.19).
     public var formFields: [RemoteFormField]?
+    /// The tab a browser handoff hands over, which `watchTab` shows (§15.18, §15.25).
+    public var tabId: String?
 
     // plan
     public var explanation: String?
@@ -974,6 +980,11 @@ public enum RemoteRequest: Equatable, Sendable {
     case runComposerCommand(taskID: String, command: String, arguments: String? = nil)
     case editMessage(taskID: String, turnID: String, text: String)
     case forkTask(taskID: String, turnID: String?)
+    /// A task's browser tabs: watching one (its frames), acknowledging a frame, input to it, and letting it go (§15.25).
+    case watchTab(taskID: String, tabID: String?, maxWidth: Int?, maxHeight: Int?, viewport: RemoteTabViewport? = nil)
+    case unwatchTab(taskID: String)
+    case tabFrameAck(taskID: String, tabID: String, frame: Int)
+    case tabInput(taskID: String, tabID: String, input: RemoteTabInput)
 
     public var type: String {
         switch self {
@@ -1018,6 +1029,10 @@ public enum RemoteRequest: Equatable, Sendable {
         case .runComposerCommand: "runComposerCommand"
         case .editMessage: "editMessage"
         case .forkTask: "forkTask"
+        case .watchTab: "watchTab"
+        case .unwatchTab: "unwatchTab"
+        case .tabFrameAck: "tabFrameAck"
+        case .tabInput: "tabInput"
         }
     }
 
@@ -1030,7 +1045,9 @@ public enum RemoteRequest: Equatable, Sendable {
              let .archiveTask(id), let .limitAccounts(id), let .continueWithAccount(id, _), let .setAutoContinue(id, _),
              let .actOnQueued(id, _, _), let .answerHandoff(id, _, _), let .chooseAnswer(id, _, _, _, _),
              let .taskOutputs(id), let .readFile(id, _, _), let .taskSettings(id, _), let .setTaskSetting(id, _, _, _),
-             let .composerCommands(id), let .runComposerCommand(id, _, _), let .editMessage(id, _, _), let .forkTask(id, _): id
+             let .composerCommands(id), let .runComposerCommand(id, _, _), let .editMessage(id, _, _), let .forkTask(id, _),
+             let .watchTab(id, _, _, _, _), let .unwatchTab(id),
+             let .tabFrameAck(id, _, _), let .tabInput(id, _, _): id
         case .snapshot, .ping, .createTask, .newTaskOptions, .registerPush, .unregisterPush, .forgetDevice,
              .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled,
              .presence: nil
@@ -1053,6 +1070,15 @@ public enum RemoteRequest: Equatable, Sendable {
              .actOnSuggestion, .setPinned, .archiveTask, .answerLink, .continueWithAccount, .setAutoContinue, .actOnQueued,
              .answerHandoff, .chooseAnswer, .runScheduledTask, .setScheduledTaskEnabled, .setTaskSetting, .runComposerCommand,
              .editMessage, .forkTask: true
+        default: false
+        }
+    }
+
+    /// A browser tab's requests (§15.25), which have a rate of their own: a frame's acknowledgement and the person's
+    /// input come several times a second.
+    public var isTabTraffic: Bool {
+        switch self {
+        case .watchTab, .unwatchTab, .tabFrameAck, .tabInput: true
         default: false
         }
     }
@@ -1121,6 +1147,12 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var arguments: String?
         var turnId: String?
         var detail: String?
+        var tabId: String?
+        var maxWidth: Int?
+        var maxHeight: Int?
+        var frame: Int?
+        var input: RemoteTabInput?
+        var viewport: RemoteTabViewport?
     }
 
     private struct WireImage: Codable {
@@ -1165,7 +1197,8 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             ("suggestionId", wire.suggestionId, RemoteProtocol.maxProviderIDBytes),
             ("choice", wire.choice, RemoteProtocol.maxProviderIDBytes), ("setting", wire.setting, RemoteProtocol.maxProviderIDBytes),
             ("value", wire.value, RemoteProtocol.maxProviderIDBytes), ("command", wire.command, RemoteProtocol.maxProviderIDBytes),
-            ("turnId", wire.turnId, RemoteProtocol.maxProviderIDBytes)
+            ("turnId", wire.turnId, RemoteProtocol.maxProviderIDBytes),
+            ("tabId", wire.tabId, RemoteProtocol.maxOwnIDBytes)
         ]
         if let long = identifiers.first(where: { ($0.value?.utf8.count ?? 0) > $0.limit }) {
             return fail(.badRequest, "\(long.name) is too long")
@@ -1366,6 +1399,30 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 return fail(.badRequest, "Missing taskId, turnId or text")
             }
             request = .editMessage(taskID: taskID, turnID: turnID, text: text)
+        case "watchTab":
+            guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
+            let sides = [wire.maxWidth, wire.maxHeight].compactMap { $0 }
+            guard sides.allSatisfy({ (1...RemoteProtocol.maxTabFrameSide).contains($0) }) else {
+                return fail(.badRequest, "maxWidth and maxHeight are 1 to \(RemoteProtocol.maxTabFrameSide)")
+            }
+            if let viewport = wire.viewport, !viewport.isAllowed {
+                return fail(.badRequest, "viewport is \(RemoteProtocol.tabViewportWidths) by \(RemoteProtocol.tabViewportHeights) CSS pixels")
+            }
+            request = .watchTab(taskID: taskID, tabID: required(wire.tabId), maxWidth: wire.maxWidth, maxHeight: wire.maxHeight,
+                                viewport: wire.viewport)
+        case "unwatchTab":
+            guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
+            request = .unwatchTab(taskID: taskID)
+        case "tabFrameAck":
+            guard let taskID = required(wire.taskId), let tabID = required(wire.tabId), let frame = wire.frame else {
+                return fail(.badRequest, "Missing taskId, tabId or frame")
+            }
+            request = .tabFrameAck(taskID: taskID, tabID: tabID, frame: frame)
+        case "tabInput":
+            guard let taskID = required(wire.taskId), let tabID = required(wire.tabId), let input = wire.input else {
+                return fail(.badRequest, "Missing taskId, tabId or input")
+            }
+            request = .tabInput(taskID: taskID, tabID: tabID, input: input)
         default:
             return fail(.unknownType, "Unknown type \(type)")
         }
@@ -1505,6 +1562,22 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         case let .forkTask(taskID, turnID):
             wire.taskId = taskID
             wire.turnId = turnID
+        case let .watchTab(taskID, tabID, maxWidth, maxHeight, viewport):
+            wire.taskId = taskID
+            wire.tabId = tabID
+            wire.maxWidth = maxWidth
+            wire.maxHeight = maxHeight
+            wire.viewport = viewport
+        case let .unwatchTab(taskID):
+            wire.taskId = taskID
+        case let .tabFrameAck(taskID, tabID, frame):
+            wire.taskId = taskID
+            wire.tabId = tabID
+            wire.frame = frame
+        case let .tabInput(taskID, tabID, input):
+            wire.taskId = taskID
+            wire.tabId = tabID
+            wire.input = input
         }
         return (try? RemoteJSON.encoder.encode(wire)) ?? Data()
     }
@@ -1594,6 +1667,11 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var taskControls: Bool?
     /// `composerCommands` (§15.23).
     public var commands: [RemoteComposerCommand]?
+    /// `snapshot` on v2: the Mac shows a task's browser tabs (§15.25).
+    public var browserTabs: Bool?
+    /// `watchTab` (§15.25): the task's tabs, and the one watched.
+    public var tabs: [RemoteBrowserTab]?
+    public var tabId: String?
 
     public init(re: String, ok: Bool = true, error: RemoteError? = nil) {
         self.re = re
@@ -1883,6 +1961,8 @@ public struct RemoteEvent: Codable, Equatable, Sendable {
         case schedulesChanged
         // §15.23
         case taskSettingsChanged
+        case tabFrame
+        case browserTabsChanged
     }
 
     public var event: Name
@@ -1925,6 +2005,17 @@ public struct RemoteEvent: Codable, Equatable, Sendable {
     /// Push payloads (§16): the Mac's name and when the push was sent.
     public var macName: String?
     public var sentAt: Int64?
+
+    // browser tabs (§15.25)
+    public var tabId: String?
+    public var tabs: [RemoteBrowserTab]?
+    public var frame: Int?
+    public var image: Data?
+    public var mediaType: String?
+    public var width: Int?
+    public var height: Int?
+    public var viewportWidth: Double?
+    public var viewportHeight: Double?
 
     public init(_ event: Name) {
         self.event = event

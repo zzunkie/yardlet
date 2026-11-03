@@ -46,15 +46,22 @@ final class AppModelRemoteBridge: RemoteBridge {
     /// watched until they change; one watch per task, since every read reads the same properties.
     var answeredSettings: [UUID: [RemoteSetting]] = [:]
     var watchesSettings: Set<UUID> = []
+    /// A task's browser tabs (§15.25), when this build has a browser engine.
+    let browser: RemoteTabBridge
 
-    init(model: AppModel, makePreview: RemoteImagePreviews.Make? = nil) {
+    init(model: AppModel, makePreview: RemoteImagePreviews.Make? = nil,
+         browser: RemoteTabBridge.Environment = .init(client: { nil })) {
         self.model = model
         previews = makePreview.map(RemoteImagePreviews.init(make:))
+        self.browser = RemoteTabBridge(model: model, environment: browser)
         previews?.onReady = { [weak self] askers in self?.previewsReady(askers) }
+        // A tab's `file:` page is shown only when `readFile` would serve it (§15.22, §15.25).
+        self.browser.fileScope = { [weak self] taskID in try? await self?.fileScope(taskID: taskID).get() }
     }
 
     func setChangeHandler(_ handler: @escaping @Sendable (RemoteBridgeChange) -> Void) {
         changeHandler = handler
+        browser.changeHandler = handler
     }
 
     // MARK: - Reading
@@ -69,6 +76,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         cachedSnapshot = snapshot
         // A setting, which Observation does not see change: read each time.
         snapshot.followUp = model.followUpMode == .steer ? .steer : .queue
+        snapshot.browserTabs = browser.isAvailable
         return snapshot
     }
 

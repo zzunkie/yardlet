@@ -1535,34 +1535,9 @@ final class BrowserAgentTools {
     // MARK: - Helpers
 
     func dispatch(_ press: BrowserAgentKeyPress, on page: BrowserAgentPage) async throws {
-        var held = 0
-        for modifier in press.modifiers {
-            held |= modifier.bit
-            _ = try await send(page, "Input.dispatchKeyEvent", keyEvent("rawKeyDown", modifier.key, modifiers: held))
+        for event in press.keyEvents(macEditingCommands: usesMacEditingCommands) {
+            _ = try await send(page, "Input.dispatchKeyEvent", event)
         }
-        var down = keyEvent(press.key.text == nil ? "rawKeyDown" : "keyDown", press.key, modifiers: held)
-        if usesMacEditingCommands, !press.macEditingCommands.isEmpty {
-            down["commands"] = .array(press.macEditingCommands.map { .string($0) })
-        }
-        _ = try await send(page, "Input.dispatchKeyEvent", down)
-        _ = try await send(page, "Input.dispatchKeyEvent", keyEvent("keyUp", press.key, modifiers: held))
-        for modifier in press.modifiers.reversed() {
-            held &= ~modifier.bit
-            _ = try await send(page, "Input.dispatchKeyEvent", keyEvent("keyUp", modifier.key, modifiers: held))
-        }
-    }
-
-    private func keyEvent(_ type: String, _ key: BrowserAgentKeyPress.Key, modifiers: Int) -> [String: JSONValue] {
-        var event: [String: JSONValue] = [
-            "type": .string(type), "key": .string(key.key), "code": .string(key.code),
-            "windowsVirtualKeyCode": .integer(Int64(key.keyCode)), "modifiers": .integer(Int64(modifiers))
-        ]
-        if key.location != 0 { event["location"] = .integer(Int64(key.location)) }
-        if type == "keyDown", let text = key.text {
-            event["text"] = .string(text)
-            event["unmodifiedText"] = .string(text)
-        }
-        return event
     }
 
     /// The element a reference names in the tab's latest snapshot. An element keeps its reference in later snapshots

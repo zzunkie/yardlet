@@ -9,9 +9,9 @@ with the sidebar's attention states, reads a task's conversation (latest first, 
 it streams), sends a message to a task, answers a pending approval (allow once or deny), stops a running
 turn, and marks a task read. It also answers questions and plan reviews, starting a task (on a
 harness, model and worktree the phone picks), images, a line's output and diffs, suggested and queued messages,
-continuing a task a plan limit stopped under another account, answering a browser handoff, push
-notifications, and a task's model, effort and permission mode, slash commands, edit and fork (§15.23). Nothing else:
-no app settings, connectors, file browsing or terminals. Yardlet on another
+continuing a task a plan limit stopped under another account, answering a browser handoff, seeing and using a
+task's browser tab (§15.25), push notifications, and a task's model, effort and permission mode, slash commands,
+edit and fork (§15.23). Nothing else: no app settings, connectors, file browsing or terminals. Yardlet on another
 computer is a client of the same protocol, as a phone is (§18).
 
 **One version.** The JSON messages of §2 and §4–§8 travel inside a Noise IK channel (§11–§16), over any
@@ -470,8 +470,9 @@ The provider's notices beside the turn (a model reroute, a warning) and context 
 - Requests: a burst of 30, then 10 per second per connection. Commands (`sendMessage`,
   `answerApproval`, `stopTurn`, `markRead`): a burst of 10, then one per 3 s. Over the limit a request
   gets `rateLimited` and is dropped; 20 in a row closes the connection (4429). File reads have a byte budget per
-  device besides (§15.22).
-- IDs a request carries: `taskId`, `projectId`, `scheduleId` and `accountId` at most 64 bytes; `requestId`,
+  device besides (§15.22). A browser tab's requests (`watchTab`, `unwatchTab`, `tabFrameAck`, `tabInput`, §15.25) have a
+  bucket of their own instead: a burst of 60, then 30 per second.
+- IDs a request carries: `taskId`, `projectId`, `scheduleId`, `accountId` and `tabId` at most 64 bytes; `requestId`,
   `itemId`, `suggestionId` and `choice` at most 256. A longer one is `badRequest`.
 - A connection whose phone leaves more than 32 MiB of the Mac's messages untaken is closed, with what was waiting:
   a direct socket is dropped, and over the relay the phone's stream closes with 4429.
@@ -481,6 +482,10 @@ The provider's notices beside the turn (a model reroute, a warning) and context 
 - A listener holds at most 4 connections from one address, and 16 in all, that have not finished their
   WebSocket and Noise handshakes; a new one closes the oldest of them, and one not done within 10 s is closed.
 - Pairing: 5 wrong codes close the open pairing.
+- The Mac holds at most 64 messages and 16 MiB of a connection's that it has not handled yet, and 64 MiB of all
+  connections'; a message past that closes its connection (4429), whatever it is, rather than wait in memory. Before
+  they are decrypted, at most 512 frames and 16 MiB of a connection's wait, past which it closes (4429) too. A browser
+  tab's input waiting behind a slow page counts apart: at most 32 per connection (§15.25).
 
 ## 8. Error codes
 
@@ -547,6 +552,11 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
     `stopTurn` expires it, and the question comes back 30 s later).
   - "Plan the weekend trip" (a chat) has a to-do plan; "Check the footer on mobile" is nested under
     "Fix the footer links"; "Regenerate the screenshots" failed.
+  - "Publish the release notes" (§15.18, §15.25) waits on a sign-in page it handed to the person, one of its two
+    browser tabs. The page draws as PNG and takes clicks, typing and keys: tap the username field and type, Tab or
+    tap to the password field (the list marks it `passwordField`), then Sign in; with both filled the page says it is
+    signed in, and I'm done answers the handoff. Thirty seconds after an answer the page signs out and the handoff
+    comes back.
 
 ## 10. Revisions
 
@@ -586,6 +596,8 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
   and closes with 4404, 4409 or no code tries again quietly for about 10 s (§14.3).
 - 2026-11-03, v2 only: a task's settings, slash commands, Edit message and Fork from here, and their change event
   (§15.23).
+- 2026-11-03, v2 only: a task's browser tabs, a watched tab's frames and the person's input to it (§15.25), and `tabId`
+  on a browser handoff's item (§15.18). A limit on the messages the Mac holds unhandled per connection and in all (§7).
 
 ## 11. v2 transport
 
@@ -1132,9 +1144,10 @@ that does not know them ignores them.
   Mac's sidebar does not mark (it shows the task running, and the panel's bar and a Mac notification say the
   rest), so here `attention` is the phone's alone.
 - `{"type": "answerHandoff", "taskId": "4C1F…", "requestId": "…", "answer": "done"}`: the bar's "I'm done" or
-  "Decline". "Done" is for a step finished elsewhere (a sign-in approved in another app, a link opened on the
-  phone); the tab itself is not shown on the phone yet (REMOTE_V2_DESIGN 6.3). A command. Errors:
-  `requestNotFound`, `notAllowed`.
+  "Decline", once the step is finished in the tab (§15.25) or elsewhere (a sign-in approved in another app, a link
+  opened on the phone). A command. Errors: `requestNotFound`, `notAllowed`.
+- Since 2026-11-03 the item carries `tabId`, the handed tab, which `watchTab` shows (§15.25); absent when the Mac
+  does not know which of the task's tabs it is.
 - It is pushed (§16) like any other wait.
 
 ### 15.19 Every answer the Mac's card gives
@@ -1524,6 +1537,138 @@ for what they read beyond §6's items. A phone keeps §6.
   Mac with `fullConversation`, decode the previews' JPEG, and word notices and limits from their kinds as its own
   strings, keeping `title` and `text` as the fallback for a kind it does not know. Full detail costs more over the
   relay, so a phone on mobile data may prefer §6.
+
+### 15.25 A task's browser tabs
+
+Added on 2026-11-03. The phone sees a task's browser tab and uses it, for a step only the person can take while away: a
+sign-in, a two-factor code, an approval button, often the tab a browser handoff (§15.18) gave them. The Mac sends
+pictures of the tab's visible page while the phone watches it, and the phone's taps, scrolling and typing go to the
+page as the Mac's own browser panel sends the person's. Opening other addresses, other tabs or the Mac's own browsing
+stays on the Mac.
+
+- The snapshot carries `browserTabs: true` when the Mac answers the requests below (it has a browser engine). A phone
+  offers a task's browser only then.
+- ```json
+  {"id": "40", "type": "watchTab", "taskId": "4C1F…", "maxWidth": 1080, "maxHeight": 2000,
+   "viewport": {"width": 390, "height": 844, "mobile": true}}
+  ```
+
+  ```json
+  {"re": "40", "ok": true, "taskId": "4C1F…", "tabId": "9B21…",
+   "tabs": [{"tabId": "77A0…", "title": "Managing releases - GitHub Docs", "url": "https://docs.github.com/…"},
+            {"tabId": "9B21…", "title": "Sign in to GitHub", "url": "https://github.com/login", "active": true,
+             "waiting": "handoff", "requestId": "…", "reason": "Sign in so I can publish the notes",
+             "passwordField": true}]}
+  ```
+
+  Lists the task's tabs, as the task's side panel lists them, in its order, and starts watching one: `tabId` names it,
+  or the panel's front tab (`active`) when the request names none. Tabs the panel saved before Yardlet restarted, or
+  lost with the browser, open again first, as the agent's first browser call opens them. `tabId` is absent, and `tabs`
+  empty, for a task with no tab; the watch then only follows the list. `maxWidth` and `maxHeight` (1 to 2,560; 1,280 and
+  1,600 when absent) are the largest picture the phone wants, in pixels: its screen, not the page. `viewport`
+  (optional) is the size the phone asks the tab to be drawn at while it watches, in CSS pixels: `width` 200 to 1,920,
+  `height` 200 to 2,560 (another is `badRequest`), and `mobile` (when absent, true under 768 wide) draws it as a phone:
+  a mobile viewport, touch, and a phone's user agent and client hints, as the agent's `browser_resize` does. Without
+  it the tab keeps the size it has (Yardlet on another computer sends none). One watch per connection: watching another
+  tab or task replaces it. A tab's fields: `tabId` (the side-panel tab; it stays when the
+  tab's page is opened again in its place), `title`, `url` (only its origin while the address carries a value the
+  password manager filled), `active`, `loading`, `canGoBack`, `canGoForward`, `waiting` (what the tab waits on from the
+  person, the most pressing: `handoff`, `passkey`, `signIn`, `permission`, `externalApp`, `javaScriptDialog`,
+  `fileChooser`), `requestId` and `reason` (the handoff's, §15.18), `passwordField` (the page's focused field is a
+  password field). Not a command. Errors: `notFound` (no such task, or no such tab of it), `unavailable` (no browser
+  engine).
+- `{"event": "tabFrame", "seq": 51, "taskId": "4C1F…", "tabId": "9B21…", "frame": 3, "image": "<base64>",
+  "mediaType": "image/jpeg", "width": 1080, "height": 675, "viewportWidth": 1280, "viewportHeight": 800}`: the watched
+  tab's visible page. `image` is JPEG from the Mac (the fixture sends PNG), `width` by `height` pixels, scaled to fit the
+  watch's largest picture and never past the page's own pixels; `viewportWidth` by `viewportHeight` is the visible page
+  in CSS pixels (the phone's own size while the tab is drawn at it), the space `tabInput` counts in. The first comes at
+  once. A frame comes only after the phone acknowledged the one before it (`tabFrameAck`), or 10 s after it was sent,
+  only when the page drew something different, and at most about four a second; a page that keeps drawing the same
+  picture sends nothing. This pace is the connection's: watching again, the same tab or another, does not start a frame
+  sooner. A page under a dialog or one of Chromium's windows, whose renderer ended, or a `file:` page outside the task's
+  files (below) sends nothing until it can be pictured.
+- `{"type": "tabFrameAck", "taskId": "4C1F…", "tabId": "9B21…", "frame": 3}`: the phone has the frame (send it once the
+  picture is decoded); the next may come. Acknowledge every `tabFrame` the connection receives, also one of a tab or
+  task no longer watched: frame numbers are the connection's, and an acknowledgement of another number changes nothing.
+  Not a command.
+- `{"event": "browserTabsChanged", "seq": 52, "taskId": "4C1F…", "tabs": [ … ]}`: the watched task's list changed (a tab
+  opened or closed, a page, title, loading, wait or handoff, the password field's focus), the whole list, batched like
+  `tasksChanged`. A watched tab that is no longer listed sends no more frames: watch another (the `active` one).
+- ```json
+  {"id": "41", "type": "tabInput", "taskId": "4C1F…", "tabId": "9B21…", "input": {"kind": "click", "x": 412.5, "y": 236}}
+  ```
+
+  The person's input to the watched tab (another is `notAllowed`), as trusted input the page cannot tell from a mouse
+  and keyboard on the Mac. `x` and `y` are CSS pixels from the visible page's top left: a point on the picture times
+  `viewportWidth / width`. `input.kind`:
+
+  | kind | fields | |
+  |---|---|---|
+  | `click` | `x`, `y`, `button`, `clickCount`, `modifiers` | a press and release: a tap. `clickCount` is the click's place in a series (2 for the second click of a double click) |
+  | `mouse` | `action` (`down`, `move`, `up`), `x`, `y`, `button`, `modifiers` | a drag (a slider, a puzzle) or a hover; a `move` with `button` drags |
+  | `scroll` | `x`, `y`, `deltaX`, `deltaY` | a wheel at the point, in CSS pixels; positive scrolls the page right and down (a finger moving up is a positive `deltaY`) |
+  | `text` | `text` (1–4,000 characters, at most 16,000 bytes as UTF-8) | committed text where the page's focus is, as an input method commits it: a phone keyboard's word or composed syllable, a paste of the phone's own clipboard |
+  | `key` | `key` | a key with modifiers joined by `+`: `Enter`, `Backspace`, `Delete`, `Tab`, `Escape`, `ArrowUp`…, `Home`, `End`, `PageUp`, `PageDown`, `Shift+Tab`, `Meta+a`, one character (US layout) |
+  | `navigate` | `action` (`back`, `forward`, `reload`) | the panel's Back, Forward and Reload |
+
+  `button` is `left` (when absent); `middle` and `right` are `notAllowed` (a middle click pastes on some pages, a right
+  click opens a menu on the Mac). `modifiers` are `shift`, `control`, `alt`, `meta`. A field the kind does not take (a
+  `text` on a `click`) is `badRequest`. A `key` is what editing text takes: one character, alone or with Shift; `Enter`,
+  `Tab` or `Escape`, alone or with Shift; `Backspace`, `Delete`, an arrow, `Home`, `End`, `PageUp` or `PageDown`, alone or
+  with Shift, Alt or Meta (words, lines, selection; not `Shift+Delete`, which cuts); and `Meta+a`, `Meta+z`, `Shift+Meta+z`.
+  Every other Meta or Control combination (the clipboard's in any spelling, the browser's own keys, the developer
+  tools'), Insert and the function keys are `notAllowed`: the Mac's clipboard and windows are not the person's, so their
+  own text comes as `text`. A connection's input goes to the page in the order sent, apart from its other requests
+  (`unwatchTab` does not wait for it); at most 32 of its inputs wait at once (more is `rateLimited`); input whose watch
+  ended meanwhile sends nothing more, and each step is checked again just before it goes. Not a command. Errors:
+  `badRequest` (a field missing, out of range or not the kind's, an unknown key), `tooLarge` (text), `notFound` (the tab
+  closed), `notAllowed` (not the watched tab, or its watch ended; a passkey or site sign-in window, one whose tab
+  Chromium does not name, or a page's dialog is up, which the person answers on the Mac; a key or button that is not
+  taken; a `file:` page outside the task's files, also one the page moved to while the input went), `rateLimited`,
+  `unavailable` (the page did not answer, or a password field could not be protected, below).
+- `{"type": "unwatchTab", "taskId": "4C1F…"}`: stops the watch. Closing the connection, removing the device, the remote
+  turning off and the tab closing stop it too, input under way included. Not a command.
+- **What the Mac does:** only the listed task's own tabs, as its side panel and the agent's browser tools see them;
+  never another task's or the Mac's own browsing. A watched tab paints while it is watched, as one a panel shows on
+  screen, and goes back to how it was (hidden, and later let go by the memory saver) when no one watches it. A phone's
+  `viewport` draws it at that size while the phone watches (the smaller when two ask), and after the last such watch the
+  tab takes the size and emulation it had before: the person's from the panel, the agent's while its turn goes on, else
+  its own. The tab the Mac's panel shows does not change. Input counts as the person's in that tab, as the panel's
+  does: the memory saver keeps a page they typed in, and a character typed into a password field, as text or as a key,
+  first marks the page as one that holds a secret, so the agent's scripts and pictures stay off it while the password
+  manager is on, as for one typed in the panel; when the page cannot be marked, nothing is typed. A page's request to
+  open another app on the Mac (a `mailto:` link, an app the site was always allowed) after a remote click waits for
+  someone at the Mac to choose it there (`waiting` `externalApp`), and so does one from a tab such a page opened (a
+  popup), until someone uses that tab on the Mac. A download a remote click started (in the tab or a popup it opened)
+  stops as it begins and the Mac's panel says so; the person downloads it on the Mac to keep it. A `file:` page is shown and driven only when
+  `readFile` would serve it, or it is a folder inside the task's folders (§15.22), checked for the very address
+  pictured or driven: a page that moves during a picture is not sent, and a step of input after a move is checked
+  again. Another is listed as `file://`, without its title. Pictures show the page as it draws itself (a password field as dots) and are
+  made only while watched; the Mac keeps none. The audit log (§4.4) records each
+  `watchTab` and, at most once a minute per device, task, kind and result, a `tabInput`'s kind (`click`, `text`, …),
+  never what was typed. Chromium's own windows (a passkey, a site's sign-in), macOS prompts and a page's dialogs stay
+  on the Mac.
+- **What a phone needs:**
+  - Draw the frame fitted to the screen, keeping its shape, and let the person zoom and pan the picture. A tap at a
+    point of the picture is `click` at that point times `viewportWidth / width` (the same factor both ways); a double tap
+    is two clicks, the second with `clickCount` 2; a drag of one finger on the page is `scroll` (the finger's movement in
+    picture pixels times that factor, sign reversed), unless the person chose to drag (`mouse`). Send scrolls at most
+    about ten a second, adding up the deltas between.
+  - Typing goes through a text field of the phone's own under the picture: send committed text as `text` (an input
+    method's composing text stays on the phone until committed), and the keyboard's Return, Backspace and Tab as `key`.
+    While the watched tab's `passwordField` is true, mask that field, turn off suggestions and learning, and keep nothing
+    of what was typed.
+  - Acknowledge each frame once it is decoded. Keep frames in memory only, and block screenshots and the recent-apps
+    preview of the browser screen (Android `FLAG_SECURE`).
+  - Send `viewport`: the browser screen's size in CSS pixels (on Android, its size in dp, which Chrome on the phone
+    would use), with `mobile` true; send it again with the new size when the phone turns. `maxWidth` and `maxHeight`
+    are the same screen in pixels.
+  - Watch only while the browser screen is on screen, `unwatchTab` when it leaves, and `watchTab` again after
+    reconnecting. A frame arrives about a quarter of a second after the page changes on the same network; through the
+    relay, each frame waits for the one before it, so a slow link means fewer frames, never a queue.
+  - With `requestId` on the watched tab, show the handoff's `reason` and its Done and Decline (`answerHandoff`, §15.18)
+    above the picture, as the Mac's panel does. With another `waiting`, say what waits on the Mac (§15.19's
+    "Steps that are not requests").
 
 ## 16. Push notifications
 

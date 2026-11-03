@@ -129,6 +129,34 @@ public enum RemoteFileReader {
         #endif
     }
 
+    /// Whether a browser tab may show the page at `path`, a `file:` address's path, to a phone (§15.25): what `read` would
+    /// serve, or a folder inside one of the task's folders (a folder's listing), with every link resolved. Anything else,
+    /// and anything not there, is not shown.
+    public static func allowsPage(_ path: String, in scope: RemoteFileScope, home: String = NSHomeDirectory()) -> Bool {
+        guard path.hasPrefix("/"), path.utf8.count <= maxPathBytes, !path.utf8.contains(0) else { return false }
+        #if canImport(Darwin)
+        let requested = lexical(path)
+        let realHome = realPath(home) ?? lexical(home)
+        var written: [String] = []
+        var roots: [String] = []
+        for root in [scope.folder] + scope.otherFolders {
+            let raw = lexical(root.path(percentEncoded: false))
+            guard let real = realPath(raw), !holdsHome(real, home: realHome) else { continue }
+            written.append(raw)
+            roots.append(real)
+        }
+        // As `read`: nothing is looked up before the path, by its text, is under one of the folders or is an output.
+        if (written + roots).contains(where: { isInside(requested, $0) }),
+           let real = realPath(requested), roots.contains(where: { isInside(real, $0) }) { return true }
+        let outputs = Set(scope.outputs.map { lexical($0.path(percentEncoded: false)) })
+        guard outputs.contains(requested) || placed(requested).map(outputs.contains) == true else { return false }
+        if case .success = read(requested, offset: max(0, (fileSize(requested) ?? 1) - 1), in: scope, home: home) { return true }
+        return false
+        #else
+        return false
+        #endif
+    }
+
     #if canImport(Darwin)
     /// `target` holds no link but in its folders, which are resolved, so a link put into any part of it since is
     /// refused (O_NOFOLLOW_ANY), and the descriptor is checked again: what is read is what was checked.
@@ -238,6 +266,13 @@ public enum RemoteFileReader {
             device = info.st_dev
             inode = info.st_ino
         }
+    }
+
+    /// The size of the regular file at `path`, not following a link in its place.
+    private static func fileSize(_ path: String) -> Int? {
+        var info = stat()
+        guard lstat(path, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return nil }
+        return Int(info.st_size)
     }
 
     /// The path with every symbolic link, `.` and `..` resolved by the kernel; nil when something on the way is not

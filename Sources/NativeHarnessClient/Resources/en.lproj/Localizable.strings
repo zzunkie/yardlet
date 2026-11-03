@@ -3688,3 +3688,4 @@
 "%@ › %@" = "%@ › %@";
 "Changed setting: %@" = "Changed setting: %@";
 "Open %@ in Settings" = "Open %@ in Settings";
+"%@ was not downloaded: a click from another device started it. Download it here to keep it." = "%@ was not downloaded: a click from another device started it. Download it here to keep it.";

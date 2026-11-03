@@ -492,7 +492,13 @@ nearby-device authentication remotely.
 - "This must be handled on the Mac" is an honest marker, like `moreOnMac`. It shows in one line what needs doing
   (for example "Confirm with Touch ID on the Mac") and does not pretend the phone can do it.
 
-### 6.3 Taking over a browser tab (design for the next step)
+### 6.3 Taking over a browser tab
+
+Implemented on 2026-11-03 as [REMOTE_PROTOCOL](REMOTE_PROTOCOL.md) §15.25, with these differences from the design below:
+the frames are the agent's own screenshot call (`Page.captureScreenshot`) taken when the tab drew something new, each
+after the last was acknowledged, rather than CDP's screencast; any of the task's tabs can be watched, not only a handed
+one; the handoff is answered with §15.18's Done and Decline, so there is no `releaseTab`; the agent's tools keep working on a
+watched tab, as they do on the tab the person uses in the Mac's panel; and starting a watch asks for no biometrics. The rest of this section is the design as written before.
 
 Yardlet's browser uses CEF off-screen rendering and holds the DevTools protocol for each tab (the agent tools already
 use it), so it is easy to send just one tab's screen and input to the phone. Creating the "waiting for the person" state

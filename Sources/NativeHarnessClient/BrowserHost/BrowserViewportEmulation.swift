@@ -10,6 +10,9 @@ struct BrowserViewportEmulation: Equatable, Sendable {
         case person
         /// `browser_resize`: it goes when the agent's turn ends, as the Claude app's does.
         case agent
+        /// A phone watching the tab over the remote (docs/REMOTE_PROTOCOL.md §15.25): it goes when no phone watches it,
+        /// and the tab takes the size it had before.
+        case remote
     }
 
     /// One of the menu's and the tool's sizes.
@@ -39,6 +42,12 @@ struct BrowserViewportEmulation: Equatable, Sendable {
         self.height = height
         mobile = width < 768
         self.owner = owner
+    }
+
+    /// A size whose phone drawing is chosen apart from its width (a phone in landscape, a tablet as a phone).
+    init(width: Int, height: Int, mobile: Bool, owner: Owner) {
+        self.init(width: width, height: height, owner: owner)
+        self.mobile = mobile
     }
 
     init(_ preset: Preset, owner: Owner) {

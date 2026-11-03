@@ -127,6 +127,41 @@ struct BrowserAgentKeyPress: Equatable {
         return Key(key: String(character), code: "", keyCode: 0, text: String(character))
     }
 
+    /// The `Input.dispatchKeyEvent` parameters that press the key: each modifier down, the key down and up, then the
+    /// modifiers up. With `macEditingCommands` the key down carries the editing commands Chromium on macOS needs.
+    func keyEvents(macEditingCommands: Bool) -> [[String: JSONValue]] {
+        var events: [[String: JSONValue]] = []
+        var held = 0
+        for modifier in modifiers {
+            held |= modifier.bit
+            events.append(Self.keyEvent("rawKeyDown", modifier.key, modifiers: held))
+        }
+        var down = Self.keyEvent(key.text == nil ? "rawKeyDown" : "keyDown", key, modifiers: held)
+        if macEditingCommands, !self.macEditingCommands.isEmpty {
+            down["commands"] = .array(self.macEditingCommands.map { .string($0) })
+        }
+        events.append(down)
+        events.append(Self.keyEvent("keyUp", key, modifiers: held))
+        for modifier in modifiers.reversed() {
+            held &= ~modifier.bit
+            events.append(Self.keyEvent("keyUp", modifier.key, modifiers: held))
+        }
+        return events
+    }
+
+    private static func keyEvent(_ type: String, _ key: Key, modifiers: Int) -> [String: JSONValue] {
+        var event: [String: JSONValue] = [
+            "type": .string(type), "key": .string(key.key), "code": .string(key.code),
+            "windowsVirtualKeyCode": .integer(Int64(key.keyCode)), "modifiers": .integer(Int64(modifiers))
+        ]
+        if key.location != 0 { event["location"] = .integer(Int64(key.location)) }
+        if type == "keyDown", let text = key.text {
+            event["text"] = .string(text)
+            event["unmodifiedText"] = .string(text)
+        }
+        return event
+    }
+
     /// Chromium on macOS performs editing keys only through these commands, which a native key
     /// event gets from the text input system and a CDP key event has to carry itself.
     var macEditingCommands: [String] {

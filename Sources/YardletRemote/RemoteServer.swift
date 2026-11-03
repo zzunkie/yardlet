@@ -16,6 +16,10 @@ public enum RemoteBridgeChange: Equatable, Sendable {
     case schedules
     /// A task's composer controls changed since `taskSettings` last read them (§15.23).
     case taskSettings(String)
+    /// What a task's browser tabs list may have changed: a tab opened or closed, or a tab's page, title or wait (§15.25).
+    case browserTabs(String)
+    /// A watched tab drew its page again (§15.25).
+    case tabPainted(taskID: String, tabID: String)
 }
 
 /// What a command asks of the Mac.
@@ -135,6 +139,17 @@ public protocol RemoteBridge: AnyObject, Sendable {
     func runComposerCommand(taskID: String, command: String, arguments: String?) async -> Result<String?, RemoteError>
     /// Fork from here on a turn, or the task's whole conversation where the Mac forks only that; the new task.
     func forkTask(taskID: String, turnID: String?) async -> Result<String, RemoteError>
+    /// A task's browser tabs, as its side panel lists them (§15.25). A bridge that answers it and the two below says so
+    /// in its snapshot (`browserTabs`).
+    func browserTabs(taskID: String) async -> Result<[RemoteBrowserTab], RemoteError>
+    /// The tabs some connection watches: these paint while watched and report `tabPainted`, and their tasks report
+    /// `browserTabs` changes. Empty when no one watches.
+    func setWatchedTabs(_ watches: Set<RemoteTabWatch>) async
+    /// A picture of a tab's visible page, at most `maxWidth` by `maxHeight` pixels.
+    func captureTab(taskID: String, tabID: String, maxWidth: Int, maxHeight: Int) async -> Result<RemoteTabFrame, RemoteError>
+    /// The person's input to a tab, through the paths the Mac's own browser panel and the agent's tools use, checking
+    /// `permit` before each step it sends: the watch it came under may end meanwhile.
+    func tabInput(taskID: String, tabID: String, input: RemoteTabInput, permit: RemoteTabPermit) async -> RemoteError?
 }
 
 extension RemoteBridge {
@@ -178,6 +193,20 @@ extension RemoteBridge {
     public func forkTask(taskID: String, turnID: String?) async -> Result<String, RemoteError> {
         .failure(RemoteError(.unavailable))
     }
+
+    public func browserTabs(taskID: String) async -> Result<[RemoteBrowserTab], RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+
+    public func setWatchedTabs(_ watches: Set<RemoteTabWatch>) async {}
+
+    public func captureTab(taskID: String, tabID: String, maxWidth: Int, maxHeight: Int) async -> Result<RemoteTabFrame, RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+
+    public func tabInput(taskID: String, tabID: String, input: RemoteTabInput, permit: RemoteTabPermit) async -> RemoteError? {
+        RemoteError(.unavailable)
+    }
 }
 
 /// The remote's protocol, connection by connection (docs/REMOTE_PROTOCOL.md): authentication and
@@ -207,6 +236,11 @@ public actor RemoteServer {
         public var macKey: Data?
         /// Where files a phone sends are kept (§15.20).
         public var uploadDirectory = RemoteUploadStore.defaultDirectory
+        /// How soon a watched tab's next frame may follow one that changed, and how long a tab that drew the same
+        /// picture again waits at most before the next look (§15.25).
+        public var tabFrameInterval: TimeInterval = 0.25
+        public var tabFrameIdleInterval: TimeInterval = 2
+        public var tabFrameAckTimeout: TimeInterval = RemoteProtocol.tabFrameAckTimeout
 
         public init(server: RemoteServerInfo, macKey: Data? = nil) {
             self.server = server
@@ -225,7 +259,7 @@ public actor RemoteServer {
         public var linkRequest: RemoteLinkRequest?
     }
 
-    private struct Connection {
+    struct Connection {
         let channel: any RemoteChannel
         var deviceID: String?
         var path: RemotePath?
@@ -248,6 +282,8 @@ public actor RemoteServer {
         var fileRead: FileRead?
         var subscriptions: [String: Subscription] = [:]
         var queue: [Data] = []
+        /// The bytes `queue` holds (§7).
+        var queuedBytes = 0
         var isDraining = false
 
         /// A paired device's connection, counted against `maxConnections`.
@@ -260,7 +296,7 @@ public actor RemoteServer {
         var next: Int
     }
 
-    private struct Subscription {
+    struct Subscription {
         var window: RemoteConversationWindow
         /// The fetch the window last showed; an older fetch that returns late is dropped.
         var generation: Int
@@ -284,13 +320,15 @@ public actor RemoteServer {
         var request: RemoteLinkRequest?
     }
 
-    private let configuration: Configuration
-    private let bridge: any RemoteBridge
+    let configuration: Configuration
+    let bridge: any RemoteBridge
     private let devices: RemoteDeviceStore
-    private let audit: RemoteAuditLog?
-    private let now: @Sendable () -> Date
+    let audit: RemoteAuditLog?
+    let now: @Sendable () -> Date
 
-    private var connections: [UUID: Connection] = [:]
+    var connections: [UUID: Connection] = [:]
+    /// What each connection watches of a task's browser tabs (§15.25), in `RemoteServer+Tabs.swift`.
+    var tabs = RemoteServerTabs()
     private var pairing: RemotePairingTicket?
     private var pairedDeviceID: String?
     private var published: RemoteSnapshot?
@@ -410,6 +448,14 @@ public actor RemoteServer {
             close(id, .messageTooBig)
             return
         }
+        // Held messages are bounded per connection and in all, before they are kept (§7).
+        let held = connections.values.reduce(0) { $0 + $1.queuedBytes }
+        guard connection.queue.count < RemoteProtocol.maxQueuedMessages,
+              connection.queuedBytes + data.count <= RemoteProtocol.maxQueuedBytes,
+              held + data.count <= RemoteProtocol.maxQueuedBytesTotal else {
+            close(id, .rateLimited)
+            return
+        }
         connections[id]?.lastReceivedAt = now()
         if !connection.isProven {
             connections[id]?.isProven = true
@@ -417,6 +463,7 @@ public actor RemoteServer {
             publishStatus()
         }
         connections[id]?.queue.append(data)
+        connections[id]?.queuedBytes += data.count
         guard connections[id]?.isDraining == false else { return }
         connections[id]?.isDraining = true
         Task { await self.drain(id) }
@@ -428,6 +475,7 @@ public actor RemoteServer {
         RemoteLog.notice("Remote: \(Self.describe(connection)) ended with its transport after \(lifetime(of: connection))")
         forgetLink(on: id)
         if connection.isPresent { Task { await self.releaseHeldPushes() } }
+        endTabWatch(on: id)
         Task { await self.updateWatched() }
         publishStatus()
     }
@@ -664,11 +712,12 @@ public actor RemoteServer {
     public func revoke(_ deviceID: String) async {
         revokedDeviceIDs.insert(deviceID)
         spentPairing = nil
-        await devices.remove(deviceID)
+        // Its connections go first, and with them what their watches still do (§15.25), before the list is saved.
         for (id, connection) in connections where connection.deviceID == deviceID {
             send(RemoteEvent(.revoked), to: id)
             close(id, .revoked)
         }
+        await devices.remove(deviceID)
         audit?.record(device: deviceID, type: "revoke", task: nil, result: "ok", at: now())
         await reloadPushDevices()
     }
@@ -694,6 +743,7 @@ public actor RemoteServer {
     private func drain(_ id: UUID) async {
         while let data = connections[id]?.queue.first {
             connections[id]?.queue.removeFirst()
+            connections[id]?.queuedBytes -= data.count
             await handle(data, on: id)
         }
         connections[id]?.isDraining = false
@@ -711,7 +761,7 @@ public actor RemoteServer {
             envelope = value
         }
         let request = envelope.request
-        guard connections[id]?.limiter.admit(isCommand: request.isCommand, now: now()) == true else {
+        guard connections[id]?.limiter.admit(isCommand: request.isCommand, isTabTraffic: request.isTabTraffic, now: now()) == true else {
             respond(.failure(envelope.id, RemoteError(.rateLimited)), to: id)
             if let refused = connections[id]?.limiter.refusedInARow, refused >= RemoteRateLimiter.refusalsBeforeClosing {
                 close(id, .rateLimited)
@@ -968,6 +1018,15 @@ public actor RemoteServer {
             } answer: { response in
                 response.taskId = forked
             }
+        case let .watchTab(taskID, tabID, maxWidth, maxHeight, viewport):
+            await watchTab(envelope.id, taskID: taskID, tabID: tabID, maxWidth: maxWidth, maxHeight: maxHeight,
+                           viewport: viewport, on: id)
+        case let .unwatchTab(taskID):
+            unwatchTab(envelope.id, taskID: taskID, on: id)
+        case let .tabFrameAck(taskID, tabID, frame):
+            acknowledgeTabFrame(envelope.id, taskID: taskID, tabID: tabID, frame: frame, on: id)
+        case let .tabInput(taskID, tabID, input):
+            tabInput(envelope.id, taskID: taskID, tabID: tabID, input: input, on: id)
         case let .uploadFile(part):
             guard let deviceID = connection.deviceID else { return }
             switch uploads.receive(part, from: deviceID, now: now()) {
@@ -996,6 +1055,7 @@ public actor RemoteServer {
             response.presence = true
             response.taskControls = published?.taskControls == true ? true : nil
             response.fullConversation = published?.fullConversation == true ? true : nil
+            response.browserTabs = published?.browserTabs == true ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)
             connections[id]?.receivesTaskEvents = true
@@ -1332,6 +1392,10 @@ public actor RemoteServer {
                 self.conversationTimers[taskID] = nil
                 await self.refreshConversation(taskID)
             }
+        case let .browserTabs(taskID):
+            browserTabsChanged(taskID)
+        case let .tabPainted(taskID, tabID):
+            tabPainted(taskID: taskID, tabID: tabID)
         case .schedules:
             guard connections.values.contains(where: \.receivesScheduleEvents) else {
                 // Nobody follows them: the next `scheduledTasks` starts over.
@@ -1456,11 +1520,11 @@ public actor RemoteServer {
 
     // MARK: - Sending and closing
 
-    private func respond(_ response: RemoteResponse, to id: UUID) {
+    func respond(_ response: RemoteResponse, to id: UUID) {
         connections[id]?.channel.send(RemoteJSON.string(response))
     }
 
-    private func send(_ event: RemoteEvent, to id: UUID) {
+    func send(_ event: RemoteEvent, to id: UUID) {
         guard let connection = connections[id] else { return }
         connections[id]?.seq += 1
         var event = event
@@ -1472,6 +1536,7 @@ public actor RemoteServer {
         guard let connection = connections.removeValue(forKey: id) else { return }
         RemoteLog.notice("Remote: closing \(Self.describe(connection)) with code \(code.rawValue) after \(lifetime(of: connection))")
         forgetLink(on: id)
+        endTabWatch(on: id)
         connection.channel.close(code)
         Task { await self.updateWatched() }
         publishStatus()
