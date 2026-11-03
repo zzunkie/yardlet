@@ -80,10 +80,10 @@ struct VaultWalletSection: View {
 
     private var switchRow: some View {
         HStack(spacing: 12) {
-            VaultSettingsIcon(systemName: "creditcard")
-            Text(L10n.string("Save and fill addresses and cards")).font(.callout.weight(.medium))
+            VaultSettingsIcon(systemName: YardletSetting.addressesAndCards.symbol)
+            Text(YardletSetting.addressesAndCards.title).font(.callout.weight(.medium))
             Spacer(minLength: 8)
-            Toggle(L10n.string("Save and fill addresses and cards"), isOn: Binding(
+            Toggle(YardletSetting.addressesAndCards.title, isOn: Binding(
                 get: { vault.offersWallet }, set: { vault.isWalletEnabled = $0 }))
                 .labelsHidden()
                 .toggleStyle(.paritySwitch)

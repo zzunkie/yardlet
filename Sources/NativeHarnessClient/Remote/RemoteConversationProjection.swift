@@ -238,6 +238,10 @@ enum RemoteConversationProjection {
             // A tool line on the phone, which has no Scheduled tasks to open.
             activity(&result, "tool", L10n.format("Created scheduled task: %@", creation.name), item.phase)
             if full != nil { result.schedule = RemoteScheduleCreation(id: creation.scheduleID.uuidString, name: creation.name) }
+        case let .settingChanged(change):
+            // A tool line on the phone, which has no Settings to open.
+            activity(&result, "tool", L10n.format("Changed setting: %@", change.title), item.phase)
+            result.detail = RemoteText.short(L10n.format("%@ → %@", change.from, change.to), RemoteText.detailLimit)
         case let .notice(notice):
             result.kind = .notice
             result.text = RemoteText.short(notice.displayMessage, RemoteText.detailLimit)

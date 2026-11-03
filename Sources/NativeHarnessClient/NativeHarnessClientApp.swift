@@ -533,6 +533,12 @@ struct NativeHarnessClientApp: App {
                     MacAgentToolService.shared.broker.sessions = model
                     MacAgentToolService.shared.broker.schedules = model
                     MacAgentToolService.shared.broker.handoffs = model
+                    // The settings tools change the vault's and Sparkle's switches as Settings does.
+                    model.settingsVault = MacAgentToolService.shared.vault
+                    if let sparkle = appDelegate.sparkle {
+                        model.settingsUpdateChecks = YardletSettingSwitch(get: { sparkle.checksAutomatically },
+                                                                          set: { sparkle.checksAutomatically = $0 })
+                    }
                     // A browser tab waiting on the person marks its task, tells them once, and waits in its tab.
                     model.followBrowserWaits(of: MacBrowserHost.shared.client)
 #if DEBUG

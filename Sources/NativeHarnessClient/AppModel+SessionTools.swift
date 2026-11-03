@@ -71,6 +71,8 @@ extension AppModel: SessionToolHandling {
              SessionToolCatalog.readPersonalAgentThread:
             return await callPersonalAgentTool(named: name, arguments: arguments)
         case TerminalToolCatalog.readTerminal: return readTerminal(arguments, caller: caller)
+        case SettingsToolCatalog.list: return listSettings(caller: caller)
+        case SettingsToolCatalog.update: return await updateSetting(arguments, caller: caller)
         default: return .error("Unknown tool: \(name)")
         }
     }

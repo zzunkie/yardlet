@@ -176,14 +176,14 @@ struct UsageLimitAutoContinueSettingRow: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(L10n.string("Continue automatically at usage limit")).font(.callout.weight(.medium))
-                Text(L10n.string("When a usage limit stops a Claude Code task and resets within a day, the task picks up where it stopped once it resets. A limit that resets later, such as a weekly one, continues only if you turn it on on its card."))
+                Text(YardletSetting.continueAtUsageLimit.title).font(.callout.weight(.medium))
+                Text(YardletSetting.continueAtUsageLimit.detail ?? "")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
-            Toggle(L10n.string("Continue automatically at usage limit"), isOn: $continuesAtLimit)
+            Toggle(YardletSetting.continueAtUsageLimit.title, isOn: $continuesAtLimit)
                 .labelsHidden()
                 .toggleStyle(.paritySwitch)
                 .controlSize(.small)

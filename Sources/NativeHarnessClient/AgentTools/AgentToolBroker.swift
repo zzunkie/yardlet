@@ -241,7 +241,8 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         if TaskSuggestionToolCatalog.definition(named: call.tool) != nil, let suggestions {
             return await suggestions.callTaskSuggestionTool(named: call.tool, arguments: call.arguments, sessionID: sessionID)
         }
-        if SessionToolCatalog.definition(named: call.tool) != nil, let sessions {
+        if SessionToolCatalog.definition(named: call.tool) != nil || SettingsToolCatalog.definition(named: call.tool) != nil,
+           let sessions {
             return await sessions.callSessionTool(named: call.tool, arguments: call.arguments, callerID: sessionID)
         }
         if TerminalToolCatalog.definition(named: call.tool) != nil, let sessions {
@@ -271,7 +272,8 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     private static func ownDefinition(named name: String) -> AgentToolDefinition? {
         AgentToolCatalog.definition(named: name) ?? VaultToolCatalog.definition(named: name)
             ?? TaskSuggestionToolCatalog.definition(named: name) ?? SessionToolCatalog.definition(named: name)
-            ?? TerminalToolCatalog.definition(named: name) ?? ScheduleToolCatalog.definition(named: name)
+            ?? TerminalToolCatalog.definition(named: name) ?? SettingsToolCatalog.definition(named: name)
+            ?? ScheduleToolCatalog.definition(named: name)
     }
 
     /// A call to a tool the task does not have, such as one its harness listed before a connector went off,
@@ -287,7 +289,7 @@ final class AgentToolBroker: AgentToolLaunchProviding {
     }
 
     /// The task's tools: the browser catalog when it was on, the task suggestion tools, the session
-    /// tools with `read_terminal` while the terminal is shared, the scheduled-task tools, then connected
+    /// tools and the settings tools, `read_terminal` while the terminal is shared, the scheduled-task tools, then connected
     /// connectors' tools, less any whose name is one of Yardlet's own (a
     /// connector slug and tool can spell `spawn_task`), with their fingerprint. Nil when the
     /// call's token does not match.
@@ -302,10 +304,11 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         let browser = browserOn ? AgentToolCatalog.browserTools.map(\.json) : []
         let vaultTools = browserOn && vault?.offersTool == true ? [VaultToolCatalog.tool.json] : []
         let suggestionTools = suggestions == nil ? [] : TaskSuggestionToolCatalog.tools.map(\.json)
-        let sessionTools = sessions == nil ? [] : SessionToolCatalog.tools.map(\.json)
+        let sessionTools = sessions == nil ? [] : (SessionToolCatalog.tools + SettingsToolCatalog.tools).map(\.json)
         let terminalTools = sessions != nil && sharesTerminal() ? [TerminalToolCatalog.tool.json] : []
         let scheduleTools = schedules == nil ? [] : ScheduleToolCatalog.tools.map(\.json)
-        let ownNames = Set((TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools + ScheduleToolCatalog.tools
+        let ownNames = Set((TaskSuggestionToolCatalog.tools + SessionToolCatalog.tools + SettingsToolCatalog.tools
+            + ScheduleToolCatalog.tools
             + [VaultToolCatalog.tool, TerminalToolCatalog.tool]).map(\.name))
         let connectorTools = (await connectors?.connectorTools(for: connectorContext(sessionID)) ?? []).filter {
             !ownNames.contains($0["name"]?.stringValue ?? "")

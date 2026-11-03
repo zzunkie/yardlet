@@ -538,6 +538,8 @@ enum CodexConversationProjection {
                 kind = .taskSuggestion(suggestion)
             } else if !failed, tool.status == "completed", let creation = ConversationScheduleProjection.creation(from: tool) {
                 kind = .scheduleCreated(creation)
+            } else if !failed, tool.status == "completed", let change = ConversationSettingProjection.change(from: tool) {
+                kind = .settingChanged(change)
             } else if let run = ConversationAgentRunProjection.subagent(from: tool) {
                 kind = .subagent(run)
             } else {

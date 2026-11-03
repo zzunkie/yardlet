@@ -137,7 +137,7 @@ extension ConversationTurn {
                 return item
             case .userMessage, .scheduledTaskMessage:
                 return index >= answered ? item : nil
-            case .taskSuggestion, .scheduleCreated, .outcome:
+            case .taskSuggestion, .scheduleCreated, .settingChanged, .outcome:
                 return item
             case let .request(request):
                 return request.isQuestion ? item : nil

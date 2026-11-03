@@ -14,6 +14,8 @@ import XCTest
 ///   the turn like every request.
 /// - `subagent-done-*`: a finished Codex subagent's card with its model and answer.
 /// - `approval-card-*`: `send_message_to_task` into another project waiting on the person's card.
+/// - `setting-approval-card-*`, `setting-changed-*`: `update_setting` waiting on the person's card, and the
+///   change it made as a row in the folded turn.
 @MainActor
 final class SessionToolRenderingTests: XCTestCase {
     private static let workspace = URL(filePath: "/work/uploader", directoryHint: .isDirectory)
@@ -155,6 +157,59 @@ final class SessionToolRenderingTests: XCTestCase {
             let texts = drawing.elements.map(\.description).joined(separator: "\n")
             XCTAssertTrue(texts.contains(L10n.string("Send a message to another project's task")), texts)
         }
+    }
+
+    /// `update_setting` on a setting that asks every time: the task's card names the setting, where it is in
+    /// Settings, the change and the setting's help; once allowed, the call is a row with Open that stays when
+    /// the turn folds.
+    func testASettingChangeAsksOnTheCallersCardAndStaysAsARowOnceMade() throws {
+        let caller = UUID()
+        let setting = YardletSetting.keepCookies
+        let approval = SessionToolApproval(
+            id: SessionToolApproval.idPrefix + "setting", taskID: caller,
+            request: PermissionRequest(id: SessionToolApproval.idPrefix + "setting",
+                                       title: AppModel.settingCardTitle(setting),
+                                       detail: AppModel.settingCardDetail(setting, from: "perTask", to: "shared"),
+                                       command: nil))
+        let input = #"{"id":"keep_cookies","value":"shared"}"#
+        let asking = transcript([
+            .user(text: "Let every task share one set of cookies"),
+            .activity(HarnessActivity(id: "toolu_setting", kind: "mcp__yardlet__update_setting",
+                                      title: "mcp__yardlet__update_setting", input: input), state: .running)
+        ])
+        let cards = try draw("setting-approval-card", height: 520) {
+            ConversationTimeline(source: .transcript(entries: asking, harness: .claudeCode, status: .running,
+                                                     latestTurnIsComplete: false),
+                                 actions: ConversationActions(heldRequests: [approval.conversationRequest]))
+        }
+        for drawing in cards {
+            let texts = drawing.elements.map(\.description).joined(separator: "\n")
+            XCTAssertTrue(texts.contains(AppModel.settingCardTitle(setting)), texts)
+            XCTAssertTrue(texts.contains(L10n.format("%@ → %@", L10n.string("Per task"), L10n.string("Shared by all tasks"))), texts)
+        }
+
+        let result = SettingsToolCatalog.changedLine(title: setting.title, from: setting.title(of: "perTask"),
+                                                     to: setting.title(of: "shared"), id: setting.id) + "\n" + setting.help
+        let made = transcript([
+            .user(text: "Let every task share one set of cookies"),
+            .activity(HarnessActivity(id: "toolu_setting", kind: "mcp__yardlet__update_setting",
+                                      title: "mcp__yardlet__update_setting", input: input, output: result), state: .completed),
+            .assistant(text: "Every task now shares one set of cookies.", isStreaming: false)
+        ])
+        var opened: [SettingsSection] = []
+        let rows = try draw("setting-changed", height: 360) {
+            ConversationTimeline(source: .transcript(entries: made, harness: .claudeCode, status: .ready,
+                                                     latestTurnIsComplete: true))
+                .environment(\.openSettingsSection, { opened.append($0) })
+        }
+        for drawing in rows {
+            let texts = drawing.elements.map(\.description).joined(separator: "\n")
+            XCTAssertTrue(texts.contains(L10n.format("Changed setting: %@", setting.title)),
+                          "The row stays in the folded turn:\n\(texts)")
+            XCTAssertTrue(texts.contains(L10n.format("Open %@ in Settings", setting.title)), texts)
+            XCTAssertFalse(texts.contains("update_setting"), "Not a tool line:\n\(texts)")
+        }
+        XCTAssertTrue(opened.isEmpty)
     }
 
     // MARK: - Fixtures

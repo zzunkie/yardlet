@@ -119,13 +119,13 @@ struct AccountList: View {
             Divider()
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(L10n.string("Choose the account for new tasks automatically")).font(.callout.weight(.medium))
-                    Text(L10n.string("With more than one account in automatic assignment, a new task starts on the one with the most room left in its limits unless you choose an account."))
+                    Text(YardletSetting.newTaskAccountAutomatically.title).font(.callout.weight(.medium))
+                    Text(YardletSetting.newTaskAccountAutomatically.detail ?? "")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
-                Toggle(L10n.string("Choose the account for new tasks automatically"), isOn: Binding(
+                Toggle(YardletSetting.newTaskAccountAutomatically.title, isOn: Binding(
                     get: { store.picksNewTaskAccount }, set: { store.setPicksNewTaskAccount($0) }))
                     .labelsHidden().toggleStyle(.paritySwitch).controlSize(.small)
             }
@@ -650,14 +650,14 @@ struct AccountMoveSettingRow: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(L10n.string("Move tasks to an account with room")).font(.callout.weight(.medium))
-                Text(L10n.string("Moves Claude Code tasks on an account that is nearly out of its limit to an account with room once they have been idle for an hour. A task that hits its limit continues on another account, or waits and continues if the limit resets soon."))
+                Text(YardletSetting.moveTasksToAccountsWithRoom.title).font(.callout.weight(.medium))
+                Text(YardletSetting.moveTasksToAccountsWithRoom.detail ?? "")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
-            Toggle(L10n.string("Move tasks to an account with room"), isOn: $movesTasks)
+            Toggle(YardletSetting.moveTasksToAccountsWithRoom.title, isOn: $movesTasks)
                 .labelsHidden()
                 .toggleStyle(.paritySwitch)
                 .controlSize(.small)

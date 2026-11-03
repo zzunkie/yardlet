@@ -1390,6 +1390,8 @@ struct MainWindow: View {
         .environment(\.taskSuggestionActions, taskSuggestionActions(for: session))
         // A schedule an agent created (`create_scheduled_task`) is a row whose Open shows it.
         .environment(\.scheduledTaskRowActions, scheduledTaskRowActions)
+        // A setting an agent changed (`update_setting`) is a row whose Open shows its section in Settings.
+        .environment(\.openSettingsSection, { presentSettings($0) })
         // A `run_agent` card reads its subagent's live line and conversation, and stops it.
         .environment(\.agentRunActions, agentRunActions(for: session, opensInPanel: !conversationOnly))
         // A file change row's diff that is too long for the conversation continues here.

@@ -15,8 +15,8 @@ host's structure is in [BROWSER_HOST](BROWSER_HOST.md).
   ([CONNECTORS](CONNECTORS.md)). When it cannot reach Yardlet, the list is the browser tool list built into the server.
 - One toggle, "Agent browser tools" in Settings → General (on by default). When it is off, sessions that start or resume
   from then on get no browser tools. The server still goes in, with the task suggestion tools (`spawn_task` and
-  `dismiss_task`, section 2, "Task suggestion tools"), the session tools (section 2, "Session tools") and the tools of
-  connected connectors (from 2026-10-16; before that, with the toggle off and no connectors, the server did not go in).
+  `dismiss_task`, section 2, "Task suggestion tools"), the session tools (section 2, "Session tools"), the settings tools
+  (section 2, "Settings tools") and the tools of connected connectors (from 2026-10-16; before that, with the toggle off and no connectors, the server did not go in).
 
 ## 2. Tools
 
@@ -228,8 +228,9 @@ built into the server (`builtInTools`) either.
   where no style reaches (a canvas, an image, a closed shadow root) stays in a picture, and a script that changes a
   value before returning it gets past the shapes: this keeps keys out of a task's history by accident, not from an agent
   set on reading one. "Hide keys and tokens" in Settings → General (on by default) turns it off, in a team-signed build
-  only and after Touch ID or the login password (`VaultCenter.setHidesCredentials`). No tool changes it, and the choice
-  is kept in a keychain item of Yardlet's own (service `‹bundle id›.vault.settings`, there only while keys are shown)
+  only and after Touch ID or the login password (`VaultCenter.setHidesCredentials`). `update_setting` takes the same
+  call, after the person allows it on the task's approval card ("Settings tools" below), so Touch ID or the password
+  still comes; nothing else changes it, and the choice is kept in a keychain item of Yardlet's own (service `‹bundle id›.vault.settings`, there only while keys are shown)
   rather than in Yardlet's preferences, which a task's commands can write. The rules for password fields and the vault's
   values above apply either way.
 - **Log and notifications:** Fills and refusals are logged in `~/.yardlet/vault/usage.jsonl` (no values) with the task,
@@ -483,6 +484,42 @@ as context" key), which add the selection to the task's message as a fenced bloc
 |---|---|---|
 | `read_terminal` | `tab` (optional, the number in the list it returns; the shown tab by default), `lines` (optional, 1 to 1,000, 200 by default) | Lists the calling task's terminal tabs (for a `run_agent` subagent, the task it runs in), each with its title, folder and state ("a command is running" when a program other than the shell holds the terminal, "at its prompt", "exited (code)", "not started"), then the last `lines` lines of the tab, with rows the terminal wrapped joined and blank rows at the end left out. A task with no tab gets "This task has no terminal tab open." Keys and tokens a command printed are hidden as the browser tools hide them (`CredentialText`, while Settings hides them). Read-only, no card |
 
+### Settings tools (2026-11-03)
+
+The agent reads Yardlet's settings and changes one when the person asks in the conversation, so they need not find the
+switch in Settings (`SettingsToolCatalog`). Both tools are listed with the session tools, for every task that has them.
+They answer from the catalog Settings draws from (`YardletSettingCatalog`): each setting's id, section, symbol, title,
+the lines under it and its tooltip in the person's language, its values, where the value lives, and whether a change
+asks every time. Settings › General draws its rows from it, and the switches of the other sections take their words from
+it, so a setting added to Settings is added there and the tools list it.
+
+| Tool | Arguments | Behavior |
+|---|---|---|
+| `list_settings` | none | JSON `{settings:[{id, section, title, help, kind, value, choices, asksThePerson}], note}` in Settings' order. `help` is the lines under the title and the tooltip, as Settings shows them. `kind` is `switch` (value `on` or `off`) or `choice` (value one of `choices`, each `{value, title, detail}`). Only what Settings shows now is listed: a row that shows while another is on (the memory saver's level, New mail, the remote's "Connect from outside" and "Keep this Mac awake on power") while it is, and a setting of an object this copy of Yardlet lacks (the vault in a test, the lid helper in a development build, Sparkle's checks outside a public build) not at all. `asksThePerson` is whether `update_setting` waits for the card in this caller. Read-only |
+| `update_setting` | `id` (an id from `list_settings`, or the title as Settings shows it), `value` (one of its values or their words; a switch also takes `true` and `false`) | Changes it where its Settings control changes it: a switch or choice kept in Yardlet's preferences is written to the key the app reads, as the control's own storage writes it, and one kept by an app object goes through the same call as its control (`RemoteControlService.setEnabled`, `VaultCenter.setHidesCredentials`, `CLIUpdateCenter.setAutoUpdate` and so on), so turning something off leaves behind what the switch leaves. The first line of the result is `Changed the Yardlet setting “‹title›” from “‹old›” to “‹new›” (settingId: ‹id›).`, then its help. Refused before any card, changing nothing: an id no setting has (`not_found`), a value outside its set (`invalid_arguments`, with `values`), and a setting Settings does not show now (`refused`, naming the switch it shows under). The value it already has answers "already …; nothing changed." |
+
+- **Who asks:** a setting that lowers a protection or reaches sign-ins, remote access, what agents may use or kept data
+  asks on the calling task's approval card every time, whatever the task's permissions: agent browser tools, sharing the
+  terminal, hide keys and tokens, keep cookies, suggest pages on new tabs (off removes each task's saved pages), keep the
+  screen unlocked, keep tasks working with the lid closed (a helper macOS has to allow), Yardlet instructions, the daily
+  evaluation (it shows task excerpts to other models, and off removes its records), claude.ai account connectors, the
+  password manager, addresses and cards, allowing remote connections, connecting from outside, and CLI automatic updates
+  (off drops what Yardlet kept for going back). Any other setting asks only where the caller asks
+  (`sessionToolAsksPerson`): a task that runs without asking changes it without a card. The card is "Change “‹title›”?"
+  with "Settings › ‹section›", "‹old› → ‹new›" and the setting's help; declined, nothing changes (`refused`, `no`).
+  Turning off "Hide keys and tokens" asks Touch ID or the login password after the card, as the switch does; declined
+  there, the result says the setting is still on.
+- **Not settings here:** signing in and out and the account lists, connectors and their sign-ins, saved passwords and
+  cards, pairing and removing devices, the instruction text, a harness's runtime and CLI version, and the system's
+  notification permission stay in Settings.
+- **Conversation and record:** a call whose result begins as above is drawn as one row where it happened (a gear, the
+  setting, "‹old› → ‹new›", and Open, which shows its section in Settings), and the row stays when the turn folds. The
+  phone shows it as a tool line "Changed setting: ‹title›". Yardlet keeps no separate log: the call and its result stay in
+  the task's conversation as its harness records them.
+- **Who else asks:** Claude Code gets both in `--allowedTools`, so the CLI shows no card of its own. Codex has no
+  per-tool `approval_mode` for them, so under an approval policy that asks it may ask before `update_setting`, as before
+  `archive_task`.
+
 ### Scheduled-task tools (2026-10-17)
 
 The agent creates, reads, changes and deletes the person's scheduled tasks, and runs them now (`ScheduleToolCatalog`).
@@ -561,7 +598,7 @@ stopped at the wrapper).
 
 | Harness | Path | Form | Evidence |
 |---|---|---|---|
-| Claude Code | The launch argument `--mcp-config <file>` (at the very end, because the option takes several values). Just before it, `--allowedTools mcp__yardlet__spawn_task mcp__yardlet__dismiss_task` (2026-10-16, the two tools that only show a chip, without a permission card; the Claude app also puts them in `allowedTools`), the session tools (`archive_task` 2026-10-22, the three project tools 2026-10-26, the three personal-agent reading tools 2026-11-01), `read_terminal` (2026-11-02; while the terminal is not shared the server does not list it and the name allows nothing), and `list_task_runs` of the scheduled-task tools (2026-10-17) | `{"mcpServers":{"yardlet":{"type":"stdio","command","args","env"}}}`. The file is a 0600 file in a 0700 folder (so the token does not show in the process list). `--strict-mcp-config` is not used, so the user's servers stay as they are | `--mcp-config <configs...>` and `--strict-mcp-config` in `--help` of the installed CLI 2.1.281. Started with an empty `CLAUDE_CONFIG_DIR`, the control request `mcp_status` gave `yardlet: connected`, and `mcp_call` navigated a tab of the QA app |
+| Claude Code | The launch argument `--mcp-config <file>` (at the very end, because the option takes several values). Just before it, `--allowedTools mcp__yardlet__spawn_task mcp__yardlet__dismiss_task` (2026-10-16, the two tools that only show a chip, without a permission card; the Claude app also puts them in `allowedTools`), the session tools (`archive_task` 2026-10-22, the three project tools 2026-10-26, the three personal-agent reading tools 2026-11-01), the settings tools (2026-11-03), `read_terminal` (2026-11-02; while the terminal is not shared the server does not list it and the name allows nothing), and `list_task_runs` of the scheduled-task tools (2026-10-17) | `{"mcpServers":{"yardlet":{"type":"stdio","command","args","env"}}}`. The file is a 0600 file in a 0700 folder (so the token does not show in the process list). `--strict-mcp-config` is not used, so the user's servers stay as they are | `--mcp-config <configs...>` and `--strict-mcp-config` in `--help` of the installed CLI 2.1.281. Started with an empty `CLAUDE_CONFIG_DIR`, the control request `mcp_status` gave `yardlet: connected`, and `mcp_call` navigated a tab of the QA app |
 | Codex | `config` of `thread/start`, `thread/resume` and `thread/fork` | `{"mcp_servers":{"yardlet":{"command","args","env","tool_timeout_sec":1800,"tools":{"create_scheduled_task":{"approval_mode":"prompt"},…}}}}` (the five scheduled-task tools ask every time, 2026-10-17). A fork gets the new task's token | `app-server generate-json-schema --experimental` of `/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` 0.158.0-alpha.2.1 (an empty temporary `CODEX_HOME`): all three requests take `config` (`additionalProperties: true`). With a user server kept in the same home, an ephemeral `thread/start` → `mcpServerStatus/list` showed both servers `connected` (merged, not overwritten; a nested object and the dot notation `mcp_servers.yardlet` behave the same), and `mcpServer/tool/call` navigated a tab of the QA app, took a snapshot and took a screenshot. `thread/resume` was not verified for real, because a thread with no turn has no rollout (only the request body was checked) |
 | ACP (OpenCode, Antigravity, Kimi, Grok, Hermes) | `mcpServers` of `session/new` and `session/load` | `{"name":"yardlet","command","args":[],"env":[{"name","value"}]}` | ACP makes stdio MCP mandatory. The server is not added when `agentCapabilities.mcpCapabilities` of `initialize` has `stdio: false` or is `false`. Running only `initialize` on the 5 installed agents (opencode, kimi, grok, gjc, hermes) with a temporary HOME, none refused (they advertise `http` and `sse`; Hermes leaves it out). OpenCode, in a temporary HOME, actually started the server through `session/new` and sent `initialize` and `tools/list`. Antigravity (`agy acp` 1.4.12, which Yardlet runs from 1.4.11) did the same with a temporary `--gemini-dir`, after a `server/discover` request; it does not save the server in `mcp_config.json`, but keeps each tool's schema under `~/.gemini/antigravity-cli/mcp/<server>/` as it does for its own servers |
 | Muse, Pi, Cursor, Antigravity before 1.4.11 | none | Not added (no route: `AgentToolInjectionRoute` is nil, or the print-mode adapter does not take the server), and no token is issued | MSP, Pi RPC and headless stream-json have no per-session MCP field. If needed, the next step is to register it with that harness's `mcp add`, with the user's approval. Antigravity's print mode (`agy --print`) has no MCP flag, and its `--add-dir` route was not used because the CLI records that folder in the conversation and restores it when the conversation continues in a terminal |
@@ -615,6 +652,10 @@ stopped at the wrapper).
 | `Sources/YardletAgentTools/VaultToolCatalog.swift` | Definition of `browser_fill_credential` | Engine (Foundation only) |
 | `Sources/YardletAgentTools/TerminalToolCatalog.swift` | Definition of `read_terminal` | Engine (Foundation only) |
 | `Sources/NativeHarnessClient/AppModel+TerminalTool.swift` | `read_terminal`'s answer and `TerminalSharingPreference` | Engine |
+| `Sources/YardletAgentTools/SettingsToolCatalog.swift` | Definitions of `list_settings` and `update_setting`, the change's result line | Engine (Foundation only) |
+| `Sources/NativeHarnessClient/Domain/YardletSettings.swift` | Settings' sections and the settings catalog (`YardletSettingCatalog`) its rows and the tools read | Engine |
+| `Sources/NativeHarnessClient/AppModel+SettingsTools.swift` | The tools' answers, cards and the app's objects they change | Engine |
+| `Sources/NativeHarnessClient/Views/Conversation/Cards/SettingChangedRow.swift` | The change's row in the conversation | macOS UI |
 | `Sources/NativeHarnessClient/Vault/` | Item and secret models, TOTP (RFC 6238), site matching (Public Suffix List), vault decisions and usage log (`VaultCenter`), passkey registration, CSV import | Engine |
 | `Sources/NativeHarnessClient/AgentTools/BrowserAgentVault.swift`, `BrowserAgentVaultPasskey.swift` | Filling, clearing and masking, page scripts on the person's side (watching for saves, filling from the key button), virtual authenticator | Engine |
 | `Sources/NativeHarnessClient/Platform/macOS/Vault/` | Keychain storage, Touch ID, HMAC (CryptoKit), team signature check, screen lock | macOS |

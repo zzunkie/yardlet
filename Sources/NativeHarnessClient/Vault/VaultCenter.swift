@@ -307,7 +307,8 @@ final class VaultCenter: ObservableObject {
     }
     private var storedWallet: VaultWallet?
     /// Whether browser tool results hide text shaped like keys and tokens (`CredentialText`). Only the person turns it
-    /// off, in Settings and after Touch ID or the login password, and the choice is kept in Yardlet's keychain item
+    /// off, with Touch ID or the login password, from Settings or from the approval card of an agent's
+    /// `update_setting`, and the choice is kept in Yardlet's keychain item
     /// rather than in its preferences, which a task's commands can write. A build that is not team-signed always hides.
     @Published private(set) var hidesCredentials: Bool
     /// Whether a "while unlocked" item fills without asking. Touch ID unlocks it; the screen locking
