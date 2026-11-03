@@ -38,6 +38,7 @@ final class RemoteHostModel: Identifiable {
 
     nonisolated let id: String
     private(set) var host: RemoteSavedHost
+    @ObservationIgnored private var sidebarMemo: (projects: [RemoteProject], tasks: [RemoteTask], mirror: RemoteSidebarMirror)?
     private(set) var connection: Connection = .stopped
     /// Why the host closed the last connection on purpose: its remote turned off, or Yardlet quit there.
     private(set) var closingReason: String?
@@ -108,6 +109,15 @@ final class RemoteHostModel: Identifiable {
     }
 
     var name: String { host.name }
+
+    /// The host's projects and tasks as this Mac's own sidebar reads them (`RemoteSidebarMirror`), made again only when
+    /// either changed.
+    var sidebar: RemoteSidebarMirror {
+        if let memo = sidebarMemo, memo.projects == projects, memo.tasks == tasks { return memo.mirror }
+        let mirror = RemoteSidebarMirror(hostID: id, projects: projects, tasks: tasks)
+        sidebarMemo = (projects, tasks, mirror)
+        return mirror
+    }
 
     var isConnected: Bool {
         if case .connected = connection { return true }

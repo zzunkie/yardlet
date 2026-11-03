@@ -8,6 +8,8 @@ import YardletRemote
 struct RemoteNewTaskView: View {
     let model: RemoteHostModel
     @Bindable var draft: TaskComposerDraft
+    /// The project New task in a project chose from the sidebar, which the screen starts in once.
+    @Binding var chosenProjectID: String?
     @State private var projectID: String?
     @State private var options: RemoteResponse?
     @State private var harness: String?
@@ -73,6 +75,11 @@ struct RemoteNewTaskView: View {
         .onAppear {
             if projectID == nil { projectID = projects.first(where: { $0.kind != .chats })?.id ?? projects.first?.id }
             isFocused = true
+        }
+        .onChange(of: chosenProjectID, initial: true) { _, chosen in
+            guard let chosen, projects.contains(where: { $0.id == chosen }) else { return }
+            projectID = chosen
+            chosenProjectID = nil
         }
         .task(id: OptionsKey(projectID: projectID, harness: harness, picks: picks, connected: model.isConnected)) {
             await readOptions()

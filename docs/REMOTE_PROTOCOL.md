@@ -1759,6 +1759,14 @@ chooses Connect), and each paired host opens in a window of its own. The host li
 - **In its own words:** it draws a line's `words` as the Mac does, its verb muted (§6.4), and a choice's `text` in its
   own language when its catalog has the key (§15.19), so two Macs set to different languages each read the card in
   their own.
+- **Its window:** Yardlet's own window shell and sidebar, read from the snapshot as the host's sidebar lists it: Home,
+  Scheduled tasks, the search (on titles and project names; a conversation's words stay on the host), Pinned, the
+  projects with their collapsing and "Show more", Chats, the nested tasks and each row's mark, the activity view, the
+  title bar's buttons and a hidden sidebar, and in place of the account button the host's name and how it is reached.
+  The Task and View menus and their keys act on it as on the local window (new task, previous and next task, the next
+  one needing attention, Pin, Archive, the sidebar, the activity view, Find in the conversation). What the host does not
+  take from another device yet (rename, mark as unread, move, nest, delete, the projects' own actions, the archived
+  list) shows dimmed.
 - **What it does:** what a phone does (§4–§6, §15), on a larger screen: the host's sidebar and its marks, a task's
   conversation in Yardlet's own timeline with the host's own cards from its full detail (§15.24: whole answers, a
   message's pictures, subagents, compactions, notices, proposed plans and the limit card with its windows and

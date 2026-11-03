@@ -521,6 +521,57 @@ final class RemoteHostModelTests: XCTestCase {
         XCTAssertFalse(conversation.apply([.upsert(stray, after: "missing")]))
     }
 
+    /// The host's lists read by this Mac's own sidebar: each task under its project or in Chats, nested as the host
+    /// nests it, and drawn with the mark the host's row shows.
+    func testTheHostsListsDrawWithTheHostsMarksInTheLocalSidebar() throws {
+        let project = UUID().uuidString
+        func task(_ number: Int, _ attention: RemoteAttention, _ indicator: RemoteIndicator?, projectID: String? = nil,
+                  unread: Bool = false, running: Bool = false, parent: Int? = nil, kind: String? = nil) -> RemoteTask {
+            var task = RemoteTask(id: Self.taskID(number), title: "Task \(number)", harness: "claude-code", harnessName: "Claude Code",
+                                  projectId: projectID ?? project, attention: attention, indicator: indicator, unread: unread,
+                                  running: running, lastActivityAt: Int64(1_000_000 - number), parentTaskId: parent.map(Self.taskID))
+            task.pendingKind = kind
+            return task
+        }
+        let tasks = [
+            task(1, .waiting, .awaitingApproval, running: true),
+            task(2, .waiting, .needsInput, running: true),
+            task(3, .waiting, .needsInput, running: true, kind: "browserHandoff"),
+            task(4, .unread, .failed, unread: true),
+            task(5, .idle, .usageLimit),
+            task(6, .active, .running, running: true, parent: 1),
+            task(7, .unread, .unread, projectID: RemoteTaskProjection.chatsProjectID, unread: true),
+            task(8, .idle, nil),
+        ]
+        let mirror = RemoteSidebarMirror(hostID: "host", projects: [
+            RemoteProject(id: project, name: "acme-web", kind: .project, canCreateTask: true),
+            RemoteProject(id: RemoteTaskProjection.chatsProjectID, name: "Chats", kind: .chats, canCreateTask: true),
+        ], tasks: tasks)
+        XCTAssertEqual(mirror.groups.map(\.displayName), ["acme-web"])
+        XCTAssertEqual(mirror.groups.first?.sessions.count, 7)
+        XCTAssertEqual(mirror.chats.map(\.title), ["Task 7"])
+        XCTAssertEqual(mirror.sessions.first { $0.title == "Task 6" }?.parentTaskID, UUID(uuidString: Self.taskID(1)))
+        func status(_ number: Int) -> SidebarTaskStatus? {
+            let session = try? XCTUnwrap(mirror.sessions.first { $0.id == UUID(uuidString: Self.taskID(number)) })
+            return session.flatMap { SidebarTaskIndicatorProjection.status(of: $0, detail: mirror.details[$0.id]) }
+        }
+        XCTAssertEqual(status(1), .awaitingApproval)
+        XCTAssertEqual(status(2), .needsInput)
+        XCTAssertEqual(status(3), .waitingInBrowser)
+        XCTAssertEqual(status(4), .failed(message: nil))
+        XCTAssertEqual(status(5), .usageLimit(HarnessRateLimit(status: .rejected)))
+        XCTAssertEqual(status(6), .running)
+        XCTAssertEqual(status(7), .unread)
+        XCTAssertNil(status(8))
+        // The folder stands only for the group: no Mac has it.
+        let folder = try XCTUnwrap(mirror.groups.first?.workspaceURL)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path(percentEncoded: false)))
+    }
+
+    private static func taskID(_ number: Int) -> String {
+        String(format: "0F1E%04X-0000-4000-8000-%012X", number, number)
+    }
+
     func testRunsKeepTheHostsOrderThroughMovesAndRemovals() {
         func item(_ id: String, _ turn: String) -> RemoteItem { RemoteItem(id: id, turnId: turn, kind: .activity) }
         var items = RemoteConversationItems([item("a1", "A"), item("a2", "A"), item("b1", "B")])

@@ -202,8 +202,8 @@ struct SidebarSplitActions {
     var rename: (SplitGroup) -> Void = { _ in }
     var dissolve: (SplitGroup) -> Void = { _ in }
     var archive: (SplitGroup) -> Void = { _ in }
-    /// A task dropped on another task's row: `(dropped, target)`.
-    var combine: (UUID, UUID) -> Void = { _, _ in }
+    /// A task dropped on another task's row: `(dropped, target)`. Nil where the window has no split views.
+    var combine: ((UUID, UUID) -> Void)? = nil
     /// A task dropped on a split view's row.
     var add: (UUID, SplitGroup) -> Void = { _, _ in }
 }
@@ -230,15 +230,22 @@ struct TaskSidebar: View {
     let onRemoveProject: (WorkspaceGroup) -> Void
     let onTogglePinned: (SessionRecord) -> Void
     let onArchive: (SessionRecord) -> Void
-    let onDelete: (SessionRecord) -> Void
-    let onRename: (SessionRecord) -> Void
-    let onMarkRead: (SessionRecord) -> Void
-    var onMarkUnread: (SessionRecord) -> Void = { _ in }
+    /// A row action the window cannot take (another Mac's window, for what its host does not take from it) is nil, and
+    /// its menu item shows dimmed.
+    let onDelete: ((SessionRecord) -> Void)?
+    let onRename: ((SessionRecord) -> Void)?
+    let onMarkRead: ((SessionRecord) -> Void)?
+    var onMarkUnread: ((SessionRecord) -> Void)? = { _ in }
     /// Moves a task to a project, or back to Chats (nil), from its row's context menu.
-    var onMoveToProject: (SessionRecord, Project?) -> Void = { _, _ in }
+    var onMoveToProject: ((SessionRecord, Project?) -> Void)? = { _, _ in }
     /// Moves a task in the sidebar's families, under another task or to the top level (nil), from
     /// its row's menu or a drop on a row (`TaskNesting`).
-    var onNest: (UUID, UUID?) -> Void = { _, _ in }
+    var onNest: ((UUID, UUID?) -> Void)? = { _, _ in }
+    /// The projects' own actions (pin, edit, Show in Finder, archive chats, remove) change this Mac's projects and
+    /// folders. Another Mac's window lists its host's, which only the host changes: they show dimmed there.
+    var managesProjects = true
+    /// What the sidebar ends with in place of the account button: another Mac's window names its host there.
+    var footer: AnyView? = nil
     var splitActions = SidebarSplitActions()
     /// The account button at the bottom and the app-wide places its menu opens.
     var accountMenu = SidebarAccountMenuContext()
@@ -408,7 +415,7 @@ struct TaskSidebar: View {
                 // The rows' menus and drops read the families as drawn when the person acts on a row.
                 .onChange(of: layout, initial: true) { _, layout in
                     nesting.layout = layout
-                    nesting.nest = onNest
+                    nesting.nest = onNest ?? { _, _ in }
                 }
             }
 
@@ -422,10 +429,16 @@ struct TaskSidebar: View {
             }
             // One account button, as the Claude and Codex apps end their sidebars; its menu holds
             // Settings, the accounts, archived tasks and the other app-wide places.
-            SidebarAccountButton(context: accountMenu)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 5)
-                .accessibilitySortPriority(ParityAccessibility.secondary)
+            Group {
+                if let footer {
+                    footer
+                } else {
+                    SidebarAccountButton(context: accountMenu)
+                }
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 5)
+            .accessibilitySortPriority(ParityAccessibility.secondary)
         }
         .background(ParityTheme.sidebar)
         .focusSection()
@@ -443,6 +456,7 @@ struct TaskSidebar: View {
             nestedSessions: section.allRows.flatMap(\.familySessions),
             isCollapsed: section.isCollapsed,
             projects: projects,
+            managesProject: managesProjects,
             onToggle: { toggle(section) },
             onNewTask: { onNewTaskInProject(group.workspaceURL) },
             onEditProject: { onEditProject(completeGroup) },
@@ -552,9 +566,9 @@ struct TaskSidebar: View {
                     projectMove: TaskProjectMove.options(
                         for: session, visibleProjects: allGroups.compactMap(\.project),
                         projects: projects.projects, home: projects.chatWorkspaceHome),
-                    onMoveToProject: { onMoveToProject(session, $0) },
-                    onDropTask: { dropped in splitActions.combine(dropped, session.id) },
-                    nesting: nesting
+                    onMoveToProject: onMoveToProject.map { move in { move(session, $0) } },
+                    onDropTask: splitActions.combine.map { combine in { dropped in combine(dropped, session.id) } },
+                    nesting: onNest == nil ? nil : nesting
                 )
                 .equatable()
             case let .split(split, members):
@@ -626,8 +640,8 @@ struct TaskSidebar: View {
                 projectMove: TaskProjectMove.options(
                     for: session, visibleProjects: allGroups.compactMap(\.project),
                     projects: projects.projects, home: projects.chatWorkspaceHome),
-                onMoveToProject: { onMoveToProject(session, $0) },
-                onDropTask: { dropped in splitActions.combine(dropped, session.id) }
+                onMoveToProject: onMoveToProject.map { move in { move(session, $0) } },
+                onDropTask: splitActions.combine.map { combine in { dropped in combine(dropped, session.id) } }
             )
             .equatable()
             .padding(.horizontal, 4)
@@ -691,6 +705,8 @@ private struct ProjectTaskHeader: View {
     let nestedSessions: [SessionRecord]
     let isCollapsed: Bool
     @Bindable var projects: ProjectStore
+    /// The project's own actions change this Mac's projects and folders (`TaskSidebar.managesProjects`).
+    let managesProject: Bool
     let onToggle: () -> Void
     let onNewTask: () -> Void
     let onEditProject: () -> Void
@@ -829,19 +845,20 @@ private struct ProjectTaskHeader: View {
     @ViewBuilder
     private var projectOptions: some View {
         Button(isPinned ? L10n.string("Unpin project") : L10n.string("Pin project"), action: togglePinned)
-            .disabled(completeGroup.project == nil)
+            .disabled(completeGroup.project == nil || !managesProject)
         Button(L10n.string("Edit project"), action: onEditProject)
-            .disabled(completeGroup.project == nil)
+            .disabled(completeGroup.project == nil || !managesProject)
         Divider()
         Button(L10n.string("Show in Finder")) {
             NSWorkspace.shared.activateFileViewerSelecting([group.workspaceURL])
         }
+        .disabled(!managesProject)
         Divider()
         Button(L10n.string("Archive chats"), action: onArchiveChats)
-            .disabled(completeGroup.sessions.isEmpty)
+            .disabled(completeGroup.sessions.isEmpty || !managesProject)
         Divider()
         Button(L10n.string("Remove project"), role: .destructive, action: onRemoveProject)
-            .disabled(completeGroup.project == nil)
+            .disabled(completeGroup.project == nil || !managesProject)
     }
 }
 
@@ -1056,14 +1073,15 @@ private struct SidebarTaskEntry: View, @MainActor Equatable {
     let onSelect: () -> Void
     let onTogglePinned: (SessionRecord) -> Void
     let onArchive: (SessionRecord) -> Void
-    let onDelete: (SessionRecord) -> Void
-    let onRename: (SessionRecord) -> Void
-    let onMarkRead: (SessionRecord) -> Void
-    let onMarkUnread: (SessionRecord) -> Void
+    let onDelete: ((SessionRecord) -> Void)?
+    let onRename: ((SessionRecord) -> Void)?
+    let onMarkRead: ((SessionRecord) -> Void)?
+    let onMarkUnread: ((SessionRecord) -> Void)?
     /// The projects the task can move to and whether it can go back to Chats.
     let projectMove: TaskProjectMove.Options
-    let onMoveToProject: (Project?) -> Void
-    let onDropTask: (UUID) -> Void
+    let onMoveToProject: ((Project?) -> Void)?
+    /// A task dropped on the row outside the families, which joins it in a split view; nil where there are none.
+    let onDropTask: ((UUID) -> Void)?
     /// The sidebar's families, for a row listed in them: its menu's moves, and a task dropped on it
     /// going under or beside it (`TaskNesting`). Without it (the activity view) a task dropped on the
     /// row joins it in a split view.
@@ -1117,11 +1135,14 @@ private struct SidebarTaskEntry: View, @MainActor Equatable {
             Button(session.isPinned ? L10n.string("Unpin") : L10n.string("Pin")) {
                 onTogglePinned(session)
             }
-            Button(L10n.string("Rename…")) { onRename(session) }
+            Button(L10n.string("Rename…")) { onRename?(session) }
+                .disabled(onRename == nil)
             if session.hasUnreadUpdate {
-                Button(L10n.string("Mark task as read")) { onMarkRead(session) }
+                Button(L10n.string("Mark task as read")) { onMarkRead?(session) }
+                    .disabled(onMarkRead == nil)
             } else {
-                Button(L10n.string("Mark task as unread")) { onMarkUnread(session) }
+                Button(L10n.string("Mark task as unread")) { onMarkUnread?(session) }
+                    .disabled(onMarkUnread == nil)
             }
             if let familyToggle {
                 Button(familyToggle.title, action: familyToggle.action)
@@ -1132,9 +1153,11 @@ private struct SidebarTaskEntry: View, @MainActor Equatable {
             if let pullRequestMark {
                 Button(pullRequestMark.openTitle) { NSWorkspace.shared.open(pullRequestMark.url) }
             }
-            TaskProjectMoveMenuItems(options: projectMove, onMove: onMoveToProject)
+            TaskProjectMoveMenuItems(options: projectMove, onMove: { onMoveToProject?($0) })
+                .disabled(onMoveToProject == nil)
             Button(L10n.string("Archive"), role: .destructive) { onArchive(session) }
-            Button(L10n.string("Delete task"), role: .destructive) { onDelete(session) }
+            Button(L10n.string("Delete task"), role: .destructive) { onDelete?(session) }
+                .disabled(onDelete == nil)
         }
         // Dragged onto a task's row in the sidebar's families, a task goes under it or beside it;
         // onto a split view's row or a pane, it joins the split view.
@@ -1880,18 +1903,20 @@ private struct SidebarTaskDropModifier: ViewModifier {
     let nesting: SidebarNesting?
     @Binding var nestDrop: TaskNesting.Drop?
     @Binding var isDropTargeted: Bool
-    let onDropTask: (UUID) -> Void
+    let onDropTask: ((UUID) -> Void)?
 
     func body(content: Content) -> some View {
         if let nesting {
             content.onDrop(of: [.yardletTaskReference], delegate: SidebarRowDrop(
                 target: sessionID, rowHeight: rowHeight, nesting: nesting, place: $nestDrop))
-        } else {
+        } else if let onDropTask {
             content.dropDestination(for: TaskDragItem.self) { items, _ in
                 guard let dropped = items.first?.sessionID, dropped != sessionID else { return false }
                 onDropTask(dropped)
                 return true
             } isTargeted: { isDropTargeted = $0 }
+        } else {
+            content
         }
     }
 }

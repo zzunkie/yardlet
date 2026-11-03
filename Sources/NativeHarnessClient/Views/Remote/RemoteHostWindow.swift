@@ -43,11 +43,17 @@ struct RemoteHostWindow: View {
     }
 }
 
-/// The window's content once its host is known.
+/// The window's content once its host is known, in this Mac's own window shell: the sidebar column with the title bar's
+/// sidebar part (Hide sidebar, the activity view, New task), this Mac's own sidebar (`TaskSidebar`) listing the host's
+/// projects and tasks as the host's sidebar does (`RemoteHostModel.sidebar`), and the host's task, new task or schedule
+/// beside it. The Task and View menus act on it as on the local window, through the host's own paths.
 struct RemoteHostView: View {
     let model: RemoteHostModel
     let directory: RemoteHostDirectory
     @State private var drafts: RemoteComposerDrafts
+    @State private var shell = RemoteHostShell()
+    @State private var windowWidth: CGFloat?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(model: RemoteHostModel, directory: RemoteHostDirectory, drafts: RemoteComposerDrafts = RemoteComposerDrafts()) {
         self.model = model
@@ -57,21 +63,116 @@ struct RemoteHostView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            RemoteHostSidebar(model: model)
-                .frame(width: ParityTheme.sidebarWidth + 20)
-                .background(ParityTheme.sidebar)
-            Divider()
+            if shell.isSidebarVisible {
+                SidebarColumn(state: shell.sidebarWidth, windowWidth: windowWidth) {
+                    VStack(spacing: 0) {
+                        TitleBarSidebarPart(
+                            isSidebarVisible: true, width: shell.sidebarWidth.shown(inWindowWidth: windowWidth),
+                            onToggleSidebar: toggleSidebar, onNewTask: showNewTask,
+                            activityToggle: ActivityViewToggle(isOn: shell.isShowingActivity, needsAttention: needsAttention,
+                                                               toggle: toggleActivity))
+                        if model.showsSchedules {
+                            RemoteScheduleList(model: model)
+                        } else {
+                            sidebar
+                        }
+                    }
+                }
+            }
             VStack(spacing: 0) {
-                RemoteConnectionBanner(model: model, directory: directory)
                 detail
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(ParityTheme.canvas)
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { windowWidth = $0 }
+        // Ordinary controls stay monochrome, as in the local window; status, links and Send opt into the accent.
+        .tint(Color.primary)
         .navigationTitle(model.name)
         .navigationSubtitle(RemoteConnectionText.line(model.connection))
         .modifier(RemotePresence(model: model))
+        .focusedSceneValue(\.yardletTaskCommands, taskCommands)
     }
+
+    // MARK: Sidebar
+
+    private var sidebar: some View {
+        let mirror = model.sidebar
+        let layout = sidebarLayout(mirror)
+        return TaskSidebar(
+            layout: layout,
+            allGroups: mirror.groups,
+            isRestoring: !model.hasSnapshot,
+            selection: SidebarProjection.row(for: windowSelection, in: layout) ?? windowSelection,
+            searchText: $shell.searchText,
+            onNewTask: showNewTask,
+            onShowSchedules: model.offersSchedules ? { showSchedules() } : nil,
+            onActivate: activate,
+            onNewTaskInProject: { folder in showNewTaskInProject(mirror.projectIDs[folder.standardizedFileURL]) },
+            projects: shell.projects,
+            onEditProject: { _ in },
+            onArchiveProjectChats: { _ in },
+            onRemoveProject: { _ in },
+            onTogglePinned: { session in model.send(.setPinned(taskID: session.id.uuidString, pinned: !session.isPinned)) },
+            onArchive: { session in model.send(.archiveTask(taskID: session.id.uuidString)) },
+            onDelete: nil,
+            onRename: nil,
+            onMarkRead: { session in model.send(.markRead(taskID: session.id.uuidString)) },
+            onMarkUnread: nil,
+            onMoveToProject: nil,
+            onNest: nil,
+            managesProjects: false,
+            footer: AnyView(RemoteHostFooter(model: model, directory: directory)),
+            disclosure: shell.disclosure,
+            activity: activity(mirror)
+        )
+        .environment(\.taskAttentionDetails, mirror.details)
+    }
+
+    /// The host's lists as the local sidebar lays them out, filtered by the search on titles and project names (a
+    /// conversation's words stay on the host).
+    private func sidebarLayout(_ mirror: RemoteSidebarMirror) -> SidebarProjection.Layout {
+        let query = shell.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let names = Dictionary(mirror.groups.map { ($0.workspaceURL, $0.displayName) }, uniquingKeysWith: { first, _ in first })
+        return SidebarProjection.layout(
+            visibleGroups: query.isEmpty ? mirror.groups
+                : TaskNavigationProjection.filteredGroups(in: mirror.groups, query: query, projectNames: names),
+            allGroups: mirror.groups,
+            chats: query.isEmpty ? mirror.chats : TaskNavigationProjection.filteredSessions(mirror.chats, query: query),
+            allChats: mirror.chats,
+            splits: [],
+            isFiltering: !query.isEmpty,
+            disclosure: shell.disclosure.disclosure,
+            selection: windowSelection,
+            waiting: Set(mirror.sessions.filter {
+                TaskAttentionProjection.waitingRequest(of: $0, detail: mirror.details[$0.id]) != nil
+            }.map(\.id)))
+    }
+
+    /// The activity view's list while it is on: the host's tasks that need the person or work, in attention order.
+    private func activity(_ mirror: RemoteSidebarMirror) -> SidebarActivity? {
+        guard shell.isShowingActivity else { return nil }
+        let query = shell.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let listed = TaskAttentionProjection.activityList(in: mirror.sessions, details: mirror.details, kept: shell.activityPlaces)
+        let names = Dictionary(mirror.groups.flatMap { group in group.sessions.map { ($0.id, group.displayName) } },
+                               uniquingKeysWith: { first, _ in first })
+        return SidebarActivity(
+            sessions: query.isEmpty ? listed : TaskNavigationProjection.filteredSessions(listed, query: query),
+            selectedSessionID: shownTaskID,
+            subtitle: { names[$0.id] ?? L10n.string("Chats") },
+            onMarkAllRead: {
+                for session in mirror.sessions where session.hasUnreadUpdate {
+                    model.send(.markRead(taskID: session.id.uuidString))
+                }
+            })
+    }
+
+    private var needsAttention: Bool {
+        let mirror = model.sidebar
+        return TaskAttentionProjection.count(in: mirror.sessions, details: mirror.details) > 0
+    }
+
+    // MARK: Detail
 
     @ViewBuilder
     private var detail: some View {
@@ -79,35 +180,187 @@ struct RemoteHostView: View {
         case let .task(taskID):
             if let conversation = model.conversations[taskID] {
                 RemoteTaskView(model: model, conversation: conversation, draft: drafts.draft(for: taskID),
-                               editing: Binding(get: { drafts.edits[taskID] }, set: { drafts.edits[taskID] = $0 }))
+                               editing: Binding(get: { drafts.edits[taskID] }, set: { drafts.edits[taskID] = $0 }),
+                               titleBar: titleBar, find: drafts.find(for: taskID), showsRail: $shell.showsRail)
                     .id(taskID)
             }
         case .newTask:
-            RemoteNewTaskView(model: model, draft: drafts.newTask)
+            plainDetail { RemoteNewTaskView(model: model, draft: drafts.newTask, chosenProjectID: $drafts.newTaskProjectID) }
         case let .schedule(id):
-            if let schedule = model.schedules.schedule(id) {
-                RemoteScheduleDetail(model: model, schedule: schedule)
-            } else {
-                schedulePlaceholder
-            }
-        case .none where model.showsSchedules:
-            schedulePlaceholder
-        case .none:
-            VStack(spacing: 10) {
-                Image(systemName: "desktopcomputer")
-                    .font(.system(size: 22, weight: .regular))
-                    .foregroundStyle(.tertiary)
-                Text(model.hasSnapshot ? L10n.format("Choose a task on %@, or start a new one.", model.name)
-                                       : L10n.format("Connecting to %@…", model.name))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                if model.hasSnapshot, model.newTask != nil {
-                    Button(L10n.string("New task")) { model.select(.newTask) }
-                        .controlSize(.small)
+            plainDetail {
+                if let schedule = model.schedules.schedule(id) {
+                    RemoteScheduleDetail(model: model, schedule: schedule)
+                } else {
+                    schedulePlaceholder
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .none where model.showsSchedules:
+            plainDetail { schedulePlaceholder }
+        case .none:
+            plainDetail {
+                VStack(spacing: 10) {
+                    Image(systemName: "desktopcomputer")
+                        .font(.system(size: 22, weight: .regular))
+                        .foregroundStyle(.tertiary)
+                    Text(model.hasSnapshot ? L10n.format("Choose a task on %@, or start a new one.", model.name)
+                                           : L10n.format("Connecting to %@…", model.name))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    if model.hasSnapshot, model.newTask != nil {
+                        Button(L10n.string("New task")) { model.select(.newTask) }
+                            .controlSize(.small)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
+    }
+
+    /// A detail with nothing to name in the title bar: the bar's row over it, then the connection's line.
+    private func plainDetail(@ViewBuilder _ content: () -> some View) -> some View {
+        VStack(spacing: 0) {
+            RemoteTitleBar(context: titleBar) { WindowDragRegion().frame(maxWidth: .infinity) }
+            RemoteConnectionBanner(model: model, directory: directory)
+            content()
+        }
+    }
+
+    private var titleBar: RemoteTitleBarContext {
+        RemoteTitleBarContext(isSidebarVisible: shell.isSidebarVisible, toggleSidebar: toggleSidebar, newTask: showNewTask,
+                              banner: AnyView(RemoteConnectionBanner(model: model, directory: directory)))
+    }
+
+    // MARK: Actions
+
+    /// What the window shows, as the local window's selection: the host's task, or the home for the rest.
+    private var windowSelection: WindowItem {
+        if case let .task(id) = model.selection, let uuid = UUID(uuidString: id) { return .session(uuid) }
+        return .home
+    }
+
+    /// The host's task the window shows.
+    private var shownTaskID: UUID? {
+        if case let .session(id) = windowSelection { return id }
+        return nil
+    }
+
+    private func activate(_ item: WindowItem) {
+        switch item {
+        case let .session(id): model.select(.task(id.uuidString))
+        case .home: showNewTask()
+        case .split: break
+        }
+    }
+
+    private func showNewTask() {
+        guard model.newTask != nil else { return }
+        model.select(.newTask)
+    }
+
+    /// New task in a project, from its row: the new task screen with the project chosen.
+    private func showNewTaskInProject(_ projectID: String?) {
+        drafts.newTaskProjectID = projectID
+        showNewTask()
+    }
+
+    private func showSchedules() {
+        model.showsSchedules = true
+        model.schedules.load()
+    }
+
+    private func toggleSidebar() {
+        withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) { shell.isSidebarVisible.toggle() }
+    }
+
+    /// Turns the activity view on, keeping where its tasks are listed while it stays on, or off.
+    private func toggleActivity() {
+        model.showsSchedules = false
+        withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
+            if shell.isShowingActivity {
+                shell.isShowingActivity = false
+                shell.activityPlaces = [:]
+            } else {
+                let mirror = model.sidebar
+                shell.activityPlaces = TaskAttentionProjection.places(of: mirror.sessions, details: mirror.details)
+                shell.isShowingActivity = true
+                shell.isSidebarVisible = true
+            }
+        }
+    }
+
+    /// The Task and View menus' commands for this window: what they act on read from the host's lists as the local
+    /// window reads its own (`TaskCommandTargets`), carried out through the host. What the host does not take from
+    /// another Mac yet (Mark as unread, the archived list) stays dimmed; the panels are the host's.
+    private var taskCommands: YardletTaskCommandSet {
+        let mirror = model.sidebar
+        let layout = sidebarLayout(mirror)
+        let activity = activity(mirror)
+        let shown = shownTaskID.flatMap { id in mirror.sessions.first { $0.id == id } }
+        var targets = TaskCommandTargets.make(
+            layout: activity?.layout ?? layout, selection: activity?.selection ?? windowSelection, shownSession: shown,
+            sidebarSessions: mirror.sessions, splits: [], details: mirror.details)
+        targets.markUnread = nil
+        var commands = YardletTaskCommandSet()
+        commands.targets = targets
+        commands.isSidebarVisible = shell.isSidebarVisible
+        commands.activate = activate
+        commands.toggleSidebar = toggleSidebar
+        commands.toggleActivity = toggleActivity
+        commands.togglePinned = { target in
+            if case let .session(id, isPinned) = target { model.send(.setPinned(taskID: id.uuidString, pinned: !isPinned)) }
+        }
+        commands.archive = { id in model.send(.archiveTask(taskID: id.uuidString)) }
+        commands.showArchivedTasks = nil
+        if model.newTask != nil { commands.newTask = { showNewTask() } }
+        return commands
+    }
+}
+
+/// What one window of a host keeps for itself, as the local window keeps its own: whether the sidebar shows and how
+/// wide, the search, which projects are collapsed (only while the window is open), the activity view and the session
+/// rail.
+@MainActor
+@Observable
+final class RemoteHostShell {
+    var isSidebarVisible = true
+    let sidebarWidth = SidebarWidthState()
+    var searchText = ""
+    let disclosure = SidebarDisclosureStore(defaults: nil)
+    var isShowingActivity = false
+    var activityPlaces: [UUID: TaskAttentionPlace] = [:]
+    var showsRail = true
+    /// The sidebar's project actions are the host's (`TaskSidebar.managesProjects`); this store only stands in for them.
+    let projects = ProjectStore()
+}
+
+/// What a detail's title bar row needs from the window: the sidebar part it starts with while the sidebar is hidden,
+/// and the connection's line under it.
+struct RemoteTitleBarContext {
+    var isSidebarVisible: Bool
+    var toggleSidebar: () -> Void
+    var newTask: () -> Void
+    var banner: AnyView
+}
+
+/// The row in the window's title bar over the detail, as the local window's: with the sidebar hidden, the bar's sidebar
+/// part (Show sidebar, New task) first, then what the detail names, with a drag region where it leaves room.
+struct RemoteTitleBar<Content: View>: View {
+    let context: RemoteTitleBarContext
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if !context.isSidebarVisible {
+                TitleBarSidebarPart(isSidebarVisible: false, width: TitleBarSidebarPart.collapsedWidth,
+                                    onToggleSidebar: context.toggleSidebar, onNewTask: context.newTask)
+                Rectangle().fill(ParityTheme.separator).frame(width: 1)
+            }
+            HStack(spacing: 8) {
+                content
+            }
+            .padding(.horizontal, 16)
+        }
+        .frame(height: ParityTheme.titleBarHeight)
     }
 }
 
@@ -154,14 +407,25 @@ extension RemoteHostView {
 @Observable
 final class RemoteComposerDrafts {
     @ObservationIgnored private var drafts: [String: TaskComposerDraft] = [:]
+    @ObservationIgnored private var finds: [String: ConversationFindModel] = [:]
     @ObservationIgnored let newTask = TaskComposerDraft()
     var edits: [String: RemoteMessageEdit] = [:]
+    /// The project New task in a project chose, for the new task screen to start in.
+    var newTaskProjectID: String?
 
     func draft(for taskID: String) -> TaskComposerDraft {
         if let draft = drafts[taskID] { return draft }
         let draft = TaskComposerDraft()
         drafts[taskID] = draft
         return draft
+    }
+
+    /// The task's find, kept while the window is open as the local task keeps its own.
+    func find(for taskID: String) -> ConversationFindModel {
+        if let find = finds[taskID] { return find }
+        let find = ConversationFindModel()
+        finds[taskID] = find
+        return find
     }
 }
 
@@ -240,211 +504,70 @@ private struct RemoteConnectionBanner: View {
     }
 }
 
-// MARK: - Sidebar
+// MARK: - The host
 
-/// The host's sidebar: New task, then Pinned, each project and Chats, in the host's order, each task with
-/// its harness, its title and the host sidebar's mark, a task started from another nested under it.
-struct RemoteHostSidebar: View {
+/// The sidebar's last row, where the local window keeps its account button: the host's name and how it is reached, and
+/// its menu (connect again, the paired Macs, and removing the host from this Mac).
+private struct RemoteHostFooter: View {
     let model: RemoteHostModel
-    @Environment(\.yardletInterfaceScale) private var interfaceScale
-
-    var body: some View {
-        if model.showsSchedules {
-            RemoteScheduleList(model: model)
-        } else {
-            tasks
-        }
-    }
-
-    private var tasks: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button { model.select(.newTask) } label: {
-                SidebarActionRow(systemName: "square.and.pencil", title: L10n.string("New task"), symbolWeight: .bold,
-                                 titleWeight: .medium, height: 32, isFilled: model.selection == .newTask)
-            }
-            .buttonStyle(.borderless)
-            .parityPointer()
-            .padding(.horizontal, SidebarMetrics.rowInset)
-            .padding(.top, 10)
-            .disabled(model.newTask == nil)
-
-            if model.offersSchedules {
-                Button {
-                    model.showsSchedules = true
-                    model.schedules.load()
-                } label: {
-                    SidebarActionRow(systemName: "clock", title: L10n.string("Scheduled tasks"))
-                }
-                .buttonStyle(.borderless)
-                .parityPointer()
-                .padding(.horizontal, SidebarMetrics.rowInset)
-                .padding(.top, 2)
-            }
-
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: SidebarMetrics.rowSpacing) {
-                    ForEach(sections, id: \.id) { section in
-                        Text(section.title)
-                            .font(.system(size: SidebarMetrics.projectHeaderFontSize * interfaceScale, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .padding(.leading, SidebarMetrics.projectHeaderLeading)
-                            .frame(height: SidebarMetrics.projectHeaderHeight * interfaceScale, alignment: .bottomLeading)
-                            .padding(.top, SidebarMetrics.projectHeaderTopSpacing)
-                            .accessibilityAddTraits(.isHeader)
-                        ForEach(section.rows, id: \.task.id) { row in
-                            RemoteTaskRow(task: row.task, depth: row.depth,
-                                          isSelected: model.selection == .task(row.task.id), model: model)
-                        }
-                        if section.rows.isEmpty {
-                            Text(L10n.string("No tasks"))
-                                .font(.system(size: 12 * interfaceScale))
-                                .foregroundStyle(.tertiary)
-                                .padding(.leading, SidebarRowLeading<EmptyView>.titleLeading())
-                                .frame(height: SidebarMetrics.secondaryLineHeight * interfaceScale)
-                        }
-                    }
-                }
-                .padding(.horizontal, SidebarMetrics.rowInset)
-                .padding(.bottom, 12)
-            }
-        }
-    }
-
-    struct Row {
-        let task: RemoteTask
-        let depth: Int
-    }
-
-    struct Section {
-        let id: String
-        let title: String
-        let rows: [Row]
-    }
-
-    /// Pinned first, then the host's projects in its order with Chats among them, each listing its tasks
-    /// most recently active first, nested under the task they were started from.
-    private var sections: [Section] {
-        let pinned = model.tasks.filter(\.pinned)
-        var sections: [Section] = []
-        if !pinned.isEmpty { sections.append(Section(id: "pinned", title: L10n.string("Pinned"), rows: Self.nest(pinned))) }
-        for project in model.projects {
-            let tasks = model.tasks.filter { !$0.pinned && $0.projectId == project.id }
-            guard !tasks.isEmpty || project.kind == .chats else { continue }
-            sections.append(Section(id: project.id, title: project.name, rows: Self.nest(tasks)))
-        }
-        return sections
-    }
-
-    /// Each task under the one it was started from when that one is in the same list.
-    static func nest(_ tasks: [RemoteTask]) -> [Row] {
-        let listed = Set(tasks.map(\.id))
-        var children: [String: [RemoteTask]] = [:]
-        var roots: [RemoteTask] = []
-        for task in tasks {
-            if let parent = task.parentTaskId, parent != task.id, listed.contains(parent) {
-                children[parent, default: []].append(task)
-            } else {
-                roots.append(task)
-            }
-        }
-        var rows: [Row] = []
-        var visited: Set<String> = []
-        func add(_ task: RemoteTask, depth: Int) {
-            guard visited.insert(task.id).inserted else { return }
-            rows.append(Row(task: task, depth: depth))
-            for child in children[task.id] ?? [] { add(child, depth: min(depth + 1, 3)) }
-        }
-        for root in roots { add(root, depth: 0) }
-        return rows
-    }
-}
-
-/// One task of the host: its harness, its title (bold while unread) and the mark the host's sidebar shows,
-/// with Pin and Archive on hover and in its menu.
-private struct RemoteTaskRow: View {
-    let task: RemoteTask
-    let depth: Int
-    let isSelected: Bool
-    let model: RemoteHostModel
+    let directory: RemoteHostDirectory
     @State private var isHovering = false
+    @State private var confirmsRemoval = false
+    @Environment(\.openWindow) private var openWindow
     @Environment(\.yardletInterfaceScale) private var interfaceScale
 
     var body: some View {
-        ZStack(alignment: .trailing) {
-            Button { model.select(.task(task.id)) } label: {
-                HStack(spacing: 0) {
-                    SidebarRowLeading(nestingDepth: depth) {
-                        HarnessIdentityIcon(harness: HarnessKind(rawValue: task.harness),
-                                            size: SidebarMetrics.nestedIconSize * interfaceScale)
-                    }
-                    Text(task.title)
-                        .font(.system(size: 13 * interfaceScale, weight: task.unread ? .semibold : .regular))
+        Menu {
+            if !model.isConnected {
+                Button(L10n.string("Try Again")) { model.reconnectNow() }
+            }
+            Button(L10n.string("Connect to Mac…")) { openWindow(id: RemoteConnectWindow.sceneID) }
+            Divider()
+            Button(L10n.string("Remove from This Mac"), role: .destructive) { confirmsRemoval = true }
+        } label: {
+            HStack(spacing: 0) {
+                Image(systemName: "desktopcomputer")
+                    .font(.system(size: 13 * interfaceScale))
+                    .foregroundStyle(.secondary)
+                    .frame(width: SidebarMetrics.gutterWidth)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(model.name)
+                        .font(.system(size: 13 * interfaceScale))
+                        .foregroundStyle(isHovering ? .primary : .secondary)
                         .lineLimit(1)
-                    Spacer(minLength: 3)
-                    if !isHovering, let status = Self.status(of: task) {
-                        SidebarTaskStatusView(status: status)
+                    let line = RemoteConnectionText.line(model.connection)
+                    if !line.isEmpty {
+                        Text(line)
+                            .font(.system(size: 11 * interfaceScale))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
                     }
                 }
-                .padding(.trailing, isHovering ? 53 : SidebarMetrics.rowTrailingPadding)
-                .frame(height: SidebarMetrics.rowHeight * interfaceScale)
-                .contentShape(Rectangle())
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9 * interfaceScale, weight: .semibold))
+                    .foregroundStyle(.tertiary)
             }
-            .buttonStyle(.borderless)
-            .parityPointer()
-            .accessibilityLabel("\(task.title), \(task.harnessName)")
-            .accessibilityValue(Self.status(of: task)?.accessibilityName ?? "")
-            .accessibilityAddTraits(isSelected ? .isSelected : [])
-
-            if isHovering {
-                HStack(spacing: 1) {
-                    hoverButton(task.pinned ? "pin.fill" : "pin", task.pinned ? L10n.string("Unpin") : L10n.string("Pin")) {
-                        model.send(.setPinned(taskID: task.id, pinned: !task.pinned))
-                    }
-                    hoverButton("archivebox", L10n.string("Archive")) { model.send(.archiveTask(taskID: task.id)) }
-                }
-                .padding(.trailing, 4)
-            }
+            .padding(.trailing, 10)
+            .frame(height: 36 * interfaceScale)
+            .contentShape(Rectangle())
+            .background(isHovering ? ParityTheme.hoverFill : .clear, in: SidebarMetrics.rowShape())
         }
-        .frame(height: SidebarMetrics.rowHeight * interfaceScale)
-        .background(isSelected ? ParityTheme.selectedFill : (isHovering ? ParityTheme.hoverFill : .clear),
-                    in: SidebarMetrics.rowShape())
-        .onHover { isHovering = $0 }
-        .contextMenu {
-            Button(task.pinned ? L10n.string("Unpin") : L10n.string("Pin")) {
-                model.send(.setPinned(taskID: task.id, pinned: !task.pinned))
-            }
-            Button(L10n.string("Archive")) { model.send(.archiveTask(taskID: task.id)) }
-        }
-    }
-
-    private func hoverButton(_ systemName: String, _ label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 11 * interfaceScale, weight: .medium))
-                .frame(width: 24, height: 24)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.borderless)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
         .parityPointer()
-        .help(label)
-        .accessibilityLabel(label)
-    }
-
-    /// The host sidebar's mark (§4.1 `indicator`), drawn as the local sidebar draws it.
-    static func status(of task: RemoteTask) -> SidebarTaskStatus? {
-        if task.pendingKind == "browserHandoff" { return .waitingInBrowser }
-        switch task.indicator {
-        case .awaitingApproval?: return .awaitingApproval
-        case .needsInput?: return .needsInput
-        case .failed?: return .failed(message: nil)
-        case .usageLimit?: return .usageLimit(HarnessRateLimit(status: .rejected))
-        case .running?: return .running
-        case .unread?: return .unread
-        case nil: return nil
+        .onHover { isHovering = $0 }
+        .accessibilityLabel(L10n.format("%@, %@", model.name, RemoteConnectionText.line(model.connection)))
+        .confirmationDialog(L10n.format("Remove %@ from this Mac?", model.name), isPresented: $confirmsRemoval) {
+            Button(L10n.string("Remove from This Mac"), role: .destructive) { Task { await directory.forget(model.id) } }
+            Button(L10n.string("Cancel"), role: .cancel) {}
+        } message: {
+            Text(L10n.format("To connect again, pair with a new link from %@'s Settings › Remote.", model.name))
         }
     }
 }
+
 
 // MARK: - A task
 
@@ -459,10 +582,13 @@ struct RemoteTaskView: View {
     let draft: TaskComposerDraft
     /// A turn's message being edited in the composer (§15.23).
     @Binding var editing: RemoteMessageEdit?
+    let titleBar: RemoteTitleBarContext
+    /// Find in the conversation (⌘F), the task's own as the local task's is.
+    let find: ConversationFindModel
+    /// The rail is shown, as the local rail is unless the person hid it; it draws only where it fits.
+    @Binding var showsRail: Bool
     /// An answer that leaves a rule behind, asked about once more before it goes.
     @State private var standingAnswer: (requestID: String, action: PermissionRequestAction)?
-    /// The rail is shown, as the local rail is unless the person hid it; it draws only where it fits.
-    @State private var showsRail = true
     @State private var width: CGFloat = 0
     /// A file read from the host, shown in Quick Look.
     @State private var preview: URL?
@@ -486,21 +612,26 @@ struct RemoteTaskView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            conversationColumn
-                .frame(minWidth: 360, maxWidth: .infinity)
-            if drawsRail {
-                Divider()
-                RemoteTaskRail(outputs: outputs, open: { open($0, .viewer) }, openInItsApp: { open($0, .itsApp) },
-                               revealInFinder: { open($0, .finder) })
+        VStack(spacing: 0) {
+            RemoteTitleBar(context: titleBar) { header }
+            titleBar.banner
+            HStack(spacing: 0) {
+                conversationColumn
+                    .frame(minWidth: 360, maxWidth: .infinity)
+                if drawsRail {
+                    Divider()
+                    RemoteTaskRail(outputs: outputs, open: { open($0, .viewer) }, openInItsApp: { open($0, .itsApp) },
+                                   revealInFinder: { open($0, .finder) })
+                }
+                if showsBrowser {
+                    Rectangle().fill(ParityTheme.separator).frame(width: 1)
+                    RemoteBrowserPanel(model: model)
+                        .frame(minWidth: 380, idealWidth: 560, maxWidth: 760)
+                }
             }
-            if showsBrowser {
-                Rectangle().fill(ParityTheme.separator).frame(width: 1)
-                RemoteBrowserPanel(model: model)
-                    .frame(minWidth: 380, idealWidth: 560, maxWidth: 760)
-            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .focusedSceneValue(\.yardletConversationFind, find)
         .environment(\.taskSuggestionActions, suggestionActions)
         // The host's files: named here, and opened once read from the host where it serves them.
         .environment(\.transcriptOpensLocalFiles, false)
@@ -521,9 +652,14 @@ struct RemoteTaskView: View {
 
     private var conversationColumn: some View {
         VStack(spacing: 0) {
-            header
             ConversationTimeline(source: .presented(presentation), actions: actions,
                                  isLoading: !conversation.isLoaded, diagnosticID: nil)
+                .environment(\.conversationFind, find)
+                .overlay(alignment: .topTrailing) {
+                    ConversationFindBar(find: find)
+                        .padding(.top, 8)
+                        .padding(.horizontal, 16)
+                }
             if let editing {
                 ConversationEditBanner(canCancel: true) {
                     draft.text = editing.previousText
@@ -567,36 +703,35 @@ struct RemoteTaskView: View {
         }
     }
 
+    /// What the title bar names for the task: its harness and title, where it runs, and the session rail's button.
+    @ViewBuilder
     private var header: some View {
-        HStack(spacing: 8) {
-            if let task {
-                HarnessIdentityIcon(harness: HarnessKind(rawValue: task.harness), size: 15)
-                Text(task.title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                Text(task.harnessName)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 8)
-            Text(L10n.format("On %@", model.name))
+        if let task {
+            HarnessIdentityIcon(harness: HarnessKind(rawValue: task.harness), size: 15)
+            Text(task.title)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+            Text(task.harnessName)
                 .font(.system(size: 12))
-                .foregroundStyle(.tertiary)
-            if model.offersBrowser {
-                ParityIconButton(systemName: "globe", help: showsBrowser ? L10n.string("Hide browser") : L10n.string("Show browser")) {
-                    if showsBrowser { model.browser.hide() } else { model.showBrowser(taskID: conversation.taskID) }
-                }
-            }
-            if !outputs.isEmpty {
-                ParityIconButton(systemName: "sidebar.squares.right",
-                                 help: L10n.string(drawsRail ? "Hide session rail" : "Show session rail")) {
-                    showsRail = !drawsRail
-                }
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        WindowDragRegion().frame(minWidth: 8, maxWidth: .infinity)
+        Text(L10n.format("On %@", model.name))
+            .font(.system(size: 12))
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+        if model.offersBrowser {
+            ParityIconButton(systemName: "globe", help: showsBrowser ? L10n.string("Hide browser") : L10n.string("Show browser")) {
+                if showsBrowser { model.browser.hide() } else { model.showBrowser(taskID: conversation.taskID) }
             }
         }
-        .padding(.horizontal, 16)
-        .frame(height: ParityTheme.paneToolbarHeight)
-        .overlay(alignment: .bottom) { Divider() }
+        if !outputs.isEmpty {
+            ParityIconButton(systemName: "sidebar.squares.right",
+                             help: L10n.string(drawsRail ? "Hide session rail" : "Show session rail")) {
+                showsRail = !drawsRail
+            }
+        }
     }
 
     private var actions: ConversationActions {

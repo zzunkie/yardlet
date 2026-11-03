@@ -13,11 +13,13 @@ final class SidebarDisclosureStore {
     private(set) var collapsedKeys: Set<String>
     private(set) var revealedPages: [String: Int] = [:]
 
-    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let defaults: UserDefaults?
 
-    init(defaults: UserDefaults = .yardlet) {
+    /// - Parameter defaults: where collapsing is kept; nil keeps it only while the store lives (another Mac's window,
+    ///   which leaves nothing of its host's projects on this Mac).
+    init(defaults: UserDefaults? = .yardlet) {
         self.defaults = defaults
-        collapsedKeys = Set(defaults.stringArray(forKey: Self.collapsedProjectsKey) ?? [])
+        collapsedKeys = Set(defaults?.stringArray(forKey: Self.collapsedProjectsKey) ?? [])
     }
 
     /// The state the sidebar layout reads, with the Codex app's row limit.
@@ -55,6 +57,6 @@ final class SidebarDisclosureStore {
     }
 
     private func persist() {
-        defaults.set(collapsedKeys.sorted(), forKey: Self.collapsedProjectsKey)
+        defaults?.set(collapsedKeys.sorted(), forKey: Self.collapsedProjectsKey)
     }
 }
