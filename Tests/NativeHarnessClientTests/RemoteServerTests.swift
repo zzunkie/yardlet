@@ -90,6 +90,83 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertEqual(second.values.last?.permissions, RemoteDevicePermissions())
     }
 
+    func testFreshRegistrationDeniesExistingRightsBeforeAnUpdateConflict() async throws {
+        let harness = try await ServerHarness()
+        let phone = try await harness.authenticatedPhone()
+        let all = await harness.devices.all()
+        let device = try XCTUnwrap(all.first)
+        let key = try XCTUnwrap(RemoteEncoding.data(base64url: device.publicKey))
+        try await harness.server.setPermission(.terminal, allowed: true, for: device.id)
+        let snapshot = await harness.devices.permissionSnapshot(device.id)
+        let before = try XCTUnwrap(snapshot)
+        let gate = PermissionChangeGate()
+        let change = Task { try await harness.server.withPermissionChange(.settings, for: device.id) { await gate.wait() } }
+        try await waitUntilAsync { await gate.isWaiting }
+        let ticket = await harness.server.openPairing()
+        let registration = await harness.server.acceptHandshake(
+            RemoteHandshakeHello(name: "Replacement", pair: RemoteEncoding.base64url(ticket.secret)),
+            publicKey: key, channel: TestChannel(), path: .local)
+        guard case .refused = registration else {
+            await gate.release()
+            return XCTFail("A conflicting registration must not report success")
+        }
+        let denied = await harness.devices.device(device.id)
+        XCTAssertEqual(denied?.permissions, RemoteDevicePermissions())
+        let access = await harness.server.permissionError(.terminal, on: try XCTUnwrap(phone.id))
+        XCTAssertEqual(access?.code, .notAllowed)
+        do {
+            _ = try await harness.devices.setPermission(.terminal, allowed: true, for: device.id,
+                                                        expectedGeneration: before.generation)
+            XCTFail("A grant queued before the reset must not restore rights")
+        } catch let error as RemoteError { XCTAssertEqual(error.code, .notAllowed) }
+        await gate.release()
+        try await change.value
+        let returning = TestChannel()
+        let reconnected = await harness.server.acceptHandshake(RemoteHandshakeHello(name: "Returning"), publicKey: key,
+                                                               channel: returning, path: .local)
+        guard case let .accepted(id, _) = reconnected else { return XCTFail("The retained key should reconnect without grants") }
+        returning.id = id
+        await harness.send(#"{"id":"proof","type":"ping"}"#, on: returning)
+        _ = try await returning.response("proof")
+        let stillDenied = await harness.server.permissionError(.terminal, on: id)
+        XCTAssertEqual(stillDenied?.code, .notAllowed)
+    }
+
+    func testPermissionRefusalsKeepImportantAuditEntries() async throws {
+        let clock = RemoteTestClock()
+        let harness = try await ServerHarness(clock: clock)
+        let phone = try await harness.authenticatedPhone()
+        let all = await harness.devices.all()
+        let device = try XCTUnwrap(all.first)
+        try await harness.server.setPermission(.terminal, allowed: true, for: device.id)
+        let request = RemoteRequest.setTaskSetting(taskID: "A", setting: "example", value: "not audit content")
+        for _ in 0..<2_600 { await harness.server.auditPermissionRefusal(device: device.id, request: request) }
+        let initial = harness.audit.entries()
+        XCTAssertTrue(initial.contains { $0.type == "permission.terminal" })
+        XCTAssertEqual(initial.filter { $0.type == request.type }.count, 1)
+        clock.advance(by: 61)
+        await harness.server.auditPermissionRefusal(device: device.id, request: request)
+        XCTAssertEqual(harness.audit.entries().filter { $0.type == request.type }.count, 2)
+        XCTAssertFalse(try String(contentsOf: harness.auditURL, encoding: .utf8).contains("not audit content"))
+        await harness.server.closed(try XCTUnwrap(phone.id))
+    }
+
+    func testShutdownNotifiesDevicesLoadedWithExistingGrants() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("remote-shutdown-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("devices.json")
+        let original = RemoteDeviceStore(fileURL: file)
+        let device = await original.addSecure(name: "Offline device", publicKey: Data(repeating: 8, count: 32), platform: nil)
+        _ = try await original.setPermission(.terminal, allowed: true, for: device.id)
+        let server = RemoteServer(configuration: .init(server: RemoteServerInfo(name: "Test", appVersion: "test")),
+                                  bridge: FakeBridge(), devices: RemoteDeviceStore(fileURL: file))
+        await server.start()
+        let received = PermissionEvents()
+        _ = await server.addPermissionsChangedHandler { received.append($0, $1) }
+        await server.shutdown(reason: "test")
+        XCTAssertEqual(received.values, [.init(device: device.id, permissions: RemoteDevicePermissions())])
+    }
+
     func testUnprovenAndQuietConnectionsAreClosed() async throws {
         let clock = RemoteTestClock()
         let harness = try await ServerHarness(clock: clock)

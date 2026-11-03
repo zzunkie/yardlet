@@ -124,11 +124,17 @@ final class RemoteSettingsRenderingTests: XCTestCase {
         _ = await service.server.addPermissionsChangedHandler { first.append($0, $1) }
         _ = await service.server.addPermissionsChangedHandler { second.append($0, $1) }
         await service.setPermission(.terminal, allowed: true, for: device)
+        await service.setPermission(.fileWrites, allowed: true, for: device)
         try fixture.block()
         await service.setPermission(.terminal, allowed: false, for: device)
         XCTAssertNotNil(service.permissionError)
         XCTAssertTrue(service.canRetryPermissionChange)
         XCTAssertEqual(service.devices.first?.permissions?.terminal, false)
+        await service.setPermission(.fileWrites, allowed: false, for: device)
+        XCTAssertEqual(service.unsavedDeniedPermissions.count, 2)
+        await service.setPermission(.settings, allowed: true, for: device)
+        XCTAssertEqual(service.unsavedDeniedPermissions.count, 2, "A later failed grant must not replace unsaved denials")
+        XCTAssertTrue(service.canRetryPermissionChange)
         XCTAssertEqual(first.values.last?.permissions.terminal, false)
         XCTAssertEqual(first.values, second.values)
         try render("remote-permissions-save-failed", service: service,
@@ -140,7 +146,8 @@ final class RemoteSettingsRenderingTests: XCTestCase {
         XCTAssertNil(service.permissionError)
         XCTAssertFalse(service.canRetryPermissionChange)
         let afterRetry = await RemoteDeviceStore(fileURL: fixture.file).device(device.id)
-        XCTAssertEqual(afterRetry?.permissions?.terminal, false)
+        XCTAssertEqual(afterRetry?.permissions, RemoteDevicePermissions(), "Retry saves only denials; it cannot retry the failed grant")
+        XCTAssertTrue(service.unsavedDeniedPermissions.isEmpty)
     }
 
     func testFailedRemovalRetainsThePairedDeviceAndReportsFailure() async throws {

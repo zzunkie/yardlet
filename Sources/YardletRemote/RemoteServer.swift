@@ -347,6 +347,16 @@ public actor RemoteServer {
     private var permissionEpochs: [String: UInt64] = [:]
     private var publishedPermissions: [String: RemoteDevicePermissions] = [:]
     private var permissionObservers: [UUID: @Sendable (String, RemoteDevicePermissions) -> Void] = [:]
+    private var resettingPermissionDevices: Set<String> = []
+    private var knownPermissionDevices: Set<String> = []
+    private struct PermissionRefusalKey: Hashable {
+        var device: String?
+        var request: String
+        var task: String?
+        var result: String
+    }
+    private var auditedPermissionRefusals: [PermissionRefusalKey: Date] = [:]
+    private var nextPermissionAuditPrune = Date.distantPast
     private var pairedDeviceID: String?
     private var published: RemoteSnapshot?
     private var tasksDirty = true
@@ -366,6 +376,7 @@ public actor RemoteServer {
     private var lastStatus = Status()
     /// A v2 pairing just spent, which the same phone key may use again until it expires (§12).
     private var spentPairing: RemotePairingTicket?
+    private var registeringPairing: RemotePairingTicket?
     private var directory: (direct: [String], relay: RemoteHandshakeReply.Relay?) = ([], nil)
     /// Link requests are taken while the Mac is signed in to an account (§12.1).
     private var acceptsLinks = false
@@ -522,6 +533,11 @@ public actor RemoteServer {
         if let typed = hello.pair {
             guard let secret = RemoteEncoding.data(base64url: typed) else { return refuse(.badRequest, "Unreadable secret", .unauthenticated) }
             var isRetry = false
+            var pairingToSpend: RemotePairingTicket?
+            if let pending = registeringPairing, pending.pairedKey == publicKey,
+               Self.constantTimeEqual(pending.secret, secret) {
+                return refuse(.unavailable, "Device registration is being saved", .unavailable)
+            }
             if let spent = spentPairing, spent.expiresAt > now(), spent.pairedKey == publicKey,
                Self.constantTimeEqual(spent.secret, secret) {
                 // The same phone again: it lost the Mac's answer.
@@ -537,17 +553,25 @@ public actor RemoteServer {
                     return refuse(.pairingInvalid, "Wrong pairing secret", .unauthenticated)
                 }
                 ticket.pairedKey = publicKey
-                var spent = ticket
-                spent.expiresAt = min(ticket.expiresAt, now().addingTimeInterval(Self.pairingRetryWindow))
-                spentPairing = spent
+                pairingToSpend = ticket
+                registeringPairing = ticket
                 if ticket.isSingleUse { pairing = nil }
             }
             do {
                 device = try await registerDevice(name: name, publicKey: publicKey, platform: platform, resetsPermissions: !isRetry)
             } catch {
-                spentPairing = nil
+                if registeringPairing.map({ $0.pairedKey == publicKey && Self.constantTimeEqual($0.secret, secret) }) == true {
+                    registeringPairing = nil
+                }
                 publishStatus()
                 return refuse(.internal, "The device registration could not be saved", .unavailable)
+            }
+            if let pairingToSpend, registeringPairing?.pairedKey == publicKey,
+               registeringPairing.map({ Self.constantTimeEqual($0.secret, pairingToSpend.secret) }) == true {
+                var spent = pairingToSpend
+                spent.expiresAt = min(pairingToSpend.expiresAt, now().addingTimeInterval(Self.pairingRetryWindow))
+                spentPairing = spent
+                registeringPairing = nil
             }
             paired = true
             pairedDeviceID = device.id
@@ -582,8 +606,8 @@ public actor RemoteServer {
         } else {
             return refuse(.unknownDevice, "This phone is not paired with this Mac", .revoked)
         }
-        // A removal still being saved is temporary, never a permanent revocation notice.
-        guard !removingDeviceIDs.contains(device.id) else {
+        // Registration and removal still being saved are temporary, never permanent revocation notices.
+        guard !removingDeviceIDs.contains(device.id), !resettingPermissionDevices.contains(device.id) else {
             return refuse(.unavailable, "Device settings are being saved", .unavailable)
         }
         // Removed while this handshake read the device list.
@@ -725,16 +749,19 @@ public actor RemoteServer {
     public func setPermission(_ permission: RemoteDevicePermission, allowed: Bool, for deviceID: String) async throws {
         try await withPermissionChange(permission, for: deviceID) {
             let epoch = permissionEpochs[deviceID, default: 0]
-            guard !revokedDeviceIDs.contains(deviceID), let before = await devices.device(deviceID),
+            guard !revokedDeviceIDs.contains(deviceID), !resettingPermissionDevices.contains(deviceID),
+                  let snapshot = await devices.permissionSnapshot(deviceID),
                   permissionEpochs[deviceID, default: 0] == epoch else {
                 throw RemoteError(.notAllowed)
             }
+            let before = snapshot.device
             if !allowed {
                 publishPermissionChange(permission, allowed: false, for: deviceID,
                                         startingFrom: before.permissions ?? RemoteDevicePermissions())
             }
             do {
-                guard let device = try await devices.setPermission(permission, allowed: allowed, for: deviceID) else {
+                guard let device = try await devices.setPermission(permission, allowed: allowed, for: deviceID,
+                                                                    expectedGeneration: snapshot.generation) else {
                     throw RemoteError(.notAllowed)
                 }
                 guard !revokedDeviceIDs.contains(deviceID), permissionEpochs[deviceID, default: 0] == epoch else {
@@ -787,24 +814,36 @@ public actor RemoteServer {
     }
 
     private func registerDevice(name: String, publicKey: Data, platform: String?, resetsPermissions: Bool) async throws -> RemoteDevice {
-        let device = await devices.addSecure(name: name, publicKey: publicKey, platform: platform, now: now())
-        guard resetsPermissions else { return device }
+        let found = await devices.device(publicKey: publicKey)
+        let device: RemoteDevice
+        if let found { device = found }
+        else { device = await devices.addSecure(name: name, publicKey: publicKey, platform: platform, now: now()) }
+        knownPermissionDevices.insert(device.id)
+        guard resetsPermissions else {
+            return await devices.authenticate(publicKey: publicKey, name: name, now: now()) ?? device
+        }
+        guard resettingPermissionDevices.insert(device.id).inserted else { throw RemoteError(.unavailable) }
+        defer { resettingPermissionDevices.remove(device.id) }
+        permissionEpochs[device.id, default: 0] &+= 1
+        let epoch = permissionEpochs[device.id, default: 0]
+        publishedPermissions[device.id] = RemoteDevicePermissions()
+        notifyPermissionsChanged(device.id, permissions: RemoteDevicePermissions())
+        guard let denied = await devices.denyPermissionsInMemory(device.id) else { throw RemoteError(.notAllowed) }
         let keys = RemoteDevicePermission.allCases.map { PermissionKey(deviceID: device.id, permission: $0) }
+        // Even a conflicting update cannot retain the key's old effective rights.
         guard keys.allSatisfy({ !permissionChanges.contains($0) }) else { throw RemoteError(.unavailable) }
         for key in keys {
             permissionChanges.insert(key)
             permissionVersions[key, default: 0] &+= 1
         }
         defer { for key in keys { permissionChanges.remove(key) } }
-        permissionEpochs[device.id, default: 0] &+= 1
-        let epoch = permissionEpochs[device.id, default: 0]
-        publishedPermissions[device.id] = RemoteDevicePermissions()
-        notifyPermissionsChanged(device.id, permissions: RemoteDevicePermissions())
         let changed = RemoteDevicePermission.allCases.contains { device.permissions?[$0] == true }
         let reset: RemoteDevice
         do {
-            guard let saved = try await devices.resetPermissions(device.id), !revokedDeviceIDs.contains(device.id),
-                  permissionEpochs[device.id, default: 0] == epoch else { throw RemoteError(.notAllowed) }
+            guard let saved = try await devices.resetPermissions(device.id, expectedGeneration: denied.generation, name: name, now: now()),
+                  !revokedDeviceIDs.contains(device.id), permissionEpochs[device.id, default: 0] == epoch else {
+                throw RemoteError(.notAllowed)
+            }
             reset = saved
         } catch {
             if changed { audit?.record(device: device.id, type: "permissionReset", task: nil, result: "failed", at: now()) }
@@ -817,16 +856,33 @@ public actor RemoteServer {
     /// Checks only the permission this operation requires; an unrelated flag being saved cannot pause it.
     func permissionError(_ permission: RemoteDevicePermission, on id: UUID) async -> RemoteError? {
         guard let connection = connections[id], connection.isProven, let deviceID = connection.deviceID,
-              !revokedDeviceIDs.contains(deviceID) else { return RemoteError(.notAllowed) }
+              !revokedDeviceIDs.contains(deviceID), !resettingPermissionDevices.contains(deviceID) else { return RemoteError(.notAllowed) }
         let key = PermissionKey(deviceID: deviceID, permission: permission)
         guard !permissionChanges.contains(key) else { return RemoteError(.notAllowed) }
         let version = permissionVersions[key, default: 0]
         guard let device = await devices.device(deviceID), device.permissions?[permission] == true,
               connections[id]?.deviceID == deviceID, !revokedDeviceIDs.contains(deviceID),
-              !permissionChanges.contains(key), permissionVersions[key, default: 0] == version else {
+              !permissionChanges.contains(key), !resettingPermissionDevices.contains(deviceID),
+              permissionVersions[key, default: 0] == version else {
             return RemoteError(.notAllowed)
         }
         return nil
+    }
+
+    func auditPermissionRefusal(device: String?, request: RemoteRequest) {
+        let time = now()
+        if time >= nextPermissionAuditPrune {
+            auditedPermissionRefusals = auditedPermissionRefusals.filter { time.timeIntervalSince($0.value) < 60 }
+            nextPermissionAuditPrune = time.addingTimeInterval(60)
+        }
+        let key = PermissionRefusalKey(device: device, request: request.type, task: request.taskID, result: "notAllowed")
+        if let last = auditedPermissionRefusals[key], time.timeIntervalSince(last) < 60 { return }
+        if auditedPermissionRefusals.count >= 1_024,
+           let oldest = auditedPermissionRefusals.min(by: { $0.value < $1.value }) {
+            auditedPermissionRefusals[oldest.key] = nil
+        }
+        auditedPermissionRefusals[key] = time
+        audit?.record(device: device, type: request.type, task: request.taskID, result: key.result, at: time)
     }
 
     /// Opens a pairing, replacing any open one.
@@ -840,6 +896,7 @@ public actor RemoteServer {
                                          expiresAt: now().addingTimeInterval(lifetime), isSingleUse: isSingleUse)
         pairing = ticket
         spentPairing = nil
+        registeringPairing = nil
         pairedDeviceID = nil
         publishStatus()
         return ticket
@@ -848,6 +905,7 @@ public actor RemoteServer {
     public func cancelPairing() {
         pairing = nil
         spentPairing = nil
+        registeringPairing = nil
         publishStatus()
     }
 
@@ -894,7 +952,8 @@ public actor RemoteServer {
 
     /// Closes every connection: the remote was turned off, or Yardlet quits.
     public func shutdown(reason: String) {
-        let devicesToEnd = Set(connections.values.compactMap(\.deviceID)).union(permissionVersions.keys.map(\.deviceID))
+        let devicesToEnd = knownPermissionDevices.union(connections.values.compactMap(\.deviceID))
+            .union(permissionVersions.keys.map(\.deviceID))
         for device in devicesToEnd {
             permissionEpochs[device, default: 0] &+= 1
             publishedPermissions[device] = nil
@@ -908,6 +967,7 @@ public actor RemoteServer {
         }
         pairing = nil
         spentPairing = nil
+        registeringPairing = nil
         link = nil
         sweeper?.cancel()
         sweeper = nil
@@ -976,8 +1036,7 @@ public actor RemoteServer {
         }
         if let permission = request.requiredPermission, let error = await permissionError(permission, on: id) {
             respond(.failure(envelope.id, error), to: id)
-            audit?.record(device: connection.deviceID, type: request.type, task: request.taskID,
-                          result: RemoteErrorCode.notAllowed.rawValue, at: now())
+            auditPermissionRefusal(device: connection.deviceID, request: request)
             return
         }
         switch request {
@@ -1855,7 +1914,9 @@ public actor RemoteServer {
 
     private func reloadPushDevices() async {
         let had = pushesAttention
-        hasPushDevices = await devices.all().contains { $0.push != nil }
+        let stored = await devices.all()
+        knownPermissionDevices.formUnion(stored.map(\.id))
+        hasPushDevices = stored.contains { $0.push != nil }
         // The first snapshot is the baseline later changes are pushed against.
         if pushesAttention, !had, published == nil { await refreshTasks(force: false) }
     }
