@@ -363,8 +363,17 @@ public actor RemoteDeviceStore {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
         let data = try JSONEncoder.remoteDates.encode(File(devices: devices))
-        try data.write(to: fileURL, options: [.atomic])
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        // Set private metadata on a sibling before replacement. Nothing that can fail follows the
+        // atomic replacement, so a reported failure cannot hide a newly persisted grant.
+        let temporary = folder.appendingPathComponent(".devices-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try data.write(to: temporary, options: [.withoutOverwriting])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary, options: [.usingNewMetadata])
+        } else {
+            try FileManager.default.moveItem(at: temporary, to: fileURL)
+        }
     }
 
 }

@@ -709,6 +709,7 @@ public actor RemoteServer {
             guard let device = try await devices.setPermission(permission, allowed: allowed, for: deviceID) else {
                 throw RemoteError(.notAllowed)
             }
+            guard !revokedDeviceIDs.contains(deviceID) else { throw RemoteError(.notAllowed) }
             permissionsChanged?(deviceID, device.permissions ?? RemoteDevicePermissions())
             audit?.record(device: deviceID, type: "permission." + permission.rawValue, task: nil,
                           result: allowed ? "allowed" : "notAllowed", at: now())
