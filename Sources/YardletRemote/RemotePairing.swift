@@ -378,7 +378,7 @@ public actor RemoteDeviceStore {
             throw error
         }
         if FileManager.default.fileExists(atPath: fileURL.path) {
-            _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary, options: [.usingNewMetadata])
+            _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary, options: [.usingNewMetadataOnly])
         } else {
             try FileManager.default.moveItem(at: temporary, to: fileURL)
         }
