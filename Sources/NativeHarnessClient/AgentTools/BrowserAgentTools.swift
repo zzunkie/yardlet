@@ -383,9 +383,15 @@ final class BrowserAgentTools {
                     try await allowFile(address, on: page, sessionID: sessionID, shown: true)
                 }
             }
-            if Self.actingTools.contains(tool) { page.agentActs() }
+            // What the page downloads after an act is the agent's: told before the act goes, and taken back when the act
+            // failed (a stale reference, a path not allowed, a locked vault), which may have sent nothing.
+            let acts = Self.actingTools.contains(tool)
+            var acted = false
+            if acts { page.agentActs() }
+            defer { if acts, !acted { page.agentActFailed() } }
             let mark = page.cdp.eventLog.count
             var result = try await perform(tool, arguments, on: page, sessionID: sessionID)
+            acted = !result.isError
             result.content += notices(after: tool, on: page, sessionID: sessionID, since: mark).map { .text($0) }
             if let note = unresponsiveNote(page) { result.content.append(.text(note)) }
             if let note = personNote(page, sessionID: sessionID) { result.content.append(.text(note)) }

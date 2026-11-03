@@ -539,16 +539,22 @@ final class BrowserAgentToolsTests: XCTestCase {
     // MARK: - Input
 
     func testClickByReferenceUsesTheElementCentreAndTrustedMouseEvents() async throws {
-        // A read does not act on the page; a click does (what the page downloads after it is the agent's).
-        var acted = 0
+        // A read does not act on the page; a click does (what the page downloads after it is the agent's), and one that
+        // fails before it reaches the page is taken back.
+        var acted = 0, failed = 0
         page.agentActs = { acted += 1 }
+        page.agentActFailed = { failed += 1 }
         _ = await loadSnapshot()
         XCTAssertEqual(acted, 0)
+        let stale = await run(AgentToolCatalog.click, ["ref": .string("@e99")])
+        XCTAssertTrue(stale.isError)
+        XCTAssertEqual([acted, failed], [1, 1])
+        acted = 0
         cdp.responders["DOM.getContentQuads"] = { _ in
             .object(["quads": .array([.array([10, 20, 110, 20, 110, 60, 10, 60].map { .number($0) })])])
         }
         let result = await run(AgentToolCatalog.click, ["ref": .string("@e3")])
-        XCTAssertEqual(acted, 1)
+        XCTAssertEqual([acted, failed], [1, 1])
         XCTAssertFalse(result.isError, result.text)
         XCTAssertEqual(result.text, "Clicked @e3 at (60, 40).")
         XCTAssertEqual(cdp.params(of: "DOM.scrollIntoViewIfNeeded").first?["backendNodeId"], .integer(13))

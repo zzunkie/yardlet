@@ -1199,6 +1199,11 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertFalse(connection.sent.dropFirst(before).contains(.refuseDownloads(tab: tab.id, isRefused: false)))
         tab.noteAgentInput()
         XCTAssertEqual(Array(connection.sent.dropFirst(before)), [.refuseDownloads(tab: tab.id, isRefused: false)])
+        // An act that failed before it reached the page gives the refusal back; one that went keeps it lifted.
+        tab.undoAgentInput()
+        XCTAssertEqual(connection.sent.last, .refuseDownloads(tab: tab.id, isRefused: true))
+        tab.noteAgentInput()
+        XCTAssertEqual(connection.sent.last, .refuseDownloads(tab: tab.id, isRefused: false))
         connection.eventHandler?(.externalApp(tab: tab.id, request: BrowserExternalAppRequest(
             url: "mailto:billing@example.test", origin: "https://example.com", userGesture: true, remembered: true)))
         XCTAssertTrue(apps.opened.isEmpty, "another app still waits for the Mac")

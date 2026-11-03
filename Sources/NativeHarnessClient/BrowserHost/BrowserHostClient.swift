@@ -1393,8 +1393,10 @@ final class BrowserTab {
     fileprivate(set) var remoteOpener = false
     /// The page that opened the tab had its downloads refused then (`inherit(from:)`).
     private var openerRefusedDownloads = false
-    /// When the agent last acted on the page (a click, typing, a navigation …), not a read (`noteAgentInput`).
+    /// When the agent last acted on the page (a click, typing, a navigation …), not a read (`noteAgentInput`), and when
+    /// before the act under way, which `undoAgentInput` takes back.
     private var lastAgentInput: ContinuousClock.Instant?
+    private var agentInputBefore: ContinuousClock.Instant??
     /// Whether the host was last told to refuse the tab's downloads (`refuseDownloads`).
     private var refusesDownloads = false
     /// What the tab's emulation was before a phone's (`sizeForRemote`); nil while no phone's holds.
@@ -1616,8 +1618,18 @@ final class BrowserTab {
     /// from now is the agent's, also after a remote device's input. Another app still opens only when someone here
     /// chooses it (`isDrivenByRemote`).
     func noteAgentInput() {
+        agentInputBefore = .some(lastAgentInput)
         lastAgentInput = .now
         client?.noteAgentActivity(on: self)
+        tellDownloads()
+    }
+
+    /// The agent's act failed before it reached the page (a stale reference, a path not allowed, a locked vault): the
+    /// page's downloads are as they were before it.
+    func undoAgentInput() {
+        guard let before = agentInputBefore else { return }
+        agentInputBefore = nil
+        lastAgentInput = before
         tellDownloads()
     }
 
