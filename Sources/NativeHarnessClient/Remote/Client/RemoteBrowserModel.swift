@@ -111,13 +111,17 @@ final class RemoteBrowserModel {
     // MARK: - What the host sends
 
     func receive(_ event: RemoteEvent) {
+        // Every frame is acknowledged, also one of a tab or task no longer shown: the host paces a connection's frames
+        // by its acknowledgements, whatever it watches (§15.25).
+        if event.event == .tabFrame, let number = event.frame {
+            send(.tabFrameAck(taskID: event.taskId ?? "", tabID: event.tabId ?? "", frame: number), nil)
+        }
         guard let taskID, event.taskId == taskID else { return }
         switch event.event {
         case .tabFrame:
             guard event.tabId == tabID, let number = event.frame, let image = event.image else { return }
             frame = Frame(number: number, image: image, width: event.width ?? 0, height: event.height ?? 0,
                           viewportWidth: event.viewportWidth ?? 0, viewportHeight: event.viewportHeight ?? 0)
-            send(.tabFrameAck(taskID: taskID, tabID: event.tabId ?? "", frame: number), nil)
         case .browserTabsChanged:
             tabs = event.tabs ?? []
             // The watched tab closed, or the task had none: the host's front tab now.
