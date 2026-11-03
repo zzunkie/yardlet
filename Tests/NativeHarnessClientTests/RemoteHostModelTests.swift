@@ -568,6 +568,30 @@ final class RemoteHostModelTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path(percentEncoded: false)))
     }
 
+    /// A window's unsent words outlast it, in the host's own folder and readable only by the person.
+    func testDraftsOutlastTheWindowInTheHostsFolder() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "remote-drafts-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
+        let drafts = RemoteComposerDrafts()
+        drafts.restore(from: folder)
+        drafts.draft(for: "4C1F").text = "Then update the changelog"
+        drafts.newTask.text = "Add a dark mode toggle"
+        drafts.save()
+        let file = folder.appending(path: "drafts.json")
+        let permissions = try FileManager.default.attributesOfItem(atPath: file.path(percentEncoded: false))[.posixPermissions]
+        XCTAssertEqual(permissions as? Int, 0o600)
+        let reopened = RemoteComposerDrafts()
+        reopened.restore(from: folder)
+        XCTAssertEqual(reopened.draft(for: "4C1F").text, "Then update the changelog")
+        XCTAssertEqual(reopened.newTask.text, "Add a dark mode toggle")
+        // A draft sent and emptied is no longer kept.
+        reopened.draft(for: "4C1F").text = ""
+        reopened.save()
+        let again = RemoteComposerDrafts()
+        again.restore(from: folder)
+        XCTAssertEqual(again.draft(for: "4C1F").text, "")
+    }
+
     private static func taskID(_ number: Int) -> String {
         String(format: "0F1E%04X-0000-4000-8000-%012X", number, number)
     }

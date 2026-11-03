@@ -92,6 +92,16 @@ struct RemoteHostView: View {
         .navigationSubtitle(RemoteConnectionText.line(model.connection))
         .modifier(RemotePresence(model: model))
         .focusedSceneValue(\.yardletTaskCommands, taskCommands)
+        .background(RemoteDraftAutosave(draft: shownDraft, drafts: drafts))
+        .onAppear { drafts.restore(from: model.cacheFolder) }
+        .onChange(of: model.selection) { _, _ in drafts.save() }
+        .onDisappear { drafts.save() }
+    }
+
+    /// The draft the window shows: the task's, or the new task's.
+    private var shownDraft: TaskComposerDraft {
+        if case let .task(id) = model.selection { return drafts.draft(for: id) }
+        return drafts.newTask
     }
 
     // MARK: Sidebar
@@ -181,7 +191,9 @@ struct RemoteHostView: View {
             if let conversation = model.conversations[taskID] {
                 RemoteTaskView(model: model, conversation: conversation, draft: drafts.draft(for: taskID),
                                editing: Binding(get: { drafts.edits[taskID] }, set: { drafts.edits[taskID] = $0 }),
-                               titleBar: titleBar, find: drafts.find(for: taskID), showsRail: $shell.showsRail)
+                               titleBar: titleBar, find: drafts.find(for: taskID),
+                               readingPosition: drafts.readingPosition(for: taskID), renderState: drafts.renderState(for: taskID),
+                               showsRail: $shell.showsRail)
                     .id(taskID)
             }
         case .newTask:
@@ -401,13 +413,20 @@ extension RemoteHostView {
     }
 }
 
-/// Each task's unsent words and the message it edits, kept on this Mac while the window is open (a host's own drafts
-/// stay there).
+/// Each task's unsent words, the message it edits, its find and where the person was reading, kept on this Mac (a
+/// host's own drafts stay there). The words outlast the window in the host's cache folder (`drafts.json`, 0600),
+/// which goes with the host; the rest lasts while the window is open, as the local window keeps it.
 @MainActor
 @Observable
 final class RemoteComposerDrafts {
     @ObservationIgnored private var drafts: [String: TaskComposerDraft] = [:]
     @ObservationIgnored private var finds: [String: ConversationFindModel] = [:]
+    @ObservationIgnored private var readings: [String: TranscriptReadingPosition] = [:]
+    @ObservationIgnored private var renders: [String: ConversationRenderState] = [:]
+    /// Where the words are kept: the host's cache folder, nil where nothing is kept (tests).
+    @ObservationIgnored private var file: URL?
+    @ObservationIgnored private var savedWords: [String: String] = [:]
+    private static let newTaskKey = "new-task"
     @ObservationIgnored let newTask = TaskComposerDraft()
     var edits: [String: RemoteMessageEdit] = [:]
     /// The project New task in a project chose, for the new task screen to start in.
@@ -426,6 +445,68 @@ final class RemoteComposerDrafts {
         let find = ConversationFindModel()
         finds[taskID] = find
         return find
+    }
+
+    /// Where the person was reading the task's conversation, so going back to it comes back there.
+    func readingPosition(for taskID: String) -> TranscriptReadingPosition {
+        if let reading = readings[taskID] { return reading }
+        let reading = TranscriptReadingPosition()
+        readings[taskID] = reading
+        return reading
+    }
+
+    /// The task's drawn conversation, kept so going back to it does not lay it out again.
+    func renderState(for taskID: String) -> ConversationRenderState {
+        if let render = renders[taskID] { return render }
+        let render = ConversationRenderState()
+        renders[taskID] = render
+        return render
+    }
+
+    /// Reads the words kept in `folder`, once, into the drafts that are still empty.
+    func restore(from folder: URL?) {
+        guard file == nil, let folder else { return }
+        file = folder.appending(path: "drafts.json")
+        guard let data = try? Data(contentsOf: file!),
+              let words = try? JSONDecoder().decode([String: String].self, from: data) else { return }
+        savedWords = words
+        for (key, text) in words {
+            let draft = key == Self.newTaskKey ? newTask : draft(for: key)
+            if draft.text.isEmpty { draft.text = text }
+        }
+    }
+
+    /// Keeps the drafts' words, when they changed since they were last kept.
+    func save() {
+        guard let file else { return }
+        var words: [String: String] = [:]
+        for (key, draft) in drafts where !draft.text.isEmpty { words[key] = draft.text }
+        if !newTask.text.isEmpty { words[Self.newTaskKey] = newTask.text }
+        guard words != savedWords else { return }
+        savedWords = words
+        let manager = FileManager.default
+        let folder = file.deletingLastPathComponent()
+        if !manager.fileExists(atPath: folder.path(percentEncoded: false)) {
+            try? manager.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        }
+        guard let data = try? JSONEncoder().encode(words) else { return }
+        manager.createFile(atPath: file.path(percentEncoded: false), contents: data, attributes: [.posixPermissions: 0o600])
+    }
+}
+
+/// Keeps the shown draft's words a moment after the person stops typing, without the window drawing again for each key.
+private struct RemoteDraftAutosave: View {
+    @Bindable var draft: TaskComposerDraft
+    let drafts: RemoteComposerDrafts
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .task(id: draft.text) {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                drafts.save()
+            }
     }
 }
 
@@ -585,6 +666,9 @@ struct RemoteTaskView: View {
     let titleBar: RemoteTitleBarContext
     /// Find in the conversation (⌘F), the task's own as the local task's is.
     let find: ConversationFindModel
+    /// Where the person was reading and the drawn conversation, kept while the window is open.
+    let readingPosition: TranscriptReadingPosition
+    let renderState: ConversationRenderState
     /// The rail is shown, as the local rail is unless the person hid it; it draws only where it fits.
     @Binding var showsRail: Bool
     /// An answer that leaves a rule behind, asked about once more before it goes.
@@ -652,8 +736,9 @@ struct RemoteTaskView: View {
 
     private var conversationColumn: some View {
         VStack(spacing: 0) {
-            ConversationTimeline(source: .presented(presentation), actions: actions,
-                                 isLoading: !conversation.isLoaded, diagnosticID: nil)
+            ConversationTimeline(source: .presented(presentation), readingPosition: readingPosition,
+                                 actions: actions, isLoading: !conversation.isLoaded, diagnosticID: nil,
+                                 renderState: renderState)
                 .environment(\.conversationFind, find)
                 .overlay(alignment: .topTrailing) {
                     ConversationFindBar(find: find)
