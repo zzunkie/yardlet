@@ -77,7 +77,8 @@ final class NativeHarnessClientAppTests: XCTestCase {
         XCTAssertEqual(reply, .terminateLater)
         try await waitUntil { resource.stopCount != 0 }
         XCTAssertEqual(resource.stopCount, 1)
-        XCTAssertTrue(model.codexPresentationBySessionID.isEmpty)
+        // The resources stop before the model shuts down, which clears the presentations in its own time.
+        try await waitUntil { model.codexPresentationBySessionID.isEmpty }
     }
 
     func testWillTerminateStopsMountedNativeSurfaceResources() {
