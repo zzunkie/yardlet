@@ -83,6 +83,13 @@ public struct RemoteSecurePairingURL: Equatable, Sendable {
         return components.url
     }
 
+    /// The longest Mac name a link carries; a longer one is cut.
+    public static let maxNameLength = 64
+
+    /// Reads a pairing link (§12). Anyone can send one, so it takes only what a client can safely try: at most
+    /// `RemoteSavedHost.maxDirectAddresses` direct addresses, each a plain `host:port` (anything else, which could
+    /// add a path to the WebSocket's URL, is left out), a name of at most `maxNameLength` characters, and a room made
+    /// of letters, digits, `-` and `_` (a link naming another is refused).
     public static func parse(_ url: URL) -> RemoteSecurePairingURL? {
         guard url.scheme == RemoteProtocol.pairingScheme, url.host == "pair",
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
@@ -92,10 +99,33 @@ public struct RemoteSecurePairingURL: Equatable, Sendable {
               secret.count == 32 else { return nil }
         let relay = items.first { $0.name == "r" }?.value
         let room = items.first { $0.name == "i" }?.value
-        return RemoteSecurePairingURL(macKey: key, secret: secret, name: items.first { $0.name == "n" }?.value ?? "Mac",
-                                      hosts: items.filter { $0.name == "h" }.compactMap(\.value),
+        if relay != nil, let room, !isRoom(room) { return nil }
+        let hosts = items.filter { $0.name == "h" }.compactMap(\.value).filter(isHostPort)
+        let name = String((items.first { $0.name == "n" }?.value ?? "Mac").prefix(maxNameLength))
+        return RemoteSecurePairingURL(macKey: key, secret: secret, name: name,
+                                      hosts: Array(hosts.prefix(RemoteSavedHost.maxDirectAddresses)),
                                       relayURL: relay != nil && room != nil ? relay : nil,
                                       room: relay != nil && room != nil ? room : nil)
+    }
+
+    /// `host:port` with a port from 1 to 65535: a name or IPv4 address of letters, digits, dots and hyphens, or an IPv6
+    /// address in brackets.
+    static func isHostPort(_ text: String) -> Bool {
+        guard let colon = text.lastIndex(of: ":"), let port = Int(text[text.index(after: colon)...]),
+              (1...65535).contains(port), text[text.index(after: colon)...].allSatisfy(\.isASCII) else { return false }
+        let host = text[..<colon]
+        guard !host.isEmpty, host.count <= 255 else { return false }
+        if host.first == "[" {
+            let inner = host.dropFirst().dropLast()
+            return host.last == "]" && !inner.isEmpty && inner.allSatisfy { $0.isHexDigit || $0 == ":" || $0 == "." }
+        }
+        return host.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-") }
+    }
+
+    /// A relay room as a URL path segment may carry it.
+    static func isRoom(_ text: String) -> Bool {
+        (1...128).contains(text.count)
+            && text.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
     }
 }
 

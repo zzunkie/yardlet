@@ -474,30 +474,21 @@ final class RemoteHostModel: Identifiable {
 
     // MARK: - Files
 
-    /// Sends a file up in parts (§15.20); its upload ID once the host holds it all.
+    /// Sends a file up in parts (§15.20); its upload ID once the host holds it all (`RemoteFileUpload`).
     func upload(_ url: URL, mediaType: String) async -> String? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? handle.close() }
-        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
-        guard size > 0, size <= RemoteProtocol.maxFileBytes else {
+        let result = await RemoteFileUpload.send(url, mediaType: mediaType) { [weak self] part in
+            await self?.response(to: .uploadFile(part)) ?? .failure("", RemoteError(.unavailable))
+        }
+        switch result {
+        case let .success(uploadID):
+            return uploadID
+        case .failure(.tooLarge):
             commandError = L10n.string("The file is too large to send.")
-            return nil
+        case let .failure(.refused(error)):
+            commandError = Self.message(for: error, host: name)
+        case .failure(.unreadable), .failure(.cancelled):
+            break
         }
-        let uploadID = UUID().uuidString
-        var offset = 0
-        while offset < size {
-            try? handle.seek(toOffset: UInt64(offset))
-            guard let data = try? handle.read(upToCount: RemoteProtocol.maxUploadPartBytes), !data.isEmpty else { return nil }
-            let part = RemoteUploadPart(uploadID: uploadID, name: offset == 0 ? url.lastPathComponent : nil,
-                                        mediaType: offset == 0 ? mediaType : nil, size: offset == 0 ? size : nil,
-                                        offset: offset, data: data)
-            let response = await response(to: .uploadFile(part))
-            guard response.ok, let received = response.received else {
-                commandError = Self.message(for: response.error, host: name)
-                return nil
-            }
-            offset = received
-        }
-        return uploadID
+        return nil
     }
 }

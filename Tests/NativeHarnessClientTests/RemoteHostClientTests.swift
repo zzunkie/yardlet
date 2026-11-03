@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import XCTest
 @testable import YardletRemote
 @testable import YardletRemoteFixtureSupport
@@ -154,6 +155,85 @@ final class RemoteHostClientTests: XCTestCase {
         await relayed.stop()
     }
 
+    /// Asking to connect now while an attempt is under way (the app coming back from Face ID or a permission
+    /// prompt) lets it go on rather than cutting its handshake and starting again.
+    func testReconnectingNowLetsAnAttemptUnderWayGoOn() async throws {
+        let listener = SilentListener()
+        let port = try await listener.start()
+        defer { listener.stop() }
+        var timing = RemoteHostConnection.Timing()
+        timing.directTimeout = 30
+        let connection = RemoteHostConnection(target: RemoteHostTarget(hostKey: RemoteKeyPair.generate().publicKey,
+                                                                       direct: ["127.0.0.1:\(port)"]),
+                                              clientKey: RemoteKeyPair.generate(),
+                                              hello: RemoteHandshakeHello(name: "iPhone", platform: "ios"), timing: timing)
+        let inbox = Inbox(connection.inbound)
+        await connection.start()
+        try await waitUntil { listener.accepted == 1 }
+        await connection.reconnectNow()
+        await connection.reconnectNow()
+        try await Task.sleep(for: .milliseconds(500))
+        XCTAssertEqual(listener.accepted, 1, "reconnectNow started the attempt over")
+        XCTAssertEqual(inbox.lastState, .connecting)
+        await connection.stop()
+    }
+
+    /// A file goes up only while the host takes it forward (§15.20): an answer that holds no more than before, or more
+    /// than the file, ends the upload instead of sending the same part again, and removing the attachment stops it.
+    func testAFileGoesUpOnlyWhileTheHostTakesItForward() async throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "upload-\(UUID().uuidString).bin")
+        let size = RemoteProtocol.maxUploadPartBytes + 1000
+        try Data(repeating: 7, count: size).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        final class Parts: @unchecked Sendable {
+            private let lock = NSLock()
+            private var offsets: [Int] = []
+            private var entered = 0
+            var sent: [Int] { lock.withLock { offsets } }
+            var started: Int { lock.withLock { entered } }
+            func start() { lock.withLock { entered += 1 } }
+            /// Records a part and answers as `received` says; after five parts it refuses, so a client that resends
+            /// forever stops here and the test reads what it sent.
+            func answer(_ part: RemoteUploadPart, received: (RemoteUploadPart) -> Int?) -> RemoteResponse {
+                let count = lock.withLock { offsets.append(part.offset); return offsets.count }
+                if count > 5 { return .failure("", RemoteError(.badRequest)) }
+                var response = RemoteResponse(re: "")
+                response.received = received(part)
+                return response
+            }
+        }
+
+        let whole = Parts()
+        let done = await RemoteFileUpload.send(file, mediaType: "application/octet-stream", uploadID: "u1") {
+            whole.answer($0) { $0.offset + $0.data.count }
+        }
+        XCTAssertEqual(done, .success("u1"))
+        XCTAssertEqual(whole.sent, [0, RemoteProtocol.maxUploadPartBytes])
+
+        for received in [0, -1, size + 1] {
+            let parts = Parts()
+            let result = await RemoteFileUpload.send(file, mediaType: "application/octet-stream") { part in
+                parts.answer(part) { _ in received }
+            }
+            XCTAssertEqual(result, .failure(.refused(nil)), "received \(received)")
+            XCTAssertEqual(parts.sent, [0], "received \(received)")
+        }
+
+        let removed = Parts()
+        let upload = Task {
+            await RemoteFileUpload.send(file, mediaType: "application/octet-stream") { part in
+                removed.start()
+                try? await Task.sleep(for: .seconds(5))
+                return removed.answer(part) { $0.offset + $0.data.count }
+            }
+        }
+        try await waitUntil { removed.started == 1 }
+        upload.cancel()
+        let result = await upload.value
+        XCTAssertEqual(result, .failure(.cancelled))
+        XCTAssertEqual(removed.sent.count, 1)
+    }
+
     func testSavedHostsLiveInOnePrivateFileThatGoesWithTheLastHost() throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "remote-hosts-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -211,5 +291,57 @@ final class Inbox: @unchecked Sendable {
             try await Task.sleep(for: .milliseconds(20))
         }
         throw TestChannel.TimedOut(description: "Timed out waiting for \(what)")
+    }
+}
+
+/// A TCP listener on loopback that accepts connections and never answers, so a client's handshake waits.
+final class SilentListener: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    private var held: [NWConnection] = []
+    private var listener: NWListener?
+    private let queue = DispatchQueue(label: "silent-listener")
+
+    var accepted: Int { lock.withLock { count } }
+
+    func start() async throws -> UInt16 {
+        let listener = try NWListener(using: .tcp, on: .any)
+        self.listener = listener
+        listener.newConnectionHandler = { [weak self] connection in
+            guard let self else { return }
+            lock.withLock {
+                count += 1
+                held.append(connection)
+            }
+            connection.start(queue: queue)
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            let once = OnceFlag()
+            listener.stateUpdateHandler = { state in
+                switch state {
+                case .ready: if once.take() { continuation.resume(returning: listener.port?.rawValue ?? 0) }
+                case let .failed(error): if once.take() { continuation.resume(throwing: error) }
+                default: break
+                }
+            }
+            listener.start(queue: queue)
+        }
+    }
+
+    func stop() {
+        listener?.cancel()
+        lock.withLock { held.forEach { $0.cancel() } }
+    }
+}
+
+private final class OnceFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var taken = false
+
+    func take() -> Bool {
+        lock.withLock {
+            defer { taken = true }
+            return !taken
+        }
     }
 }
