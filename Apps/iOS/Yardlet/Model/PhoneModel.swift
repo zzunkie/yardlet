@@ -50,6 +50,13 @@ final class PhoneModel {
         // Screenshots and checks without touching the screen: `-demo YES [-openTask <task ID>]` at launch, and
         // `-openLink <pairing link>` as if another app opened it.
         if let link = UserDefaults.standard.string(forKey: "openLink"), let url = URL(string: link) { open(url) }
+        // `-turnOnAppLock YES`: the Settings switch's own path, as if turned on a moment after launch.
+        if UserDefaults.standard.bool(forKey: "turnOnAppLock") {
+            Task { [lock] in
+                try? await Task.sleep(for: .seconds(2))
+                await lock.setEnabled(true)
+            }
+        }
         if UserDefaults.standard.bool(forKey: "demo") {
             Task {
                 await startDemo()
@@ -203,6 +210,7 @@ final class PhoneModel {
         switch phase {
         case .active:
             isActive = true
+            lock.appCameToFront()
             // Opens the connection closed in the background, or tries an open one again now.
             session?.reconnectNow()
         case .background:

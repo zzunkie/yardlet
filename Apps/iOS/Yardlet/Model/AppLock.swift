@@ -11,15 +11,29 @@ final class AppLock {
     private(set) var isEnabled: Bool
     private(set) var isLocked: Bool
     private(set) var isAsking = false
+    /// Ask for the owner by itself the next time the app comes to the front: at launch and after the background, not
+    /// after the Face ID prompt itself (which also takes the app out of the front), so a cancelled prompt does not
+    /// come straight back; Unlock asks again.
+    private var asksWhenInFront: Bool
 
     init() {
         let enabled = UserDefaults.standard.bool(forKey: "appLock")
         isEnabled = enabled
         isLocked = enabled
+        asksWhenInFront = enabled
     }
 
     func appWentAway() {
-        if isEnabled { isLocked = true }
+        guard isEnabled else { return }
+        isLocked = true
+        asksWhenInFront = true
+    }
+
+    /// The app is in front again: a locked app asks for the owner at once.
+    func appCameToFront() {
+        guard isLocked, asksWhenInFront else { return }
+        asksWhenInFront = false
+        Task { await unlock() }
     }
 
     func unlock() async {
