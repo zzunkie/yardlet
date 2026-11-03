@@ -117,13 +117,15 @@ enum BrowserURLPolicy {
         return !port.isEmpty && port.allSatisfy(\.isNumber)
     }
 
-    private static func isLoopback(_ hostAndPort: String) -> Bool {
+    static func isLoopback(_ hostAndPort: String) -> Bool {
         var host = hostAndPort.lowercased()
+        if host == "::1" { return true }
         if host.hasPrefix("["), let end = host.firstIndex(of: "]") {
             host = String(host[host.index(after: host.startIndex)..<end])
             return host == "::1"
         }
         host = host.split(separator: ":", maxSplits: 1).first.map(String.init) ?? host
+        if host.hasSuffix(".") { host.removeLast() }
         if host == "localhost" || host.hasSuffix(".localhost") { return true }
         let octets = host.split(separator: ".", omittingEmptySubsequences: false)
         return octets.count == 4 && octets.first == "127" && octets.allSatisfy { UInt8($0) != nil }

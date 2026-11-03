@@ -628,6 +628,8 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
   `provider`, and the relay sends `apns` and `apns-sandbox` pushes through APNs (§14.2, §16). A push's `collapse` is
   at most 64 bytes rather than 64 characters.
 
+- 2026-11-04, v2 only: optional `tabControls` and watched-task address opening and tab closing (§15.30).
+
 ## 11. v2 transport
 
 ### 11.1 Paths
@@ -1588,8 +1590,8 @@ for what they read beyond §6's items. A phone keeps §6.
 Added on 2026-11-03. The phone sees a task's browser tab and uses it, for a step only the person can take while away: a
 sign-in, a two-factor code, an approval button, often the tab a browser handoff (§15.18) gave them. The Mac sends
 pictures of the tab's visible page while the phone watches it, and the phone's taps, scrolling and typing go to the
-page as the Mac's own browser panel sends the person's. Opening other addresses, other tabs or the Mac's own browsing
-stays on the Mac.
+page as the Mac's own browser panel sends the person's. Hosts advertising `tabControls` also accept addresses and
+tab closes within the watched task (§15.30); browsing outside a task stays on the Mac.
 
 - The snapshot carries `browserTabs: true` when the Mac answers the requests below (it has a browser engine). A phone
   offers a task's browser only then.
@@ -1914,6 +1916,31 @@ the client decodes its exit code or terminating signal as the local panel does. 
 window's existing file and browser routing; without that route, the terminal never opens a host path
 or localhost address through the client's system applications.
 
+### 15.30 Opening addresses and closing browser tabs
+
+A snapshot may include `tabControls: true`. Without it, clients keep the address field and tab close/new-tab
+controls disabled. These requests extend §15.25; they do not change existing browser requests or grant access
+to another task's tabs.
+
+- `openTab`: `{id, type: "openTab", taskId, tabId?, address}`. The address is at most 8,192 UTF-8 bytes.
+  With `tabId`, navigate that task's existing tab; without it, create a tab in that task's browser profile.
+  The host resolves address-field text with its normal URL and search rules. The successful response includes
+  `taskId` and `tabId`; the client then watches that tab. An address beginning with `file:` must stay within
+  the task's existing file boundary (§15.22). App schemes and browser-internal schemes remain refused.
+- `closeTab`: `{id, type: "closeTab", taskId, tabId}`. Ask that task's page to close through the host's normal
+  close path. A page's confirmation remains on the host. Success acknowledges the close request; the tab list
+  event reports whether the tab actually closed.
+
+Both requests require a current browser watch for the same task. They share the bounded, ordered input queue
+and revocable watch permit with `tabInput`. Ending the watch, changing tasks, removing the device or disconnecting
+invalidates queued actions. The host rechecks the task, target tab, page boundary and blocking dialogs immediately
+before acting. Audits record the request type, task, device and outcome, never the address or page contents.
+
+The desktop client provides `openHostBrowserLink` for window and terminal link handlers to route `localhost`,
+`*.localhost`, IPv4 loopback and IPv6 loopback to the host's browser panel. Callers use the hook before default-browser
+handling. These addresses refer to the host's servers; no port forwarding is created. With an older host, the hook
+shows an update notice instead of sending those links to the client's own loopback interface.
+
 ## 16. Push notifications
 
 The Mac pushes to a device that registered (§15.6) and **has no open v2 connection**, for these
@@ -2023,9 +2050,10 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   Back, Forward and Reload, the handoff's bar, and the watched tab's page, which takes clicks, drags, the trackpad,
   keys and the input method's committed text (what it is still composing shows on the client until committed; ⌘V
   types the client's own clipboard; secure keyboard entry is on while the page's password field has the keyboard); it
-  sends no `viewport`, so the tab keeps its size. A handoff's card has Show Tab, which opens it there. Settings,
-  connectors, the context ring, creating or editing a schedule, the other side panels, opening addresses and closing
-  tabs stay on the host.
+  sends no `viewport`, so the tab keeps its size. A handoff's card has Show Tab, which opens it there. With `tabControls`,
+  the address field, new-tab button and tab close buttons act on the host (§15.30), and a hook routes loopback links
+  there for the window's link handler. The tab strip uses the same `WorkSurfaceHeader` as other side panels.
+  Settings, connectors, the context ring, creating or editing a schedule and the other side panels stay on the host.
 - **Paths:** as §11.4. While a host's window is open it browses Bonjour (§11.3) for the instance with the
   discovery id of the host key it saved, and resolves it to the host's name and port (`Name.local:47616`; the
   system resolves the name when connecting). Those addresses go first, never saved, then the direct addresses the
