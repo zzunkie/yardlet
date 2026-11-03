@@ -463,7 +463,7 @@ enum TerminalAppearance {
 
 @MainActor
 @Observable
-final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalViewDelegate, NativeSurfaceResource {
+final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, NativeSurfaceResource {
     static let backgroundColor = NSColor(
         calibratedRed: 20 / 255,
         green: 22 / 255,
@@ -500,10 +500,16 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
     /// Told once the shell ends for good: its task's workspace drops its tab.
     @ObservationIgnored var onEnd: (() -> Void)?
 
-    /// The shell's view, kept with the shell rather than by the panel, so a panel drawn again for the
+    /// The renderer, kept with the session rather than by the panel, so a panel drawn again for the
     /// same shell (the task the new-task screen started, the same task in another place) shows the same
     /// screen and scrollback. Each panel mounts it in a host of its own (`TerminalViewHost`).
-    @ObservationIgnored private var terminalView: LocalProcessTerminalView?
+    @ObservationIgnored private var terminalView: TerminalView?
+    @ObservationIgnored let hosting: any TerminalHosting
+    @ObservationIgnored private var started = false
+    var process: LocalProcess? { (hosting as? LocalTerminalHosting)?.process }
+    @ObservationIgnored var onOutput: ((ArraySlice<UInt8>) -> Void)?
+    @ObservationIgnored var onExit: ((Int32?) -> Void)?
+    @ObservationIgnored private var pendingOutput: [UInt8] = []
     /// When the shell last printed, while its view reports it (`NativeTerminalView`).
     @ObservationIgnored private var lastOutputAt: ContinuousClock.Instant?
     /// Panels showing a shell the task's workspace keeps.
@@ -518,19 +524,23 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
     @ObservationIgnored private(set) var taskID: UUID?
     @ObservationIgnored private var registeredShellPID: Int32?
 
-    init(workspaceURL: URL, launch: ShellLaunchEnvironment = .userLoginShell(), taskID: UUID? = nil) {
+    init(workspaceURL: URL, launch: ShellLaunchEnvironment = .userLoginShell(), taskID: UUID? = nil,
+         hosting: (any TerminalHosting)? = nil) {
         self.workspaceURL = workspaceURL.standardizedFileURL
         self.launch = launch
         self.taskID = taskID
+        self.hosting = hosting ?? LocalTerminalHosting(folder: workspaceURL, launch: launch)
         super.init()
+        self.hosting.onOutput = { [weak self] in self?.dataReceived(slice: $0) }
+        self.hosting.onExit = { [weak self] in self?.processTerminated(exitCode: $0) }
         NativeSurfaceResourceRegistry.shared.register(self)
     }
 
-    /// A view has started the shell and not been stopped.
-    var hasShell: Bool { terminalView != nil }
+    /// The session started its host and has not been stopped.
+    var hasShell: Bool { started }
 
     /// The shell's view, which starts the shell the first time it is asked for after a stop.
-    func view(make: () -> LocalProcessTerminalView) -> LocalProcessTerminalView {
+    func view(make: () -> TerminalView) -> TerminalView {
         if let terminalView { return terminalView }
         let view = make()
         attach(view)
@@ -542,7 +552,7 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
         guard taskID != id else { return }
         unregisterShell()
         taskID = id
-        if let terminalView, isRunning { registerShell(of: terminalView) }
+        if isRunning { registerShell() }
     }
 
     /// A panel shows a shell its task's workspace keeps.
@@ -575,9 +585,9 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
         onEnd?()
     }
 
-    private func registerShell(of view: LocalProcessTerminalView) {
+    private func registerShell() {
         unregisterShell()
-        let shellPID = view.process.shellPid
+        let shellPID = process?.shellPid ?? 0
         guard let taskID, shellPID > 0 else { return }
         TaskProcessRegistry.shared.register(shellPID, owner: .task(taskID))
         registeredShellPID = shellPID
@@ -589,26 +599,61 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
         registeredShellPID = nil
     }
 
-    func attach(_ view: LocalProcessTerminalView) {
+    func attach(_ view: TerminalView) {
         guard terminalView !== view else { return }
         terminalView = view
-        view.processDelegate = self
+        view.terminalDelegate = self
+        (view as? NativeTerminalView)?.session = self
+        if !pendingOutput.isEmpty {
+            view.feed(byteArray: pendingOutput[...])
+            pendingOutput.removeAll(keepingCapacity: false)
+        }
+        start()
+        sizeChanged(source: view, newCols: view.getTerminal().cols, newRows: view.getTerminal().rows)
+    }
+
+    /// Starts the PTY independently of any panel or AppKit view.
+    func start() {
+        guard !started, !hasEnded else { return }
+        started = true
         exitCode = nil
         terminationSignal = nil
         currentDirectory = workspaceURL.path(percentEncoded: false)
         lastOutputAt = nil
-        (view as? NativeTerminalView)?.onOutput = { [weak self] in self?.lastOutputAt = .now }
-
-        let start = launch.start(in: workspaceURL)
-        view.startProcess(
-            executable: start.executable,
-            args: start.arguments,
-            environment: start.environment,
-            execName: start.processName,
-            currentDirectory: start.currentDirectory
-        )
         isRunning = true
-        registerShell(of: view)
+        hosting.start()
+        registerShell()
+    }
+
+    func dataReceived(slice: ArraySlice<UInt8>) {
+        lastOutputAt = .now
+        if let terminalView {
+            terminalView.feed(byteArray: slice)
+        } else {
+            pendingOutput.append(contentsOf: slice)
+            if pendingOutput.count > 1_048_576 { pendingOutput.removeFirst(pendingOutput.count - 1_048_576) }
+        }
+        onOutput?(slice)
+    }
+
+    func resize(columns: Int, rows: Int) { hosting.resize(columns: columns, rows: rows) }
+    func send(source: TerminalView, data: ArraySlice<UInt8>) { send(data) }
+    func send(_ data: ArraySlice<UInt8>) {
+        guard isRunning else { return }
+        hosting.send(data)
+    }
+    func scrolled(source: TerminalView, position: Double) {}
+    func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+
+    func clipboardCopy(source: TerminalView, content: Data) {
+        guard hosting is LocalTerminalHosting, let text = String(data: content, encoding: .utf8) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([text as NSString])
+    }
+
+    func clipboardRead(source: TerminalView) -> Data? {
+        guard hosting is LocalTerminalHosting else { return nil }
+        return NSPasteboard.general.string(forType: .string)?.data(using: .utf8)
     }
 
     func restart() {
@@ -617,31 +662,17 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
     }
 
     func stop() {
-        if let terminalView {
-            terminateProcess(in: terminalView)
-        }
+        unregisterShell()
+        hosting.stop()
+        started = false
         terminalView = nil
+        pendingOutput.removeAll()
         isRunning = false
     }
 
-    func terminateForApplicationShutdown() {
-        stop()
-    }
+    func terminateForApplicationShutdown() { stop() }
 
-    private func terminateProcess(in view: LocalProcessTerminalView) {
-        unregisterShell()
-        let shellPID = view.process.shellPid
-        guard view.process.running, shellPID > 0 else { return }
-
-        NativeProcessTree.terminate(rootPID: shellPID)
-        view.terminate()
-    }
-
-    func send(_ text: String) {
-        guard let terminalView, isRunning else { return }
-        let bytes = Array(text.utf8)
-        terminalView.send(source: terminalView, data: bytes[...])
-    }
+    func send(_ text: String) { send(Array(text.utf8)[...]) }
 
     /// A command as the shell takes a paste: its trailing line breaks left out, and a command over several
     /// lines as a bracketed paste when the shell asked for that mode (zsh's line editor does), so its inner
@@ -691,22 +722,18 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
 
     /// The process group that holds the terminal while the shell runs: the shell's own at its prompt,
     /// a program's while one runs in the foreground (an interactive shell gives each job its group).
-    private var foregroundProcessGroup: pid_t? {
-        guard isRunning, let process = terminalView?.process, process.childfd >= 0 else { return nil }
-        let group = tcgetpgrp(process.childfd)
-        return group > 0 ? group : nil
-    }
+    private var foregroundProcessGroup: pid_t? { hosting.foregroundProcessGroup }
 
     /// A program other than the shell holds the terminal: a command still runs in it. Read when asked,
     /// never watched.
     var isRunningProgram: Bool {
-        guard let group = foregroundProcessGroup, let shell = terminalView?.process.shellPid else { return false }
+        guard let group = foregroundProcessGroup, let shell = hosting.processID else { return false }
         return group != shell
     }
 
     /// The shell holds its terminal: no command runs in the foreground.
     var isAtPrompt: Bool {
-        guard let group = foregroundProcessGroup, let shell = terminalView?.process.shellPid else { return false }
+        guard let group = foregroundProcessGroup, let shell = hosting.processID else { return false }
         return group == shell
     }
 
@@ -726,9 +753,11 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
         return L10n.string("Stopped")
     }
 
-    func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
+    func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+        resize(columns: newCols, rows: newRows)
+    }
 
-    func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
+    func setTerminalTitle(source: TerminalView, title: String) {
         self.title = title
     }
 
@@ -736,7 +765,8 @@ final class NativeTerminalSession: NSObject, @MainActor LocalProcessTerminalView
         currentDirectory = directory
     }
 
-    func processTerminated(source: TerminalView, exitCode: Int32?) {
+    func processTerminated(exitCode: Int32?) {
+        onExit?(exitCode)
         // SwiftTerm's macOS forkpty backend supplies waitpid status, not WEXITSTATUS.
         if let status = exitCode {
             let signal = status & 0x7f
@@ -780,7 +810,7 @@ private struct SwiftTermHost: NSViewRepresentable {
         (nsView.terminal as? NativeTerminalView)?.attachSelection = attachSelection
     }
 
-    private func applyAppearance(to view: LocalProcessTerminalView, coordinator: Coordinator) {
+    private func applyAppearance(to view: TerminalView, coordinator: Coordinator) {
         if coordinator.isDark != isDark {
             view.nativeForegroundColor = TerminalAppearance.foreground(isDark: isDark)
             view.nativeBackgroundColor = TerminalAppearance.background(isDark: isDark)
@@ -819,9 +849,9 @@ private struct SwiftTermHost: NSViewRepresentable {
 /// the next panel's host, and the teardown of the panel it left, which SwiftUI may run after, cannot
 /// take it out of its new place.
 final class TerminalViewHost: NSView {
-    let terminal: LocalProcessTerminalView
+    let terminal: TerminalView
 
-    init(terminal: LocalProcessTerminalView) {
+    init(terminal: TerminalView) {
         self.terminal = terminal
         super.init(frame: terminal.frame)
         terminal.removeFromSuperview()
@@ -859,15 +889,11 @@ extension EnvironmentValues {
 /// terminal is shared (`TerminalSharingPreference`) its right-click menu and ⌘⇧L, the Claude app's
 /// "Attach selection as context" key, attach the selection to the person's message; otherwise it has
 /// no menu, as SwiftTerm's own view has none.
-final class NativeTerminalView: LocalProcessTerminalView {
-    var onOutput: (() -> Void)?
+final class NativeTerminalView: TerminalView {
+    weak var session: NativeTerminalSession?
+    var process: LocalProcess! { session?.process }
     /// Attaches the selected text to the task's message; nil while the terminal is not shared.
     var attachSelection: ((String) -> Void)?
-
-    override func dataReceived(slice: ArraySlice<UInt8>) {
-        super.dataReceived(slice: slice)
-        onOutput?()
-    }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         guard attachSelection != nil else { return super.menu(for: event) }
