@@ -248,7 +248,15 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
         }
         .onChange(of: draft.text) { previous, text in
             // `!` typed into the empty composer switches it to bash mode instead of being kept.
-            if bashModeAvailable, isFocused.wrappedValue, draft.enterBashModeIfTyped(after: previous) { return }
+            if bashModeAvailable, !isBashMode, isFocused.wrappedValue, previous.isEmpty, text == "!" {
+                // Let the field commit its edit before changing the observed String again.
+                // Revalidate because another edit or focus change may arrive before this runs.
+                DispatchQueue.main.async {
+                    guard isFocused.wrappedValue, draft.text == text else { return }
+                    draft.enterBashModeIfTyped(after: previous)
+                }
+                return
+            }
             if dismissedCommandText != text { dismissedCommandText = nil }
             if dismissedMentionText != text { dismissedMentionText = nil }
             if typedCommandQuery != nil { commands?.textEdited() }
