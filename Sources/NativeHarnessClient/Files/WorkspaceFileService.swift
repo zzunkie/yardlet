@@ -222,6 +222,7 @@ enum WorkspaceFileEncoding: String, Codable, Sendable {
 struct WorkspaceFileIndex: Sendable {
     var paths: [String]
     var isLimited: Bool
+    var workspaceURL: URL? = nil
 }
 
 enum WorkspaceFileService {

@@ -971,6 +971,7 @@ public actor RemoteServer {
                 switch result {
                 case let .success(index):
                     var response = RemoteResponse(re: envelope.id)
+                    response.workspaceRoot = scope.folder.path(percentEncoded: false)
                     response.filePaths = index.paths
                     response.filesLimited = index.isLimited
                     respond(response, to: id)
