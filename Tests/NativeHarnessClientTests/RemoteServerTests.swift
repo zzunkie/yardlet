@@ -30,6 +30,11 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertEqual(stolen.error?.code, .notAllowed, "Another connection of the same device cannot write")
         let input = try await request("input", .terminalInput(taskID: "A", terminalID: terminal, data: Data("private command".utf8)), on: phone)
         XCTAssertTrue(input.ok)
+        let status = try await request("status", .terminalStatus(taskID: "A", terminalID: terminal), on: phone)
+        XCTAssertEqual(status.isAtPrompt, true)
+        XCTAssertEqual(status.isRunningProgram, false)
+        let foreignStatus = try await request("foreign-status", .terminalStatus(taskID: "A", terminalID: terminal), on: other)
+        XCTAssertEqual(foreignStatus.error?.code, .notAllowed)
         _ = try await request("ack", .terminalOutputAck(taskID: "A", terminalID: terminal, sequence: try XCTUnwrap(first.sequence)), on: phone)
         let second = try await phone.event(.terminalOutput, after: first.seq ?? 0)
         XCTAssertEqual(second.data, Data("private command".utf8))
@@ -61,20 +66,37 @@ final class RemoteServerTests: XCTestCase {
         await harness.server.receive(RemoteRequestEnvelope(id: "open", request: .openTerminal(taskID: "A")).encoded(), on: connection)
         let opened = try await phone.response("open")
         let terminal = try XCTUnwrap(opened.terminalId)
-        _ = try await phone.event(.terminalOutput)
-        await harness.bridge.floodTerminal(terminal)
-        let closed = try await phone.event(.terminalClosed)
-        XCTAssertEqual(closed.reason, "outputOverflow")
-        try await waitUntil { await harness.bridge.closedTerminals.contains(terminal) }
-        await harness.server.receive(RemoteRequestEnvelope(id: "again", request: .openTerminal(taskID: "A")).encoded(), on: connection)
-        let again = try await phone.response("again")
-        let second = try XCTUnwrap(again.terminalId)
-        let capturedPermit = await harness.bridge.terminalPermit(second)
-        let permit = try XCTUnwrap(capturedPermit)
+        let first = try await phone.event(.terminalOutput)
+        let heldPermit = await harness.bridge.terminalPermit(terminal)
+        let permit = try XCTUnwrap(heldPermit)
+        let burst = Task { await harness.bridge.floodTerminal(terminal) }
+        try await waitUntil { permit.isWaitingForCapacity }
+        XCTAssertLessThanOrEqual(permit.bufferedByteCount, 256 * 1024)
+        XCTAssertTrue(permit.isValid, "An ordinary burst waits for room instead of ending its shell")
+        var previous = first
+        var received = 0
+        while received < 300 * 1024 {
+            let ack = RemoteRequestEnvelope(id: "ack-\(received)", request: .terminalOutputAck(
+                taskID: "A", terminalID: terminal, sequence: try XCTUnwrap(previous.sequence)))
+            await harness.server.receive(ack.encoded(), on: connection)
+            _ = try await phone.response(ack.id)
+            previous = try await phone.event(.terminalOutput, after: previous.seq ?? 0)
+            let bytes = try XCTUnwrap(previous.data)
+            XCTAssertTrue(bytes.allSatisfy { $0 == 65 })
+            received += bytes.count
+        }
+        await burst.value
+        XCTAssertEqual(received, 300 * 1024)
+        XCTAssertTrue(phone.events(.terminalClosed).isEmpty)
+        XCTAssertTrue(permit.isValid)
+        let blockedBurst = Task { await harness.bridge.floodTerminal(terminal) }
+        try await waitUntil { permit.isWaitingForCapacity }
         await harness.server.closed(connection)
+        try await waitUntil { await harness.bridge.completedTerminalBursts == 2 }
+        await blockedBurst.value
         XCTAssertFalse(permit.isValid)
-        try await waitUntil { await harness.bridge.closedTerminals.contains(second) }
-        let invalid = RemoteRequestEnvelope(id: "bad", request: .terminalResize(taskID: "A", terminalID: second, columns: 0, rows: 1))
+        try await waitUntil { await harness.bridge.closedTerminals.contains(terminal) }
+        let invalid = RemoteRequestEnvelope(id: "bad", request: .terminalResize(taskID: "A", terminalID: terminal, columns: 0, rows: 1))
         guard case .failure = RemoteRequestEnvelope.decode(invalid.encoded()) else { return XCTFail("Invalid size accepted") }
     }
 
@@ -1405,7 +1427,7 @@ final class TestChannel: RemoteChannel, @unchecked Sendable {
 }
 
 actor FakeBridge: RemoteBridge {
-    private var terminalSinks: [String: @Sendable (RemoteTerminalUpdate) -> Void] = [:]
+    private var terminalSinks: [String: @Sendable (RemoteTerminalUpdate) async -> Void] = [:]
     private var terminalPermits: [String: RemoteTerminalPermit] = [:]
     private(set) var closedTerminals: [String] = []
     private var holdTerminalInput = false
@@ -1415,11 +1437,11 @@ actor FakeBridge: RemoteBridge {
     func releaseTerminalInput() { terminalInputContinuation?.resume(); terminalInputContinuation = nil }
 
     func openTerminal(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit,
-                      output: @escaping @Sendable (RemoteTerminalUpdate) -> Void) -> RemoteError? {
+                      output: @escaping @Sendable (RemoteTerminalUpdate) async -> Void) async -> RemoteError? {
         guard permit.isValid, taskID == "A" else { return RemoteError(.notAllowed) }
         terminalSinks[terminalID] = output
         terminalPermits[terminalID] = permit
-        output(.output(Data("ready".utf8)))
+        await output(.output(Data("ready".utf8)))
         return nil
     }
     func terminalInput(taskID: String, terminalID: String, data: Data, permit: RemoteTerminalPermit) async -> RemoteError? {
@@ -1428,7 +1450,7 @@ actor FakeBridge: RemoteBridge {
             await withCheckedContinuation { terminalInputContinuation = $0 }
         }
         guard permit.isValid, let sink = terminalSinks[terminalID] else { return RemoteError(.notAllowed) }
-        sink(.output(data))
+        await sink(.output(data))
         return nil
     }
     func terminalResize(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit) -> RemoteError? {
@@ -1440,8 +1462,19 @@ actor FakeBridge: RemoteBridge {
         closedTerminals.append(terminalID)
     }
     func terminalPermit(_ id: String) -> RemoteTerminalPermit? { terminalPermits[id] }
-    func floodTerminal(_ id: String) {
-        for _ in 0..<80 { terminalSinks[id]?(.output(Data(repeating: 65, count: 16 * 1024))) }
+    private(set) var completedTerminalBursts = 0
+    func floodTerminal(_ id: String) async {
+        defer { completedTerminalBursts += 1 }
+        var left = 300 * 1024
+        while left > 0, let sink = terminalSinks[id] {
+            let count = min(left, 16 * 1024)
+            await sink(.output(Data(repeating: 65, count: count)))
+            left -= count
+        }
+    }
+    func terminalStatus(taskID: String, terminalID: String, permit: RemoteTerminalPermit) -> Result<RemoteTerminalStatus, RemoteError> {
+        guard permit.isValid, terminalSinks[terminalID] != nil else { return .failure(RemoteError(.notAllowed)) }
+        return .success(RemoteTerminalStatus(isAtPrompt: true, isRunningProgram: false))
     }
 
     static let snapshot = RemoteSnapshot(

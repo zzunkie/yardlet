@@ -154,9 +154,10 @@ public protocol RemoteBridge: AnyObject, Sendable {
     /// Whether the Mac announces the finish of a task that just became unread, as its own notification would (§5.2).
     func announcesFinish(of taskID: String) async -> Bool
     func openTerminal(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit,
-                      output: @escaping @Sendable (RemoteTerminalUpdate) -> Void) async -> RemoteError?
+                      output: @escaping @Sendable (RemoteTerminalUpdate) async -> Void) async -> RemoteError?
     func terminalInput(taskID: String, terminalID: String, data: Data, permit: RemoteTerminalPermit) async -> RemoteError?
     func terminalResize(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit) async -> RemoteError?
+    func terminalStatus(taskID: String, terminalID: String, permit: RemoteTerminalPermit) async -> Result<RemoteTerminalStatus, RemoteError>
     func closeTerminal(taskID: String, terminalID: String) async
 
 }
@@ -164,12 +165,15 @@ public protocol RemoteBridge: AnyObject, Sendable {
 extension RemoteBridge {
     public func announcesFinish(of taskID: String) async -> Bool { true }
     public func openTerminal(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit,
-                             output: @escaping @Sendable (RemoteTerminalUpdate) -> Void) async -> RemoteError? { RemoteError(.unavailable) }
+                             output: @escaping @Sendable (RemoteTerminalUpdate) async -> Void) async -> RemoteError? { RemoteError(.unavailable) }
     public func terminalInput(taskID: String, terminalID: String, data: Data, permit: RemoteTerminalPermit) async -> RemoteError? {
         RemoteError(.unavailable)
     }
     public func terminalResize(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit) async -> RemoteError? {
         RemoteError(.unavailable)
+    }
+    public func terminalStatus(taskID: String, terminalID: String, permit: RemoteTerminalPermit) async -> Result<RemoteTerminalStatus, RemoteError> {
+        .failure(RemoteError(.unavailable))
     }
     public func closeTerminal(taskID: String, terminalID: String) async {}
 
@@ -1429,7 +1433,7 @@ public actor RemoteServer {
             } answer: { response in
                 response.taskId = forked
             }
-        case .openTerminal, .terminalInput, .terminalResize, .closeTerminal, .terminalOutputAck:
+        case .openTerminal, .terminalInput, .terminalResize, .closeTerminal, .terminalOutputAck, .terminalStatus:
             await handleTerminal(envelope.id, request: request, on: id)
         case let .watchTab(taskID, tabID, maxWidth, maxHeight, viewport):
             await watchTab(envelope.id, taskID: taskID, tabID: tabID, maxWidth: maxWidth, maxHeight: maxHeight,

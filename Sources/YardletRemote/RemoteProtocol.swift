@@ -999,6 +999,7 @@ public enum RemoteRequest: Equatable, Sendable {
     case openTerminal(taskID: String, columns: Int = 80, rows: Int = 24)
     case terminalInput(taskID: String, terminalID: String, data: Data)
     case terminalResize(taskID: String, terminalID: String, columns: Int, rows: Int)
+    case terminalStatus(taskID: String, terminalID: String)
     case closeTerminal(taskID: String, terminalID: String)
     case terminalOutputAck(taskID: String, terminalID: String, sequence: Int)
 
@@ -1055,6 +1056,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .openTerminal: "openTerminal"
         case .terminalInput: "terminalInput"
         case .terminalResize: "terminalResize"
+        case .terminalStatus: "terminalStatus"
         case .closeTerminal: "closeTerminal"
         case .terminalOutputAck: "terminalOutputAck"
         }
@@ -1088,7 +1090,7 @@ public enum RemoteRequest: Equatable, Sendable {
              let .watchTab(id, _, _, _, _), let .unwatchTab(id),
              let .tabFrameAck(id, _, _), let .tabInput(id, _, _), let .openTerminal(id, _, _),
              let .terminalInput(id, _, _), let .terminalResize(id, _, _, _), let .closeTerminal(id, _),
-             let .terminalOutputAck(id, _, _): id
+             let .terminalOutputAck(id, _, _), let .terminalStatus(id, _): id
         case .snapshot, .ping, .createTask, .newTaskOptions, .registerPush, .unregisterPush, .forgetDevice,
              .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled,
              .presence: nil
@@ -1117,7 +1119,7 @@ public enum RemoteRequest: Equatable, Sendable {
 
     public var isTerminalTraffic: Bool {
         switch self {
-        case .openTerminal, .terminalInput, .terminalResize, .closeTerminal, .terminalOutputAck: true
+        case .openTerminal, .terminalInput, .terminalResize, .closeTerminal, .terminalOutputAck, .terminalStatus: true
         default: false
         }
     }
@@ -1251,7 +1253,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             ("choice", wire.choice, RemoteProtocol.maxProviderIDBytes), ("setting", wire.setting, RemoteProtocol.maxProviderIDBytes),
             ("value", wire.value, RemoteProtocol.maxProviderIDBytes), ("command", wire.command, RemoteProtocol.maxProviderIDBytes),
             ("turnId", wire.turnId, RemoteProtocol.maxProviderIDBytes),
-            ("tabId", wire.tabId, RemoteProtocol.maxOwnIDBytes)
+            ("tabId", wire.tabId, RemoteProtocol.maxOwnIDBytes), ("terminalId", wire.terminalId, RemoteProtocol.maxOwnIDBytes)
         ]
         if let long = identifiers.first(where: { ($0.value?.utf8.count ?? 0) > $0.limit }) {
             return fail(.badRequest, "\(long.name) is too long")
@@ -1484,11 +1486,12 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 return fail(.badRequest, "Invalid terminal input")
             }
             request = .terminalInput(taskID: taskID, terminalID: terminalID, data: data)
-        case "closeTerminal":
+        case "closeTerminal", "terminalStatus":
             guard let taskID = required(wire.taskId), let terminalID = required(wire.terminalId) else {
                 return fail(.badRequest, "Missing taskId or terminalId")
             }
-            request = .closeTerminal(taskID: taskID, terminalID: terminalID)
+            request = wire.type == "terminalStatus" ? .terminalStatus(taskID: taskID, terminalID: terminalID)
+                : .closeTerminal(taskID: taskID, terminalID: terminalID)
         case "terminalOutputAck":
             guard let taskID = required(wire.taskId), let terminalID = required(wire.terminalId),
                   let sequence = wire.sequence, sequence > 0 else { return fail(.badRequest, "Invalid terminal acknowledgement") }
@@ -1667,7 +1670,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             wire.taskId = taskID; wire.terminalId = terminalID; wire.data = data.base64EncodedString()
         case let .terminalResize(taskID, terminalID, columns, rows):
             wire.taskId = taskID; wire.terminalId = terminalID; wire.columns = columns; wire.rows = rows
-        case let .closeTerminal(taskID, terminalID):
+        case let .closeTerminal(taskID, terminalID), let .terminalStatus(taskID, terminalID):
             wire.taskId = taskID; wire.terminalId = terminalID
         case let .terminalOutputAck(taskID, terminalID, sequence):
             wire.taskId = taskID; wire.terminalId = terminalID; wire.sequence = sequence
@@ -1790,6 +1793,8 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var tabId: String?
     public var terminalId: String?
     public var terminals: Bool?
+    public var isAtPrompt: Bool?
+    public var isRunningProgram: Bool?
 
     public init(re: String, ok: Bool = true, error: RemoteError? = nil) {
         self.re = re

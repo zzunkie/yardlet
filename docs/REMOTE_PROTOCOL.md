@@ -1855,13 +1855,21 @@ the protocol does not separately expose environment variables, credentials or va
 - `terminalInput`: `taskId`, `terminalId`, `data` (strict base64, 1–16,384 decoded bytes).
 - `terminalResize`: `taskId`, `terminalId`, `columns` (2–500) and `rows` (2–300).
 - `closeTerminal`: `taskId`, `terminalId`.
+- `terminalStatus`: `taskId`, `terminalId`; returns optional `isAtPrompt` and `isRunningProgram` booleans,
+  from the host session at that moment. The same ownership and live-permission checks apply. Clients request
+  status for a user action that needs it, never on a timer.
 - `terminalOutputAck`: `taskId`, `terminalId`, `sequence` of the last output delivered to the terminal view.
 
 `terminalOutput` events carry `taskId`, `terminalId`, `data` (base64, at most 16,384 bytes) and `sequence`, starting
 at one per session. Output bytes stay in order. Each chunk waits for acknowledgement before the next; at most
-64 chunks and 256 KiB are reserved from the bridge callback through acknowledgement, including callbacks waiting
-on the server actor. An acknowledgement missing for ten seconds closes the terminal with `outputTimeout`;
-overflow closes it with `outputOverflow`, rather than dropping bytes or growing memory without a bound.
+64 chunks and 256 KiB are reserved from the bridge callback through acknowledgement. The bridge's single output
+producer awaits room before reading more from the PTY, with at most one additional 16 KiB chunk waiting. This
+backpressure preserves ordinary bursts larger than the buffer without blocking the main actor or creating an
+unbounded task queue. The bridge sends exit after all output using that same ordered producer. Releasing room,
+revoking the permit or cancelling the producer wakes its wait. An acknowledgement missing for ten seconds closes
+the terminal with `outputTimeout`; an oversized chunk or concurrent producers violating this contract close it
+with `outputOverflow`. Opening and input return once their action is accepted; they never wait for output to drain,
+so an acknowledgement on that connection cannot be trapped behind them.
 
 `terminalClosed` carries `taskId`, `terminalId`, `reason` (`closed`, `exited`, `notAllowed`, `disconnected`,
 `outputTimeout`, or `outputOverflow`) and, for an exited process, optional `exitCode` (the host's raw waitpid status,
