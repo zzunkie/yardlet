@@ -8,6 +8,76 @@ import XCTest
 /// attention events, conversation pages and changes, and commands reaching the bridge with their audit
 /// lines — never the message text.
 final class RemoteServerTests: XCTestCase {
+    func testTerminalOwnershipFlowAndPermissionRevocation() async throws {
+        let harness = try await ServerHarness()
+        let key = Data(RemoteRandom.bytes(32))
+        let phone = try await harness.authenticatedPhone(key: key)
+        let other = try await harness.authenticatedPhone(key: key)
+        let devices = await harness.devices.all()
+        let device = try XCTUnwrap(devices.first)
+        func request(_ id: String, _ request: RemoteRequest, on channel: TestChannel) async throws -> RemoteResponse {
+            await harness.server.receive(RemoteRequestEnvelope(id: id, request: request).encoded(), on: try XCTUnwrap(channel.id))
+            return try await channel.response(id)
+        }
+        let denied = try await request("denied", .openTerminal(taskID: "A"), on: phone)
+        XCTAssertEqual(denied.error?.code, .notAllowed)
+        try await harness.server.setPermission(.terminal, allowed: true, for: device.id)
+        let opened = try await request("open", .openTerminal(taskID: "A"), on: phone)
+        let terminal = try XCTUnwrap(opened.terminalId)
+        let first = try await phone.event(.terminalOutput)
+        XCTAssertEqual(first.data, Data("ready".utf8))
+        let stolen = try await request("stolen", .terminalInput(taskID: "A", terminalID: terminal, data: Data("secret".utf8)), on: other)
+        XCTAssertEqual(stolen.error?.code, .notAllowed, "Another connection of the same device cannot write")
+        let input = try await request("input", .terminalInput(taskID: "A", terminalID: terminal, data: Data("private command".utf8)), on: phone)
+        XCTAssertTrue(input.ok)
+        _ = try await request("ack", .terminalOutputAck(taskID: "A", terminalID: terminal, sequence: try XCTUnwrap(first.sequence)), on: phone)
+        let second = try await phone.event(.terminalOutput, after: first.seq ?? 0)
+        XCTAssertEqual(second.data, Data("private command".utf8))
+        await harness.bridge.holdNextTerminalInput()
+        await harness.server.receive(RemoteRequestEnvelope(id: "stalled", request: .terminalInput(
+            taskID: "A", terminalID: terminal, data: Data("wait".utf8))).encoded(), on: try XCTUnwrap(phone.id))
+        try await waitUntil { await harness.bridge.terminalInputWaiting }
+        try await harness.server.setPermission(.terminal, allowed: false, for: device.id)
+        await harness.bridge.releaseTerminalInput()
+        let stalled = try await phone.response("stalled")
+        XCTAssertEqual(stalled.error?.code, .notAllowed, "Revocation stops input suspended inside the bridge")
+        let closed = try await phone.event(.terminalClosed)
+        XCTAssertEqual(closed.reason, "notAllowed")
+        try await waitUntil { await harness.bridge.closedTerminals.contains(terminal) }
+        let refused = try await request("after", .terminalInput(taskID: "A", terminalID: terminal, data: Data([13])), on: phone)
+        XCTAssertEqual(refused.error?.code, .notAllowed)
+        let audit = harness.audit.entries().filter { $0.type == "terminalInput" }
+        XCTAssertEqual(audit.map(\.byteCount), [6, 15, 4, 1])
+        XCTAssertFalse(try String(contentsOf: harness.auditURL, encoding: .utf8).contains("private command"))
+        XCTAssertFalse(try String(contentsOf: harness.auditURL, encoding: .utf8).contains("secret"))
+    }
+
+    func testTerminalOutputIsBoundedAndConnectionCloseRevokesPermit() async throws {
+        let harness = try await ServerHarness()
+        let phone = try await harness.authenticatedPhone()
+        let connection = try XCTUnwrap(phone.id)
+        let devices = await harness.devices.all()
+        try await harness.server.setPermission(.terminal, allowed: true, for: try XCTUnwrap(devices.first).id)
+        await harness.server.receive(RemoteRequestEnvelope(id: "open", request: .openTerminal(taskID: "A")).encoded(), on: connection)
+        let opened = try await phone.response("open")
+        let terminal = try XCTUnwrap(opened.terminalId)
+        _ = try await phone.event(.terminalOutput)
+        await harness.bridge.floodTerminal(terminal)
+        let closed = try await phone.event(.terminalClosed)
+        XCTAssertEqual(closed.reason, "outputOverflow")
+        try await waitUntil { await harness.bridge.closedTerminals.contains(terminal) }
+        await harness.server.receive(RemoteRequestEnvelope(id: "again", request: .openTerminal(taskID: "A")).encoded(), on: connection)
+        let again = try await phone.response("again")
+        let second = try XCTUnwrap(again.terminalId)
+        let capturedPermit = await harness.bridge.terminalPermit(second)
+        let permit = try XCTUnwrap(capturedPermit)
+        await harness.server.closed(connection)
+        XCTAssertFalse(permit.isValid)
+        try await waitUntil { await harness.bridge.closedTerminals.contains(second) }
+        let invalid = RemoteRequestEnvelope(id: "bad", request: .terminalResize(taskID: "A", terminalID: second, columns: 0, rows: 1))
+        guard case .failure = RemoteRequestEnvelope.decode(invalid.encoded()) else { return XCTFail("Invalid size accepted") }
+    }
+
     func testDevicePermissionsDefaultToDeniedPersistAndRevokeLive() async throws {
         let harness = try await ServerHarness()
         let phone = try await harness.authenticatedPhone()
@@ -1335,6 +1405,45 @@ final class TestChannel: RemoteChannel, @unchecked Sendable {
 }
 
 actor FakeBridge: RemoteBridge {
+    private var terminalSinks: [String: @Sendable (RemoteTerminalUpdate) -> Void] = [:]
+    private var terminalPermits: [String: RemoteTerminalPermit] = [:]
+    private(set) var closedTerminals: [String] = []
+    private var holdTerminalInput = false
+    private var terminalInputContinuation: CheckedContinuation<Void, Never>?
+    var terminalInputWaiting: Bool { terminalInputContinuation != nil }
+    func holdNextTerminalInput() { holdTerminalInput = true }
+    func releaseTerminalInput() { terminalInputContinuation?.resume(); terminalInputContinuation = nil }
+
+    func openTerminal(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit,
+                      output: @escaping @Sendable (RemoteTerminalUpdate) -> Void) -> RemoteError? {
+        guard permit.isValid, taskID == "A" else { return RemoteError(.notAllowed) }
+        terminalSinks[terminalID] = output
+        terminalPermits[terminalID] = permit
+        output(.output(Data("ready".utf8)))
+        return nil
+    }
+    func terminalInput(taskID: String, terminalID: String, data: Data, permit: RemoteTerminalPermit) async -> RemoteError? {
+        if holdTerminalInput {
+            holdTerminalInput = false
+            await withCheckedContinuation { terminalInputContinuation = $0 }
+        }
+        guard permit.isValid, let sink = terminalSinks[terminalID] else { return RemoteError(.notAllowed) }
+        sink(.output(data))
+        return nil
+    }
+    func terminalResize(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit) -> RemoteError? {
+        permit.isValid ? nil : RemoteError(.notAllowed)
+    }
+    func closeTerminal(taskID: String, terminalID: String) {
+        terminalSinks[terminalID] = nil
+        terminalPermits[terminalID] = nil
+        closedTerminals.append(terminalID)
+    }
+    func terminalPermit(_ id: String) -> RemoteTerminalPermit? { terminalPermits[id] }
+    func floodTerminal(_ id: String) {
+        for _ in 0..<80 { terminalSinks[id]?(.output(Data(repeating: 65, count: 16 * 1024))) }
+    }
+
     static let snapshot = RemoteSnapshot(
         projects: [RemoteProject(id: "P", name: "Yardlet", kind: .project)],
         tasks: [
@@ -1521,8 +1630,7 @@ struct ServerHarness {
 
     /// A paired phone's connection, handed over as its handshake would. `proving` sends its first message,
     /// which makes the connection count as the device's.
-    func authenticatedPhone(proving: Bool = true) async throws -> TestChannel {
-        let key = Data(RemoteRandom.bytes(32))
+    func authenticatedPhone(proving: Bool = true, key: Data = Data(RemoteRandom.bytes(32))) async throws -> TestChannel {
         _ = await devices.addSecure(name: "Phone", publicKey: key, platform: nil)
         let phone = TestChannel()
         guard case let .accepted(id, _) = await server.acceptHandshake(RemoteHandshakeHello(name: "Phone"), publicKey: key,

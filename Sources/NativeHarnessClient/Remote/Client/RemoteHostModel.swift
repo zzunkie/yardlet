@@ -236,6 +236,8 @@ final class RemoteHostModel: Identifiable {
             if schedules.isFollowing { schedules.load() }
         case .tabFrame, .browserTabsChanged:
             browser.receive(event)
+        case .terminalOutput, .terminalClosed:
+            break
         case .revoked, .linked, .linkRefused, .linkRequest, .linkResolved:
             break
         }

@@ -243,12 +243,13 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var fullConversation: Bool
     /// The bridge shows a task's browser tabs and takes input for them (§15.25).
     public var browserTabs: Bool
+    public var terminals: Bool
 
     public init(projects: [RemoteProject] = [], tasks: [RemoteTask] = [], newestRequestIDs: [String: String] = [:],
                 requestSummaries: [String: String] = [:], newTask: RemoteNewTask? = nil,
                 followUp: RemoteFollowUpMode? = nil, scheduledTasks: Bool = false, taskFiles: Bool = false,
                 taskControls: Bool = false, fullConversation: Bool = false,
-                browserTabs: Bool = false) {
+                browserTabs: Bool = false, terminals: Bool = false) {
         self.projects = projects
         self.tasks = tasks
         self.newestRequestIDs = newestRequestIDs
@@ -260,6 +261,7 @@ public struct RemoteSnapshot: Equatable, Sendable {
         self.taskControls = taskControls
         self.fullConversation = fullConversation
         self.browserTabs = browserTabs
+        self.terminals = terminals
     }
 
     public static let empty = RemoteSnapshot()
@@ -994,6 +996,12 @@ public enum RemoteRequest: Equatable, Sendable {
     case unwatchTab(taskID: String)
     case tabFrameAck(taskID: String, tabID: String, frame: Int)
     case tabInput(taskID: String, tabID: String, input: RemoteTabInput)
+    case openTerminal(taskID: String, columns: Int = 80, rows: Int = 24)
+    case terminalInput(taskID: String, terminalID: String, data: Data)
+    case terminalResize(taskID: String, terminalID: String, columns: Int, rows: Int)
+    case closeTerminal(taskID: String, terminalID: String)
+    case terminalOutputAck(taskID: String, terminalID: String, sequence: Int)
+
 
     public var type: String {
         switch self {
@@ -1044,6 +1052,11 @@ public enum RemoteRequest: Equatable, Sendable {
         case .unwatchTab: "unwatchTab"
         case .tabFrameAck: "tabFrameAck"
         case .tabInput: "tabInput"
+        case .openTerminal: "openTerminal"
+        case .terminalInput: "terminalInput"
+        case .terminalResize: "terminalResize"
+        case .closeTerminal: "closeTerminal"
+        case .terminalOutputAck: "terminalOutputAck"
         }
     }
 
@@ -1073,7 +1086,9 @@ public enum RemoteRequest: Equatable, Sendable {
              let .readReview(id, _), let .workspaceFiles(id), let .taskOutputs(id), let .readFile(id, _, _), let .taskSettings(id, _), let .setTaskSetting(id, _, _, _),
              let .composerCommands(id), let .runComposerCommand(id, _, _), let .editMessage(id, _, _), let .forkTask(id, _),
              let .watchTab(id, _, _, _, _), let .unwatchTab(id),
-             let .tabFrameAck(id, _, _), let .tabInput(id, _, _): id
+             let .tabFrameAck(id, _, _), let .tabInput(id, _, _), let .openTerminal(id, _, _),
+             let .terminalInput(id, _, _), let .terminalResize(id, _, _, _), let .closeTerminal(id, _),
+             let .terminalOutputAck(id, _, _): id
         case .snapshot, .ping, .createTask, .newTaskOptions, .registerPush, .unregisterPush, .forgetDevice,
              .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled,
              .presence: nil
@@ -1096,6 +1111,13 @@ public enum RemoteRequest: Equatable, Sendable {
              .actOnSuggestion, .setPinned, .archiveTask, .answerLink, .continueWithAccount, .setAutoContinue, .actOnQueued,
              .answerHandoff, .chooseAnswer, .runScheduledTask, .setScheduledTaskEnabled, .setTaskSetting, .runComposerCommand,
              .editMessage, .forkTask: true
+        default: false
+        }
+    }
+
+    public var isTerminalTraffic: Bool {
+        switch self {
+        case .openTerminal, .terminalInput, .terminalResize, .closeTerminal, .terminalOutputAck: true
         default: false
         }
     }
@@ -1180,6 +1202,10 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var frame: Int?
         var input: RemoteTabInput?
         var viewport: RemoteTabViewport?
+        var terminalId: String?
+        var columns: Int?
+        var rows: Int?
+        var sequence: Int?
     }
 
     private struct WireImage: Codable {
@@ -1435,6 +1461,38 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 return fail(.badRequest, "Missing taskId, turnId or text")
             }
             request = .editMessage(taskID: taskID, turnID: turnID, text: text)
+        case "openTerminal", "terminalResize":
+            guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
+            if wire.type == "terminalResize", wire.columns == nil || wire.rows == nil {
+                return fail(.badRequest, "Missing columns or rows")
+            }
+            let columns = wire.columns ?? 80
+            let rows = wire.rows ?? 24
+            guard RemoteProtocol.terminalColumns.contains(columns), RemoteProtocol.terminalRows.contains(rows) else {
+                return fail(.badRequest, "Invalid terminal size")
+            }
+            if wire.type == "openTerminal" {
+                request = .openTerminal(taskID: taskID, columns: columns, rows: rows)
+            } else {
+                guard let terminalID = required(wire.terminalId) else { return fail(.badRequest, "Missing terminalId") }
+                request = .terminalResize(taskID: taskID, terminalID: terminalID, columns: columns, rows: rows)
+            }
+        case "terminalInput":
+            guard let taskID = required(wire.taskId), let terminalID = required(wire.terminalId),
+                  let encoded = wire.data, encoded.utf8.count <= 4 * ((RemoteProtocol.maxTerminalChunkBytes + 2) / 3),
+                  let data = Data(base64Encoded: encoded), !data.isEmpty, data.count <= RemoteProtocol.maxTerminalChunkBytes else {
+                return fail(.badRequest, "Invalid terminal input")
+            }
+            request = .terminalInput(taskID: taskID, terminalID: terminalID, data: data)
+        case "closeTerminal":
+            guard let taskID = required(wire.taskId), let terminalID = required(wire.terminalId) else {
+                return fail(.badRequest, "Missing taskId or terminalId")
+            }
+            request = .closeTerminal(taskID: taskID, terminalID: terminalID)
+        case "terminalOutputAck":
+            guard let taskID = required(wire.taskId), let terminalID = required(wire.terminalId),
+                  let sequence = wire.sequence, sequence > 0 else { return fail(.badRequest, "Invalid terminal acknowledgement") }
+            request = .terminalOutputAck(taskID: taskID, terminalID: terminalID, sequence: sequence)
         case "watchTab":
             guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
             let sides = [wire.maxWidth, wire.maxHeight].compactMap { $0 }
@@ -1603,6 +1661,16 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         case let .forkTask(taskID, turnID):
             wire.taskId = taskID
             wire.turnId = turnID
+        case let .openTerminal(taskID, columns, rows):
+            wire.taskId = taskID; wire.columns = columns; wire.rows = rows
+        case let .terminalInput(taskID, terminalID, data):
+            wire.taskId = taskID; wire.terminalId = terminalID; wire.data = data.base64EncodedString()
+        case let .terminalResize(taskID, terminalID, columns, rows):
+            wire.taskId = taskID; wire.terminalId = terminalID; wire.columns = columns; wire.rows = rows
+        case let .closeTerminal(taskID, terminalID):
+            wire.taskId = taskID; wire.terminalId = terminalID
+        case let .terminalOutputAck(taskID, terminalID, sequence):
+            wire.taskId = taskID; wire.terminalId = terminalID; wire.sequence = sequence
         case let .watchTab(taskID, tabID, maxWidth, maxHeight, viewport):
             wire.taskId = taskID
             wire.tabId = tabID
@@ -1720,6 +1788,8 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     /// `watchTab` (§15.25): the task's tabs, and the one watched.
     public var tabs: [RemoteBrowserTab]?
     public var tabId: String?
+    public var terminalId: String?
+    public var terminals: Bool?
 
     public init(re: String, ok: Bool = true, error: RemoteError? = nil) {
         self.re = re
@@ -2012,6 +2082,8 @@ public struct RemoteEvent: Codable, Equatable, Sendable {
         case taskSettingsChanged
         case tabFrame
         case browserTabsChanged
+        case terminalOutput
+        case terminalClosed
     }
 
     public var event: Name
@@ -2057,6 +2129,12 @@ public struct RemoteEvent: Codable, Equatable, Sendable {
     /// Push payloads (§16): the Mac's name and when the push was sent.
     public var macName: String?
     public var sentAt: Int64?
+
+    // terminals (§15.29)
+    public var terminalId: String?
+    public var data: Data?
+    public var sequence: Int?
+    public var exitCode: Int32?
 
     // browser tabs (§15.25)
     public var tabId: String?
