@@ -2941,6 +2941,8 @@
 "Always allow %@ to open links of this type in the associated app" = "Always allow %@ to open links of this type in the associated app";
 "Open %@" = "Open %@";
 "Pop-ups blocked" = "Pop-ups blocked";
+"Always allow pop-ups from this site" = "Always allow pop-ups from this site";
+"Stop allowing pop-ups from this site" = "Stop allowing pop-ups from this site";
 "Pop-ups were blocked on this page." = "Pop-ups were blocked on this page.";
 "Control and reprogram your MIDI devices" = "Control and reprogram your MIDI devices";
 "Know when you're using this Mac" = "Know when you're using this Mac";

@@ -1019,6 +1019,48 @@ document.getElementById('open').onclick = () => {
 };
 </script>'''
 
+# Popup activation and opener preservation. Only loopback pages are involved.
+POPUPS = '''<!doctype html><meta charset="utf-8"><title>Popup QA</title>
+<style>body{font:16px -apple-system;margin:20px}button{display:block;margin:12px 0;width:240px;height:40px}iframe{width:300px;height:100px}</style>
+<h1>Popup QA</h1><button id="fetch">Open after fetch</button><button id="timer">Open after one second</button>
+<button id="expired">Open after six seconds</button><iframe id="frame" src="ISSUER/popups/frame"></iframe>
+<script>
+window.qa = {attempts:[], replies:[]};
+window.openQA = function(kind) {
+  const active = navigator.userActivation.isActive;
+  const popup = window.open('ISSUER/popups/reply?kind=' + kind, '_blank', 'popup,width=420,height=560');
+  window.qa.attempts.push({kind, active, returned:!!popup});
+};
+addEventListener('message', e => {
+  if (e.origin !== 'ISSUER' || !e.data || !e.data.popupQA) return;
+  window.qa.replies.push(e.data.kind);
+});
+document.querySelector('#fetch').onclick = async () => { await fetch('/second'); openQA('fetch'); };
+document.querySelector('#timer').onclick = () => setTimeout(() => openQA('timer'), 1000);
+document.querySelector('#expired').onclick = () => setTimeout(() => openQA('expired'), 6000);
+</script>'''
+
+POPUPS_FRAME = '''<!doctype html><meta charset="utf-8"><title>Popup frame</title>
+<style>body{margin:0}button{position:absolute;left:20px;top:20px;width:240px;height:40px}</style>
+<button id="open">Open from issuer frame</button><script>
+document.querySelector('#open').onclick = async () => {
+  await fetch('/second');
+  window.open('/popups/reply?kind=frame', '_blank', 'popup,width=420,height=560');
+};
+addEventListener('message', e => {
+  if (e.origin === location.origin && e.data && e.data.popupQA) parent.postMessage(e.data, 'MERCHANT');
+});
+</script>'''
+
+POPUPS_REPLY = '''<!doctype html><meta charset="utf-8"><title>Popup reply</title><h1>Popup reply</h1>
+<script>
+const kind = new URL(location.href).searchParams.get('kind');
+if (window.opener) {
+  window.opener.postMessage({popupQA:true, kind}, kind === 'frame' ? 'ISSUER' : 'MERCHANT');
+  document.title = 'Popup has opener';
+} else document.title = 'Popup has no opener';
+</script>'''
+
 # A wallet button (Google Pay, Apple Pay, Secure Payment Confirmation) starts the Payment Request API, whose
 # sheet is Chrome's. Opened at localhost, a valid relying party for Secure Payment Confirmation; no credential
 # matches, as for a card never enrolled. window.qa.request.abort() ends a request still open. As on a real
@@ -1601,6 +1643,12 @@ class Handler(BaseHTTPRequestHandler):
             payload = PERSON_CHECK.encode()
         elif self.path.startswith('/pick'):
             payload = PICK.encode()
+        elif self.path.startswith('/popups/frame'):
+            payload = sites(POPUPS_FRAME).encode()
+        elif self.path.startswith('/popups/reply'):
+            payload = sites(POPUPS_REPLY).encode()
+        elif self.path.startswith('/popups'):
+            payload = sites(POPUPS).encode()
         elif self.path.startswith('/checkout/frame'):
             payload = sites(CHECKOUT_FRAME).encode()
         elif self.path.startswith('/checkout/redirect'):

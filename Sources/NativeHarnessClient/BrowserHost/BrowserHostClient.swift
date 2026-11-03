@@ -666,13 +666,29 @@ final class BrowserHostClient {
         if let session = tab.session { notifySession(session) }
     }
 
-    /// Opens a pop-up the browser blocked, from the panel's list, as Chrome's list opens one: another tab of the
-    /// task, in front. It has no `window.opener`: Chromium made no window for the request, so the new tab loads
-    /// its address (Chrome keeps the original request and its opener).
+    /// Opens the retained request, keeping its opener and the input ownership at the time it was blocked.
     func openBlockedPopup(_ url: String, from tab: BrowserTab) {
-        guard tabs[tab.id] === tab, tab.blockedPopups.contains(url) else { return }
-        tab.forgetBlockedPopup(url)
-        openWindow(url, from: tab, background: false, userGesture: true)
+        guard let popup = tab.blockedPopupRequests.first(where: { $0.url == url }) else { return }
+        openBlockedPopup(popup, from: tab)
+    }
+
+    func openBlockedPopup(_ popup: BrowserBlockedPopup, from tab: BrowserTab) {
+        guard tabs[tab.id] === tab, tab.blockedPopupRequests.contains(popup),
+              !tab.openingBlockedPopups.contains(popup.id) else { return }
+        if popup.id < 0 {
+            // Older hosts report only a URL, without a retained request.
+            tab.forgetBlockedPopup(popup.id)
+            openWindow(popup.url, from: tab, background: false, userGesture: true)
+        } else {
+            guard let session = tab.session, tabs(forSession: session).count < Self.maxTabsPerSession else { return }
+            tab.openingBlockedPopups.insert(popup.id)
+            connection?.send(.openBlockedPopup(tab: tab.id, popupTab: popup.id))
+        }
+    }
+
+    func setPopupsAllowed(_ allowed: Bool, for tab: BrowserTab) {
+        guard tabs[tab.id] === tab else { return }
+        connection?.send(.popupPermission(tab: tab.id, url: tab.currentURL ?? "", allowed: allowed))
     }
 
     // MARK: Host
@@ -906,10 +922,12 @@ final class BrowserHostClient {
     /// placed as `openWindow` places one. A tab outside a task, or a task with no room for another tab,
     /// closes it, and the opener loads the address itself, as `openWindow` does.
     private func adoptPopup(_ id: BrowserTabID, opener: BrowserTab?, url: String, background: Bool) {
+        let retained = opener?.blockedPopupRequests.first { $0.id == id }
+        opener?.forgetBlockedPopup(id)
         guard tabs[id] == nil else { return }
         guard let opener, let session = opener.session, tabs(forSession: session).count < Self.maxTabsPerSession else {
             connection?.send(.close(tab: id))
-            guard let opener else { return }
+            guard let opener, retained == nil else { return }
             connection?.send(.navigate(tab: opener.id, url: url))
             opener.receive(.openedTab(tab: opener.id, newTab: nil, url: url))
             return
@@ -919,8 +937,14 @@ final class BrowserHostClient {
         let tab = BrowserTab(id: id, client: self, session: session, key: UUID())
         tab.viewport = opener.viewport
         // The agent's click opened it; or a remote device's, which the new tab's own requests answer to.
-        tab.openedByAgent = opener.isDrivenByAgent
-        tab.inherit(from: opener)
+        tab.openedByAgent = retained?.openedByAgent ?? opener.isDrivenByAgent
+        if let retained {
+            tab.remoteOpener = retained.drivenByRemote
+            tab.openerRefusedDownloads = retained.refusedDownloads
+            tab.tellDownloads()
+        } else {
+            tab.inherit(from: opener)
+        }
         tabs[id] = tab
         sessionOrder[session, default: []].append(id)
         if (!background && !behind) || frontedTabs[session].flatMap({ tabs[$0] }) == nil {
@@ -1251,6 +1275,15 @@ final class BrowserHostClient {
     }
 }
 
+/// A blocked request and the input ownership it had when the page opened it.
+struct BrowserBlockedPopup: Identifiable, Equatable {
+    let id: BrowserTabID
+    let url: String
+    let openedByAgent: Bool
+    let drivenByRemote: Bool
+    let refusedDownloads: Bool
+}
+
 /// One page in the host. Events arrive through `eventHandler` and any added observers; CDP goes
 /// through `devTools`.
 @MainActor
@@ -1334,7 +1367,10 @@ final class BrowserTab {
     fileprivate(set) var externalAppQuestion: BrowserExternalAppQuestion?
     /// Pop-ups the page opened without a click, which the browser blocked as Chrome does, in order (Chrome's
     /// address-bar list, at most 25), until the page moves on.
-    private(set) var blockedPopups: [String] = []
+    private(set) var blockedPopupRequests: [BrowserBlockedPopup] = []
+    var blockedPopups: [String] { blockedPopupRequests.map(\.url) }
+    fileprivate var openingBlockedPopups: Set<BrowserTabID> = []
+    private(set) var popupsAllowed = false
     /// The person's last input to the page: a click or key press in its panel, or an address, Back, Forward or
     /// Reload there (`notePersonInput`).
     fileprivate(set) var lastPersonInput: ContinuousClock.Instant?
@@ -1392,7 +1428,7 @@ final class BrowserTab {
     /// A page the remote device's input drove opened the tab (`inherit(from:)`).
     fileprivate(set) var remoteOpener = false
     /// The page that opened the tab had its downloads refused then (`inherit(from:)`).
-    private var openerRefusedDownloads = false
+    fileprivate var openerRefusedDownloads = false
     /// When the agent last acted on the page (a click, typing, a navigation …), not a read (`noteAgentInput`), and when
     /// before the act under way, which `undoAgentInput` takes back.
     private var lastAgentInput: ContinuousClock.Instant?
@@ -1651,7 +1687,7 @@ final class BrowserTab {
     /// Tells the host to refuse the tab's downloads (`refusesDownloadsNow`), or to take them again: sent before the
     /// input that changed it goes, so a download that input starts is refused before it begins (the host also refuses
     /// those of a pop-up such a page opens).
-    private func tellDownloads() {
+    fileprivate func tellDownloads() {
         let refuses = refusesDownloadsNow
         guard refuses != refusesDownloads else { return }
         refusesDownloads = refuses
@@ -1705,8 +1741,9 @@ final class BrowserTab {
         client?.personWaitChanged(self)
     }
 
-    fileprivate func forgetBlockedPopup(_ url: String) {
-        blockedPopups.removeAll { $0 == url }
+    fileprivate func forgetBlockedPopup(_ id: BrowserTabID) {
+        blockedPopupRequests.removeAll { $0.id == id }
+        openingBlockedPopups.remove(id)
     }
 
     func close() {
@@ -2053,10 +2090,25 @@ final class BrowserTab {
             openedTabs.insert(newTab)
         case .newWindow(_, let url, _, false):
             // Chrome keeps the first 25 (PopupBlockerTabHelper kMaximumNumberOfPopups).
-            if blockedPopups.count < 25 { blockedPopups.append(url) }
+            if blockedPopupRequests.count < 25 {
+                let id = (blockedPopupRequests.map(\.id).min() ?? 0) - 1
+                blockedPopupRequests.append(BrowserBlockedPopup(id: min(-1, id), url: url,
+                    openedByAgent: isDrivenByAgent, drivenByRemote: isDrivenByRemote, refusedDownloads: refusesDownloads))
+            }
+        case .blockedPopup(_, let popupTab, let url):
+            if blockedPopupRequests.count < 25, !blockedPopupRequests.contains(where: { $0.id == popupTab }) {
+                blockedPopupRequests.append(BrowserBlockedPopup(id: popupTab, url: url,
+                    openedByAgent: isDrivenByAgent, drivenByRemote: isDrivenByRemote, refusedDownloads: refusesDownloads))
+            }
+        case .blockedPopupRemoved(_, let popupTab):
+            forgetBlockedPopup(popupTab)
+        case .popupPermission(_, let allowed):
+            popupsAllowed = allowed
         case .newDocument:
             navigations += 1
-            blockedPopups = []
+            blockedPopupRequests = []
+            openingBlockedPopups = []
+            popupsAllowed = false
             externalAppQuestion = nil
             documentStartedAt = .now
             hadPersonEdits = false
@@ -2085,6 +2137,9 @@ final class BrowserTab {
         case .permissionPromptDismissed(_, let prompt):
             if permissionPrompt?.id == prompt { permissionPrompt = nil }
         case .terminated, .closed:
+            blockedPopupRequests = []
+            openingBlockedPopups = []
+            popupsAllowed = false
             isClosed = true
             restore = .none
             permissionPrompt = nil

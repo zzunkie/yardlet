@@ -253,7 +253,7 @@ final class BrowserAgentPage {
             filledValueBlocks += 1
         case .openedTab(_, let newTab, let url):
             openedTabs.append((newTab, url))
-        case .newWindow(_, let url, _, false):
+        case .newWindow(_, let url, _, false), .blockedPopup(_, _, let url):
             blockedPopups.append(url)
             if blockedPopups.count > 25 { blockedPopups.removeFirst() }
         case .externalAppHandled(_, let url, let app, let outcome):

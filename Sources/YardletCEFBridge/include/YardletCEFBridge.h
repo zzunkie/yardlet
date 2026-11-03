@@ -22,6 +22,11 @@ extern "C" {
 void yardlet_host_input_began(void);
 void yardlet_host_input_ended(void);
 
+void yardlet_cef_open_blocked_popup(int opener_tab, int popup_tab);
+/// allowed: -1 query, 0 remove exception, 1 allow.
+void yardlet_cef_popup_permission(int tab, int allowed, const char *expected_url);
+void yardlet_cef_cancel_blocked_popup(int opener_tab, int popup_tab);
+
 typedef enum {
     YardletCEFEventContextInitialized = 1,
     YardletCEFEventAfterCreated = 2,
@@ -80,7 +85,13 @@ typedef enum {
     /// A navigation of the tab (any frame, a redirect, a new window) was refused before it was sent: its address
     /// carried a value yardlet_cef_guard_filled_values named. No text: the address holds the value. number: 1 in the
     /// main frame.
-    YardletCEFEventFilledValueBlocked = 27
+    YardletCEFEventFilledValueBlocked = 27,
+    /// tab: opener, number: retained request ID (becomes popup tab), text: requested URL.
+    YardletCEFEventPopupRetained = 28,
+    /// number: whether this site is allowed to open popups in its profile.
+    YardletCEFEventPopupPermission = 29,
+    /// tab: opener, number: removed retained request ID.
+    YardletCEFEventPopupRemoved = 30
 } YardletCEFEvent;
 
 /// What a frame's renderer says of its page (YardletCEFHelper's PageState.c names the same flags).

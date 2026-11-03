@@ -2941,6 +2941,8 @@
 "Always allow %@ to open links of this type in the associated app" = "항상 %@에서 연결된 앱에 있는 이 유형의 링크를 열도록 허용";
 "Open %@" = "%@ 열기";
 "Pop-ups blocked" = "팝업 차단됨";
+"Always allow pop-ups from this site" = "이 사이트의 팝업 항상 허용";
+"Stop allowing pop-ups from this site" = "이 사이트의 팝업 허용 취소";
 "Pop-ups were blocked on this page." = "이 페이지에서 팝업이 차단되었습니다.";
 "Control and reprogram your MIDI devices" = "MIDI 기기 제어 및 재프로그래밍";
 "Know when you're using this Mac" = "이 Mac을 사용 중인지 알기";

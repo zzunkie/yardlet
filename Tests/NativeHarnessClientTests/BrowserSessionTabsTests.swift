@@ -282,6 +282,80 @@ final class BrowserSessionTabsTests: XCTestCase {
         XCTAssertNil(client.tabs(forSession: session).first { $0.id == popup.id }, "window.close() closes its tab")
     }
 
+    func testBlockedPopupSelectionKeepsTheRequestIdentityAndOriginalInputOwnership() throws {
+        let client = makeClient()
+        let session = UUID()
+        let opener = try client.openTab(forSession: session, url: "https://merchant.test/", viewport: .offscreenDefault)
+        opener.notePersonInput(remote: true)
+        opener.noteAgentActivity()
+        let firstID = 1 << 30
+        let secondID = firstID + 1
+        let url = "https://issuer.test/"
+        connection.eventHandler?(.blockedPopup(tab: opener.id, popupTab: firstID, url: url))
+        connection.eventHandler?(.blockedPopup(tab: opener.id, popupTab: secondID, url: url))
+        XCTAssertEqual(opener.blockedPopups, [url, url])
+        XCTAssertEqual(client.tabs(forSession: session).count, 1)
+        let second = try XCTUnwrap(opener.blockedPopupRequests.last)
+        opener.notePersonInput()
+        XCTAssertFalse(opener.isDrivenByAgent)
+        XCTAssertFalse(opener.isDrivenByRemote)
+        let before = connection.sent.count
+        client.openBlockedPopup(second, from: opener)
+        client.openBlockedPopup(second, from: opener)
+        XCTAssertEqual(Array(connection.sent.dropFirst(before)), [.openBlockedPopup(tab: opener.id, popupTab: secondID)],
+                       "one selection resumes that request, without opening its URL again")
+        connection.eventHandler?(.popupOpened(tab: secondID, opener: opener.id, url: url, background: false))
+        let popup = try XCTUnwrap(client.tabs(forSession: session).first { $0.id == secondID })
+        XCTAssertTrue(popup.openedByAgent, "selection must not erase the request's agent ownership")
+        XCTAssertTrue(popup.isDrivenByRemote)
+        XCTAssertTrue(connection.sent.contains(.refuseDownloads(tab: secondID, isRefused: true)))
+        XCTAssertEqual(opener.blockedPopupRequests.map(\.id), [firstID], "same URL is a different request")
+        XCTAssertEqual(opened(), ["https://merchant.test/"])
+    }
+
+    func testBlockedPopupDoesNotResumeAfterItsDocumentHasLeft() throws {
+        let client = makeClient()
+        let opener = try client.openTab(forSession: UUID(), url: "https://merchant.test/", viewport: .offscreenDefault)
+        connection.eventHandler?(.blockedPopup(tab: opener.id, popupTab: 1 << 30, url: "https://issuer.test/"))
+        let stale = try XCTUnwrap(opener.blockedPopupRequests.first)
+        connection.eventHandler?(.newDocument(tab: opener.id, url: "https://merchant.test/next"))
+        XCTAssertTrue(opener.blockedPopupRequests.isEmpty)
+        let before = connection.sent.count
+        client.openBlockedPopup(stale, from: opener)
+        XCTAssertEqual(connection.sent.count, before)
+
+        connection.eventHandler?(.blockedPopup(tab: opener.id, popupTab: (1 << 30) + 1, url: "https://issuer.test/"))
+        let failed = try XCTUnwrap(opener.blockedPopupRequests.first)
+        client.openBlockedPopup(failed, from: opener)
+        connection.eventHandler?(.blockedPopupRemoved(tab: opener.id, popupTab: failed.id))
+        XCTAssertTrue(opener.blockedPopupRequests.isEmpty, "a failed replay or departed iframe removes its request")
+        let afterRemoval = connection.sent.count
+        client.openBlockedPopup(failed, from: opener)
+        XCTAssertEqual(connection.sent.count, afterRemoval)
+    }
+
+    func testPopupExceptionFollowsHostStateAndCanBeRemoved() throws {
+        let client = makeClient()
+        let opener = try client.openTab(forSession: UUID(), url: "https://merchant.test/", viewport: .offscreenDefault)
+        connection.eventHandler?(.address(tab: opener.id, url: "https://merchant.test/"))
+        client.setPopupsAllowed(true, for: opener)
+        XCTAssertEqual(connection.sent.last, .popupPermission(tab: opener.id, url: "https://merchant.test/", allowed: true))
+        XCTAssertFalse(opener.popupsAllowed, "the saved exception is confirmed by the host")
+        connection.eventHandler?(.popupPermission(tab: opener.id, allowed: true))
+        XCTAssertTrue(opener.popupsAllowed)
+        client.setPopupsAllowed(false, for: opener)
+        XCTAssertEqual(connection.sent.last, .popupPermission(tab: opener.id, url: "https://merchant.test/", allowed: false))
+        connection.eventHandler?(.popupPermission(tab: opener.id, allowed: false))
+        XCTAssertFalse(opener.popupsAllowed)
+        connection.eventHandler?(.popupPermission(tab: opener.id, allowed: true))
+        connection.eventHandler?(.newDocument(tab: opener.id, url: "https://other.test/"))
+        XCTAssertFalse(opener.popupsAllowed, "another document waits for its own profile setting")
+        connection.eventHandler?(.address(tab: opener.id, url: "https://other.test/"))
+        client.setPopupsAllowed(true, for: opener)
+        XCTAssertEqual(connection.sent.last, .popupPermission(tab: opener.id, url: "https://other.test/", allowed: true),
+                       "the permission command names the displayed page, so a host-side navigation cannot grant another site")
+    }
+
     func testANewWindowOutsideATaskOrPastTheLimitLoadsInPlace() throws {
         let client = makeClient()
         let loose = try client.openTab(url: "https://a.test/", viewport: .offscreenDefault)
@@ -305,6 +379,16 @@ final class BrowserSessionTabsTests: XCTestCase {
         XCTAssertEqual(client.tabs(forSession: session).count, BrowserHostClient.maxTabsPerSession)
         connection.eventHandler?(.popupOpened(tab: (1 << 30) + 1, opener: loose.id, url: "https://e.test/", background: false))
         XCTAssertEqual(Array(connection.sent.suffix(2)), [.close(tab: (1 << 30) + 1), .navigate(tab: loose.id, url: "https://e.test/")])
+
+        let retainedID = (1 << 30) + 2
+        connection.eventHandler?(.blockedPopup(tab: opener.id, popupTab: retainedID, url: "https://issuer.test/"))
+        let retained = try XCTUnwrap(opener.blockedPopupRequests.first)
+        let before = connection.sent.count
+        client.openBlockedPopup(retained, from: opener)
+        XCTAssertEqual(connection.sent.count, before, "a full task keeps the request for later")
+        connection.eventHandler?(.popupOpened(tab: retainedID, opener: opener.id, url: retained.url, background: false))
+        XCTAssertEqual(Array(connection.sent.dropFirst(before)), [.close(tab: retainedID)],
+                       "a retained request never falls back to navigating its opener")
     }
 
     func testTabsSavedWithTheTaskOpenOnlyWhenItHasNone() throws {
