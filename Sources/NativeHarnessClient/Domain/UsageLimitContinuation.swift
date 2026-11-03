@@ -5,9 +5,20 @@ import Foundation
 /// the reset it names rather than by its entry: a conversation read back from Claude's saved history
 /// after a relaunch holds the same card under another entry ID.
 struct UsageLimitAutoContinue: Codable, Equatable, Sendable {
+    /// Who armed a continue, which says who may disarm it besides the person.
+    enum ArmedBy: String, Codable, Sendable {
+        /// The setting, as the limit stopped the task (`UsageLimitAutoContinuePreference`).
+        case setting
+        /// Moving tasks to an account with room, which waits for a reset that comes before the
+        /// task's cache expires (`AccountMovePreference`).
+        case accountMove
+    }
+
     let resetsAt: Date
     let providerSessionID: String?
     let connection: ProviderConnection?
+    /// Nil when the person armed it on the card, and in records written before.
+    var armedBy: ArmedBy? = nil
 
     /// Whether a limit card names this reset.
     func waits(for reset: Date?) -> Bool {
@@ -37,6 +48,22 @@ struct UsageLimitAutoContinue: Codable, Equatable, Sendable {
             return
         }
         defaults.set(data, forKey: preferenceKey)
+    }
+}
+
+/// Settings › Accounts' "Continue automatically at usage limit", on unless turned off, as Claude
+/// Code 2.1.291's setting of that name is: a limit that stops a Claude Code task and resets within
+/// `horizon` arms its card's automatic continue as it comes. Off, each card waits for the person to
+/// arm it, and the continues the setting armed are disarmed.
+enum UsageLimitAutoContinuePreference {
+    static let key = "Yardlet.continueAtUsageLimit"
+    /// Claude Code waits only for a reset within a day ("the usage limit now resets more than 24
+    /// hours out, so this task will not resume on its own"); a weekly limit days out waits for the
+    /// person.
+    static let horizon: TimeInterval = 24 * 60 * 60
+
+    static func isOn(in defaults: UserDefaults = .yardlet) -> Bool {
+        defaults.object(forKey: key) as? Bool ?? true
     }
 }
 

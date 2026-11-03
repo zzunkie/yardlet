@@ -228,7 +228,7 @@ extension AppModel: TaskSuggestionToolHandling {
         taskSuggestions.setProgress(.sending, of: suggestion.id, in: sourceID)
         let message = TaskSuggestionHereMessage.text(for: suggestion)
         switch await deliverMessage(to: source, text: { _ in message }) {
-        case .delivered, .steered, .queued, .afterStart:
+        case .delivered, .steered, .queued, .afterStart, .afterReset:
             taskSuggestions.markSentHere(suggestion.id, in: sourceID)
         case .undelivered:
             taskSuggestions.setProgress(.failed(L10n.string("The message could not be sent.")),

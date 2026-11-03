@@ -1545,6 +1545,8 @@
 "Compacted session" = "세션 압축됨";
 "Continue with another account" = "다른 계정으로 계속";
 "Auto-continue when limits reset" = "초기화되면 자동으로 계속";
+"Continue automatically at usage limit" = "사용 한도가 초기화되면 자동으로 계속";
+"When a usage limit stops a Claude Code task and resets within a day, the task picks up where it stopped once it resets. A limit that resets later, such as a weekly one, continues only if you turn it on on its card." = "Claude Code 작업이 사용 한도로 멈추고 하루 안에 초기화되면, 초기화된 뒤 멈춘 곳부터 이어 갑니다. 주간 한도처럼 더 늦게 초기화되는 한도는 카드에서 켤 때만 이어 갑니다.";
 "Auto-resuming at %@" = "%@에 자동으로 계속합니다";
 "Type to search for files" = "파일을 검색하려면 입력하세요";
 "Searching files…" = "파일 검색 중…";

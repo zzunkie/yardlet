@@ -129,7 +129,12 @@ struct AccountList: View {
                     get: { store.picksNewTaskAccount }, set: { store.setPicksNewTaskAccount($0) }))
                     .labelsHidden().toggleStyle(.paritySwitch).controlSize(.small)
             }
-            .padding(.bottom, showsAccountMoveSetting ? 0 : 12)
+            .padding(.bottom, showsClaudeCodeSettings ? 0 : 12)
+            if showsClaudeCodeSettings {
+                Divider()
+                UsageLimitAutoContinueSettingRow()
+                    .padding(.bottom, showsAccountMoveSetting ? 0 : 12)
+            }
             if showsAccountMoveSetting {
                 Divider()
                 AccountMoveSettingRow()
@@ -137,10 +142,15 @@ struct AccountList: View {
         }
     }
 
+    /// The Claude Code accounts' own settings show unless the list is filtered to another harness.
+    private var showsClaudeCodeSettings: Bool {
+        harnessFilter.wrappedValue.map { $0 == .claudeCode } ?? true
+    }
+
     /// Moving Claude Code tasks to an account with room has somewhere to move them once a Claude Code
     /// account is saved besides the default login.
     private var showsAccountMoveSetting: Bool {
-        (harnessFilter.wrappedValue.map { $0 == .claudeCode } ?? true) && !store.connections(for: .claudeCode).isEmpty
+        showsClaudeCodeSettings && !store.connections(for: .claudeCode).isEmpty
     }
 
     // MARK: List

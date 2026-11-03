@@ -1545,6 +1545,8 @@
 "Compacted session" = "Compacted session";
 "Continue with another account" = "Continue with another account";
 "Auto-continue when limits reset" = "Auto-continue when limits reset";
+"Continue automatically at usage limit" = "Continue automatically at usage limit";
+"When a usage limit stops a Claude Code task and resets within a day, the task picks up where it stopped once it resets. A limit that resets later, such as a weekly one, continues only if you turn it on on its card." = "When a usage limit stops a Claude Code task and resets within a day, the task picks up where it stopped once it resets. A limit that resets later, such as a weekly one, continues only if you turn it on on its card.";
 "Auto-resuming at %@" = "Auto-resuming at %@";
 "Type to search for files" = "Type to search for files";
 "Searching files…" = "Searching files…";

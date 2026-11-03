@@ -168,6 +168,29 @@ private struct UsageLimitHostAccountMenu: View {
     }
 }
 
+/// Settings › Accounts' switch for continuing a Claude Code task once the limit that stopped it
+/// resets (`UsageLimitAutoContinuePreference`), named as Claude Code names its own.
+struct UsageLimitAutoContinueSettingRow: View {
+    @AppStorage(UsageLimitAutoContinuePreference.key, store: .yardlet) private var continuesAtLimit = true
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L10n.string("Continue automatically at usage limit")).font(.callout.weight(.medium))
+                Text(L10n.string("When a usage limit stops a Claude Code task and resets within a day, the task picks up where it stopped once it resets. A limit that resets later, such as a weekly one, continues only if you turn it on on its card."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Toggle(L10n.string("Continue automatically at usage limit"), isOn: $continuesAtLimit)
+                .labelsHidden()
+                .toggleStyle(.paritySwitch)
+                .controlSize(.small)
+        }
+    }
+}
+
 /// Where the provider summarized earlier conversation, as a divider in the timeline.
 struct CompactionMarker: View {
     let compaction: HarnessContextCompaction
