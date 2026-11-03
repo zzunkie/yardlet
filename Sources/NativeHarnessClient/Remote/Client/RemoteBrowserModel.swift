@@ -71,7 +71,7 @@ final class RemoteBrowserModel {
     func show(taskID: String, tabID: String? = nil) {
         selectionRevision += 1
         if self.taskID != taskID {
-            tabs = []
+            tabs = rememberedTabs[taskID]?.tabs ?? []
             self.tabID = nil
             isListed = false
             frame = nil

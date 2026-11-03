@@ -21,7 +21,13 @@ final class RemoteHostModelTests: XCTestCase {
         browser.show(taskID: "task", tabID: "first")
         var initial = RemoteResponse(re: "initial")
         initial.tabId = "first"
+        initial.tabs = [RemoteBrowserTab(tabId: "first")]
         pending[0].1?(initial)
+        browser.hide()
+        XCTAssertEqual(browser.tabs(for: "task").map(\.tabId), ["first"])
+        browser.show(taskID: "task", tabID: "first")
+        XCTAssertEqual(browser.tabs(for: "task").map(\.tabId), ["first"], "a pending refresh must not remove shared tabs")
+        pending.last!.1?(initial)
         browser.openAddress("localhost:3000", inNewTab: true)
         let opened = pending.last!.1
         browser.select("chosen")
