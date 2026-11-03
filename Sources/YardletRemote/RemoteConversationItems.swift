@@ -5,14 +5,14 @@ import YardletRemote
 /// one turn each, so that a change costs what it touches: replacing a streaming answer finds its run by the
 /// item's ID, and inserting reads only its run. The runs keep the host's order exactly; a change whose
 /// `after` names an item not held reports the conversation out of step, never guessing a place.
-struct RemoteConversationItems {
+public struct RemoteConversationItems {
     /// One turn's items, in order. A class, so an item's run is found from its ID without an index that
     /// every insertion would shift.
-    final class Run {
-        let turnID: String
-        var items: [RemoteItem]
+    public final class Run {
+        public let turnID: String
+        public internal(set) var items: [RemoteItem]
         /// Bumped whenever the run changes, which tells its projection to draw it again.
-        var version = 0
+        public var version = 0
 
         init(turnID: String, items: [RemoteItem]) {
             self.turnID = turnID
@@ -20,22 +20,22 @@ struct RemoteConversationItems {
         }
     }
 
-    private(set) var runs: [Run] = []
+    public private(set) var runs: [Run] = []
     private var runOf: [String: Run] = [:]
 
-    var isEmpty: Bool { runs.isEmpty }
+    public var isEmpty: Bool { runs.isEmpty }
 
     /// The run an item is in.
-    func run(containing itemID: String) -> Run? { runOf[itemID] }
-    var count: Int { runs.reduce(0) { $0 + $1.items.count } }
-    var items: [RemoteItem] { runs.flatMap(\.items) }
+    public func run(containing itemID: String) -> Run? { runOf[itemID] }
+    public var count: Int { runs.reduce(0) { $0 + $1.items.count } }
+    public var items: [RemoteItem] { runs.flatMap(\.items) }
 
-    init(_ items: [RemoteItem] = []) {
+    public init(_ items: [RemoteItem] = []) {
         replace(with: items)
     }
 
     /// A fresh page (`subscribeTask`, `conversationReset`).
-    mutating func replace(with items: [RemoteItem]) {
+    public mutating func replace(with items: [RemoteItem]) {
         runs = Self.runs(of: items)
         runOf = [:]
         for run in runs { for item in run.items { runOf[item.id] = run } }
@@ -44,7 +44,7 @@ struct RemoteConversationItems {
     /// The latest runs within a page's limits, counted as the host counts a page's turns
     /// (`RemoteConversationWindow`), at least one; `isWhole` is false when earlier items were left out.
     /// It reads only the runs it takes.
-    func latest(within limits: RemoteConversationWindow.Limits) -> (items: [RemoteItem], isWhole: Bool) {
+    public func latest(within limits: RemoteConversationWindow.Limits) -> (items: [RemoteItem], isWhole: Bool) {
         var start = runs.endIndex
         var items = 0
         var bytes = 0
@@ -64,7 +64,7 @@ struct RemoteConversationItems {
     }
 
     /// A `loadOlder` page, before everything held.
-    mutating func prepend(_ items: [RemoteItem]) {
+    public mutating func prepend(_ items: [RemoteItem]) {
         var added = Self.runs(of: items)
         guard !added.isEmpty else { return }
         for run in added { for item in run.items { runOf[item.id] = run } }
@@ -79,7 +79,7 @@ struct RemoteConversationItems {
 
     /// Applies a `conversation` event's changes in order. False when a change named an item not held: the
     /// client is out of step and subscribes again (§5.3). A run it changed has a new `version`.
-    mutating func apply(_ changes: [RemoteChange]) -> Bool {
+    public mutating func apply(_ changes: [RemoteChange]) -> Bool {
         var reshaped = false
         for change in changes {
             switch change.op {

@@ -134,7 +134,9 @@ let package = Package(
     name: "NativeHarnessClient",
     defaultLocalization: "en",
     platforms: [
-        .macOS(.v15)
+        .macOS(.v15),
+        // The phone app (Apps/iOS) builds YardletRemote alone, for iOS.
+        .iOS(.v17)
     ],
     products: (engineOnly ? [] : [
         .executable(name: "NativeHarnessClient", targets: ["NativeHarnessClient"])
@@ -148,7 +150,10 @@ let package = Package(
         .executable(name: "yardlet-lid-helper", targets: ["YardletLidHelper"]),
         // The phone remote's fixture server: the remote protocol on loopback with fixture tasks, for
         // building the Android client without real tasks (docs/REMOTE_PROTOCOL.md §9).
-        .executable(name: "yardlet-remote-fixture", targets: ["YardletRemoteFixture"])
+        .executable(name: "yardlet-remote-fixture", targets: ["YardletRemoteFixture"]),
+        // The remote protocol and its client, for the phone app (Apps/iOS), which also runs the fixture Mac
+        // in its demo.
+        .library(name: "YardletRemote", targets: ["YardletRemote", "YardletRemoteFixtureSupport"])
     ] + (cefDirectory == nil ? [] : [
         .executable(name: "YardletCEFHelper", targets: ["YardletCEFHelper"]),
         .executable(name: "YardletBrowserHost", targets: ["YardletBrowserHost"])

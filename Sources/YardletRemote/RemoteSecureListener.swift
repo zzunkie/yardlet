@@ -92,7 +92,11 @@ public final class RemoteSecureListener: @unchecked Sendable {
         parameters.includePeerToPeer = false
         if loopbackOnly {
             parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port) ?? .any)
+            // On iOS a listener that accepts local connections only is handed none (the phone app's demo Mac); the
+            // loopback address alone keeps every other device out there.
+            #if os(macOS)
             parameters.acceptLocalOnly = true
+            #endif
         }
         let listener: NWListener
         do {
