@@ -154,7 +154,7 @@ final class ComposerEditorTests: XCTestCase {
         }
     }
 
-    func testOnlyTheTaskDraftHasBashMode() {
+    func testOnlyTheTaskDraftHasBashMode() throws {
         let task = TaskComposerDraft(), home = NewTaskDraft()
         task.text = "!"
         home.text = "!"
@@ -168,6 +168,14 @@ final class ComposerEditorTests: XCTestCase {
         XCTAssertFalse(editing.isBashMode)
         XCTAssertFalse(editing.leaveBashMode())
         XCTAssertEqual(home.text, "!", "The new-task draft keeps a typed `!`")
+
+        let probe = TaskProbe()
+        let mounted = try mount(taskComposer(probe))
+        try type("!", into: mounted)
+        XCTAssertTrue(probe.draft.isBashMode)
+        XCTAssertEqual(probe.draft.text, "")
+        XCTAssertEqual(try editor(mounted).string, "")
+        XCTAssertTrue(probe.sent.isEmpty)
     }
 
     // MARK: - When a typed list shows

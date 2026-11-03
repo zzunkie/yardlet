@@ -1499,14 +1499,22 @@ struct BrowserHostPane: View {
                 }
                 .disabled(!controller.hasTab)
             }
-            TextField(L10n.string("Search Google or type a URL"), text: $controller.addressInput)
+            TextField(L10n.string("Search Google or type a URL"), text: Binding(
+                get: { controller.addressInput },
+                set: { text in
+                    let previous = controller.addressInput
+                    guard text != previous else { return }
+                    controller.addressInput = text
+                    // Inline completion changes the field too. Handle the edit at its source,
+                    // before SwiftUI observes the completed text in this frame.
+                    controller.addressTextChanged(from: previous, to: text)
+                }))
                 .focused($isAddressFocused)
                 .textFieldStyle(.plain)
                 .font(.callout.monospaced())
                 // Submitting gives the page the keyboard (`submitAddress`); a focus change here would take
                 // it back to the window.
                 .onSubmit { controller.submitAddress() }
-                .onChange(of: controller.addressInput) { old, text in controller.addressTextChanged(from: old, to: text) }
                 .onReceive(NotificationCenter.default.publisher(for: NSTextView.didChangeSelectionNotification)) { note in
                     controller.addressSelectionChanged(in: note.object)
                 }
