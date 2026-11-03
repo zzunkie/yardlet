@@ -1856,8 +1856,10 @@ the protocol does not separately expose environment variables, credentials or va
 - `terminalResize`: `taskId`, `terminalId`, `columns` (2–500) and `rows` (2–300).
 - `closeTerminal`: `taskId`, `terminalId`.
 - `terminalStatus`: `taskId`, `terminalId`; returns optional `isAtPrompt` and `isRunningProgram` booleans,
-  from the host session at that moment. The same ownership and live-permission checks apply. Clients request
-  status for a user action that needs it, never on a timer.
+  from the host session at that moment, and optional `workspaceRoot`, the host path where the session started.
+  The path supplies the shared panel's folder context; clients must not treat it as a local filesystem path.
+  The same ownership and live-permission checks apply. Clients request status after opening and for a user
+  action that needs it, never on a timer.
 - `terminalOutputAck`: `taskId`, `terminalId`, `sequence` of the last output delivered to the terminal view.
 
 `terminalOutput` events carry `taskId`, `terminalId`, `data` (base64, at most 16,384 bytes) and `sequence`, starting

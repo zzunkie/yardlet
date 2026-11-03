@@ -8,9 +8,11 @@ public enum RemoteTerminalUpdate: Sendable {
 public struct RemoteTerminalStatus: Equatable, Sendable {
     public var isAtPrompt: Bool
     public var isRunningProgram: Bool
-    public init(isAtPrompt: Bool, isRunningProgram: Bool) {
+    public var workspaceRoot: String?
+    public init(isAtPrompt: Bool, isRunningProgram: Bool, workspaceRoot: String? = nil) {
         self.isAtPrompt = isAtPrompt
         self.isRunningProgram = isRunningProgram
+        self.workspaceRoot = workspaceRoot
     }
 }
 

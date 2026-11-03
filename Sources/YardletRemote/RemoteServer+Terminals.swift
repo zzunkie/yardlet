@@ -80,6 +80,7 @@ extension RemoteServer {
                 if session.permit.isValid {
                     response.isAtPrompt = status.isAtPrompt
                     response.isRunningProgram = status.isRunningProgram
+                    response.workspaceRoot = status.workspaceRoot
                 } else { error = RemoteError(.notAllowed) }
             case let .failure(failure): error = failure
             }
