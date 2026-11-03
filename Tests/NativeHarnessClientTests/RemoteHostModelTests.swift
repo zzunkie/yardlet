@@ -382,6 +382,15 @@ final class RemoteHostModelTests: XCTestCase {
         XCTAssertTrue(notice.offersAllowOnce)
         XCTAssertEqual(SystemNotificationTarget(userInfo: notice.target.userInfo), notice.target)
         XCTAssertEqual(notice.target.requestID, "toolu_fixture_1")
+        // A finish the host keeps quiet about posts nothing and takes the wait's notification back, as the host's do.
+        var finished = waiting
+        finished.previousState = .waiting
+        finished.state = .unread
+        XCTAssertNotNil(RemoteAttentionNotice.notification(hostID: host.id, hostName: model.name, event: finished))
+        XCTAssertNil(RemoteAttentionNotice.withdrawn(hostID: host.id, event: finished))
+        finished.announces = false
+        XCTAssertNil(RemoteAttentionNotice.notification(hostID: host.id, hostName: model.name, event: finished))
+        XCTAssertEqual(RemoteAttentionNotice.withdrawn(hostID: host.id, event: finished), notice.identifier)
         var question = waiting
         question.taskId = ID.question
         question.pendingRequest = .input

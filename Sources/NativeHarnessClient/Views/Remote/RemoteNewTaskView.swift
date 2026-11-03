@@ -16,7 +16,16 @@ struct RemoteNewTaskView: View {
     @State private var isStarting = false
     @FocusState private var isFocused: Bool
 
-    private var projects: [RemoteProject] { model.projects.filter { $0.canCreateTask == true } }
+    /// The host's projects that take tasks, and Chats, which the host's own new-task menu always offers and which it
+    /// takes before it lists any chat (§15.5).
+    private var projects: [RemoteProject] {
+        var projects = model.projects.filter { $0.canCreateTask == true }
+        if !projects.contains(where: { $0.kind == .chats }) {
+            projects.append(RemoteProject(id: RemoteTaskProjection.chatsProjectID, name: L10n.string("Chats"), kind: .chats,
+                                          canCreateTask: true))
+        }
+        return projects
+    }
 
     var body: some View {
         VStack(spacing: 18) {

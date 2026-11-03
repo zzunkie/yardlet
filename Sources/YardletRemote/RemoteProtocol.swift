@@ -1992,6 +1992,9 @@ public struct RemoteEvent: Codable, Equatable, Sendable {
     public var summary: String?
     /// While `waiting`, what kind of request it is, as the task's `pendingKind` (§15.1, §15.18).
     public var pendingKind: String?
+    /// False on a change to `unread` the Mac does not announce itself (§5.2): a turn the person did not ask for, one
+    /// a queued message follows, or one that leaves a background agent running.
+    public var announces: Bool?
 
     // conversation
     public var changes: [RemoteChange]?

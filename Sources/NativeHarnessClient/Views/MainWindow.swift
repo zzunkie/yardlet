@@ -2461,6 +2461,12 @@ struct MainWindow: View {
         }
         // A notification led to a task archived since: the archived list is where it is restored.
         .onChange(of: model.archivedTasksRevealRequest) { _, _ in showArchivedTasks() }
+        // ⌘, in another Mac's window shows this Mac's Settings here, in the first main window to see it.
+        .onChange(of: model.isSettingsRequested, initial: true) { _, requested in
+            guard requested, model.isSettingsRequested else { return }
+            model.isSettingsRequested = false
+            presentSettings()
+        }
         .onChange(of: model.taskSurfaceRevealRequest) { _, _ in
             sidebarSection = .tasks
             shellFocusBookmark = nil

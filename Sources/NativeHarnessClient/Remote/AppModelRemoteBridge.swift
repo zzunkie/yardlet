@@ -119,6 +119,19 @@ final class AppModelRemoteBridge: RemoteBridge {
         return snapshot
     }
 
+    /// Whether the Mac's own notification announces the task's finish (`announcesCompletion`): a failure always, a
+    /// completed turn when the person asked for it and nothing it queued or started still follows. A task already
+    /// working or waiting again has nothing finished to announce.
+    func announcesFinish(of taskID: String) -> Bool {
+        guard let model, let id = UUID(uuidString: taskID),
+              let session = model.store.sessions.first(where: { $0.id == id }) else { return true }
+        switch session.status {
+        case .failed: return true
+        case .completed: return model.announcesCompletion(of: session)
+        case .ready, .running, .waitingForApproval: return false
+        }
+    }
+
     /// A message to the task can carry images: the task composer's own rule for its harness and session.
     static func acceptsImages(_ session: SessionRecord, in model: AppModel) -> Bool {
         inputPolicy(session, in: model).carriesImages
