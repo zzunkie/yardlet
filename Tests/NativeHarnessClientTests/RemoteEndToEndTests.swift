@@ -111,16 +111,18 @@ final class LoopbackStack: @unchecked Sendable {
     let listener: RemoteSecureListener
     let port: UInt16
 
-    init(name: String = "Loopback", bridge: (any RemoteBridge)? = nil) async throws {
+    init(name: String = "Loopback", bridge: (any RemoteBridge)? = nil, port requestedPort: UInt16 = 0) async throws {
         identity = try RemoteIdentity(noisePrivateKey: Data(RemoteRandom.bytes(32)), relayPrivateKey: Data(RemoteRandom.bytes(32)))
         server = RemoteServer(
             configuration: RemoteServer.Configuration(server: RemoteServerInfo(name: name, appVersion: "test"),
                                                       macKey: identity.noise.publicKey),
             bridge: bridge ?? RemoteFixtureBridge(speed: 25), devices: devices)
         await server.start()
-        listener = RemoteSecureListener(server: server, staticKey: identity.noise, port: 0, advertisement: nil, loopbackOnly: true)
+        // CI runs the focused fixtures in parallel; each gets its own listener port there.
+        let listenPort: UInt16 = ProcessInfo.processInfo.environment["CI"] == "true" ? 0 : requestedPort
+        listener = RemoteSecureListener(server: server, staticKey: identity.noise, port: listenPort, advertisement: nil, loopbackOnly: true)
         listener.start()
-        port = try await RemoteSecureTests.waitForPort(listener)
+        self.port = try await RemoteSecureTests.waitForPort(listener)
     }
 
     /// A socket that has not shaken hands.

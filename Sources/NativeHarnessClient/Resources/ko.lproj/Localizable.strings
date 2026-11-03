@@ -3700,3 +3700,7 @@
 "The page didn't take that." = "페이지가 이 입력을 받지 않았습니다.";
 "Waiting on you" = "답을 기다림";
 "Browser page on %@" = "%@의 브라우저 페이지";
+
+"Update Yardlet on the host to use this panel." = "이 패널을 사용하려면 호스트의 Yardlet을 업데이트하세요.";
+
+"This repository is outside the task's folders." = "이 저장소는 작업에 허용된 폴더 밖에 있습니다.";

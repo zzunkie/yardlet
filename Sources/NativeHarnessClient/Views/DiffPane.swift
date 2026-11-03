@@ -1,29 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// Whether a task's review offers Last turn, and the diff when the task has a turn.
-enum ReviewLastTurn: Equatable {
-    case notOffered
-    case offered(CodexLastTurnDiff?)
-
-    var isOffered: Bool { self != .notOffered }
-
-    var diff: CodexLastTurnDiff? {
-        if case let .offered(diff) = self { diff } else { nil }
-    }
-
-    /// A shared transcript's Last turn: offered once a call in it reported the file change it made
-    /// (Claude Code's Edit and Write, an ACP or Pi edit), with the latest turn's applied changes (D8).
-    static func transcript(
-        _ entries: [TranscriptEntry], harness: HarnessKind, isRunning: Bool, workspaceURL: URL
-    ) -> ReviewLastTurn {
-        guard ConversationFileChangeProjection.carriesFileChanges(entries) else { return .notOffered }
-        return .offered(ConversationFileChangeProjection.lastTurnDiff(
-            entries: entries, harness: harness, isRunning: isRunning, workspaceURL: workspaceURL
-        ))
-    }
-}
-
 struct DiffPane: View {
     let workspaceURL: URL
     var additionalRootURLs: [URL] = []
@@ -32,6 +9,9 @@ struct DiffPane: View {
     var lastTurn: ReviewLastTurn = .notOffered
     /// The task's diff comments waiting for its next message; nil leaves the diff without comments.
     var comments: Binding<[DiffComment]>? = nil
+    var reading: any GitDiffReading = GitDiffService()
+    @State private var providerLastTurn: ReviewLastTurn?
+    private var effectiveLastTurn: ReviewLastTurn { providerLastTurn ?? lastTurn }
     let onClose: () -> Void
 
     /// Same bound as the git scopes' output.
@@ -88,7 +68,7 @@ struct DiffPane: View {
                 .parityPointer()
             }
 
-            if !isNotRepository || lastTurn.isOffered { scopeBar }
+            if !isNotRepository || effectiveLastTurn.isOffered { scopeBar }
             Divider()
 
             if !codexChanges.isEmpty {
@@ -130,7 +110,7 @@ struct DiffPane: View {
             scope: review.scope,
             commit: review.commit,
             repositoryPath: review.repositoryPath,
-            lastTurnRevision: review.scope == .lastTurn ? lastTurn.diff?.revision ?? "" : nil
+            lastTurnRevision: review.scope == .lastTurn ? effectiveLastTurn.diff?.revision ?? "" : nil
         )) {
             reloadTask?.cancel()
             if !(review.scope == .lastTurn && shownScope == .lastTurn) {
@@ -140,7 +120,7 @@ struct DiffPane: View {
         }
         .onAppear {
             // A task that no longer offers Last turn opens on the default scope.
-            if review.scope == .lastTurn, !lastTurn.isOffered { review.scope = .unstaged }
+            if !reading.isRemote, review.scope == .lastTurn, !effectiveLastTurn.isOffered { review.scope = .unstaged }
         }
         .onDisappear { reloadTask?.cancel() }
         .taskFocus(.diff, isFocused: $isRefreshFocused, enabled: !isLoading)
@@ -164,7 +144,7 @@ struct DiffPane: View {
                 .help(selectedRepository?.path(percentEncoded: false) ?? "")
             }
             Picker(L10n.string("Review scope"), selection: $review.scope) {
-                ForEach(GitDiffScope.offered(includingLastTurn: lastTurn.isOffered), id: \.self) { scope in
+                ForEach(GitDiffScope.offered(includingLastTurn: effectiveLastTurn.isOffered), id: \.self) { scope in
                     Text(scope.displayName).tag(scope)
                 }
             }
@@ -188,12 +168,13 @@ struct DiffPane: View {
             }
             Spacer(minLength: 0)
             if review.scope == .unstaged, mutationIsAvailable {
-                Button(L10n.string("Stage all")) { perform(.stage) }
+                Button(L10n.string("Stage all")) { perform(.stage) }.disabled(reading.isRemote)
                 Button(L10n.string("Discard changes")) {
                     if let loadedRepository { discardRequest = .init(workspaceURL: loadedRepository, snapshot: snapshot) }
                 }
+                .disabled(reading.isRemote)
             } else if review.scope == .staged, mutationIsAvailable {
-                Button(L10n.string("Unstage all")) { perform(.unstage) }
+                Button(L10n.string("Unstage all")) { perform(.unstage) }.disabled(reading.isRemote)
             }
         }
         .padding(.horizontal, 10)
@@ -277,7 +258,7 @@ struct DiffPane: View {
             }
         }
         // Read again with each load, so a refresh also brings the tasks that touched the file since.
-        .loadsFileTasks(for: isLoading ? nil : selectedFileURL, refresh: requestID.uuidString, into: $fileTasks)
+        .loadsFileTasks(for: isLoading || reading.isRemote ? nil : selectedFileURL, refresh: requestID.uuidString, into: $fileTasks)
     }
 
     /// The selected file where it is: in the repository's top folder for the git scopes, in the task's
@@ -342,19 +323,19 @@ struct DiffPane: View {
         return DiffMarkdownPreview(
             isOn: Binding(get: { review.rendersMarkdown == true }, set: { review.rendersMarkdown = $0 ? true : nil }),
             loadID: "\(scope.rawValue)|\(String(describing: target))|\(file.path)|\(sections.hashValue)",
-            documentFolder: (fileURL ?? root.appending(path: file.path)).deletingLastPathComponent(),
+            documentFolder: reading.isRemote ? nil : (fileURL ?? root.appending(path: file.path)).deletingLastPathComponent(),
             load: {
                 let new: String?
                 if let path = file.newPath {
                     switch target {
                     case nil, .unstaged?:
-                        new = fileURL.flatMap(Self.workingText)
+                        if let fileURL { new = try? await reading.workingText(fileURL) } else { new = nil }
                     case .staged?:
-                        new = try? await GitDiffService().fileText(workspaceURL: repository, revision: "", path: path)
+                        new = try? await reading.fileText(workspaceURL: repository, revision: "", path: path)
                     case let .commit(hash)?:
-                        new = try? await GitDiffService().fileText(workspaceURL: repository, revision: hash, path: path)
+                        new = try? await reading.fileText(workspaceURL: repository, revision: hash, path: path)
                     case .branch?:
-                        new = try? await GitDiffService().fileText(workspaceURL: repository, revision: "HEAD", path: path)
+                        new = try? await reading.fileText(workspaceURL: repository, revision: "HEAD", path: path)
                     }
                 } else {
                     // The change took the whole file out.
@@ -365,14 +346,6 @@ struct DiffPane: View {
                 }.value
             }
         )
-    }
-
-    /// A file in the working tree as the diff reads one, within the diff's own limit.
-    nonisolated private static func workingText(_ url: URL) -> String? {
-        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
-              values.isRegularFile == true, (values.fileSize ?? 0) <= lastTurnByteLimit,
-              let data = try? Data(contentsOf: url) else { return nil }
-        return String(decoding: data, as: UTF8.self)
     }
 
     private var statusText: String? {
@@ -398,7 +371,7 @@ struct DiffPane: View {
     }
 
     private func perform(_ action: GitMutation, frozen: GitDiscardRequest? = nil) {
-        guard !isMutating, let root = frozen?.workspaceURL ?? loadedRepository else { return }
+        guard !reading.isRemote, !isMutating, let root = frozen?.workspaceURL ?? loadedRepository else { return }
         let expected = frozen?.snapshot ?? snapshot
         isMutating = true
         Task {
@@ -412,8 +385,22 @@ struct DiffPane: View {
 
     private func reload() async {
         let ticket = UUID()
-        let scope = review.scope
         requestID = ticket
+        if reading.isRemote {
+            isLoading = true
+            do {
+                let last = try await reading.lastTurn()
+                guard requestID == ticket, !Task.isCancelled else { return }
+                providerLastTurn = last
+                if review.scope == .lastTurn, !effectiveLastTurn.isOffered { review.scope = .unstaged }
+            } catch {
+                guard requestID == ticket, !Task.isCancelled else { return }
+                errorMessage = error.localizedDescription
+                isLoading = false
+                return
+            }
+        }
+        let scope = review.scope
         if scope == .lastTurn {
             await showLastTurn(ticket: ticket)
             return
@@ -421,7 +408,7 @@ struct DiffPane: View {
         isLoading = true
         errorMessage = nil
         do {
-            let service = GitDiffService()
+            let service = reading
             // A task with one folder never looks further, so its review reads that folder as before.
             let found = additionalRootURLs.isEmpty
                 ? []
@@ -443,7 +430,7 @@ struct DiffPane: View {
                 target = .staged
                 result = try await service.load(workspaceURL: repository, target: .staged)
             case .commit:
-                let listed = try await service.recentCommits(workspaceURL: repository)
+                let listed = try await service.recentCommits(workspaceURL: repository, limit: 50)
                 try Task.checkCancellation()
                 guard requestID == ticket else { return }
                 commits = listed
@@ -504,10 +491,11 @@ struct DiffPane: View {
 
     /// Last turn reads the provider's diff, not git, so it needs no repository and shows at once.
     private func showLastTurn(ticket: UUID) async {
-        let diff = lastTurn.diff
+        let diff = effectiveLastTurn.diff
         let text = diff?.text ?? ""
         let result = await Task.detached(priority: .userInitiated) {
-            UnifiedDiffParser().parse(text, byteLimit: Self.lastTurnByteLimit)
+            let parsed = UnifiedDiffParser().parse(text, byteLimit: Self.lastTurnByteLimit)
+            return DiffSnapshot(lines: parsed.lines, isTruncated: parsed.isTruncated || diff?.isTruncated == true)
         }.value
         guard requestID == ticket, review.scope == .lastTurn else { return }
         snapshot = result

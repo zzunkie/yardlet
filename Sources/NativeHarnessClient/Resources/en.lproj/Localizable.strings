@@ -3700,3 +3700,7 @@
 "The page didn't take that." = "The page didn't take that.";
 "Waiting on you" = "Waiting on you";
 "Browser page on %@" = "Browser page on %@";
+
+"Update Yardlet on the host to use this panel." = "Update Yardlet on the host to use this panel.";
+
+"This repository is outside the task's folders." = "This repository is outside the task's folders.";
