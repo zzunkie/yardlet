@@ -68,7 +68,7 @@ struct FilesPane: View {
                     FileTasksLine(tasks: fileTasks).padding(.horizontal, 10).padding(.vertical, 7)
                     Divider()
                 }
-                WorkspaceFileMediaView(media: media)
+                WorkspaceFileMediaView(media: media).id(media.url)
             }
             .loadsFileTasks(for: media.url, into: $fileTasks)
         } else if let document = state.document {

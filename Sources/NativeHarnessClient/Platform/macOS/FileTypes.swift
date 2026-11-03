@@ -7,10 +7,12 @@ enum FileTypes {
         UTType(filenameExtension: pathExtension)?.preferredMIMEType
     }
 
-    /// A PDF or an image, which the Files panel previews.
+    /// Media the local Files panel can ask the system to preview.
     static func mediaKind(forExtension pathExtension: String) -> WorkspaceFileMedia.Kind? {
         guard let type = UTType(filenameExtension: pathExtension) else { return nil }
         if type.conforms(to: .pdf) { return .pdf }
+        if type.conforms(to: .movie) { return .movie }
+        if type.conforms(to: .audio) { return .audio }
         if type.conforms(to: .image) { return .image }
         return nil
     }

@@ -37,6 +37,8 @@ several agents and accounts every day, and it is shared for anyone who doesn't h
   with quota left; Yardlet shows each account's session and weekly limits.
 - **Review the work.** Diffs of the last turn, file restore and fork, a pull request tab with checks
   through your own `gh`, a terminal, and a files pane next to the conversation.
+  Local file previews include images (including animation), PDFs, and movies and audio supported by macOS.
+  Movies and audio start paused and stop when you leave the preview; videos fit the pane without enlargement.
 - **Connectors for every agent.** Gmail, Google Calendar and Google Drive through Yardlet's
   built-in MCP server on your Mac, GitHub, Slack, and dozens of remote MCP services that connect
   with one sign-in. A connector set up once is offered to the agents you run, and can be turned off

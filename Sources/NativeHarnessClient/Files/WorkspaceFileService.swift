@@ -70,10 +70,9 @@ struct WorkspaceFileLocation: Equatable, Sendable {
     }
 }
 
-/// A file that is not text which the panel shows as the Codex and Claude apps show one: an image
-/// or a PDF.
+/// A local non-text file that system frameworks can preview.
 struct WorkspaceFileMedia: Equatable, Sendable {
-    enum Kind: Sendable { case image, pdf }
+    enum Kind: Sendable { case image, pdf, movie, audio }
     let url: URL
     let kind: Kind
 
