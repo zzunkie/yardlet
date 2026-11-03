@@ -198,6 +198,7 @@ numbers to the file as a JSON line (`PerfBenchRecord`), which the bench collects
 | `ConversationBlankFrameTests/testBenchmarkAnEarlierPageArriving` | an earlier page of a 60-turn Codex task arriving at the top |
 | `ConversationReopenGapWindowTests/testBenchmarkOpeningATaskWhoseTurnsWereLetGo` | reopening a task after four others were opened |
 | `LongTranscriptRenderPerformanceTests` | laying out and streaming a 400-turn Claude Code transcript |
+| `TranscriptProseResizePerformanceTests` | eleven width changes of a 1,000-paragraph message and an 11,086-item conversation, with and without live-resize deferral; exact final heights, middle/end reading positions and light/dark renders |
 | `StreamingTurnRenderPerformanceTests` | a Claude Code fragment after 120 calls in its turn, which fails over 15 ms of the main thread's time |
 | `WindowStructureQATests/testBenchmarkTheSidebarCrossingItsTop` | the sidebar of 828 tasks crossing its top |
 | `SubagentStatePerformanceTests` | a long Codex subagent's state handled by the app, beside three others (also a check that runs with every `swift test`) |
@@ -206,3 +207,14 @@ numbers to the file as a JSON line (`PerfBenchRecord`), which the bench collects
 skips without `NHC_PERF_BENCH=1`, prints what it measured, and calls `PerfBenchRecord.write` with numbers
 named by their unit, so the bench compares them too. A scene of the whole app goes in `PerfBenchFixture`
 instead, when the cost needs the real window, adapters and processes; give it budgets in `budgets.json`.
+
+`TranscriptProseResizePerformanceTests` invokes AppKit's live-resize hooks in an unshown window.
+It publishes no provider events; it measures synchronous resize work, row measurements and body
+reevaluations. Its finish time includes settling the window. The final images are written to
+`.build/prose-width/`. This isolates the layout policy; it does not synthesize a physical window drag.
+
+During native window live resize, existing prose keeps its last exact layout, clipped to its offered
+bounds. The final width is measured after tracking ends. A content change ends deferral immediately,
+so streamed text stays current. Sidebar and split-divider drags do not invoke this AppKit lifecycle
+and still measure their intermediate widths. Exact final layout and measurement of many retained
+turns can still block the main thread.

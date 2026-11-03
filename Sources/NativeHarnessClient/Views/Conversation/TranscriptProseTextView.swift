@@ -97,6 +97,10 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     /// The width the text was last laid out whole at, which its lines are placed for; nil once the
     /// text changed.
     private var wholeLayoutWidth: CGFloat?
+    /// Keep the last exact layout while AppKit tracks a window resize. Its final width is measured
+    /// once tracking ends, rather than laying out every paragraph for every intermediate drag step.
+    private var liveResizeSize: CGSize?
+    private var clipsBeforeLiveResize: Bool?
     private var codeControls: [CodeControls] = []
     private var find = TranscriptProseFind()
     private var activeMatch: NSRange?
@@ -207,6 +211,7 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
         }
         sizes = [:]
         wholeLayoutWidth = nil
+        finishDeferredResize()
         updateCodeControls()
         needsLayout = true
         textView.window?.invalidateCursorRects(for: textView)
@@ -247,6 +252,10 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     /// the text wraps to any width it is given, and a long message laid out whole at widths it never
     /// shows at, then at its own again, held the main thread for most of a second.
     func size(forWidth proposed: CGFloat?) -> CGSize {
+        if let size = liveResizeSize {
+            guard let width = proposed, width.isFinite else { return size }
+            return CGSize(width: fitsWidth ? min(max(0, width), size.width) : max(0, width), height: size.height)
+        }
         if let width = proposed, width <= 0 {
             return CGSize(width: 0, height: wholeLayoutWidth.flatMap { sizes[$0]?.height } ?? 0)
         }
@@ -315,8 +324,32 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     }
 #endif
 
+    override func viewWillStartLiveResize() {
+        super.viewWillStartLiveResize()
+        liveResizeSize = wholeLayoutWidth.flatMap { sizes[$0] }
+        if liveResizeSize != nil {
+            clipsBeforeLiveResize = clipsToBounds
+            clipsToBounds = true
+        }
+    }
+
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        guard liveResizeSize != nil else { return }
+        finishDeferredResize()
+        invalidateIntrinsicContentSize()
+        needsLayout = true
+    }
+
+    private func finishDeferredResize() {
+        liveResizeSize = nil
+        if let clips = clipsBeforeLiveResize { clipsToBounds = clips }
+        clipsBeforeLiveResize = nil
+    }
+
     override func layout() {
         super.layout()
+        guard liveResizeSize == nil else { return }
         if textView.frame != bounds {
             textView.frame = bounds
             // The links' rects moved with the lines (`TranscriptProseTextView.resetCursorRects`).
@@ -537,6 +570,12 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     /// A text back in a window after the selection it held part of was dropped shows none of it.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        // A task removed during a drag will not necessarily receive the window's end callback.
+        if window == nil, liveResizeSize != nil {
+            finishDeferredResize()
+            invalidateIntrinsicContentSize()
+            needsLayout = true
+        }
         if window != nil, conversationSelection != nil, !ConversationSelection.spans(textView) {
             conversationSelection = nil
         }

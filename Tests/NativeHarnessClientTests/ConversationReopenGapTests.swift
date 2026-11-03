@@ -119,6 +119,41 @@ final class ConversationReopenGapTests: XCTestCase {
         content.scroll(NSPoint(x: 0, y: wide - 300))
         settle()
         XCTAssertEqual(text.laidOutHeight, wide, "Moved to the next width, laid out there")
+
+        let before = text.newWidthLayouts
+        text.viewWillStartLiveResize()
+        let proposals: [CGFloat?] = [600, 530, 291, nil, .infinity]
+        for width in proposals {
+            XCTAssertEqual(text.size(forWidth: width).height, wide)
+            if let width, width.isFinite { text.frame.size.width = width }
+            text.layoutSubtreeIfNeeded()
+        }
+        XCTAssertEqual(text.newWidthLayouts, before, "Tracking a drag keeps the previous exact layout")
+        XCTAssertEqual(text.size(forWidth: 0).width, 0)
+        text.viewDidEndLiveResize()
+        let final = text.size(forWidth: 291)
+        text.frame.size = final
+        settle()
+        XCTAssertEqual(final.height, narrow)
+        XCTAssertEqual(text.laidOutHeight, narrow)
+        XCTAssertEqual(text.newWidthLayouts - before, 1, "Only the final width is laid out whole")
+
+        text.viewWillStartLiveResize()
+        let streamed = Self.answer + "\n\nA paragraph that arrived during the drag."
+        text.update(blocks: TranscriptMarkdownDocument(streamed).blocks.enumerated().map {
+            TranscriptProseBlock(block: $1, path: [$0])
+        }, style: TranscriptProseStyle())
+        let grown = text.size(forWidth: 291)
+        XCTAssertGreaterThan(grown.height, narrow, "New words end deferral instead of retaining a stale height")
+        text.frame.size = grown
+        settle()
+        XCTAssertEqual(text.laidOutHeight, grown.height)
+        text.viewDidEndLiveResize()
+
+        text.viewWillStartLiveResize()
+        text.removeFromSuperview()
+        let detached = text.size(forWidth: 530)
+        XCTAssertLessThan(detached.height, grown.height, "A task detached during tracking does not keep a stale layout")
     }
 
     private final class FlippedView: NSView {
