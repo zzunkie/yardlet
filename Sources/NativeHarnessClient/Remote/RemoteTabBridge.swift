@@ -326,6 +326,52 @@ final class RemoteTabBridge {
     static let captureTimeout: Duration = .seconds(5)
     static let jpegQuality: Int64 = 60
 
+    // MARK: - Address and tab controls
+
+    func open(taskID: String, tabID: String?, address: String, permit: RemoteTabPermit) async -> Result<String, RemoteError> {
+        guard permit.isValid, let (session, client) = resolve(taskID) else { return .failure(RemoteError(.notAllowed)) }
+        let destination: String
+        do { destination = try BrowserURLPolicy.addressFieldURL(address) }
+        catch { return .failure(RemoteError(.badRequest, "The address cannot be opened")) }
+        if let refusal = await outsideFiles(destination, taskID: taskID) { return .failure(refusal) }
+        guard permit.isValid, resolve(taskID) != nil else { return .failure(RemoteError(.notAllowed)) }
+        do {
+            let tab: BrowserTab
+            if let tabID {
+                tab = try watchedTab(taskID: taskID, tabID: tabID).get()
+                if let refusal = await stepRefusal(tab, permit, PageScope(taskID: taskID)) { return .failure(refusal) }
+                guard resolve(taskID) != nil else { return .failure(RemoteError(.notFound)) }
+                tab.notePersonInput(remote: true)
+                tab.noteTypedNavigation()
+                tab.send(.navigate(tab: tab.id, url: destination))
+            } else {
+                // An unnamed Chromium window may be a sign-in or passkey sheet. Only the host answers it.
+                guard !client.chromiumWindows.contains(where: { $0.kind != .print && $0.tab == nil }) else {
+                    return .failure(RemoteError(.notAllowed))
+                }
+                if let front = client.tab(forSession: session), let refusal = blocked(front) { return .failure(refusal) }
+                guard permit.isValid else { return .failure(RemoteError(.notAllowed)) }
+                tab = try client.newTab(forSession: session, url: destination, viewport: .offscreenDefault, select: true)
+                tab.notePersonInput(remote: true)
+            }
+            return .success(tab.key.uuidString)
+        } catch let error as RemoteError { return .failure(error) }
+        catch { return .failure(RemoteError(.unavailable)) }
+    }
+
+    func close(taskID: String, tabID: String, permit: RemoteTabPermit) async -> RemoteError? {
+        guard permit.isValid else { return RemoteError(.notAllowed) }
+        let tab: BrowserTab
+        do { tab = try watchedTab(taskID: taskID, tabID: tabID).get() }
+        catch let error as RemoteError { return error }
+        catch { return RemoteError(.notFound) }
+        if let refusal = await stepRefusal(tab, permit, PageScope(taskID: taskID)) { return refusal }
+        guard let (_, client) = resolve(taskID), permit.isValid else { return RemoteError(.notAllowed) }
+        tab.notePersonInput(remote: true)
+        client.requestClose(tab)
+        return nil
+    }
+
     // MARK: - Input
 
     /// The person's input to a watched tab, as trusted input the page cannot tell from a keyboard and mouse here. Each
@@ -577,6 +623,13 @@ final class RemoteTabBridge {
 
 /// A task's browser tabs (§15.25), through `RemoteTabBridge`.
 extension AppModelRemoteBridge {
+    func openTab(taskID: String, tabID: String?, address: String, permit: RemoteTabPermit) async -> Result<String, RemoteError> {
+        await browser.open(taskID: taskID, tabID: tabID, address: address, permit: permit)
+    }
+    func closeTab(taskID: String, tabID: String, permit: RemoteTabPermit) async -> RemoteError? {
+        await browser.close(taskID: taskID, tabID: tabID, permit: permit)
+    }
+
     func browserTabs(taskID: String) async -> Result<[RemoteBrowserTab], RemoteError> {
         await browser.tabs(taskID: taskID)
     }

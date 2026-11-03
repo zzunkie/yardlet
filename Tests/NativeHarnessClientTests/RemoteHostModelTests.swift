@@ -874,6 +874,42 @@ final class RemoteHostModelTests: XCTestCase {
         String(format: "0F1E%04X-0000-4000-8000-%012X", number, number)
     }
 
+    func testBrowserSelectionSurvivesDelayedNavigationReplies() {
+        let browser = RemoteBrowserModel()
+        browser.canControlTabs = true
+        var pending: [(RemoteRequest, ((RemoteResponse) -> Void)?)] = []
+        browser.send = { pending.append(($0, $1)) }
+        browser.show(taskID: "task", tabID: "first")
+        var initial = RemoteResponse(re: "initial")
+        initial.tabId = "first"
+        initial.tabs = [RemoteBrowserTab(tabId: "first")]
+        pending[0].1?(initial)
+        browser.hide()
+        XCTAssertEqual(browser.tabs(for: "task").map(\.tabId), ["first"])
+        browser.show(taskID: "task", tabID: "first")
+        XCTAssertEqual(browser.tabs(for: "task").map(\.tabId), ["first"], "a pending refresh must not remove shared tabs")
+        pending.last!.1?(initial)
+        browser.openAddress("localhost:3000", inNewTab: true)
+        let opened = pending.last!.1
+        browser.select("chosen")
+        var selected = RemoteResponse(re: "selected")
+        selected.tabId = "chosen"
+        pending.last!.1?(selected)
+        var late = RemoteResponse(re: "late")
+        late.tabId = "new"
+        opened?(late)
+        XCTAssertEqual(browser.tabID, "chosen", "a later selection wins over an earlier open request")
+        // An older watch reply must not replace a newer selection either.
+        browser.select("second")
+        let earlierWatch = pending.last!.1
+        browser.select("third")
+        selected.tabId = "third"
+        pending.last!.1?(selected)
+        late.tabId = "second"
+        earlierWatch?(late)
+        XCTAssertEqual(browser.tabID, "third")
+    }
+
     func testRunsKeepTheHostsOrderThroughMovesAndRemovals() {
         func item(_ id: String, _ turn: String) -> RemoteItem { RemoteItem(id: id, turnId: turn, kind: .activity) }
         var items = RemoteConversationItems([item("a1", "A"), item("a2", "A"), item("b1", "B")])

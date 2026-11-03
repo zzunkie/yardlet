@@ -75,7 +75,10 @@ final class RemoteProtocolTests: XCTestCase {
             .tabFrameAck(taskID: "T1", tabID: "K", frame: 3),
             .tabInput(taskID: "T1", tabID: "K", input: .click(x: 412.5, y: 236, clickCount: 2)),
             .tabInput(taskID: "T1", tabID: "K", input: RemoteTabInput(kind: .scroll, x: 10, y: 20, deltaY: -120)),
-            .tabInput(taskID: "T1", tabID: "K", input: .text("안녕하세요"))
+            .tabInput(taskID: "T1", tabID: "K", input: .text("안녕하세요")),
+            .openTab(taskID: "T1", tabID: nil, address: "http://localhost:3000"),
+            .openTab(taskID: "T1", tabID: "K", address: "https://example.com"),
+            .closeTab(taskID: "T1", tabID: "K")
         ]
         for (index, request) in requests.enumerated() {
             let envelope = RemoteRequestEnvelope(id: "\(index)", request: request)

@@ -80,6 +80,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.reviewReading = true
         snapshot.browserTabs = browser.isAvailable
         snapshot.terminals = RemoteTerminalBridge.isAvailable
+        snapshot.tabControls = browser.isAvailable
         return snapshot
     }
 
