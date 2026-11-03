@@ -305,7 +305,7 @@ final class VaultTests: XCTestCase {
     }
 
     func testAnItemAskedForOnAnotherSiteIsRefusedAndThePersonIsTold() async throws {
-        let item = VaultItem(name: "GitHub", sites: ["github.com"], username: "ada", policy: .always)
+        let item = VaultItem(name: "GitHub", sites: ["github.com"], username: "ada", hasPassword: true, policy: .always)
         let center = VaultCenter(environment: VaultCenter.Environment(
             secrets: InMemoryVaultSecretStore([item.id: VaultSecret(password: "correct horse")]),
             repository: InMemoryVaultRepository(items: [item]), hmac: MacVault.hmac, isAllowedBuild: true,
@@ -336,11 +336,12 @@ final class VaultTests: XCTestCase {
 
         // Two accounts on one site under the site's name, as an import names them: the refusal tells them
         // apart by username, and the username names one.
-        let other = VaultItem(name: "GitHub", sites: ["github.com"], username: "grace", policy: .always)
+        let other = VaultItem(name: "GitHub", sites: ["github.com"], username: "grace", hasPassword: true, policy: .always)
+        let repository = InMemoryVaultRepository(items: [item, other])
         let both = VaultCenter(environment: VaultCenter.Environment(
             secrets: InMemoryVaultSecretStore([item.id: VaultSecret(password: "correct horse"),
                                                other.id: VaultSecret(password: "battery staple")]),
-            repository: InMemoryVaultRepository(items: [item, other]), hmac: MacVault.hmac, isAllowedBuild: true,
+            repository: repository, hmac: MacVault.hmac, isAllowedBuild: true,
             defaults: .vaultTests()))
         for name in [nil, "GitHub"] {
             let refused = await both.authorize(VaultFillRequest(sessionID: task, itemName: name, kind: .login,
@@ -353,6 +354,59 @@ final class VaultTests: XCTestCase {
                                                                origin: "https://github.com"))
         guard case let .success(chosen) = byUsername else { return XCTFail("the username did not name its item") }
         XCTAssertEqual(chosen.password, "battery staple")
+        XCTAssertNil(chosen.chosen)
+
+        // Naming none, an agent gets the account the page asks for: its username field, else its text, which names a
+        // username whole (not inside an address); fields holding both pick none.
+        let unnamedOn = { (accounts: VaultPageAccounts, session: UUID) in
+            var request = VaultFillRequest(sessionID: session, itemName: nil, kind: .login, origin: "https://github.com")
+            request.pageAccounts = accounts
+            return await both.authorize(request)
+        }
+        for accounts in [VaultPageAccounts(fieldValues: ["Grace"]), VaultPageAccounts(text: "Enter the password for grace.")] {
+            guard case let .success(picked) = await unnamedOn(accounts, UUID()) else { return XCTFail("\(accounts)") }
+            XCTAssertEqual(picked.item.id, other.id)
+            XCTAssertEqual(picked.chosen?.among, 2)
+        }
+        for accounts in [VaultPageAccounts(fieldValues: ["ada", "grace"]), VaultPageAccounts(text: "Signed in as grace.hopper@example.com")] {
+            guard case .failure = await unnamedOn(accounts, UUID()) else { return XCTFail("\(accounts)") }
+        }
+        // Else the item this task filled on this host last; another task still has to name one.
+        both.record(chosen, for: VaultFillRequest(sessionID: task, itemName: "grace", kind: .login, origin: "https://github.com"),
+                    filled: ["password"])
+        guard case let .success(again) = await unnamedOn(VaultPageAccounts(), task) else {
+            return XCTFail("the task's last item on this host was not taken")
+        }
+        XCTAssertEqual(again.item.id, other.id)
+        XCTAssertEqual(again.chosen?.reason, "this task filled it here last")
+        guard case .failure = await unnamedOn(VaultPageAccounts(), UUID()) else { return XCTFail("another task's item taken") }
+        XCTAssertEqual(repository.uses.last?.outcome, .refused)
+
+        // Else the one item saved on this very host, as Chrome prefers a site's exact match.
+        let admin = VaultItem(name: "admin.example.com", sites: ["example.com"], username: "ops")
+        let automation = VaultItem(name: "n8n.example.com", sites: ["example.com"], username: "bot")
+        let hosts = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore([admin.id: VaultSecret(password: "a"), automation.id: VaultSecret(password: "n")]),
+            repository: InMemoryVaultRepository(items: [admin, automation]), hmac: MacVault.hmac, isAllowedBuild: true,
+            defaults: .vaultTests()))
+        guard case let .success(onHost) = await hosts.authorize(VaultFillRequest(
+            sessionID: task, itemName: nil, kind: .login, origin: "https://admin.example.com")) else {
+            return XCTFail("the item saved on the page's host was not taken")
+        }
+        XCTAssertEqual(onHost.item.id, admin.id)
+        guard case .failure = await hosts.authorize(VaultFillRequest(sessionID: task, itemName: nil, kind: .login,
+                                                                     origin: "https://shop.example.com")) else {
+            return XCTFail("an item of another host taken")
+        }
+
+        // A page that asks for a passkey first: with none saved, the agent hears which items sign in the other way.
+        guard case let .failure(noPasskey) = await both.authorize(VaultFillRequest(sessionID: task, itemName: nil,
+                                                                                    kind: .passkey, origin: "https://github.com")) else {
+            return XCTFail("a passkey filled with none saved")
+        }
+        XCTAssertTrue(noPasskey.message.contains("“GitHub” (ada), “GitHub” (grace) can sign in with a password")
+                      && noPasskey.message.contains("kind login"), noPasskey.message)
+        XCTAssertEqual(noPasskey.failure.retry, .withChanges)
     }
 
     /// Passwords the vault makes (design §15): Chrome's classes plus a symbol, without look-alikes, within a

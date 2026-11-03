@@ -978,7 +978,7 @@ final class BrowserAgentToolsTests: XCTestCase {
     /// stays out of results in the spellings a form and an address inside another's query give it.
     func testAVaultFillKeepsThePasswordOutOfAddressesAndOtherSites() async {
         let password = "p@ss word+1!"
-        let item = VaultItem(name: "Example", sites: ["example.com"], username: "ada", policy: .always)
+        let item = VaultItem(name: "Example", sites: ["example.com"], username: "ada", hasPassword: true, policy: .always)
         tools.vault = VaultCenter(environment: VaultCenter.Environment(
             secrets: InMemoryVaultSecretStore([item.id: VaultSecret(password: password)]),
             repository: InMemoryVaultRepository(items: [item]), hmac: MacVault.hmac, isAllowedBuild: true,
@@ -998,10 +998,15 @@ final class BrowserAgentToolsTests: XCTestCase {
         var submission = targets([])
         var guardsAtFill: [BrowserHostCommand]?
         var submits = 0
+        var accountsRead = 0
         cdp.responders["Runtime.callFunctionOn"] = { [unowned self] params in
             let function = params["functionDeclaration"]?.stringValue ?? ""
             if function.contains("ownerDocument === document") { return ScriptedCDP.value(.bool(true)) }
             if function == BrowserAgentTools.submissionFunction { return ScriptedCDP.value(submission) }
+            if function == BrowserAgentTools.pageAccountsFunction {
+                accountsRead += 1
+                return ScriptedCDP.value(.object(["values": .array([.string("grace")]), "text": .string("Sign in")]))
+            }
             if function == BrowserAgentTools.submitFunction {
                 submits += 1
                 return ScriptedCDP.value(.string("submitted"))
@@ -1039,6 +1044,17 @@ final class BrowserAgentToolsTests: XCTestCase {
         }
         XCTAssertEqual(submits, 1, "an unsafe form is left unsent even when the agent asks")
         XCTAssertFalse(cdp.methods.contains("Input.dispatchKeyEvent"), "no Enter in place of the submit")
+        XCTAssertEqual(accountsRead, 0, "a site with one item reads nothing of the page's account")
+
+        // With two items for the site and none named, the account the page's username field holds is filled, and the
+        // agent hears which and why.
+        try? tools.vault?.save(VaultItem(name: "Other", sites: ["example.com"], username: "grace"),
+                               secret: VaultSecret(password: "battery staple"))
+        submission = targets([("https://www.example.com/session", "post")])
+        let picked = await fill(false)
+        XCTAssertEqual(accountsRead, 1)
+        XCTAssertTrue(picked.text.contains("Of the 2 items saved for www.example.com, Yardlet took “Other” (grace) because "
+                                           + "the page's username field holds its username"), picked.text)
 
         page.receive(.filledValueBlocked(tab: 4))
         cdp.pageURL = "https://www.example.com/login?email=ada&password=p%40ss+word%2b1%21"

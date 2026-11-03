@@ -17,7 +17,8 @@ package enum VaultToolCatalog {
             + "password, or the current one-time code, or the passkey for the page's next passkey request. For a new "
             + "account, Yardlet makes a strong password, fills it into the new password field and its confirmation, and "
             + "saves it as a new item. Yardlet puts the values into the page itself and does not return them. It fills "
-            + "only on the sites the item is saved for.",
+            + "only on the sites the item is saved for. Call it when a page asks to sign in or for a code, before handing "
+            + "the tab to the person: when it cannot fill, its answer says why and what would.",
         inputSchema: .object([
             "type": .string("object"),
             "properties": .object([
@@ -29,7 +30,8 @@ package enum VaultToolCatalog {
                 "item": .object([
                     "type": .string("string"),
                     "description": .string("The saved item's name, username or another saved value such as an account ID. "
-                        + "Omit when one item is saved for this site. "
+                        + "Omit to let Yardlet pick: the site's one item, or of several the account the page asks for, "
+                        + "else the one this task filled here last, and the answer says which. "
                         + "For new_password, the new item's name (the site by default).")
                 ]),
                 "kind": .object([
