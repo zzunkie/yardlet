@@ -5,10 +5,12 @@ struct RemoteTerminalPane: View {
     let workspace: TaskWorkspaceState
     let workspaceURL: URL
     let onClose: () -> Void
+    let isInSidePanel: Bool
     let onAttachSelection: ((String, String) -> Void)?
 
     init(model: RemoteHostModel, taskID: String, workspaceURL: URL? = nil,
-         onAttachSelection: ((String, String) -> Void)? = nil, onOpenLink: ((URL) -> Void)? = nil, onClose: @escaping () -> Void) {
+         onAttachSelection: ((String, String) -> Void)? = nil, onOpenLink: ((URL) -> Void)? = nil,
+         isInSidePanel: Bool = false, onClose: @escaping () -> Void) {
         let owner = model.terminals
         let state = owner.workspaces[taskID] ?? TaskWorkspaceState()
         state.terminalFactory = { [weak owner, weak state] folder, launch, _ in
@@ -36,6 +38,7 @@ struct RemoteTerminalPane: View {
         workspace = state
         self.workspaceURL = workspaceURL ?? URL(string: "yardlet-remote://terminal/" + taskID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)!)!
         self.onClose = onClose
+        self.isInSidePanel = isInSidePanel
         self.onAttachSelection = onAttachSelection
     }
 
@@ -45,7 +48,7 @@ struct RemoteTerminalPane: View {
         VStack(spacing: 0) {
             TerminalPane(session: session, tabs: TerminalTabsContext(workspace: workspace, folder: session.workspaceURL,
                 launch: .userLoginShell(), taskID: nil), onAttachSelection: onAttachSelection,
-                isInSidePanel: true, onClose: onClose)
+                isInSidePanel: isInSidePanel, onClose: onClose)
                 .id(ObjectIdentifier(session))
             Text(L10n.string("Closing this window or losing the connection ends its terminals."))
                 .font(.caption).foregroundStyle(.secondary)

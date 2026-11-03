@@ -60,10 +60,10 @@ final class RemoteHostModelTests: XCTestCase {
             client.requestInOrder(.ping) { _ in continuation.resume() }
         }
         try await waitUntil { bridge.terminals.sessions.isEmpty }
-        let pane = RemoteTerminalPane(model: client, taskID: task.id.uuidString, onClose: {})
+        let pane = RemoteTerminalPane(model: client, taskID: task.id.uuidString, isInSidePanel: true, onClose: {})
         let workspace = pane.workspace
         func newRemote() -> NativeTerminalSession {
-            let pane = RemoteTerminalPane(model: client, taskID: task.id.uuidString, onClose: {})
+            let pane = RemoteTerminalPane(model: client, taskID: task.id.uuidString, isInSidePanel: true, onClose: {})
             return pane.workspace.terminal(in: pane.workspaceURL, launch: .isolatedZsh(in: folder), taskID: nil)
         }
         var remote = newRemote()
@@ -74,6 +74,7 @@ final class RemoteHostModelTests: XCTestCase {
         let local = try XCTUnwrap(host.taskWorkspaces.loadedState(for: task.id)?.terminals.first)
         XCTAssertTrue(local.isRunning)
         try await waitUntil { Project.isSamePath(remote.workspaceURL, folder) }
+        XCTAssertEqual(TerminalTabTitle.defaultTitle(of: remote), TerminalTabTitle.defaultTitle(of: local))
         var clipboardReads = 0, clipboardWrites = 0
         local.clipboard = TerminalClipboard(read: { clipboardReads += 1; return Data("test-only".utf8) },
             write: { _ in clipboardWrites += 1 })
@@ -162,6 +163,19 @@ final class RemoteHostModelTests: XCTestCase {
             try WindowlessRender.writePNG(TerminalCommandHandoffTests.asShown(rendered, appearance: appearance),
                 to: output.appending(path: "terminal-local-remote-\(appearance.suffix).png"))
             rendered.close()
+        }
+        // Below the conversation both use only the terminal-tab strip, without the side-panel header.
+        let belowPane = RemoteTerminalPane(model: client, taskID: task.id.uuidString, onClose: {})
+        for appearance in WindowlessRender.Appearance.allCases {
+            let below = WindowlessRender.Host(HStack(spacing: 1) {
+                TerminalPane(session: local, tabs: TerminalTabsContext(workspace: host.taskWorkspaces.state(for: task.id),
+                    folder: folder, launch: .isolatedZsh(in: folder), taskID: task.id), onClose: {}).frame(width: 520)
+                belowPane.frame(width: 520)
+            }.environment(\.colorScheme, appearance.colorScheme), size: NSSize(width: 1041, height: 400), appearance: appearance)
+            below.settle(passes: 4)
+            try WindowlessRender.writePNG(TerminalCommandHandoffTests.asShown(below, appearance: appearance),
+                to: output.appending(path: "terminal-below-local-remote-\(appearance.suffix).png"))
+            below.close()
         }
         let exitRender = WindowlessRender.Host(HStack(spacing: 1) {
             TerminalPane(session: local, tabs: TerminalTabsContext(workspace: host.taskWorkspaces.state(for: task.id),
