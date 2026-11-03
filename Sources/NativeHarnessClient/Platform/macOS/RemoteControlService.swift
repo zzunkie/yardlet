@@ -370,6 +370,9 @@ final class RemoteControlService {
     }
     private(set) var removalError: String?
     private(set) var removingDeviceIDs: Set<String> = []
+    private var permissionEdits: [RemotePermissionKey: UUID] = [:]
+    private(set) var pendingPermissionValues: [RemotePermissionKey: Bool] = [:]
+    private var deactivation: Task<Void, Never>?
     private(set) var updatingDevicePermissions: [String: Set<RemoteDevicePermission>] = [:]
     typealias UnsavedDeniedPermission = RemotePermissionKey
     private(set) var unsavedDeniedPermissions: Set<RemotePermissionKey> = []
@@ -387,18 +390,24 @@ final class RemoteControlService {
     }
 
     func setPermission(_ permission: RemoteDevicePermission, allowed: Bool, for device: RemoteDevice) async {
-        guard updatingDevicePermissions[device.id, default: []].insert(permission).inserted else { return }
-        defer {
+        let key = RemotePermissionKey(deviceID: device.id, permission: permission)
+        let edit = UUID()
+        permissionEdits[key] = edit
+        pendingPermissionValues[key] = allowed
+        updatingDevicePermissions[device.id, default: []].insert(permission)
+        do {
+            try await server.setPermission(permission, allowed: allowed, for: device.id)
+            if permissionEdits[key] == edit { permissionSaveError = nil }
+        } catch {
+            if permissionEdits[key] == edit { permissionSaveError = L10n.string("Could not save device permissions. Try again.") }
+        }
+        await reloadDevices()
+        if permissionEdits[key] == edit {
+            permissionEdits[key] = nil
+            pendingPermissionValues[key] = nil
             updatingDevicePermissions[device.id]?.remove(permission)
             if updatingDevicePermissions[device.id]?.isEmpty == true { updatingDevicePermissions[device.id] = nil }
         }
-        do {
-            try await server.setPermission(permission, allowed: allowed, for: device.id)
-            permissionSaveError = nil
-        } catch {
-            permissionSaveError = L10n.string("Could not save device permissions. Try again.")
-        }
-        await reloadDevices()
     }
 
     func remove(_ device: RemoteDevice) async {
@@ -424,10 +433,13 @@ final class RemoteControlService {
         guard started else { return }
         started = false
         startup?.cancel()
+        let previousActivation = activation
         activation?.cancel()
         activation = nil
         pairingRequestID = nil
         refreshAwake()
+        await previousActivation?.value
+        await deactivation?.value
         await server.shutdown(reason: "quitting")
         secureListener?.stop()
         relayClient?.stop()
@@ -460,15 +472,19 @@ final class RemoteControlService {
     private func activate() {
         refreshAddresses()
         guard activation == nil else { return }
+        let previousShutdown = deactivation
         activation = Task {
-            await activateWhenReady()
+            await activateWhenReady(after: previousShutdown)
             // A failed keychain read can be retried by the next activation request.
             if !Task.isCancelled, identity == nil { activation = nil }
         }
     }
 
-    private func activateWhenReady() async {
+    private func activateWhenReady(after previousShutdown: Task<Void, Never>?) async {
         await startup?.value
+        await previousShutdown?.value
+        guard !Task.isCancelled, isEnabled else { return }
+        await server.start()
         guard !Task.isCancelled, isEnabled else { return }
         let prepared = await ensureIdentity()
         guard !Task.isCancelled, isEnabled else { return }
@@ -501,6 +517,7 @@ final class RemoteControlService {
     }
 
     private func deactivate(reason: String) {
+        let previousActivation = activation
         activation?.cancel()
         activation = nil
         pairingRequestID = nil
@@ -511,7 +528,12 @@ final class RemoteControlService {
         secureListener = nil
         secureState = .stopped
         stopRelay()
-        Task { await server.shutdown(reason: reason) }
+        let previous = deactivation
+        deactivation = Task {
+            await previous?.value
+            await previousActivation?.value
+            await server.shutdown(reason: reason)
+        }
     }
 
     private func startRelay() {

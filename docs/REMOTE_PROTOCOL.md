@@ -579,7 +579,7 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
 - 2026-11-04: workspace file listing (§15.27), with the existing bounded `readFile` requests for content.
 
 
-- 2026-11-04: host-managed per-device permissions, all off by default, with ordered persistence and denial recovery (§15.28).
+- 2026-11-04: host-managed per-device permissions, all off by default, with coalesced current-state persistence and denial recovery (§15.28).
 
 - 2026-10-16, after the first Android client build:
   - §5.3: `after` always names an item the phone holds once it has applied what came before in order;
@@ -1797,8 +1797,9 @@ without a suspension or disk lookup. Neither a handshake snapshot nor the persis
 Granting one permission does not grant the others.
 
 A denial or fresh-registration reset changes that map and cancels resource permits in the same actor turn. A single
-ordered writer follows those intents; a grant becomes effective only after its save succeeds and only while it is
-still the current intent. Saving one flag cannot pause an unrelated granted operation. Existing identities are
+writer saves the latest complete intended permission map, coalescing changes made while an earlier save waits.
+Publishing an intent and committing the permission files are mutually exclusive; an obsolete snapshot cannot clear
+a newer denial. A grant becomes effective only after its save succeeds and only while it is still the current intent. Saving one flag cannot pause an unrelated granted operation. Existing identities are
 reserved by public key, so concurrent pairing paths cannot create two live identities for one key.
 
 Before updating the primary device file, denial/reset writes record a private recovery fence in
@@ -1806,13 +1807,17 @@ Before updating the primary device file, denial/reset writes record a private re
 unfinished saves. A failed primary write therefore cannot revive an old grant after restart. Settings reads the
 server's live values and recovery state; Retry writes only denied values. If both the recovery record and primary
 write fail, the host keeps access off for the current run and explicitly says that restart recovery could not be
-saved. It does not claim a durable denial in that case.
+saved. It does not claim a durable denial in that case. The in-memory device store also retains denials after a
+failed write, including during ordinary device metadata saves. Settings accepts turning a permission off while a
+grant is pending. Recovery entries apply only to known identities; an unreadable or symbolic-link journal denies
+all known permissions until a regular private journal can be saved.
 
 A new QR or account-link registration clears an existing key's grants, including when another save is pending.
 Only a bounded retry of a successfully committed pairing preserves permissions; an in-progress registration is not
 a spent-ticket retry. Failed reset attempts are audited even when the live flags are already off. Independent
 consumers subscribe without replacing each other. Shutdown cancels runtime access for every known device, including
 startup grants; accepted configuration writes may finish but cannot publish runtime grants after shutdown.
+Enabling remote connections again waits for shutdown to finish and reactivates the saved configuration.
 
 Device removal is published only after the ordered save succeeds. A failed save keeps the paired entry, denies its
 extra access and shows a removal error. `forgetDevice` acknowledges success only after durable removal. A failure

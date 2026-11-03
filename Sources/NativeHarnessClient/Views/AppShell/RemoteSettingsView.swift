@@ -345,15 +345,15 @@ struct RemoteSettingsView: View {
             }
             Spacer(minLength: 12)
             Toggle(L10n.string(title), isOn: Binding(
-                get: { device.permissions?[permission] ?? false },
+                get: { service.pendingPermissionValues[RemotePermissionKey(deviceID: device.id, permission: permission)]
+                    ?? device.permissions?[permission] ?? false },
                 set: { allowed in Task { await service.setPermission(permission, allowed: allowed, for: device) } }
             ))
             .labelsHidden()
             .toggleStyle(.paritySwitch)
             .controlSize(.small)
             .accessibilityLabel(L10n.format("%@ for %@", L10n.string(title), device.name))
-            .disabled(service.updatingDevicePermissions[device.id]?.contains(permission) == true
-                      || service.removingDeviceIDs.contains(device.id))
+            .disabled(service.removingDeviceIDs.contains(device.id))
         }
         .font(.caption)
     }

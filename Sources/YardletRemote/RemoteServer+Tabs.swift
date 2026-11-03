@@ -78,7 +78,10 @@ extension RemoteServer {
             respond(.failure(requestID, RemoteError(.notFound, "The task has no such tab")), to: id)
             return
         }
-        guard connections[id] != nil else { return }
+        guard canContinueRequest(on: id, deviceID: device) else {
+            respond(.failure(requestID, RemoteError(.notAllowed)), to: id)
+            return
+        }
         let chosen = tabID ?? listed.first(where: { $0.active == true })?.tabId ?? listed.first?.tabId
         let previous = tabs.watches[id]
         let sameTab = previous.map { $0.taskID == taskID && $0.tabID == chosen && chosen != nil } ?? false

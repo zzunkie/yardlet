@@ -28,8 +28,7 @@ struct RemotePermissionBootstrap: Sendable {
 }
 
 enum RemotePermissionWrite: Sendable {
-    case grant(RemotePermissionKey)
-    case deny(Set<RemotePermissionKey>)
+    case save
     case register(RemoteDevice)
     case remove(String)
 }
@@ -38,4 +37,24 @@ struct RemotePermissionWriteResult: Sendable {
     var succeeded: Bool
     var device: RemoteDevice?
     var recovery: RemotePermissionRecoveryState
+}
+
+/// Server-owned desired configuration. Persistence reads the latest complete value, not a queued
+/// grant/deny command. The short configuration transaction and publishing a new intent are mutually
+/// exclusive, so a superseded snapshot cannot replace the files or clear a newer denial fence.
+final class RemotePermissionSnapshot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var permissions: [String: RemoteDevicePermissions] = [:]
+
+    func replace(_ value: [String: RemoteDevicePermissions]) {
+        lock.lock()
+        defer { lock.unlock() }
+        permissions = value
+    }
+
+    func withValue<T>(_ body: ([String: RemoteDevicePermissions]) throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return try body(permissions)
+    }
 }

@@ -100,7 +100,7 @@ final class RemoteSettingsRenderingTests: XCTestCase {
         let (service, _) = try await makeService()
         await service.reloadDevices()
         let device = try XCTUnwrap(service.devices.first)
-        XCTAssertNil(device.permissions)
+        XCTAssertEqual(device.permissions, RemoteDevicePermissions())
         let directory = try WindowlessRender.directory("remote-qa")
         let size = NSSize(width: 820, height: 820)
         try render("remote-permissions-off", service: service, in: directory, size: size)
@@ -148,6 +148,91 @@ final class RemoteSettingsRenderingTests: XCTestCase {
         let afterRetry = await RemoteDeviceStore(fileURL: fixture.file).device(device.id)
         XCTAssertEqual(afterRetry?.permissions, RemoteDevicePermissions(), "Retry saves only denials; it cannot retry the failed grant")
         XCTAssertTrue(service.unsavedDeniedPermissions.isEmpty)
+    }
+
+    func testPendingGrantCanBeTurnedOffBeforeItEverReachesDisk() async throws {
+        let fixture = try DeviceStoreWriteFailure()
+        defer { fixture.cleanUp() }
+        let gate = PermissionPersistenceGate()
+        let store = RemoteDeviceStore(fileURL: fixture.file, beforePermissionWrite: { await gate.waitIfArmed() })
+        let (service, _) = try await makeService(store: store)
+        await service.reloadDevices()
+        let device = try XCTUnwrap(service.devices.first)
+        let events = PermissionEvents()
+        _ = await service.server.addPermissionsChangedHandler { events.append($0, $1) }
+        await gate.arm()
+        let grant = Task { await service.setPermission(.terminal, allowed: true, for: device) }
+        try await waitUntil { await gate.isWaiting }
+        XCTAssertEqual(service.pendingPermissionValues[.init(deviceID: device.id, permission: .terminal)], true)
+        try render("remote-permissions-saving", service: service,
+                   in: WindowlessRender.directory("remote-qa"), size: NSSize(width: 820, height: 820))
+        let denial = Task { await service.setPermission(.terminal, allowed: false, for: device) }
+        try await waitUntil { !events.values.isEmpty }
+        // Hold the SECOND write too: inspecting the first completed write must already show OFF.
+        await gate.arm()
+        await gate.release()
+        await grant.value
+        try await waitUntil { await gate.isWaiting }
+        let intermediate = await RemoteDeviceStore(fileURL: fixture.file).device(device.id)
+        XCTAssertEqual(intermediate?.permissions?.terminal, false)
+        XCTAssertEqual(service.pendingPermissionValues[.init(deviceID: device.id, permission: .terminal)], false)
+        await gate.release()
+        await denial.value
+        XCTAssertNil(service.permissionError)
+        let saved = await RemoteDeviceStore(fileURL: fixture.file).device(device.id)
+        XCTAssertEqual(saved?.permissions?.terminal, false)
+    }
+
+    func testReenablingRemoteRestoresPermissionEnforcement() async throws {
+        let (service, _) = try await makeService()
+        await service.reloadDevices()
+        let device = try XCTUnwrap(service.devices.first)
+        await service.setPermission(.terminal, allowed: true, for: device)
+        service.setEnabled(true)
+        let phone = TestChannel()
+        guard case let .accepted(id, _) = await service.server.acceptHandshake(
+            RemoteHandshakeHello(name: "Mac"), publicKey: Data(repeating: 3, count: 32), channel: phone, path: .local)
+        else { return XCTFail("Expected paired device") }
+        await service.server.receive(Data(#"{"id":"proof","type":"ping"}"#.utf8), on: id)
+        _ = try await phone.response("proof")
+        service.setEnabled(false)
+        try await phone.waitUntilClosed(.unavailable)
+        service.setEnabled(true)
+        let returning = TestChannel()
+        guard case let .accepted(newID, _) = await service.server.acceptHandshake(
+            RemoteHandshakeHello(name: "Mac"), publicKey: Data(repeating: 3, count: 32), channel: returning, path: .local)
+        else { return XCTFail("Expected paired device after enabling") }
+        await service.server.receive(Data(#"{"id":"proof","type":"ping"}"#.utf8), on: newID)
+        _ = try await returning.response("proof")
+        try await waitUntil { await service.server.permissionError(.terminal, on: newID) == nil }
+        let files = await service.server.permissionError(.fileWrites, on: newID)
+        XCTAssertEqual(files?.code, .notAllowed)
+        await service.shutdown()
+    }
+
+    func testOtherWritesPreserveFailedDenials() async throws {
+        for metadataOnly in [true, false] {
+            let fixture = try DeviceStoreWriteFailure()
+            defer { fixture.cleanUp() }
+            let store = RemoteDeviceStore(fileURL: fixture.file)
+            let (service, _) = try await makeService(store: store)
+            await service.reloadDevices()
+            let device = try XCTUnwrap(service.devices.first)
+            await service.setPermission(.terminal, allowed: true, for: device)
+            try fixture.block()
+            await service.setPermission(.terminal, allowed: false, for: device)
+            let logical = await store.device(device.id)
+            XCTAssertEqual(logical?.permissions?.terminal, false)
+            try fixture.restore()
+            if metadataOnly {
+                _ = await store.authenticate(publicKey: Data(repeating: 3, count: 32), name: "Renamed Mac")
+            } else {
+                await service.setPermission(.settings, allowed: true, for: device)
+            }
+            let restarted = await RemoteDeviceStore(fileURL: fixture.file).device(device.id)
+            XCTAssertEqual(restarted?.permissions?.terminal, false)
+            XCTAssertEqual(restarted?.permissions?.settings, !metadataOnly)
+        }
     }
 
     func testDurableDenialRecoveryExplainsThatRestartRemainsSafe() async throws {
@@ -258,14 +343,7 @@ final class RemoteSettingsRenderingTests: XCTestCase {
         return host.accessibilityElements()
     }
 
-    private func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool,
-                           file: StaticString = #filePath, line: UInt = #line) async throws {
-        let deadline = ContinuousClock.now + timeout
-        while !condition() {
-            guard ContinuousClock.now < deadline else { return XCTFail("Condition not met in time", file: file, line: line) }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-    }
+
 }
 
 /// A deterministic persistence failure without depending on the test runner's filesystem privileges.
