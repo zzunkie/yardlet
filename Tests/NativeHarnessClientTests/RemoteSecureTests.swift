@@ -91,6 +91,22 @@ final class RemoteSecureTests: XCTestCase {
         XCTAssertNil(RemoteSecurePairingURL.parse(try XCTUnwrap(URL(string: "yardlet-remote://pair?v=1&code=ABCDE-12345&port=1"))))
         XCTAssertEqual(identity.room.count, 32)
         XCTAssertTrue(identity.room.allSatisfy { "abcdefghijklmnopqrstuvwxyz234567".contains($0) })
+
+        // A crafted link: it takes 8 plain `host:port` addresses at most, a name cut to 64 characters, and no room that
+        // is not one path segment.
+        var crafted = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        let junk = ["evil.example/x?y:80", "user@host:80", "host:0", "host:65536", "host", "[fd7a::1:80", " host:80", ":80"]
+        let many = (1...20).map { "10.0.0.\($0):47616" }
+        crafted.queryItems = (crafted.queryItems ?? []).filter { $0.name != "h" && $0.name != "n" }
+            + (junk + many).map { URLQueryItem(name: "h", value: $0) } + [URLQueryItem(name: "n", value: String(repeating: "M", count: 500))]
+        let read = try XCTUnwrap(RemoteSecurePairingURL.parse(try XCTUnwrap(crafted.url)))
+        XCTAssertEqual(read.hosts, Array(many.prefix(RemoteSavedHost.maxDirectAddresses)))
+        XCTAssertEqual(read.name.count, RemoteSecurePairingURL.maxNameLength)
+        XCTAssertEqual(read.room, identity.room)
+        for room in ["../../v1/auth", "room/connect", "", String(repeating: "a", count: 129), "방"] {
+            crafted.queryItems = (crafted.queryItems ?? []).filter { $0.name != "i" } + [URLQueryItem(name: "i", value: room)]
+            XCTAssertNil(RemoteSecurePairingURL.parse(try XCTUnwrap(crafted.url)), room)
+        }
     }
 
     // MARK: - Pairing and devices (§12, §13.1)

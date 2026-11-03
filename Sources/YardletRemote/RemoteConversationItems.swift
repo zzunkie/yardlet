@@ -1,5 +1,4 @@
 import Foundation
-import YardletRemote
 
 /// The items a client holds of one subscribed conversation (docs/REMOTE_PROTOCOL.md §5.3), kept in runs of
 /// one turn each, so that a change costs what it touches: replacing a streaming answer finds its run by the

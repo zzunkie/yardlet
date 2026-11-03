@@ -673,6 +673,10 @@ yardlet-remote://pair?v=2&k=<Mac static public key>&s=<secret>&n=MacBook%20Pro&h
   `h`: zero or more direct addresses `host:port` in the order to try (an IPv6 host in brackets). `r` and
   `i`: the relay's base URL and the Mac's room, present when the Mac uses a relay. Values are
   percent-encoded; unknown parameters are ignored.
+- Anyone can send a link, so a client reads only what it can safely try: at most 8 `h`, each a plain `host:port` (a
+  name or address of letters, digits, `.` and `-`, or an IPv6 address in brackets, and a port from 1 to 65535; any
+  other is left out), `n` cut to 64 characters, and an `i` of letters, digits, `-` and `_` only (at most 128; a link
+  naming any other room is refused).
 - A pairing **expires after 5 minutes**, and opening a new one cancels it. A wrong secret is refused
   (`pairingInvalid`) without closing the pairing. It is spent by its first successful use, except that the
   **same phone key** may use it again for 60 s (a phone that lost the Mac's answer simply pairs again);
