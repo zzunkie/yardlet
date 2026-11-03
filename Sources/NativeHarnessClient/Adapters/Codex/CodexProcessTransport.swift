@@ -37,6 +37,10 @@ actor CodexProcessTransport: CodexTransport {
     private var readerTask: Task<Void, Never>?
     /// The reader has seen the end of the process's stdout.
     private var stdoutReachedEnd = false
+    private var stderrContinuation: AsyncStream<Data>.Continuation?
+    private var stderrTask: Task<Void, Never>?
+    /// The stderr reader has seen the end of the process's stderr.
+    private var stderrReachedEnd = false
     private var pending: [Int64: PendingRequest] = [:]
     private var stdoutBuffer = Data()
     private var stderrBuffer = Data()
@@ -91,9 +95,9 @@ actor CodexProcessTransport: CodexTransport {
         let chunks = AsyncStream<Data>.makeStream()
         chunkContinuation = chunks.continuation
         stdoutPipe.fileHandleForReading.readChunks(into: chunks.continuation)
-        stderrPipe.fileHandleForReading.readChunks { [weak self] data in
-            Task { await self?.appendStderr(data) }
-        }
+        let errors = AsyncStream<Data>.makeStream()
+        stderrContinuation = errors.continuation
+        stderrPipe.fileHandleForReading.readChunks(into: errors.continuation)
         let owner = resourceOwner
         let registry = processRegistry
         process.terminationHandler = { [weak self] process in
@@ -120,6 +124,13 @@ actor CodexProcessTransport: CodexTransport {
                 await self?.acceptStdoutChunk(chunk)
             }
             await self?.stdoutDidEnd()
+        }
+        stderrReachedEnd = false
+        stderrTask = Task { [weak self] in
+            for await data in errors.stream {
+                await self?.appendStderr(data)
+            }
+            await self?.stderrDidEnd()
         }
     }
 
@@ -184,6 +195,7 @@ actor CodexProcessTransport: CodexTransport {
         stderrHandle?.readabilityHandler = nil
         chunkContinuation?.finish()
         readerTask?.cancel()
+        stderrContinuation?.finish()
         try? stdinHandle?.close()
 
         let exitCode: Int32
@@ -273,6 +285,8 @@ actor CodexProcessTransport: CodexTransport {
 
     private func stdoutDidEnd() { stdoutReachedEnd = true }
 
+    private func stderrDidEnd() { stderrReachedEnd = true }
+
     private func appendStderr(_ data: Data) {
         stderrBuffer.append(data)
         let limit = 16 * 1024
@@ -283,13 +297,16 @@ actor CodexProcessTransport: CodexTransport {
 
     private func processDidTerminate(code: Int32) async {
         // A response written just before the process exits can still be in the pipe when the exit
-        // is reported. Let the reader reach the pipe's end by itself, then drain buffered frames
-        // before publishing notification EOF; a child holding the pipe open is given one second.
-        for _ in 0..<100 where readerTask != nil && !stdoutReachedEnd {
+        // is reported, and so can its last words on stderr. Let the readers reach the pipes' ends by
+        // themselves, then drain buffered frames before publishing notification EOF; a child holding
+        // a pipe open is given one second.
+        for _ in 0..<100 where (readerTask != nil && !stdoutReachedEnd) || (stderrTask != nil && !stderrReachedEnd) {
             try? await Task.sleep(for: .milliseconds(10))
         }
         chunkContinuation?.finish()
         await readerTask?.value
+        stderrContinuation?.finish()
+        await stderrTask?.value
         let message = String(data: stderrBuffer, encoding: .utf8) ?? ""
         failPending(HarnessAdapterError.processExited(code: code, message: message))
         notificationContinuation.finish()
