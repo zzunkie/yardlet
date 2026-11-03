@@ -160,14 +160,14 @@ final class RemoteControlService {
     func refreshAccount() async {
         guard isEnabled, let client = accountClient else { return }
         accountProviders = (try? await client.providers()) ?? accountProviders
-        guard let token = accountToken.load(), let identity = ensureIdentity() else { return }
+        guard let token = await withAccountToken({ $0.load() }), let identity = ensureIdentity() else { return }
         do {
             let current = try await client.account(token: token)
             try await client.registerMac(token: token, identity: identity, name: macName, accountID: current.id)
             account = current
             await server.setAcceptsLinks(true)
         } catch let failure as RemoteAccountClient.Failure where failure.isUnauthorized {
-            accountToken.delete()
+            await withAccountToken { $0.delete() }
             account = nil
             await server.setAcceptsLinks(false)
         } catch {
@@ -191,7 +191,7 @@ final class RemoteControlService {
                 return
             }
             let (token, signedIn) = try await client.exchange(code: code, pkce: pkce, deviceName: macName)
-            accountToken.save(token)
+            await withAccountToken { $0.save(token) }
             try await client.registerMac(token: token, identity: identity, name: macName, accountID: signedIn.id)
             account = signedIn
             await server.setAcceptsLinks(true)
@@ -206,13 +206,19 @@ final class RemoteControlService {
 
     /// Takes this Mac off the account and forgets the token; link requests stop.
     func signOut() async {
-        if let client = accountClient, let token = accountToken.load() {
+        if let client = accountClient, let token = await withAccountToken({ $0.load() }) {
             if let identity { try? await client.removeMac(token: token, room: identity.room) }
             try? await client.logout(token: token)
         }
-        accountToken.delete()
+        await withAccountToken { $0.delete() }
         account = nil
         await server.setAcceptsLinks(false)
+    }
+
+    /// Runs an account-token operation off the main actor: the keychain can wait on a system prompt.
+    private func withAccountToken<T: Sendable>(_ operation: @escaping @Sendable (any RemoteSecretStoring) -> T) async -> T {
+        let accountToken = accountToken
+        return await Task.detached { operation(accountToken) }.value
     }
 
     /// The relay this Mac uses: the developer's or self-hosted one, else the built-in one.
