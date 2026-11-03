@@ -27,11 +27,12 @@ extension AppModel {
         refreshBrowserWaits()
     }
 
-    /// Reads every task's browser waits again, and marks, tells and withdraws what changed.
+    /// Reads every task's browser waits again, and marks, tells and withdraws what changed. The mailbox's panel is
+    /// no task's: what its pages wait on shows over the panel and on its tab, where the person who opened them looks.
     func refreshBrowserWaits() {
         guard let client = browserWaitSource else { return }
         var next: [UUID: BrowserTaskWait] = [:]
-        for session in client.sessionsWithTabs {
+        for session in client.sessionsWithTabs where session != TaskWorkspaceStore.mailID {
             let waits = client.tabs(forSession: session).compactMap { tab -> (BrowserTab, BrowserPersonWait)? in
                 guard let wait = client.personWait(of: tab), !(wait.agentLed && isInTurn(session)) else { return nil }
                 return (tab, wait)

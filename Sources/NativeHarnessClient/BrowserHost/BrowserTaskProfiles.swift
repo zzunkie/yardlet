@@ -92,9 +92,13 @@ final class BrowserTaskProfiles {
         saved.own?[key] != nil || (saved.sorted != true && folderExists(key))
     }
 
+    /// The panels that are no task's and keep the default profile: the new-task screen's, whose tabs the task it starts
+    /// takes over, and the mailbox's, which opens mail's links with the person's own sign-ins (docs/MAILBOX.md, "Links").
+    private static let taskless: Set<UUID> = [TaskWorkspaceStore.draftID, TaskWorkspaceStore.mailID]
+
     /// Whether the task's tabs use a profile of their own.
     func hasOwnProfile(_ session: UUID) -> Bool {
-        session != TaskWorkspaceStore.draftID && isOwn(key(for: session))
+        !Self.taskless.contains(session) && isOwn(key(for: session))
     }
 
     /// The profile a task's tabs use; nil for the default profile.
@@ -109,7 +113,7 @@ final class BrowserTaskProfiles {
     /// What a tab of the task opens in: a child task's first tab decides whether it takes a copy of its parent's
     /// profile of its own (when its parent has one then) or stays in the default profile.
     func opening(for session: UUID) -> BrowserTabProfile? {
-        guard storage == .perTask, session != TaskWorkspaceStore.draftID else { return nil }
+        guard storage == .perTask, !Self.taskless.contains(session) else { return nil }
         let key = key(for: session)
         if !isOwn(key), !(saved.sharedChildren?.contains(key) ?? false), let parent = parentOf(session) {
             let parentKey = self.key(for: parent)
@@ -128,7 +132,7 @@ final class BrowserTaskProfiles {
     /// profile's cookies, so that sign-in changes no other task's. False when the task has one already, or every task
     /// shares the default profile (the setting).
     func takeOwnProfile(for session: UUID) -> Bool {
-        guard storage == .perTask, session != TaskWorkspaceStore.draftID else { return false }
+        guard storage == .perTask, !Self.taskless.contains(session) else { return false }
         var key = key(for: session)
         guard !isOwn(key) else { return false }
         // A folder left from before tasks shared the default profile, not yet removed, is no copy of it.

@@ -1,4 +1,5 @@
 import AppKit
+@preconcurrency import IOSurface
 import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
@@ -133,13 +134,171 @@ final class MailboxRenderingTests: XCTestCase {
         }
     }
 
-    private func makeWindowModel() throws -> AppModel {
+    /// The browser host as the mailbox's panel sees it, with no Chromium: tabs open, and the test reports their pages.
+    private final class StandInHost: BrowserHostConnection {
+        var eventHandler: ((BrowserHostEvent) -> Void)?
+        var sent: [BrowserHostCommand] = []
+        func send(_ command: BrowserHostCommand) {
+            sent.append(command)
+            // These pages do not ask before closing: the host closes the tab and says so, as Chromium does.
+            if case .requestClose(let tab) = command {
+                DispatchQueue.main.async { self.eventHandler?(.closed(tab: tab)) }
+            }
+        }
+        func terminate() {}
+
+        func load(_ tab: BrowserTabID, _ url: String, title: String) {
+            eventHandler?(.loading(tab: tab, isLoading: true, canGoBack: false, canGoForward: false))
+            eventHandler?(.address(tab: tab, url: url))
+            eventHandler?(.title(tab: tab, title: title))
+            eventHandler?(.loading(tab: tab, isLoading: false, canGoBack: false, canGoForward: false))
+        }
+    }
+
+    /// A link chosen in a message, and Open in Gmail, open in the mailbox's own browser panel beside the thread
+    /// (docs/MAILBOX.md, "Links"), never in the task the window showed last, whose agent would read the page: drawn as
+    /// `link-<width>-<appearance>.png`. Turning the mailbox off closes the panel and its pages.
+    func testALinkInMailOpensInTheMailboxsOwnPanelBesideTheThread() async throws {
+        var standIn: StandInHost?
+        let client = BrowserHostClient(idleGrace: .seconds(60)) {
+            let host = StandInHost()
+            standIn = host
+            return host
+        }
+        let task = SessionRecord(harness: .claudeCode, workspaceURL: FileManager.default.temporaryDirectory,
+                                 runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Fix the sign-in screen")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("MailboxLinks")))
+        let model = try makeWindowModel(sessions: [task], defaults: defaults, browserClient: client)
+        let fixture = MailFixture()
+        let directory = try WindowlessRender.directory("mailbox-qa")
+        let quote = "https://vendor.example/quotes/Q-2611"
+        let panel = { model.taskWorkspaces.mail }
+        for size in [NSSize(width: 1280, height: 800), NSSize(width: 920, height: 680)] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                // The task the window showed last, where links went before.
+                model.splits.activate(.session(task.id))
+                let transports = fixture.transports()
+                model.mailbox.setEnabled(true)
+                model.mailbox.setAccounts(transports.map { ($0.account, $0) })
+                await model.mailbox.refresh()
+                let host = WindowlessRender.Host(MainWindow(model: model)
+                    .environment(\.colorScheme, appearance.colorScheme)
+                    .frame(width: size.width, height: size.height), size: size, appearance: appearance)
+                defer { host.close() }
+                host.settle()
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Mail")))
+                let quoteRow = { host.accessibilityElements().first { $0.label.hasPrefix(MailFixture.haneul.displayName) } }
+                await host.settle(until: { quoteRow() != nil })
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: try XCTUnwrap(quoteRow()).label))
+                await host.settle(until: { host.accessibilityElements().contains { $0.label == L10n.string("Ask an agent") } })
+
+                // Open in Gmail, then a link in the message (`MailActions.openLink`, which the message's page calls); the
+                // panel's pane opens each page as it shows it.
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Open in Gmail")))
+                let original = try XCTUnwrap(TaskSurfaceNavigationProjection.browserKeys(in: panel().panels).first)
+                await host.settle(until: { client.tab(key: original, forSession: TaskWorkspaceStore.mailID) != nil })
+                model.openMailLink(try XCTUnwrap(URL(string: quote)), elsewhere: { XCTFail("\($0) went elsewhere") })
+                let keys = TaskSurfaceNavigationProjection.browserKeys(in: panel().panels)
+                XCTAssertEqual(keys.map { panel().browserTabs.tab($0)?.address }, ["https://mail.example/thread/thread-quote", quote])
+                let shown = try XCTUnwrap(keys.last)
+                XCTAssertEqual(TaskSurfaceNavigationProjection.browserKey(inTab: panel().panels.trailingSurfaceID), shown)
+                await host.settle(until: { client.tab(key: shown, forSession: TaskWorkspaceStore.mailID) != nil })
+                let tab = try XCTUnwrap(client.tab(key: shown, forSession: TaskWorkspaceStore.mailID))
+                try XCTUnwrap(standIn).load(tab.id, quote, title: "견적서 Q-2611 · Vendor Example")
+                host.settle(passes: 10)
+                let page = try XCTUnwrap(Self.browserView(in: host.hosting))
+                Self.showQuotePage(in: page)
+                host.settle(passes: 4)
+
+                // No task's panel took the page, and the window kept the mailbox.
+                let taskPanel = model.taskWorkspaces.state(for: task.id)
+                XCTAssertTrue(TaskSurfaceNavigationProjection.browserKeys(in: taskPanel.panels).isEmpty)
+                XCTAssertTrue(client.tabs(forSession: task.id).isEmpty)
+                XCTAssertTrue(TaskSurfaceNavigationProjection.browserKeys(in: model.taskWorkspaces.draft.panels).isEmpty)
+                XCTAssertTrue(host.accessibilityElements().contains { $0.label == L10n.string("Ask an agent") },
+                              "the thread stays beside the panel")
+                try WindowlessRender.writePNG(host.capture().bitmap,
+                                              to: directory.appending(path: "link-\(Int(size.width))-\(appearance.suffix).png"))
+                panel().closeSidePanelTabs(panel().panels.trailingTabs)
+                await host.settle(until: { panel().panels.trailingTabs.isEmpty })
+                host.close()
+            }
+        }
+
+        // Turning the mailbox off closes its panel and the pages in it, and forgets the panel.
+        model.openMailLink(try XCTUnwrap(URL(string: quote)), elsewhere: { XCTFail("\($0) went elsewhere") })
+        let key = try XCTUnwrap(TaskSurfaceNavigationProjection.browserKeys(in: panel().panels).first)
+        _ = try panel().openBrowserEngineTab(key, viewport: .offscreenDefault)
+        XCTAssertEqual(client.tabs(forSession: TaskWorkspaceStore.mailID).count, 1)
+        defaults.set(false, forKey: MailboxPreference.key)
+        model.followMailbox(defaults: defaults)
+        XCTAssertTrue(client.tabs(forSession: TaskWorkspaceStore.mailID).isEmpty)
+        XCTAssertNil(model.taskWorkspaces.loadedState(for: TaskWorkspaceStore.mailID))
+    }
+
+    private static func browserView(in view: NSView) -> BrowserHostView? {
+        if let view = view as? BrowserHostView { return view }
+        return view.subviews.lazy.compactMap(browserView(in:)).first
+    }
+
+    /// A vendor's quote page as the host would draw it at the pane's size.
+    private static func showQuotePage(in view: BrowserHostView) {
+        let scale = view.window?.backingScaleFactor ?? 2
+        let width = Int(view.bounds.width * scale), height = Int(view.bounds.height * scale)
+        guard width > 0, height > 0, let surface = IOSurfaceCreate([
+            kIOSurfaceWidth: width, kIOSurfaceHeight: height, kIOSurfaceBytesPerElement: 4,
+            kIOSurfacePixelFormat: 0x4247_5241
+        ] as CFDictionary) else { return XCTFail("no surface for \(view.bounds)") }
+        IOSurfaceLock(surface, [], nil)
+        defer { IOSurfaceUnlock(surface, [], nil) }
+        guard let context = CGContext(
+            data: IOSurfaceGetBaseAddress(surface), width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: IOSurfaceGetBytesPerRow(surface), space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        ) else { return }
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: scale, y: -scale)
+        let previous = NSGraphicsContext.current
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        defer { NSGraphicsContext.current = previous }
+        let pageWidth = view.bounds.width
+        func text(_ string: String, _ point: NSPoint, size: CGFloat, color: NSColor, weight: NSFont.Weight = .regular) {
+            NSAttributedString(string: string, attributes: [.font: NSFont.systemFont(ofSize: size, weight: weight),
+                                                            .foregroundColor: color]).draw(at: point)
+        }
+        NSColor.white.setFill()
+        NSRect(x: 0, y: 0, width: pageWidth, height: view.bounds.height).fill()
+        NSColor(red: 0.09, green: 0.32, blue: 0.29, alpha: 1).setFill()
+        NSRect(x: 0, y: 0, width: pageWidth, height: 52).fill()
+        text("Vendor Example", NSPoint(x: 20, y: 16), size: 15, color: .white, weight: .semibold)
+        text("견적서 Q-2611", NSPoint(x: 28, y: 84), size: 22, color: .black, weight: .semibold)
+        text("연간 유지보수 · 모니터링 포함 · 수정본 v3", NSPoint(x: 28, y: 118), size: 13, color: .darkGray)
+        NSColor(white: 0.88, alpha: 1).setFill()
+        NSRect(x: 28, y: 148, width: pageWidth - 56, height: 1).fill()
+        for (index, row) in [("유지보수 (12개월)", "₩ 9,600,000"), ("모니터링", "₩ 1,200,000"),
+                             ("합계 (VAT 별도)", "₩ 10,800,000")].enumerated() {
+            let y = 164 + CGFloat(index) * 30
+            text(row.0, NSPoint(x: 28, y: y), size: 13, color: .black, weight: index == 2 ? .semibold : .regular)
+            let amount = NSAttributedString(string: row.1, attributes: [.font: NSFont.systemFont(ofSize: 13, weight: index == 2 ? .semibold : .regular)])
+            amount.draw(at: NSPoint(x: pageWidth - 28 - amount.size().width, y: y))
+        }
+        NSColor(red: 0.09, green: 0.32, blue: 0.29, alpha: 1).setFill()
+        NSBezierPath(roundedRect: NSRect(x: 28, y: 270, width: 132, height: 36), xRadius: 6, yRadius: 6).fill()
+        text("견적 승인", NSPoint(x: 66, y: 279), size: 14, color: .white, weight: .semibold)
+        context.flush()
+        view.frameDisplay.show(BrowserFrame(layer: .view, surface: 1, pixelWidth: width, pixelHeight: height,
+                                            sequence: 1, paintedAt: DispatchTime.now().uptimeNanoseconds,
+                                            source: "software"), surface: surface)
+    }
+
+    private func makeWindowModel(sessions: [SessionRecord] = [], defaults given: UserDefaults? = nil,
+                                 browserClient: BrowserHostClient? = nil) throws -> AppModel {
         let root = FileManager.default.temporaryDirectory.appending(path: "yardlet-mailbox-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("MailboxShell")))
+        let defaults = try given ?? XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("MailboxShell")))
         let model = AppModel(
-            store: SessionStore(sessions: [], repository: InMemorySessionRepository(sessions: [])),
+            store: SessionStore(sessions: sessions, repository: InMemorySessionRepository(sessions: sessions)),
             runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
             codexQueueRepository: UserDefaultsCodexQueueRepository(defaults: defaults, keyPrefix: "queue."),
             preferences: defaults,
@@ -148,7 +307,7 @@ final class MailboxRenderingTests: XCTestCase {
             codexHistorySelectionRepository: UserDefaultsCodexHistorySelectionRepository(defaults: defaults, keyPrefix: "history."),
             transcriptRepository: FileTranscriptRepository(directoryURL: root.appending(path: "transcripts")),
             sessionTitleResolver: { _ in nil }, sessionTitleRetryCount: 0, restoresIndexOnLaunch: false,
-            browserClient: { nil })
+            browserClient: { browserClient })
         addTeardownBlock { await model.shutdown() }
         return model
     }

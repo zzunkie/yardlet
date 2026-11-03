@@ -29,6 +29,7 @@ extension AppModel {
     func followMailbox(defaults: UserDefaults = .yardlet) {
         let isOn = MailboxPreference.isOn(in: defaults)
         mailbox.setEnabled(isOn)
+        if !isOn { closeMailBrowser() }
         guard isOn, let connectorCenter else { return }
         let entries: [(MailAccount, any MailAccountTransport)]
         if mailboxFollowsConnectors {
