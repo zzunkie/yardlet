@@ -47,12 +47,13 @@ final class RemoteBrowserModel {
     func show(taskID: String, tabID: String? = nil) {
         if self.taskID != taskID {
             tabs = []
+            self.tabID = nil
             isListed = false
             frame = nil
         }
         self.taskID = taskID
         refusal = nil
-        watch(tabID ?? (self.taskID == taskID ? self.tabID : nil))
+        watch(tabID ?? self.tabID)
     }
 
     func hide() {
