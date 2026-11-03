@@ -13,6 +13,9 @@ extension RemoteProtocol {
     /// The longest text one `tabInput` types, in characters and in UTF-8 bytes (a character can be many).
     public static let maxTabInputCharacters = 4_000
     public static let maxTabInputBytes = 16_000
+    /// The longest key name one `tabInput` presses, in UTF-8 bytes: a character with marks combined onto it is still
+    /// one character however many bytes it takes.
+    public static let maxTabKeyBytes = 64
     /// What a client's own screen may ask a tab to be drawn at, in CSS pixels (`RemoteTabViewport`).
     public static let tabViewportWidths = 200...1_920
     public static let tabViewportHeights = 200...2_560
@@ -202,7 +205,8 @@ public struct RemoteTabInput: Codable, Equatable, Sendable {
     }
 
     /// Why the Mac would not send it, or nil: a point, delta, button, action, key or text it lacks or that does not
-    /// fit, or a field its kind does not take. Text over `maxTabInputCharacters` is `tooLarge`.
+    /// fit, or a field its kind does not take. Text over `maxTabInputCharacters` is `tooLarge`; a key name over
+    /// `maxTabKeyBytes` is `badRequest`.
     public var problem: RemoteError? {
         func bad(_ message: String) -> RemoteError { RemoteError(.badRequest, message) }
         if let stray = present.first(where: { !(Self.fields[kind] ?? []).contains($0) }) {
@@ -236,7 +240,9 @@ public struct RemoteTabInput: Codable, Equatable, Sendable {
             return text.count > RemoteProtocol.maxTabInputCharacters || text.utf8.count > RemoteProtocol.maxTabInputBytes
                 ? RemoteError(.tooLarge) : nil
         case .key:
-            guard let key, !key.isEmpty, key.count <= 64 else { return bad("key needs a key name") }
+            guard let key, !key.isEmpty, key.utf8.count <= RemoteProtocol.maxTabKeyBytes else {
+                return bad("key needs a key name of at most \(RemoteProtocol.maxTabKeyBytes) bytes")
+            }
             return nil
         case .navigate:
             guard let action, Self.navigateActions.contains(action) else {

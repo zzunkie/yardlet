@@ -430,6 +430,10 @@ enum BrowserHostCommand: Codable, Equatable, Sendable {
     /// Answers a `fileDialog` event; nil paths cancel it.
     case fileDialogResult(tab: BrowserTabID, dialog: Int, paths: [String]?)
     case cancelDownload(tab: BrowserTabID, download: Int)
+    /// Refuses the tab's downloads before they begin (no file is written), and those of a pop-up its page opens, while
+    /// a remote device drove it last (`BrowserTab.isDrivenByRemote`), with `remoteDownloadStopped`; false takes them
+    /// again.
+    case refuseDownloads(tab: BrowserTabID, isRefused: Bool)
     /// Answers a `permissionPrompt` event.
     case permissionResult(tab: BrowserTabID, prompt: Int, result: BrowserPermissionResult)
     /// Turns the page's accessibility tree on or off. While on, the host sends the whole tree and
@@ -514,7 +518,7 @@ enum BrowserHostEvent: Codable, Equatable, Sendable {
     /// Produced by the client, never sent by a host: what came of the page's request to open `url` in `app`
     /// (nil when no app opens it).
     case externalAppHandled(tab: BrowserTabID, url: String, app: String?, outcome: BrowserExternalAppOutcome)
-    /// Produced by the client, never sent by a host: a download a remote device's input started was cancelled as it began
+    /// A download of a tab whose downloads are refused (`refuseDownloads`) was refused before it began
     /// (docs/REMOTE_PROTOCOL.md §15.25); the person downloads it on this Mac to keep it.
     case remoteDownloadStopped(tab: BrowserTabID, fileName: String)
     /// The main frame committed a new document (never for a same-document move): what was asked or blocked for
