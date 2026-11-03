@@ -521,12 +521,23 @@ final class BrowserPanelTabsQATests: XCTestCase {
             orderIn(window)
             try await settle(window) { false }
             try draw(window, "remote-handoff", appearance)
-            let remoteBar = controls(in: window).filter { ["I'm done", "Decline"].map(L10n.string).contains($0.label) }
-            XCTAssertEqual(remoteBar.count, 4, "the card's answers and the bar's: \(remoteBar.map(\.label))")
+            // With the handed tab in the panel, the request is the panel's bar alone, as on this Mac: no card.
+            let answers = ["I'm done", "Decline"].map(L10n.string)
+            let remoteBar = controls(in: window).filter { answers.contains($0.label) }
+            XCTAssertEqual(remoteBar.count, 2, "the bar's answers only: \(remoteBar.map(\.label))")
+            XCTAssertFalse(controls(in: window).contains { $0.label == L10n.string("Show Tab") })
             XCTAssertTrue(controls(in: window).contains { $0.label == L10n.string("Reload") })
+            // The panel closed, the card comes back with its Show Tab.
+            remote.browser.hide()
+            try await settle(window) { controls(in: window).contains { $0.label == L10n.string("Show Tab") } }
+            XCTAssertEqual(controls(in: window).filter { answers.contains($0.label) }.count, 2, "the card's answers")
+            try draw(window, "remote-handoff-card", appearance)
+            remote.showBrowser(taskID: task.id.uuidString, tabID: key.uuidString)
+            try await waitUntilAsync { remote.browser.frame != nil }
+            try await settle(window) { !controls(in: window).contains { $0.label == L10n.string("Show Tab") } }
 
             // The bar's I'm done answers the handoff on this Mac.
-            let done = try XCTUnwrap(remoteBar.filter { $0.label == L10n.string("I'm done") }.max { $0.frame.minX < $1.frame.minX })
+            let done = try XCTUnwrap(controls(in: window).filter { $0.label == L10n.string("I'm done") }.first)
             XCTAssertTrue(WindowlessRender.withAccessibilityTree { done.object.accessibilityPerformPress?() ?? false })
             try await waitUntilAsync { tab.handoff?.answer == .done }
             window.close()

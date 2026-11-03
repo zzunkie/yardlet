@@ -473,6 +473,14 @@ struct RemoteTaskView: View {
 
     private var showsBrowser: Bool { model.browser.taskID == conversation.taskID }
 
+    /// The conversation as the host draws it, but for the handoff whose tab the browser panel shows: that one is the
+    /// panel's bar alone, as on the Mac, where a handed tab's request is its panel's bar and no card. With the panel
+    /// closed, the card's Show Tab opens it.
+    private var presentation: ConversationPresentation {
+        guard showsBrowser, let handed = model.browser.watchedTab?.requestId else { return conversation.presentation }
+        return conversation.presentation.withoutRequest(handed)
+    }
+
     private var drawsRail: Bool {
         showsRail && !outputs.isEmpty && SessionRailPlacement.fits(sessionWidth: width, panelOpen: showsBrowser)
     }
@@ -514,7 +522,7 @@ struct RemoteTaskView: View {
     private var conversationColumn: some View {
         VStack(spacing: 0) {
             header
-            ConversationTimeline(source: .presented(conversation.presentation), actions: actions,
+            ConversationTimeline(source: .presented(presentation), actions: actions,
                                  isLoading: !conversation.isLoaded, diagnosticID: nil)
             if let editing {
                 ConversationEditBanner(canCancel: true) {
