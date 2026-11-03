@@ -15,7 +15,7 @@ struct RemoteTerminalPane: View {
             // The owner outlives its window's panels. A missing owner supplies a closed stream.
             let stream = owner?.makeStream(taskID: taskID) ?? RemoteTerminalStream(owner: nil, taskID: taskID)
             let session = NativeTerminalSession(workspaceURL: folder, launch: launch, hosting: RemoteTerminalHosting(stream: stream))
-            session.disableClipboardAccess()
+            session.markRemoteOrigin()
             session.onOpenLink = onOpenLink
             session.onExit = { [weak session] _ in
                 Task { @MainActor in
@@ -46,6 +46,7 @@ struct RemoteTerminalPane: View {
             TerminalPane(session: session, tabs: TerminalTabsContext(workspace: workspace, folder: session.workspaceURL,
                 launch: .userLoginShell(), taskID: nil), onAttachSelection: onAttachSelection,
                 isInSidePanel: true, onClose: onClose)
+                .id(ObjectIdentifier(session))
             Text(L10n.string("Closing this window or losing the connection ends its terminals."))
                 .font(.caption).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)

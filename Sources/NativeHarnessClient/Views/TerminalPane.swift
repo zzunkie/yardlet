@@ -523,6 +523,7 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
     @ObservationIgnored var onStop: (() -> Void)?
     @ObservationIgnored var onOpenLink: ((URL) -> Void)?
     @ObservationIgnored private(set) var allowsClipboard = true
+    @ObservationIgnored private var isRemoteOrigin = false
     @ObservationIgnored var clipboard = TerminalClipboard.system
     @ObservationIgnored private var mirror: TerminalBufferMirror?
     @ObservationIgnored private var columns = 80
@@ -688,11 +689,19 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
 
     func disableClipboardAccess() { allowsClipboard = false }
+    func markRemoteOrigin() { isRemoteOrigin = true; allowsClipboard = false }
 
     func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
         guard let url = URL(string: link) else { return }
+        let remote = isRemoteOrigin || hosting is RemoteTerminalHosting
+        let scheme = url.scheme?.lowercased() ?? ""
+        let taskLink: Bool = if case .task = ConversationLinkKind(url) { true } else { false }
+        if remote, !["http", "https", "file"].contains(scheme), !taskLink {
+            actionError = L10n.string("This link is not supported in a remote terminal.")
+            return
+        }
         if let onOpenLink { onOpenLink(url); return }
-        guard hosting is LocalTerminalHosting else {
+        guard hosting is LocalTerminalHosting, !remote || ["http", "https"].contains(scheme) else {
             actionError = L10n.string("Open this address in the remote task's browser.")
             return
         }
@@ -705,8 +714,8 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
     }
 
     func clipboardRead(source: TerminalView) -> Data? {
-        guard allowsClipboard, hosting is LocalTerminalHosting else { return nil }
-        return clipboard.read()
+        // Output may come from an untrusted file or remote command. Explicit Paste remains a view action.
+        nil
     }
 
     func restart() {
@@ -716,8 +725,8 @@ final class NativeTerminalSession: NSObject, @MainActor TerminalViewDelegate, Na
 
     func stop() {
         unregisterShell()
-        hosting.stop()
         onStop?()
+        hosting.stop()
         started = false
         terminalView = nil
         mirror = nil

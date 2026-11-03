@@ -3793,3 +3793,5 @@
 "Open this address in the remote task's browser." = "Open this address in the remote task's browser.";
 
 "Closing this window or losing the connection ends its terminals." = "Closing this window or losing the connection ends its terminals.";
+
+"This link is not supported in a remote terminal." = "This link is not supported in a remote terminal.";

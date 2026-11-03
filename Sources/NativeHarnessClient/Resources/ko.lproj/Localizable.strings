@@ -3793,3 +3793,5 @@
 "Open this address in the remote task's browser." = "원격 작업의 브라우저에서 이 주소를 열어 주세요.";
 
 "Closing this window or losing the connection ends its terminals." = "이 창을 닫거나 연결이 끊기면 터미널이 종료됩니다.";
+
+"This link is not supported in a remote terminal." = "원격 터미널에서 지원하지 않는 링크입니다.";

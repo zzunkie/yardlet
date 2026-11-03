@@ -88,9 +88,14 @@ extension RemoteServer {
             return
         }
         guard let terminalID = request.terminalID, let session = terminals[terminalID],
-              session.connection == connection, session.taskID == request.taskID, session.opened, session.permit.isValid else {
+              session.connection == connection, session.taskID == request.taskID, session.opened else {
             respond(.failure(requestID, RemoteError(.notAllowed)), to: connection)
             auditTerminal(request.type, device: deviceID, task: request.taskID, bytes: request.terminalInputBytes, result: "notAllowed")
+            return
+        }
+        guard session.permit.isValid else {
+            endTerminal(terminalID, reason: "closed")
+            respond(.failure(requestID, RemoteError(.notFound)), to: connection)
             return
         }
         var error: RemoteError?
@@ -125,11 +130,16 @@ extension RemoteServer {
             }
         default: error = RemoteError(.badRequest)
         }
+        if !session.permit.isValid, terminals[terminalID] != nil {
+            endTerminal(terminalID, reason: "closed")
+            error = RemoteError(.notFound)
+        }
         respond(error.map { .failure(requestID, $0) } ?? response, to: connection)
     }
 
     private func receiveTerminalUpdates(_ terminalID: String) {
-        guard let session = terminals[terminalID], session.permit.isValid else { return }
+        guard let session = terminals[terminalID] else { return }
+        guard session.permit.isValid else { endTerminal(terminalID, reason: "closed"); return }
         for update in session.permit.takeUpdates() {
             switch update {
             case let .output(data): terminals[terminalID]?.output.append(data)

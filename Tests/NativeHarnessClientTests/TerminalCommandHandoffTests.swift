@@ -34,10 +34,14 @@ final class TerminalCommandHandoffTests: XCTestCase {
         XCTAssertTrue(output.contains("30 100"))
         session.send(#"printf '\033[?1049h'; printf '%1100000s' '' | tr ' ' x; printf '\033[2J\033[HSTATE_AFTER_BURST\n'"# + "\r")
         try await waitUntil { session.bufferText.contains("STATE_AFTER_BURST") }
+        var clipboardReads = 0
+        session.clipboard = TerminalClipboard(read: { clipboardReads += 1; return Data("fixture".utf8) }, write: { _ in })
         let view = session.view {
             NativeTerminalView(frame: .zero, font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
                 options: TerminalOptions(scrollback: 5_000))
         }
+        XCTAssertNil(session.clipboardRead(source: view))
+        XCTAssertEqual(clipboardReads, 0, "Output cannot request the person's clipboard, including in local terminals")
         XCTAssertTrue(view.getTerminal().isCurrentBufferAlternate, "Mounting adopts parser state even after more than 1 MiB")
         XCTAssertTrue(view.getTerminal().unwrappedText.contains("STATE_AFTER_BURST"))
         session.send(#"printf '\033[?1049l'"# + "\r")
@@ -46,6 +50,44 @@ final class TerminalCommandHandoffTests: XCTestCase {
         session.end()
         XCTAssertFalse(session.isRunning)
         XCTAssertFalse(session.hasShell)
+    }
+
+    func testClosingAfterTheShellExitsEndsItsRemainingPTYSession() async throws {
+        let folder = try temporaryFolder()
+        let marker = folder.appending(path: "background-pid")
+        let script = """
+        import os, signal, time
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        child = os.fork()
+        if child:
+            os._exit(0)
+        os.setpgid(0, 0)
+        with open(os.environ["YARDLET_TEST_PIDFILE"], "w") as f:
+            f.write(str(os.getpid()))
+        time.sleep(120)
+        """
+        let hosting = LocalTerminalHosting(folder: folder, launch: ShellLaunchEnvironment(
+            executable: "/usr/bin/python3", arguments: ["-c", script], overrides: ["YARDLET_TEST_PIDFILE": marker.path]))
+        hosting.outputConsumer = { _ in }
+        let session = NativeTerminalSession(workspaceURL: folder, hosting: hosting)
+        let other = NativeTerminalSession(workspaceURL: folder, launch: .isolatedZsh(in: folder))
+        session.start(); other.start()
+        let leader = try XCTUnwrap(session.process?.shellPid)
+        defer {
+            session.end(); other.end()
+            if let text = try? String(contentsOf: marker, encoding: .utf8), let pid = Int32(text), getsid(pid) == leader {
+                _ = Darwin.kill(pid, SIGKILL)
+            }
+        }
+        try await waitUntil { FileManager.default.fileExists(atPath: marker.path) && hosting.process?.running == false }
+        let child = try XCTUnwrap(Int32(String(contentsOf: marker, encoding: .utf8)))
+        XCTAssertEqual(getsid(child), leader)
+        XCTAssertEqual(getpgid(child), child, "The job is no longer in the dead shell's process group")
+        XCTAssertEqual(Darwin.kill(child, 0), 0)
+        session.end()
+        try await waitUntil { Darwin.kill(child, 0) != 0 }
+        XCTAssertTrue(other.isRunning, "Another terminal's session is not part of this cleanup")
+        XCTAssertTrue(other.process?.running == true)
     }
 
     // MARK: - The cards
