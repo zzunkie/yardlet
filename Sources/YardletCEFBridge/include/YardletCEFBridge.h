@@ -22,10 +22,9 @@ extern "C" {
 void yardlet_host_input_began(void);
 void yardlet_host_input_ended(void);
 
-void yardlet_cef_open_blocked_popup(int opener_tab, int popup_tab);
+int yardlet_cef_open_blocked_popup(int opener_tab, int popup_tab);
 /// allowed: -1 query, 0 remove exception, 1 allow.
 void yardlet_cef_popup_permission(int tab, int allowed, const char *expected_url);
-void yardlet_cef_cancel_blocked_popup(int opener_tab, int popup_tab);
 
 typedef enum {
     YardletCEFEventContextInitialized = 1,
@@ -69,7 +68,8 @@ typedef enum {
     /// number: 1 the page's focused field is a password field (an <input type=password> in any frame), 0 it
     /// is not. Sent when that changes.
     YardletCEFEventPasswordField = 21,
-    /// The host made a browser for a page's new window, which keeps window.opener; tab is the new tab.
+    /// A page popup or independently opened blocked URL; tab is the new tab.
+    /// Only an ordinary page popup preserves its original DOM opener semantics.
     /// text: its URL, detail: the opener's tab, number: 1 the page asked for it behind.
     YardletCEFEventPopupOpened = 22,
     /// A page asked to open another app's address (mailto:, tel:, zoommtg:, slack: …), which the host does not
@@ -91,7 +91,9 @@ typedef enum {
     /// number: whether this site is allowed to open popups in its profile.
     YardletCEFEventPopupPermission = 29,
     /// tab: opener, number: removed retained request ID.
-    YardletCEFEventPopupRemoved = 30
+    YardletCEFEventPopupRemoved = 30,
+    /// tab: opener, number: request kept for retry when capacity becomes available.
+    YardletCEFEventPopupRetry = 31
 } YardletCEFEvent;
 
 /// What a frame's renderer says of its page (YardletCEFHelper's PageState.c names the same flags).

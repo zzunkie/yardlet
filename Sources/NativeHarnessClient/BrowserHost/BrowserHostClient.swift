@@ -666,7 +666,7 @@ final class BrowserHostClient {
         if let session = tab.session { notifySession(session) }
     }
 
-    /// Opens the retained request, keeping its opener and the input ownership at the time it was blocked.
+    /// Opens the recorded URL independently, preserving the input ownership when it was blocked.
     func openBlockedPopup(_ url: String, from tab: BrowserTab) {
         guard let popup = tab.blockedPopupRequests.first(where: { $0.url == url }) else { return }
         openBlockedPopup(popup, from: tab)
@@ -674,13 +674,13 @@ final class BrowserHostClient {
 
     func openBlockedPopup(_ popup: BrowserBlockedPopup, from tab: BrowserTab) {
         guard tabs[tab.id] === tab, tab.blockedPopupRequests.contains(popup),
-              !tab.openingBlockedPopups.contains(popup.id) else { return }
+              !tab.openingBlockedPopups.contains(popup.id),
+              let session = tab.session, tabs(forSession: session).count < Self.maxTabsPerSession else { return }
         if popup.id < 0 {
             // Older hosts report only a URL, without a retained request.
             tab.forgetBlockedPopup(popup.id)
-            openWindow(popup.url, from: tab, background: false, userGesture: true)
+            openWindow(popup.url, from: tab, background: false, userGesture: true, retained: popup)
         } else {
-            guard let session = tab.session, tabs(forSession: session).count < Self.maxTabsPerSession else { return }
             tab.openingBlockedPopups.insert(popup.id)
             connection?.send(.openBlockedPopup(tab: tab.id, popupTab: popup.id))
         }
@@ -899,26 +899,32 @@ final class BrowserHostClient {
     /// click asked for it behind, as the Codex and Claude apps' browsers open one. Without a user
     /// gesture nothing opens (Chrome blocks those pop-ups too). A tab outside a task, or a task with
     /// no room for another tab, loads the address itself, as before 2026-10-22.
-    private func openWindow(_ url: String, from opener: BrowserTab, background: Bool, userGesture: Bool) {
+    private func openWindow(_ url: String, from opener: BrowserTab, background: Bool, userGesture: Bool,
+                            retained: BrowserBlockedPopup? = nil) {
         guard userGesture else { return }
         if let session = opener.session {
             let behind = opensBehind(from: opener, session: session)
             let agentsOpener = agentTab(forSession: session) === opener
             // The agent's click opened it, or a remote device's, as a pop-up the host adopts (`adoptPopup`).
-            if let tab = try? newTab(forSession: session, url: url, viewport: opener.viewport ?? .offscreenDefault,
-                                     select: !background && !behind, byAgent: opener.isDrivenByAgent) {
-                tab.inherit(from: opener)
+            if let tab = try? newTab(forSession: session, url: retained == nil ? url : "about:blank",
+                                     viewport: opener.viewport ?? .offscreenDefault,
+                                     select: !background && !behind,
+                                     byAgent: retained?.openedByAgent == true || opener.isDrivenByAgent) {
+                tab.inherit(from: opener, retained: retained)
+                // Apply retained download restrictions before a URL-only request starts loading.
+                if retained != nil { connection?.send(.navigate(tab: tab.id, url: url)) }
                 if !background { placeOpened(tab, behind: behind, agentsOpener: agentsOpener, session: session) }
                 opener.receive(.openedTab(tab: opener.id, newTab: tab.id, url: url))
                 return
             }
         }
+        guard retained == nil else { return }
         connection?.send(.navigate(tab: opener.id, url: url))
         opener.receive(.openedTab(tab: opener.id, newTab: nil, url: url))
     }
 
-    /// A page's new window the host made, so it keeps `window.opener` (a card issuer's 3-D Secure window,
-    /// PayPal and sign-in popups answer the page that opened them): another tab of the opener's task,
+    /// Adopts an engine-created window into its originating task. Ordinary page popups keep their opener;
+    /// URLs selected from the blocked menu have an independent browsing context.
     /// placed as `openWindow` places one. A tab outside a task, or a task with no room for another tab,
     /// closes it, and the opener loads the address itself, as `openWindow` does.
     private func adoptPopup(_ id: BrowserTabID, opener: BrowserTab?, url: String, background: Bool) {
@@ -937,14 +943,8 @@ final class BrowserHostClient {
         let tab = BrowserTab(id: id, client: self, session: session, key: UUID())
         tab.viewport = opener.viewport
         // The agent's click opened it; or a remote device's, which the new tab's own requests answer to.
-        tab.openedByAgent = retained?.openedByAgent ?? opener.isDrivenByAgent
-        if let retained {
-            tab.remoteOpener = retained.drivenByRemote
-            tab.openerRefusedDownloads = retained.refusedDownloads
-            tab.tellDownloads()
-        } else {
-            tab.inherit(from: opener)
-        }
+        tab.openedByAgent = retained?.openedByAgent == true || opener.isDrivenByAgent
+        tab.inherit(from: opener, retained: retained)
         tabs[id] = tab
         sessionOrder[session, default: []].append(id)
         if (!background && !behind) || frontedTabs[session].flatMap({ tabs[$0] }) == nil {
@@ -1671,9 +1671,11 @@ final class BrowserTab {
 
     /// A tab a page opened answers to what drove that page: a remote device's input, and whether its downloads were
     /// refused.
-    fileprivate func inherit(from opener: BrowserTab) {
-        remoteOpener = opener.isDrivenByRemote
-        openerRefusedDownloads = opener.refusesDownloads
+    fileprivate func inherit(from opener: BrowserTab, retained: BrowserBlockedPopup? = nil) {
+        // Match the host: either the original request or the opener's current input can restrict a popup.
+        // Local input in this popup ends both inherited restrictions through tellDownloads().
+        remoteOpener = retained?.drivenByRemote == true || opener.isDrivenByRemote
+        openerRefusedDownloads = retained?.refusedDownloads == true || opener.refusesDownloads
         tellDownloads()
     }
 
@@ -1729,8 +1731,8 @@ final class BrowserTab {
     /// The agent's input came after the person's last (or the person has not used the page): what the page does
     /// now follows the agent.
     var isDrivenByAgent: Bool {
-        guard let agent = lastAgentActivity else { return false }
-        return lastPersonInput.map { agent > $0 } ?? true
+        if let agent = lastAgentActivity { return lastPersonInput.map { agent > $0 } ?? true }
+        return openedByAgent && lastPersonInput == nil
     }
 
     /// The person's answer to the page's request to open another app.
@@ -2048,6 +2050,8 @@ final class BrowserTab {
                 restore = .none
             }
         case .discarded:
+            blockedPopupRequests = []
+            openingBlockedPopups = []
             // The page is gone with its renderer, and with it what it asked of the person.
             isDiscarded = true
             isDiscardAsked = false
@@ -2071,6 +2075,8 @@ final class BrowserTab {
             waitedUntil = nil
             if isResponsive { unanswered = nil }
         case .pageCrashed(_, let reason, let status, let code):
+            blockedPopupRequests = []
+            openingBlockedPopups = []
             hangReported = false
             waitedUntil = nil
             unanswered = nil
@@ -2102,6 +2108,8 @@ final class BrowserTab {
             }
         case .blockedPopupRemoved(_, let popupTab):
             forgetBlockedPopup(popupTab)
+        case .blockedPopupRetry(_, let popupTab):
+            openingBlockedPopups.remove(popupTab)
         case .popupPermission(_, let allowed):
             popupsAllowed = allowed
         case .newDocument:

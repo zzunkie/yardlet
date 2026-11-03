@@ -313,6 +313,65 @@ final class BrowserSessionTabsTests: XCTestCase {
         XCTAssertEqual(opened(), ["https://merchant.test/"])
     }
 
+    func testAgentOwnershipFollowsChainedPopupsUntilThePersonUsesThem() throws {
+        let client = makeClient()
+        let session = UUID()
+        let opener = try client.openTab(forSession: session, url: "https://merchant.test/",
+                                        viewport: .offscreenDefault, byAgent: true)
+        connection.eventHandler?(.popupOpened(tab: 1 << 30, opener: opener.id, url: "https://issuer.test/", background: false))
+        let first = try XCTUnwrap(client.tabs(forSession: session).last)
+        XCTAssertTrue(first.isDrivenByAgent, "a popup inherits ownership before any agent tool uses it")
+        connection.eventHandler?(.blockedPopup(tab: first.id, popupTab: (1 << 30) + 1, url: "https://verify.test/"))
+        let request = try XCTUnwrap(first.blockedPopupRequests.first)
+        client.openBlockedPopup(request, from: first)
+        connection.eventHandler?(.popupOpened(tab: request.id, opener: first.id, url: request.url, background: false))
+        let second = try XCTUnwrap(client.tabs(forSession: session).last)
+        XCTAssertTrue(second.openedByAgent)
+        XCTAssertTrue(second.isDrivenByAgent, "external-app requests still require the person's answer")
+        second.notePersonInput()
+        XCTAssertFalse(second.isDrivenByAgent, "the person's own input takes over the popup")
+    }
+
+    func testPopupDownloadRestrictionsIncludeInputBeforeApprovalAndEndWithLocalInput() throws {
+        let client = makeClient()
+        let session = UUID()
+        let opener = try client.openTab(forSession: session, url: "https://merchant.test/", viewport: .offscreenDefault)
+        for legacy in [false, true] {
+            opener.notePersonInput()
+            let url = "https://issuer.test/"
+            if legacy {
+                // The URL-only fallback must keep the original restriction even after local input.
+                opener.notePersonInput(remote: true)
+                opener.noteAgentActivity()
+                connection.eventHandler?(.newWindow(tab: opener.id, url: url, background: false, userGesture: false))
+                opener.notePersonInput()
+            } else {
+                connection.eventHandler?(.blockedPopup(tab: opener.id, popupTab: 1 << 30, url: url))
+                opener.notePersonInput(remote: true)
+            }
+            let request = try XCTUnwrap(opener.blockedPopupRequests.first)
+            let before = connection.sent.count
+            client.openBlockedPopup(request, from: opener)
+            if !legacy {
+                connection.eventHandler?(.popupOpened(tab: request.id, opener: opener.id, url: url, background: false))
+            }
+            let popup = try XCTUnwrap(client.tabs(forSession: session).last)
+            XCTAssertTrue(popup.isDrivenByRemote)
+            let commands = Array(connection.sent.dropFirst(before))
+            let refusalIndex = try XCTUnwrap(commands.firstIndex(of: .refuseDownloads(tab: popup.id, isRefused: true)))
+            if legacy {
+                XCTAssertTrue(popup.openedByAgent)
+                let navigationIndex = try XCTUnwrap(commands.firstIndex(of: .navigate(tab: popup.id, url: url)))
+                XCTAssertLessThan(refusalIndex, navigationIndex, "the fallback refuses downloads before loading")
+            }
+            popup.notePersonInput()
+            XCTAssertFalse(popup.isDrivenByRemote)
+            XCTAssertEqual(connection.sent.last, .refuseDownloads(tab: popup.id, isRefused: false),
+                           "the client must know the inherited refusal to release it in the host")
+            popup.close()
+        }
+    }
+
     func testBlockedPopupDoesNotResumeAfterItsDocumentHasLeft() throws {
         let client = makeClient()
         let opener = try client.openTab(forSession: UUID(), url: "https://merchant.test/", viewport: .offscreenDefault)
@@ -332,6 +391,28 @@ final class BrowserSessionTabsTests: XCTestCase {
         let afterRemoval = connection.sent.count
         client.openBlockedPopup(failed, from: opener)
         XCTAssertEqual(connection.sent.count, afterRemoval)
+    }
+
+    func testBlockedPopupCapacityCanBeRetriedAndRendererLossClearsRequests() throws {
+        let client = makeClient()
+        let opener = try client.openTab(forSession: UUID(), url: "https://merchant.test/", viewport: .offscreenDefault)
+        let losses: [BrowserHostEvent] = [.pageCrashed(tab: opener.id, reason: "crashed"), .discarded(tab: opener.id)]
+        for lost in losses {
+            let id = 1 << 30
+            connection.eventHandler?(.blockedPopup(tab: opener.id, popupTab: id, url: "https://issuer.test/"))
+            let request = try XCTUnwrap(opener.blockedPopupRequests.first)
+            client.openBlockedPopup(request, from: opener)
+            connection.eventHandler?(.blockedPopupRetry(tab: opener.id, popupTab: id))
+            XCTAssertEqual(opener.blockedPopupRequests, [request])
+            let retry = connection.sent.count
+            client.openBlockedPopup(request, from: opener)
+            XCTAssertEqual(Array(connection.sent.dropFirst(retry)), [.openBlockedPopup(tab: opener.id, popupTab: id)])
+            connection.eventHandler?(lost)
+            XCTAssertTrue(opener.blockedPopupRequests.isEmpty)
+            let afterLoss = connection.sent.count
+            client.openBlockedPopup(request, from: opener)
+            XCTAssertEqual(connection.sent.count, afterLoss, "a dead document has no request to resume")
+        }
     }
 
     func testPopupExceptionFollowsHostStateAndCanBeRemoved() throws {

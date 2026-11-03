@@ -156,13 +156,7 @@ final class BrowserHost {
         case "openBlockedPopup":
             guard let popupTab = fields["popupTab"] as? Int else { return }
             guard blockedPopupSources[popupTab]?.opener == tab else { return }
-            yardlet_cef_open_blocked_popup(Int32(tab), Int32(popupTab))
-            // Page code may replace window.open or reuse a named target without making a new window.
-            // Do not leave an opening indicator or its one-shot request behind indefinitely.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-                guard let self, self.blockedPopupSources[popupTab]?.opener == tab else { return }
-                yardlet_cef_cancel_blocked_popup(Int32(tab), Int32(popupTab))
-            }
+            _ = yardlet_cef_open_blocked_popup(Int32(tab), Int32(popupTab))
         case "popupPermission":
             yardlet_cef_popup_permission(Int32(tab), (fields["allowed"] as? Bool).map { $0 ? 1 : 0 } ?? -1, fields["url"] as? String ?? "")
         case "navigate":
@@ -583,6 +577,8 @@ final class BrowserHost {
         case YardletCEFEventConsole.rawValue:
             send(["console": ["tab": tab, "level": Int(value >> 16), "message": text ?? "",
                               "source": detail ?? "", "line": Int(value & 0xFFFF)]])
+        case YardletCEFEventPopupRetry.rawValue:
+            send(["blockedPopupRetry": ["tab": tab, "popupTab": Int(value)]])
         case YardletCEFEventPopupRemoved.rawValue:
             blockedPopupSources.removeValue(forKey: Int(value))
             send(["blockedPopupRemoved": ["tab": tab, "popupTab": Int(value)]])
@@ -631,6 +627,7 @@ final class BrowserHost {
             if value == 1 { advance(tab) }
             else { notOpened(tab, "chromium", "Chromium could not create a browser for tab \(tab)") }
         case YardletCEFEventPageCrashed.rawValue:
+            blockedPopupSources = blockedPopupSources.filter { $0.value.opener != tab }
             // One line per renderer that ended, for reading a person's host.log: how it ended and its exit code.
             let status = Self.terminationStatus(value)
             let code = Int(detail ?? "") ?? 0
@@ -641,6 +638,7 @@ final class BrowserHost {
         case YardletCEFEventPageState.rawValue:
             discarder.answered(tab: tab, query: Int(detail ?? "") ?? -1, flags: value)
         case YardletCEFEventDiscarded.rawValue:
+            blockedPopupSources = blockedPopupSources.filter { $0.value.opener != tab }
             discarder.discarded(tab: tab)
         case YardletCEFEventDialogReset.rawValue:
             send(["javaScriptDialogReset": ["tab": tab]])

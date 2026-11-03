@@ -1025,10 +1025,10 @@ POPUPS = '''<!doctype html><meta charset="utf-8"><title>Popup QA</title>
 <h1>Popup QA</h1><button id="fetch">Open after fetch</button><button id="timer">Open after one second</button>
 <button id="expired">Open after six seconds</button><iframe id="frame" src="ISSUER/popups/frame"></iframe>
 <script>
-window.qa = {attempts:[], replies:[]};
-window.openQA = function(kind) {
+window.qa = {attempts:[], replies:[], openHookCalls:0};
+window.openQA = function(kind, features = 'popup,width=420,height=560') {
   const active = navigator.userActivation.isActive;
-  const popup = window.open('ISSUER/popups/reply?kind=' + kind, '_blank', 'popup,width=420,height=560');
+  const popup = window.open('ISSUER/popups/reply?kind=' + kind, '_blank', features);
   window.qa.attempts.push({kind, active, returned:!!popup});
 };
 addEventListener('message', e => {
@@ -1048,6 +1048,9 @@ document.querySelector('#open').onclick = async () => {
   window.open('/popups/reply?kind=frame', '_blank', 'popup,width=420,height=560');
 };
 addEventListener('message', e => {
+  if (e.origin === 'MERCHANT' && e.data && e.data.openBlockedPopup) {
+    window.open('/popups/reply?kind=' + e.data.openBlockedPopup, '_blank', 'popup');
+  }
   if (e.origin === location.origin && e.data && e.data.popupQA) parent.postMessage(e.data, 'MERCHANT');
 });
 </script>'''

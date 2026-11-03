@@ -2002,12 +2002,72 @@ private final class BrowserHostQARunner {
         await capturePopupMenu(controller)
         if let blocked = opener.blockedPopups.first {
             controller.openBlockedPopup(blocked)
-            let answered = await replied("expired")
+            _ = await waitUntil(.seconds(10)) { self.client.tabs(forSession: self.session).contains { $0 !== opener } }
             let popup = client.tabs(forSession: session).first { $0 !== opener }
-            let loaded = await waitUntil(.seconds(10)) { popup?.title == "Popup has opener" }
-            check("popups: opening the blocked request preserves its opener callback", answered && loaded && opener.blockedPopups.isEmpty,
-                  "reply \(answered), title \(popup?.title ?? "none")")
-        } else { check("popups: opening the blocked request preserves its opener callback", false, "no blocked request") }
+            let loaded = await waitUntil(.seconds(10)) { popup?.title == "Popup has no opener" }
+            check("popups: the blocked menu opens an independent tab", loaded && opener.blockedPopups.isEmpty,
+                  "title \(popup?.title ?? "none")")
+        } else { check("popups: the blocked menu opens an independent tab", false, "no blocked request") }
+
+        // Approval opens the recorded URL without calling page JavaScript.
+        try await reset()
+        _ = try await evaluate(controller, "openQA('original')", userGesture: false)
+        let originalBlocked = await waitUntil(.seconds(5)) { !opener.blockedPopups.isEmpty }
+        _ = try await evaluate(controller, """
+            (() => {
+              const original = window.open;
+              window.open = function(url, name, features) {
+                window.qa.openHookCalls++;
+                return original.call(this, '/second?intercepted', name, features);
+              };
+            })()
+            """, userGesture: false)
+        if let blocked = opener.blockedPopups.first {
+            controller.openBlockedPopup(blocked)
+            _ = await waitUntil(.seconds(10)) { self.client.tabs(forSession: self.session).contains { $0 !== opener } }
+            let popup = client.tabs(forSession: session).first { $0 !== opener }
+            let loaded = await waitUntil(.seconds(10)) { popup?.title == "Popup has no opener" }
+            let hooks = await read("String(window.qa.openHookCalls)")
+            check("popups: approval bypasses the page's replacement of window.open", originalBlocked && loaded && hooks == "0"
+                    && popup?.currentURL?.hasSuffix("/popups/reply?kind=original") == true,
+                  "hook calls \(hooks), URL \(popup?.currentURL ?? "none")")
+            results["replacedOpen"] = .string("hook calls \(hooks), URL \(popup?.currentURL ?? "none")")
+        } else { check("popups: approval bypasses the page's replacement of window.open", false, "no blocked request") }
+
+        try await reset()
+        _ = try await evaluate(controller, "openQA('noopener', 'noopener')", userGesture: false)
+        let noOpenerBlocked = await waitUntil(.seconds(5)) { !opener.blockedPopups.isEmpty }
+        let noOpenerAttempt = await read("JSON.stringify(window.qa.attempts)")
+        if let blocked = opener.blockedPopups.first {
+            controller.openBlockedPopup(blocked)
+            let appeared = await waitUntil(.seconds(10)) { self.client.tabs(forSession: self.session).contains { $0 !== opener } }
+            let popup = client.tabs(forSession: session).first { $0 !== opener }
+            let withoutOpener = await waitUntil(.seconds(10)) { popup?.title == "Popup has no opener" }
+            check("popups: approving a noopener request keeps window.opener null", noOpenerBlocked && appeared && withoutOpener
+                    && noOpenerAttempt.contains("\"returned\":false"),
+                  "attempt \(noOpenerAttempt), title \(popup?.title ?? "none")")
+            results["noopener"] = .string("attempt \(noOpenerAttempt), title \(popup?.title ?? "none")")
+        } else { check("popups: approving a noopener request keeps window.opener null", false, "no blocked request; \(noOpenerAttempt)") }
+
+        // A replaced or removed iframe must not retain menu entries for its old document.
+        for change in ["navigate", "remove"] {
+            try await reset()
+            _ = try await evaluate(controller, """
+                document.querySelector('#frame').contentWindow.postMessage({openBlockedPopup:'stale-\(change)'}, '*')
+                """, userGesture: false)
+            let blocked = await waitUntil(.seconds(5)) { !opener.blockedPopups.isEmpty }
+            let request = opener.blockedPopupRequests.first
+            let action = change == "navigate"
+                ? "document.querySelector('#frame').src = '/second?replaced-frame'"
+                : "document.querySelector('#frame').remove()"
+            _ = try await evaluate(controller, action, userGesture: false)
+            let cleared = await waitUntil(.seconds(5)) { opener.blockedPopups.isEmpty }
+            if let request { controller.openBlockedPopup(request) }
+            check("popups: iframe \(change) clears requests from its previous document", blocked && cleared
+                    && client.tabs(forSession: session).count == 1,
+                  "listed before \(blocked), cleared \(cleared), tabs \(client.tabs(forSession: session).count)")
+            results["iframe-\(change)"] = .string("listed before \(blocked), cleared \(cleared)")
+        }
 
         try await reset()
         controller.setPopupsAllowed(true)
@@ -2031,6 +2091,21 @@ private final class BrowserHostQARunner {
         check("popups: revoking always allow restores blocking", revoked && blockedAgain, "revoked \(revoked), blocked \(blockedAgain)")
         try await reset()
         check("popups: navigation clears retained requests", opener.blockedPopups.isEmpty, "remaining \(opener.blockedPopups.count)")
+
+        _ = try await evaluate(controller, "openQA('renderer-ended')", userGesture: false)
+        let blockedBeforeCrash = await waitUntil(.seconds(5)) { !opener.blockedPopups.isEmpty }
+        // The same deliberate renderer-only crash used by the input QA; the browser host stays alive.
+        _ = try? await opener.devTools.send("Page.crash", [:], timeout: .seconds(2))
+        let previousCrashes: Int64
+        if case .integer(let count) = record["intentionalRendererCrashes"] { previousCrashes = count } else { previousCrashes = 0 }
+        record["intentionalRendererCrashes"] = .integer(previousCrashes + 1)
+        let crashed = await waitUntil(.seconds(10)) { opener.crash != nil }
+        let clearedAfterCrash = await waitUntil(.seconds(5)) { opener.blockedPopups.isEmpty }
+        check("popups: renderer termination clears dead popup requests", blockedBeforeCrash && crashed && clearedAfterCrash && client.isHostRunning,
+              "listed before \(blockedBeforeCrash), renderer ended \(crashed), cleared \(clearedAfterCrash)")
+        controller.navigate(.reload)
+        _ = await waitUntil(.seconds(10)) { opener.crash == nil && opener.title == "Popup QA" && !opener.isLoading }
+
     }
 
     /// Draws the same content used by the popup menu without ordering a window on screen.
