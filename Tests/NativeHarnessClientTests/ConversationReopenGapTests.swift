@@ -221,16 +221,18 @@ final class ConversationReopenGapWindowTests: XCTestCase {
         let others = [4, 5, 6, 7]
         var checks: [Check] = []
         func check(_ index: Int, _ name: String) throws {
-            window.show(index)
-            window.host.settle(passes: 20)
-            checks.append(try self.check(window, name: "\(name)-\(appearance.suffix)"))
+            try autoreleasepool {
+                window.show(index)
+                window.host.settle(passes: 20)
+                checks.append(try self.check(window, name: "\(name)-\(appearance.suffix)"))
+            }
         }
         window.show(others[0])
         for (index, name) in subjects { try check(index, "\(name)-first") }
-        for index in others { window.show(index) }
+        for index in others { autoreleasepool { window.show(index) } }
         for (index, name) in subjects {
             try check(index, "\(name)-after-four-others")
-            for other in others { window.show(other) }
+            for other in others { autoreleasepool { window.show(other) } }
         }
         guard everyWay else { return try report(checks) }
         // Again while its turns are kept (one other task between).
@@ -241,7 +243,7 @@ final class ConversationReopenGapWindowTests: XCTestCase {
         // A wider window, its turns let go.
         resize(window, to: NSSize(width: 1280, height: 800))
         for (index, name) in subjects {
-            for other in others { window.show(other) }
+            for other in others { autoreleasepool { window.show(other) } }
             try check(index, "\(name)-wider")
         }
         // Shown wide, hidden, the window made narrower, shown again with its turns kept.
