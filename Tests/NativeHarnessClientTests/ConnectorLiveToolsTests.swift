@@ -91,6 +91,7 @@ final class ConnectorLiveToolsTests: XCTestCase {
         defer { rig.tearDown() }
         let task = UUID()
         let invoker = try rig.invoker(for: task)
+        rig.connectors.set((0..<600).map { Self.tool("catalog_\($0)", "Search the connected catalog \($0)") })
         let first = try XCTUnwrapAsync(await invoker.listTools())
         XCTAssertEqual(first.fingerprint, AgentToolListWatching.fingerprint(of: first.tools),
                        "The list carries the app's fingerprint of itself")
