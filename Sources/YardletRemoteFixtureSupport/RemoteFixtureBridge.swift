@@ -1455,13 +1455,19 @@ public actor RemoteFixtureBridge: RemoteBridge {
                 Choice(value: "bypassPermissions", name: "Bypass permissions", confirm: bypass)], role: "permission")] + menu
         case .codex:
             let full = RemoteSetting.Confirmation(
-                title: "Allow full access?",
-                message: "Codex will run commands, use the internet, and create and edit files anywhere on this Mac without asking.",
-                button: "Allow full access")
-            return [RemoteSetting(id: "runLocation", name: "Permissions", value: "automatic", choices: [
-                Choice(value: "automatic", name: "Default"), Choice(value: "readOnly", name: "Read-only"),
-                Choice(value: "workspaceWrite", name: "Workspace write"),
-                Choice(value: "dangerFullAccess", name: "Full access", confirm: full)], role: "permission")] + menu
+                title: "Turn on full access?",
+                message: "Codex will be able to run commands, use the internet, and create and edit files anywhere on "
+                    + "this computer without your permission. This comes with risks like loss or exposure of sensitive "
+                    + "data and prompt injection.",
+                button: "Confirm")
+            return [RemoteSetting(id: "runLocation", name: "Permissions", value: "askForApproval", choices: [
+                Choice(value: "askForApproval", name: "Ask for approval",
+                       description: "Always ask to edit external files and use the internet"),
+                Choice(value: "approveForMe", name: "Approve for me",
+                       description: "Only ask for actions detected as potentially unsafe"),
+                Choice(value: "dangerFullAccess", name: "Full access",
+                       description: "Unrestricted access to the internet and any file on your computer", confirm: full)],
+                role: "permission")] + menu
         case .opencode:
             var permission = RemoteSetting(id: "permissions", name: "Permissions", value: "", choices: [], role: "permission")
             permission.title = "On request"

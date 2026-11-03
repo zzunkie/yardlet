@@ -59,7 +59,7 @@ struct PromptComposer: View {
         modes: [CodexCollaborationPreset] = [],
         selectedModeID: CodexCollaborationPreset.ID? = nil,
         modelCatalog: CodexModelCatalog = CodexModelCatalog(),
-        runLocation: CodexRunLocation = .automatic,
+        runLocation: CodexRunLocation = .askForApproval,
         providerSession: SessionRecord? = nil,
         providerEntries: [TranscriptEntry] = [],
         providerCapabilities: ProviderCapabilityState? = nil,

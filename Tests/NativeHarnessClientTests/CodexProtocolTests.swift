@@ -171,9 +171,8 @@ final class CodexProtocolTests: XCTestCase {
         let params = try XCTUnwrap(object["params"] as? [String: Any])
 
         XCTAssertEqual(params["approvalPolicy"] as? String, "on-request")
-        XCTAssertEqual(params["sandbox"] as? String, "workspace-write")
-        XCTAssertNotEqual(params["approvalPolicy"] as? String, "never")
-        XCTAssertNotEqual(params["sandbox"] as? String, "danger-full-access")
+        XCTAssertEqual(params["permissions"] as? String, ":workspace")
+        XCTAssertEqual(params["approvalsReviewer"] as? String, "user")
     }
 
     func testStartTurnEncodesSelectedCollaborationMode() throws {
@@ -231,52 +230,6 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertEqual(steer.method, "turn/steer")
         XCTAssertEqual(steer.params["expectedTurnId"]?.stringValue, "turn-1")
         XCTAssertEqual(steer.params["input"]?.arrayValue?.first?["text"]?.stringValue, "Continue")
-    }
-
-    func testTurnStartEncodesTheInstalledSandboxPolicyEnvelope() {
-        let readOnly = CodexProtocol.startTurn(
-            id: 12,
-            threadID: "thread-1",
-            prompt: "Inspect",
-            runLocation: .readOnly
-        )
-        XCTAssertEqual(
-            readOnly.params["sandboxPolicy"]?["type"]?.stringValue,
-            "readOnly"
-        )
-        XCTAssertEqual(
-            readOnly.params["sandboxPolicy"]?["networkAccess"]?.boolValue,
-            false
-        )
-
-        let workspaceWrite = CodexProtocol.startTurn(
-            id: 13,
-            threadID: "thread-1",
-            prompt: "Edit",
-            runLocation: .workspaceWrite
-        )
-        XCTAssertEqual(
-            workspaceWrite.params["sandboxPolicy"]?["type"]?.stringValue,
-            "workspaceWrite"
-        )
-
-        let fullAccess = CodexProtocol.startTurn(
-            id: 14,
-            threadID: "thread-1",
-            prompt: "Run",
-            runLocation: .dangerFullAccess
-        )
-        XCTAssertEqual(
-            fullAccess.params["sandboxPolicy"]?["type"]?.stringValue,
-            "dangerFullAccess"
-        )
-
-        let inherited = CodexProtocol.startTurn(
-            id: 15,
-            threadID: "thread-1",
-            prompt: "Use default"
-        )
-        XCTAssertNil(inherited.params["sandboxPolicy"])
     }
 
     func testUnknownUserInputRoundTripsItsOriginalProviderEnvelope() throws {

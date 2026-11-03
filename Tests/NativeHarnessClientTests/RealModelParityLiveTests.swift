@@ -391,7 +391,7 @@ final class RealModelParityLiveTests: XCTestCase {
 
             let instructions = rig.workspace.appending(path: CodexInitPrompt.fileName)
             XCTAssertFalse(FileManager.default.fileExists(atPath: instructions.path))
-            await model.selectCodexRunLocation(.workspaceWrite, for: try rig.current(session))
+            await model.selectCodexRunLocation(.askForApproval, for: try rig.current(session))
             await model.runCodexComposerCommand(.initialize, in: try rig.current(session))
             let initialized = try await rig.completedCodexTurn(session, count: 3, timeout: 240, acceptingFileChanges: [instructions])
             let wrote = FileManager.default.fileExists(atPath: instructions.path)

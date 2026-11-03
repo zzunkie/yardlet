@@ -123,7 +123,7 @@ extension AppModel: ScheduleToolHandling {
         // A new task's runs use the schedule's own permission, which may be another harness's.
         let destination = schedule.destination
         let runMode = destination.mode == .newTask
-            ? destination.modelChoice?.permissionName(for: destination.harness)
+            ? (destination.modelChoice ?? NewTaskModelChoice(model: nil)).permissionName(for: destination.harness)
                 ?? (destination.harness == .claudeCode ? L10n.string("Manual") : L10n.string("Default"))
             : ClaudePermissionMode.displayName(mode) ?? mode
         await systemNotificationCenter.post(SystemNotification(
@@ -214,19 +214,18 @@ extension AppModel: ScheduleToolHandling {
     }
 
     /// Why a new task's runs would do more without asking than the caller may, or nil: a Claude Code run in a
-    /// mode freer than the caller's (`scheduleModeCeiling`), a Codex run at a level above the caller's, or any
-    /// other harness's run from a read-only caller, since only Claude Code's and Codex's permissions are kept
-    /// with a schedule.
+    /// mode, or a Codex run with a permission, freer than the caller's (`scheduleModeCeiling`), or any other
+    /// harness's run from a read-only caller, since only Claude Code's and Codex's permissions are kept with a
+    /// schedule.
     private func scheduleFreedomRefusal(_ destination: ScheduleDestination, caller: SessionToolCaller) -> String? {
         let harness = destination.harness
-        let named = destination.modelChoice?.toolPermission(for: harness) ?? "default"
+        let choice = destination.modelChoice ?? NewTaskModelChoice(model: nil)
+        let named = choice.toolPermission(for: harness) ?? "default"
         switch harness {
         case .claudeCode:
-            guard ClaudePermissionMode.freedom(destination.modelChoice?.permissionMode) > scheduleModeCeiling(caller)
-            else { return nil }
+            guard ClaudePermissionMode.freedom(choice.permissionMode) > scheduleModeCeiling(caller) else { return nil }
         case .codex:
-            let options = destination.modelChoice?.providerOptions(for: harness) ?? [:]
-            guard TaskPermissionLevel.level(harness: harness, options: options) > caller.permission else { return nil }
+            guard choice.codexRunLocation.freedom > scheduleModeCeiling(caller) else { return nil }
         default:
             guard caller.permission == .readOnly else { return nil }
             return "a read-only task schedules new tasks only on Claude Code and Codex, whose runs keep reading only; "
@@ -491,7 +490,8 @@ extension AppModel: ScheduleToolHandling {
             nestedUnderTaskId: isNew ? destination.parentTaskID?.uuidString : nil,
             model: isNew ? destination.modelChoice?.model : nil,
             effort: isNew ? destination.modelChoice?.effort : nil,
-            permissionMode: isNew ? destination.modelChoice?.toolPermission(for: destination.harness) : nil,
+            permissionMode: isNew
+                ? (destination.modelChoice ?? NewTaskModelChoice(model: nil)).toolPermission(for: destination.harness) : nil,
             prompt: promptLength.map { schedule.prompt.count > $0 ? String(schedule.prompt.prefix($0)) + "…" : schedule.prompt }
                 ?? schedule.prompt)
     }
@@ -525,7 +525,7 @@ extension AppModel: ScheduleToolHandling {
             var words = "a new \(destination.harness.displayName) task \(place)"
             if let model = destination.modelChoice?.model { words += ", on \(model)" }
             if Self.permissionKey(for: destination.harness) != nil {
-                let mode = destination.modelChoice?.toolPermission(for: destination.harness)
+                let mode = (destination.modelChoice ?? NewTaskModelChoice(model: nil)).toolPermission(for: destination.harness)
                 words += mode.map { ", in \($0) mode" } ?? ", in the default permission mode"
             }
             words += destination.parentTaskID.map { ", nested under task \($0.uuidString)" } ?? ", as a top-level task"
@@ -725,19 +725,26 @@ extension AppModel: ScheduleToolHandling {
 }
 
 extension AppModel {
-    /// The freest Claude Code mode a schedule the caller makes may run in: a Claude Code task's own
-    /// mode, else the mode that matches the caller's permission level (a harness's default edits its
-    /// folder as acceptEdits does).
+    /// The freest permission, on Claude Code's scale (`ClaudePermissionMode.freedom`), that a task or
+    /// schedule the caller makes may run with: a Claude Code task's own mode, else the mode that matches
+    /// the caller's permission level (a harness's default edits its folder as acceptEdits does), raised to
+    /// a Codex task's own permission where that is freer (Approve for me as Auto). Codex's Custom, whatever
+    /// `config.toml` says, raises nothing.
     func scheduleModeCeiling(_ caller: SessionToolCaller) -> Int {
-        if caller.id == caller.hostTaskID, caller.harness == .claudeCode,
-           let host = store.sessions.first(where: { $0.id == caller.hostTaskID }) {
+        let host = caller.id == caller.hostTaskID ? store.sessions.first(where: { $0.id == caller.hostTaskID }) : nil
+        if caller.harness == .claudeCode, let host {
             return ClaudePermissionMode.freedom(host.providerOptions[ClaudeLaunchOption.permissionMode])
         }
-        switch caller.permission {
-        case .readOnly: return ClaudePermissionMode.freedom(ClaudePermissionMode.plan)
-        case .standard: return ClaudePermissionMode.freedom(ClaudePermissionMode.acceptEdits)
-        case .elevated: return ClaudePermissionMode.freedom(ClaudePermissionMode.bypassPermissions)
+        let ceiling = switch caller.permission {
+        case .readOnly: ClaudePermissionMode.freedom(ClaudePermissionMode.plan)
+        case .standard: ClaudePermissionMode.freedom(ClaudePermissionMode.acceptEdits)
+        case .elevated: ClaudePermissionMode.freedom(ClaudePermissionMode.bypassPermissions)
         }
+        if caller.harness == .codex, caller.permission != .readOnly, let host,
+           case let location = CodexRunLocation.restored(from: host.providerOptions), location != .custom {
+            return max(ceiling, location.freedom)
+        }
+        return ceiling
     }
 }
 

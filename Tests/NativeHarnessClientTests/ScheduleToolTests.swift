@@ -70,8 +70,8 @@ final class ScheduleToolTests: XCTestCase {
         XCTAssertEqual(properties, ["name", "prompt", "cronExpression", "fireAt", "continueTaskId", "harness", "project",
                                     "chat", "useWorktree", "topLevel", "model", "effort", "permissionMode"])
         XCTAssertEqual(create["inputSchema"]?["properties"]?["permissionMode"]?["enum"],
-                       .array(["default", "plan", "acceptEdits", "auto", "dontAsk", "bypassPermissions", "readOnly",
-                               "workspaceWrite", "dangerFullAccess"].map { .string($0) }),
+                       .array(["default", "plan", "acceptEdits", "auto", "dontAsk", "bypassPermissions", "askForApproval",
+                               "approveForMe", "dangerFullAccess", "custom", "readOnly"].map { .string($0) }),
                        "The Claude app's own modes, then Codex's own permissions")
         let update = try XCTUnwrap(ScheduleToolCatalog.definition(named: "update_scheduled_task")?.json)
         XCTAssertEqual(update["inputSchema"]?["properties"]?["enabled"]?["type"], .string("boolean"))
@@ -398,17 +398,20 @@ final class ScheduleToolTests: XCTestCase {
         XCTAssertTrue(auto.isError, "Nor in a mode freer than the caller's own: \(auto.text)")
         XCTAssertEqual(model.scheduledTasks.schedules.count, 3)
 
-        // Codex's permissions in Codex's own values, no freer than the caller's level (a harness's default asks).
-        let fullAccess = await call(model, "create_scheduled_task", [
-            "prompt": "Clean up.", "cronExpression": "0 3 * * *", "harness": "codex", "permissionMode": "dangerFullAccess"
-        ], from: fixture.caller)
-        XCTAssertTrue(fullAccess.isError, fullAccess.text)
-        XCTAssertTrue(fullAccess.text.contains("lets each run do more without asking than this task may"), fullAccess.text)
+        // Codex's permissions in Codex's own values, no freer than the caller's (a harness's default asks): Approve for
+        // me lets a reviewer answer for the person, as Auto does, and Full access asks nothing.
+        for freer in ["approveForMe", "dangerFullAccess", "custom"] {
+            let refused = await call(model, "create_scheduled_task", [
+                "prompt": "Clean up.", "cronExpression": "0 3 * * *", "harness": "codex", "permissionMode": freer
+            ], from: fixture.caller)
+            XCTAssertTrue(refused.isError, refused.text)
+            XCTAssertTrue(refused.text.contains("lets each run do more without asking than this task may"), refused.text)
+        }
         let claudeWords = await call(model, "create_scheduled_task", [
             "prompt": "Clean up.", "cronExpression": "0 3 * * *", "harness": "codex", "permissionMode": "plan"
         ], from: fixture.caller)
-        XCTAssertTrue(claudeWords.text.contains("must be one of default, readOnly, workspaceWrite, dangerFullAccess"),
-                      claudeWords.text)
+        XCTAssertTrue(claudeWords.text.contains(
+            "must be one of askForApproval, approveForMe, dangerFullAccess, custom, readOnly"), claudeWords.text)
         let readOnly = await call(model, "create_scheduled_task", [
             "prompt": "Read the logs.", "cronExpression": "0 3 * * *", "harness": "codex", "permissionMode": "readOnly"
         ], from: fixture.caller)
@@ -421,8 +424,8 @@ final class ScheduleToolTests: XCTestCase {
         let plain = await call(model, "create_scheduled_task", [
             "prompt": "Read the logs.", "cronExpression": "0 4 * * *", "harness": "codex"
         ], from: fixture.caller)
-        XCTAssertTrue(plain.text.contains("in the default permission mode"), plain.text)
-        XCTAssertNil(model.scheduledTasks.schedules.last?.destination.modelChoice, "Codex's Default, as before")
+        XCTAssertTrue(plain.text.contains("in askForApproval mode"), plain.text)
+        XCTAssertNil(model.scheduledTasks.schedules.last?.destination.modelChoice, "Ask for approval, as before")
         XCTAssertEqual(model.scheduledTasks.schedules.count, 5)
         await model.shutdown()
     }
@@ -537,10 +540,21 @@ final class ScheduleToolTests: XCTestCase {
                        from: auto.claude)
         XCTAssertEqual(auto.model.scheduledTasks.schedules.first?.destination.modelChoice?.permissionMode, "auto")
         XCTAssertEqual(auto.notifications.posts.count, 1)
-        // Auto is the standard level, so a Codex schedule's runs keep Codex's Default.
+        // Auto is the standard level, so a Codex schedule's runs keep Ask for approval.
         _ = await call(auto.model, "create_scheduled_task", ["prompt": "Go.", "fireAt": "2026-10-18T09:00:00+09:00",
                                                              "harness": "codex"], from: auto.claude)
         XCTAssertNil(auto.model.scheduledTasks.schedules.last?.destination.modelChoice)
+        // Approve for me lets Codex's reviewer answer for the person as Auto's classifier does, so Auto may name it;
+        // Full access it may not.
+        let approved = await call(auto.model, "create_scheduled_task", [
+            "prompt": "Go.", "fireAt": "2026-10-18T09:00:00+09:00", "harness": "codex", "permissionMode": "approveForMe"
+        ], from: auto.claude)
+        XCTAssertFalse(approved.isError, approved.text)
+        XCTAssertEqual(auto.model.scheduledTasks.schedules.last?.destination.modelChoice?.codexRunLocation, .approveForMe)
+        let full = await call(auto.model, "create_scheduled_task", [
+            "prompt": "Go.", "fireAt": "2026-10-18T09:00:00+09:00", "harness": "codex", "permissionMode": "dangerFullAccess"
+        ], from: auto.claude)
+        XCTAssertTrue(full.isError, full.text)
         await auto.model.shutdown()
 
         // On Codex, a caller that runs without asking makes runs with Full access, as its Codex child would, says

@@ -56,7 +56,7 @@ enum ComposerCompactPath: Equatable, Sendable {
 enum ComposerSessionChoice: Equatable, Sendable {
     /// Codex's typed model, effort and speed, applied together.
     case codexModel(CodexModelSelection)
-    /// Codex's sandbox policy for the next turn.
+    /// Codex's permission for the next turn.
     case codexRunLocation(CodexRunLocation)
     /// The provider's own selector and value.
     case providerOption(id: String, value: String)
@@ -365,7 +365,7 @@ enum ComposerSessionOptionsProjection {
         if capabilities.modes.first(where: { $0.id == capabilities.selectedModeID })?.mode == "plan" {
             options.mode = .planIndicator
         }
-        options.permission = codexPermission(capabilities.selectedRunLocation)
+        options.permission = codexPermission(capabilities.selectedRunLocation, config: capabilities.permissionConfig)
         let skills = capabilities.skills.filter(\.enabled)
         if !skills.isEmpty { options.skills = ComposerSkillsSlot(skills: skills) }
         options.contextUsage = codexContextUsage(tokenUsage)
@@ -389,22 +389,25 @@ enum ComposerSessionOptionsProjection {
                                       toolListFollowsNextTurn: carries && route == .claudeMCPConfig)
     }
 
-    /// Codex's four sandbox policies. Full access asks first, in Codex's words.
-    static func codexPermission(_ location: CodexRunLocation) -> ComposerPermissionSlot {
+    /// The Codex app's permission menu, its choices with their descriptions in its order
+    /// (`CodexRunLocation.menu`). Full access asks first, in the app's words.
+    static func codexPermission(_ location: CodexRunLocation, config: CodexPermissionConfig) -> ComposerPermissionSlot {
         ComposerPermissionSlot(
-            title: location.displayName,
+            title: location.shortName,
             selector: ProviderCapabilitySelector(
                 id: NewTaskModelProjection.codexPermissionID, name: L10n.string("Permissions"), description: nil,
                 category: "permission",
                 currentValue: location.rawValue,
-                choices: CodexRunLocation.allCases.map { .init(value: $0.rawValue, name: $0.displayName, description: nil) }),
+                choices: CodexRunLocation.menu(current: location, config: config).map {
+                    .init(value: $0.rawValue, name: $0.displayName, description: $0.choiceDescription)
+                }),
             confirmations: [CodexRunLocation.dangerFullAccess.rawValue: .init(
-                title: L10n.string("Allow full access?"),
-                // Full access is the Codex app's: no sandbox and no asking (`approvalPolicy: never`).
-                message: L10n.string("Codex will run commands, use the internet, and create and edit files anywhere on this Mac without asking."),
-                confirm: L10n.string("Allow full access"))],
+                title: L10n.string("Turn on full access?"),
+                // Full access is the app's: no sandbox and no asking (`approvalPolicy: never`).
+                message: L10n.string("Codex will be able to run commands, use the internet, and create and edit files anywhere on this computer without your permission. This comes with risks like loss or exposure of sensitive data and prompt injection."),
+                confirm: L10n.string("Confirm"))],
             canChoose: true, apply: .codexRunLocation, isElevated: location == .dangerFullAccess,
-            accessibilityHint: L10n.string("Choose the sandbox policy for the next Codex turn"))
+            accessibilityHint: L10n.string("Change permissions"))
     }
 
     /// The provider's permission selector, or what the session says about permissions without one.
@@ -637,7 +640,9 @@ extension ComposerSessionOptionsProjection {
         }
         if harness == .codex {
             // The same control and choices as a Codex task's composer; the thread starts with the choice.
-            options.permission = codexPermission(choice?.codexRunLocation ?? .automatic)
+            let config = catalogs?.defaults(for: .codex, connection: connection, workspaceURL: workspaceURL)?
+                .codexPermissions ?? CodexPermissionConfig()
+            options.permission = codexPermission(choice?.codexRunLocation ?? .askForApproval, config: config)
         }
         return options
     }
@@ -730,10 +735,10 @@ enum NewTaskModelProjection {
     /// The ID of Codex's permission selector (`ComposerSessionOptionsProjection.codexPermission`).
     nonisolated static let codexPermissionID = "runLocation"
 
-    /// Codex's choice with `location` as its permission; Default keeps none.
+    /// Codex's choice with `location` as its permission; Ask for approval keeps none.
     static func choosing(_ location: CodexRunLocation, choice: NewTaskModelChoice?) -> NewTaskModelChoice {
         var chosen = choice ?? NewTaskModelChoice(model: nil)
-        chosen.permissionMode = location == .automatic ? nil : location.rawValue
+        chosen.permissionMode = location.storedValue
         return chosen
     }
 

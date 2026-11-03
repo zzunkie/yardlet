@@ -3298,17 +3298,17 @@ final class AppModel {
         for session: SessionRecord
     ) async {
         do {
-            try await store.updateProviderOption(id: session.id, optionID: CodexRunLocation.storageKey,
-                                                 value: location.rawValue)
+            if let value = location.storedValue {
+                try await store.updateProviderOption(id: session.id, optionID: CodexRunLocation.storageKey, value: value)
+            } else {
+                try await store.removeProviderOption(id: session.id, optionID: CodexRunLocation.storageKey)
+            }
             let (_, provider, handle) = try await codexProvider(for: session)
             try await provider.selectRunLocation(location, for: handle)
             guard store.sessions.contains(where: { $0.id == session.id }) else { return }
             var state = codexCapabilitiesBySessionID[session.id] ?? .empty
             state.selectedRunLocation = location
-            state.actionMessage = L10n.format(
-                "Run location selected: %@",
-                location.displayName
-            )
+            state.actionMessage = L10n.format("Permissions selected: %@", location.displayName)
             codexCapabilitiesBySessionID[session.id] = state
         } catch {
             updateCodexActionError(error, for: session.id)
@@ -3953,7 +3953,7 @@ final class AppModel {
                 forkedCapabilities.modes = sourceCapabilities?.modes ?? []
                 forkedCapabilities.selectedModeID = sourceCapabilities?.selectedModeID
                 forkedCapabilities.selectedRunLocation =
-                    sourceCapabilities?.selectedRunLocation ?? .automatic
+                    sourceCapabilities?.selectedRunLocation ?? .askForApproval
                 forkedCapabilities.skills = sourceCapabilities?.skills ?? []
                 forkedCapabilities.plugins = sourceCapabilities?.plugins ?? []
                 codexCapabilitiesBySessionID[forkedSession.id] = forkedCapabilities
@@ -4990,6 +4990,9 @@ final class AppModel {
         var state = codexCapabilitiesBySessionID[session.id] ?? .empty
         guard session.harness == .codex else { return state }
         state.selectedRunLocation = CodexRunLocation.restored(from: session.providerOptions)
+        state.permissionConfig = modelCatalogs.defaults(for: .codex, connection: session.connection,
+                                                        scope: session.environmentScope, workspaceURL: nil)?
+            .codexPermissions ?? CodexPermissionConfig()
         // The task's saved mode shows before the runtime lists its presets; the adapter already
         // sends it from the task's launch options.
         if !state.modes.contains(where: { $0.id == state.selectedModeID }),

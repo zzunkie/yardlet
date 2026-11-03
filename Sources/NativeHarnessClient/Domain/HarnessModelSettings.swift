@@ -22,6 +22,8 @@ struct HarnessModelDefaults: Equatable, Sendable {
     var model: String?
     var effort: String?
     var serviceTier: String?
+    /// What Codex's `config.toml` changes in its permission menu.
+    var codexPermissions = CodexPermissionConfig()
 }
 
 /// Reads the model settings a harness keeps in its own files. Only those files are read: no CLI
@@ -51,7 +53,8 @@ enum HarnessModelDefaultsReader {
     }
 
     /// Codex's `model`, `model_reasoning_effort` and `service_tier` from `config.toml`'s top
-    /// level, with the profile it selects laid over them.
+    /// level, with the profile it selects laid over them, and what the file changes in the
+    /// permission menu.
     static func codex(home: URL) -> HarnessModelDefaults {
         let file = home.appending(path: "config.toml")
         guard let size = (try? file.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size < 1_048_576,
@@ -65,6 +68,7 @@ enum HarnessModelDefaultsReader {
             if let effort = nonEmpty(table["model_reasoning_effort"]) { defaults.effort = effort }
             if let tier = nonEmpty(table["service_tier"]) { defaults.serviceTier = tier }
         }
+        defaults.codexPermissions = CodexPermissionConfig(tables: tables)
         return defaults
     }
 
@@ -80,9 +84,10 @@ enum HarnessModelDefaultsReader {
     }
 }
 
-/// The string values of a TOML file, by table. Only what the model defaults need is understood:
-/// `[table]` headers (dotted, with quoted parts) and `key = "string"` or `key = 'string'` lines.
-/// Anything else is skipped rather than guessed.
+/// The values of a TOML file, by table, as text. Only what the model and permission defaults need is
+/// understood: `[table]` headers (dotted, with quoted parts), `key = "string"` or `key = 'string'`
+/// lines, and any other value as written up to a comment (`true`, `{ granular = … }`). Anything else
+/// is skipped rather than guessed.
 enum TOMLStringTables {
     static func parse(_ text: String) -> [String: [String: String]] {
         var tables: [String: [String: String]] = [:]
@@ -103,7 +108,11 @@ enum TOMLStringTables {
             let key = line[..<equals].trimmingCharacters(in: .whitespaces)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
             let rest = line[line.index(after: equals)...].trimmingCharacters(in: .whitespaces)
-            guard let quote = rest.first, quote == "\"" || quote == "'" else { continue }
+            guard let quote = rest.first, quote == "\"" || quote == "'" else {
+                let value = rest.prefix { $0 != "#" }.trimmingCharacters(in: .whitespaces)
+                if !value.isEmpty { tables[current, default: [:]][key] = value }
+                continue
+            }
             let body = rest.dropFirst()
             guard let close = body.firstIndex(of: quote) else { continue }
             tables[current, default: [:]][key] = String(body[..<close])

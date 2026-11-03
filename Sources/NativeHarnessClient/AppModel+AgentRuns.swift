@@ -237,7 +237,7 @@ extension AppModel {
             }
             try await provider.selectRunLocation(.readOnly, for: handle)
         } else if run.harness == .codex, case let location = CodexRunLocation.restored(from: options),
-                  location != .automatic, let provider = adapter as? any CodexCapabilityProviding {
+                  location != .askForApproval, let provider = adapter as? any CodexCapabilityProviding {
             // A Codex subagent of a Codex task runs with the task's permission, as its model.
             try await provider.selectRunLocation(location, for: handle)
         }

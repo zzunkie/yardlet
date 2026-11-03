@@ -477,7 +477,7 @@ final class YHPCodexCompatibilityAdapterTests: XCTestCase {
         XCTAssertEqual(items.entries.map(\.item.id), ["history-item"])
 
         try await routed.selectCollaborationMode(try XCTUnwrap(modes.first), for: handle)
-        try await routed.selectRunLocation(.workspaceWrite, for: handle)
+        try await routed.selectRunLocation(.approveForMe, for: handle)
         try await routed.setThreadName("Renamed", for: handle)
         try await routed.archiveThread(handle)
 

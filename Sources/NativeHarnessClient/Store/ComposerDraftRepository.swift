@@ -46,9 +46,9 @@ struct NewTaskModelChoice: Codable, Equatable, Sendable {
     /// Codex's service tier (Fast) chosen with the model.
     var serviceTier: String?
     /// Claude Code's permission mode, which the task launches in, Antigravity's, which its first
-    /// run takes, or Codex's permission (a `CodexRunLocation` other than Default), which its thread
-    /// starts with. Absent, as in drafts and schedules saved before it existed, the task starts in
-    /// the harness's default mode as every task does.
+    /// run takes, or Codex's permission (a `CodexRunLocation` other than Ask for approval), which its
+    /// thread starts with. Absent, as in drafts and schedules saved before it existed, the task starts
+    /// in the harness's default mode as every task does, Ask for approval on Codex.
     var permissionMode: String?
 
     init(model: String?, effort: String? = nil, serviceTier: String? = nil, permissionMode: String? = nil) {
@@ -67,17 +67,18 @@ struct NewTaskModelChoice: Codable, Equatable, Sendable {
         model.map { CodexModelSelection(model: $0, reasoningEffort: effort, serviceTier: serviceTier) }
     }
 
-    /// Codex's permission, Default when none was chosen.
+    /// Codex's permission, Ask for approval when none was chosen.
     var codexRunLocation: CodexRunLocation {
-        permissionMode.flatMap(CodexRunLocation.init(rawValue:)) ?? .automatic
+        CodexRunLocation.stored(permissionMode)
     }
 
     /// The chosen permission by the name its harness's control gives it, or nil when none was chosen.
+    /// Codex always has one, Ask for approval when none was chosen.
     func permissionName(for harness: HarnessKind) -> String? {
+        if harness == .codex { return codexRunLocation.displayName }
         guard let permissionMode else { return nil }
         switch harness {
         case .claudeCode: return ClaudePermissionMode.displayName(permissionMode) ?? permissionMode
-        case .codex: return codexRunLocation.displayName
         case .antigravityCLI: return AntigravityPermissionMode.displayName(permissionMode) ?? permissionMode
         default: return permissionMode
         }
@@ -96,7 +97,7 @@ struct NewTaskModelChoice: Codable, Equatable, Sendable {
         case .codex:
             var options: [String: String] = [:]
             if let selection = codexSelection?.storedValue { options[CodexModelSelection.storageKey] = selection }
-            if codexRunLocation != .automatic { options[CodexRunLocation.storageKey] = codexRunLocation.rawValue }
+            if let location = codexRunLocation.storedValue { options[CodexRunLocation.storageKey] = location }
             return options
         case .antigravityCLI:
             var options: [String: String] = [:]
@@ -113,23 +114,28 @@ struct NewTaskModelChoice: Codable, Equatable, Sendable {
 extension NewTaskModelChoice {
     /// The choice a session or scheduled-task tool's `permissionMode` makes for a new task of
     /// `harness`, in that harness's own values: Claude Code's (`ScheduleToolCatalog.permissionModes`,
-    /// whose `default` is Manual) and Codex's (`codexPermissionModes`, whose `default` keeps none).
-    /// Nil for a value the harness does not have, and for a harness the tools choose none for.
+    /// whose `default` is Manual) and Codex's (`codexPermissionModes`, the values of
+    /// `CodexRunLocation`). Codex also takes `default` and an earlier `workspaceWrite` as Ask for
+    /// approval. Nil for a value the harness does not have, and for a harness the tools choose none for.
     static func permission(fromTool value: String, harness: HarnessKind) -> NewTaskModelChoice? {
         switch harness {
         case .claudeCode:
             OtherAppScheduleImport.claudePermissionMode(value).map { NewTaskModelChoice(model: nil, permissionMode: $0) }
         case .codex:
-            ScheduleToolCatalog.codexPermissionModes.contains(value)
-                ? NewTaskModelChoice(model: nil, permissionMode: value == "default" ? nil : value) : nil
+            (value == "default" || value == "workspaceWrite" ? .askForApproval : CodexRunLocation(rawValue: value))
+                .map { NewTaskModelChoice(model: nil, permissionMode: $0.storedValue) }
         default:
             nil
         }
     }
 
-    /// The chosen permission as the tools spell it; nil when none was chosen.
+    /// The chosen permission as the tools spell it; nil when none was chosen. Codex always has one.
     func toolPermission(for harness: HarnessKind) -> String? {
-        harness == .claudeCode && permissionMode == ClaudePermissionMode.manual ? "default" : permissionMode
+        switch harness {
+        case .claudeCode: permissionMode == ClaudePermissionMode.manual ? "default" : permissionMode
+        case .codex: codexRunLocation.rawValue
+        default: permissionMode
+        }
     }
 }
 

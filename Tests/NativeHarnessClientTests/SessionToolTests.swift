@@ -1202,7 +1202,7 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(started.providerOptions[CodexRunLocation.storageKey], CodexRunLocation.dangerFullAccess.rawValue)
         started = try await child("Review the port", ["harness": "claude-code"], from: fixture.codex.id)
         XCTAssertEqual(started.providerOptions[ClaudeLaunchOption.permissionMode], ClaudePermissionMode.bypassPermissions)
-        // Named in the harness's own values; Codex's default keeps no permission of the caller's.
+        // Named in the harness's own values; Codex's default, Ask for approval, keeps no permission of the caller's.
         started = try await child("Read the parser", ["harness": "codex", "permissionMode": "readOnly"], from: fixture.caller.id)
         XCTAssertEqual(started.providerOptions[CodexRunLocation.storageKey], CodexRunLocation.readOnly.rawValue)
         started = try await child("Tidy the parser", ["permissionMode": "default"], from: fixture.codex.id)
@@ -1210,6 +1210,9 @@ final class SessionToolTests: XCTestCase {
         XCTAssertNil(started.providerOptions[CodexRunLocation.storageKey])
         started = try await child("Plan the parser", ["permissionMode": "plan"], from: fixture.caller.id)
         XCTAssertEqual(started.providerOptions[ClaudeLaunchOption.permissionMode], ClaudePermissionMode.plan)
+        started = try await child("Watch the parser", ["harness": "codex", "permissionMode": "approveForMe"],
+                                  from: fixture.caller.id)
+        XCTAssertEqual(started.providerOptions[CodexRunLocation.storageKey], CodexRunLocation.approveForMe.rawValue)
 
         // A task that asks may not start one that does not, and each harness takes only its own values.
         let asking = fixture.sibling.id
@@ -1220,10 +1223,14 @@ final class SessionToolTests: XCTestCase {
         let subagent = await call(model, "run_agent", ["prompt": "Deploy", "harness": "codex",
                                                        "permissionMode": "dangerFullAccess"], callerID: asking)
         XCTAssertTrue(subagent.isError && subagent.text.contains("lets the subagent do more without asking"), subagent.text)
+        // Nor one whose requests Codex's reviewer answers in place of the person.
+        let reviewed = await call(model, "create_task", ["prompt": "Deploy", "harness": "codex",
+                                                         "permissionMode": "approveForMe"], callerID: asking)
+        XCTAssertTrue(reviewed.isError && reviewed.text.contains("lets the task do more without asking"), reviewed.text)
         let wrongWords = await call(model, "create_task", ["prompt": "Deploy", "harness": "codex",
                                                            "permissionMode": "bypassPermissions"], callerID: asking)
-        XCTAssertTrue(wrongWords.text.contains("must be one of default, readOnly, workspaceWrite, dangerFullAccess"),
-                      wrongWords.text)
+        XCTAssertTrue(wrongWords.text.contains(
+            "must be one of askForApproval, approveForMe, dangerFullAccess, custom, readOnly"), wrongWords.text)
         let elsewhere = await call(model, "create_task", ["prompt": "Deploy", "harness": "opencode",
                                                           "permissionMode": "default"], callerID: asking)
         XCTAssertTrue(elsewhere.text.contains("permissionMode is for Claude Code and Codex"), elsewhere.text)

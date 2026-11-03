@@ -33,14 +33,17 @@ struct ComposerOptionChoiceLabel: View {
     let choice: ProviderCapabilityChoice
     let isSelected: Bool
     var body: some View {
+        let description = choice.description.flatMap { $0.isEmpty ? nil : $0 }
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(choice.name).lineLimit(1)
-                if let description = choice.description, !description.isEmpty {
+                if let description {
                     Text(description).font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            // A described choice is taller than the row; this keeps it apart from the next one.
+            .padding(.vertical, description == nil ? 0 : 5)
             Spacer(minLength: 8)
             Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold))
                 .opacity(isSelected ? 1 : 0)

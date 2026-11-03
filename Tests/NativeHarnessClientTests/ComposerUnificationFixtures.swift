@@ -119,7 +119,7 @@ enum ComposerUnificationFixtures {
             Scenario(name: "codex-idle", size: NSSize(width: 760, height: 150)) {
                 AnyView(PromptComposer(harness: .codex, composerDraft: draft("Refactor the parser"), skills: skills,
                     modes: [planPreset, defaultPreset], selectedModeID: planPreset.id, modelCatalog: codexCatalog,
-                    runLocation: .workspaceWrite, providerSession: session(.codex), isProviderAttached: true, isRunning: false,
+                    runLocation: .approveForMe, providerSession: session(.codex), isProviderAttached: true, isRunning: false,
                     codexHasThread: true, codexTokenUsage: codexTokenUsage, workspaceURL: workspace, actions: codexActions))
             },
             Scenario(name: "codex-running", size: NSSize(width: 760, height: 190)) {

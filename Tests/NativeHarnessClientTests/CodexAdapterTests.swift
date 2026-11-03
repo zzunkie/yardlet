@@ -304,10 +304,7 @@ final class CodexAdapterTests: XCTestCase {
         XCTAssertEqual(requests.map(\.method), ["initialize", "thread/start", "turn/start", "turn/steer"])
         let startInputs = requests[2].params["input"]?.arrayValue ?? []
         XCTAssertEqual(startInputs[1]["type"]?.stringValue, "localImage")
-        XCTAssertEqual(
-            requests[2].params["sandboxPolicy"]?["type"]?.stringValue,
-            "readOnly"
-        )
+        XCTAssertEqual(requests[2].params["permissions"]?.stringValue, ":read-only")
         XCTAssertEqual(requests[3].params["expectedTurnId"]?.stringValue, "turn-1")
     }
 
@@ -1312,7 +1309,7 @@ final class CodexAdapterTests: XCTestCase {
         XCTAssertEqual(occurrences.nextCursor, "occurrence-cursor")
 
         try await adapter.selectCollaborationMode(try XCTUnwrap(modes.first), for: handle)
-        try await adapter.selectRunLocation(.workspaceWrite, for: handle)
+        try await adapter.selectRunLocation(.approveForMe, for: handle)
         try await adapter.send("use plan", to: handle)
         let forked = try await adapter.fork(handle, newLocalSessionID: UUID())
         XCTAssertEqual(forked.providerSessionID, "thread-forked")
@@ -1339,10 +1336,7 @@ final class CodexAdapterTests: XCTestCase {
             requests.last(where: { $0.method == "turn/start" && $0.params["threadId"]?.stringValue == "thread-forked" })
         )
         XCTAssertEqual(forkTurnRequest.params["collaborationMode"]?["mode"]?.stringValue, "plan")
-        XCTAssertEqual(
-            forkTurnRequest.params["sandboxPolicy"]?["type"]?.stringValue,
-            "workspaceWrite"
-        )
+        XCTAssertEqual(forkTurnRequest.params["approvalsReviewer"]?.stringValue, "guardian_subagent")
         XCTAssertEqual(
             reviewRequest.params["threadId"]?.stringValue,
             "thread-capabilities"

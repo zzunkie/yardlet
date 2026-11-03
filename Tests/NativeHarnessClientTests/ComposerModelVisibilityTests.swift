@@ -51,6 +51,29 @@ final class ComposerModelVisibilityTests: XCTestCase {
         XCTAssertEqual(HarnessModelDefaultsReader.codex(home: home),
                        HarnessModelDefaults(model: "gpt-6-astra", effort: "max", serviceTier: "default"))
         XCTAssertEqual(HarnessModelDefaultsReader.codex(home: home.appending(path: "missing")), HarnessModelDefaults())
+
+        // What the file changes in the permission menu, as the Codex app reads it.
+        func permissions(_ text: String) throws -> CodexPermissionConfig {
+            try write(text, to: home.appending(path: "config.toml"))
+            return HarnessModelDefaultsReader.codex(home: home).codexPermissions
+        }
+        let standard = CodexPermissionConfig(), custom = CodexPermissionConfig(offersCustom: true)
+        for (text, expected) in [
+            (#"approvals_reviewer = "user""#, standard),
+            ("sandbox_mode = \"workspace-write\"\napproval_policy = \"on-request\"", standard),
+            ("sandbox_mode = 'danger-full-access'\napproval_policy = 'never' # yolo", standard),
+            (#"approval_policy = "untrusted""#, custom),
+            ("sandbox_mode = \"workspace-write\"\n[sandbox_workspace_write]\nnetwork_access = true", custom),
+            ("approval_policy = { granular = { sandbox_approval = true, rules = true, mcp_elicitations = true } }\n"
+                + "sandbox_mode = \"workspace-write\"", custom),
+            ("profile = \"wide\"\n[profiles.wide]\nsandbox_mode = \"danger-full-access\"\napproval_policy = \"on-request\"",
+             custom),
+            ("[features]\nguardian_approval = false # off", CodexPermissionConfig(offersApproveForMe: false)),
+            ("features.guardian_approval = false\napprovals_reviewer = \"auto_review\"\nsandbox_mode = \"workspace-write\"",
+             CodexPermissionConfig(offersApproveForMe: false, offersCustom: true))
+        ] {
+            XCTAssertEqual(try permissions(text), expected, text)
+        }
     }
 
     func testModelListsSurviveRelaunchAndStandInForAnAccountThatHasNone() throws {
