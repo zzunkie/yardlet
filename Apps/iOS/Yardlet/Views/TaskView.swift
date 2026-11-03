@@ -10,9 +10,12 @@ struct TaskView: View {
     @State private var detailItem: RemoteItem?
     @State private var isShowingSettings = false
     @State private var isConfirmingArchive = false
+    /// The title last read from the list, kept while the list is read again after a reconnection.
+    @State private var knownTitle = ""
     @Environment(\.dismiss) private var dismiss
 
     private var task: RemoteTask? { session.task(taskID) }
+    private var title: String { task.map { $0.title.isEmpty ? String(localized: "Untitled task") : $0.title } ?? knownTitle }
 
     var body: some View {
         Group {
@@ -22,17 +25,19 @@ struct TaskView: View {
                 ProgressView()
             }
         }
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        // An opaque bar: words scrolled under it would otherwise read through the title and its buttons.
+        .toolbarBackground(Color(.systemBackground), for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .modifier(TaskSubtitle(title: title, subtitle: subtitle))
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                VStack(spacing: 1) {
-                    Text(task?.title ?? "").font(.subheadline.weight(.semibold)).lineLimit(1)
-                    Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-            }
             ToolbarItem(placement: .topBarTrailing) { menu }
         }
         .onAppear { conversation = session.open(taskID) }
+        .onChange(of: task?.title, initial: true) { _, title in
+            if let title, !title.isEmpty { knownTitle = title }
+        }
         #if DEBUG
         .task {
             guard UserDefaults.standard.string(forKey: "sheet") == "taskSettings" else { return }
@@ -105,10 +110,10 @@ struct TaskView: View {
         .overlay {
             if !conversation.isLoaded { ProgressView() }
         }
-        .safeAreaInset(edge: .top, spacing: 0) { ConnectionBanner(session: session) }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 8) {
                 CommandErrorBanner(session: session)
+                ConnectionBanner(session: session)
                 ComposerView(session: session, taskID: taskID, conversation: conversation,
                              openSettings: { isShowingSettings = true })
             }
@@ -476,3 +481,26 @@ struct NoticeLine: View {
         .frame(maxWidth: .infinity, alignment: .center)
     }
 }
+
+/// The task's harness and project under its title: the navigation bar's own subtitle on iOS 26, two lines in the bar's
+/// middle before it.
+private struct TaskSubtitle: ViewModifier {
+    let title: String
+    let subtitle: String
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content.navigationSubtitle(subtitle)
+        } else {
+            content.toolbar {
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 1) {
+                        Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+            }
+        }
+    }
+}
+
