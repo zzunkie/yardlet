@@ -14,6 +14,7 @@ extension AppModel {
             return fixture.makeModel()
         }
         #endif
+        LoginShellPath.startReading(shell: ShellLaunchEnvironment.loginShellPath())
         let supportRootURL = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask

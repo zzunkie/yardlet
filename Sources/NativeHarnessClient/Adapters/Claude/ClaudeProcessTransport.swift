@@ -48,6 +48,7 @@ actor ClaudeProcessTransport: ClaudeTransport {
     }
 
     func start(_ configuration: ClaudeLaunchConfiguration) async throws {
+        await LoginShellPath.ready()
         if let process, process.isRunning { return }
         guard !stopped else {
             throw HarnessAdapterError.processExited(
@@ -222,7 +223,7 @@ actor ClaudeProcessTransport: ClaudeTransport {
     }
 
     private func environment() -> [String: String] {
-        Self.environment(base: ProcessInfo.processInfo.environment, overrides: environmentOverrides,
+        Self.environment(base: RuntimeProcessEnvironment.app, overrides: environmentOverrides,
                          claudeAIConnectors: ClaudeAIConnectorPreference.isEnabled())
     }
 

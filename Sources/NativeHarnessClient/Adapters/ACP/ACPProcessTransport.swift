@@ -63,6 +63,7 @@ actor ACPProcessTransport: ACPTransport {
     }
 
     func start(_ configuration: ACPLaunchConfiguration) async throws {
+        await LoginShellPath.ready()
         if let process, process.isRunning { return }
         guard !stopped else {
             throw HarnessAdapterError.processExited(
@@ -78,7 +79,7 @@ actor ACPProcessTransport: ACPTransport {
         process.executableURL = executableURL
         process.arguments = configuration.arguments
         process.currentDirectoryURL = configuration.workspaceURL.standardizedFileURL
-        var environment = ProcessInfo.processInfo.environment
+        var environment = RuntimeProcessEnvironment.app
         for (key, value) in configuration.environmentOverrides {
             environment[key] = value
         }

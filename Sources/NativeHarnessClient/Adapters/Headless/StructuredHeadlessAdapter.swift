@@ -125,6 +125,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
     }
 
     func send(_ prompt: String, to session: HarnessSessionHandle) async throws {
+        await LoginShellPath.ready()
         guard handles[session.localSessionID] != nil else {
             throw HarnessAdapterError.invalidProviderEvent(
                 L10n.string("Headless session is not attached")

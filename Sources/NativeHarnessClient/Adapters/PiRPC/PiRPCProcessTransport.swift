@@ -47,6 +47,7 @@ actor PiRPCProcessTransport: PiRPCTransport {
     }
 
     func start(_ configuration: PiRPCLaunchConfiguration) async throws {
+        await LoginShellPath.ready()
         if let process, process.isRunning { return }
         guard !stopped else {
             throw HarnessAdapterError.processExited(

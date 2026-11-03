@@ -1,9 +1,26 @@
 import Foundation
 
 enum RuntimeProcessEnvironment {
+    /// The app's own environment, with `PATH` as the person's login shell sets it once that has been
+    /// read (`LoginShellPath`): the shell's folders first, then any of the app's it lacks. The base
+    /// of every program Yardlet starts, agents included.
+    static var app: [String: String] {
+        withLoginShellPath(LoginShellPath.value, base: ProcessInfo.processInfo.environment)
+    }
+
+    static func withLoginShellPath(_ loginPath: String?, base: [String: String]) -> [String: String] {
+        guard let loginPath else { return base }
+        var values = base
+        var seen = Set<String>()
+        values["PATH"] = (loginPath.split(separator: ":") + (base["PATH"] ?? "").split(separator: ":"))
+            .filter { seen.insert(String($0)).inserted }
+            .joined(separator: ":")
+        return values
+    }
+
     static func values(
         executableURL: URL,
-        base: [String: String] = ProcessInfo.processInfo.environment,
+        base: [String: String] = app,
         overrides: [String: String] = [:]
     ) -> [String: String] {
         var values = base

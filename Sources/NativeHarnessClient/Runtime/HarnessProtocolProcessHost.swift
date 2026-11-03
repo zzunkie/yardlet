@@ -116,6 +116,7 @@ actor HarnessProtocolProcessHost {
     func start(
         _ configuration: HarnessProtocolAdapterLaunchConfiguration
     ) async throws -> HarnessProtocolProcessSession {
+        await LoginShellPath.ready()
         guard !launched else {
             throw stopped
                 ? HarnessProtocolProcessHostError.restartNotSupported
