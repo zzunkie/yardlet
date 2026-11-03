@@ -1882,9 +1882,12 @@ the permit immediately before starting, writing or resizing a process. Reconnect
 
 Terminal traffic has its own bucket (120 requests initially, 60 per second), independent of conversation and browser
 requests. A matching acknowledgement for the connection's one outstanding terminal output chunk is exempt;
-invalid, duplicate and foreign acknowledgements still consume that bucket. Existing message queue limits still apply. Each open, close and input batch writes an audit line with
-request type, task ID, device ID and result. Input additionally records `byteCount`; the bytes and their decoded text,
-output, environment and credentials never enter the audit log. Permission controls are available only on the host;
+invalid, duplicate and foreign acknowledgements still consume that bucket. Existing message queue limits still apply.
+Each open and close writes an audit line with request type, task ID, device ID and result. Input packets are
+coalesced for up to two seconds per device, task and outcome, with summed `byteCount`, rather than displacing other
+audit events with a line for every keystroke. Closing, revocation and shutdown flush pending batches. Aggregation
+holds at most 128 windows and flushes the oldest when full. The bytes and their decoded text, output, environment
+and credentials never enter the audit log. Permission controls are available only on the host;
 a remote request cannot enable them. File-write and settings permissions grant no terminal access.
 
 ## 16. Push notifications
