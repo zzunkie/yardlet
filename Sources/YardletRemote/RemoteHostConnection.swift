@@ -102,8 +102,10 @@ public actor RemoteHostConnection {
     private var pingCounter = 0
     /// What Bonjour resolved for the host now (§11.3), tried before the addresses it named; never saved.
     private var discovered: [String] = []
-    /// An attempt is racing; an address found or a retry asked for meanwhile is tried as soon as it ends.
+    /// An attempt is racing. An address Bonjour found meanwhile is tried as soon as it ends (from the relay too); a
+    /// retry asked for meanwhile starts the next attempt at once should it fail.
     private var racing = false
+    private var foundWhileRacing = false
     private var retryAfterRace = false
 
     public init(target: RemoteHostTarget, clientKey: RemoteKeyPair, hello: RemoteHandshakeHello,
@@ -169,7 +171,7 @@ public actor RemoteHostConnection {
             tryDirectUpgrade()
         } else if socket == nil {
             if racing {
-                retryAfterRace = true
+                foundWhileRacing = true
             } else {
                 attempt = 0
                 connectSoon(after: 0)
@@ -200,6 +202,7 @@ public actor RemoteHostConnection {
         guard running, socket == nil else { return }
         continuation.yield(.state(.connecting))
         racing = true
+        foundWhileRacing = false
         retryAfterRace = false
         let result = await Self.race(Self.candidates(target, discovered: discovered, includeRelay: true, timing: timing),
                                      clientKey: clientKey, hostKey: target.hostKey, hello: hello, session: session)
@@ -211,14 +214,15 @@ public actor RemoteHostConnection {
         switch result {
         case let .success(won):
             adopt(won)
-            if retryAfterRace { tryDirectUpgrade() }
+            // Only a new address is worth trying: the ones the race just had did not complete.
+            if foundWhileRacing { tryDirectUpgrade() }
         case let .failure(failure):
             if Self.isRevoked(failure) {
                 running = false
                 continuation.yield(.state(.revoked))
                 return
             }
-            let delay = retryAfterRace ? 0 : timing.backoff[min(attempt, timing.backoff.count - 1)]
+            let delay = foundWhileRacing || retryAfterRace ? 0 : timing.backoff[min(attempt, timing.backoff.count - 1)]
             attempt += 1
             continuation.yield(.state(.waiting(retryAt: Date().addingTimeInterval(delay), reason: failure.reason)))
             connectSoon(after: delay)

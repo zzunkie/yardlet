@@ -2065,6 +2065,7 @@
 "Slash commands run on %@." = "Slash commands run on %@.";
 "That isn't offered for this task now." = "That isn't offered for this task now.";
 "The file is too large to send." = "The file is too large to send.";
+"Couldn't read %@, or it is empty." = "Couldn't read %@, or it is empty.";
 "The link works once, for 5 minutes. Pair once while both Macs are together; from then on this Mac connects on the same network, over Tailscale or through the Yardlet server." = "The link works once, for 5 minutes. Pair once while both Macs are together; from then on this Mac connects on the same network, over Tailscale or through the Yardlet server.";
 "The message is too long." = "The message is too long.";
 "This Mac is no longer paired." = "This Mac is no longer paired.";

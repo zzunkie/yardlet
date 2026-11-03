@@ -475,6 +475,34 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appending(path: left).path))
     }
 
+    /// A phone that gave up on files (removed them, or started them again under new IDs) leaves them unfinished: a
+    /// fifth upload drops the one that went longest without a part instead of every later file being busy.
+    func testAFifthUploadMakesRoomByDroppingTheStalestUnfinishedOne() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "remote-store-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var store = RemoteUploadStore(directory: directory)
+        let start = Date()
+        let ids = (0..<6).map { _ in UUID().uuidString }
+        func first(_ id: String, at seconds: TimeInterval, device: String = "phone") -> Result<Int, RemoteError> {
+            store.receive(RemoteUploadPart(uploadID: id, name: "a.bin", size: 10, offset: 0, data: Data("hi".utf8)),
+                          from: device, now: start.addingTimeInterval(seconds))
+        }
+        for (index, id) in ids.prefix(4).enumerated() { XCTAssertEqual(try first(id, at: Double(index)).get(), 2) }
+        // The first one goes on, so the second is the stalest.
+        XCTAssertEqual(try store.receive(RemoteUploadPart(uploadID: ids[0], offset: 2, data: Data("ab".utf8)), from: "phone",
+                                         now: start.addingTimeInterval(10)).get(), 4)
+        XCTAssertEqual(try first(ids[4], at: 11).get(), 2)
+        XCTAssertNil(store.uploads[ids[1]])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appending(path: ids[1]).path))
+        let dropped = store.receive(RemoteUploadPart(uploadID: ids[1], offset: 2, data: Data("ab".utf8)), from: "phone",
+                                    now: start.addingTimeInterval(12))
+        guard case let .failure(error) = dropped else { return XCTFail("The dropped upload took a part") }
+        XCTAssertEqual(error.code, .notFound)
+        // Another device's uploads are not its to drop.
+        XCTAssertEqual(try first(ids[5], at: 13, device: "other").get(), 2)
+        XCTAssertEqual(store.uploads.values.filter { $0.deviceID == "phone" }.count, 4)
+    }
+
     func testMessagesTheMacWouldNotSendAreRefused() {
         XCTAssertEqual(RemoteServer.validateMessage("   ")?.code, .emptyMessage)
         XCTAssertEqual(RemoteServer.validateMessage(String(repeating: "a", count: 32_001))?.code, .tooLarge)
