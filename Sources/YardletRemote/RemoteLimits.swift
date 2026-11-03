@@ -57,6 +57,7 @@ public struct RemoteRateLimiter: Sendable {
     private var requests: RemoteRateBucket
     private var commands: RemoteRateBucket
     private var tab: RemoteRateBucket
+    private var terminal: RemoteRateBucket
     /// Requests refused in a row; this many closes the connection.
     public private(set) var refusedInARow = 0
     public static let refusalsBeforeClosing = 20
@@ -65,12 +66,15 @@ public struct RemoteRateLimiter: Sendable {
         requests = RemoteRateBucket(capacity: 30, perSecond: 10, now: now)
         commands = RemoteRateBucket(capacity: 10, perSecond: 1.0 / 3.0, now: now)
         tab = RemoteRateBucket(capacity: 60, perSecond: 30, now: now)
+        terminal = RemoteRateBucket(capacity: 120, perSecond: 60, now: now)
     }
 
     /// Whether the request may go on.
-    public mutating func admit(isCommand: Bool, isTabTraffic: Bool = false, now: Date = Date()) -> Bool {
+    public mutating func admit(isCommand: Bool, isTabTraffic: Bool = false, isTerminalTraffic: Bool = false, now: Date = Date()) -> Bool {
         var admitted: Bool
-        if isTabTraffic {
+        if isTerminalTraffic {
+            admitted = terminal.take(now: now)
+        } else if isTabTraffic {
             admitted = tab.take(now: now)
         } else {
             admitted = requests.take(now: now)
@@ -132,6 +136,7 @@ public final class RemoteAuditLog: @unchecked Sendable {
         public var file: String?
         /// The kind of a browser tab's input (§15.25: `click`, `text`, `key` …), never what was typed.
         public var input: String?
+        public var byteCount: Int?
         public var result: String
     }
 
@@ -148,9 +153,9 @@ public final class RemoteAuditLog: @unchecked Sendable {
     }
 
     public func record(device: String?, type: String, task: String?, schedule: String? = nil, file: String? = nil,
-                       input: String? = nil, result: String, at: Date = Date()) {
+                       input: String? = nil, byteCount: Int? = nil, result: String, at: Date = Date()) {
         let entry = Entry(at: at, device: device, type: type, task: task, schedule: schedule, file: file, input: input,
-                          result: result)
+                          byteCount: byteCount, result: result)
         queue.async { [self, fileURL, keptLines] in
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601

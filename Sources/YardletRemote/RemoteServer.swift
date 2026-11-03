@@ -153,10 +153,25 @@ public protocol RemoteBridge: AnyObject, Sendable {
     func tabInput(taskID: String, tabID: String, input: RemoteTabInput, permit: RemoteTabPermit) async -> RemoteError?
     /// Whether the Mac announces the finish of a task that just became unread, as its own notification would (§5.2).
     func announcesFinish(of taskID: String) async -> Bool
+    func openTerminal(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit,
+                      output: @escaping @Sendable (RemoteTerminalUpdate) -> Void) async -> RemoteError?
+    func terminalInput(taskID: String, terminalID: String, data: Data, permit: RemoteTerminalPermit) async -> RemoteError?
+    func terminalResize(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit) async -> RemoteError?
+    func closeTerminal(taskID: String, terminalID: String) async
+
 }
 
 extension RemoteBridge {
     public func announcesFinish(of taskID: String) async -> Bool { true }
+    public func openTerminal(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit,
+                             output: @escaping @Sendable (RemoteTerminalUpdate) -> Void) async -> RemoteError? { RemoteError(.unavailable) }
+    public func terminalInput(taskID: String, terminalID: String, data: Data, permit: RemoteTerminalPermit) async -> RemoteError? {
+        RemoteError(.unavailable)
+    }
+    public func terminalResize(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit) async -> RemoteError? {
+        RemoteError(.unavailable)
+    }
+    public func closeTerminal(taskID: String, terminalID: String) async {}
 
     public func readReview(taskID: String, query: RemoteReviewQuery) async -> Result<RemoteReviewResult, RemoteError> {
         .failure(RemoteError(.unavailable))
@@ -337,6 +352,7 @@ public actor RemoteServer {
     var connections: [UUID: Connection] = [:]
     /// What each connection watches of a task's browser tabs (§15.25), in `RemoteServer+Tabs.swift`.
     var tabs = RemoteServerTabs()
+    var terminals: [String: RemoteServerTerminal] = [:]
     private var pairing: RemotePairingTicket?
     /// Live authorization has one owner. Persistence never answers an authorization check.
     private let permissionSnapshot = RemotePermissionSnapshot()
@@ -507,6 +523,7 @@ public actor RemoteServer {
         forgetLink(on: id)
         if connection.isPresent { Task { await self.releaseHeldPushes() } }
         endTabWatch(on: id)
+        endTerminals(on: id, reason: "disconnected")
         Task { await self.updateWatched() }
         publishStatus()
     }
@@ -894,6 +911,7 @@ public actor RemoteServer {
 
     func notifyPermissionsChanged(_ deviceID: String, permissions: RemoteDevicePermissions) {
         let effective = permissionRequestsEnabled ? permissions : RemoteDevicePermissions()
+        if !effective.terminal { endTerminals(deviceID: deviceID, reason: "notAllowed") }
         for handler in permissionObservers.values { handler(deviceID, effective) }
     }
 
@@ -1111,7 +1129,7 @@ public actor RemoteServer {
             envelope = value
         }
         let request = envelope.request
-        guard connections[id]?.limiter.admit(isCommand: request.isCommand, isTabTraffic: request.isTabTraffic, now: now()) == true else {
+        guard connections[id]?.limiter.admit(isCommand: request.isCommand, isTabTraffic: request.isTabTraffic, isTerminalTraffic: request.isTerminalTraffic, now: now()) == true else {
             respond(.failure(envelope.id, RemoteError(.rateLimited)), to: id)
             if let refused = connections[id]?.limiter.refusedInARow, refused >= RemoteRateLimiter.refusalsBeforeClosing {
                 close(id, .rateLimited)
@@ -1411,6 +1429,8 @@ public actor RemoteServer {
             } answer: { response in
                 response.taskId = forked
             }
+        case .openTerminal, .terminalInput, .terminalResize, .closeTerminal, .terminalOutputAck:
+            await handleTerminal(envelope.id, request: request, on: id)
         case let .watchTab(taskID, tabID, maxWidth, maxHeight, viewport):
             await watchTab(envelope.id, taskID: taskID, tabID: tabID, maxWidth: maxWidth, maxHeight: maxHeight,
                            viewport: viewport, on: id)
@@ -1451,6 +1471,7 @@ public actor RemoteServer {
             response.fullConversation = published?.fullConversation == true ? true : nil
             response.reviewReading = published?.reviewReading == true ? true : nil
             response.browserTabs = published?.browserTabs == true ? true : nil
+            response.terminals = published?.terminals == true ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)
             connections[id]?.receivesTaskEvents = true
@@ -1939,6 +1960,7 @@ public actor RemoteServer {
         RemoteLog.notice("Remote: closing \(Self.describe(connection)) with code \(code.rawValue) after \(lifetime(of: connection))")
         forgetLink(on: id)
         endTabWatch(on: id)
+        endTerminals(on: id, reason: "disconnected")
         connection.channel.close(code)
         Task { await self.updateWatched() }
         publishStatus()
