@@ -10,6 +10,7 @@ struct WorkSurfaceTab: Identifiable, Equatable, Sendable {
     let systemName: String
     /// A choice the task cannot open stays in the menu, dimmed, so every harness shows the same menu.
     var isAvailable = true
+    var isClosable = true
     /// Another task's conversation shows its harness's mark in place of the symbol.
     var harness: HarnessKind? = nil
     /// The key that opens it, which the launcher shows beside it as the Codex app's does.
@@ -196,7 +197,7 @@ struct WorkSurfaceHeader<Trailing: View>: View {
     /// A browser tab shows its page's icon in place of the symbol, and a spinner while it loads.
     var favicon: Data? = nil
     var isLoading = false
-    let workspaceURL: URL
+    let workspaceURL: URL?
     let status: String?
     let statusTint: Color
     let onClose: () -> Void
@@ -210,7 +211,7 @@ struct WorkSurfaceHeader<Trailing: View>: View {
         harness: HarnessKind? = nil,
         favicon: Data? = nil,
         isLoading: Bool = false,
-        workspaceURL: URL,
+        workspaceURL: URL? = nil,
         status: String? = nil,
         statusTint: Color = .secondary,
         showsPanelControls: Bool = true,
@@ -336,13 +337,14 @@ struct WorkSurfaceHeader<Trailing: View>: View {
                     .font(.callout)
                     .lineLimit(1).truncationMode(.middle)
                     .allowsHitTesting(false)
-                    .accessibilityValue(workspaceURL.lastPathComponent)
+                    .accessibilityValue(workspaceURL?.lastPathComponent ?? "")
                 ParityIconButton(systemName: "xmark", help: L10n.string("Close tab"), action: onClose)
+                    .disabled(navigation?.tabs.first(where: { $0.id == navigation?.activeID })?.isClosable == false)
             }
             .padding(.leading, 10).padding(.trailing, 2)
             .frame(height: 30)
         }
-        .background { TabDragHandle().help(workspaceURL.path(percentEncoded: false)) }
+        .background { TabDragHandle().help(workspaceURL?.path(percentEncoded: false) ?? "") }
         .background(ParityTheme.selectedFill, in: RoundedRectangle(cornerRadius: 9))
         .layoutPriority(1)
     }
@@ -476,6 +478,7 @@ private struct WorkSurfaceTabButton<Menu: View>: View {
                 .overlay(alignment: .trailing) {
                     if isHovering {
                         ParityIconButton(systemName: "xmark", help: L10n.string("Close tab"), action: onClose)
+                            .disabled(!tab.isClosable)
                             .background(ParityTheme.canvas, in: Circle())
                             .padding(.trailing, 2)
                     }
@@ -513,7 +516,7 @@ private struct WorkSurfaceTabButton<Menu: View>: View {
         .parityPointer()
         .help(help)
         .accessibilityLabel(help)
-        .accessibilityAction(named: Text(L10n.string("Close tab")), onClose)
+        .accessibilityAction(named: Text(L10n.string("Close tab"))) { if tab.isClosable { onClose() } }
     }
 
     /// The title, and what a browser tab waits on from the person or that the agent works in it.

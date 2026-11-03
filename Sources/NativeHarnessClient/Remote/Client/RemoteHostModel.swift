@@ -291,6 +291,7 @@ final class RemoteHostModel: Identifiable {
         guard !changed.isEmpty || !removed.isEmpty else { return }
         var next = tasks
         let gone = Set(removed)
+        for id in gone { browser.forgetTask(id) }
         if !gone.isEmpty { next.removeAll { gone.contains($0.id) } }
         for task in changed {
             if let index = next.firstIndex(where: { $0.id == task.id }) { next[index] = task } else { next.append(task) }

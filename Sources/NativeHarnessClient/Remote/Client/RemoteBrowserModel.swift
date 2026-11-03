@@ -8,6 +8,27 @@ import YardletRemote
 @MainActor
 @Observable
 final class RemoteBrowserModel {
+    @MainActor @Observable
+    fileprivate final class TabList {
+        var tabs: [RemoteBrowserTab]
+        init(_ tabs: [RemoteBrowserTab]) { self.tabs = tabs }
+    }
+    private var rememberedTabs: [String: TabList] = [:]
+
+    func tabs(for taskID: String) -> [RemoteBrowserTab] {
+        self.taskID == taskID ? tabs : rememberedTabs[taskID]?.tabs ?? []
+    }
+
+    func forgetTask(_ taskID: String) {
+        rememberedTabs[taskID] = nil
+        if self.taskID == taskID { hide() }
+    }
+
+    private func remember(_ tabs: [RemoteBrowserTab], for taskID: String) {
+        if let list = rememberedTabs[taskID] { list.tabs = tabs }
+        else { rememberedTabs[taskID] = TabList(tabs) }
+    }
+
     struct Frame: Equatable {
         var number: Int
         var image: Data
@@ -105,6 +126,7 @@ final class RemoteBrowserModel {
             guard let self, self.taskID == taskID, self.watchRevision == revision else { return }
             if response.ok {
                 self.tabs = response.tabs ?? []
+                self.remember(self.tabs, for: taskID)
                 self.isListed = true
                 if self.tabID != response.tabId { self.frame = nil }
                 self.tabID = response.tabId
@@ -125,6 +147,7 @@ final class RemoteBrowserModel {
         if event.event == .tabFrame, let number = event.frame {
             send(.tabFrameAck(taskID: event.taskId ?? "", tabID: event.tabId ?? "", frame: number), nil)
         }
+        if event.event == .browserTabsChanged, let taskID = event.taskId { remember(event.tabs ?? [], for: taskID) }
         guard let taskID, event.taskId == taskID else { return }
         switch event.event {
         case .tabFrame:
@@ -161,6 +184,36 @@ final class RemoteBrowserModel {
         send(.closeTab(taskID: taskID, tabID: tabID)) { [weak self] response in
             guard let self, self.taskID == taskID else { return }
             if !response.ok { self.refusal = Self.refusal(response.error, host: self.hostName) }
+        }
+    }
+
+    /// Closing background side-panel tabs borrows one watch for the batch, without showing their pages.
+    func closeTabs(_ tabIDs: [String], in taskID: String) {
+        guard canControlTabs, !tabIDs.isEmpty else { return }
+        if self.taskID == taskID { for tabID in tabIDs { closeTab(tabID) }; return }
+        let revision = selectionRevision
+        let restoreWatch: @MainActor (RemoteBrowserModel) -> Void = { browser in
+            if browser.taskID == nil { browser.send(.unwatchTab(taskID: taskID), nil) }
+            else { browser.rewatch() }
+        }
+        send(.watchTab(taskID: taskID, tabID: nil, maxWidth: 320, maxHeight: 320)) { [weak self] response in
+            guard let self else { return }
+            guard self.selectionRevision == revision else { restoreWatch(self); return }
+            guard response.ok else {
+                self.refusal = Self.refusal(response.error, host: self.hostName)
+                restoreWatch(self)
+                return
+            }
+            self.remember(response.tabs ?? [], for: taskID)
+            var remaining = tabIDs.count
+            for tabID in tabIDs {
+                self.send(.closeTab(taskID: taskID, tabID: tabID)) { [weak self] response in
+                    guard let self else { return }
+                    if !response.ok { self.refusal = Self.refusal(response.error, host: self.hostName) }
+                    remaining -= 1
+                    if remaining == 0 { restoreWatch(self) }
+                }
+            }
         }
     }
 

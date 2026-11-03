@@ -9,7 +9,7 @@ import YardletRemote
 /// Addresses and tab closes are performed on the host.
 struct RemoteBrowserPanel: View {
     let model: RemoteHostModel
-    @State private var stripWidth: CGFloat = 0
+    @Environment(\.workSurfaceNavigation) private var navigation
     @State private var address = ""
     @State private var submittedAddress = false
     @FocusState private var addressFocused: Bool
@@ -36,34 +36,14 @@ struct RemoteBrowserPanel: View {
 
     // MARK: - Tabs
 
-    /// The tabs as wide as their titles up to the strip's tab width, sharing the strip evenly once they do not fit.
     private var header: some View {
-        let room = stripWidth - 76 - CGFloat(max(browser.tabs.count - 1, 0)) * PanelTabMetrics.spacing
-        let tabWidth = min(PanelTabMetrics.maxWidth, max(76, room / CGFloat(max(browser.tabs.count, 1))))
-        return HStack(spacing: PanelTabMetrics.spacing) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: PanelTabMetrics.spacing) {
-                    ForEach(browser.tabs, id: \.tabId) { tab in
-                        HStack(spacing: 0) {
-                            RemoteBrowserTabButton(tab: tab, isShown: tab.tabId == browser.tabID, maxWidth: tabWidth - 24) {
-                                browser.select(tab.tabId)
-                            }
-                            ParityIconButton(systemName: "xmark", help: L10n.string("Close tab")) { browser.closeTab(tab.tabId) }
-                                .disabled(!browser.canControlTabs)
-                        }
-                    }
-                }
-            }
-            Spacer(minLength: 0)
-            ParityIconButton(systemName: "plus", help: L10n.string("New tab")) {
-                browser.openAddress("about:blank", inNewTab: true)
-            }.disabled(!browser.canControlTabs)
-            WorkSurfacePanelControls(onClose: { browser.hide() })
-        }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width - 16 } action: { stripWidth = $0 }
-        .padding(.horizontal, 8)
-        .frame(height: 42)
-        .background(ParityTheme.canvas)
+        WorkSurfaceHeader(title: browser.watchedTab.map { BrowserTabTitle.make(pageTitle: $0.title ?? "", address: $0.url) }
+            ?? L10n.string("Browser"), systemName: "globe", isLoading: browser.watchedTab?.loading == true,
+            onClose: {
+                if let tabID = browser.tabID { browser.closeTab(tabID) }
+                else { browser.hide() }
+            }) { EmptyView() }
+            .environment(\.workSurfaceNavigation, navigation ?? browser.surfaceNavigation)
     }
 
     private var toolbar: some View {
@@ -161,42 +141,54 @@ struct RemoteBrowserPanel: View {
     }
 }
 
-/// A tab of the host task's browser in the panel's strip, drawn as the Mac's own panel draws its tabs.
-private struct RemoteBrowserTabButton: View {
-    let tab: RemoteBrowserTab
-    let isShown: Bool
-    let maxWidth: CGFloat
-    let select: () -> Void
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: select) {
-            HStack(spacing: 8) {
-                WorkSurfaceTabIcon(systemName: "globe", isLoading: tab.loading == true)
-                    .foregroundStyle(.secondary)
-                Text(BrowserTabTitle.make(pageTitle: tab.title ?? "", address: tab.url))
-                    .font(.callout)
-                    .lineLimit(1).truncationMode(.middle)
-                    .foregroundStyle(isShown ? .primary : .secondary)
-                    .frame(maxWidth: max(0, maxWidth - 52), alignment: .leading)
-                // A tab behind that waits on the person; the one in front says so in its bar.
-                if tab.waiting != nil, !isShown {
-                    Circle().fill(Color.orange).frame(width: 6, height: 6)
-                        .accessibilityLabel(L10n.string("Waiting on you"))
-                }
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 30)
-            .fixedSize(horizontal: true, vertical: false)
-            .background(isShown ? ParityTheme.selectedFill : isHovering ? ParityTheme.hoverFill : .clear,
-                        in: RoundedRectangle(cornerRadius: 9))
-            .contentShape(RoundedRectangle(cornerRadius: 9))
+/// The browser lends its tabs and actions to the task's ordinary side-panel navigation.
+extension RemoteBrowserModel {
+    func surfaceTabs(for taskID: String) -> [WorkSurfaceTab] {
+        tabs(for: taskID).map { tab in
+            WorkSurfaceTab(id: "browser:" + tab.tabId,
+                           title: BrowserTabTitle.make(pageTitle: tab.title ?? "", address: tab.url),
+                           systemName: "globe", isClosable: canControlTabs,
+                           isLoading: tab.loading == true,
+                           waitNote: tab.waiting.flatMap(BrowserPersonWait.Kind.init(rawValue:)).map {
+                               BrowserPersonWaitText.describe(BrowserPersonWait(kind: $0, id: ""),
+                                                              site: tab.url.flatMap { URL(string: $0)?.host() })
+                           })
         }
-        .buttonStyle(.plain)
-        .parityPointer()
-        .onHover { isHovering = $0 }
-        .help(tab.url ?? "")
-        .accessibilityAddTraits(isShown ? .isSelected : [])
+    }
+
+    func selectSurfaceTab(_ id: String, taskID: String) {
+        guard id.hasPrefix("browser:") else { return }
+        let tabID = String(id.dropFirst("browser:".count))
+        if self.taskID == taskID { select(tabID) }
+        else { show(taskID: taskID, tabID: tabID) }
+    }
+
+    func closeSurfaceTab(_ id: String, taskID: String) {
+        guard id.hasPrefix("browser:") else { return }
+        closeTabs([String(id.dropFirst("browser:".count))], in: taskID)
+    }
+
+    func closeSurfaceTabs(_ ids: [String], taskID: String) {
+        closeTabs(ids.filter { $0.hasPrefix("browser:") }.map { String($0.dropFirst("browser:".count)) }, in: taskID)
+    }
+
+    func newSurfaceTab(taskID: String) {
+        if self.taskID != taskID { show(taskID: taskID) }
+        openAddress("about:blank", inNewTab: true)
+    }
+
+    var surfaceNavigation: WorkSurfaceNavigation {
+        let task = taskID
+        return WorkSurfaceNavigation(tabs: task.map { surfaceTabs(for: $0) } ?? [],
+            activeID: tabID.map { "browser:" + $0 }, choices: [],
+            select: { [weak self] id in if let task { self?.selectSurfaceTab(id, taskID: task) } },
+            open: { _ in },
+            closeTab: { [weak self] id in if let task { self?.closeSurfaceTab(id, taskID: task) } },
+            closeTabs: { [weak self] ids in if let task { self?.closeSurfaceTabs(ids, taskID: task) } },
+            closePanel: { [weak self] in self?.hide() },
+            newTab: canControlTabs && task != nil ? WorkSurfaceNewTab(help: L10n.string("New tab"), action: { [weak self] in
+                if let task { self?.newSurfaceTab(taskID: task) }
+            }) : nil)
     }
 }
 

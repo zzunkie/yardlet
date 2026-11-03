@@ -563,8 +563,11 @@ final class BrowserPanelTabsQATests: XCTestCase {
             try await NativeHarnessClientTests.waitUntil { remote.browser.tabID == opened.key.uuidString }
             remote.browser.openAddress("localhost:4000/next")
             try await NativeHarnessClientTests.waitUntil { standIn.sent.contains(.navigate(tab: opened.id, url: "http://localhost:4000/next")) }
-            remote.browser.closeTab(opened.key.uuidString)
+            remote.browser.hide()
+            XCTAssertTrue(remote.browser.surfaceTabs(for: task.id.uuidString).contains { $0.id == "browser:" + opened.key.uuidString })
+            remote.browser.closeSurfaceTab("browser:" + opened.key.uuidString, taskID: task.id.uuidString)
             try await NativeHarnessClientTests.waitUntil { client.tabs(forSession: task.id).count == priorCount }
+            XCTAssertNil(remote.browser.taskID, "closing a background tab does not open its panel")
             XCTAssertTrue(standIn.closed.contains(opened.id))
             window.close()
             remote.browser.hide()

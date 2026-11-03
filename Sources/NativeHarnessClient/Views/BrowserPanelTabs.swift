@@ -110,12 +110,14 @@ struct WorkSurfaceTabMenu: View {
         }
         let ids = navigation.tabs.map(\.id)
         let index = ids.firstIndex(of: tabID)
+        let closable = Set(navigation.tabs.filter(\.isClosable).map(\.id))
+        let others = ids.filter { $0 != tabID && closable.contains($0) }
+        let right = index.map { Array(ids[($0 + 1)...]).filter { closable.contains($0) } } ?? []
         Button(L10n.string("Close Tab")) { navigation.closeTab(tabID) }
-        Button(L10n.string("Close Other Tabs")) { navigation.closeTabs(ids.filter { $0 != tabID }) }
-            .disabled(!ids.contains { $0 != tabID })
-        Button(L10n.string("Close Tabs to the Right")) {
-            if let index { navigation.closeTabs(Array(ids[(index + 1)...])) }
-        }
-        .disabled(index.map { $0 + 1 >= ids.count } ?? true)
+            .disabled(navigation.tabs.first(where: { $0.id == tabID })?.isClosable == false)
+        Button(L10n.string("Close Other Tabs")) { navigation.closeTabs(others) }
+            .disabled(others.isEmpty)
+        Button(L10n.string("Close Tabs to the Right")) { navigation.closeTabs(right) }
+            .disabled(right.isEmpty)
     }
 }
