@@ -78,6 +78,12 @@ enum BrowserHostQAFixture {
             Task { @MainActor in await BrowserHostMemorySaverQA(output: output, base: base).run() }
             return
         }
+        // `--ui-fixture-browser-check-only=idle-return` runs a tab shown again after it was hidden alone
+        // (BrowserHostIdleReturnQA).
+        if argument("ui-fixture-browser-check-only") == "idle-return" {
+            Task { @MainActor in await BrowserHostIdleReturnQA(output: output, base: base, panelSession: session).run() }
+            return
+        }
         Task { @MainActor in await BrowserHostQARunner(output: output, base: base, session: session).run() }
     }
 }

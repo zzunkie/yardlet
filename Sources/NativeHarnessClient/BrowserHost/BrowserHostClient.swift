@@ -577,12 +577,10 @@ final class BrowserHostClient {
         tab.wasPanelAttached = true
         if occluded {
             tab.occludedPanelCount += 1
+            wake(tab)
         } else {
-            tab.wasOnScreen = true
-            tab.isShown = true
-            connection?.send(.visibility(tab: tab.id, isHidden: false))
+            panelComesOnScreen(tab)
         }
-        wake(tab)
         reschedule()
     }
 
@@ -601,9 +599,21 @@ final class BrowserHostClient {
     /// painting; the tab hides like a panel-less one and paints again when the panel shows.
     func setPanelOccluded(_ occluded: Bool, on tab: BrowserTab) {
         guard tabs[tab.id] === tab, tab.panelCount > 0 else { return }
+        let occludedBefore = tab.occludedPanelCount
         tab.occludedPanelCount = min(tab.panelCount, max(0, tab.occludedPanelCount + (occluded ? 1 : -1)))
-        if tab.visiblePanelCount > 0 { tab.wasOnScreen = true }
+        if tab.occludedPanelCount < occludedBefore { panelComesOnScreen(tab) }
         reschedule()
+    }
+
+    /// A panel comes on screen with the tab: the tab is shown to its engine and asked for a fresh frame, also when the
+    /// engine draws it already (the agent's tab, drawn for `agentVisibleWindow` after each use). The panel may hold no
+    /// frame of it (a new view, or one that showed another tab), and a page that does not change draws none of its own;
+    /// a discarded page loads again.
+    private func panelComesOnScreen(_ tab: BrowserTab) {
+        tab.wasOnScreen = true
+        tab.isShown = true
+        connection?.send(.visibility(tab: tab.id, isHidden: false))
+        wake(tab)
     }
 
     /// The agent used the session's fronted tab. Call it (or `noteAgentActivity(on:)` for the tab used)
