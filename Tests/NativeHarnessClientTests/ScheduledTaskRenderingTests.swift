@@ -90,7 +90,9 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         var standup = ScheduledTask(
             name: "Standup notes", prompt: "Summarize yesterday's merged pull requests as standup notes.",
             trigger: .weekly(days: ScheduleWeekday.weekdays, time: ScheduleTime(hour: 9, minute: 30)),
-            destination: ScheduleDestination(harness: .codex, workspacePath: path, projectID: project.id, startsInNewWorktree: true))
+            destination: ScheduleDestination(harness: .codex, modelChoice: NewTaskModelChoice(
+                model: nil, permissionMode: CodexRunLocation.dangerFullAccess.rawValue),
+                workspacePath: path, projectID: project.id, startsInNewWorktree: true))
         standup.state.runs = [ScheduledTaskRun(slot: at(-1, 9, 30), at: at(-1, 9, 30), trigger: .scheduled, outcome: .started,
                                                taskID: standupRun.id)]
         var release = ScheduledTask(
@@ -137,7 +139,7 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         // Both folded groups open, so the drawing shows each kind of row.
         state.expandedSections = [.off, .finished]
         return Fixture(model: model, state: state, project: project, releaseTask: releaseTask,
-                       schedules: ["morning": morning, "release": release, "nightly": nightly],
+                       schedules: ["morning": morning, "standup": standup, "release": release, "nightly": nightly],
                        switchedRun: (yesterdayRun, switched))
     }
 
@@ -251,6 +253,13 @@ final class ScheduledTaskRenderingTests: XCTestCase {
         }
         XCTAssertTrue(shows(release, L10n.format("Continues “%@”", "Release watch")))
         XCTAssertTrue(shows(release, L10n.string("Imported from the Codex app.")))
+
+        // A Codex schedule's permission, in the words of Codex's own control.
+        fixture.state.selection = fixture.schedules["standup"]?.id
+        let standup = try render("detail-codex-full-access", size: NSSize(width: 900, height: 640)) { _ in
+            ScheduledTasksMain(model: fixture.model, state: fixture.state, actions: ScheduledTaskActions(), projectName: { _ in "" })
+        }
+        XCTAssertTrue(shows(standup, L10n.string("Full access")), standup.map(\.description).joined(separator: "\n"))
 
         fixture.state.selection = fixture.schedules["nightly"]?.id
         _ = try render("detail-turned-off", size: NSSize(width: 900, height: 700), appearances: [.light]) { _ in

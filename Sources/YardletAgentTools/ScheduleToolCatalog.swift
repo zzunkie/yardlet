@@ -114,6 +114,22 @@ package enum ScheduleToolCatalog {
 
     /// The Claude app's own permission modes; `default` is Manual.
     package static let permissionModes = ["default", "plan", "acceptEdits", "auto", "dontAsk", "bypassPermissions"]
+    /// Codex's permissions, by the App Server's names for its sandbox policies; `default` keeps the thread's own
+    /// configuration, as the Codex composer's Default does.
+    package static let codexPermissionModes = ["default", "readOnly", "workspaceWrite", "dangerFullAccess"]
+
+    /// `permissionMode` for a new task, which the session tools take too: one property whose values are each
+    /// harness's own.
+    package static func permissionModeProperty(_ lead: String) -> ToolJSON {
+        .object([
+            "type": .string("string"),
+            "enum": .array((permissionModes + codexPermissionModes.filter { !permissionModes.contains($0) })
+                .map { .string($0) }),
+            "description": .string(lead + " Claude Code: " + permissionModes.joined(separator: ", ")
+                + ". Codex: " + codexPermissionModes.joined(separator: ", ") + " (Full access). No freer than this "
+                + "task's own.")
+        ])
+    }
 
     private static let settingProperties: [String: ToolJSON] = [
         Key.name: property("string", "The name in Scheduled tasks, in any language. Defaults to the prompt's "
@@ -138,12 +154,9 @@ package enum ScheduleToolCatalog {
             + "new schedule."),
         Key.model: property("string", "Each new task's model id. Defaults to the harness's."),
         Key.effort: property("string", "A reasoning effort the model accepts."),
-        Key.permissionMode: .object([
-            "type": .string("string"),
-            "enum": .array(permissionModes.map { .string($0) }),
-            "description": .string("A Claude Code task's permission mode. Defaults to this task's Auto or Bypass "
-                + "permissions, else default.")
-        ])
+        Key.permissionMode: permissionModeProperty("Each new task's permissions, in its harness's own values. "
+            + "Defaults to this task's when it runs without asking (Auto or bypassPermissions, dangerFullAccess) or "
+            + "reads only, in that harness's terms, else default.")
     ]
 
     package static let tools: [AgentToolDefinition] = [

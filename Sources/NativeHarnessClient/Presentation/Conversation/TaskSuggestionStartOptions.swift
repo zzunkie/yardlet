@@ -1,9 +1,9 @@
 import Foundation
 
 /// A suggestion chip's Options (`TaskSuggestionOptionsPopover`) over the new-task screen's own
-/// choices: the options a started task keeps, read as the new-task model menu's choice
-/// (`NewTaskModelChoice`) and Codex's sandbox (`CodexRunLocation`), and written back. This is where
-/// the chip tells harnesses apart, as `ComposerSessionOptionsProjection` is for the composer.
+/// choices: the options a started task keeps, read as the new-task screen's choice
+/// (`NewTaskModelChoice`: model, effort and permission) and written back. This is where the chip
+/// tells harnesses apart, as `ComposerSessionOptionsProjection` is for the composer.
 @MainActor
 enum TaskSuggestionStartOptions {
     /// The model menu's choice in `options`, as the new-task screen keeps one.
@@ -14,7 +14,8 @@ enum TaskSuggestionStartOptions {
             choice = NewTaskModelChoice(model: options[ClaudeLaunchOption.model], effort: options[ClaudeLaunchOption.effort],
                                         permissionMode: options[ClaudeLaunchOption.permissionMode])
         case .codex:
-            return CodexModelSelection.restored(from: options).map(NewTaskModelChoice.init)
+            choice = NewTaskModelProjection.choosing(CodexRunLocation.restored(from: options),
+                choice: CodexModelSelection.restored(from: options).map(NewTaskModelChoice.init))
         case .antigravityCLI:
             choice = NewTaskModelChoice(model: options[StructuredHeadlessOptionID.model],
                                         effort: options[StructuredHeadlessOptionID.reasoningEffort],
@@ -25,18 +26,13 @@ enum TaskSuggestionStartOptions {
         return choice == NewTaskModelChoice(model: nil) ? nil : choice
     }
 
-    static func runLocation(from options: [String: String]) -> CodexRunLocation {
-        CodexRunLocation.restored(from: options)
-    }
-
     /// `base` with the controls' choices in place of what it held for them; the options the
     /// controls do not show stay.
-    static func providerOptions(_ base: [String: String], harness: HarnessKind, choice: NewTaskModelChoice?,
-                                runLocation: CodexRunLocation) -> [String: String] {
+    static func providerOptions(_ base: [String: String], harness: HarnessKind,
+                                choice: NewTaskModelChoice?) -> [String: String] {
         var options = base
         for key in controlledKeys(harness) { options[key] = nil }
         options.merge(choice?.providerOptions(for: harness) ?? [:]) { _, new in new }
-        if harness == .codex, runLocation != .automatic { options[CodexRunLocation.storageKey] = runLocation.rawValue }
         return options
     }
 
@@ -50,23 +46,13 @@ enum TaskSuggestionStartOptions {
         }
     }
 
-    /// The new-task screen's model, effort and permission controls for the choice, with Codex's
-    /// sandbox where the task composer offers it.
-    static func sessionOptions(harness: HarnessKind, choice: NewTaskModelChoice?, runLocation: CodexRunLocation,
-                               catalogs: HarnessModelCatalogStore?, connection: ProviderConnection?,
-                               workspaceURL: URL?) -> ComposerSessionOptions {
-        var options = ComposerSessionOptionsProjection.newTask(harness: harness, choice: choice, catalogs: catalogs,
-                                                               connection: connection, workspaceURL: workspaceURL)
-        if harness == .codex { options.permission = ComposerSessionOptionsProjection.codexPermission(runLocation) }
-        return options
-    }
-
-    /// Those controls for what Start starts with now, on its harness, account and folder.
+    /// The new-task screen's model, effort and permission controls for what Start starts with now,
+    /// on its harness, account and folder.
     static func sessionOptions(for choice: TaskSuggestionStartChoice,
                                catalogs: HarnessModelCatalogStore?) -> ComposerSessionOptions {
-        sessionOptions(harness: choice.harness, choice: modelChoice(from: choice.providerOptions, harness: choice.harness),
-                       runLocation: runLocation(from: choice.providerOptions), catalogs: catalogs,
-                       connection: choice.connection, workspaceURL: choice.place.folder)
+        ComposerSessionOptionsProjection.newTask(
+            harness: choice.harness, choice: modelChoice(from: choice.providerOptions, harness: choice.harness),
+            catalogs: catalogs, connection: choice.connection, workspaceURL: choice.place.folder)
     }
 
     /// `choice` on another harness, in the same place: that harness's options and account. Nil
@@ -83,22 +69,22 @@ enum TaskSuggestionStartOptions {
     static func choosing(_ picked: ComposerSessionChoice, in choice: TaskSuggestionStartChoice,
                          catalogs: HarnessModelCatalogStore?) -> TaskSuggestionStartChoice? {
         let harness = choice.harness
-        var model = modelChoice(from: choice.providerOptions, harness: harness)
-        var location = runLocation(from: choice.providerOptions)
+        let model = modelChoice(from: choice.providerOptions, harness: harness)
+        let chosen: NewTaskModelChoice?
         switch picked {
-        case let .codexRunLocation(chosen):
-            location = chosen
+        case let .codexRunLocation(location):
+            chosen = harness == .codex ? NewTaskModelProjection.choosing(location, choice: model) : nil
         case let .codexModel(selection):
-            model = NewTaskModelChoice(selection)
+            chosen = harness == .codex ? NewTaskModelProjection.choosing(selection, choice: model) : nil
         case let .providerOption(id, value):
-            guard let catalogs,
-                  let chosen = NewTaskModelProjection.choosing(id, value: value, harness: harness, choice: model,
-                                                               catalogs: catalogs, connection: choice.connection,
-                                                               workspaceURL: choice.place.folder) else { return nil }
-            model = chosen
+            chosen = catalogs.flatMap {
+                NewTaskModelProjection.choosing(id, value: value, harness: harness, choice: model, catalogs: $0,
+                                                connection: choice.connection, workspaceURL: choice.place.folder)
+            }
         }
+        guard let chosen else { return nil }
         var next = choice
-        next.providerOptions = providerOptions(choice.providerOptions, harness: harness, choice: model, runLocation: location)
+        next.providerOptions = providerOptions(choice.providerOptions, harness: harness, choice: chosen)
         return next
     }
 

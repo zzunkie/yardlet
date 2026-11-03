@@ -630,27 +630,30 @@ final class TaskSuggestionTests: XCTestCase {
         XCTAssertEqual(choice, NewTaskModelChoice(model: "opus", effort: "high", permissionMode: "bypassPermissions"))
         var changed = choice
         changed?.model = "sonnet"
-        XCTAssertEqual(TaskSuggestionStartOptions.providerOptions(claude, harness: .claudeCode, choice: changed,
-                                                                  runLocation: .automatic),
+        XCTAssertEqual(TaskSuggestionStartOptions.providerOptions(claude, harness: .claudeCode, choice: changed),
                        ["model": "sonnet", "effort": "high", "permissionMode": "bypassPermissions", "other": "kept"],
                        "What the controls do not show stays")
-        XCTAssertEqual(TaskSuggestionStartOptions.providerOptions(claude, harness: .claudeCode, choice: nil,
-                                                                  runLocation: .automatic), ["other": "kept"])
+        XCTAssertEqual(TaskSuggestionStartOptions.providerOptions(claude, harness: .claudeCode, choice: nil), ["other": "kept"])
 
+        // Codex's permission is the new-task screen's choice too.
         let codex = [CodexRunLocation.storageKey: CodexRunLocation.dangerFullAccess.rawValue]
-        XCTAssertEqual(TaskSuggestionStartOptions.runLocation(from: codex), .dangerFullAccess)
-        XCTAssertNil(TaskSuggestionStartOptions.modelChoice(from: codex, harness: .codex))
-        XCTAssertEqual(TaskSuggestionStartOptions.providerOptions(codex, harness: .codex, choice: nil, runLocation: .readOnly),
+        XCTAssertEqual(TaskSuggestionStartOptions.modelChoice(from: codex, harness: .codex),
+                       NewTaskModelChoice(model: nil, permissionMode: CodexRunLocation.dangerFullAccess.rawValue))
+        XCTAssertNil(TaskSuggestionStartOptions.modelChoice(from: [:], harness: .codex))
+        XCTAssertEqual(TaskSuggestionStartOptions.providerOptions(codex, harness: .codex,
+            choice: NewTaskModelChoice(model: nil, permissionMode: CodexRunLocation.readOnly.rawValue)),
                        [CodexRunLocation.storageKey: CodexRunLocation.readOnly.rawValue])
-        XCTAssertEqual(TaskSuggestionStartOptions.providerOptions(codex, harness: .codex, choice: nil, runLocation: .automatic),
+        XCTAssertEqual(TaskSuggestionStartOptions.providerOptions(codex, harness: .codex, choice: nil),
                        [:], "Codex's default leaves the key out")
 
-        let codexOptions = TaskSuggestionStartOptions.sessionOptions(harness: .codex, choice: nil, runLocation: .dangerFullAccess,
-                                                                     catalogs: nil, connection: nil, workspaceURL: nil)
+        let codexStart = TaskSuggestionStartChoice(harness: .codex, providerOptions: codex,
+                                                   place: SuggestedTaskPlace(folder: nil, project: nil, startsInNewWorktree: false))
+        let codexOptions = TaskSuggestionStartOptions.sessionOptions(for: codexStart, catalogs: nil)
         XCTAssertEqual(codexOptions.permission?.title, CodexRunLocation.dangerFullAccess.displayName,
                        "Codex's sandbox, as the task composer offers it")
-        let claudeOptions = TaskSuggestionStartOptions.sessionOptions(harness: .claudeCode, choice: choice, runLocation: .automatic,
-                                                                      catalogs: nil, connection: nil, workspaceURL: nil)
+        let claudeStart = TaskSuggestionStartChoice(harness: .claudeCode, providerOptions: claude,
+                                                    place: SuggestedTaskPlace(folder: nil, project: nil, startsInNewWorktree: false))
+        let claudeOptions = TaskSuggestionStartOptions.sessionOptions(for: claudeStart, catalogs: nil)
         XCTAssertEqual(TaskSuggestionStartOptions.summary(harness: .claudeCode, options: claudeOptions),
                        HarnessKind.claudeCode.displayName + " · " + L10n.string("Bypass permissions"))
 

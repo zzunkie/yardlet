@@ -1,4 +1,5 @@
 import Foundation
+import YardletAgentTools
 
 struct TaskDraftSnapshot: Codable, Equatable {
     var text = ""
@@ -29,24 +30,25 @@ struct HomeDraftSnapshot: Codable, Equatable {
     var attachments: [CodexUserInput]?
     /// Projects whose new tasks were last started in a new worktree rather than locally.
     var worktreeProjectIDs: Set<UUID>?
-    /// The model and effort last chosen for new tasks, per harness.
+    /// The model, effort and permission last chosen for new tasks, per harness.
     var modelChoices: [HarnessKind: NewTaskModelChoice]?
     /// The suggested task whose Start opened the draft. Absent, as in drafts saved before it
     /// existed, the draft is the person's own.
     var suggestion: NewTaskSuggestionOrigin?
 }
 
-/// A model and effort chosen on the new-task screen, in the harness's own values. The new task
-/// keeps it as its own choice, so its first turn already runs on it.
+/// A model, effort and permission chosen on the new-task screen, in the harness's own values. The
+/// new task keeps it as its own choice, so its first turn already runs on it.
 struct NewTaskModelChoice: Codable, Equatable, Sendable {
     /// Nil when only an effort was chosen, which leaves the model to the account's settings.
     var model: String?
     var effort: String?
     /// Codex's service tier (Fast) chosen with the model.
     var serviceTier: String?
-    /// Claude Code's permission mode, which the task launches in, or Antigravity's, which its
-    /// first run takes. Absent, as in drafts saved before it existed, the task starts in the
-    /// harness's default mode as every task does.
+    /// Claude Code's permission mode, which the task launches in, Antigravity's, which its first
+    /// run takes, or Codex's permission (a `CodexRunLocation` other than Default), which its thread
+    /// starts with. Absent, as in drafts and schedules saved before it existed, the task starts in
+    /// the harness's default mode as every task does.
     var permissionMode: String?
 
     init(model: String?, effort: String? = nil, serviceTier: String? = nil, permissionMode: String? = nil) {
@@ -65,6 +67,22 @@ struct NewTaskModelChoice: Codable, Equatable, Sendable {
         model.map { CodexModelSelection(model: $0, reasoningEffort: effort, serviceTier: serviceTier) }
     }
 
+    /// Codex's permission, Default when none was chosen.
+    var codexRunLocation: CodexRunLocation {
+        permissionMode.flatMap(CodexRunLocation.init(rawValue:)) ?? .automatic
+    }
+
+    /// The chosen permission by the name its harness's control gives it, or nil when none was chosen.
+    func permissionName(for harness: HarnessKind) -> String? {
+        guard let permissionMode else { return nil }
+        switch harness {
+        case .claudeCode: return ClaudePermissionMode.displayName(permissionMode) ?? permissionMode
+        case .codex: return codexRunLocation.displayName
+        case .antigravityCLI: return AntigravityPermissionMode.displayName(permissionMode) ?? permissionMode
+        default: return permissionMode
+        }
+    }
+
     /// The task options a new task of this harness starts with: the keys the task's own model
     /// menu keeps its choice under.
     func providerOptions(for harness: HarnessKind) -> [String: String] {
@@ -76,7 +94,10 @@ struct NewTaskModelChoice: Codable, Equatable, Sendable {
             if let permissionMode { options[ClaudeLaunchOption.permissionMode] = permissionMode }
             return options
         case .codex:
-            return codexSelection?.storedValue.map { [CodexModelSelection.storageKey: $0] } ?? [:]
+            var options: [String: String] = [:]
+            if let selection = codexSelection?.storedValue { options[CodexModelSelection.storageKey] = selection }
+            if codexRunLocation != .automatic { options[CodexRunLocation.storageKey] = codexRunLocation.rawValue }
+            return options
         case .antigravityCLI:
             var options: [String: String] = [:]
             if let model { options[StructuredHeadlessOptionID.model] = model }
@@ -86,6 +107,29 @@ struct NewTaskModelChoice: Codable, Equatable, Sendable {
         default:
             return [:]
         }
+    }
+}
+
+extension NewTaskModelChoice {
+    /// The choice a session or scheduled-task tool's `permissionMode` makes for a new task of
+    /// `harness`, in that harness's own values: Claude Code's (`ScheduleToolCatalog.permissionModes`,
+    /// whose `default` is Manual) and Codex's (`codexPermissionModes`, whose `default` keeps none).
+    /// Nil for a value the harness does not have, and for a harness the tools choose none for.
+    static func permission(fromTool value: String, harness: HarnessKind) -> NewTaskModelChoice? {
+        switch harness {
+        case .claudeCode:
+            OtherAppScheduleImport.claudePermissionMode(value).map { NewTaskModelChoice(model: nil, permissionMode: $0) }
+        case .codex:
+            ScheduleToolCatalog.codexPermissionModes.contains(value)
+                ? NewTaskModelChoice(model: nil, permissionMode: value == "default" ? nil : value) : nil
+        default:
+            nil
+        }
+    }
+
+    /// The chosen permission as the tools spell it; nil when none was chosen.
+    func toolPermission(for harness: HarnessKind) -> String? {
+        harness == .claudeCode && permissionMode == ClaudePermissionMode.manual ? "default" : permissionMode
     }
 }
 

@@ -228,8 +228,8 @@ struct ScheduledTaskDetail: View {
             let choice = destination.modelChoice
             let model = [choice?.model, choice?.effort].compactMap { $0 }.joined(separator: " · ")
             rows.append((L10n.string("Model"), model.isEmpty ? L10n.string("Default") : model))
-            if let mode = choice?.permissionMode {
-                rows.append((L10n.string("Permissions"), ClaudePermissionMode.displayName(mode) ?? mode))
+            if let permission = choice?.permissionName(for: destination.harness) {
+                rows.append((L10n.string("Permissions"), permission))
             }
         }
         rows.append((L10n.string("Next run"), nextRun.map { ScheduleText.moment($0, relativeTo: now) } ?? "—"))

@@ -38,7 +38,18 @@ extension AppModel {
         case let .success(value): options = sessionToolInheritedOptions(harness: harness, caller: caller, chosen: value)
         case let .failure(error): return error.result("Not started")
         }
-        let permission: TaskPermissionLevel = caller.permission == .readOnly ? .readOnly : .standard
+        var chosenLevel: TaskPermissionLevel?
+        if let mode = arguments["permissionMode"]?.stringValue?.trimmingCharacters(in: .whitespaces) {
+            switch sessionToolPermission(mode, harness: harness, caller: caller, subject: "the subagent",
+                                         personChooses: "New Task") {
+            case let .success(permission):
+                options = Self.options(options, withPermission: permission, harness: harness)
+                chosenLevel = TaskPermissionLevel.level(harness: harness, options: options)
+            case let .failure(error): return error.result("Not started")
+            }
+        }
+        let permission: TaskPermissionLevel = caller.permission == .readOnly || chosenLevel == .readOnly
+            ? .readOnly : .standard
         if permission == .readOnly {
             guard let readOnly = Self.readOnlyOptions(for: harness) else {
                 return .error("Not started: this task is read only, and Yardlet cannot run "

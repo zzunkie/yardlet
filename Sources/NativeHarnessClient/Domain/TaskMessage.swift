@@ -331,17 +331,25 @@ enum TaskPermissionLevel: Int, Comparable, Sendable {
     /// A task's level from its saved options, which follow the composer's choice (for Codex its
     /// saved run location unless one is given).
     static func level(of session: SessionRecord, codexRunLocation: CodexRunLocation? = nil) -> Self {
-        switch session.harness {
+        var options = session.providerOptions
+        if let codexRunLocation { options[CodexRunLocation.storageKey] = codexRunLocation.rawValue }
+        return level(harness: session.harness, options: options)
+    }
+
+    /// The level a task of `harness` with these options runs at: a task's own, or the one a new
+    /// task's or a schedule's choice (`NewTaskModelChoice.providerOptions`) would start it at.
+    static func level(harness: HarnessKind, options: [String: String]) -> Self {
+        switch harness {
         case .claudeCode:
-            let mode = session.providerOptions[ClaudeLaunchOption.permissionMode]
+            let mode = options[ClaudeLaunchOption.permissionMode]
             if ClaudePermissionMode.isElevated(mode) { return .elevated }
             return mode == ClaudePermissionMode.plan ? .readOnly : .standard
         case .antigravityCLI:
-            let mode = session.providerOptions[AntigravityPermissionMode.optionID]
+            let mode = options[AntigravityPermissionMode.optionID]
             if AntigravityPermissionMode.isElevated(mode) { return .elevated }
             return mode == AntigravityPermissionMode.plan ? .readOnly : .standard
         case .codex:
-            switch codexRunLocation ?? CodexRunLocation.restored(from: session.providerOptions) {
+            switch CodexRunLocation.restored(from: options) {
             case .readOnly: return .readOnly
             case .dangerFullAccess: return .elevated
             default: return .standard

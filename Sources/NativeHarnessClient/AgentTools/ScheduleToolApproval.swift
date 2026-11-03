@@ -57,8 +57,11 @@ enum ScheduleToolApproval {
             lines.append(L10n.string("It starts now with the schedule's own settings."))
         }
         if let mode = input[Key.permissionMode]?.stringValue, !mode.isEmpty {
-            let value = OtherAppScheduleImport.claudePermissionMode(mode)
-            lines.append(L10n.format("Its runs will use %@ mode.", value.flatMap(ClaudePermissionMode.displayName) ?? mode))
+            // In the words of the harness the runs start on: the caller's (Claude Code's) unless the call names another.
+            let harness = input[Key.harness]?.stringValue.flatMap(HarnessCatalog.harness(named:)) ?? .claudeCode
+            let name = NewTaskModelChoice.permission(fromTool: mode, harness: harness)
+                .map { $0.permissionName(for: harness) ?? L10n.string("Default") }
+            lines.append(L10n.format("Its runs will use %@ mode.", name ?? mode))
         }
         var detail = lines.joined(separator: "\n")
         if let prompt, !prompt.isEmpty {
