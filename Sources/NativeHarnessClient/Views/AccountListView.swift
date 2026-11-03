@@ -377,7 +377,19 @@ struct AccountRow: View {
     var body: some View {
         HStack(spacing: 12) {
             identityButton
-            trailing
+            // The row's menu is also on a button, as Settings' other account rows offer theirs. It sits
+            // under the limits or status, so it takes no width from the account's name.
+            VStack(alignment: .trailing, spacing: 4) {
+                trailing
+                if hasMenu {
+                    Menu { menuItems } label: {
+                        Label(L10n.format("More for %@", title), systemImage: "ellipsis").labelStyle(.iconOnly)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                }
+            }
             if let onConnect {
                 Button(choice.needsProvider ? L10n.string("Choose provider") : L10n.string("Connect"), action: onConnect)
                     .controlSize(.small)
@@ -386,24 +398,31 @@ struct AccountRow: View {
         .padding(.horizontal, 12).padding(.vertical, 12)
         .frame(minHeight: 68)
         .background(selected ? ParityTheme.selectedFill : Color.clear, in: RoundedRectangle(cornerRadius: 10))
-        .contextMenu {
-            if let onSetAutomaticAssignment, let automaticAssignment {
-                Toggle(L10n.string("Include in Automatic Assignment"), isOn: Binding(
-                    get: { automaticAssignment }, set: { onSetAutomaticAssignment($0) }))
-            }
-            if let onShare { Button(L10n.string("Share With the Default Folder…"), action: onShare) }
-            if let signIn = onSignOut[.signInWithAnotherAccount] {
-                Button(L10n.string("Sign In With Another Account…"), action: signIn)
-            }
-            if !onRemove.isEmpty || onSignOut[.signOut] != nil { Divider() }
-            if let signOut = onSignOut[.signOut] {
-                Button(L10n.string(AccountConnectionPresentation.usesProviderLanguage(choice.harness)
-                    ? "Disconnect Provider…" : "Sign Out…"), role: .destructive, action: signOut)
-            }
-            if let remove = onRemove[.fromList] { Button(L10n.string("Remove from List…"), action: remove) }
-            if let delete = onRemove[.signOutAndDelete] {
-                Button(L10n.string("Sign Out and Delete…"), role: .destructive, action: delete)
-            }
+        .contextMenu { menuItems }
+    }
+
+    private var hasMenu: Bool {
+        (onSetAutomaticAssignment != nil && automaticAssignment != nil) || onShare != nil || !onRemove.isEmpty
+            || !onSignOut.isEmpty
+    }
+
+    @ViewBuilder private var menuItems: some View {
+        if let onSetAutomaticAssignment, let automaticAssignment {
+            Toggle(L10n.string("Include in Automatic Assignment"), isOn: Binding(
+                get: { automaticAssignment }, set: { onSetAutomaticAssignment($0) }))
+        }
+        if let onShare { Button(L10n.string("Share With the Default Folder…"), action: onShare) }
+        if let signIn = onSignOut[.signInWithAnotherAccount] {
+            Button(L10n.string("Sign In With Another Account…"), action: signIn)
+        }
+        if !onRemove.isEmpty || onSignOut[.signOut] != nil { Divider() }
+        if let signOut = onSignOut[.signOut] {
+            Button(L10n.string(AccountConnectionPresentation.usesProviderLanguage(choice.harness)
+                ? "Disconnect Provider…" : "Sign Out…"), role: .destructive, action: signOut)
+        }
+        if let remove = onRemove[.fromList] { Button(L10n.string("Remove from List…"), action: remove) }
+        if let delete = onRemove[.signOutAndDelete] {
+            Button(L10n.string("Sign Out and Delete…"), role: .destructive, action: delete)
         }
     }
 

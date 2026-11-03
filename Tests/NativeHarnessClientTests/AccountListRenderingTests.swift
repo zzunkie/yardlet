@@ -248,8 +248,12 @@ import XCTest
         defer { host.close() }
         host.settle()
 
-        // The row's menu, built as a right click builds it, without opening it.
-        let row = try rowFrame(store.choice(for: .antigravityCLI, connection: nil).title, in: host)
+        // The row's menu, built as a right click builds it, without opening it. The same menu is on a
+        // button at the row's end, where it can be found without a right click.
+        let title = store.choice(for: .antigravityCLI, connection: nil).title
+        let row = try rowFrame(title, in: host)
+        let more = try rowFrame(L10n.format("More for %@", title), in: host)
+        XCTAssertGreaterThan(more.minX, row.midX)
         let click = try XCTUnwrap(NSEvent.mouseEvent(
             with: .rightMouseDown, location: NSPoint(x: row.midX, y: size.height - row.midY),
             modifierFlags: [], timestamp: 0, windowNumber: host.window.windowNumber, context: nil,
@@ -268,7 +272,7 @@ import XCTest
                 page(appearance)
                 MenuPanel(lines: lines, width: 250,
                           highlighted: lines.firstIndex { $0.title == L10n.string("Sign In With Another Account…") })
-                    .padding(.leading, row.midX).padding(.top, row.midY)
+                    .padding(.leading, more.maxX - 250).padding(.top, more.maxY + 4)
             }
             .frame(width: size.width, height: 300, alignment: .topLeading)
             .clipped()
@@ -327,7 +331,10 @@ import XCTest
         return try WindowlessRender.withAccessibilityTree {
             func find(_ node: AnyObject) -> CGRect? {
                 for case let child as AnyObject in (node.accessibilityChildren?() ?? nil) ?? [] {
-                    if ((child.accessibilityLabel?() ?? nil) ?? "").hasPrefix(title),
+                    // An icon-only menu button names itself by its title, not its label.
+                    let name = (child.accessibilityRole?() ?? nil) == .menuButton
+                        ? child.accessibilityTitle?() ?? nil : child.accessibilityLabel?() ?? nil
+                    if (name ?? "").hasPrefix(title),
                        let screen = child.accessibilityFrame?(), screen.height > 0 {
                         let frame = window.convertFromScreen(screen)
                         return CGRect(x: frame.minX, y: height - frame.maxY, width: frame.width, height: frame.height)

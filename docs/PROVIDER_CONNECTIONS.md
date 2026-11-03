@@ -416,7 +416,9 @@ the address shortens in the middle. The plan line no longer repeats the organiza
 
 ### Removing an account
 
-A saved account row's context menu in Settings › Accounts has two items. The default sign-in (`~/.claude`, `~/.codex`)
+Each account row in Settings › Accounts has a menu, opened with a right click or with the "…" button under the row's
+limits or status (under them, so it takes no width from the account's name). A saved account's menu has two removal
+items. The default sign-in (`~/.claude`, `~/.codex`)
 is not removed; its row signs it out instead ("Signing the default sign-in out" below). That sign-out applies only to
 the default sign-in (`AccountCenterModel.logout` runs with a broker that has no connection) and never reaches a saved
 account's folder.
@@ -461,13 +463,12 @@ account's folder.
 
 ### Signing the default sign-in out
 
-While the default sign-in's last reading says its CLI can sign out, its row's context menu in Settings › Accounts offers
-what the Harnesses page offers beside it (`AccountListProjection.defaultLoginActions`): **Sign Out…** (**Disconnect
+While the default sign-in's last reading says its CLI can sign out, its row's menu in Settings › Accounts offers what
+the Harnesses page offers beside it (`AccountListProjection.defaultLoginActions`): **Sign Out…** (**Disconnect
 Provider…** for OpenCode and Pi, which connect model providers, where connecting another needs no sign-out) and, for an
 account sign-in, **Sign In With Another Account…**. A harness that keeps its sign-in in one place and cannot have a
 separate account folder (the keychain items of Antigravity CLI and Cursor Agent,
-`HarnessConnectionCapabilities.supportsSeparateHome`)
-changes account only this way.
+`HarnessConnectionCapabilities.supportsSeparateHome`) changes account only this way.
 
 - Both confirm first, then run the harness's own sign-out command in the sign-in console
   (`HarnessAccountBroker.logoutCommand`), as the Harnesses page does.
@@ -539,9 +540,9 @@ a limit warning, `.build/claude-provider-notices-qa/notices-*`).
 
 Signing the default sign-in out: `AccountListTests.testSettingsListsEveryFilteredHarnessGroupedByAccountAndSearchable`
 (which rows offer which items) and `AccountListRenderingTests.testTheDefaultLoginSignsOutOrInWithAnotherAccountFromItsRow`
-(the row's menu as a right click builds it; a fake `agy` that stays open after `/logout` with a fake probe, signing out
-alone and then signing in with another account; a fake `claude` whose `auth logout` exits; light and dark,
-`.build/account-list-qa/default-login-*`).
+(the row's menu as a right click builds it, and its "…" button; a fake `agy` that stays open after `/logout` with a
+fake probe, signing out alone and then signing in with another account; a fake `claude` whose `auth logout` exits;
+light and dark, `.build/account-list-qa/default-login-*`).
 
 Moving the tasks first: `ClaudeAccountFolderTests.testMovingAnAccountsTasksKeepsTheirSessionsAndRemovesItOnceAllMoved`
 (fake account folders and CLI: which folders qualify, a target whose CLI reports another address takes nothing, not even
