@@ -1839,6 +1839,7 @@ These permissions reserve separate authorization for terminal sessions, direct f
 They do not add file-writing or settings-changing requests by themselves, and do not change the existing paired
 remote's task messages or task-specific controls. Credentials, vault entries, sign-in and remote device management
 remain on the host.
+
 ### 15.30 Opening addresses and closing browser tabs
 
 A snapshot may include `tabControls: true`. Without it, clients keep the address field and tab close/new-tab
