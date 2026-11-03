@@ -5,6 +5,17 @@ import XCTest
 
 @MainActor
 final class PersonalAgentTests: XCTestCase {
+    /// A thread's folder is named by its last part only, never the whole path, on a Mac or on Windows.
+    func testAThreadsFolderIsItsLastPartOnAnyComputer() {
+        XCTAssertEqual(PersonalAgentThread.folder("/Users/person/work/launch-site"), "launch-site")
+        XCTAssertEqual(PersonalAgentThread.folder("C:\\Users\\Person\\Documents\\task"), "task")
+        XCTAssertEqual(PersonalAgentThread.folder("/C:\\Users\\Person\\task\\"), "task")
+        XCTAssertEqual(PersonalAgentThread.folder("\\\\server\\share\\work"), "work")
+        XCTAssertNil(PersonalAgentThread.folder("C:\\"))
+        XCTAssertNil(PersonalAgentThread.folder("relative/path"))
+        XCTAssertNil(PersonalAgentThread.folder(nil))
+    }
+
     private func value(_ text: String) throws -> JSONValue {
         try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
     }
