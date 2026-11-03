@@ -52,7 +52,9 @@ struct WindowTabStrip<SelectedTitle: View>: View {
                                                 + WindowTabMetrics.spacing))
                             .zIndex(draggedIndex == index ? 1 : 0)
                             // Read outside the offset: where the tab is laid out, not where it slid.
-                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { tabFrames[tab.id] = $0 }
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                                if tabFrames[tab.id] != frame { tabFrames[tab.id] = frame }
+                            }
                             .overlay(alignment: .leading) {
                                 if insertionIndex == index { TabInsertionMark().offset(x: -WindowTabMetrics.spacing - 1) }
                             }
@@ -70,7 +72,9 @@ struct WindowTabStrip<SelectedTitle: View>: View {
                 }
             }
             .frame(maxWidth: WindowTabMetrics.idealWidth(count: tabs.count))
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { stripFrame = $0 }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                if stripFrame != frame { stripFrame = frame }
+            }
             .onDrop(of: [.yardletTaskReference], delegate: TaskDropOnStrip(
                 strip: { stripFrame }, tabs: { orderedFrames }, index: $systemDropIndex,
                 onDrop: { id, index in onOpenTask(id, tabs.indices.contains(index) ? tabs[index].id : nil) }))

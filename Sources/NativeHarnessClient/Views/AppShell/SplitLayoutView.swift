@@ -178,6 +178,7 @@ struct PaneDropTarget: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                guard self.frame != frame else { return }
                 self.frame = frame
                 register()
             }
