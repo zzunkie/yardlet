@@ -1664,6 +1664,9 @@ struct MainWindow: View {
             models: NewTaskModelSource(catalogs: model.modelCatalogs) {
                 await model.loadNewTaskModels(harness: $0, runtimeURL: $1, connection: $2, workspaceURL: $3)
             },
+            accounts: NewTaskAccountSource(
+                preview: { model.newTaskAccountPreview(harness: $0, model: $1) },
+                pick: { await model.newTaskAccount(harness: $0, model: $1) }),
             onSelectSession: { activateTask($0.id) },
             onChooseWorkspace: { projects.ensureProject(forRoot: $0) },
             onShowHarnesses: presentHarnesses,

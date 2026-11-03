@@ -25,6 +25,13 @@ import XCTest
         XCTAssertEqual(AccountListProjection.harnesses(mode), [.claudeCode])
 
         store.selection[.claudeCode] = fixture.b.id
+        XCTAssertFalse(store.startsNewTasksAutomatically(for: .claudeCode),
+            "Accounts apart from the default login's history are not in automatic assignment by default")
+        store.defaultLoginEnvironment = ["CLAUDE_CONFIG_DIR": fixture.root.appending(path: "shared").path]
+        XCTAssertTrue(store.startsNewTasksAutomatically(for: .claudeCode),
+            "Several accounts in automatic assignment: Automatic, and no account is marked")
+        XCTAssertFalse(choices.contains { AccountListProjection.isSelected($0, mode: mode, store: store) })
+        store.choose(try XCTUnwrap(choices.first { $0.connection == fixture.b }))
         XCTAssertEqual(choices.filter { AccountListProjection.isSelected($0, mode: mode, store: store) }.map(\.connection),
             [fixture.b], "The next task's account is marked")
         let signedOut = try XCTUnwrap(choices.last)

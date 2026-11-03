@@ -1,7 +1,8 @@
 import Foundation
 
 /// Which account a task Yardlet starts for an agent runs on (docs/NATIVE_SESSION_STORAGE.md, "Choosing an additional account"): a child task
-/// (`create_task`), a subagent (`run_agent`) or a suggestion the person starts, and where a
+/// (`create_task`), a subagent (`run_agent`) or a suggestion the person starts, a new task the person
+/// starts while its account menu says Automatic, and where a
 /// schedule's run goes when its own account is nearly spent. The candidates are
 /// the harness's accounts in automatic assignment that are signed in
 /// (`ProviderConnectionStore.isInAutomaticAssignment`); this picks one of them from the plan limits

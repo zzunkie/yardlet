@@ -1106,6 +1106,10 @@
 "Chosen automatically" = "Chosen automatically";
 "Chosen by the agent" = "Chosen by the agent";
 "Account for new tasks" = "Account for new tasks";
+"Automatic" = "Automatic";
+"Each new task starts on the account with the most room left in its limits" = "Each new task starts on the account with the most room left in its limits";
+"Choose the account for new tasks automatically" = "Choose the account for new tasks automatically";
+"With more than one account in automatic assignment, a new task starts on the one with the most room left in its limits unless you choose an account." = "With more than one account in automatic assignment, a new task starts on the one with the most room left in its limits unless you choose an account.";
 "%@ %lld%% used" = "%1$@ %2$lld%% used";
 "Frees up %@" = "Frees up %@";
 "Switched from %@: nearly out of its limit" = "Switched from %@: nearly out of its limit";

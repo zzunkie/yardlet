@@ -9,6 +9,14 @@ struct NewTaskModelSource {
     let load: (HarnessKind, URL, ProviderConnection?, URL?) async -> Void
 }
 
+/// The account a new task starts on while its account menu says Automatic: the one the composer names
+/// before it is sent, from the readings at hand, and the one it starts on, picked when it is sent
+/// (`AppModel.newTaskAccountPreview`, `AppModel.newTaskAccount`). Both take the harness and the model.
+struct NewTaskAccountSource {
+    let preview: @MainActor (HarnessKind, String?) -> AccountAssignment?
+    let pick: @MainActor (HarnessKind, String?) async -> AppModel.AccountStart?
+}
+
 /// What the new-task screen's lists read beside the draft: the tasks the sidebar lists and their
 /// attention (`TaskAttentionProjection`, the definition `⌥⌘A`, the Dock badge and the sidebar marks
 /// share), where each task sits, the schedules, what is wrong, and how tall the window is. All of it
@@ -68,6 +76,7 @@ struct NewTaskHome: View {
     @Bindable var runtimeSelections: RuntimeSelectionStore
     var connections: ProviderConnectionStore? = nil
     var models: NewTaskModelSource? = nil
+    var accounts: NewTaskAccountSource? = nil
     let onSelectSession: (SessionRecord) -> Void
     let onChooseWorkspace: (URL) -> Void
     let onShowHarnesses: () -> Void
@@ -291,6 +300,7 @@ struct NewTaskHome: View {
                 runtimeSelections: runtimeSelections,
                 connections: connections,
                 models: models,
+                accounts: accounts,
                 onChooseWorkspace: onChooseWorkspace,
                 onShowHarnesses: onShowHarnesses,
                 onManageAccounts: onManageAccounts,
@@ -639,6 +649,26 @@ struct NewTaskDestinationMenuItems: View {
     }
 }
 
+/// Which account the next task starts on while its account menu says Automatic, and why, in the words
+/// a task's hover card uses: "name · Chosen automatically · 5 hour limit 12% used · Resets 3:00 PM".
+/// Before the task is sent it is the account the readings at hand pick; once it is sent, the one it
+/// was given. Its own view, so the tasks and readings the pick reads redraw only this line.
+private struct NewTaskAutomaticAccountLine: View {
+    let assignment: AccountAssignment?
+    let preview: () -> AccountAssignment?
+
+    var body: some View {
+        if let assignment = assignment ?? preview() {
+            let line = assignment.accountName + " · " + assignment.reasonLine()
+            Text(line)
+                .font(.caption).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(line)
+        }
+    }
+}
+
 private struct NewTaskComposer: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Bindable var draft: NewTaskDraft
@@ -646,6 +676,7 @@ private struct NewTaskComposer: View {
     @Bindable var runtimeSelections: RuntimeSelectionStore
     var connections: ProviderConnectionStore? = nil
     var models: NewTaskModelSource? = nil
+    var accounts: NewTaskAccountSource? = nil
     let onChooseWorkspace: (URL) -> Void
     let onShowHarnesses: () -> Void
     var onManageAccounts: ((HarnessKind) -> Void)? = nil
@@ -668,6 +699,8 @@ private struct NewTaskComposer: View {
     @State private var commandLoad: Task<Void, Never>?
     @State private var commandRequestID: UUID?
     @State private var hasReadCommandCatalog = false
+    /// The account a task being sent on Automatic was given, and why, until it has started.
+    @State private var startingAccount: AccountAssignment?
 
     private var availableHarnesses: [HarnessDescriptor] {
         runtimeSelections.connectedDescriptors
@@ -681,8 +714,23 @@ private struct NewTaskComposer: View {
     private var canCreate: Bool {
         guard draft.canCreate(runtimeURL: runtimeURL) else { return false }
         guard let harness = draft.harness, let connections else { return true }
+        // Automatic is offered only with more than one account a task can start on.
+        if startsOnAutomaticAccount { return true }
         guard let choice = connections.choices(for: [harness]).first(where: { $0.connection?.id == connections.selection[harness] }) else { return false }
         return choice.canSelect
+    }
+
+    /// The next task starts on the account automatic assignment picks when it is sent.
+    private var startsOnAutomaticAccount: Bool {
+        guard let harness = draft.harness else { return false }
+        return connections?.startsNewTasksAutomatically(for: harness) == true
+    }
+
+    /// The model the next task names, for the limits of one model.
+    private var chosenModel: String? {
+        draft.harness.flatMap { harness in
+            draft.modelChoices[harness].flatMap { AppModel.modelOption($0.providerOptions(for: harness), harness: harness) }
+        }
     }
 
     private struct ModelSettingsContext: Equatable {
@@ -764,6 +812,11 @@ private struct NewTaskComposer: View {
                              action: "Manage harnesses", perform: onShowHarnesses)
             } else if availableHarnesses.isEmpty {
                 homeGuidance("Add a harness to start a task.", action: "Manage harnesses", perform: onShowHarnesses)
+            }
+
+            if startsOnAutomaticAccount, let harness = draft.harness, let accounts {
+                NewTaskAutomaticAccountLine(assignment: startingAccount, preview: { accounts.preview(harness, chosenModel) })
+                    .padding(.horizontal, 16).padding(.bottom, 6)
             }
 
             HStack(alignment: .newTaskControlRow, spacing: 7) {
@@ -983,10 +1036,19 @@ private struct NewTaskComposer: View {
             draft.notice = notice
             return
         }
-        guard let submission = draft.beginSubmission(runtimeURL: runtimeURL,
+        guard let begun = draft.beginSubmission(runtimeURL: runtimeURL,
             connection: draft.harness.flatMap { connections?.selected(for: $0) },
             startsInNewWorktree: startsInNewWorktree) else { return }
+        let picksAccount = startsOnAutomaticAccount ? accounts?.pick : nil
+        let model = chosenModel
         Task {
+            var submission = begun
+            if let picksAccount, let account = await picksAccount(submission.harness, model) {
+                submission.connection = account.connection
+                submission.accountAssignment = account.assignment
+                startingAccount = account.assignment
+            }
+            defer { startingAccount = nil }
             do {
                 let created = try await onCreate(submission)
                 draft.complete(submission, succeeded: created != nil)
