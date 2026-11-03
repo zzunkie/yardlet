@@ -367,8 +367,16 @@ public actor RemoteDeviceStore {
         // atomic replacement, so a reported failure cannot hide a newly persisted grant.
         let temporary = folder.appendingPathComponent(".devices-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: temporary) }
-        try data.write(to: temporary, options: [.withoutOverwriting])
+        try Data().write(to: temporary, options: [.withoutOverwriting])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
+        let handle = try FileHandle(forWritingTo: temporary)
+        do {
+            try handle.write(contentsOf: data)
+            try handle.close()
+        } catch {
+            try? handle.close()
+            throw error
+        }
         if FileManager.default.fileExists(atPath: fileURL.path) {
             _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary, options: [.usingNewMetadata])
         } else {
