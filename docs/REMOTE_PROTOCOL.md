@@ -1691,10 +1691,13 @@ stays on the Mac.
 A snapshot may advertise `reviewReading: true`. Older hosts omit it; clients keep the panel unavailable.
 `readReview` takes `taskId` and `reviewQuery`, an object with `operation` and optional `repository`,
 `target`, `revision`, and `path`. The answer holds a `review` object. The desktop uses the same Review
-pane and scope/file selectors as its local window, backed by these reads:
+pane and scope/file selectors as its local window, backed by these reads. The window passes only `taskId`;
+the panel first asks for `context` without a repository path. Host paths remain absent from the general
+task snapshot, and clients never submit synthetic sidebar paths as host paths:
 
 | Operation | Inputs | `review` fields |
 |---|---|---|
+| `context` | none | `workspace` and `additionalRoots`: the task's host folder paths, requested only when Review opens |
 | `lastTurn` | none | `lastTurnOffered`, optional `turnID`, `text` (unified diff), `isRunning`, `truncated`; the same provider projection the host Review uses |
 | `repositories` | none | `repositories`: host repository paths among the task's folders |
 | `root` | optional `repository` | `root`: repository root |
