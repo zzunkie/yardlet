@@ -1,10 +1,11 @@
 import SwiftUI
 import YardletRemote
 
-/// A new task on the host (docs/REMOTE_PROTOCOL.md §15.5, §15.16): its project or Chats, then the harness,
-/// model, effort and permission mode the host's new-task composer offers, a new worktree where the project
-/// is a Git repository, and the first message. The choices apply to this task only; the host's own
-/// new-task composer keeps its own.
+/// The host's home, as the local window's: the host's projects with what their tasks need (`NewTaskHomeLists`, read
+/// from the lists the sidebar reads), then the title naming the project the new task starts in, which is its menu, and
+/// the composer (docs/REMOTE_PROTOCOL.md §15.5, §15.16): the harness, model, effort and permission mode the host's
+/// new-task composer offers, a new worktree where the project is a Git repository, and the first message. The choices
+/// apply to this task only; the host's own new-task composer keeps its own.
 struct RemoteNewTaskView: View {
     let model: RemoteHostModel
     @Bindable var draft: TaskComposerDraft
@@ -17,6 +18,8 @@ struct RemoteNewTaskView: View {
     @State private var worktree: Bool?
     @State private var isStarting = false
     @FocusState private var isFocused: Bool
+    @State private var listKeyboard = NewTaskHomeListKeyboard()
+    @FocusState private var listFocus: NewTaskHomeLists.Part?
 
     /// The host's projects that take tasks, and Chats, which the host's own new-task menu always offers and which it
     /// takes before it lists any chat (§15.5).
@@ -30,48 +33,31 @@ struct RemoteNewTaskView: View {
     }
 
     var body: some View {
-        VStack(spacing: 18) {
-            Spacer(minLength: 0)
-            Text(L10n.format("What should %@ work on?", model.name))
-                .font(.system(size: 22, weight: .semibold))
-                .multilineTextAlignment(.center)
-            VStack(alignment: .leading, spacing: 10) {
-                ComposerEditor(
-                    draft: draft, placeholder: L10n.string("Describe the task"),
-                    accessibilityHint: L10n.string("Press Return to start the task"), metrics: .newTask,
-                    input: nil, onExternalInput: acceptsAttachments ? { receive($0) } : nil, mentionRoots: [], commands: nil,
-                    isCommandMenuOpen: false, isMenuOpen: false, isFocused: $isFocused, onSubmit: start
-                ) {
-                    EmptyView()
-                } chips: {
-                    EmptyView()
-                } footer: {
-                    HStack(spacing: 8) {
-                        projectMenu
-                        harnessMenu
-                        ForEach(options?.settings ?? [], id: \.id) { setting in settingMenu(setting) }
-                        if let worktree {
-                            Toggle(L10n.string("New worktree"), isOn: Binding(get: { worktree }, set: { self.worktree = $0 }))
-                                .toggleStyle(.checkbox)
-                                .controlSize(.small)
-                        }
-                        Spacer()
-                        if isStarting { ProgressView().controlSize(.small) }
-                        ParityIconButton(systemName: "arrow.up", help: L10n.string("Start task"), isProminent: true, action: start)
-                            .accessibilityLabel(L10n.string("Start task"))
-                            .disabled(!canStart)
-                    }
-                    .padding(.horizontal, 12).padding(.bottom, 10)
+        GeometryReader { viewport in
+            let columns = NewTaskHomeLayout.columns(width: viewport.size.width)
+            VStack(spacing: 0) {
+                // The host's projects with what their tasks need, as the local home lists this Mac's.
+                ScrollView {
+                    homeLists(viewport: viewport, columns: columns)
+                        .frame(maxWidth: columns > 1 ? NewTaskHomeLayout.gridWidth : NewTaskHomeLayout.composerWidth)
+                        .padding(.horizontal, NewTaskHomeLayout.inset)
+                        .padding(.top, 28)
+                        .padding(.bottom, 16)
+                        .frame(maxWidth: .infinity)
                 }
-                if let error = model.commandError {
-                    Text(error).font(.caption).foregroundStyle(.orange)
+                .defaultScrollAnchor(.top)
+                VStack(spacing: 0) {
+                    NewTaskHeroTitle(kind: heroKind) { destinationMenuItems }
+                    composer
+                        .padding(.top, 20)
                 }
+                .frame(maxWidth: NewTaskHomeLayout.composerWidth)
+                .padding(.horizontal, NewTaskHomeLayout.inset)
+                .padding(.top, 14)
+                .padding(.bottom, 20)
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: ParityTheme.contentWidth)
-            Spacer(minLength: 0)
         }
-        .padding(.horizontal, ParityTheme.conversationInset)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             if projectID == nil { projectID = projects.first(where: { $0.kind != .chats })?.id ?? projects.first?.id }
             isFocused = true
@@ -84,6 +70,115 @@ struct RemoteNewTaskView: View {
         .task(id: OptionsKey(projectID: projectID, harness: harness, picks: picks, connected: model.isConnected)) {
             await readOptions()
         }
+    }
+
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ComposerEditor(
+                draft: draft, placeholder: L10n.string("Describe the task"),
+                accessibilityHint: L10n.string("Press Return to start the task"), metrics: .newTask,
+                input: nil, onExternalInput: acceptsAttachments ? { receive($0) } : nil, mentionRoots: [], commands: nil,
+                isCommandMenuOpen: false, isMenuOpen: false, isFocused: $isFocused, onSubmit: start
+            ) {
+                EmptyView()
+            } chips: {
+                EmptyView()
+            } footer: {
+                HStack(spacing: 8) {
+                    harnessMenu
+                    ForEach(options?.settings ?? [], id: \.id) { setting in settingMenu(setting) }
+                    if let worktree {
+                        Toggle(L10n.string("New worktree"), isOn: Binding(get: { worktree }, set: { self.worktree = $0 }))
+                            .toggleStyle(.checkbox)
+                            .controlSize(.small)
+                    }
+                    Spacer()
+                    if isStarting { ProgressView().controlSize(.small) }
+                    ParityIconButton(systemName: "arrow.up", help: L10n.string("Start task"), isProminent: true, action: start)
+                        .accessibilityLabel(L10n.string("Start task"))
+                        .disabled(!canStart)
+                }
+                .padding(.horizontal, 12).padding(.bottom, 10)
+            }
+            if let error = model.commandError {
+                Text(error).font(.caption).foregroundStyle(.orange)
+            }
+        }
+    }
+
+    // MARK: The home's lists
+
+    /// The host's tasks as the local home reads this Mac's (`NewTaskHomeActivity`), from the lists the sidebar reads.
+    private var activity: NewTaskHomeActivity {
+        let mirror = model.sidebar
+        let names = Dictionary(mirror.groups.flatMap { group in group.sessions.map { ($0.id, group.displayName) } },
+                               uniquingKeysWith: { first, _ in first })
+        var activity = NewTaskHomeActivity()
+        activity.sessions = mirror.sessions
+        activity.details = mirror.details
+        activity.groups = mirror.groups
+        activity.chats = mirror.chats
+        activity.placeName = { names[$0.id] ?? L10n.string("Chats") }
+        activity.onMarkRead = { [model] ids in for id in ids { model.send(.markRead(taskID: id.uuidString)) } }
+        return activity
+    }
+
+    private func homeLists(viewport: GeometryProxy, columns: Int) -> NewTaskHomeLists {
+        let mirror = model.sidebar
+        let names = Dictionary(mirror.groups.map { ($0.workspaceURL, $0.displayName) }, uniquingKeysWith: { first, _ in first })
+        return NewTaskHomeLists(
+            part: .projects, folder: nil, startsChat: isChat, canUseWorktree: false, startsInNewWorktree: false, git: .none,
+            activity: activity, rowLimit: NewTaskHomeListsProjection.rowLimit(windowHeight: viewport.size.height),
+            columns: columns, selectedProjectID: isChat ? nil : projectID.flatMap(UUID.init(uuidString:)),
+            recentSessions: mirror.sessions.sorted { $0.updatedAt > $1.updatedAt },
+            projectName: { names[$0.standardizedFileURL] ?? $0.lastPathComponent },
+            onSelectSession: { model.select(.task($0.id.uuidString)) },
+            onAction: perform,
+            keyboard: $listKeyboard, focus: $listFocus,
+            onListed: { _, entries in listKeyboard.list(entries) },
+            onReturnToComposer: { isFocused = true },
+            // The host's folders are the host's: nothing here reads them.
+            readFolderGit: { _ in .none }, readLeftWork: { _ in nil })
+    }
+
+    private func perform(_ action: NewTaskHomeAction) {
+        switch action {
+        // The host's task opens here; answering it in the composer's place is the local home's alone for now.
+        case let .openTask(id), let .reply(id):
+            model.select(.task(id.uuidString))
+        case let .draft(prompt):
+            draft.text = draft.text.isEmpty ? prompt : draft.text + "\n\n" + prompt
+            isFocused = true
+        case .useNewWorktree:
+            if worktree != nil { worktree = true }
+            isFocused = true
+        case let .chooseProject(id):
+            projectID = id.uuidString
+            isFocused = true
+        case .chooseChat:
+            projectID = RemoteTaskProjection.chatsProjectID
+            isFocused = true
+        case .openSchedule:
+            break
+        }
+    }
+
+    private var isChat: Bool { projects.first { $0.id == projectID }?.kind == .chats }
+
+    /// The title over the composer, as the local home's: what to work on in the chosen project, its name the menu of
+    /// the host's projects and Chats.
+    private var heroKind: NewTaskHeroTitleKind {
+        guard let project = projects.first(where: { $0.id == projectID }), project.kind != .chats else { return .noProject }
+        return .workOn(project: NewTaskHeroTitleKind.shortened(project.name))
+    }
+
+    @ViewBuilder
+    private var destinationMenuItems: some View {
+        ForEach(projects.filter { $0.kind != .chats }, id: \.id) { project in
+            Button(project.name) { projectID = project.id }
+        }
+        Divider()
+        Button(L10n.string("Chat (no project)")) { projectID = RemoteTaskProjection.chatsProjectID }
     }
 
     private struct OptionsKey: Equatable {
@@ -103,19 +198,6 @@ struct RemoteNewTaskView: View {
     }
 
     private var acceptsAttachments: Bool { chosenHarness?.acceptsImages == true || chosenHarness?.acceptsFiles == true }
-
-    private var projectMenu: some View {
-        Menu {
-            ForEach(projects, id: \.id) { project in
-                Button(project.name) { projectID = project.id }
-            }
-        } label: {
-            Label(projects.first { $0.id == projectID }?.name ?? L10n.string("Choose a project"),
-                  systemImage: projects.first { $0.id == projectID }?.kind == .chats ? "bubble.left" : "folder")
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-    }
 
     private var harnessMenu: some View {
         Menu {

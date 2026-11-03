@@ -68,8 +68,14 @@ struct RemoteSidebarMirror: Equatable {
         return SessionRecord(id: id, harness: HarnessKind(rawValue: task.harness), workspaceURL: folder,
                              runtimeExecutableURL: folder, title: task.title, status: status, createdAt: updatedAt,
                              updatedAt: updatedAt, hasUnreadUpdate: task.unread,
-                             completionState: task.indicator == .failed ? .failed : .none, isPinned: task.pinned,
+                             completionState: completion(task), isPinned: task.pinned,
                              projectID: project?.id, parentTaskID: task.parentTaskId.flatMap(UUID.init(uuidString:)))
+    }
+
+    /// How the latest turn ended, where the host's list says: failed, or finished with a result still unread.
+    private static func completion(_ task: RemoteTask) -> SessionCompletionState {
+        if task.indicator == .failed { return .failed }
+        return task.unread && !task.running ? .completed : .none
     }
 
     /// What the host's mark says beyond the record: the request a task waits on, a tab handed to the person, a plan
