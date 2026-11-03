@@ -11,8 +11,9 @@ the menu bar menu and the sidebar's account menu. Nothing is sent anywhere and n
   in the accent) and the three limit windows closest to running out, each with its account, harness mark, the share
   left and, when the window runs out before it resets at its recent pace, "runs out in 1 hr, 30 min". While the band
   shows, the line over the composer leaves out its nearly spent limits, which the band already says, and keeps the
-  Mac's own warnings. With Home shown, the limits are read again every five minutes so the pace has readings a while
-  apart.
+  Mac's own warnings. With Home shown, an account's limits are read again once its reading is 15 minutes old, the span
+  the pace needs between two readings; a reading a menu, a list or a limit card made meanwhile is used instead of
+  starting the account's CLI again (`AccountCheckPolicy.ifOlderThan`).
 - **Settings › Usage** (after Accounts), as the Claude and Codex apps put usage in Settings:
   - **Plan limits:** every account with a limit, each window on the bar grid every limit uses, with when it resets or,
     in orange, when it runs out first at this pace.

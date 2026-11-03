@@ -221,10 +221,14 @@ enum UsageResetState: Equatable {
 }
 
 /// When a check request may reuse what is already known.
-enum AccountCheckPolicy: Sendable {
+enum AccountCheckPolicy: Equatable, Sendable {
     /// Skip readings a check in this run confirmed less than `freshnessInterval` ago, and join a
     /// check already running. Lists use this when they appear.
     case ifStale
+    /// Skip readings a check in this run confirmed less than this long ago, whoever asked for it, and
+    /// join a check already running. A screen that reads again on a timer uses this (Home's usage band,
+    /// every 15 minutes), so a reading another list or menu made meanwhile is used rather than read again.
+    case ifOlderThan(TimeInterval)
     /// Check again even when the reading is fresh, but join a check already running: one started
     /// a moment ago answers the same question. The refresh button uses this.
     case refresh
@@ -451,10 +455,10 @@ final class ProviderConnectionStore {
         return !checkingKeys.isDisjoint(with: keys)
     }
 
-    /// Whether `.ifStale` keeps the reading under `key` without checking again.
-    func isFresh(_ key: String, now: Date = Date()) -> Bool {
+    /// Whether `.ifStale` (or `.ifOlderThan(within)`) keeps the reading under `key` without checking again.
+    func isFresh(_ key: String, now: Date = Date(), within: TimeInterval = freshnessInterval) -> Bool {
         guard (readingStatus[key] ?? .current) == .current, let confirmed = confirmedAt[key] else { return false }
-        return now.timeIntervalSince(confirmed) < Self.freshnessInterval
+        return now.timeIntervalSince(confirmed) < within
     }
 
     /// How current the reading shown for `choice` is; nil before any reading.
@@ -967,7 +971,11 @@ final class ProviderConnectionStore {
                           work: @escaping @MainActor (_ isLatest: @escaping @MainActor () -> Bool) async -> Void)
         -> Task<Void, Never>? {
         if policy != .restart, let running = runningChecks[key] { return running.task }
-        if policy == .ifStale, isFresh(key) { return nil }
+        switch policy {
+        case .ifStale where isFresh(key): return nil
+        case let .ifOlderThan(age) where isFresh(key, within: age): return nil
+        default: break
+        }
         let generation = supersede(key)
         checkingKeys.insert(key)
         let task = Task { @MainActor [weak self] in

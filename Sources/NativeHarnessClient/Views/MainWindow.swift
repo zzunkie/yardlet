@@ -1723,15 +1723,15 @@ struct MainWindow: View {
         .environment(model.pullRequests)
         // A pane without a session keeps the shell's home focus path, not the focused task's.
         .environment(\.taskKeyboardFocus, homeKeyboardFocus)
-        // Its nearly spent limits are the Usage lines' readings. With the usage band shown they are read
-        // again every five minutes, as its pace needs readings a while apart (a reading under a minute old
-        // is kept).
+        // Its nearly spent limits are the Usage lines' readings. With the usage band shown, an account is
+        // read again once its reading is 15 minutes old, the span its pace needs between two readings; one
+        // a menu, a list or a limit card made meanwhile is used instead.
         .task(id: model.tokenUsage.isEnabled) {
             await model.checkUsageAccounts()
             while model.tokenUsage.isEnabled, !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(300))
+                try? await Task.sleep(for: .seconds(TokenUsagePace.span))
                 guard !Task.isCancelled else { return }
-                await model.checkUsageAccounts()
+                await model.checkUsageAccounts(policy: .ifOlderThan(TokenUsagePace.span))
             }
         }
     }
