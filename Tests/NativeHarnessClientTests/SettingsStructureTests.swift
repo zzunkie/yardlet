@@ -52,7 +52,7 @@ final class SettingsStructureTests: XCTestCase {
         XCTAssertEqual(ConnectionEntryRoute.accounts(harness: .codex, connects: true), .accountSheet)
     }
 
-    func testTheAccountsListStartsWithTheHarnessesInUse() {
+    func testTheAccountsListStartsWithTheHarnessesInUse() throws {
         let catalog = HarnessCatalog.builtIns.map(\.id)
         let available = AccountHarnessScope.available(catalog: catalog,
             installed: [.codex, .claudeCode, .museCode, .grokBuild], savedAccounts: [.claudeCode],
@@ -67,6 +67,26 @@ final class SettingsStructureTests: XCTestCase {
             chosenForNewTask: .grokBuild), [.grokBuild], "The harness chosen for the next task is in use")
         XCTAssertEqual(AccountHarnessScope.inUse(available: available, withTasks: [], savedAccounts: [],
             chosenForNewTask: nil), available, "Before anything is in use the list shows every harness")
+
+        // A harness an agent ran a subagent on in the last 30 days is in use. The record keeps the
+        // harness and the time only, drops older entries and goes once none is left.
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("SettingsStructureTests")))
+        let now = Date(), day: TimeInterval = 24 * 60 * 60
+        AccountHarnessScope.SubagentUse.note(.museCode, at: now.addingTimeInterval(-31 * day), in: defaults)
+        AccountHarnessScope.SubagentUse.note(.grokBuild, at: now.addingTimeInterval(-29 * day), in: defaults)
+        let withSubagents = AccountHarnessScope.SubagentUse.harnesses(in: defaults, now: now)
+        XCTAssertEqual(withSubagents, [.grokBuild], "A subagent run more than 30 days ago no longer counts")
+        XCTAssertEqual(AccountHarnessScope.inUse(available: available, withTasks: [.codex, .claudeCode],
+            withSubagents: withSubagents, savedAccounts: [.claudeCode], chosenForNewTask: .codex),
+            catalog.filter { [.codex, .claudeCode, .grokBuild].contains($0) })
+        let key = AccountHarnessScope.SubagentUse.key
+        let saved = defaults.dictionary(forKey: key) ?? [:]
+        XCTAssertEqual(saved.keys.sorted(), [HarnessKind.grokBuild.rawValue, HarnessKind.museCode.rawValue].sorted())
+        XCTAssertTrue(saved.values.allSatisfy { $0 is Date })
+        AccountHarnessScope.SubagentUse.prune(in: defaults, now: now)
+        XCTAssertEqual(defaults.dictionary(forKey: key)?.keys.sorted(), [HarnessKind.grokBuild.rawValue])
+        AccountHarnessScope.SubagentUse.prune(in: defaults, now: now.addingTimeInterval(2 * day))
+        XCTAssertNil(defaults.object(forKey: key))
 
         XCTAssertEqual(AccountHarnessScope.harnesses(for: .inUse, available: available, inUse: inUse), inUse)
         XCTAssertEqual(AccountHarnessScope.harnesses(for: .all, available: available, inUse: inUse), available,

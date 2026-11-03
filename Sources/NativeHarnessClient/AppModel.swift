@@ -540,6 +540,7 @@ final class AppModel {
         )
         self.followUps = FollowUpQueueStore(repository: codexQueueRepository)
         self.preferences = preferences
+        AccountHarnessScope.SubagentUse.prune(in: preferences)
         self.sessionRailPreferences = SessionRailPreferenceStore(defaults: preferences)
         self.pullRequestDetails = PullRequestDetailCenter(autoFix: PullRequestAutoFixStore(defaults: preferences))
         self.scheduledTasks = ScheduledTaskCenter(repository: scheduleRepository)

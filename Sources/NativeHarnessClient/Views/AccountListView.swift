@@ -210,7 +210,8 @@ struct AccountList: View {
     private var harnessesInUse: [HarnessKind] {
         guard let harnessUsage else { return availableHarnesses }
         return AccountHarnessScope.inUse(available: availableHarnesses, withTasks: harnessUsage.withTasks,
-            savedAccounts: Set(store.connections.map(\.harness)), chosenForNewTask: harnessUsage.chosenForNewTask)
+            withSubagents: harnessUsage.withSubagents, savedAccounts: Set(store.connections.map(\.harness)),
+            chosenForNewTask: harnessUsage.chosenForNewTask)
     }
     /// Every harness the filter offers, including one a caller asked for that is not available.
     private var filterHarnesses: [HarnessKind] {
