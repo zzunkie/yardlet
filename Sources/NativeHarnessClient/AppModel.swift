@@ -6957,6 +6957,11 @@ final class AppModel {
             if status != .running, status != .waitingForApproval {
                 scheduleShellDelivery(for: event.localSessionID)
             }
+            // A provider says a lost connection cut its turn before the turn ends, so the network may come
+            // back while the task still runs: a cut-off turn already due continues once the turn has ended.
+            if status != .running, status != .waitingForApproval, connectionResumes[event.localSessionID]?.isDue == true {
+                continueDueConnectionResumes()
+            }
         case let .followUpDelivery(delivery):
             acceptFollowUpDelivery(delivery, for: event.localSessionID)
         case let .providerStartedTurn(messageID):
