@@ -3700,3 +3700,7 @@
 "The page didn't take that." = "페이지가 이 입력을 받지 않았습니다.";
 "Waiting on you" = "답을 기다림";
 "Browser page on %@" = "%@의 브라우저 페이지";
+
+"Waiting until the task is available" = "작업이 메시지를 받을 수 있을 때까지 대기 중";
+
+"Missed: the task was unavailable for 24 hours" = "놓친 실행: 24시간 동안 작업에 메시지를 보낼 수 없었음";

@@ -149,7 +149,7 @@ final class ScheduledTaskCenter {
         await execute(schedule, slot: nil, trigger: .manual)
     }
 
-    /// One look: every schedule due runs once, a busy one is skipped, a one-off past its window ends.
+    /// One look: run due schedules, defer busy one-off continuations, and expire pending runs after their window.
     func checkDue() async {
         let now = now()
         let calendar = calendar()
@@ -168,6 +168,19 @@ final class ScheduledTaskCenter {
 
     private func execute(_ schedule: ScheduledTask, slot: Date?, trigger: ScheduledTaskRun.Trigger) async {
         if let reason = busyReason?(schedule) {
+            if slot != nil, case .once = schedule.trigger, schedule.destination.mode == .continueTask,
+               reason == .targetBusy {
+                guard !schedule.state.runs.contains(where: { $0.outcome == .deferred }) else { return }
+                guard let slot, now().timeIntervalSince(slot) < ScheduleRunPolicy.busyDeferralWindow else {
+                    record(ScheduledTaskRun(slot: slot, at: now(), trigger: trigger, outcome: .expired), for: schedule.id)
+                    if let current = self.schedule(id: schedule.id), let slot {
+                        replace(ScheduleRunPolicy.expire(current, slot: slot))
+                    }
+                    return
+                }
+                record(ScheduledTaskRun(slot: slot, at: now(), trigger: trigger, outcome: .deferred), for: schedule.id)
+                return
+            }
             record(ScheduledTaskRun(slot: slot, at: now(), trigger: trigger, outcome: .skipped, skipReason: reason),
                    for: schedule.id)
             return
@@ -177,6 +190,8 @@ final class ScheduledTaskCenter {
         // The slot is taken before the start begins, so a second look cannot start it again.
         if let slot, var current = self.schedule(id: schedule.id) {
             current.state.lastSlot = max(current.state.lastSlot ?? slot, slot)
+            // Once delivery begins, a restart must not replay the pending message.
+            current.state.runs.removeAll { $0.outcome == .deferred && $0.slot == slot }
             replace(current)
         }
         let at = now()

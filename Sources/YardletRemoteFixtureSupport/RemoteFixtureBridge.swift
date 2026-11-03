@@ -649,7 +649,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
                 schedules[index].enabled = false
                 schedules[index].stop = .repeatedFailures
             }
-        case .skipped:
+        case .skipped, .deferred, .expired:
             break
         }
         handler?(.schedules)

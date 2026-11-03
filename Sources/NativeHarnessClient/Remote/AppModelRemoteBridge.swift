@@ -1009,6 +1009,8 @@ final class AppModelRemoteBridge: RemoteBridge {
             let outcome: RemoteSchedule.Run.Outcome = switch run.outcome {
             case .started: .started
             case .skipped: .skipped
+            case .deferred: .deferred
+            case .expired: .expired
             case .failed: .failed
             }
             remote.lastRun = RemoteSchedule.Run(

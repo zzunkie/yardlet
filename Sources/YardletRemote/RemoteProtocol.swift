@@ -1848,6 +1848,7 @@ public struct RemoteSchedule: Codable, Equatable, Sendable {
     /// Its latest run.
     public struct Run: Codable, Equatable, Sendable {
         public enum Outcome: String, Codable, Sendable {
+            case deferred, expired
             case started
             case skipped
             case failed

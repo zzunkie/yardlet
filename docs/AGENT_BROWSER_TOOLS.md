@@ -537,8 +537,8 @@ Times in results are ISO 8601 in the Mac's time zone (with the offset).
 | `list_scheduled_tasks` | `includeFinished` (2026-11-02: true also lists the one-offs that already ran), `scheduleId` (2026-11-02: only that schedule, finished or not, with its whole prompt) | `{scheduledTasks, finishedNotListed, note}`, in the order of Scheduled tasks: the schedules that will run, soonest first, then those that are off (paused, or stopped by themselves), then, with `includeFinished`, the one-offs that ran, the latest first. Each entry: `scheduleId`, `name`, `schedule` (an English summary), `cronExpression` (when it can be converted back), `fireAt`, `enabled`, `nextRunAt`, `lastRunAt`, `stoppedBecause`, `eachRun`, `continuesTaskId`, `harness`, `folder`, `project`, `useWorktree`, `nestedUnderTaskId` (2026-10-26, absent for a top-level task), `model`, `effort`, `permissionMode` and `prompt`. A listing of several cuts a prompt after 200 characters and ends it in "…", and `note` then says that `scheduleId` gives it whole and that a cut prompt is not one to send back (the Claude app's list gives a cut description and the path of the task's file instead of the prompt). `finishedNotListed` counts the one-offs left out. With none at all, "No scheduled tasks in Yardlet." |
 | `update_scheduled_task` | `scheduleId` (required), the arguments of creation, `enabled` | Changes only what is given. `cronExpression` and `fireAt` replace each other (counting from now), the arguments for where it runs are laid over that schedule (switching to a new task uses the calling task's folder), `enabled: false` pauses and `true` resumes (and also clears why it was turned off). Refused when nothing is given. `Scheduled task "…" (scheduleId: …) updated: {changes}.` |
 | `delete_scheduled_task` | `scheduleId` (required) | Deletes it. The tasks its runs made stay |
-| `run_scheduled_task` | `scheduleId` (required) | The same as Run now on the Scheduled tasks screen (`ScheduledTaskCenter.runNow`). Answers with the ID of the task it started (or continued); when the previous run is still working, that it skipped; when the start failed, the reason as an error |
-| `list_task_runs` | `scheduleId` (required), `limit` (10 by default, at most 50; the Claude app's values) | `{scheduleId, totalRuns, runs:[{at, scheduledFor, trigger(scheduled·missed·manual), outcome(started·skipped·failed), skipReason, failure, taskId, taskTitle, taskLink}]}` (`taskLink` as the session tools' `link`) |
+| `run_scheduled_task` | `scheduleId` (required) | The same as Run now on the Scheduled tasks screen (`ScheduledTaskCenter.runNow`). Manual runs keep the existing busy-skip behavior and do not consume or enqueue a scheduled slot. Answers with the ID of the task it started (or continued); when the previous run is still working, that it skipped; when the start failed, the reason as an error |
+| `list_task_runs` | `scheduleId` (required), `limit` (10 by default, at most 50; the Claude app's values) | `{scheduleId, totalRuns, runs:[{at, scheduledFor, trigger(scheduled·missed·manual), outcome(started·deferred·expired·skipped·failed), skipReason, failure, taskId, taskTitle, taskLink}]}` (`taskLink` as the session tools' `link`) |
 
 - **Values left empty (taken from the calling task, as the Claude app fills `cwd` and `notifySessionId` from the
   session):** the harness, the folder (for a worktree task the original folder, the Claude app's `originCwd`), the
@@ -586,6 +586,14 @@ Times in results are ISO 8601 in the Mac's time zone (with the offset).
   `description`, `title` (Yardlet's `name`), `notifyOnCompletion` (a notice to the calling session each time a run ends;
   in Yardlet that would be a new turn of that task, so it is left out), manual-only schedules (no trigger), SKILL.md
   files, random delay, and cron schedules such as monthly ones. Result rows for changes and deletions.
+
+A one-time `fireAt` continuation that finds its task busy is recorded as `deferred`, not consumed.
+The existing scheduler retries while Yardlet is open (about once a second while pending), including after a restart.
+It uses the normal idle-task send path: running turns, approval waits, edits, queued follow-ups,
+account changes and another app holding the task still prevent delivery. At 24 hours after the scheduled
+moment, a pending run becomes `expired` even if the task has just become available. Repeating and
+manual runs still skip busy targets. Pausing cancels pending delivery; changing the trigger or destination
+removes the pending record. A successful retry replaces that record with `started` and trigger `missed`.
 
 ## 3. Injection per harness
 

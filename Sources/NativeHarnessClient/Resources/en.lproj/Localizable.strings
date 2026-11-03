@@ -3700,3 +3700,7 @@
 "The page didn't take that." = "The page didn't take that.";
 "Waiting on you" = "Waiting on you";
 "Browser page on %@" = "Browser page on %@";
+
+"Waiting until the task is available" = "Waiting until the task is available";
+
+"Missed: the task was unavailable for 24 hours" = "Missed: the task was unavailable for 24 hours";
