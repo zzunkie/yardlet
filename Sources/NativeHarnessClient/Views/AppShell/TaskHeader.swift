@@ -364,6 +364,8 @@ struct SplitPaneHeader<Identity: View, Controls: View>: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onFocus)
         .windowDraggable(dragged.map { .pane(sessionID: $0.task) }, preview: dragged?.preview)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measuredWidth in
+            if width != measuredWidth { width = measuredWidth }
+        }
     }
 }

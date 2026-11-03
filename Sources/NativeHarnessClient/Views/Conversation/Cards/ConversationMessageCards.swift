@@ -270,7 +270,9 @@ private struct ConversationClippedSentText: View {
             words(isExpanded ? text : prefix.text)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measuredHeight in
+                    if height != measuredHeight { height = measuredHeight }
+                }
                 .frame(height: isFolded && heightAtVisibleLines > 0 ? heightAtVisibleLines : nil, alignment: .top)
                 .clipped()
                 .background(alignment: .topLeading) {
@@ -305,8 +307,12 @@ private struct ConversationClippedSentText: View {
     /// marks only colour the text, so the copies leave them (and the match's scroll target) out.
     private func measurements(_ folded: String) -> some View {
         ZStack(alignment: .topLeading) {
-            measured(folded, lines: clip.lineCount) { heightAtLineCount = $0 }
-            measured(folded, lines: clip.visibleLineCount) { heightAtVisibleLines = $0 }
+            measured(folded, lines: clip.lineCount) { height in
+                if heightAtLineCount != height { heightAtLineCount = height }
+            }
+            measured(folded, lines: clip.visibleLineCount) { height in
+                if heightAtVisibleLines != height { heightAtVisibleLines = height }
+            }
         }
         .hidden()
         .accessibilityHidden(true)
