@@ -141,7 +141,12 @@ final class RemoteControlService {
             .appending(path: YardletProduct.storageDirectoryName, directoryHint: .isDirectory)
             .appending(path: "remote", directoryHint: .isDirectory)
         return RemoteControlService(
-            bridge: AppModelRemoteBridge(model: model, makePreview: RemoteImagePreviewMaker.make),
+            bridge: AppModelRemoteBridge(model: model, makePreview: RemoteImagePreviewMaker.make, browser: RemoteTabBridge.Environment(
+                client: AppModel.macBrowserClient, usesMacEditingCommands: true,
+                marksTypedSecrets: {
+                    let vault = MacAgentToolService.shared.vault
+                    return vault.isAllowedBuild && (vault.isEnabled || vault.isWalletEnabled)
+                })),
             deviceStore: RemoteDeviceStore(fileURL: folder.appending(path: "devices.json")),
             audit: RemoteAuditLog(fileURL: folder.appending(path: "audit.log")),
             identityStore: KeychainRemoteIdentityStore.live(),

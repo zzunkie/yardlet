@@ -30,8 +30,11 @@ public final class RemoteSecureConnection: RemoteChannel, @unchecked Sendable {
     private var joiner = RemoteNoiseFraming.Joiner(limit: RemoteProtocol.maxSecureClientMessageBytes)
     /// What the server sent before message 2 went out (it should not, but order is kept if it does).
     private var held: [String] = []
-    /// Frames are handled one at a time, in order.
+    /// Frames are handled one at a time, in order; at most `maxInboxFrames` and `maxInboxBytes` wait (§7).
     private var inbox: [Data] = []
+    private var inboxBytes = 0
+    static let maxInboxFrames = 512
+    static let maxInboxBytes = 16 * 1024 * 1024
     private var isDraining = false
     private var helloTimer: Task<Void, Never>?
 
@@ -61,13 +64,16 @@ public final class RemoteSecureConnection: RemoteChannel, @unchecked Sendable {
             case .awaitingHello, .open:
                 break
             }
+            // A phone that sends faster than its frames are handled is closed rather than held without end.
+            guard inbox.count < Self.maxInboxFrames, inboxBytes + frame.count <= Self.maxInboxBytes else { return nil }
             inbox.append(frame)
+            inboxBytes += frame.count
             guard !isDraining else { return false }
             isDraining = true
             return true
         }
-        // A phone sends nothing but message 1 before message 2; nothing more is held for it.
-        guard let start else { return fail(.unauthenticated) }
+        // A phone sends nothing but message 1 before message 2, and never more than the inbox holds.
+        guard let start else { return fail(isHandshaking ? .unauthenticated : .rateLimited) }
         if start { Task { await drain() } }
     }
 
@@ -99,7 +105,9 @@ public final class RemoteSecureConnection: RemoteChannel, @unchecked Sendable {
                     isDraining = false
                     return nil
                 }
-                return (inbox.removeFirst(), state)
+                let frame = inbox.removeFirst()
+                inboxBytes -= frame.count
+                return (frame, state)
             }
             guard let (frame, current) = next else { return }
             switch current {
@@ -197,7 +205,7 @@ public final class RemoteSecureConnection: RemoteChannel, @unchecked Sendable {
     private func fail(_ code: RemoteCloseCode) {
         let id = lock.withLock { () -> UUID? in
             helloTimer?.cancel()
-            defer { state = .closed; inbox = [] }
+            defer { state = .closed; inbox = []; inboxBytes = 0 }
             if case let .open(id) = state { return id }
             return nil
         }

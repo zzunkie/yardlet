@@ -23,8 +23,10 @@ import YardletRemote
 /// a file beside them that is neither is refused. Since 2026-11-03 (§15.23) a task's composer settings change (Bypass
 /// permissions and Full access only once confirmed), "Check the footer on mobile" reads its settings first as a task
 /// not connected to its harness does, each task offers its slash commands that may run from elsewhere (Compact, a new
-/// chat, Codex's fork and Plan mode), and a task's latest message is edited and its turns forked as on the Mac. Nothing
-/// else is read from or written to the Mac.
+/// chat, Codex's fork and Plan mode), and a task's latest message is edited and its turns forked as on the Mac. Since then
+/// (§15.25) "Publish the release notes" has two browser tabs, a static page and the sign-in page it hands to the person,
+/// which draws as PNG and takes clicks, typing and keys (`RemoteFixtureTabs`). Nothing else is read from or written to
+/// the Mac.
 public actor RemoteFixtureBridge: RemoteBridge {
     public enum ID {
         public static let approval = "0F1E0001-0000-4000-8000-000000000001"
@@ -124,6 +126,9 @@ public actor RemoteFixtureBridge: RemoteBridge {
     public nonisolated let filesFolder: URL
     private var madeFiles = false
     private let filesWrittenAt: Date
+    /// The handoff task's browser tabs (§15.25), and what a phone watches of them.
+    private var browser = RemoteFixtureTabs()
+    private var watchedTabs: Set<RemoteTabWatch> = []
 
     /// `filesFolder` holds the tasks' folders and files; by default a new folder in the temporary folder.
     public init(speed: Double = 1, filesFolder: URL? = nil) {
@@ -205,7 +210,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
         return RemoteSnapshot(projects: projects, tasks: listed.map(\.task), newestRequestIDs: requests,
                               requestSummaries: summaries,
                               newTask: RemoteNewTask(harness: "claude-code", harnessName: "Claude Code"), followUp: .steer,
-                              scheduledTasks: true, taskFiles: true, taskControls: true)
+                              scheduledTasks: true, taskFiles: true, taskControls: true, browserTabs: true)
     }
 
     /// The fixture's tasks hold nothing beyond the phone's projection (§15.24).
@@ -398,6 +403,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
                 return tasks[taskID] == nil ? RemoteError(.notFound) : RemoteError(.requestNotFound)
             }
             guard item.requestKind == "browserHandoff" else { return RemoteError(.notAllowed) }
+            browserChanged()
             resolve(taskID, item: item, status: answer == .done ? "answered" : "denied",
                     reply: answer == .done ? "Thanks, the session is signed in. The release notes are published at github.com/acme/web/releases."
                         : "Okay, I left the release notes as a draft. Publish it from the Releases page when you can.")
@@ -472,6 +478,58 @@ public actor RemoteFixtureBridge: RemoteBridge {
             RemoteOutput(path: url.path(percentEncoded: false), name: url.lastPathComponent,
                          writtenAt: written - Int64(index) * 60_000)
         })
+    }
+
+    // MARK: - Browser tabs (§15.25)
+
+    public func browserTabs(taskID: String) async -> Result<[RemoteBrowserTab], RemoteError> {
+        guard tasks[taskID] != nil else { return .failure(RemoteError(.notFound)) }
+        guard taskID == ID.handoff else { return .success([]) }
+        return .success(browser.listed(handoff: pendingHandoff))
+    }
+
+    public func setWatchedTabs(_ watches: Set<RemoteTabWatch>) {
+        watchedTabs = watches
+        // A phone's own size while it watches the sign-in tab, the default again once none asks.
+        let asked = watches.compactMap { $0.taskID == ID.handoff && $0.tabID == RemoteFixtureTabs.signInTab ? $0.viewport : nil }
+            .min { ($0.width, $0.height) < ($1.width, $1.height) }
+        let size = asked.map { (width: $0.width, height: $0.height) } ?? RemoteFixtureTabs.viewport
+        if size != browser.size {
+            browser.size = size
+            browserChanged(picture: true, list: false)
+        }
+    }
+
+    public func captureTab(taskID: String, tabID: String, maxWidth: Int, maxHeight: Int) async -> Result<RemoteTabFrame, RemoteError> {
+        guard taskID == ID.handoff, let frame = browser.frame(of: tabID, maxWidth: maxWidth, maxHeight: maxHeight) else {
+            return .failure(RemoteError(.notFound))
+        }
+        return .success(frame)
+    }
+
+    public func tabInput(taskID: String, tabID: String, input: RemoteTabInput, permit: RemoteTabPermit) async -> RemoteError? {
+        guard permit.isValid else { return RemoteError(.notAllowed, "The watch ended") }
+        guard taskID == ID.handoff, [RemoteFixtureTabs.signInTab, RemoteFixtureTabs.docsTab].contains(tabID) else {
+            return RemoteError(.notFound)
+        }
+        let change = browser.input(input, on: tabID)
+        if !change.isEmpty { browserChanged(picture: change.contains(.picture), list: change.contains(.list)) }
+        return nil
+    }
+
+    /// The handoff the sign-in tab waits on, if one does.
+    private var pendingHandoff: (requestID: String, reason: String)? {
+        guard let request = tasks[ID.handoff]?.pendingRequest,
+              let item = pendingItem(ID.handoff, request.id), item.requestKind == "browserHandoff" else { return nil }
+        return (request.id, item.detail ?? "")
+    }
+
+    private func browserChanged(picture: Bool = false, list: Bool = true) {
+        guard watchedTabs.contains(where: { $0.taskID == ID.handoff }) else { return }
+        if list { handler?(.browserTabs(ID.handoff)) }
+        if picture, watchedTabs.contains(RemoteTabWatch(taskID: ID.handoff, tabID: RemoteFixtureTabs.signInTab)) {
+            handler?(.tabPainted(taskID: ID.handoff, tabID: RemoteFixtureTabs.signInTab))
+        }
     }
 
     public func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError> {
@@ -1047,6 +1105,9 @@ public actor RemoteFixtureBridge: RemoteBridge {
             tasks[taskID]?.pendingRequest = (requestID, .input)
         } else if taskID == ID.handoff {
             let requestID = "handoff_fixture_\(counter)"
+            // The sign-in page again, for the next try.
+            browser.signOut()
+            browserChanged(picture: true)
             tasks[taskID]?.turns.append(RemoteTurn(id: turnID, items: [
                 Self.user(turnID, "Publish the release notes again"),
                 Self.turnItem(turnID, running: true, waiting: true),
@@ -1611,6 +1672,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
         item.title = "github.com"
         item.detail = "Sign in to GitHub so I can publish the release notes."
         item.options = [RemoteHandoffAnswer.done.rawValue, RemoteHandoffAnswer.decline.rawValue]
+        item.tabId = RemoteFixtureTabs.signInTab
         return item
     }
 

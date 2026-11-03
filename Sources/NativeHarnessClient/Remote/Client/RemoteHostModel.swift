@@ -210,7 +210,7 @@ final class RemoteHostModel: Identifiable {
             closingReason = event.reason
         case .schedulesChanged:
             if schedules.isFollowing { schedules.load() }
-        case .revoked, .linked, .linkRefused, .linkRequest, .linkResolved:
+        case .revoked, .linked, .linkRefused, .linkRequest, .linkResolved, .tabFrame, .browserTabsChanged:
             break
         }
     }

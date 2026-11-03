@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import XCTest
 @testable import YardletRemote
@@ -7,7 +8,8 @@ import XCTest
 /// stop button applies) and stopping it expires the request, a waiting task's attention carries a
 /// short summary, and a message sent to a running task waits as a queued item until the turn ends.
 /// The phone app's QA runs against it, so what it offers since 2026-10-27 (§15.13–§15.18) answers as
-/// the contract says, and so do its scheduled tasks (§15.21) and a task's files (§15.22), through the server.
+/// the contract says, and so do its scheduled tasks (§15.21), a task's files (§15.22) and its browser tabs (§15.25), through
+/// the server.
 final class RemoteFixtureTests: XCTestCase {
     func testWaitingTasksRunAndStoppingExpiresTheirRequest() async throws {
         let fixture = RemoteFixtureBridge(speed: 50)
@@ -292,5 +294,95 @@ final class RemoteFixtureTests: XCTestCase {
         XCTAssertEqual(none.outputs, [])
         let unknown = try await ask("taskOutputs", #","taskId":"nope""#)
         XCTAssertEqual(unknown.error?.code, .notFound)
+    }
+
+    /// The handoff task's sign-in tab through the server: a PNG of the page, a click into a field, typing and Tab, the
+    /// password field's mark on the list, Sign in, and the handoff answered, each frame after the last was acknowledged.
+    func testTheHandoffTasksSignInTabTakesInputThroughTheServer() async throws {
+        typealias ID = RemoteFixtureBridge.ID
+        let harness = try await ServerHarness(serving: RemoteFixtureBridge(speed: 50))
+        let phone = try await harness.authenticatedPhone()
+        var sent = 0
+        func ask(_ type: String, _ fields: String = "") async throws -> RemoteResponse {
+            sent += 1
+            await harness.send(#"{"id":"r\#(sent)","type":"\#(type)"\#(fields)}"#, on: phone)
+            return try await phone.response("r\(sent)")
+        }
+        // As a phone does: every frame is acknowledged as it arrives (§15.25), whichever it is, so the next can come.
+        let acker = Task {
+            var acknowledged: Set<Int> = []
+            while !Task.isCancelled {
+                for event in phone.events(.tabFrame) {
+                    guard let number = event.frame, acknowledged.insert(number).inserted else { continue }
+                    await harness.send(#"{"id":"ack\#(number)","type":"tabFrameAck","taskId":"\#(ID.handoff)","tabId":"\#(event.tabId ?? "")","frame":\#(number)}"#,
+                                       on: phone)
+                }
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        defer { acker.cancel() }
+        var seq = 0
+        func frame() async throws -> RemoteEvent {
+            let event = try await phone.event(.tabFrame, after: seq)
+            seq = event.seq ?? seq
+            return event
+        }
+        func input(_ input: String) async throws -> RemoteResponse {
+            try await ask("tabInput", #","taskId":"\#(ID.handoff)","tabId":"\#(RemoteFixtureTabs.signInTab)","input":\#(input)"#)
+        }
+
+        let snapshot = try await ask("snapshot")
+        XCTAssertEqual(snapshot.browserTabs, true)
+        let conversation = try await ask("subscribeTask", #","taskId":"\#(ID.handoff)""#)
+        XCTAssertEqual(conversation.items?.last?.tabId, RemoteFixtureTabs.signInTab, "the handoff names its tab")
+        let watching = try await ask("watchTab", #","taskId":"\#(ID.handoff)","maxWidth":640"#)
+        XCTAssertEqual(watching.tabId, RemoteFixtureTabs.signInTab)
+        XCTAssertEqual(watching.tabs?.map(\.tabId), [RemoteFixtureTabs.docsTab, RemoteFixtureTabs.signInTab])
+        XCTAssertEqual(watching.tabs?.last?.requestId, "handoff_fixture_1")
+        XCTAssertEqual(watching.tabs?.last?.waiting, "handoff")
+
+        let page = try await frame()
+        XCTAssertEqual(page.mediaType, "image/png")
+        XCTAssertEqual([page.width, page.height], [640, 400])
+        XCTAssertEqual([page.viewportWidth, page.viewportHeight], [640, 400])
+        let image = try XCTUnwrap(page.image)
+        XCTAssertLessThan(image.count, 20_000, "a page of flat colors is a few kilobytes")
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: image))
+        XCTAssertEqual([bitmap.pixelsWide, bitmap.pixelsHigh], [640, 400])
+        let header = try XCTUnwrap(bitmap.colorAt(x: 600, y: 20)?.usingColorSpace(.sRGB))
+        XCTAssertEqual(Int((header.redComponent * 255).rounded()), 0x24, "the header bar")
+        let button = try XCTUnwrap(bitmap.colorAt(x: 180, y: 245)?.usingColorSpace(.sRGB))
+        XCTAssertEqual(Int((button.greenComponent * 255).rounded()), 0x88, "the Sign in button")
+
+        let clicked = try await input(#"{"kind":"click","x":200,"y":145}"#)
+        XCTAssertTrue(clicked.ok)
+        let focused = try await frame()
+        XCTAssertNotEqual(focused.image, page.image)
+        _ = try await input(#"{"kind":"text","text":"octocat"}"#)
+        _ = try await input(#"{"kind":"key","key":"Tab"}"#)
+        let marked = try await phone.event(.browserTabsChanged)
+        XCTAssertEqual(marked.tabs?.last?.passwordField, true, "a client masks what it types into the password field")
+        _ = try await input(#"{"kind":"text","text":"hunter2"}"#)
+        _ = try await input(#"{"kind":"click","x":300,"y":255}"#)
+        try await waitFor { phone.events(.browserTabsChanged).last?.tabs?.last?.title == "New release · acme/web" }
+
+        let done = try await ask("answerHandoff", #","taskId":"\#(ID.handoff)","requestId":"handoff_fixture_1","answer":"done""#)
+        XCTAssertTrue(done.ok)
+        try await waitFor { phone.events(.browserTabsChanged).last?.tabs?.last?.requestId == nil }
+        let docs = try await ask("tabInput", #","taskId":"\#(ID.handoff)","tabId":"\#(RemoteFixtureTabs.docsTab)","input":{"kind":"click","x":1,"y":1}"#)
+        XCTAssertEqual(docs.error?.code, .notAllowed, "input goes to the watched tab")
+
+        // A phone's own size: the page is laid out at it while the phone watches.
+        _ = try await ask("watchTab", #","taskId":"\#(ID.handoff)","viewport":{"width":390,"height":844,"mobile":true}"#)
+        try await waitFor { phone.events(.tabFrame).last?.viewportWidth == 390 }
+        XCTAssertEqual(phone.events(.tabFrame).last?.width, 390)
+    }
+
+    private func waitFor(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let deadline = Date().addingTimeInterval(testWaitLimitSeconds)
+        while !condition() {
+            guard Date() < deadline else { return XCTFail("Condition not met in time", file: file, line: line) }
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 }

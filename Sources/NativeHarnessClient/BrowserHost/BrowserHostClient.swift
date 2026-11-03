@@ -12,9 +12,10 @@ import Foundation
 /// `idleGrace` (60 seconds) and ends, returning all of Chromium's memory; the next tab starts it
 /// again. Tabs opened without a session (`openTab(url:viewport:)`) also stay until closed.
 ///
-/// A session tab is shown to its engine (painting, full-speed timers) while a panel shows it or
-/// within `agentVisibleWindow` of the agent's last use (or of opening); otherwise it is hidden, so an
-/// unwatched page stops painting and its timers slow down, as the Codex app throttles a page nobody sees.
+/// A session tab is shown to its engine (painting, full-speed timers) while a panel shows it, while a remote
+/// device watches it, or within `agentVisibleWindow` of the agent's last use (or of opening); otherwise it is
+/// hidden, so an unwatched page stops painting and its timers slow down, as the Codex app throttles a page nobody
+/// sees.
 ///
 /// Tabs lost with the host (a crash, or the host ending as Yardlet quits) leave their last addresses
 /// behind (`rememberedTabs(forSession:)`), and the panel and the agent's tools open them again
@@ -588,6 +589,16 @@ final class BrowserHostClient {
         wake(tab)
     }
 
+    /// A remote device watches the tab, or no longer does (docs/REMOTE_PROTOCOL.md §15.25): while watched it is shown to
+    /// its engine, as a panel on screen shows it, and a discarded or restored page loads. The tab the task's panel
+    /// shows does not change.
+    func setRemotelyWatched(_ watched: Bool, tab: BrowserTab) {
+        guard tabs[tab.id] === tab, tab.isRemotelyWatched != watched else { return }
+        tab.isRemotelyWatched = watched
+        if watched { wake(tab) }
+        reschedule()
+    }
+
     /// The agent used the session's fronted tab. Call it (or `noteAgentActivity(on:)` for the tab used)
     /// on every agent browser action; it shows the tab to its engine for `agentVisibleWindow` after the
     /// last call, also while the panel fronts another tab.
@@ -879,6 +890,7 @@ final class BrowserHostClient {
             let agentsOpener = agentTab(forSession: session) === opener
             if let tab = try? newTab(forSession: session, url: url, viewport: opener.viewport ?? .offscreenDefault,
                                      select: !background && !behind) {
+                tab.remoteOpener = opener.isDrivenByRemote
                 if !background { placeOpened(tab, behind: behind, agentsOpener: agentsOpener, session: session) }
                 opener.receive(.openedTab(tab: opener.id, newTab: tab.id, url: url))
                 return
@@ -905,8 +917,9 @@ final class BrowserHostClient {
         let agentsOpener = agentTab(forSession: session) === opener
         let tab = BrowserTab(id: id, client: self, session: session, key: UUID())
         tab.viewport = opener.viewport
-        // The agent's click opened it.
+        // The agent's click opened it; or a remote device's, which the new tab's own requests answer to.
         tab.openedByAgent = opener.isDrivenByAgent
+        tab.remoteOpener = opener.isDrivenByRemote
         tabs[id] = tab
         sessionOrder[session, default: []].append(id)
         if (!background && !behind) || frontedTabs[session].flatMap({ tabs[$0] }) == nil {
@@ -941,7 +954,9 @@ final class BrowserHostClient {
         guard let url = URL(string: request.url), let scheme = url.scheme?.lowercased(), let app = externalApps.appName(for: url)
         else { return report(.noApp) }
         let byAgent = tab.isDrivenByAgent
-        if BrowserExternalAppPolicy.opensWithoutAsking(scheme: scheme, remembered: request.remembered, byAgent: byAgent) {
+        // Another app on this Mac opens only when someone at this Mac chose it: a remote device's click asks here.
+        if !tab.isDrivenByRemote,
+           BrowserExternalAppPolicy.opensWithoutAsking(scheme: scheme, remembered: request.remembered, byAgent: byAgent) {
             externalApps.open(url)
             return report(.opened, app: app)
         }
@@ -1017,7 +1032,8 @@ final class BrowserHostClient {
     }
 
     private func updateVisibility(of tab: BrowserTab, now: ContinuousClock.Instant) {
-        let shown = tab.session == nil || tab.visiblePanelCount > 0 || (agentVisibleUntil(tab).map { now < $0 } ?? false)
+        let shown = tab.session == nil || tab.visiblePanelCount > 0 || tab.isRemotelyWatched
+            || (agentVisibleUntil(tab).map { now < $0 } ?? false)
         guard shown != tab.isShown else { return }
         tab.isShown = shown
         connection?.send(.visibility(tab: tab.id, isHidden: !shown))
@@ -1158,6 +1174,12 @@ final class BrowserHostClient {
             adoptPopup(id, opener: tabs[openerID], url: url, background: background)
         case .download(let id, let download):
             guard let tab = tabs[id] else { return }
+            // A remote device's click does not save files on this Mac: the download stops as it begins, and the panel
+            // says so, for the person here to download it.
+            if download.state == .started, tab.isDrivenByRemote {
+                connection?.send(.cancelDownload(tab: id, download: download.id))
+                tab.receive(.remoteDownloadStopped(tab: id, fileName: download.fileName))
+            }
             tab.receive(event)
             // A tab a page opened only to download (a target=_blank link to a file) never shows a page. As
             // in Chrome it closes and its opener comes back, once the download ends: CEF reports nothing
@@ -1349,6 +1371,16 @@ final class BrowserTab {
     fileprivate(set) var wasOnScreen = false
     /// The agent's tools opened the tab, or the agent's input in another tab opened it as a pop-up.
     fileprivate(set) var openedByAgent = false
+    /// A remote device watches the tab (`BrowserHostClient.setRemotelyWatched`).
+    fileprivate(set) var isRemotelyWatched = false
+    /// When the person's last input came from a remote device (`notePersonInput(remote:)`).
+    private var lastRemoteInput: ContinuousClock.Instant?
+    /// A page the remote device's input drove opened the tab (`BrowserHostClient.openWindow`, `adoptPopup`).
+    fileprivate(set) var remoteOpener = false
+    /// What the tab's emulation was before a phone's (`emulateForRemote`); nil while no phone's holds.
+    private var emulationBeforeRemote: BrowserViewportEmulation??
+    /// The last change of the emulation, which the next waits for (`inEmulationOrder`).
+    private var emulationChanges: Task<Void, Never>?
     /// How many times the person brought the tab in front of its task (`BrowserHostClient.show`).
     fileprivate(set) var revisits = 0
     fileprivate(set) var lastAgentActivity: ContinuousClock.Instant?
@@ -1536,10 +1568,45 @@ final class BrowserTab {
     }
 
     /// The person used the page from its panel without a click or key press on it: an address, Back, Forward
-    /// or Reload.
-    func notePersonInput() {
-        lastPersonInput = .now
-        lastPersonUse = .now
+    /// or Reload; or from a remote device (`remote`), whose input goes over DevTools (`edits`: they typed or deleted
+    /// text).
+    func notePersonInput(edits: Bool = false, remote: Bool = false) {
+        let now = ContinuousClock.now
+        lastPersonInput = now
+        lastPersonUse = now
+        if remote { lastRemoteInput = now }
+        if edits { hadPersonEdits = true }
+    }
+
+    /// The person's last input to the page came from a remote device, after the agent's, or a page the remote device's
+    /// input drove opened this tab and no one here has used it since: what the page asks now (another app to open, a
+    /// download) waits for someone at this Mac.
+    var isDrivenByRemote: Bool {
+        guard !isDrivenByAgent else { return false }
+        if let remote = lastRemoteInput { return remote == lastPersonInput }
+        return remoteOpener && lastPersonInput == nil
+    }
+
+    // MARK: A remote device's size (docs/REMOTE_PROTOCOL.md §15.25)
+
+    /// A phone watches the tab at its own size: the emulation the tab had before is kept, to take again after. In order
+    /// with every other change (`inEmulationOrder`).
+    func emulateForRemote(_ emulation: BrowserViewportEmulation) async throws {
+        try await inEmulationOrder {
+            if self.emulation?.owner != .remote { self.emulationBeforeRemote = .some(self.emulation) }
+            try await self.applyEmulation(emulation)
+        }
+    }
+
+    /// No phone watches the tab: it takes the size and emulation it had before, unless the person or the agent set
+    /// another since; the agent's own goes if its turn ended meanwhile, as it would have.
+    func endRemoteEmulation() async {
+        try? await inEmulationOrder {
+            guard let before = self.emulationBeforeRemote else { return }
+            self.emulationBeforeRemote = nil
+            guard self.emulation?.owner == .remote else { return }
+            try await self.applyEmulation(before?.owner == .agent && !self.isInAgentTurn ? nil : before)
+        }
     }
 
     /// The person opened an address from the address field: the page it commits counts as typed.
@@ -1607,6 +1674,22 @@ final class BrowserTab {
     /// the tab is drawn at it, so a panel shows it scaled down and the page's coordinates stay the agent's. It holds
     /// across reloads and navigations, since the tab's DevTools session keeps it.
     func emulate(_ emulation: BrowserViewportEmulation?) async throws {
+        try await inEmulationOrder { try await self.applyEmulation(emulation) }
+    }
+
+    /// Runs one change of the emulation after those before it have done all their steps: the agent's, the panel's and a
+    /// remote device's never interleave, so none comes back after a later one.
+    private func inEmulationOrder(_ change: @escaping @MainActor () async throws -> Void) async throws {
+        let earlier = emulationChanges
+        let work = Task { @MainActor in
+            await earlier?.value
+            try await change()
+        }
+        emulationChanges = Task { @MainActor in _ = try? await work.value }
+        try await work.value
+    }
+
+    private func applyEmulation(_ emulation: BrowserViewportEmulation?) async throws {
         // The size the tab has before its first emulation is its own, which it takes again after the last.
         if self.emulation == nil { ownViewport = viewport }
         self.emulation = emulation
@@ -1722,6 +1805,8 @@ final class BrowserTab {
         if handoff?.answer == nil { answerHandoff(.turnEnded) } else { endHandoff() }
         if vaultSetupAsk?.answer == nil { answerSetupAsk(.turnEnded) } else { endSetupAsk() }
         if emulation?.owner == .agent { try? await emulate(nil) }
+        // Under a phone's size, the agent's own goes with its turn: the phone's end takes the tab back to its own.
+        if case .some(.some(let before)) = emulationBeforeRemote, before.owner == .agent { emulationBeforeRemote = .some(nil) }
         if emulatedColorScheme != nil { try? await emulateColorScheme(nil) }
     }
 

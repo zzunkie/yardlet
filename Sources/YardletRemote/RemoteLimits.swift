@@ -43,10 +43,20 @@ public struct RemoteRateBucket: Sendable {
     }
 }
 
-/// The rates a connection may send at (§7): every request, and commands apart.
+extension RemoteProtocol {
+    /// What the Mac holds of a connection's messages that it has received and not yet handled, and of all connections'
+    /// together (§7): a phone that sends faster than the Mac handles is closed (4429) rather than queued without end.
+    public static let maxQueuedMessages = 64
+    public static let maxQueuedBytes = 16 * 1024 * 1024
+    public static let maxQueuedBytesTotal = 64 * 1024 * 1024
+}
+
+/// The rates a connection may send at (§7): every request, and commands apart; a browser tab's requests (§15.25)
+/// have a bucket of their own, which the others do not share.
 public struct RemoteRateLimiter: Sendable {
     private var requests: RemoteRateBucket
     private var commands: RemoteRateBucket
+    private var tab: RemoteRateBucket
     /// Requests refused in a row; this many closes the connection.
     public private(set) var refusedInARow = 0
     public static let refusalsBeforeClosing = 20
@@ -54,12 +64,18 @@ public struct RemoteRateLimiter: Sendable {
     public init(now: Date = Date()) {
         requests = RemoteRateBucket(capacity: 30, perSecond: 10, now: now)
         commands = RemoteRateBucket(capacity: 10, perSecond: 1.0 / 3.0, now: now)
+        tab = RemoteRateBucket(capacity: 60, perSecond: 30, now: now)
     }
 
     /// Whether the request may go on.
-    public mutating func admit(isCommand: Bool, now: Date = Date()) -> Bool {
-        var admitted = requests.take(now: now)
-        if admitted, isCommand { admitted = commands.take(now: now) }
+    public mutating func admit(isCommand: Bool, isTabTraffic: Bool = false, now: Date = Date()) -> Bool {
+        var admitted: Bool
+        if isTabTraffic {
+            admitted = tab.take(now: now)
+        } else {
+            admitted = requests.take(now: now)
+            if admitted, isCommand { admitted = commands.take(now: now) }
+        }
         refusedInARow = admitted ? 0 : refusedInARow + 1
         return admitted
     }
@@ -101,7 +117,8 @@ public enum RemoteHandshakeAdmission {
 }
 
 /// A local record of what remote devices did: when, which device, the request's type, its task or
-/// schedule, the name of a file it opened, and the result. Never a message's text or a file's path. One JSON
+/// schedule, the name of a file it opened, the kind of a browser tab's input, and the result. Never a message's text,
+/// what was typed into a tab, or a file's path. One JSON
 /// object per line, trimmed to the latest lines.
 public final class RemoteAuditLog: @unchecked Sendable {
     public struct Entry: Codable, Equatable, Sendable {
@@ -113,6 +130,8 @@ public final class RemoteAuditLog: @unchecked Sendable {
         public var schedule: String?
         /// The name of the file a `readFile` opened or was refused (§15.22), never its path.
         public var file: String?
+        /// The kind of a browser tab's input (§15.25: `click`, `text`, `key` …), never what was typed.
+        public var input: String?
         public var result: String
     }
 
@@ -129,8 +148,9 @@ public final class RemoteAuditLog: @unchecked Sendable {
     }
 
     public func record(device: String?, type: String, task: String?, schedule: String? = nil, file: String? = nil,
-                       result: String, at: Date = Date()) {
-        let entry = Entry(at: at, device: device, type: type, task: task, schedule: schedule, file: file, result: result)
+                       input: String? = nil, result: String, at: Date = Date()) {
+        let entry = Entry(at: at, device: device, type: type, task: task, schedule: schedule, file: file, input: input,
+                          result: result)
         queue.async { [self, fileURL, keptLines] in
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601

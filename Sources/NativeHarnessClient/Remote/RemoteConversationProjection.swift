@@ -107,6 +107,8 @@ enum RemoteConversationProjection {
         item.title = RemoteText.short(site ?? L10n.string("Browser"), RemoteText.titleLimit)
         item.detail = RemoteText.short(wait.reason, RemoteText.requestDetailLimit)
         item.options = [RemoteHandoffAnswer.done.rawValue, RemoteHandoffAnswer.decline.rawValue]
+        // The tab `watchTab` shows (§15.25).
+        item.tabId = wait.tabKey?.uuidString
         conversation.turns[last].items.append(item)
         return conversation
     }

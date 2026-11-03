@@ -511,6 +511,234 @@ final class RemoteServerTests: XCTestCase {
                        [9, nil], "Sizes follow no link in an output's place either")
     }
 
+    // MARK: - Browser tabs (§15.25)
+
+    /// A watched tab's frames: the first at once, the next only once the client acknowledged the last and the tab drew
+    /// something new, and a picture like the last never again. Input reaches the watched tab only, and the audit log
+    /// keeps its kind, never what was typed. Letting the tab go and closing the connection stop the frames and tell the
+    /// bridge, so the tab stops painting. A tab's acknowledgements and input have a rate of their own.
+    func testAWatchedTabsFramesWaitForTheirAcknowledgementAndStopWithTheWatch() async throws {
+        let harness = try await ServerHarness()
+        let phone = try await harness.authenticatedPhone()
+        await harness.send(#"{"id":"1","type":"watchTab","taskId":"A","maxWidth":640}"#, on: phone)
+        let watching = try await phone.response("1")
+        XCTAssertEqual(watching.tabId, "T1", "the panel's front tab when none is named")
+        XCTAssertEqual(watching.tabs?.map(\.tabId), ["T1", "T2"])
+        let watched = await harness.bridge.watchedTabs
+        XCTAssertEqual(watched, [RemoteTabWatch(taskID: "A", tabID: "T1")])
+        let first = try await phone.event(.tabFrame)
+        XCTAssertEqual(first.frame, 1)
+        XCTAssertEqual(first.image, Data("one".utf8))
+        XCTAssertEqual(first.width, 640)
+        XCTAssertEqual(first.viewportWidth, 1280)
+
+        // Drawn again before the first frame was acknowledged: nothing more is looked at or sent.
+        await harness.bridge.setPicture(Data("two".utf8))
+        await harness.bridge.signal(.tabPainted(taskID: "A", tabID: "T1"))
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(phone.events(.tabFrame).count, 1)
+        let capturedBeforeAck = await harness.bridge.captures
+        XCTAssertEqual(capturedBeforeAck, 1)
+        await harness.send(#"{"id":"2","type":"tabFrameAck","taskId":"A","tabId":"T1","frame":1}"#, on: phone)
+        let second = try await phone.event(.tabFrame, after: first.seq ?? 0)
+        XCTAssertEqual(second.frame, 2)
+        XCTAssertEqual(second.image, Data("two".utf8))
+
+        // The same picture drawn again many times goes once; the looks come less and less often.
+        await harness.send(#"{"id":"3","type":"tabFrameAck","taskId":"A","tabId":"T1","frame":2}"#, on: phone)
+        let bytesBefore = phone.sentBytes
+        let looksBefore = await harness.bridge.captures
+        let started = Date()
+        for _ in 0..<20 {
+            await harness.bridge.signal(.tabPainted(taskID: "A", tabID: "T1"))
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(phone.events(.tabFrame).count, 2)
+        // Once the picture stays, a look at most every idle interval (0.08 s here), after two shorter ones.
+        let looks = await harness.bridge.captures - looksBefore
+        XCTAssertLessThanOrEqual(looks, Int(Date().timeIntervalSince(started) / 0.08) + 3,
+                                 "a tab drawing the same picture is not looked at on every draw")
+        XCTAssertLessThan(looks, 20)
+        XCTAssertLessThan(phone.sentBytes - bytesBefore, 2_000, "nothing but acknowledgements' answers went out")
+
+        // Input reaches the watched tab only; a click needs its point.
+        await harness.send(#"{"id":"4","type":"tabInput","taskId":"A","tabId":"T2","input":{"kind":"click","x":10,"y":10}}"#,
+                           on: phone)
+        let notWatched = try await phone.response("4").error?.code
+        XCTAssertEqual(notWatched, .notAllowed)
+        await harness.send(#"{"id":"5","type":"tabInput","taskId":"A","tabId":"T1","input":{"kind":"click"}}"#, on: phone)
+        let pointless = try await phone.response("5").error?.code
+        XCTAssertEqual(pointless, .badRequest)
+        await harness.send(#"{"id":"6","type":"tabInput","taskId":"A","tabId":"T1","input":{"kind":"text","text":"hunter2-secret"}}"#,
+                           on: phone)
+        let typed = try await phone.response("6").ok
+        XCTAssertTrue(typed)
+        let inputs = await harness.bridge.tabInputs
+        XCTAssertEqual(inputs, [.text("hunter2-secret")])
+        let audit = harness.audit.entries().filter { $0.type == "tabInput" || $0.type == "watchTab" }
+        XCTAssertEqual(audit.map(\.type), ["watchTab", "tabInput", "tabInput", "tabInput"])
+        XCTAssertEqual(audit.map(\.input), [nil, "click", "click", "text"])
+        XCTAssertEqual(audit.map(\.result), ["ok", "notAllowed", "badRequest", "ok"])
+        let log = try String(contentsOf: harness.auditURL, encoding: .utf8)
+        XCTAssertFalse(log.contains("hunter2"), "what was typed is never logged")
+
+        // The list follows the task's tabs; a tab that closed has no more frames.
+        await harness.bridge.setTabs([RemoteBrowserTab(tabId: "T2", title: "Docs", active: true)])
+        await harness.bridge.signal(.browserTabs("A"))
+        let changed = try await phone.event(.browserTabsChanged)
+        XCTAssertEqual(changed.tabs?.map(\.tabId), ["T2"])
+        try await waitUntilAsync { await harness.bridge.watchedTabs == [RemoteTabWatch(taskID: "A", tabID: nil)] }
+
+        // A tab's acknowledgements do not use up the other requests' rate.
+        for index in 0..<40 {
+            await harness.send(#"{"id":"ack\#(index)","type":"tabFrameAck","taskId":"A","tabId":"T2","frame":9}"#, on: phone)
+        }
+        let lastAck = try await phone.response("ack39").ok
+        XCTAssertTrue(lastAck)
+        await harness.send(#"{"id":"7","type":"markRead","taskId":"B"}"#, on: phone)
+        let marked = try await phone.response("7").ok
+        XCTAssertTrue(marked)
+
+        await harness.send(#"{"id":"8","type":"watchTab","taskId":"A","tabId":"T2"}"#, on: phone)
+        _ = try await phone.response("8")
+        try await waitUntilAsync { await harness.bridge.watchedTabs == [RemoteTabWatch(taskID: "A", tabID: "T2")] }
+        await harness.send(#"{"id":"9","type":"unwatchTab","taskId":"A"}"#, on: phone)
+        _ = try await phone.response("9")
+        try await waitUntilAsync { await harness.bridge.watchedTabs.isEmpty }
+        let framesBefore = phone.events(.tabFrame).count
+        await harness.bridge.signal(.tabPainted(taskID: "A", tabID: "T2"))
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(phone.events(.tabFrame).count, framesBefore, "no frames once the tab is let go")
+
+        // Watching the same tab again starts no frame its last one was not acknowledged for.
+        await harness.bridge.setTabs([RemoteBrowserTab(tabId: "T2", title: "Docs", active: true)])
+        await harness.bridge.setPicture(Data("three".utf8))
+        await harness.send(#"{"id":"w1","type":"watchTab","taskId":"A","tabId":"T2"}"#, on: phone)
+        _ = try await phone.response("w1")
+        let third = try await phone.event(.tabFrame, after: second.seq ?? 0)
+        await harness.bridge.setPicture(Data("four".utf8))
+        for index in 0..<3 {
+            await harness.send(#"{"id":"rw\#(index)","type":"watchTab","taskId":"A","tabId":"T2"}"#, on: phone)
+            _ = try await phone.response("rw\(index)")
+            await harness.bridge.signal(.tabPainted(taskID: "A", tabID: "T2"))
+        }
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(phone.events(.tabFrame).last?.frame, third.frame, "no frame before the last is acknowledged")
+        await harness.send(#"{"id":"a3","type":"tabFrameAck","taskId":"A","tabId":"T2","frame":\#(third.frame ?? 0)}"#, on: phone)
+        let fourth = try await phone.event(.tabFrame, after: third.seq ?? 0)
+        XCTAssertEqual(fourth.image, Data("four".utf8))
+        await harness.send(#"{"id":"a4","type":"tabFrameAck","taskId":"A","tabId":"T2","frame":\#(fourth.frame ?? 0)}"#, on: phone)
+
+        // Letting the tab go does not wait for the input under way, which then sends nothing more.
+        await harness.bridge.setDelays(input: .seconds(2))
+        let reached = await harness.bridge.tabInputs.count
+        await harness.send(#"{"id":"slow","type":"tabInput","taskId":"A","tabId":"T2","input":{"kind":"text","text":"abc"}}"#,
+                           on: phone)
+        try await waitUntilAsync { await harness.bridge.tabInputs.count == reached + 1 }
+        await harness.send(#"{"id":"stop","type":"unwatchTab","taskId":"A"}"#, on: phone)
+        let stopped = try await phone.response("stop", timeout: 1).ok
+        XCTAssertTrue(stopped, "answered while the input was still under way")
+        _ = try await phone.response("slow")
+        let permits = await harness.bridge.permitsAtEnd
+        XCTAssertEqual(permits.count, reached + 1)
+        XCTAssertEqual(permits.last, false, "the input saw its watch end")
+        // Input that comes after the watch ended reaches nothing.
+        await harness.bridge.setDelays()
+        await harness.send(#"{"id":"after","type":"tabInput","taskId":"A","tabId":"T2","input":{"kind":"text","text":"x"}}"#,
+                           on: phone)
+        let after = try await phone.response("after").error?.code
+        XCTAssertEqual(after, .notAllowed)
+        let reachedAfter = await harness.bridge.tabInputs.count
+        XCTAssertEqual(reachedAfter, reached + 1)
+
+        // A phone's own size goes to the bridge with the watch; a size past the limits is refused.
+        await harness.send(#"{"id":"vp","type":"watchTab","taskId":"A","tabId":"T2","viewport":{"width":390,"height":844,"mobile":true}}"#,
+                           on: phone)
+        _ = try await phone.response("vp")
+        try await waitUntilAsync {
+            await harness.bridge.watchedTabs == [RemoteTabWatch(taskID: "A", tabID: "T2",
+                                                                viewport: RemoteTabViewport(width: 390, height: 844, mobile: true))]
+        }
+        await harness.send(#"{"id":"vp2","type":"watchTab","taskId":"A","viewport":{"width":5000,"height":844}}"#, on: phone)
+        let tooWide = try await phone.response("vp2").error?.code
+        XCTAssertEqual(tooWide, .badRequest)
+
+        await harness.send(#"{"id":"10","type":"watchTab","taskId":"A","tabId":"T9"}"#, on: phone)
+        let missing = try await phone.response("10").error?.code
+        XCTAssertEqual(missing, .notFound)
+        await harness.send(#"{"id":"11","type":"watchTab","taskId":"A","tabId":"T2"}"#, on: phone)
+        _ = try await phone.response("11")
+        try await waitUntilAsync { await !harness.bridge.watchedTabs.isEmpty }
+        await harness.server.closed(try XCTUnwrap(phone.id))
+        try await waitUntilAsync { await harness.bridge.watchedTabs.isEmpty }
+    }
+
+    private func waitUntilAsync(_ condition: () async -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let deadline = Date().addingTimeInterval(testWaitLimitSeconds)
+        while await !condition() {
+            guard Date() < deadline else { return XCTFail("Condition not met in time", file: file, line: line) }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    /// Input waiting behind a slow page is bounded per connection, and a device removed ends its input under way before
+    /// its removal is saved (§15.25).
+    func testWaitingInputIsBoundedAndARemovedDeviceEndsItsInput() async throws {
+        let harness = try await ServerHarness()
+        let phone = try await harness.authenticatedPhone()
+        await harness.send(#"{"id":"w","type":"watchTab","taskId":"A"}"#, on: phone)
+        _ = try await phone.response("w")
+        await harness.bridge.setDelays(input: .seconds(3))
+        for index in 0...RemoteProtocol.maxPendingTabInputs {
+            await harness.send(#"{"id":"i\#(index)","type":"tabInput","taskId":"A","tabId":"T1","input":{"kind":"click","x":1,"y":1}}"#,
+                               on: phone)
+        }
+        let over = try await phone.response("i\(RemoteProtocol.maxPendingTabInputs)").error?.code
+        XCTAssertEqual(over, .rateLimited, "past the input that may wait")
+        try await waitUntilAsync { await harness.bridge.tabInputs.count == 1 }
+        let devices = await harness.devices.all()
+        let device = try XCTUnwrap(devices.first?.id)
+        await harness.server.revoke(device)
+        try await waitUntilAsync { await harness.bridge.permitsAtEnd.count == 1 }
+        let permits = await harness.bridge.permitsAtEnd
+        XCTAssertEqual(permits, [false], "the removed device's input saw its watch end")
+        let reached = await harness.bridge.tabInputs.count
+        XCTAssertEqual(reached, 1, "nothing queued behind it went on")
+    }
+
+    /// Watching again while a look runs does not let the next look come sooner than the connection's pace (§15.25).
+    func testWatchingAgainDoesNotSpeedUpTheLooks() async throws {
+        let harness = try await ServerHarness { $0.tabFrameInterval = 0.5; $0.tabFrameIdleInterval = 1 }
+        let phone = try await harness.authenticatedPhone()
+        await harness.bridge.setDelays(capture: .milliseconds(200))
+        await harness.send(#"{"id":"w0","type":"watchTab","taskId":"A","tabId":"T1"}"#, on: phone)
+        _ = try await phone.response("w0")
+        try await waitUntilAsync { await harness.bridge.captureStarts.count == 1 }
+        // Watched again during the look, twice, with new pictures to send.
+        for index in 1...2 {
+            await harness.bridge.setPicture(Data("p\(index)".utf8))
+            await harness.send(#"{"id":"w\#(index)","type":"watchTab","taskId":"A","tabId":"T2"}"#, on: phone)
+            _ = try await phone.response("w\(index)")
+        }
+        try await waitUntilAsync { await harness.bridge.captureStarts.count >= 2 }
+        let starts = await harness.bridge.captureStarts
+        XCTAssertGreaterThanOrEqual(starts[1].timeIntervalSince(starts[0]), 0.45, "the next look waited for the pace")
+    }
+
+    /// A connection that sends faster than the Mac handles its requests is closed once it holds the most messages the Mac
+    /// keeps for it, rather than queued without end (§7).
+    func testAConnectionThatOutrunsTheMacIsClosed() async throws {
+        let harness = try await ServerHarness()
+        let phone = try await harness.authenticatedPhone()
+        await harness.bridge.setDelays(list: .seconds(2))
+        await harness.send(#"{"id":"slow","type":"watchTab","taskId":"A"}"#, on: phone)
+        for index in 0...RemoteProtocol.maxQueuedMessages {
+            await harness.send(#"{"id":"p\#(index)","type":"ping"}"#, on: phone)
+        }
+        try await phone.waitUntilClosed(.rateLimited)
+    }
+
     func testRemovingADeviceDisconnectsItAndEndsItsPairing() async throws {
         let harness = try await ServerHarness()
         let ticket = await harness.server.openPairing()
@@ -609,6 +837,14 @@ final class TestChannel: RemoteChannel, @unchecked Sendable {
         }
     }
 
+    /// Every event of that name received so far, in order.
+    func events(_ name: RemoteEvent.Name) -> [RemoteEvent] {
+        decoded(RemoteEvent.self).filter { $0.event == name }
+    }
+
+    /// The bytes the server sent so far.
+    var sentBytes: Int { lock.withLock { texts.reduce(0) { $0 + $1.utf8.count } } }
+
     func waitUntilClosed(_ code: RemoteCloseCode, timeout: TimeInterval = testWaitLimitSeconds) async throws {
         let closed = try await waitFor(timeout: timeout, "close") { self.lock.withLock { self.closeCode } }
         XCTAssertEqual(closed, code)
@@ -656,6 +892,21 @@ actor FakeBridge: RemoteBridge {
     private var details: [String: RemoteItemDetail] = [:]
     private var fileScopes: [String: RemoteFileScope] = [:]
     private var outputs: [String: [RemoteOutput]] = [:]
+    /// Task A's browser tabs (§15.25), the picture a capture returns, and what reached them.
+    private var tabs: [RemoteBrowserTab] = [RemoteBrowserTab(tabId: "T1", title: "Sign in", active: true),
+                                            RemoteBrowserTab(tabId: "T2", title: "Docs")]
+    var picture = Data("one".utf8)
+    private(set) var watchedTabs: Set<RemoteTabWatch> = []
+    private(set) var captures = 0
+    /// When each capture began, and how long one takes.
+    private(set) var captureStarts: [Date] = []
+    var captureDelay: Duration = .zero
+    private(set) var tabInputs: [RemoteTabInput] = []
+    /// How long an input takes, and whether its permit still held when it was done.
+    var inputDelay: Duration = .zero
+    private(set) var permitsAtEnd: [Bool] = []
+    /// How long listing a task's tabs takes (holding the connection's requests up meanwhile).
+    var listDelay: Duration = .zero
 
     func setChangeHandler(_ handler: @escaping @Sendable (RemoteBridgeChange) -> Void) { self.handler = handler }
     func snapshot() -> RemoteSnapshot { current }
@@ -691,6 +942,32 @@ actor FakeBridge: RemoteBridge {
         guard !fileScopes.isEmpty else { return .failure(RemoteError(.unavailable)) }
         return fileScopes[taskID].map { .success($0) } ?? .failure(RemoteError(.notFound))
     }
+
+    func browserTabs(taskID: String) async -> Result<[RemoteBrowserTab], RemoteError> {
+        if listDelay > .zero { try? await Task.sleep(for: listDelay) }
+        return taskID == "A" ? .success(tabs) : taskID == "B" ? .success([]) : .failure(RemoteError(.notFound))
+    }
+    func setWatchedTabs(_ watches: Set<RemoteTabWatch>) { watchedTabs = watches }
+    func captureTab(taskID: String, tabID: String, maxWidth: Int, maxHeight: Int) async -> Result<RemoteTabFrame, RemoteError> {
+        captures += 1
+        captureStarts.append(Date())
+        if captureDelay > .zero { try? await Task.sleep(for: captureDelay) }
+        return .success(RemoteTabFrame(image: picture, width: maxWidth, height: maxWidth / 2, viewportWidth: 1280,
+                                       viewportHeight: 640))
+    }
+    func tabInput(taskID: String, tabID: String, input: RemoteTabInput, permit: RemoteTabPermit) async -> RemoteError? {
+        tabInputs.append(input)
+        if inputDelay > .zero { try? await Task.sleep(for: inputDelay) }
+        permitsAtEnd.append(permit.isValid)
+        return nil
+    }
+    func setDelays(input: Duration = .zero, list: Duration = .zero, capture: Duration = .zero) {
+        inputDelay = input
+        listDelay = list
+        captureDelay = capture
+    }
+    func setTabs(_ tabs: [RemoteBrowserTab]) { self.tabs = tabs }
+    func setPicture(_ picture: Data) { self.picture = picture }
 
     func setDetail(_ detail: RemoteItemDetail, task: String, item: String) { details["\(task)/\(item)"] = detail }
     func setFiles(_ scope: RemoteFileScope, outputs: [RemoteOutput], for taskID: String) {
@@ -748,7 +1025,8 @@ struct ServerHarness {
     let auditURL: URL
 
     /// `serving` puts another bridge (the fixture's) behind the server in place of `bridge`.
-    init(clock: RemoteTestClock = RemoteTestClock(), serving other: (any RemoteBridge)? = nil) async throws {
+    init(clock: RemoteTestClock = RemoteTestClock(), serving other: (any RemoteBridge)? = nil,
+         configure: (inout RemoteServer.Configuration) -> Void = { _ in }) async throws {
         auditURL = FileManager.default.temporaryDirectory.appending(path: "remote-server-\(UUID().uuidString)/audit.log")
         audit = RemoteAuditLog(fileURL: auditURL)
         var configuration = RemoteServer.Configuration(server: RemoteServerInfo(name: "Test Mac", appVersion: "test"))
@@ -757,6 +1035,9 @@ struct ServerHarness {
         configuration.sweepInterval = .seconds(3600)
         configuration.olderWait = 2
         configuration.windowLimits = .init(maxTurns: 10)
+        configuration.tabFrameInterval = 0.02
+        configuration.tabFrameIdleInterval = 0.08
+        configure(&configuration)
         server = RemoteServer(configuration: configuration, bridge: other ?? bridge, devices: devices, audit: audit,
                               now: { clock.now })
         await server.start()

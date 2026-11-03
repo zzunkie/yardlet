@@ -514,6 +514,9 @@ enum BrowserHostEvent: Codable, Equatable, Sendable {
     /// Produced by the client, never sent by a host: what came of the page's request to open `url` in `app`
     /// (nil when no app opens it).
     case externalAppHandled(tab: BrowserTabID, url: String, app: String?, outcome: BrowserExternalAppOutcome)
+    /// Produced by the client, never sent by a host: a download a remote device's input started was cancelled as it began
+    /// (docs/REMOTE_PROTOCOL.md §15.25); the person downloads it on this Mac to keep it.
+    case remoteDownloadStopped(tab: BrowserTabID, fileName: String)
     /// The main frame committed a new document (never for a same-document move): what was asked or blocked for
     /// the page before (a question to open an app, blocked pop-ups) goes.
     case newDocument(tab: BrowserTabID, url: String)
@@ -583,6 +586,7 @@ enum BrowserHostEvent: Codable, Equatable, Sendable {
              .title(let tab, _), .favicon(let tab, _, _), .loading(let tab, _, _, _), .loadEnd(let tab, _, _),
              .loadError(let tab, _, _, _), .console(let tab, _, _, _, _), .newWindow(let tab, _, _, _), .popupOpened(let tab, _, _, _),
              .openedTab(let tab, _, _), .externalApp(let tab, _), .externalAppHandled(let tab, _, _, _), .newDocument(let tab, _),
+             .remoteDownloadStopped(let tab, _),
              .navigationBlocked(let tab, _), .filledValueBlocked(let tab), .tooltip(let tab, _), .javaScriptDialog(let tab, _),
              .javaScriptDialogReset(let tab), .fileDialog(let tab, _), .dialogClosed(let tab, _), .permissionPrompt(let tab, _),
              .permissionPromptDismissed(let tab, _), .download(let tab, _),

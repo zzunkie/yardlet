@@ -923,16 +923,21 @@ enum VaultPageScripts {
     /// The page shows secrets the vault keeps (a two-factor setup's key, which makes the codes for good): the agent's
     /// tools treat its document as one the vault filled, and a snapshot leaves out what shows them. The caller keeps
     /// them out of results (`VaultScrubList`).
+    /// Returns whether the document was marked: false when the page did not say which document it shows.
+    @discardableResult
     static func noteSecretsShown(_ secrets: [String], on cdp: any BrowserAgentCDP, fills: BrowserVaultFills,
-                                 timeout: Duration = .seconds(10)) async {
-        guard let frame = try? await mainFrame(cdp, timeout: timeout) else { return }
+                                 timeout: Duration = .seconds(10)) async -> Bool {
+        guard let frame = try? await mainFrame(cdp, timeout: timeout) else { return false }
         fills.record(BrowserAgentVaultFill(loaderID: frame.loaderID, eventMark: cdp.eventLog.count))
-        guard !secrets.isEmpty, let context = try? await vaultWorld(cdp, frame: frame.id, timeout: timeout) else { return }
+        guard !secrets.isEmpty, let context = try? await vaultWorld(cdp, frame: frame.id, timeout: timeout) else {
+            return !frame.loaderID.isEmpty
+        }
         _ = try? await cdp.send("Runtime.callFunctionOn", [
             "functionDeclaration": .string("function(values) { window.__yardletVaultSecrets = (window.__yardletVaultSecrets || []).concat(values); }"),
             "executionContextId": .integer(context),
             "arguments": .array([.object(["value": .array(secrets.map(JSONValue.string))])])
         ], timeout: timeout)
+        return !frame.loaderID.isEmpty
     }
 
     /// Whether the page shows a field for a one-time code, read in the vault's world.
