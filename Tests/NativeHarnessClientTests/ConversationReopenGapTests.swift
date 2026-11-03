@@ -154,6 +154,8 @@ final class ConversationReopenGapTests: XCTestCase {
         text.removeFromSuperview()
         let detached = text.size(forWidth: 530)
         XCTAssertLessThan(detached.height, grown.height, "A task detached during tracking does not keep a stale layout")
+        text.viewWillStartLiveResize()
+        XCTAssertFalse(text.isDeferringResize, "A detached hosting is not a visible conversation")
     }
 
     private final class FlippedView: NSView {
