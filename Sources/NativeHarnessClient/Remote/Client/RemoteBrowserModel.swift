@@ -27,6 +27,7 @@ final class RemoteBrowserModel {
     private(set) var isListed = false
     /// The last input the host refused, in a line for the panel.
     var refusal: String?
+    var canControlTabs = false
 
     /// The host's name, for the panel's words.
     @ObservationIgnored var hostName = ""
@@ -132,6 +133,24 @@ final class RemoteBrowserModel {
             }
         default:
             break
+        }
+    }
+
+    /// Opens on the host, so loopback addresses refer to the host's development servers.
+    func openAddress(_ address: String, inNewTab: Bool = false) {
+        guard canControlTabs, let taskID else { return }
+        send(.openTab(taskID: taskID, tabID: inNewTab ? nil : tabID, address: address)) { [weak self] response in
+            guard let self, self.taskID == taskID else { return }
+            if response.ok { self.watch(response.tabId) }
+            else { self.refusal = Self.refusal(response.error, host: self.hostName) }
+        }
+    }
+
+    func closeTab(_ tabID: String) {
+        guard canControlTabs, let taskID else { return }
+        send(.closeTab(taskID: taskID, tabID: tabID)) { [weak self] response in
+            guard let self, self.taskID == taskID else { return }
+            if !response.ok { self.refusal = Self.refusal(response.error, host: self.hostName) }
         }
     }
 

@@ -3772,3 +3772,4 @@
 "Permission is off for now. Recovery could not be saved; retry before restarting Yardlet." = "현재 권한은 꺼졌지만 복구 기록을 저장하지 못했습니다. Yardlet을 다시 시작하기 전에 다시 시도해 주세요.";
 
 "Permission stays off after restarting. Retry saving the settings." = "재시작해도 권한은 꺼진 상태로 유지됩니다. 설정 저장을 다시 시도해 주세요.";
+"Update Yardlet on %@ to open addresses in its browser." = "%@의 Yardlet을 업데이트하면 호스트 브라우저에서 주소를 열 수 있습니다.";

@@ -150,6 +150,8 @@ public protocol RemoteBridge: AnyObject, Sendable {
     func captureTab(taskID: String, tabID: String, maxWidth: Int, maxHeight: Int) async -> Result<RemoteTabFrame, RemoteError>
     /// The person's input to a tab, through the paths the Mac's own browser panel and the agent's tools use, checking
     /// `permit` before each step it sends: the watch it came under may end meanwhile.
+    func openTab(taskID: String, tabID: String?, address: String, permit: RemoteTabPermit) async -> Result<String, RemoteError>
+    func closeTab(taskID: String, tabID: String, permit: RemoteTabPermit) async -> RemoteError?
     func tabInput(taskID: String, tabID: String, input: RemoteTabInput, permit: RemoteTabPermit) async -> RemoteError?
     /// Whether the Mac announces the finish of a task that just became unread, as its own notification would (§5.2).
     func announcesFinish(of taskID: String) async -> Bool
@@ -157,6 +159,12 @@ public protocol RemoteBridge: AnyObject, Sendable {
 
 extension RemoteBridge {
     public func announcesFinish(of taskID: String) async -> Bool { true }
+    public func openTab(taskID: String, tabID: String?, address: String, permit: RemoteTabPermit) async -> Result<String, RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+    public func closeTab(taskID: String, tabID: String, permit: RemoteTabPermit) async -> RemoteError? {
+        RemoteError(.unavailable)
+    }
 
     public func readReview(taskID: String, query: RemoteReviewQuery) async -> Result<RemoteReviewResult, RemoteError> {
         .failure(RemoteError(.unavailable))
@@ -1418,6 +1426,8 @@ public actor RemoteServer {
             unwatchTab(envelope.id, taskID: taskID, on: id)
         case let .tabFrameAck(taskID, tabID, frame):
             acknowledgeTabFrame(envelope.id, taskID: taskID, tabID: tabID, frame: frame, on: id)
+        case .openTab, .closeTab:
+            tabControl(envelope.id, request: request, on: id)
         case let .tabInput(taskID, tabID, input):
             tabInput(envelope.id, taskID: taskID, tabID: tabID, input: input, on: id)
         case let .uploadFile(part):
@@ -1451,6 +1461,7 @@ public actor RemoteServer {
             response.fullConversation = published?.fullConversation == true ? true : nil
             response.reviewReading = published?.reviewReading == true ? true : nil
             response.browserTabs = published?.browserTabs == true ? true : nil
+            response.tabControls = published?.tabControls == true ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)
             connections[id]?.receivesTaskEvents = true

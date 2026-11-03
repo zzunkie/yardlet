@@ -627,6 +627,8 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
   `provider`, and the relay sends `apns` and `apns-sandbox` pushes through APNs (§14.2, §16). A push's `collapse` is
   at most 64 bytes rather than 64 characters.
 
+- 2026-11-04, v2 only: optional `tabControls` and watched-task address opening and tab closing (§15.30).
+
 ## 11. v2 transport
 
 ### 11.1 Paths
@@ -1837,6 +1839,29 @@ These permissions reserve separate authorization for terminal sessions, direct f
 They do not add file-writing or settings-changing requests by themselves, and do not change the existing paired
 remote's task messages or task-specific controls. Credentials, vault entries, sign-in and remote device management
 remain on the host.
+### 15.30 Opening addresses and closing browser tabs
+
+A snapshot may include `tabControls: true`. Without it, clients keep the address field and tab close/new-tab
+controls disabled. These requests extend §15.25; they do not change existing browser requests or grant access
+to another task's tabs.
+
+- `openTab`: `{id, type: "openTab", taskId, tabId?, address}`. The address is at most 8,192 UTF-8 bytes.
+  With `tabId`, navigate that task's existing tab; without it, create a tab in that task's browser profile.
+  The host resolves address-field text with its normal URL and search rules. The successful response includes
+  `taskId` and `tabId`; the client then watches that tab. An address beginning with `file:` must stay within
+  the task's existing file boundary (§15.22). App schemes and browser-internal schemes remain refused.
+- `closeTab`: `{id, type: "closeTab", taskId, tabId}`. Ask that task's page to close through the host's normal
+  close path. A page's confirmation remains on the host. Success acknowledges the close request; the tab list
+  event reports whether the tab actually closed.
+
+Both requests require a current browser watch for the same task. They share the bounded, ordered input queue
+and revocable watch permit with `tabInput`. Ending the watch, changing tasks, removing the device or disconnecting
+invalidates queued actions. The host rechecks the task, target tab, page boundary and blocking dialogs immediately
+before acting. Audits record the request type, task, device and outcome, never the address or page contents.
+
+The desktop client opens conversation links to `localhost`, `*.localhost`, IPv4 loopback and IPv6 loopback in the
+host's browser panel. They refer to the host's servers; no port forwarding is created. With an older host, the client
+shows an update notice instead of sending those links to its own loopback interface.
 
 ## 16. Push notifications
 

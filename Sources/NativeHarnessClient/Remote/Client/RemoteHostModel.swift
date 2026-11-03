@@ -261,6 +261,7 @@ final class RemoteHostModel: Identifiable {
                 for taskID in subscribed { subscribe(taskID) }
             }
             offersBrowser = response.browserTabs == true
+            browser.canControlTabs = response.tabControls == true
             hasSnapshot = true
             hostTakesPresence = response.presence == true
             toldPresence = nil
@@ -426,6 +427,21 @@ final class RemoteHostModel: Identifiable {
     func showBrowser(taskID: String, tabID: String? = nil) {
         guard offersBrowser else { return }
         browser.show(taskID: taskID, tabID: tabID)
+    }
+
+    /// Returns true for host-local web links, including when an older host cannot open them yet.
+    /// The window uses this before handing a link to this Mac's default browser.
+    @discardableResult
+    func openHostBrowserLink(_ url: URL, taskID: String) -> Bool {
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              let host = url.host(), BrowserURLPolicy.isLoopback(host) else { return false }
+        guard offersBrowser, browser.canControlTabs else {
+            commandError = L10n.format("Update Yardlet on %@ to open addresses in its browser.", name)
+            return true
+        }
+        browser.show(taskID: taskID)
+        browser.openAddress(url.absoluteString, inNewTab: true)
+        return true
     }
 
     /// A request whose answer the caller waits for.

@@ -6,10 +6,12 @@ import YardletRemote
 /// A host task's browser in the window's side panel (docs/REMOTE_PROTOCOL.md §15.25), where the Mac's own window shows
 /// the task's browser panel: its tabs in the panel's strip, Back, Forward and Reload, the handoff's bar, and the watched
 /// tab's page as the host pictures it, which takes clicks, drags, scrolling and typing, sent back to the page there.
-/// Opening addresses and closing tabs stay on the host.
+/// Addresses and tab closes are performed on the host.
 struct RemoteBrowserPanel: View {
     let model: RemoteHostModel
     @State private var stripWidth: CGFloat = 0
+    @State private var address = ""
+    @FocusState private var addressFocused: Bool
     private var browser: RemoteBrowserModel { model.browser }
 
     var body: some View {
@@ -20,6 +22,12 @@ struct RemoteBrowserPanel: View {
             page
         }
         .background(ParityTheme.canvas)
+        .onChange(of: browser.watchedTab?.url, initial: true) { _, url in
+            if !addressFocused { address = url ?? "" }
+        }
+        .onChange(of: addressFocused) { _, focused in
+            if !focused { address = browser.watchedTab?.url ?? "" }
+        }
     }
 
     // MARK: - Tabs
@@ -30,11 +38,18 @@ struct RemoteBrowserPanel: View {
         let tabWidth = min(PanelTabMetrics.maxWidth, max(PanelTabMetrics.markWidth, room / CGFloat(max(browser.tabs.count, 1))))
         return HStack(spacing: PanelTabMetrics.spacing) {
             ForEach(browser.tabs, id: \.tabId) { tab in
-                RemoteBrowserTabButton(tab: tab, isShown: tab.tabId == browser.tabID, maxWidth: tabWidth) {
-                    browser.select(tab.tabId)
+                HStack(spacing: 0) {
+                    RemoteBrowserTabButton(tab: tab, isShown: tab.tabId == browser.tabID, maxWidth: tabWidth - 24) {
+                        browser.select(tab.tabId)
+                    }
+                    ParityIconButton(systemName: "xmark", help: L10n.string("Close tab")) { browser.closeTab(tab.tabId) }
+                        .disabled(!browser.canControlTabs)
                 }
             }
             Spacer(minLength: 0)
+            ParityIconButton(systemName: "plus", help: L10n.string("New tab")) {
+                browser.openAddress("about:blank", inNewTab: true)
+            }.disabled(!browser.canControlTabs)
             WorkSurfacePanelControls(onClose: { browser.hide() })
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width - 16 } action: { stripWidth = $0 }
@@ -54,12 +69,12 @@ struct RemoteBrowserPanel: View {
                 ParityIconButton(systemName: "arrow.clockwise", help: L10n.string("Reload")) { navigate("reload") }
                     .disabled(tab == nil)
             }
-            // The host's address, read-only: opening another address stays on the host.
-            Text(tab?.url ?? "")
+            TextField(L10n.string("Search or enter address"), text: $address)
+                .textFieldStyle(.plain)
                 .font(.callout.monospaced())
-                .foregroundStyle(.secondary)
-                .lineLimit(1).truncationMode(.middle)
-                .textSelection(.enabled)
+                .focused($addressFocused)
+                .disabled(!browser.canControlTabs)
+                .onSubmit { browser.openAddress(address); addressFocused = false }
                 .padding(.horizontal, 10)
                 .frame(maxWidth: .infinity, minHeight: 30, maxHeight: 30, alignment: .leading)
                 .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 7))

@@ -243,6 +243,7 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var fullConversation: Bool
     /// The bridge shows a task's browser tabs and takes input for them (§15.25).
     public var browserTabs: Bool
+    public var tabControls: Bool = false
 
     public init(projects: [RemoteProject] = [], tasks: [RemoteTask] = [], newestRequestIDs: [String: String] = [:],
                 requestSummaries: [String: String] = [:], newTask: RemoteNewTask? = nil,
@@ -994,6 +995,8 @@ public enum RemoteRequest: Equatable, Sendable {
     case unwatchTab(taskID: String)
     case tabFrameAck(taskID: String, tabID: String, frame: Int)
     case tabInput(taskID: String, tabID: String, input: RemoteTabInput)
+    case openTab(taskID: String, tabID: String?, address: String)
+    case closeTab(taskID: String, tabID: String)
 
     public var type: String {
         switch self {
@@ -1044,6 +1047,8 @@ public enum RemoteRequest: Equatable, Sendable {
         case .unwatchTab: "unwatchTab"
         case .tabFrameAck: "tabFrameAck"
         case .tabInput: "tabInput"
+        case .openTab: "openTab"
+        case .closeTab: "closeTab"
         }
     }
 
@@ -1073,7 +1078,7 @@ public enum RemoteRequest: Equatable, Sendable {
              let .readReview(id, _), let .workspaceFiles(id), let .taskOutputs(id), let .readFile(id, _, _), let .taskSettings(id, _), let .setTaskSetting(id, _, _, _),
              let .composerCommands(id), let .runComposerCommand(id, _, _), let .editMessage(id, _, _), let .forkTask(id, _),
              let .watchTab(id, _, _, _, _), let .unwatchTab(id),
-             let .tabFrameAck(id, _, _), let .tabInput(id, _, _): id
+             let .tabFrameAck(id, _, _), let .tabInput(id, _, _), let .openTab(id, _, _), let .closeTab(id, _): id
         case .snapshot, .ping, .createTask, .newTaskOptions, .registerPush, .unregisterPush, .forgetDevice,
              .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled,
              .presence: nil
@@ -1104,7 +1109,7 @@ public enum RemoteRequest: Equatable, Sendable {
     /// input come several times a second.
     public var isTabTraffic: Bool {
         switch self {
-        case .watchTab, .unwatchTab, .tabFrameAck, .tabInput: true
+        case .watchTab, .unwatchTab, .tabFrameAck, .tabInput, .openTab, .closeTab: true
         default: false
         }
     }
@@ -1180,6 +1185,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var frame: Int?
         var input: RemoteTabInput?
         var viewport: RemoteTabViewport?
+        var address: String?
     }
 
     private struct WireImage: Codable {
@@ -1454,6 +1460,15 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 return fail(.badRequest, "Missing taskId, tabId or frame")
             }
             request = .tabFrameAck(taskID: taskID, tabID: tabID, frame: frame)
+        case "openTab":
+            guard let taskID = required(wire.taskId), let address = required(wire.address),
+                  address.utf8.count <= 8192 else { return fail(.badRequest, "Missing or invalid address") }
+            request = .openTab(taskID: taskID, tabID: wire.tabId, address: address)
+        case "closeTab":
+            guard let taskID = required(wire.taskId), let tabID = required(wire.tabId) else {
+                return fail(.badRequest, "Missing taskId or tabId")
+            }
+            request = .closeTab(taskID: taskID, tabID: tabID)
         case "tabInput":
             guard let taskID = required(wire.taskId), let tabID = required(wire.tabId), let input = wire.input else {
                 return fail(.badRequest, "Missing taskId, tabId or input")
@@ -1469,6 +1484,10 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
     public func encoded() -> Data {
         var wire = Wire(id: id, type: request.type)
         switch request {
+        case let .openTab(taskID, tabID, address):
+            wire.taskId = taskID; wire.tabId = tabID; wire.address = address
+        case let .closeTab(taskID, tabID):
+            wire.taskId = taskID; wire.tabId = tabID
         case .snapshot, .ping:
             break
         case let .subscribeTask(taskID, detail):
@@ -1716,6 +1735,7 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     /// `composerCommands` (§15.23).
     public var commands: [RemoteComposerCommand]?
     /// `snapshot` on v2: the Mac shows a task's browser tabs (§15.25).
+    public var tabControls: Bool?
     public var browserTabs: Bool?
     /// `watchTab` (§15.25): the task's tabs, and the one watched.
     public var tabs: [RemoteBrowserTab]?
