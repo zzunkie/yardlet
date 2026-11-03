@@ -3772,3 +3772,6 @@
 "Save and discard changes in the task's workspace." = "Save and discard changes in the task's workspace.";
 
 "Write files" = "Write files";
+"Search or enter address" = "Search or enter address";
+
+"Update Yardlet on %@ to open addresses in its browser." = "Update Yardlet on %@ to open addresses in its browser.";
