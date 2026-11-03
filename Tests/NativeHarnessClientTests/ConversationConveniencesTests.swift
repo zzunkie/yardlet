@@ -170,6 +170,14 @@ final class ConversationConveniencesTests: XCTestCase {
         let heading = URL(string: "#usage")!
         XCTAssertEqual(ConversationLinkKind(heading), .place)
         XCTAssertEqual(ConversationLinkMenu.items(for: heading, opensLocalFiles: true, places: ConversationLinkPlaces()), [])
+        // Another computer's file is named, never opened or shown at its path here; where that computer's files can
+        // be read (another Mac's task), it opens once read from there.
+        let elsewhere = URL(string: "reports/crash-notes.txt")!
+        XCTAssertEqual(ConversationLinkMenu.items(for: elsewhere, opensLocalFiles: false, places: ConversationLinkPlaces()),
+                       [[.copyPath]])
+        var readable = ConversationLinkPlaces()
+        readable.fileElsewhere = { _ in }
+        XCTAssertEqual(ConversationLinkMenu.items(for: elsewhere, opensLocalFiles: false, places: readable), [[.open], [.copyPath]])
         // A Codex thread copies as the address the Codex app opens.
         XCTAssertEqual(ConversationLinkMenu.copiedLink(URL(string: "codex://threads/thread_1")!, text: "the thread"),
                        "codex://threads/thread_1")

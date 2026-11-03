@@ -1,3 +1,4 @@
+import QuickLook
 import SwiftUI
 import YardletRemote
 
@@ -76,6 +77,14 @@ struct RemoteHostView: View {
             }
         case .newTask:
             RemoteNewTaskView(model: model, draft: drafts.newTask)
+        case let .schedule(id):
+            if let schedule = model.schedules.schedule(id) {
+                RemoteScheduleDetail(model: model, schedule: schedule)
+            } else {
+                schedulePlaceholder
+            }
+        case .none where model.showsSchedules:
+            schedulePlaceholder
         case .none:
             VStack(spacing: 10) {
                 Image(systemName: "desktopcomputer")
@@ -114,6 +123,21 @@ private struct RemotePresence: ViewModifier {
                 }
             }
             .onDisappear { model.setPresence(false) }
+    }
+}
+
+extension RemoteHostView {
+    /// The detail while the host's scheduled tasks are listed and none is chosen.
+    var schedulePlaceholder: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "clock")
+                .font(.system(size: 22, weight: .regular))
+                .foregroundStyle(.tertiary)
+            Text(L10n.string(model.schedules.list?.isEmpty == false ? "Choose a scheduled task." : "No scheduled tasks."))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -215,6 +239,14 @@ struct RemoteHostSidebar: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
 
     var body: some View {
+        if model.showsSchedules {
+            RemoteScheduleList(model: model)
+        } else {
+            tasks
+        }
+    }
+
+    private var tasks: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button { model.select(.newTask) } label: {
                 SidebarActionRow(systemName: "square.and.pencil", title: L10n.string("New task"), symbolWeight: .bold,
@@ -225,6 +257,19 @@ struct RemoteHostSidebar: View {
             .padding(.horizontal, SidebarMetrics.rowInset)
             .padding(.top, 10)
             .disabled(model.newTask == nil)
+
+            if model.offersSchedules {
+                Button {
+                    model.showsSchedules = true
+                    model.schedules.load()
+                } label: {
+                    SidebarActionRow(systemName: "clock", title: L10n.string("Scheduled tasks"))
+                }
+                .buttonStyle(.borderless)
+                .parityPointer()
+                .padding(.horizontal, SidebarMetrics.rowInset)
+                .padding(.top, 2)
+            }
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: SidebarMetrics.rowSpacing) {
@@ -394,17 +439,58 @@ private struct RemoteTaskRow: View {
 // MARK: - A task
 
 /// A task of the host: its conversation in the app's own timeline, the queue's chips, the plan limit's
-/// actions, and the composer.
+/// actions, and the composer; beside it, as the local session rail, the task's outputs when the host serves
+/// its files (§15.22). Suggested tasks' chips act through the host (§15.9), and a file a link names or an
+/// output is read from the host and opened here (`RemoteHostFiles`).
 struct RemoteTaskView: View {
     let model: RemoteHostModel
     let conversation: RemoteConversationModel
     let draft: TaskComposerDraft
     /// An answer that leaves a rule behind, asked about once more before it goes.
     @State private var standingAnswer: (requestID: String, action: PermissionRequestAction)?
+    /// The rail is shown, as the local rail is unless the person hid it; it draws only where it fits.
+    @State private var showsRail = true
+    @State private var width: CGFloat = 0
+    /// A file read from the host, shown in Quick Look.
+    @State private var preview: URL?
 
     private var task: RemoteTask? { model.task(conversation.taskID) }
 
+    private var outputs: [RemoteOutput] { model.offersTaskFiles ? model.files.outputs[conversation.taskID] ?? [] : [] }
+
+    private var drawsRail: Bool {
+        showsRail && !outputs.isEmpty && SessionRailPlacement.fits(sessionWidth: width, panelOpen: false)
+    }
+
     var body: some View {
+        HStack(spacing: 0) {
+            conversationColumn
+            if drawsRail {
+                Divider()
+                RemoteTaskRail(outputs: outputs, open: { open($0, .viewer) }, openInItsApp: { open($0, .itsApp) },
+                               revealInFinder: { open($0, .finder) })
+            }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .environment(\.taskSuggestionActions, suggestionActions)
+        // The host's files: named here, and opened once read from the host where it serves them.
+        .environment(\.transcriptOpensLocalFiles, false)
+        .transformEnvironment(\.conversationLinkPlaces) { $0.fileElsewhere = fileElsewhere }
+        .environment(\.openURL, OpenURLAction(handler: openLink))
+        .quickLookPreview($preview)
+        // What the task made, read again as it settles.
+        .task(id: outputsMoment) {
+            if model.offersTaskFiles { model.files.loadOutputs(conversation.taskID) }
+        }
+    }
+
+    /// Where a file link of the host's opens: read from the host first, where it serves files.
+    private var fileElsewhere: (@MainActor (URL) -> Void)? {
+        guard model.offersTaskFiles else { return nil }
+        return { url in open(url, .viewer) }
+    }
+
+    private var conversationColumn: some View {
         VStack(spacing: 0) {
             header
             ConversationTimeline(source: .presented(conversation.presentation), actions: actions,
@@ -415,6 +501,11 @@ struct RemoteTaskView: View {
                         .font(.caption)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+                if let name = model.files.reading {
+                    Text(L10n.format("Reading %@ from %@…", name, model.name))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 if let limit = conversation.usageLimit, !(limit.options ?? []).isEmpty {
                     RemoteUsageLimitBar(model: model, taskID: conversation.taskID, limit: limit)
@@ -457,6 +548,12 @@ struct RemoteTaskView: View {
             Text(L10n.format("On %@", model.name))
                 .font(.system(size: 12))
                 .foregroundStyle(.tertiary)
+            if !outputs.isEmpty {
+                ParityIconButton(systemName: "sidebar.squares.right",
+                                 help: L10n.string(drawsRail ? "Hide session rail" : "Show session rail")) {
+                    showsRail = !drawsRail
+                }
+            }
         }
         .padding(.horizontal, 16)
         .frame(height: ParityTheme.paneToolbarHeight)
@@ -482,6 +579,69 @@ struct RemoteTaskView: View {
 
     private func respond(_ requestID: String, _ route: ConversationRequestRoute) {
         model.respond(taskID: conversation.taskID, requestID: requestID, route: route)
+    }
+
+    /// The chips' Start, Do it here and ✕, sent to the host (§15.9); what became of each is the host's.
+    /// Options stays the host's: a suggestion starts with that Mac's choices.
+    private var suggestionActions: TaskSuggestionActions {
+        let taskID = conversation.taskID
+        let model = model, conversation = conversation
+        func act(_ id: String, _ action: RemoteSuggestionAction) {
+            model.send(.actOnSuggestion(taskID: taskID, suggestionID: id, action: action))
+        }
+        return TaskSuggestionActions(
+            resolution: { conversation.suggestions[$0].flatMap(RemoteSuggestionState.resolution) },
+            progress: { id in conversation.suggestions[id].flatMap { RemoteSuggestionState.progress($0, host: model.name) } },
+            start: { act($0.id, .start) },
+            doHere: { act($0.id, .here) },
+            optionsUnavailable: L10n.format("It starts with the choices set on %@.", model.name),
+            dismiss: { act($0, .dismiss) },
+            openTask: { model.select(.task($0.uuidString)) },
+            canOpenTask: { model.task($0.uuidString) != nil })
+    }
+
+    /// A link in the conversation: a file is read from the host where it serves files, and never opened at
+    /// the same path on this Mac; a task the host lists opens here; a web page in the default browser.
+    private func openLink(_ url: URL) -> OpenURLAction.Result {
+        switch ConversationLinkKind(url) {
+        case .file:
+            guard model.offersTaskFiles else { return .discarded }
+            open(url, .viewer)
+            return .handled
+        case let .task(.task(id)):
+            guard model.task(id.uuidString) != nil else { return .discarded }
+            model.select(.task(id.uuidString))
+            return .handled
+        case .task, .place:
+            return .discarded
+        case .web, .other:
+            return .systemAction
+        }
+    }
+
+    private func open(_ url: URL, _ opening: RemoteFileOpening) {
+        let path = url.path(percentEncoded: false)
+        guard !path.isEmpty else { return }
+        let taskID = conversation.taskID
+        Task {
+            switch await model.files.copy(taskID: taskID, path: path) {
+            case let .success(copy):
+                switch opening {
+                case .viewer: preview = copy
+                // A program is only shown: its own app would run it.
+                case .itsApp where !FileElsewhereButtons.runs(copy): NSWorkspace.shared.open(copy)
+                case .itsApp, .finder: NSWorkspace.shared.activateFileViewerSelecting([copy])
+                }
+            case let .failure(failure):
+                model.commandError = RemoteFileOpening.message(failure, host: model.name)
+            }
+        }
+    }
+
+    /// When the outputs are read again: the task's state, and its last activity once it rests.
+    private var outputsMoment: String {
+        guard let task else { return "" }
+        return "\(task.attention.rawValue)-\(task.running)-\(task.running ? 0 : task.lastActivityAt)"
     }
 }
 

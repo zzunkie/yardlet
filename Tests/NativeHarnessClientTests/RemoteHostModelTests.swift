@@ -243,6 +243,144 @@ final class RemoteHostModelTests: XCTestCase {
         try await waitUntil { !FileManager.default.fileExists(atPath: root.path) }
     }
 
+    /// What phase one left to the host, now done in the window through the host's own paths: an MCP form
+    /// filled in on the card and sent with the host's Submit, a suggested task started there, "Allow once"
+    /// from a notification, the host's scheduled tasks run and resumed, and a task's outputs and the files its
+    /// conversation names read into a private copy here, which goes with the window.
+    func testAWindowFillsAFormStartsASuggestionAllowsOnceAndReadsTheHostsSchedulesAndFiles() async throws {
+        typealias ID = RemoteFixtureBridge.ID
+        let stack = try await LoopbackStack()
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                        name: "Loopback", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                            hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
+        let host = try await directory.pair(link: link.absoluteString)
+        let model = try XCTUnwrap(directory.model(for: host.id))
+        try await waitUntil { model.hasSnapshot }
+        XCTAssertTrue(model.offersSchedules)
+        XCTAssertTrue(model.offersTaskFiles)
+
+        // The form draws as the card's own, checks its fields as the card does, and Submit sends the values.
+        model.select(.task(ID.form))
+        let form = try XCTUnwrap(model.conversations[ID.form])
+        try await waitUntil { form.isLoaded }
+        let request = try XCTUnwrap(form.presentation.turns.last?.requests.first)
+        guard case let .mcpForm(fields)? = request.form else { return XCTFail("No form: \(String(describing: request.form))") }
+        XCTAssertEqual(fields.fields.map(\.id), ["repo", "private", "team"])
+        XCTAssertEqual(fields.fields.first?.isRequired, true)
+        XCTAssertEqual(request.responses.map(\.title), ["Decline", "Submit"])
+        let submit = try XCTUnwrap(request.responses.last)
+        XCTAssertNil(request.route(for: submit, input: ConversationRequestFormInput()), "Submit without the required field")
+        var input = ConversationRequestFormInput()
+        input.fields = ["repo": .text("acme/billing"), "team": .picked(["web"])]
+        model.respond(taskID: ID.form, requestID: request.id, route: try XCTUnwrap(request.route(for: submit, input: input)))
+        try await waitUntil {
+            form.presentation.turns.last?.requests.isEmpty == true && form.presentation.turns.last?.answers.contains {
+                if case let .answer(text, _) = $0.kind { text.contains("**acme/billing** (private)") } else { false }
+            } == true
+        }
+
+        // The suggested task's chip reads what became of it from the host, and Start starts it there.
+        model.select(.task(ID.idle))
+        let idle = try XCTUnwrap(model.conversations[ID.idle])
+        try await waitUntil { idle.isLoaded }
+        let chip = idle.presentation.turns.flatMap { $0.work + $0.answers }.first { item in
+            if case .taskSuggestion = item.kind { true } else { false }
+        }
+        guard case let .taskSuggestion(suggestion)? = chip?.kind else { return XCTFail("No suggestion chip") }
+        XCTAssertEqual(suggestion.title, "Add a link checker to CI")
+        XCTAssertNil(idle.suggestions[suggestion.id].flatMap(RemoteSuggestionState.resolution))
+        model.send(.actOnSuggestion(taskID: ID.idle, suggestionID: suggestion.id, action: .start))
+        try await waitUntil { idle.suggestions[suggestion.id].flatMap(RemoteSuggestionState.resolution)?.outcome == .started }
+        let started = try XCTUnwrap(idle.suggestions[suggestion.id].flatMap(RemoteSuggestionState.resolution)?.startedTaskID)
+        try await waitUntil { model.task(started.uuidString)?.parentTaskId == ID.idle }
+
+        // An approval's notification offers "Allow once", the host card's narrowest allow, and says which request.
+        model.select(.task(ID.approval))
+        let approval = try XCTUnwrap(model.conversations[ID.approval])
+        try await waitUntil { approval.isLoaded }
+        var waiting = RemoteEvent(.attention)
+        waiting.taskId = ID.approval
+        waiting.title = "Approve the index migration"
+        waiting.state = .waiting
+        waiting.pendingRequest = .approval
+        waiting.requestId = "toolu_fixture_1"
+        XCTAssertTrue(model.offersAllowOnce(waiting))
+        let notice = try XCTUnwrap(RemoteAttentionNotice.notification(hostID: host.id, hostName: model.name, event: waiting,
+                                                                      offersAllowOnce: model.offersAllowOnce(waiting)))
+        XCTAssertTrue(notice.offersAllowOnce)
+        XCTAssertEqual(SystemNotificationTarget(userInfo: notice.target.userInfo), notice.target)
+        XCTAssertEqual(notice.target.requestID, "toolu_fixture_1")
+        var question = waiting
+        question.taskId = ID.question
+        question.pendingRequest = .input
+        XCTAssertFalse(model.offersAllowOnce(question))
+        let allowed = await directory.allowOnce(hostID: host.id, taskID: ID.approval, requestID: "toolu_fixture_1")
+        XCTAssertTrue(allowed)
+        try await waitUntil { approval.presentation.turns.last?.requests.isEmpty == true }
+        let again = await directory.allowOnce(hostID: host.id, taskID: ID.approval, requestID: "toolu_fixture_1")
+        XCTAssertFalse(again, "An answered request is not answered twice")
+
+        // The host's schedules in its list's groups; Resume and Run now act there, and the list follows.
+        model.schedules.load()
+        try await waitUntil { model.schedules.list?.count == 4 }
+        XCTAssertEqual(model.schedules.list?.map(\.id), [ID.morningSchedule, ID.footerSchedule, ID.screenshotsSchedule,
+                                                         ID.reminderSchedule])
+        XCTAssertEqual(model.schedules.list?.map(\.section), [.upcoming, .off, .off, .finished])
+        model.schedules.setEnabled(ID.footerSchedule, true)
+        try await waitUntil { model.schedules.schedule(ID.footerSchedule)?.enabled == true }
+        let lastRun = model.schedules.schedule(ID.morningSchedule)?.lastRun?.at
+        model.schedules.runNow(ID.morningSchedule)
+        try await waitUntil { model.schedules.schedule(ID.morningSchedule)?.lastRun?.at != lastRun }
+
+        // A task's outputs, read as the host's card lists them, and its files copied here, privately.
+        model.files.loadOutputs(ID.history)
+        try await waitUntil { model.files.outputs[ID.history]?.count == 2 }
+        let summary = try XCTUnwrap(model.files.outputs[ID.history]?.first)
+        XCTAssertEqual(summary.name, "crash-summary.pdf")
+        let copy = try await model.files.copy(taskID: ID.history, path: summary.path).get()
+        XCTAssertEqual(copy.lastPathComponent, "crash-summary.pdf")
+        XCTAssertEqual(try Data(contentsOf: copy), try Data(contentsOf: URL(filePath: summary.path)))
+        let permissions = try FileManager.default.attributesOfItem(atPath: copy.path(percentEncoded: false))[.posixPermissions] as? Int
+        XCTAssertEqual(permissions, 0o600)
+        // A path as the conversation writes it, with a line, relative to the task's folder.
+        let notes = try await model.files.copy(taskID: ID.history, path: "reports/crash-notes.txt:12").get()
+        XCTAssertEqual(notes.lastPathComponent, "crash-notes.txt")
+        let outside = await model.files.copy(taskID: ID.history, path: "../Desktop/private-notes.txt")
+        XCTAssertEqual(outside, .failure(.notServed))
+        directory.close(host.id)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copy.path(percentEncoded: false)))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: notes.path(percentEncoded: false)))
+    }
+
+    /// A host task's "Allow once" goes to its host; where the host does not take it, the task opens instead.
+    func testAHostTasksAllowOnceAnswersThereOrOpensTheTask() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteHostModelTests.allowOnce")))
+        let app = AppModel(store: SessionStore(repository: InMemorySessionRepository()),
+                           runtimeSelections: RuntimeSelectionStore(defaults: defaults), restoresIndexOnLaunch: false)
+        var answered: [String] = []
+        var opened: [String] = []
+        var takes = true
+        app.allowRemoteOnce = { _, taskID, requestID in
+            answered.append("\(taskID)/\(requestID)")
+            return takes
+        }
+        app.openRemoteTask = { _, taskID in opened.append(taskID) }
+        let target = SystemNotificationTarget(remoteTask: RemoteTaskReveal(hostID: "H", taskID: "T"), requestID: "R")
+        await app.handleNotificationResponse(SystemNotificationResponse(target: target, action: .allowOnce))
+        XCTAssertEqual(answered, ["T/R"])
+        XCTAssertEqual(opened, [])
+        takes = false
+        await app.handleNotificationResponse(SystemNotificationResponse(target: target, action: .allowOnce))
+        XCTAssertEqual(opened, ["T"])
+        await app.handleNotificationResponse(SystemNotificationResponse(target: target, action: .open))
+        XCTAssertEqual(answered.count, 2)
+        XCTAssertEqual(opened, ["T", "T"])
+        await app.shutdown()
+    }
+
     func testALongConversationProjectsOnlyTheTurnsAChangeTouches() throws {
         let conversation = RemoteConversationModel(taskID: "T", harness: .claudeCode, hostName: "Mac Studio")
         var page: [RemoteItem] = []

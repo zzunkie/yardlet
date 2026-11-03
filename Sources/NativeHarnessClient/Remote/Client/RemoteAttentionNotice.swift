@@ -3,10 +3,12 @@ import YardletRemote
 
 /// A notification for a host's task while its window is open (docs/REMOTE_PROTOCOL.md §5.2): when the task
 /// starts waiting on the person, or finishes or fails. Its title names the host before the task, and a
-/// click opens the task in the host's window. Nothing comes while no window of the host is open; the
-/// phone's pushes are the host's own.
+/// click opens the task in the host's window; an approval offers "Allow once" as a local one does
+/// (`RemoteHostModel.offersAllowOnce`). Nothing comes while no window of the host is open; the phone's
+/// pushes are the host's own.
 enum RemoteAttentionNotice {
-    static func notification(hostID: String, hostName: String, event: RemoteEvent) -> SystemNotification? {
+    static func notification(hostID: String, hostName: String, event: RemoteEvent,
+                             offersAllowOnce: Bool = false) -> SystemNotification? {
         guard let taskID = event.taskId, let state = event.state else { return nil }
         let body: String
         switch state {
@@ -19,7 +21,10 @@ enum RemoteAttentionNotice {
             return nil
         }
         let title = [hostName, event.title].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        let allowsOnce = offersAllowOnce && state == .waiting && event.requestId != nil
         return SystemNotification(title: title, body: body, identifier: "yardlet.remote.\(hostID).\(taskID)",
-                                  target: SystemNotificationTarget(remoteTask: RemoteTaskReveal(hostID: hostID, taskID: taskID)))
+                                  target: SystemNotificationTarget(remoteTask: RemoteTaskReveal(hostID: hostID, taskID: taskID),
+                                                                   requestID: allowsOnce ? event.requestId : nil),
+                                  offersAllowOnce: allowsOnce)
     }
 }

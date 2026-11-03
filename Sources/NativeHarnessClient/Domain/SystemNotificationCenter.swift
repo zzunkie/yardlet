@@ -70,9 +70,11 @@ struct SystemNotificationTarget: Equatable, Sendable {
         self.mailThread = mailThread
     }
 
-    init(remoteTask: RemoteTaskReveal) {
+    /// A host task's notification; an approval's names its request, which "Allow once" answers there.
+    init(remoteTask: RemoteTaskReveal, requestID: String? = nil) {
         sessionID = nil
         self.remoteTask = remoteTask
+        self.requestID = requestID
     }
 
     /// Reads a target back from a delivered notification; nil for one Yardlet did not post.
@@ -88,7 +90,8 @@ struct SystemNotificationTarget: Equatable, Sendable {
             return
         }
         if let host = userInfo[Self.remoteHostKey] as? String, let task = userInfo[Self.remoteTaskKey] as? String {
-            self.init(remoteTask: RemoteTaskReveal(hostID: host, taskID: task))
+            self.init(remoteTask: RemoteTaskReveal(hostID: host, taskID: task),
+                      requestID: (userInfo[Self.requestKey] as? String).flatMap { $0.isEmpty ? nil : $0 })
             return
         }
         guard let text = userInfo[Self.sessionKey] as? String, let id = UUID(uuidString: text) else { return nil }

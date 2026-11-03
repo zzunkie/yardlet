@@ -46,9 +46,13 @@ enum TaskLinkPlace: Equatable {
 struct ConversationLinkPlaces: Equatable {
     var task: (@MainActor (TaskLink, URL, TaskLinkPlace) -> Void)?
     var browserPanel: (@MainActor (URL) -> Void)?
+    /// Opens a file of the computer the conversation ran on, read from there first: another Mac's task
+    /// (docs/REMOTE_PROTOCOL.md §15.22). Nil where the files are this Mac's, or where they cannot be read.
+    var fileElsewhere: (@MainActor (URL) -> Void)?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         (lhs.task == nil) == (rhs.task == nil) && (lhs.browserPanel == nil) == (rhs.browserPanel == nil)
+            && (lhs.fileElsewhere == nil) == (rhs.fileElsewhere == nil)
     }
 }
 
@@ -66,8 +70,8 @@ extension EnvironmentValues {
 /// A link's items in a conversation's menus, by what it names, for a message's text and for the cards that
 /// name a task or a file alike. A task offers what its sidebar row's menu offers (open, in a new tab, in a
 /// split view, in the side panel); a web page, the task's browser panel and the default browser; a file, the
-/// task's files, its own app and Finder (only its path for a file on another computer,
-/// `transcriptOpensLocalFiles`). Each ends with its copy. An anchor to a place in the message offers nothing.
+/// task's files, its own app and Finder (for a file on another computer, `transcriptOpensLocalFiles`, only its
+/// path, and opening it where that computer's files can be read). Each ends with its copy. An anchor to a place in the message offers nothing.
 /// Yardlet's windows share one selection, so a task has no "Open in New Window".
 enum ConversationLinkMenu {
     enum Item: Hashable {
@@ -92,8 +96,8 @@ enum ConversationLinkMenu {
         case .web:
             return [(places.browserPanel == nil ? [] : [.open]) + [.openInDefaultBrowser], [.copyLink]]
         case .file:
-            // A file on another computer is named, not opened or shown here.
-            guard opensLocalFiles else { return [[.copyPath]] }
+            // A file on another computer is named, and opened only where it can be read from there.
+            guard opensLocalFiles else { return places.fileElsewhere == nil ? [[.copyPath]] : [[.open], [.copyPath]] }
             // A program or a package is only shown in Finder: its own app would run it.
             let itsApp: [Item] = FileElsewhereButtons.runs(url) ? [] : [.openInItsApp]
             return [[.open] + itsApp + [.revealInFinder], [.copyPath]]

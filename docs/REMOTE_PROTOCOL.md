@@ -1397,10 +1397,17 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   their own.
 - **What it does:** what a phone does (§4–§6, §15), on a larger screen: the host's sidebar and its marks, a task's
   conversation in Yardlet's own timeline, a line's output and diffs when it opens (§15.8), every answer the host's
-  card gives (§15.19; one that leaves a rule behind is asked about once more), questions and plan reviews, the
-  queue's actions, the plan limit's actions, Stop, Pin and Archive, new tasks with the host's choices (§15.16), and
-  pictures and files (§15.14, §15.20). Settings, slash commands, changing an existing task's model, editing a
-  message, the side panels and scheduled tasks stay on the host.
+  card gives (§15.19; one that leaves a rule behind is asked about once more), an MCP form filled in on Yardlet's
+  own form card and sent with the host's Submit and its `values`, questions and plan reviews, the queue's actions,
+  the plan limit's actions, Stop, Pin and Archive, new tasks with the host's choices (§15.16), and pictures and
+  files (§15.14, §15.20). A suggested task draws as Yardlet's own chip, whose Start, Do it here and ✕ are
+  `actOnSuggestion` (§15.9); what it starts with stays the host's. When the snapshot says so, the sidebar lists the
+  host's scheduled tasks with Run now, Pause and Resume (§15.21), and a task's session rail shows its Outputs card
+  (§15.22). An output, or a file a conversation's link names, is read with `readFile` into a folder of its own in
+  this Mac's temporary folder, readable only by the person, and opened there in Quick Look (from the output's
+  menu, in its own app or Finder); the copies go when the window closes. A file link never opens the same path on
+  this Mac. Settings, slash commands, changing an existing task's model, editing a message, creating or editing a
+  schedule and the side panels stay on the host.
 - **Paths:** as §11.4. While a host's window is open it browses Bonjour (§11.3) for the instance with the
   discovery id of the host key it saved, and resolves it to the host's name and port (`Name.local:47616`; the
   system resolves the name when connecting). Those addresses go first, never saved, then the direct addresses the
@@ -1422,7 +1429,9 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   `forgetDevice` (§15.6) when the host can be reached and deletes all three; a cache folder whose host is no longer
   saved is removed when Yardlet starts.
 - **Notifications:** while a host's window is open, a task that starts waiting, finishes or fails posts a notification
-  named after the host, which opens the task there.
+  named after the host, which opens the task there. An approval's offers "Allow once", sent as `answerApproval`
+  `allowOnce` (§4.4): the host answers with its card's narrowest allow, as its own notification does, and where it
+  does not take it the notification opens the task.
 - **In use:** a host whose snapshot carries `presence: true` takes `{"type": "presence", "active": true}` (or `false`);
   the answer is `ok`. The client says `true` while the host's window is in front and the person typed, clicked or
   moved the pointer in the last two minutes, and `false` once not, telling only a change and again after each new

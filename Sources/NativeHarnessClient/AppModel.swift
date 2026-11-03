@@ -401,6 +401,8 @@ final class AppModel {
     /// Opens a task of another Mac this one follows (`RemoteHostDirectory`), for a click on its notification:
     /// the host's ID and the task's. Nil in tests and fixtures.
     @ObservationIgnored var openRemoteTask: ((String, String) -> Void)?
+    /// "Allow once" from a host task's notification, by the host, task and request; whether the host took it.
+    @ObservationIgnored var allowRemoteOnce: ((String, String, String) async -> Bool)?
     /// The display is kept on while tasks work ("Keep the screen unlocked while tasks work"), which
     /// the menu bar menu says (`RunningWorkActivity`).
     @ObservationIgnored var keepsScreenAwake = false

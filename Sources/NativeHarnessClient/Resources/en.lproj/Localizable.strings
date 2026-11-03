@@ -2062,6 +2062,14 @@
 "What should %@ work on?" = "What should %@ work on?";
 "Write a message first." = "Write a message first.";
 "Yardlet on %@ quit." = "Yardlet on %@ quit.";
+"This scheduled task is starting already." = "This scheduled task is starting already.";
+"Reading %@ from %@…" = "Reading %@ from %@…";
+"It starts with the choices set on %@." = "It starts with the choices set on %@.";
+"%@ couldn't start this task." = "%@ couldn't start this task.";
+"%@ opens only what the task made and the files in its folders." = "%@ opens only what the task made and the files in its folders.";
+"The file is too large to open from %@." = "The file is too large to open from %@.";
+"Create scheduled tasks on %@." = "Create scheduled tasks on %@.";
+"See its instructions and runs, or edit or delete it, on %@." = "See its instructions and runs, or edit or delete it, on %@.";
 "exit code %lld" = "exit code %lld";
 "Homebrew's answer could not be read" = "Homebrew's answer could not be read";
 "npm's answer could not be read" = "npm's answer could not be read";

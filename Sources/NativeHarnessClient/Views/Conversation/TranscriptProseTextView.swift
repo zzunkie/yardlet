@@ -590,9 +590,9 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
     }
 
     /// Opens `url` as a click on it does: through SwiftUI's `openURL`, which shows a file in the
-    /// task's files.
+    /// task's files, or reads another computer's file from there first (`ConversationLinkPlaces.fileElsewhere`).
     func open(_ url: URL) {
-        guard opensLocalFiles || !url.isFileURL else { return }
+        guard opensLocalFiles || !url.isFileURL || linkPlaces.fileElsewhere != nil else { return }
         if let openURL { openURL(url) } else { NSWorkspace.shared.open(url) }
     }
 

@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
+@testable import YardletAgentTools
 @testable import YardletRemote
 @testable import YardletRemoteFixtureSupport
 
@@ -14,12 +15,19 @@ import XCTest
 ///   with Claude Code's own three answers.
 /// - `remote-host-question-*.png` and `local-question-*.png`: a question with its options.
 /// - `remote-host-lines-*.png` and `local-lines-*.png`: the same turn with its Read and Edit lines opened.
+/// - `remote-host-suggestion-*.png` and `local-suggestion-*.png`: a finished task with a suggested task's chip.
+/// - `remote-host-outputs-*.png` and `local-outputs-*.png`: a task that wrote a report and a chart, with the
+///   session rail's Outputs card beside it.
+/// - `remote-host-schedules-*.png` and `local-schedules-*.png`: the scheduled tasks list beside a schedule.
+/// - `remote-form-*.png` and `local-form-*.png`: a Codex MCP form's card, the remote one read from what the host
+///   sends for it.
 ///
 /// Against the fixture host (`RemoteFixtureBridge`), which streams and answers:
 /// - `remote-connect-*.png`: File › Connect to Mac… with one paired Mac.
 /// - `remote-host-running-*.png`: a turn running after its approval was answered, with a queued message.
 /// - `remote-host-answered-*.png`: a finished task's turns, each folded under its answer.
 /// - `remote-host-new-*.png`: a new task with the host's project, harness and model menus.
+/// - `remote-host-form-*.png`: an MCP form waiting in the host window.
 /// - `remote-host-offline-*.png`: the host gone, its list and conversation kept under the banner.
 @MainActor
 final class RemoteHostWindowRenderingTests: XCTestCase {
@@ -68,6 +76,13 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
 
         model.select(.newTask)
         try await render("remote-host-new", size: size, model: model, hosts: hosts)
+
+        model.select(.task(RemoteFixtureBridge.ID.form))
+        try await waitUntil { model.conversations[RemoteFixtureBridge.ID.form]?.isLoaded == true }
+        try await render("remote-host-form", size: size, model: model, hosts: hosts) { elements in
+            XCTAssertTrue(elements.contains { $0.label == "Repository" }, elements.description)
+            XCTAssertTrue(elements.contains { $0.label == "Submit" }, elements.description)
+        }
 
         model.select(.task(RemoteFixtureBridge.ID.approval))
         await stack.server.shutdown(reason: "quitting")
@@ -191,13 +206,236 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
         await host.shutdown()
     }
 
+    /// A suggested task's chip, a task's outputs on the session rail and the scheduled tasks list, each drawn in
+    /// the host window from what the host (the app's own model) sends, and by the local views from the same state.
+    func testSuggestionsOutputsAndSchedulesDrawAsTheLocalOnesDo() async throws {
+        let website = URL(filePath: "/tmp/remote-render/website", directoryHint: .isDirectory)
+        let claude = URL(filePath: "/tmp/claude")
+        let now = Date()
+        let footer = SessionRecord(harness: .claudeCode, workspaceURL: website, runtimeExecutableURL: claude,
+                                   title: "Fix the footer links", status: .completed, updatedAt: now.addingTimeInterval(-60),
+                                   completionState: .completed)
+        let crash = SessionRecord(harness: .claudeCode, workspaceURL: website, runtimeExecutableURL: claude,
+                                  title: "Summarize the crash reports", status: .completed, updatedAt: now,
+                                  completionState: .completed)
+        let suggestion = ConversationTaskSuggestion(
+            id: "task_00000001", title: "Add a link checker to CI",
+            tldr: "Run a link check on every pull request so footer links cannot break again.",
+            prompt: "Add a CI job that checks every link in the footer.", startsInNewWorktree: false)
+        func at(_ seconds: TimeInterval) -> Date { now.addingTimeInterval(seconds - 600) }
+        let footerEntries = [
+            TranscriptEntry(createdAt: at(0), content: .user(text: "Find the footer links that 404")),
+            TranscriptEntry(createdAt: at(6), content: .activity(HarnessActivity(
+                id: "toolu_read", kind: "Read", title: "Read", input: #"{"file_path":"/tmp/remote-render/website/Footer.tsx"}"#,
+                output: "export function Footer() {}"), state: .completed)),
+            TranscriptEntry(createdAt: at(12), content: .activity(HarnessActivity(
+                id: "toolu_spawn", kind: "mcp__yardlet__spawn_task", title: "mcp__yardlet__spawn_task",
+                input: JSONValue.object(["title": .string(suggestion.title ?? ""), "tldr": .string(suggestion.tldr ?? ""),
+                                         "prompt": .string(suggestion.prompt)]).readableText,
+                output: TaskSuggestionToolCatalog.notedResult(taskID: suggestion.id)), state: .completed)),
+            TranscriptEntry(createdAt: at(18), content: .assistant(
+                text: "Two links pointed at pages that moved; both now point at their new paths.", isStreaming: false))
+        ]
+        func written(_ path: String, _ seconds: TimeInterval) -> TranscriptEntry {
+            TranscriptEntry(createdAt: at(seconds), content: .activity(HarnessActivity(
+                id: "write-\(Int(seconds))", kind: "Write", title: "Write", diff: HarnessActivityDiff(path: path, newText: "x")),
+                state: .completed))
+        }
+        let crashEntries = [
+            TranscriptEntry(createdAt: at(0), content: .user(text: "Summarize last week's crash reports")),
+            written("/tmp/remote-render/Desktop/crash-summary.pdf", 30),
+            written("reports/crash-chart.png", 60),
+            TranscriptEntry(createdAt: at(90), content: .assistant(
+                text: "The summary is on the Desktop and the chart is in `reports/crash-chart.png`.", isStreaming: false))
+        ]
+        func run(_ outcome: ScheduledTaskRun.Outcome, hoursAgo: Double, task: UUID? = nil, failure: String? = nil) -> ScheduledTaskRun {
+            ScheduledTaskRun(at: now.addingTimeInterval(-hoursAgo * 3_600), trigger: .scheduled, outcome: outcome,
+                             failure: failure, taskID: task)
+        }
+        var morning = ScheduledTask(name: "Summarize new crash reports", prompt: "Summarize the new crash reports",
+                                    trigger: .daily(ScheduleTime(hour: 9, minute: 0)),
+                                    destination: ScheduleDestination(harness: .claudeCode, workspacePath: website.path(percentEncoded: false)),
+                                    createdAt: now)
+        morning.state.runs = [run(.started, hoursAgo: 1, task: crash.id)]
+        var weekly = ScheduledTask(name: "Check the footer links", prompt: "Check the footer links",
+                                   trigger: .weekly(days: [.monday], time: ScheduleTime(hour: 10, minute: 0)),
+                                   destination: ScheduleDestination(mode: .continueTask, harness: .claudeCode, targetTaskID: footer.id),
+                                   isEnabled: false, createdAt: now)
+        weekly.state.runs = [run(.started, hoursAgo: 26, task: footer.id)]
+        var nightly = ScheduledTask(name: "Nightly screenshots", prompt: "Shoot", trigger: .daily(ScheduleTime(hour: 2, minute: 0)),
+                                    destination: ScheduleDestination(harness: .codex, workspacePath: website.path(percentEncoded: false)),
+                                    isEnabled: false, createdAt: now)
+        nightly.state.stopReason = .repeatedFailures
+        nightly.state.consecutiveFailures = 3
+        nightly.state.runs = [run(.failed, hoursAgo: 3, failure: "No simulator")]
+        let schedules = [morning, weekly, nightly]
+
+        let sessions = [crash, footer]
+        let transcripts = [footer.id: footerEntries, crash.id: crashEntries]
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteHostWindowRenderingTests.parity")))
+        let host = AppModel(store: SessionStore(sessions: sessions, repository: InMemorySessionRepository(sessions: sessions)),
+                            runtimeSelections: RuntimeSelectionStore(defaults: defaults), initialTranscripts: transcripts,
+                            scheduleRepository: InMemoryScheduledTaskRepository(snapshot: ScheduleSnapshot(schedules: schedules)),
+                            restoresIndexOnLaunch: false)
+        let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(model: host))
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                        name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let hosts = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                        hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
+        let paired = try await hosts.pair(link: link.absoluteString)
+        let model = try XCTUnwrap(hosts.model(for: paired.id))
+        try await waitUntil { model.hasSnapshot }
+        XCTAssertTrue(model.offersSchedules)
+        XCTAssertTrue(model.offersTaskFiles)
+        let size = NSSize(width: 1280, height: 820)
+        let column = NSSize(width: size.width - ParityTheme.sidebarWidth - 21, height: size.height - ParityTheme.paneToolbarHeight)
+
+        // The chip: Start, Do it here and ✕ as on the Mac; Options is the host's.
+        model.select(.task(footer.id.uuidString))
+        let conversation = try XCTUnwrap(model.conversations[footer.id.uuidString])
+        try await waitUntil { conversation.isLoaded && conversation.suggestions[suggestion.id] != nil }
+        try await render("remote-host-suggestion", size: size, model: model, hosts: hosts) { elements in
+            XCTAssertTrue(elements.contains { $0.label == "Add a link checker to CI" }, elements.description)
+            XCTAssertTrue(elements.contains { $0.label == L10n.string("Do it here") }, elements.description)
+        }
+        try await render("local-suggestion", size: column, titled: false) {
+            localTimeline(footerEntries, folder: website, status: .completed)
+                .environment(\.taskSuggestionActions, localSuggestionActions(host, session: footer))
+        }
+
+        // The rail's Outputs card: the host's card's files, newest first.
+        model.select(.task(crash.id.uuidString))
+        try await waitUntil { model.conversations[crash.id.uuidString]?.isLoaded == true }
+        model.files.loadOutputs(crash.id.uuidString)
+        try await waitUntil { model.files.outputs[crash.id.uuidString]?.count == 2 }
+        let card = SessionRailContent.outputs(entries: crashEntries, codexChanges: [], workspaceURL: website)
+        XCTAssertEqual(RemoteTaskRail.rows(model.files.outputs[crash.id.uuidString] ?? []).map(\.url), card.map(\.url))
+        try await render("remote-host-outputs", size: size, model: model, hosts: hosts) { elements in
+            XCTAssertTrue(elements.contains { $0.label == L10n.string("Outputs") }, elements.description)
+            XCTAssertTrue(elements.contains { $0.label.contains("crash-summary.pdf") }, elements.description)
+        }
+        let rail = SessionRailContent.make(
+            session: crash, projectName: "website", instructionSources: TaskInstructionSources(origin: .detected, paths: []),
+            git: nil, options: ComposerSessionOptionsProjection.make(harness: .claudeCode, session: crash, providerCapabilities: nil,
+                                                                     providerUsage: nil, entries: crashEntries, isAttached: false),
+            connectors: nil, account: nil, entries: crashEntries, codexPlan: nil, pullRequest: nil, pullRequestState: nil)
+        var folds = SessionRailFolds()
+        folds.setAll(folded: false)
+        try await render("local-outputs", size: NSSize(width: column.width, height: size.height), titled: false) {
+            HStack(spacing: 0) {
+                localTimeline(crashEntries, folder: website, status: .completed)
+                Divider()
+                SessionRailView(content: rail, folds: .constant(folds),
+                                preferences: SessionRailPreferenceStore(defaults: defaults))
+            }
+        }
+
+        // The scheduled tasks list beside the chosen schedule, in the host's words.
+        model.showsSchedules = true
+        model.schedules.load()
+        try await waitUntil { model.schedules.list?.count == 3 }
+        model.select(.schedule(morning.id.uuidString))
+        try await render("remote-host-schedules", size: size, model: model, hosts: hosts) { elements in
+            XCTAssertTrue(elements.contains { $0.label == "Summarize new crash reports" }, elements.description)
+            XCTAssertTrue(elements.contains { $0.label == L10n.string("Run now") }, elements.description)
+        }
+        let state = ScheduledTasksWindowState()
+        state.isShowing = true
+        state.selection = morning.id
+        try await render("local-schedules", size: size, titled: false) {
+            HStack(spacing: 0) {
+                ScheduledTasksSidebar(model: host, state: state, onBack: {}, actions: ScheduledTaskActions())
+                    .frame(width: ParityTheme.sidebarWidth + 20)
+                Rectangle().fill(ParityTheme.separator).frame(width: 1)
+                ScheduledTasksMain(model: host, state: state, actions: ScheduledTaskActions(), projectName: { _ in "website" })
+            }
+            .background(ParityTheme.canvas)
+        }
+        hosts.close(paired.id)
+        await host.shutdown()
+    }
+
+    /// A Codex MCP form as the host's card has it, sent as the host sends it (its projection, through JSON) and
+    /// drawn by the remote window's card, beside the local card: the same fields, checks and answers.
+    func testAnMCPFormDrawsAsTheLocalCardDoes() async throws {
+        let local = CodexRequestFormRestorationTests.form([
+            "repo": .object(["type": .string("string"), "title": .string("Repository"), "description": .string("owner/name"),
+                             "maxLength": .integer(100)]),
+            "private": .object(["type": .string("boolean"), "title": .string("Private"), "default": .bool(true)]),
+            "team": .object(["type": .string("string"), "title": .string("Team"),
+                             "oneOf": .array([.object(["const": .string("web"), "title": .string("Web")]),
+                                              .object(["const": .string("ios"), "title": .string("iOS")])])])
+        ], required: ["repo"], message: "Create a repository for the new service.")
+        var user = RemoteItem(id: "u1", turnId: "t1", kind: .user)
+        user.text = "Create a GitHub repository for the billing service"
+        let sent = RemoteConversationProjection.request(local, turnID: "t1", inWork: false)
+        let wire = try JSONDecoder().decode(RemoteItem.self, from: JSONEncoder().encode(sent))
+        let conversation = RemoteConversationModel(taskID: "T", harness: .codex, hostName: "Mac Studio")
+        conversation.load([user, wire], cursor: nil, hasOlder: false)
+        let remote = try XCTUnwrap(conversation.presentation.turns.last?.requests.first)
+        guard case let .mcpForm(localForm)? = local.form, case let .mcpForm(remoteForm)? = remote.form else {
+            return XCTFail("No form: \(String(describing: remote.form))")
+        }
+        XCTAssertEqual(remoteForm, localForm)
+        XCTAssertEqual(remote.responses.map(\.title), local.responses.map(\.title))
+        XCTAssertEqual(remote.responses.map(\.role), local.responses.map(\.role))
+        // What Submit sends once filled in is what the host's card would send.
+        var input = ConversationRequestFormInput()
+        input.fields = ["repo": .text("acme/billing"), "team": .picked(["web"])]
+        let submit = try XCTUnwrap(remote.responses.last)
+        guard case let .codex(.mcpElicitation(_, content?, _))? = remote.route(for: submit, input: input) else {
+            return XCTFail("Submit sends no content")
+        }
+        XCTAssertEqual(try AppModelRemoteBridge.fieldValues(RemoteTurnProjection.formValues(content), for: localForm).get(),
+                       ["repo": .text("acme/billing"), "private": .flag(true), "team": .picked(["web"])])
+
+        var actions = ConversationActions()
+        actions.chooseOption = { _, _ in }
+        let width = NSSize(width: 760, height: 560)
+        try await render("remote-form", size: width, titled: false) {
+            ConversationTimeline(source: .presented(conversation.presentation), actions: actions)
+                .background(ParityTheme.canvas)
+        }
+        var turn = ConversationTurn(id: "t1", status: .running, timing: ConversationTurnTiming())
+        turn.prompt = [ConversationItem(id: "u1", kind: .userMessage(text: user.text ?? "", images: []), phase: .completed,
+                                        source: .transcript(TranscriptEntry(content: .user(text: user.text ?? ""))))]
+        turn.requests = [local]
+        var presentation = ConversationPresentation(harness: .codex, turns: [turn])
+        presentation.pendingRequestIDs = [local.id]
+        try await render("local-form", size: width, titled: false) {
+            ConversationTimeline(source: .presented(presentation), actions: actions)
+                .background(ParityTheme.canvas)
+        }
+    }
+
+    /// The chips' actions as the local window gives them, with where and with what Start starts each.
+    private func localSuggestionActions(_ model: AppModel, session: SessionRecord) -> TaskSuggestionActions {
+        TaskSuggestionActions(
+            resolution: { model.taskSuggestions.resolution(of: $0, in: session.id) },
+            start: { _ in },
+            startPlace: { suggestion in
+                guard case let .success(start) = model.suggestedTaskStart(for: suggestion, from: session) else {
+                    return TaskSuggestionStartPlace(startsInWorktree: false)
+                }
+                let choice = model.suggestedTaskChoice(for: suggestion, start: start, in: session.id)
+                return TaskSuggestionStartPlace(
+                    label: model.suggestedTaskPlaceLabel(for: suggestion, start: start, choice: choice, from: session),
+                    startsInWorktree: choice.place.folder != nil && choice.place.startsInNewWorktree,
+                    settings: model.suggestedTaskSettingsLabel(choice, for: suggestion))
+            },
+            dismiss: { _ in })
+    }
+
     /// The local timeline of a Claude Code task waiting on the person, whose cards can answer as the window's do.
-    private func localTimeline(_ entries: [TranscriptEntry], folder: URL) -> some View {
+    private func localTimeline(_ entries: [TranscriptEntry], folder: URL,
+                               status: SessionStatus = .waitingForApproval) -> some View {
         var actions = ConversationActions()
         actions.chooseOption = { _, _ in }
         actions.answer = { _, _ in }
-        return ConversationTimeline(source: .transcript(entries: entries, harness: .claudeCode, status: .waitingForApproval,
-                                                        latestTurnIsComplete: false), actions: actions)
+        return ConversationTimeline(source: .transcript(entries: entries, harness: .claudeCode, status: status,
+                                                        latestTurnIsComplete: status != .waitingForApproval), actions: actions)
             .environment(\.transcriptWorkspaceURL, folder)
             .background(ParityTheme.canvas)
     }

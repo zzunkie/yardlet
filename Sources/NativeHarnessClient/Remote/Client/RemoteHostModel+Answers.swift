@@ -33,9 +33,39 @@ extension RemoteHostModel {
                     ? RemoteQuestionAnswer(questionId: step.id, options: [value])
                     : RemoteQuestionAnswer(questionId: step.id, text: value)
             }))
+        case let .codex(.mcpElicitation(.accept, content?, _)) where RemoteTurnProjection.submitChoice(item) != nil:
+            // The form's Submit: the host's own Submit, with the values the card checked.
+            let submit = RemoteTurnProjection.submitChoice(item)?.id ?? ""
+            send(.chooseAnswer(taskID: taskID, requestID: requestID, choice: submit,
+                               values: RemoteTurnProjection.formValues(content)))
         case .codex, .structured:
             commandError = L10n.format("Answer this on %@.", name)
         }
+    }
+
+    /// Whether a host task's notification offers "Allow once", as a local approval's does: only for an
+    /// approval, not a question, plan review or form, and, when the conversation is open here, only where the
+    /// host card's answers include its narrowest allow.
+    func offersAllowOnce(_ event: RemoteEvent) -> Bool {
+        guard event.state == .waiting, event.pendingRequest == .approval, let taskID = event.taskId,
+              let requestID = event.requestId else { return false }
+        if let kind = task(taskID)?.pendingKind, kind != "approval" { return false }
+        if let item = conversations[taskID]?.pendingRequest(requestID) {
+            return (item.options ?? []).contains(RemoteApprovalAnswer.allowOnce.rawValue)
+        }
+        return true
+    }
+
+    /// "Allow once" from a host task's notification: the host card's narrowest allow, as the host's own
+    /// approval notification gives it (`answerApproval` `allowOnce`, §4.4, which the host answers by
+    /// `NotificationApprovalProjection`). False when the host is not connected or does not offer it for
+    /// that request, so the notification opens the task instead, as a local one does.
+    func allowOnce(taskID: String, requestID: String) async -> Bool {
+        guard isConnected else { return false }
+        if let item = conversations[taskID]?.pendingRequest(requestID),
+           !(item.options ?? []).contains(RemoteApprovalAnswer.allowOnce.rawValue) { return false }
+        let response = await response(to: .answerApproval(taskID: taskID, requestID: requestID, answer: .allowOnce))
+        return response.ok
     }
 
     private func answer(_ action: PermissionRequestAction, taskID: String, requestID: String) -> RemoteRequest {

@@ -14,6 +14,9 @@ struct TaskSuggestionActions {
     /// Options: what Start starts the suggestion with and where, to change in a popover
     /// (`TaskSuggestionOptionsPopover`); nil where it cannot start now.
     var optionsContext: @MainActor (ConversationTaskSuggestion) -> TaskSuggestionOptionsContext? = { _ in nil }
+    /// Why Options is not offered where the chip is shown, as its help: another Mac's task starts a
+    /// suggestion with that Mac's choices. Nil where it is.
+    var optionsUnavailable: String? = nil
     /// Where Start starts the suggestion, as the row's summary leads with it.
     var startPlace: @MainActor (ConversationTaskSuggestion) -> TaskSuggestionStartPlace = {
         TaskSuggestionStartPlace(startsInWorktree: $0.startsInNewWorktree)
@@ -212,7 +215,8 @@ private struct TaskSuggestionRow: View {
                     Button(L10n.string("Options")) { options = actions.optionsContext(suggestion) }
                         .buttonStyle(.borderless)
                         .foregroundStyle(.secondary)
-                        .help(L10n.string("taskSuggestion.optionsHelp"))
+                        .help(actions.optionsUnavailable ?? L10n.string("taskSuggestion.optionsHelp"))
+                        .disabled(actions.optionsUnavailable != nil)
                         .accessibilityHint(title)
                         .popover(isPresented: Binding(get: { options != nil }, set: { if !$0 { options = nil } }),
                                  arrowEdge: .bottom) {

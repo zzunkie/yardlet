@@ -32,6 +32,8 @@ final class RemoteHostModel: Identifiable {
         case none
         case task(String)
         case newTask
+        /// One of the host's scheduled tasks (§15.21).
+        case schedule(String)
     }
 
     nonisolated let id: String
@@ -45,6 +47,14 @@ final class RemoteHostModel: Identifiable {
     private(set) var tasks: [RemoteTask] = []
     private(set) var newTask: RemoteNewTask?
     private(set) var followUp: RemoteFollowUpMode?
+    /// The host lists its scheduled tasks (§15.21) and serves what its tasks made (§15.22).
+    private(set) var offersSchedules = false
+    private(set) var offersTaskFiles = false
+    /// The sidebar lists the host's scheduled tasks in place of its tasks, as the Mac's sidebar does.
+    var showsSchedules = false
+    /// The host's scheduled tasks, and its tasks' outputs and files, read when shown.
+    let schedules = RemoteHostSchedules()
+    let files: RemoteHostFiles
     private(set) var selection: Selection = .none
     private(set) var conversations: [String: RemoteConversationModel] = [:]
     /// The last command the host refused, in a line for the window.
@@ -76,8 +86,11 @@ final class RemoteHostModel: Identifiable {
         self.store = store
         self.cache = cache
         self.discovery = discovery
+        files = RemoteHostFiles(hostID: host.id)
         connector = RemoteHostConnection(target: host.target ?? RemoteHostTarget(hostKey: Data(), direct: []),
                                          clientKey: clientKey, hello: hello, session: session, timing: timing)
+        schedules.model = self
+        files.model = self
     }
 
     var name: String { host.name }
@@ -89,6 +102,8 @@ final class RemoteHostModel: Identifiable {
 
     func start() {
         guard reader == nil else { return }
+        // Copies an earlier window left when Yardlet did not close it.
+        files.removeAll()
         connection = .connecting
         cache?.open(for: self)
         let stream = connector.inbound
@@ -116,6 +131,7 @@ final class RemoteHostModel: Identifiable {
         Task { await connector.stop() }
         failPending()
         connection = .stopped
+        files.removeAll()
     }
 
     /// The person asked to try now, or the network changed.
@@ -182,7 +198,9 @@ final class RemoteHostModel: Identifiable {
             applyTasks(changed: [], removed: [taskID])
         case .closing:
             closingReason = event.reason
-        case .revoked, .linked, .linkRefused, .linkRequest, .linkResolved, .schedulesChanged:
+        case .schedulesChanged:
+            if schedules.isFollowing { schedules.load() }
+        case .revoked, .linked, .linkRefused, .linkRequest, .linkResolved:
             break
         }
     }
@@ -195,11 +213,15 @@ final class RemoteHostModel: Identifiable {
             tasks = (response.tasks ?? []).sorted { $0.lastActivityAt > $1.lastActivityAt }
             newTask = response.newTask
             followUp = response.followUp
+            offersSchedules = response.scheduledTasks == true
+            offersTaskFiles = response.taskFiles == true
             hasSnapshot = true
             hostTakesPresence = response.presence == true
             toldPresence = nil
             tellPresence()
             if case let .task(id) = selection, !tasks.contains(where: { $0.id == id }) { selection = .none }
+            // The host sends `schedulesChanged` to a connection that asked since it connected.
+            if offersSchedules, schedules.isFollowing { schedules.load() }
         }
         for taskID in subscribed { subscribe(taskID) }
     }
@@ -250,6 +272,8 @@ final class RemoteHostModel: Identifiable {
         self.selection = selection
         commandError = nil
         guard case let .task(taskID) = selection else { return }
+        // A task opened from a schedule, a chip or a notification shows among the tasks.
+        showsSchedules = false
         if conversations[taskID] == nil {
             let harness = HarnessKind(rawValue: task(taskID)?.harness ?? HarnessKind.claudeCode.rawValue)
             let conversation = RemoteConversationModel(taskID: taskID, harness: harness, hostName: host.name)

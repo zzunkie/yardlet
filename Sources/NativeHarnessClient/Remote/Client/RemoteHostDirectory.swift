@@ -95,6 +95,12 @@ final class RemoteHostDirectory {
         openHostWindow?(hostID)
     }
 
+    /// "Allow once" from a host task's notification, answered while the host's window is open.
+    func allowOnce(hostID: String, taskID: String, requestID: String) async -> Bool {
+        guard let model = models[hostID] else { return false }
+        return await model.allowOnce(taskID: taskID, requestID: requestID)
+    }
+
     /// The host's window closed: its connection ends.
     func close(_ hostID: String) {
         models.removeValue(forKey: hostID)?.stop()

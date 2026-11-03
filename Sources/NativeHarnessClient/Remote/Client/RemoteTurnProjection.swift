@@ -94,6 +94,8 @@ enum RemoteTurnProjection {
         case .activity where item.activity == "reasoning":
             return ConversationItem(id: item.id, kind: .reasoning(summary: item.detail, detail: nil, isStreaming: item.status == "running"),
                                     phase: phase(item.status), source: source(item, .reasoning(text: item.detail ?? "", isStreaming: false)))
+        case .activity where item.activity == "taskSuggestion" && item.suggestionId != nil:
+            return taskSuggestion(item)
         case .activity, .notice:
             return line(item, details: details)
         case .approval:
@@ -142,6 +144,18 @@ enum RemoteTurnProjection {
         // What "Copy item details" takes, as a local line copies what it ran and returned.
         line.copyDetails = [title, item.detail, detail?.output].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
         return line
+    }
+
+    /// A suggested task as the app's chip draws it (§15.9). The host sends its title and summary, not the
+    /// prompt, which the chip's popover shows; what became of it is read from the item as it changes
+    /// (`RemoteSuggestionState`).
+    private static func taskSuggestion(_ item: RemoteItem) -> ConversationItem {
+        let title = item.title ?? ""
+        let suggestion = ConversationTaskSuggestion(id: item.suggestionId ?? item.id, title: item.title, tldr: item.detail,
+                                                    prompt: title, startsInNewWorktree: false)
+        let activity = HarnessActivity(id: item.id, kind: "taskSuggestion", title: title, detail: item.detail)
+        return ConversationItem(id: item.id, kind: .taskSuggestion(suggestion), phase: phase(item.status),
+                                source: source(item, .activity(activity, state: activityState(item.status))))
     }
 
     private static func plan(_ item: RemoteItem) -> ConversationPlan {
@@ -216,7 +230,30 @@ enum RemoteTurnProjection {
                                      .init(title: done.label, role: .primary, route: .providerAction(done))]
             }
         default:
-            if item.formFields == nil, let choices = item.choices, !choices.isEmpty {
+            if let fields = item.formFields, let choices = item.choices, !choices.isEmpty {
+                // An MCP form (§15.19): the card's own form, which its Submit sends back with the values.
+                let form = form(fields)
+                if let form { request.form = .mcpForm(form) }
+                let submit = submitChoice(item)
+                var responses: [ConversationRequestResponse] = []
+                var actions: [PermissionRequestAction] = []
+                for choice in choices {
+                    let title = title(of: choice)
+                    if choice.id == submit?.id {
+                        // A field this Mac cannot draw leaves the form to the host, as the card leaves a form it
+                        // cannot read: declined or cancelled here, never sent without it.
+                        if form != nil { responses.append(.init(title: title, role: .primary, route: .structured)) }
+                        continue
+                    }
+                    let action = PermissionRequestAction(id: Route.choice + choice.id, label: title,
+                                                         decision: choice.role == "destructive" ? .deny : .allow,
+                                                         kind: choice.standing == true ? Route.standing : nil)
+                    actions.append(action)
+                    responses.append(.init(title: title, role: role(choice.role), route: .providerAction(action)))
+                }
+                request.providerActions = actions
+                request.responses = responses
+            } else if item.formFields == nil, let choices = item.choices, !choices.isEmpty {
                 let actions = choices.map { choice in
                     PermissionRequestAction(id: Route.choice + choice.id, label: title(of: choice),
                                             decision: choice.role == "destructive" ? .deny : .allow,
@@ -248,6 +285,69 @@ enum RemoteTurnProjection {
     /// it (§15.19); otherwise the host's own words.
     static func title(of choice: RemoteChoice, lookup: (String) -> String? = L10n.lookup) -> String {
         choice.text.flatMap(LocalizedText.init).flatMap { $0.resolved(lookup) } ?? choice.title
+    }
+
+    /// The choice that sends an MCP form's values: the card's prominent Submit. A form without fields has
+    /// none; its Submit is an answer like the others.
+    static func submitChoice(_ item: RemoteItem) -> RemoteChoice? {
+        guard item.formFields?.isEmpty == false else { return nil }
+        return item.choices?.first { $0.role == "primary" }
+    }
+
+    /// The host's MCP form as the card's own (`CodexMCPElicitationForm`), which checks each field as the
+    /// host's card does before Submit; nil when a field is of a kind this Mac does not know.
+    static func form(_ fields: [RemoteFormField]) -> CodexMCPElicitationForm? {
+        var form: [CodexMCPElicitationForm.Field] = []
+        for field in fields {
+            let options = (field.options ?? []).map { CodexMCPElicitationForm.Option(value: $0.value, title: $0.title) }
+            let kind: CodexMCPElicitationForm.Kind
+            switch field.type {
+            case "text":
+                kind = .text(format: field.format.flatMap(CodexMCPElicitationForm.TextFormat.init(rawValue:)),
+                             minLength: field.minLength, maxLength: field.maxLength)
+            case "number", "integer":
+                kind = .number(isInteger: field.type == "integer", minimum: field.minimum, maximum: field.maximum)
+            case "boolean":
+                kind = .boolean
+            case "choice":
+                kind = .choice(options)
+            case "choices":
+                kind = .choices(options, minItems: field.minItems, maxItems: field.maxItems)
+            default:
+                return nil
+            }
+            form.append(.init(id: field.id, title: field.label, description: field.description,
+                              isRequired: field.required == true, kind: kind,
+                              defaultValue: field.default.flatMap { value($0, for: kind) }))
+        }
+        return CodexMCPElicitationForm(fields: form)
+    }
+
+    /// A field's default as the card's form holds it: words and numbers as text, the options picked.
+    private static func value(_ value: RemoteFormValue, for kind: CodexMCPElicitationForm.Kind) -> CodexMCPElicitationFieldValue? {
+        switch (kind, value) {
+        case let (.text, .text(text)), let (.number, .text(text)): .text(text)
+        case let (.number, .number(number)): .text(CodexMCPElicitationForm.text(number))
+        case let (.boolean, .flag(flag)): .flag(flag)
+        case let (.choice, .text(choice)): .picked([choice])
+        case let (.choices, .list(list)): .picked(Set(list))
+        default: nil
+        }
+    }
+
+    /// The values the card's form sent as `content`, as `chooseAnswer` carries them (§15.19).
+    static func formValues(_ content: JSONValue) -> [String: RemoteFormValue] {
+        guard case let .object(fields) = content else { return [:] }
+        return fields.compactMapValues { value in
+            switch value {
+            case let .string(text): .text(text)
+            case let .integer(number): .number(Double(number))
+            case let .number(number): .number(number)
+            case let .bool(flag): .flag(flag)
+            case let .array(items): .list(items.compactMap(\.stringValue))
+            case .object, .null: nil
+            }
+        }
     }
 
     private static func question(_ step: RemoteQuestionStep) -> PermissionQuestion {
@@ -316,5 +416,27 @@ enum RemoteTurnProjection {
 
     private static func date(_ milliseconds: Int64) -> Date {
         Date(timeIntervalSince1970: TimeInterval(milliseconds) / 1000)
+    }
+}
+
+/// What became of a host's suggested task (§15.9), as the chip reads it: started, sent here or dismissed, or
+/// starting, or a start that failed. The host does not say why a start failed.
+enum RemoteSuggestionState {
+    static func resolution(_ item: RemoteItem) -> TaskSuggestionResolution? {
+        let at = Date(timeIntervalSince1970: 0)
+        switch item.suggestionState {
+        case "started": return TaskSuggestionResolution(outcome: .started, at: at, startedTaskID: item.startedTaskId.flatMap(UUID.init))
+        case "sentHere": return TaskSuggestionResolution(outcome: .sentHere, at: at)
+        case "dismissed": return TaskSuggestionResolution(outcome: .dismissed, at: at)
+        default: return nil
+        }
+    }
+
+    static func progress(_ item: RemoteItem, host: String) -> TaskSuggestionStore.Progress? {
+        switch item.suggestionState {
+        case "starting": .starting
+        case "failed": .failed(L10n.format("%@ couldn't start this task.", host))
+        default: nil
+        }
     }
 }

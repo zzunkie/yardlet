@@ -20,10 +20,13 @@ final class RemoteConversationModel {
     private(set) var isLoadingOlder = false
     /// What lines opened so far hold (§15.8), by item ID.
     private(set) var details: [String: RemoteItemDetail] = [:]
+    /// Each suggested task's item, which says what became of it (§15.9), by suggestion ID: the chips read
+    /// it as they draw.
+    private(set) var suggestions: [String: RemoteItem] = [:]
 
     @ObservationIgnored private(set) var cursor: String?
     @ObservationIgnored private var items = RemoteConversationItems()
-    @ObservationIgnored private var projected: [ObjectIdentifier: (version: Int, turn: ConversationTurn)] = [:]
+    @ObservationIgnored private var projected: [ObjectIdentifier: Projected] = [:]
     @ObservationIgnored private var loadingDetails: Set<String> = []
     @ObservationIgnored var hostName: String
     /// How many turns were projected so far: a change projects only the turns it touched.
@@ -111,23 +114,35 @@ final class RemoteConversationModel {
         return last.items.last { $0.kind == .error && $0.errorKind == "usageLimit" && $0.inWork != true }
     }
 
+    /// A run as it was last projected: its turn, and its suggested tasks' items.
+    private struct Projected {
+        var version: Int
+        var turn: ConversationTurn
+        var suggestions: [RemoteItem]
+    }
+
     private func publish() {
         revision += 1
         var turns: [ConversationTurn] = []
         turns.reserveCapacity(items.runs.count)
-        var kept: [ObjectIdentifier: (version: Int, turn: ConversationTurn)] = [:]
+        var kept: [ObjectIdentifier: Projected] = [:]
         var seen: Set<String> = []
         var pending: Set<String> = []
+        var suggestions: [String: RemoteItem] = [:]
         for run in items.runs {
             let key = ObjectIdentifier(run)
-            var turn: ConversationTurn
+            let entry: Projected
             if let cached = projected[key], cached.version == run.version {
-                turn = cached.turn
+                entry = cached
             } else {
-                turn = RemoteTurnProjection.turn(run.items, turnID: run.turnID, details: details, hostName: hostName)
+                entry = Projected(version: run.version,
+                                  turn: RemoteTurnProjection.turn(run.items, turnID: run.turnID, details: details, hostName: hostName),
+                                  suggestions: run.items.filter { $0.suggestionId != nil })
                 projectedTurnCount += 1
             }
-            kept[key] = (run.version, turn)
+            kept[key] = entry
+            for item in entry.suggestions { if let id = item.suggestionId { suggestions[id] = item } }
+            var turn = entry.turn
             // A turn the host sent in two places mid-change still draws once each.
             if !seen.insert(turn.id).inserted {
                 turn = ConversationTurn(id: "\(turn.id)#\(turns.count)", status: turn.status, timing: turn.timing)
@@ -140,6 +155,7 @@ final class RemoteConversationModel {
         next.earlier = hasOlder ? .provider(cursor: cursor ?? "") : .none
         next.pendingRequestIDs = pending
         presentation = next
+        if suggestions != self.suggestions { self.suggestions = suggestions }
         let waiting = items.runs.last?.items.filter { $0.queued == true } ?? []
         if waiting != queued { queued = waiting }
     }

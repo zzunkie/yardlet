@@ -26,8 +26,10 @@ extension AppModel {
         if let reveal = response.target.personalAgent { return revealPersonalAgent(reveal) }
         // So does a new mail's.
         if let thread = response.target.mailThread { return revealMailThread(thread) }
-        // And a task of another Mac, which opens in that Mac's window.
+        // And a task of another Mac, which opens in that Mac's window; "Allow once" answers there first.
         if let remote = response.target.remoteTask {
+            if response.action == .allowOnce, let requestID = response.target.requestID,
+               await allowRemoteOnce?(remote.hostID, remote.taskID, requestID) == true { return }
             applicationAttention?.bringForward()
             return openRemoteTask?(remote.hostID, remote.taskID) ?? ()
         }
