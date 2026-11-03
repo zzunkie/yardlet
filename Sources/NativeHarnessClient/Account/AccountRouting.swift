@@ -2,8 +2,9 @@ import Foundation
 
 /// Which account a task Yardlet starts for an agent runs on (docs/NATIVE_SESSION_STORAGE.md, "Choosing an additional account"): a child task
 /// (`create_task`), a subagent (`run_agent`) or a suggestion the person starts, a new task the person
-/// starts while its account menu says Automatic, and where a
-/// schedule's run goes when its own account is nearly spent. The candidates are
+/// starts while its account menu says Automatic, where a schedule's run goes when its own account is
+/// nearly spent, and where a Claude Code task moves when its account is nearly spent or a limit
+/// stopped it (`move`). The candidates are
 /// the harness's accounts in automatic assignment that are signed in
 /// (`ProviderConnectionStore.isInAutomaticAssignment`); this picks one of them from the plan limits
 /// Yardlet already reads, and the tasks already running on each. Pure, so the rule is tested
@@ -155,6 +156,47 @@ enum AccountRouting {
 
     private static func score(_ headroom: Headroom?, running: Int) -> Double {
         (headroom?.pace ?? 0) / Double(1 + max(running, 0))
+    }
+
+    // MARK: - Moving a task to an account with room
+
+    /// How long a conversation's prompt cache lives after its last request: Claude Code asks for an
+    /// hour. Caches are kept per account, so a task that moves while its cache lives writes its whole
+    /// conversation again on the new account; once it has expired, the next request writes it
+    /// anyway, wherever the task is (docs/PROVIDER_CONNECTIONS.md, "Moving tasks to an account with room").
+    static let promptCacheLifetime: TimeInterval = 60 * 60
+
+    /// Where a Claude Code task stands with its account's limits.
+    enum MoveState: Equatable, Sendable {
+        /// Idle, on an account nearly spent for its model.
+        case nearlySpent
+        /// A plan limit stopped its last turn; the limit resets then, when the CLI said.
+        case stoppedByLimit(resetsAt: Date?)
+    }
+
+    enum Move: Equatable, Sendable {
+        case stay
+        /// To the account with room `hasRoomElsewhere` names.
+        case move
+        /// It stays and continues once the limit resets.
+        case waitForReset
+    }
+
+    /// Whether a task moves now, with what moving costs while its cache lives:
+    /// 1. A task whose cache has expired moves off a nearly spent account at no cost.
+    /// 2. A task a limit stopped moves, unless the limit resets before its cache expires: then it
+    ///    waits, and the cache is still there when it continues.
+    /// 3. A task whose cache lives stays on a nearly spent account until the limit stops it or its
+    ///    cache expires.
+    /// With no room elsewhere it stays, and a stopped one waits for a reset the CLI named.
+    static func move(_ state: MoveState, cacheExpiresAt: Date, hasRoomElsewhere: Bool, now: Date) -> Move {
+        switch state {
+        case .nearlySpent:
+            return hasRoomElsewhere && now >= cacheExpiresAt ? .move : .stay
+        case let .stoppedByLimit(resetsAt):
+            if let resetsAt, resetsAt <= cacheExpiresAt || !hasRoomElsewhere { return .waitForReset }
+            return hasRoomElsewhere ? .move : .stay
+        }
     }
 }
 

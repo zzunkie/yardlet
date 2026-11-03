@@ -227,6 +227,23 @@ final class AppModel {
     /// for what else keeps it busy; the end of another turn cuts the wait short.
     @ObservationIgnored private var switchingAfterTurn = Set<UUID>()
     @ObservationIgnored private var accountSwitchWaits: [UUID: Task<Void, Never>] = [:]
+    /// The moves in `accountSwitchesAfterTurn` Yardlet made itself, to an account with room
+    /// (AppModel+AccountMoves.swift), and the state each was made for.
+    @ObservationIgnored var automaticAccountMoves: [UUID: AutomaticAccountMove] = [:]
+    /// Tasks whose automatic move the person cancelled: they stay until they work again.
+    @ObservationIgnored var declinedAccountMoves = Set<UUID>()
+    /// The next look for tasks to move, at the moment one could (`lookForAccountMoves`).
+    @ObservationIgnored var accountMoveLook: (at: Date, task: Task<Void, Never>)?
+    @ObservationIgnored var isLookingForAccountMoves = false
+    @ObservationIgnored var looksForAccountMovesAgain = false
+    /// The Claude Code accounts with room at the last reading, so a look follows only a change.
+    @ObservationIgnored var claudeAccountsWithRoom: Set<String>?
+    @ObservationIgnored var accountMovePreferenceObserver: (any NSObjectProtocol)?
+    /// The setting as followed from launch (`startAccountMoves`); nil until then.
+    @ObservationIgnored var followedAccountMovePreference: Bool?
+    /// The resets whose continue Yardlet armed itself, by task, so turning the setting off disarms
+    /// only those.
+    @ObservationIgnored var accountMoveArmedContinues: [UUID: Date] = [:]
     private(set) var sideChatErrors: [UUID: String] = [:]
     private(set) var bootstrapError: String?
     /// Archived tasks being restored, and the last restore or listing failure, for the archived list.
@@ -322,7 +339,7 @@ final class AppModel {
     var usesVisualFixture: Bool { isVisualFixture }
     let registry: HarnessRegistry
     /// App preferences read at the moment they apply, such as the Codex follow-up mode.
-    private let preferences: UserDefaults
+    let preferences: UserDefaults
     private let codexPendingRequestRepository: any CodexPendingServerRequestRepository
     private let codexTimelineItemRepository: CachedCodexTimelineItemRepository
     /// The files each task read and edited, for a file's related tasks (`AppModel+FileTasks`). Nil in
@@ -5105,6 +5122,7 @@ final class AppModel {
 
     func shutdown() async {
         scheduledTasks.stop()
+        stopFollowingAccountMoves()
         // Before their runtimes close: the subagents the quit cuts off, kept for their callers.
         interruptAgentRunsForQuit()
         await endSideChatsForQuit()
@@ -5186,6 +5204,8 @@ final class AppModel {
     /// again forgets the choice.
     func chooseAccount(_ connection: ProviderConnection, for session: SessionRecord) async {
         guard let current = store.sessions.first(where: { $0.id == session.id }) else { return }
+        // The person's choice takes the place of one Yardlet made.
+        automaticAccountMoves.removeValue(forKey: current.id)
         guard Self.isWorking(current) else {
             cancelAccountSwitchAfterTurn(for: current.id)
             await switchAccount(to: connection, for: current)
@@ -5199,9 +5219,22 @@ final class AppModel {
         accountSwitchesAfterTurn[current.id] = connection
     }
 
-    /// Keeps a working task on its account after all.
-    func cancelAccountSwitchAfterTurn(for sessionID: UUID) {
+    /// Moves a task Yardlet chose to move itself, as a choice made in its turn moves: now if nothing
+    /// keeps it busy, else once that is over, with the line above the composer and its Cancel.
+    func moveAutomatically(_ id: UUID, to connection: ProviderConnection, as move: AutomaticAccountMove) {
+        guard accountSwitchesAfterTurn[id] == nil, !switchingAccounts.contains(id) else { return }
+        accountSwitchesAfterTurn[id] = connection
+        automaticAccountMoves[id] = move
+        switchAccountAfterTurn(id)
+    }
+
+    /// Keeps a working task on its account after all. An automatic move the person cancels is not
+    /// made again until the task works again.
+    func cancelAccountSwitchAfterTurn(for sessionID: UUID, declined: Bool = true) {
         guard accountSwitchesAfterTurn.removeValue(forKey: sessionID) != nil else { return }
+        if automaticAccountMoves.removeValue(forKey: sessionID) != nil, declined {
+            declinedAccountMoves.insert(sessionID)
+        }
         accountSwitchWaits[sessionID]?.cancel()
         // What was sent for the new account goes on this one.
         if !isRunning(sessionID) { scheduleFollowUpDrain(for: sessionID) }
@@ -5212,7 +5245,7 @@ final class AppModel {
     /// sent meanwhile go: they start its next turn on the new account. One still busy otherwise (a
     /// message the provider holds, a background command) is looked at again, as an account move
     /// looks again at its tasks; a turn that starts meanwhile looks again when it ends.
-    private func switchAccountAfterTurn(_ id: UUID) {
+    func switchAccountAfterTurn(_ id: UUID) {
         guard accountSwitchesAfterTurn[id] != nil else { return }
         guard switchingAfterTurn.insert(id).inserted else {
             accountSwitchWaits[id]?.cancel()
@@ -5226,9 +5259,14 @@ final class AppModel {
                     return
                 }
                 guard !Self.isWorking(task) else { return }
+                // One Yardlet made goes only while it still saves what it was made for.
+                if automaticAccountMoves[id].map({ !automaticAccountMoveHolds($0, for: task) }) ?? false {
+                    cancelAccountSwitchAfterTurn(for: id, declined: false)
+                    return
+                }
                 if settlesForAccountMove(task, heldMessagesGoAfter: true) {
                     accountSwitchesAfterTurn.removeValue(forKey: id)
-                    await completeAccountSwitch(task, to: target)
+                    await completeAccountSwitch(task, to: target, automatic: automaticAccountMoves.removeValue(forKey: id))
                     return
                 }
                 let wait = Task { [accountMoveSleep] in _ = try? await accountMoveSleep() }
@@ -5241,8 +5279,10 @@ final class AppModel {
 
     /// Moves a task whose turn ended to the account chosen during it, then sends what waited for the
     /// move. A refusal shows as the immediate switch's does, and holds what the person queued for
-    /// the new account until they resume it.
-    private func completeAccountSwitch(_ task: SessionRecord, to target: ProviderConnection) async {
+    /// the new account until they resume it; what was queued while Yardlet moved the task on its own
+    /// goes on its account instead.
+    private func completeAccountSwitch(_ task: SessionRecord, to target: ProviderConnection,
+                                       automatic: AutomaticAccountMove? = nil) async {
         let target = connections.connections.first { $0.id == target.id } ?? target
         if TaskAccountSwitch.allows(target, for: task) {
             await switchAccount(to: target, for: task)
@@ -5251,7 +5291,10 @@ final class AppModel {
                 "%@ no longer shares this task's conversation history, so the task stays on its account.",
                 accountChoice(harness: task.harness, connection: target).title)
         }
-        if store.sessions.first(where: { $0.id == task.id })?.connection != target {
+        let moved = store.sessions.first(where: { $0.id == task.id })?.connection == target
+        if let automatic, moved {
+            await finishAutomaticAccountMove(automatic, of: task.id)
+        } else if !moved, automatic == nil {
             followUps.pause(task.id)
         }
         scheduleFollowUpDrain(for: task.id)
@@ -5417,7 +5460,7 @@ final class AppModel {
     /// armed continue after a limit goes on under the same account (`moveSettledTask`). With
     /// `heldMessagesGoAfter`, the messages and shell output Yardlet holds go after the move instead, on
     /// the new account; only those the provider holds or one being sent are waited for.
-    private func settlesForAccountMove(_ session: SessionRecord, heldMessagesGoAfter: Bool = false) -> Bool {
+    func settlesForAccountMove(_ session: SessionRecord, heldMessagesGoAfter: Bool = false) -> Bool {
         let id = session.id
         let queue = followUps.queue(for: id)
         let messagesSettle = heldMessagesGoAfter
@@ -5440,7 +5483,7 @@ final class AppModel {
 
     /// Moves one settled task to another folder of its account. It keeps a runtime only if it had one,
     /// and an armed continue after the limit, which is the same account's.
-    private func moveSettledTask(_ current: SessionRecord, to connection: ProviderConnection) async throws {
+    func moveSettledTask(_ current: SessionRecord, to connection: ProviderConnection) async throws {
         guard switchingAccounts.insert(current.id).inserted else { throw ProviderConnectionError.invalidBinding }
         defer { switchingAccounts.remove(current.id) }
         let hadRuntime = handlesBySessionID[current.id] != nil
@@ -6768,6 +6811,11 @@ final class AppModel {
                 if connectionResumes[event.localSessionID]?.isWaiting == true {
                     forgetConnectionResume(event.localSessionID)
                 }
+                // Its cache is written again on this account: a move Yardlet chose would lose it.
+                if automaticAccountMoves[event.localSessionID] != nil {
+                    cancelAccountSwitchAfterTurn(for: event.localSessionID, declined: false)
+                }
+                declinedAccountMoves.remove(event.localSessionID)
             } else {
                 // The rail's browser preview goes with the turn, as the Codex app's at `turn/completed`.
                 BrowserAgentUse.shared.endTurn(session: event.localSessionID)
@@ -6826,6 +6874,7 @@ final class AppModel {
                 agentTools?.taskTurnEnded(event.localSessionID)
                 wakeAccountMove(for: event.localSessionID)
                 switchAccountAfterTurn(event.localSessionID)
+                considerAccountMoveAfterTurn(event.localSessionID)
             }
             // A shell command's output waits for the turn to end, however it ended.
             if status != .running, status != .waitingForApproval {
@@ -7060,6 +7109,13 @@ final class AppModel {
             guard !text.isEmpty else { return }
         }
         pendingTranscriptDeltas[sessionID, default: []].append(delta)
+    }
+
+    /// A task's conversation as Yardlet holds it now, with what is still on its way drawn in; nil
+    /// when it is not loaded.
+    func heldTranscript(of sessionID: UUID) -> [TranscriptEntry]? {
+        flushTranscriptDeltas(for: sessionID)
+        return transcriptBuilders[sessionID]?.entries
     }
 
     private func flushTranscriptDeltas(for sessionID: UUID) {

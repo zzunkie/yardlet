@@ -7,7 +7,8 @@ import Foundation
 /// task's next message, the way auto-fix's message goes (`deliverAutoFix`). Nothing here wakes a
 /// task that is busy: the center skips the slot instead. A run whose account is nearly spent goes to
 /// the one automatic assignment picks instead (`accountReplacing`): a new task starts there, and a
-/// continued task first moves there as Continue with another account moves it.
+/// continued task first moves there as Continue with another account moves it, unless tasks move
+/// to an account with room on their own and its cache still lives (`AccountRouting.move`).
 extension AppModel {
     /// Gives the center its start and busy checks. The loop itself starts with the app.
     func wireScheduledTasks() {
@@ -136,13 +137,15 @@ extension AppModel {
     /// ones it may go on under (`TaskAccountSwitch`, as Continue with another account offers) that
     /// automatic assignment may use and that are signed in, and says why when it moved. With none, or
     /// when the move is refused, the task stays where it was and its message goes there, as before
-    /// (sending clears the refusal's error).
+    /// (sending clears the refusal's error). While tasks move to an account with room on their own,
+    /// one whose cache still lives stays too: moving it would write its conversation again on the
+    /// other account, and a limit that stops it moves it then.
     private func moveToAccountWithRoom(_ task: SessionRecord) async -> AccountAssignment? {
+        if movesTasksToAccountsWithRoom,
+           Date() < task.updatedAt.addingTimeInterval(AccountRouting.promptCacheLifetime) { return nil }
         let account = await accountReplacing(
             task.connection, harness: task.harness, model: Self.modelOption(task.providerOptions, harness: task.harness)) {
-            usageLimitAccounts(for: task).map { accountChoice(harness: task.harness, connection: $0) }.filter {
-                $0.canSelect && $0.snapshot?.state == .signedIn && connections.isInAutomaticAssignment($0)
-            }
+            automaticMoveTargets(for: task)
         }
         guard let account, let connection = account.connection else { return nil }
         await switchAccount(to: connection, for: task)

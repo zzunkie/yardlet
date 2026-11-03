@@ -129,8 +129,18 @@ struct AccountList: View {
                     get: { store.picksNewTaskAccount }, set: { store.setPicksNewTaskAccount($0) }))
                     .labelsHidden().toggleStyle(.paritySwitch).controlSize(.small)
             }
-            .padding(.bottom, 12)
+            .padding(.bottom, showsAccountMoveSetting ? 0 : 12)
+            if showsAccountMoveSetting {
+                Divider()
+                AccountMoveSettingRow()
+            }
         }
+    }
+
+    /// Moving Claude Code tasks to an account with room has somewhere to move them once a Claude Code
+    /// account is saved besides the default login.
+    private var showsAccountMoveSetting: Bool {
+        (harnessFilter.wrappedValue.map { $0 == .claudeCode } ?? true) && !store.connections(for: .claudeCode).isEmpty
     }
 
     // MARK: List
@@ -619,5 +629,29 @@ struct AccountLimitsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }.padding(18).frame(width: 500)
+    }
+}
+
+/// Settings › Accounts' switch for moving Claude Code tasks to an account with room
+/// (`AccountMovePreference`), shown once there is another Claude Code account to move to.
+struct AccountMoveSettingRow: View {
+    @AppStorage(AccountMovePreference.key, store: .yardlet) private var movesTasks = true
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(L10n.string("Move tasks to an account with room")).font(.callout.weight(.medium))
+                Text(L10n.string("Moves Claude Code tasks on an account that is nearly out of its limit to an account with room once they have been idle for an hour. A task that hits its limit continues on another account, or waits and continues if the limit resets soon."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Toggle(L10n.string("Move tasks to an account with room"), isOn: $movesTasks)
+                .labelsHidden()
+                .toggleStyle(.paritySwitch)
+                .controlSize(.small)
+        }
+        .padding(.bottom, 12)
     }
 }

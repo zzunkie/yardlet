@@ -317,7 +317,8 @@ final class ScheduledTaskTests: XCTestCase {
 
     /// A run that continues a Claude task whose account is nearly spent first moves the task to another
     /// account that shares its history, as Continue with another account does, keeping its conversation,
-    /// and then sends. With no such account the message goes on the task's own account, as before.
+    /// and then sends. With no such account the message goes on the task's own account, as before. While
+    /// tasks move to an account with room on their own, a task whose cache still lives stays.
     func testAContinuingRunMovesItsTaskOffANearlySpentAccountFirst() async throws {
         let adapter = SuggestionRecordingAdapter()
         let clock = Clock(date(16, 20))
@@ -365,6 +366,25 @@ final class ScheduledTaskTests: XCTestCase {
         XCTAssertNil(model.errorBySessionID[staying.id])
         prompts = await adapter.prompts
         XCTAssertEqual(prompts.count, 2)
+
+        // Moving it would write its whole conversation again on the other account; a limit that
+        // stops it moves it then.
+        model.startAccountMoves()
+        let (live, liveSchedule) = try await continuing("work")
+        await model.scheduledTasks.runNow(liveSchedule)
+        run = try XCTUnwrap(model.scheduledTasks.schedule(id: liveSchedule)?.state.runs.first)
+        XCTAssertEqual(run.outcome, .started, run.failure ?? "")
+        XCTAssertNil(run.account)
+        XCTAssertEqual(model.store.sessions.first { $0.id == live.id }?.connection, accounts["work"], "Its cache lives")
+
+        // Turned off, a run moves it as before.
+        model.preferences.set(false, forKey: AccountMovePreference.key)
+        model.followAccountMovePreference()
+        let (offLive, offSchedule) = try await continuing("work")
+        await model.scheduledTasks.runNow(offSchedule)
+        run = try XCTUnwrap(model.scheduledTasks.schedule(id: offSchedule)?.state.runs.first)
+        XCTAssertEqual(run.account?.accountID, "roomy")
+        XCTAssertEqual(model.store.sessions.first { $0.id == offLive.id }?.connection, accounts["roomy"])
         await model.shutdown()
     }
 

@@ -74,8 +74,12 @@ and the accounts in automatic assignment. A run that continues a Claude task fir
 another account does, to the account picked among its own and the accounts that share its history, are in automatic
 assignment and are signed in; only the binding changes, and the provider ID, scope and history stay. When every account
 is nearly spent the run goes to the one that frees up first. A run with no other account, or whose move is refused,
-keeps its account and goes as before. The schedule's own account does not change. The run's line in the schedule's
-history and the task's hover card name the account it went to and the one it replaced.
+keeps its account and goes as before. While Settings › Accounts moves tasks to an account with room, a continued task
+whose prompt cache still lives (its last activity less than an hour ago) stays on its account, since moving it would
+make the other account process its whole conversation again; a limit that stops it moves it then (see
+[PROVIDER_CONNECTIONS.md](PROVIDER_CONNECTIONS.md), "Moving tasks to an account with room"). The schedule's own account
+does not change. The run's line in the schedule's history and the task's hover card name the account it went to and
+the one it replaced.
 
 **Account folders, found sign-ins and removal** (see [PROVIDER_CONNECTIONS.md](PROVIDER_CONNECTIONS.md), "Account
 folder shape, finding sign-ins and removing accounts"). A Claude account folder Yardlet makes for a new sign-in links
