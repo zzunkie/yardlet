@@ -3194,7 +3194,7 @@
 "App registrations → New registration, name Yardlet. Supported accounts: any organization and personal accounts, or only your organization's. Leave the redirect empty, then Register." = "App registrations → New registration, name Yardlet. Supported accounts: any organization and personal accounts, or only your organization's. Leave the redirect empty, then Register.";
 "App registrations" = "App registrations";
 "Add Yardlet's redirect in the manifest" = "Add Yardlet's redirect in the manifest";
-"In the app, Manifest: add the redirect URL below to publicClient → redirectUris, or in the older AAD Graph manifest the entry below to replyUrlsWithType, then Save. The redirect form doesn't take this address." = "In the app, Manifest: add the redirect URL below to publicClient → redirectUris, or in the older AAD Graph manifest the entry below to replyUrlsWithType, then Save. The redirect form doesn't take this address.";
+"In the app, Manifest: add the redirect URL below to publicClient → redirectUris, or in the older AAD Graph manifest the entry below to replyUrlsWithType, then Save." = "In the app, Manifest: add the redirect URL below to publicClient → redirectUris, or in the older AAD Graph manifest the entry below to replyUrlsWithType, then Save.";
 "Manifest entry" = "Manifest entry";
 "Add the Microsoft Graph permissions" = "Add the Microsoft Graph permissions";
 "API permissions → Add a permission → Microsoft Graph → Delegated permissions: add the ones below. An administrator can then grant consent for the whole organization." = "API permissions → Add a permission → Microsoft Graph → Delegated permissions: add the ones below. An administrator can then grant consent for the whole organization.";
@@ -3691,6 +3691,7 @@
 "The account has no mail server settings." = "The account has no mail server settings.";
 "This account has no Drafts folder." = "This account has no Drafts folder.";
 "This message is no longer in the account." = "This message is no longer in the account.";
+"This mail server does not answer searches, so its mail cannot be searched here." = "This mail server does not answer searches, so its mail cannot be searched here.";
 "Choose a service" = "Choose a service";
 "Mail accounts…" = "Mail accounts…";
 "Move tasks to an account with room" = "Move tasks to an account with room";

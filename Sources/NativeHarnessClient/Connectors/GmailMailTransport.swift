@@ -316,7 +316,7 @@ struct GmailMailTransport: MailAccountTransport {
     static func message(_ message: GmailMessage) -> MailMessage? {
         guard let id = message.id else { return nil }
         let parts = GmailMessage.parts(message.json["payload"])
-        let text = parts.plain ?? parts.html.map(GmailText.plainText(fromHTML:)) ?? ""
+        let text = GmailText.bodyText(plain: parts.plain, html: parts.html) ?? ""
         return MailMessage(
             id: id,
             from: MailAddressList.parse(message.header("From") ?? "").first ?? MailAddress(address: ""),

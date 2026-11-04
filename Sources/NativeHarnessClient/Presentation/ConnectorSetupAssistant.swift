@@ -126,8 +126,8 @@ struct ConnectorSetupAssistant: Equatable {
     /// Microsoft Entra admin center → App registrations.
     static let microsoftRegistrations = URL(string: "https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade")!
 
-    /// The manifest entry that makes Yardlet's loopback a redirect of a desktop (public) client.
-    /// Microsoft's redirect form does not take a `127.0.0.1` address, so it goes in the manifest
+    /// The manifest entry that makes Yardlet's loopback a redirect of a desktop (public) client, the same
+    /// redirect the Mobile and desktop applications platform takes as a custom redirect URI
     /// (learn.microsoft.com/entra/identity-platform/reply-url).
     static var microsoftManifestEntry: String {
         #"{ "url": "\#(ConnectorOAuth.registeredClientRedirectURI.absoluteString)", "type": "InstalledClient" }"#
@@ -153,7 +153,7 @@ struct ConnectorSetupAssistant: Equatable {
                  link: Link(title: L10n.string("App registrations"), url: microsoftRegistrations),
                  copies: [Copy(label: L10n.string("App name"), value: appName)], isDone: done(.msRegister)),
             Step(id: .msRedirect, title: L10n.string("Add Yardlet's redirect in the manifest"),
-                 detail: L10n.string("In the app, Manifest: add the redirect URL below to publicClient → redirectUris, or in the older AAD Graph manifest the entry below to replyUrlsWithType, then Save. The redirect form doesn't take this address."),
+                 detail: L10n.string("In the app, Manifest: add the redirect URL below to publicClient → redirectUris, or in the older AAD Graph manifest the entry below to replyUrlsWithType, then Save."),
                  copies: [Copy(label: L10n.string("Manifest entry"), value: microsoftManifestEntry),
                           Copy(label: L10n.string("Redirect URL"), value: ConnectorOAuth.registeredClientRedirectURI.absoluteString)],
                  isDone: done(.msRedirect)),

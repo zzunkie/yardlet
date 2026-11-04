@@ -5,8 +5,10 @@ import XCTest
 /// An IMAP mail account behind the mailbox's contract, against a fake IMAP server that answers as Korean
 /// webmail does (no special-use attributes, folder names in Korean) and a fake SMTP server: folders by
 /// role, a list page and a message read without marking it, flags and an archive made on first use, a
-/// draft saved and saved over, a send without its Bcc line and its copy in Sent, new mail from the inbox's
-/// STATUS, and adding an account through Settings › Connectors with its password in the secure store only.
+/// draft saved and saved over, a send without its Bcc line and its copy in Sent unless the server filed
+/// one, new mail from the inbox's STATUS and its newest messages' flags, a search where the server's TEXT
+/// finds less than it should, and adding an account through Settings › Connectors with its password in
+/// the secure store only.
 final class IMAPMailTransportTests: XCTestCase {
     private static let now = Date(timeIntervalSince1970: 1_793_620_800) // 2026-11-02 12:00 UTC
     private static let drafts = "&x4TC3Lz0rQDVaA-"   // 임시보관함
@@ -73,7 +75,7 @@ final class IMAPMailTransportTests: XCTestCase {
 
     func testADraftIsSavedInDraftsAndSentWithoutItsBccWithACopyInSent() async throws {
         let state = FakeMailState()
-        let opener = FakeMailOpener(imap: { FakeIMAPServer(answer: state.answer) })
+        let opener = FakeMailOpener(imap: { FakeIMAPServer(answer: state.answer) }, sent: { state.sent($0) })
         let session = makeSession(opener)
         let transport = IMAPMailTransport(session: session, account: MailAccount(id: session.id, address: "dana@example.com",
                                                                                  provider: .imap))
@@ -119,14 +121,32 @@ final class IMAPMailTransportTests: XCTestCase {
             "UID EXPUNGE 1",
             "UID FETCH 2 (BODY.PEEK[])",
             #"SELECT "\#(Self.sent)""#,
-            #"UID SEARCH HEADER Message-ID "<id>""#,
             #"APPEND "\#(Self.sent)" (\Seen) \#(date) {literal}"#,
             #"SELECT "\#(Self.drafts)""#,
             #"UID STORE 2 +FLAGS.SILENT (\Deleted)"#,
             "UID EXPUNGE 2",
+        ], "Sent was empty, so there was no copy to look for")
+
+        // A server that files its own copy of what it sends, as webmail services do, gets no second one;
+        // the copy is found among Sent's newest messages, not by the server's search.
+        state.filesSentCopies = true
+        composition.draftID = nil
+        let third = try await transport.saveDraft(composition)
+        let before = server.commands.count
+        try await transport.sendDraft(third)
+        XCTAssertEqual(state.folder(Self.sent).count, 2, "The client's copy of the first, the server's of this one")
+        XCTAssertEqual(Array(server.commands[before...]), [
+            "UID FETCH 4 (BODY.PEEK[])",
+            #"SELECT "\#(Self.sent)""#,
+            "FETCH 1:2 (UID ENVELOPE)",
+            #"SELECT "\#(Self.drafts)""#,
+            #"UID STORE 4 +FLAGS.SILENT (\Deleted)"#,
+            "UID EXPUNGE 4",
         ])
     }
 
+    /// New mail is read from the inbox's newest messages and their flags, the FETCH its list makes, not
+    /// from UID SEARCH, which some servers answer without the messages.
     func testNewMailIsTheInboxStatusAndTheUnreadMessagesAfterTheLastUID() async throws {
         let state = FakeMailState()
         let opener = FakeMailOpener(imap: { FakeIMAPServer(answer: state.answer) })
@@ -146,7 +166,45 @@ final class IMAPMailTransportTests: XCTestCase {
         XCTAssertEqual(renumbered, MailChanges(cursor: "8:3:2:0", changed: true, arrivedThreadIDs: []),
                        "New UIDs read the inbox again and tell nothing")
         let server = try XCTUnwrap(opener.imapServers.first)
-        XCTAssertTrue(server.commands.contains("UID SEARCH UID 12:* UNSEEN UNDRAFT"))
+        XCTAssertTrue(server.commands.contains("FETCH 3:4 (UID FLAGS)"), "UIDs 12 and 13 at most, the last two")
+        XCTAssertFalse(server.commands.contains { $0.contains("SEARCH") })
+    }
+
+    /// The server's search in the inbox and Sent, numbers read as sequence numbers by the list's FETCH:
+    /// what TEXT misses is found by subject and sender; nothing found is no results when the server finds
+    /// its last message by number, and a failure when it cannot.
+    func testSearchFallsBackToSubjectAndSenderAndSaysWhenTheServerCannotSearch() async throws {
+        let state = FakeMailState()
+        let opener = FakeMailOpener(imap: { FakeIMAPServer(answer: state.answer) })
+        let transport = IMAPMailTransport(session: makeSession(opener), account: MailAccount(id: UUID(), address: "dana@example.com",
+                                                                                             provider: .imap))
+        let found = try await transport.search("Price", pageToken: nil)
+        XCTAssertEqual(found.threads.map(\.id.threadID), ["7:11:INBOX"])
+        XCTAssertEqual(found.threads.map(\.subject), ["Price inside"])
+        let none = try await transport.search("Invoice", pageToken: nil)
+        XCTAssertTrue(none.threads.isEmpty)
+
+        let server = try XCTUnwrap(opener.imapServers.first)
+        XCTAssertEqual(server.commands.dropFirst(2), [
+            #"SELECT "INBOX""#,
+            #"SEARCH TEXT "Price""#,
+            #"SEARCH OR SUBJECT "Price" FROM "Price""#,
+            "FETCH 2 (UID FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODYSTRUCTURE BODY.PEEK[TEXT]<0.2048>)",
+            #"SELECT "\#(Self.sent)""#,
+            #"SELECT "INBOX""#,
+            #"SEARCH TEXT "Invoice""#,
+            #"SEARCH OR SUBJECT "Invoice" FROM "Invoice""#,
+            "SEARCH 2",
+            #"SELECT "\#(Self.sent)""#,
+        ], "Sent is empty, so it is not searched")
+
+        state.searchesNothing = true
+        do {
+            _ = try await transport.search("Price", pageToken: nil)
+            XCTFail("A server that finds nothing, not even its last message, has no search to offer")
+        } catch {
+            XCTAssertEqual((error as? MailFailure)?.kind, .unavailable)
+        }
     }
 
     /// The setup's check signs in to both servers before anything is stored; the password then lives in

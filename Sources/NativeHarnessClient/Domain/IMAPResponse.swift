@@ -214,8 +214,8 @@ enum IMAPValue: Hashable, Sendable {
     case null
     case list([IMAPValue])
 
-    /// An atom's or a string's text; nil for NIL and lists. Strings that are not UTF-8 are read as
-    /// Latin-1, which keeps every byte.
+    /// An atom's or a string's text; nil for NIL and lists. Strings that are not UTF-8 are read as raw
+    /// header bytes are (`MIMECharset.header`), since an envelope's subject and names are such bytes.
     var text: String? {
         switch self {
         case let .atom(atom): atom
@@ -245,7 +245,7 @@ enum IMAPValue: Hashable, Sendable {
     }
 
     static func text(_ data: Data) -> String {
-        String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
+        MIMECharset.header(data)
     }
 }
 
@@ -359,11 +359,37 @@ enum IMAPResponse: Sendable {
                 if let number = try parser.value().number32 { numbers.append(number) }
             }
             return .search(numbers)
+        case "ESEARCH":
+            // RFC 4731's form, which an IMAP4rev2 server sends for every SEARCH: an optional `(TAG "A5")`
+            // and `UID`, then named results, the matches under ALL as a sequence set (`2:4,9`).
+            var numbers: [UInt32] = []
+            parser.skipSpaces()
+            if parser.peek() == .openParen { _ = try parser.value() }
+            while true {
+                parser.skipSpaces()
+                guard !parser.atEnd else { break }
+                let item = parser.atom().uppercased()
+                guard !item.isEmpty else { throw parser.failure() }
+                guard item != "UID" else { continue }
+                parser.skipSpaces()
+                let value = try parser.value()
+                if item == "ALL", let set = value.text { numbers += sequenceNumbers(set) }
+            }
+            return .search(numbers)
         case "FLAGS":
             parser.skipSpaces()
             return .flags(try parser.value().list?.compactMap(\.text) ?? [])
         default:
             return .other(name)
+        }
+    }
+
+    /// The numbers of a sequence set as a server writes one, a run in either order: `2:4,9` is 2, 3, 4 and 9.
+    private static func sequenceNumbers(_ set: String) -> [UInt32] {
+        set.split(separator: ",").flatMap { run -> [UInt32] in
+            let ends = run.split(separator: ":").compactMap { UInt32($0) }
+            guard let first = ends.first, let last = ends.last, ends.count <= 2 else { return [] }
+            return Array(min(first, last)...max(first, last))
         }
     }
 
