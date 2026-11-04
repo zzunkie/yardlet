@@ -1030,7 +1030,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         let now = center.displayNow
         let calendar = center.calendar()
         let starting = center.startingIDs
-        let projects = Dictionary(model.projects.projects.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        let projects = Dictionary(model.projects.projects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let tasks = Dictionary(snapshot.tasks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let taskProjects = Dictionary(snapshot.projects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         // In the Mac's list order: the ones that will run, soonest first, then those that are off, then the one-offs that ran.
@@ -1040,8 +1040,10 @@ final class AppModelRemoteBridge: RemoteBridge {
             let projectName: String?
             switch destination.mode {
             case .newTask:
-                // As the sidebar names the group its tasks join; a chat has none.
-                projectName = destination.projectID.flatMap { projects[$0] } ?? destination.workspaceURL?.lastPathComponent
+                // As the sidebar names the group its tasks join; a chat has none, nor a project the host hides.
+                if let project = destination.projectID.flatMap({ projects[$0] }) {
+                    projectName = project.isHidden ? nil : project.name
+                } else { projectName = destination.workspaceURL?.lastPathComponent }
             case .continueTask:
                 let project = destination.targetTaskID.flatMap { tasks[$0.uuidString]?.projectId }.flatMap { taskProjects[$0] }
                 projectName = project?.kind == .chats ? nil : project?.name
@@ -1049,7 +1051,7 @@ final class AppModelRemoteBridge: RemoteBridge {
             var remote = Self.schedule(schedule, nextRun: entry.nextRun, isStarting: starting.contains(schedule.id),
                                        now: now, calendar: calendar, projectName: projectName, tasks: tasks)
             remote.definition = Self.scheduleDefinition(schedule, model: model)
-            let root = model.projects.project(id: destination.projectID)?.primaryRoot
+            let root = Self.sharedRoot(destination, model: model)
             remote.name = Self.scheduleText(remote.name, root: root)
             remote.status = remote.status.map { Self.scheduleText($0, root: root) }
             if let line = remote.lastRun?.line { remote.lastRun?.line = Self.scheduleText(line, root: root) }

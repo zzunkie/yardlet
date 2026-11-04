@@ -7,16 +7,13 @@ extension AppModelRemoteBridge {
     static func scheduleDefinition(_ schedule: ScheduledTask, model: AppModel) -> Data? {
         var copy = schedule
         copy.origin = nil
-        let root = model.projects.project(id: schedule.destination.projectID)?.primaryRoot
+        let root = sharedRoot(schedule.destination, model: model)
         copy.name = Self.scheduleText(copy.name, root: root)
         copy.prompt = Self.scheduleText(copy.prompt, root: root)
         copy.destination.accountID = nil
-        if let project = model.projects.project(id: copy.destination.projectID), !project.isHidden {
-            copy.destination.workspacePath = project.primaryRoot.path(percentEncoded: false)
-        } else {
-            copy.destination.workspacePath = schedule.destination.workspacePath == nil ? nil : "yardlet-host-folder"
-            copy.destination.projectID = nil
-        }
+        // A project travels by ID; the host folder itself never does (§15.35).
+        copy.destination.projectID = sharedProjectID(schedule.destination, model: model)
+        copy.destination.workspacePath = schedule.destination.workspacePath == nil ? nil : hostFolder
         for index in copy.state.runs.indices {
             if let account = copy.state.runs[index].account {
                 // Keep the history's explanation without exporting routing identifiers or usage data.
@@ -35,15 +32,33 @@ extension AppModelRemoteBridge {
 
     func sessionSchedules() async -> [RemoteSessionSchedule] {
         guard let model else { return [] }
+        let listed = Set(model.sidebarSessions.map(\.id))
         return model.scheduledSessionJobs.compactMap { item in
+            // Only the tasks this device can see; paths stay visible only inside the task's listed project.
+            guard listed.contains(item.session.id) else { return nil }
+            let root = model.project(for: item.session)?.primaryRoot
             let original = item.job
             let job = ClaudeSessionJob(id: original.id, kind: original.kind, cron: original.cron,
-                schedule: original.schedule.map { Self.scheduleText($0, root: item.session.workspaceURL) },
-                prompt: Self.scheduleText(original.prompt, root: item.session.workspaceURL),
+                schedule: original.schedule.map { Self.scheduleText($0, root: root) },
+                prompt: Self.scheduleText(original.prompt, root: root),
                 createdAt: original.createdAt, reportedRun: original.reportedRun)
             guard let data = try? JSONEncoder().encode(job) else { return nil }
             return RemoteSessionSchedule(taskId: item.session.id.uuidString, job: data)
         }
+    }
+
+    /// What a schedule's unregistered or hidden folder is called on the wire.
+    static let hostFolder = "yardlet-host-folder"
+
+    /// The project other devices see a schedule start in: none when the host hides it or it is gone,
+    /// so the schedule reads like one in an unregistered folder and keeps its place when saved back.
+    static func sharedProjectID(_ destination: ScheduleDestination, model: AppModel) -> UUID? {
+        model.projects.project(id: destination.projectID).flatMap { $0.isHidden ? nil : $0.id }
+    }
+
+    /// The folder whose paths a schedule's text may show: its project's, when other devices see that project.
+    static func sharedRoot(_ destination: ScheduleDestination, model: AppModel) -> URL? {
+        sharedProjectID(destination, model: model).flatMap { model.projects.project(id: $0)?.primaryRoot }
     }
 
     /// Secrets and absolute paths outside the schedule's project are presentation-only masks.
@@ -138,8 +153,8 @@ extension AppModelRemoteBridge {
             let defaultAccountID = model.connections.selection[harness] ?? AccountChoice.nativeID(for: harness)
             let changedAccount = requestedAccountID.map { $0 != (savedAccountID ?? defaultAccountID) } ?? false
             let connection = Self.scheduleConnection(accountID: accountID, harness: harness, connections: model.connections)
-            let samePlace = existing != nil && (existing?.destination.projectID?.uuidString ?? RemoteTaskProjection.chatsProjectID)
-                == (projectID ?? RemoteTaskProjection.chatsProjectID)
+            let samePlace = existing.map { (Self.sharedProjectID($0.destination, model: model)?.uuidString
+                ?? RemoteTaskProjection.chatsProjectID) == (projectID ?? RemoteTaskProjection.chatsProjectID) } ?? false
             let folder = samePlace ? existing?.destination.workspaceURL ?? place.folder : place.folder
             let baseline = changedAccount ? nil : (sameHarness ? existing?.destination.modelChoice : model.composerDrafts.home.modelChoices[harness])
             // Opening the host's own new-task menu loads its model catalog without starting a turn.
@@ -205,9 +220,10 @@ extension AppModelRemoteBridge {
                 let place = try place(projectID, in: model).get()
                 destination.projectID = place.project?.id
                 destination.workspacePath = place.folder?.path(percentEncoded: false)
-                // Unregistered existing folders stay on the host, including edits to their instructions.
-                if let existing, existing.destination.projectID == supplied.destination.projectID,
-                   supplied.destination.projectID != nil || supplied.destination.workspacePath == "yardlet-host-folder" {
+                // Unregistered, hidden or removed projects' folders stay on the host, including edits to their instructions.
+                if let existing, Self.sharedProjectID(existing.destination, model: model) == supplied.destination.projectID,
+                   supplied.destination.projectID != nil || supplied.destination.workspacePath == Self.hostFolder {
+                    destination.projectID = existing.destination.projectID
                     destination.workspacePath = existing.destination.workspacePath
                 }
                 let savedAccountID = existing?.destination.harness == harness ? existing?.destination.accountID : nil
@@ -237,7 +253,7 @@ extension AppModelRemoteBridge {
             }
             var schedule = existing ?? ScheduledTask(name: supplied.name, prompt: supplied.prompt,
                 trigger: supplied.trigger, destination: destination, createdAt: center.now())
-            let root = existing.flatMap { model.projects.project(id: $0.destination.projectID)?.primaryRoot }
+            let root = existing.flatMap { Self.sharedRoot($0.destination, model: model) }
             schedule.name = existing.map { supplied.name == Self.scheduleText($0.name, root: root) ? $0.name : supplied.name } ?? supplied.name
             let prompt = existing.map { supplied.prompt == Self.scheduleText($0.prompt, root: root) ? $0.prompt : supplied.prompt } ?? supplied.prompt
             if schedule.prompt != prompt { schedule.agentTaskID = nil }

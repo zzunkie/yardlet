@@ -2153,10 +2153,13 @@ writes a schedule to its own repository.
   `sessionSchedules`. `definition` is base64-encoded JSON using the host's `ScheduledTask` Codable shape, with
   instructions, trigger, destination choices and retained run history. It is a presentation copy: connection
   data, account identifiers and import source identifiers are removed; secrets and paths outside a listed
-  project are masked in text. An undisclosed existing folder uses the presentation marker `yardlet-host-folder`;
-  retaining it preserves that folder, while choosing Chat clears it. Failed-start diagnostics use the same masking. The
-  host retains its original data when applying an edit. `sessionSchedules` contains `{taskId, job}`, where
-  `job` is base64-encoded JSON using `ClaudeSessionJob`'s Codable shape; these are the CLI's session jobs and
+  project are masked in text. A host folder never travels: a listed project is named by `projectID`, and every
+  folder appears as the presentation marker `yardlet-host-folder`. A project the host hides, or one since removed,
+  is sent without `projectID` or `projectName`, like an unregistered folder; retaining the marker preserves the
+  schedule's place, while choosing Chat clears it. Failed-start diagnostics use the same masking. The
+  host retains its original data when applying an edit. `sessionSchedules` contains `{taskId, job}` for the tasks
+  the snapshot lists, where `job` is base64-encoded JSON using `ClaudeSessionJob`'s Codable shape; paths are
+  unmasked only inside the task's listed project. These are the CLI's session jobs and
   open their owning task, as on the host. They have no independent edit or delete control.
 - `scheduledTaskOptions` takes optional `projectId`, optional `harness`, optional `scheduleId`, optional `accountId`, and `settings`, and returns the host's
   new-task choices as in §15.16. With `scheduleId`, the host resolves the existing account, folder and saved

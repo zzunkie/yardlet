@@ -777,6 +777,11 @@ final class RemoteBridgeTests: XCTestCase {
         // Existing schedules keep their harness even if its executable temporarily disappears.
         model.runtimeSelections.select(URL(filePath: "/missing-schedule-runtime"), for: .claudeCode)
         model.scheduledTasks.now = { now }
+        // A hidden project's schedule reads like one in an unregistered folder and keeps its place when saved back.
+        let hiddenProject = model.projects.ensureProject(forRoot: URL(filePath: originalPath))
+        model.projects.hide(hiddenProject.id)
+        original.destination.projectID = hiddenProject.id
+        model.scheduledTasks.update(original)
         let connections = ProviderConnectionStore()
         let selected = try connections.add(name: "Selected account", harness: .claudeCode, home: URL(filePath: "/tmp/selected-schedule-account"))
         connections.selection[.claudeCode] = selected.id
@@ -791,11 +796,13 @@ final class RemoteBridgeTests: XCTestCase {
         let data = try XCTUnwrap(list.first?.definition)
         let text = String(decoding: data, as: UTF8.self)
         XCTAssertFalse(text.contains("private-value") || text.contains(originalPath) || text.contains("account-home"))
+        XCTAssertNil(list.first?.projectName)
         var supplied = try JSONDecoder().decode(ScheduledTask.self, from: data)
         XCTAssertEqual(supplied.state.runs.count, original.state.runs.count)
         XCTAssertEqual(supplied.state.runs.first?.account?.switchLine, original.state.runs.first?.account?.switchLine)
         XCTAssertNil(supplied.destination.accountID)
         XCTAssertEqual(supplied.destination.workspacePath, "yardlet-host-folder")
+        XCTAssertNil(supplied.destination.projectID)
         supplied.name = "Edited"
         supplied.id = UUID()
         supplied.destination.accountID = "forged-account"
@@ -814,6 +821,7 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(actual.name, "Edited")
         XCTAssertEqual(actual.prompt, original.prompt, "An unchanged masked prompt preserves the host's full instructions")
         XCTAssertEqual(actual.destination.workspacePath, originalPath)
+        XCTAssertEqual(actual.destination.projectID, hiddenProject.id)
         XCTAssertEqual(actual.destination.accountID, "host-account")
         XCTAssertEqual(actual.state.runs, original.state.runs)
         XCTAssertEqual(actual.isEnabled, original.isEnabled)
