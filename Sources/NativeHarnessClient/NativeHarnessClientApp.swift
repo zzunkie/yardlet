@@ -84,14 +84,26 @@ private struct YardletSettingsCommands: Commands {
     }
 }
 
+/// Yardlet › Install Update…, one action from the app. The scene makes it again each time its body runs;
+/// as a closure it was a new environment value each time, so the whole main window was evaluated again
+/// with it, and at launch the window published its menu commands twice in one frame ("FocusedValue
+/// update tried to update multiple times per frame").
+struct YardletInstallUpdateAction: Equatable {
+    let install: @MainActor @Sendable () -> Void
+
+    @MainActor func callAsFunction() { install() }
+
+    static func == (lhs: Self, rhs: Self) -> Bool { true }
+}
+
 private struct YardletInstallUpdateKey: EnvironmentKey {
-    static let defaultValue: (@MainActor @Sendable () -> Void)? = nil
+    static let defaultValue: YardletInstallUpdateAction? = nil
 }
 
 extension EnvironmentValues {
     /// Yardlet › Install Update…, for the places in the window that offer it too (the sidebar's
     /// account menu). Nil where there is no app to install into, as in a test's window.
-    var yardletInstallUpdate: (@MainActor @Sendable () -> Void)? {
+    var yardletInstallUpdate: YardletInstallUpdateAction? {
         get { self[YardletInstallUpdateKey.self] }
         set { self[YardletInstallUpdateKey.self] = newValue }
     }
@@ -475,7 +487,7 @@ struct NativeHarnessClientApp: App {
                 // open window takes it, where SwiftUI would otherwise open a window for each one. A link that launches
                 // Yardlet still gets the first window.
                 .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
-                .environment(\.yardletInstallUpdate, { [appDelegate] in appDelegate.offerStagedUpdate() })
+                .environment(\.yardletInstallUpdate, YardletInstallUpdateAction { [appDelegate] in appDelegate.offerStagedUpdate() })
                 .environment(\.yardletUpdateWait, appDelegate.updateWait)
                 .environment(\.yardletSparkle, appDelegate.sparkle)
                 .environment(\.yardletStagedUpdate, appDelegate.stagedUpdate)
