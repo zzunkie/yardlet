@@ -64,6 +64,19 @@ final class StreamingWindowRedrawTests: XCTestCase {
         }
         XCTAssertEqual(writes[.mainWindow], 0)
         XCTAssertEqual(writes[.sidebarRow], 0)
+
+        // The scene's body runs again, as the app's does whenever something it reads changes. After the first
+        // such run, which draws the window once more as a new value, the window is handed the same app-wide
+        // actions and is not drawn again. An action made anew each time was a new environment value, and at
+        // launch the window published its menu commands twice in one frame.
+        window.scene.runs += 1
+        let scene = await window.measure("the scene's body run again 5 times") {
+            for _ in 0..<5 {
+                window.scene.runs += 1
+                window.host.settle(passes: 1, interval: 0.02)
+            }
+        }
+        XCTAssertEqual(scene[.mainWindow], 0)
     }
 
     /// A task the window showed keeps its views out of the window while another task shows
@@ -271,12 +284,14 @@ final class StreamingWindowRedrawTests: XCTestCase {
     private final class Window {
         let fixture: Fixture
         let host: WindowlessRender.Host<AnyView>
+        let scene = SceneRuns()
         var model: AppModel { fixture.model }
         var tasks: [SessionRecord] { fixture.tasks }
 
         init(fixture: Fixture, height: CGFloat = 820) {
             self.fixture = fixture
-            host = WindowlessRender.Host(AnyView(SceneRoot(model: fixture.model)), size: NSSize(width: 1_280, height: height))
+            host = WindowlessRender.Host(AnyView(SceneRoot(model: fixture.model, runs: scene)),
+                                         size: NSSize(width: 1_280, height: height))
             ViewBodyCensus.isEnabled = true
         }
 
@@ -398,19 +413,34 @@ final class StreamingWindowRedrawTests: XCTestCase {
 /// The main window as `NativeHarnessClientApp`'s window group shows it: the appearance and size
 /// preferences read from UserDefaults around it, and the app-wide update actions it hands down.
 private struct SceneRoot: View {
-    let model: AppModel
+    /// Made once, as the window's content is; the scene's body hands it its values again each time it runs.
+    let window: MainWindow
+    /// Read by the body, so a test runs it again as the app's runs again whenever what it reads changes.
+    let runs: SceneRuns
     @AppStorage(YardletPreferenceKeys.appearance) private var appearanceRawValue =
         YardletAppearancePreference.system.rawValue
     @AppStorage(YardletPreferenceKeys.interfaceSize) private var interfaceSizeRawValue =
         YardletInterfaceSizePreference.standard.rawValue
     private let updateWait = YardletUpdateWait()
 
+    init(model: AppModel, runs: SceneRuns) {
+        window = MainWindow(model: model)
+        self.runs = runs
+    }
+
     var body: some View {
-        MainWindow(model: model)
+        let _ = runs.runs
+        window
             .environment(\.yardletInterfaceScale, 1)
-            .environment(\.yardletInstallUpdate, { [updateWait] in _ = updateWait })
+            .environment(\.yardletInstallUpdate, YardletInstallUpdateAction { [updateWait] in _ = updateWait })
             .environment(\.yardletUpdateWait, updateWait)
     }
+}
+
+/// How many times a test ran the scene's body again (`SceneRoot`).
+@MainActor @Observable
+private final class SceneRuns {
+    var runs = 0
 }
 
 /// The main thread's CPU time.
