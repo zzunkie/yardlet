@@ -134,8 +134,8 @@ import XCTest
 
         for appearance in WindowlessRender.Appearance.allCases {
             for (name, height) in [("list-general", 620.0), ("general-headings", 1560.0)] {
-                let host = WindowlessRender.Host(SettingsCenterView(initialSection: SettingsSection.general.rawValue,
-                    notificationCenter: QuietNotificationCenter(), connectors: connectors, vault: vault, accounts: accounts,
+                let host = WindowlessRender.Host(SettingsCenterView(size: CGSize(width: 820, height: height),
+                    initialSection: SettingsSection.general.rawValue, notificationCenter: QuietNotificationCenter(), connectors: connectors, vault: vault, accounts: accounts,
                     remote: remote, cliUpdates: cliUpdates, instructions: instructions, usage: usage)
                     .environment(\.colorScheme, appearance.colorScheme),
                     size: NSSize(width: 820, height: height), appearance: appearance)
