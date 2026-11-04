@@ -233,15 +233,26 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(request.moreOnMac, true, "Always allow stays on the Mac")
         XCTAssertNil(request.inWork)
         XCTAssertNil(request.truncated)
-        // A command cut to its limit says so.
-        let long = PermissionRequest(id: "bash-2", title: "Bash", detail: nil,
-                                     command: String(repeating: "x", count: RemoteText.commandLimit + 10))
-        let waiting = TranscriptConversationProjection.presentation(
-            from: [TranscriptEntry(content: .user(text: "Go")), TranscriptEntry(content: .permission(long, state: .pending))],
-            harness: .claudeCode, status: .waitingForApproval, latestTurnIsComplete: false)
-        let cut = RemoteConversationProjection.request(try XCTUnwrap(waiting.turns.last?.requests.first), turnID: "t", inWork: false)
-        XCTAssertEqual(cut.command?.count, RemoteText.commandLimit)
-        XCTAssertEqual(cut.truncated, true)
+        // A pending command comes whole up to full detail's limit, since the phone allows what it read; an answered
+        // one is cut to the history's limit, and a command cut says so.
+        func projected(_ count: Int, _ state: ConversationRequestState = .pending) throws -> RemoteItem {
+            let long = PermissionRequest(id: "bash-2", title: "Bash", detail: nil, command: String(repeating: "x", count: count))
+            let waiting = TranscriptConversationProjection.presentation(
+                from: [TranscriptEntry(content: .user(text: "Go")), TranscriptEntry(content: .permission(long, state: .pending))],
+                harness: .claudeCode, status: .waitingForApproval, latestTurnIsComplete: false)
+            var request = try XCTUnwrap(waiting.turns.last?.requests.first)
+            request.state = state
+            return RemoteConversationProjection.request(request, turnID: "t", inWork: state != .pending)
+        }
+        let pending = try projected(5_000)
+        XCTAssertEqual(pending.command?.count, 5_000)
+        XCTAssertNil(pending.truncated)
+        let tooLong = try projected(RemoteText.fullTextLimit + 10)
+        XCTAssertEqual(tooLong.command?.count, RemoteText.fullTextLimit)
+        XCTAssertEqual(tooLong.truncated, true)
+        let answered = try projected(5_000, .allowed)
+        XCTAssertEqual(answered.command?.count, RemoteText.commandLimit)
+        XCTAssertEqual(answered.truncated, true)
 
         let json = RemoteJSON.string(RemoteEvent.items(turn.items))
         XCTAssertFalse(json.contains("SECRET FILE CONTENTS"))

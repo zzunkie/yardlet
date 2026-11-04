@@ -395,8 +395,10 @@ enum RemoteConversationProjection {
         item.message = RemoteText.short(request.codexContext?.messages.joined(separator: "\n\n"),
                                         isFull ? RemoteText.fullTextLimit : RemoteText.requestDetailLimit)
         if let command = RemoteText.short(request.command, .max) {
-            // A phone must not take a cut command for the whole one (§6).
-            let capped = RemoteText.capped(command, isFull ? RemoteText.fullTextLimit : RemoteText.commandLimit)
+            // A phone must not take a cut command for the whole one (§6). A pending one comes as whole as full detail
+            // sends it, since the person reads it to answer; an answered one is history and keeps the shorter cap.
+            let whole = isFull || request.state == .pending
+            let capped = RemoteText.capped(command, whole ? RemoteText.fullTextLimit : RemoteText.commandLimit)
             item.command = capped.text
             if capped.truncated { item.truncated = true }
         }

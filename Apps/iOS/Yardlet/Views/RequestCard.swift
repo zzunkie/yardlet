@@ -83,40 +83,44 @@ private struct ApprovalAnswer: View {
     @State private var isAskingNote = false
     @State private var note = ""
     @State private var isSending = false
+    @State private var isCommandOpen = false
+    @State private var isCommandCut = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let command = item.command, !command.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    Text(command)
-                        .font(.system(.footnote, design: .monospaced))
-                        .textSelection(.enabled)
-                        .padding(10)
+                CommandText(command: command, isOpen: $isCommandOpen, isCut: $isCommandCut)
+                if item.truncated == true {
+                    Text("This command is too long to reach the phone whole. Allow it on your Mac.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
-                .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
             if let detail = item.detail, !detail.isEmpty {
                 Text(detail).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
             }
-            if let choices = item.choices, !choices.isEmpty {
-                ForEach(orderedChoices(choices), id: \.id) { choice in
-                    button(choice.title, role: choice.role) {
-                        if choice.standing == true { standing = choice } else { choose(choice, note: nil) }
+            // The answers only: the command stays readable while the phone reconnects.
+            Group {
+                if let choices = item.choices, !choices.isEmpty {
+                    ForEach(orderedChoices(choices), id: \.id) { choice in
+                        button(choice.title, role: choice.role, locked: choice.role != "destructive" && hidesCommand) {
+                            if choice.standing == true { standing = choice } else { choose(choice, note: nil) }
+                        }
                     }
-                }
-                if let deny = choices.first(where: { $0.role == "destructive" }) {
-                    Button("Deny and Say What to Do Instead…") {
-                        noteFor = deny
-                        note = ""
-                        isAskingNote = true
+                    if let deny = choices.first(where: { $0.role == "destructive" }) {
+                        Button("Deny and Say What to Do Instead…") {
+                            noteFor = deny
+                            note = ""
+                            isAskingNote = true
+                        }
+                        .font(.footnote)
                     }
-                    .font(.footnote)
+                } else {
+                    legacyButtons
                 }
-            } else {
-                legacyButtons
             }
+            .disabled(isSending || !context.session.isConnected)
         }
-        .disabled(isSending || !context.session.isConnected)
         .confirmationDialog(standing?.title ?? "", isPresented: Binding(get: { standing != nil },
                                                                         set: { if !$0 { standing = nil } }),
                             titleVisibility: .visible, presenting: standing) { choice in
@@ -136,6 +140,13 @@ private struct ApprovalAnswer: View {
         choices.filter { $0.role != "primary" } + choices.filter { $0.role == "primary" }
     }
 
+    /// Part of the command is not in view: the Mac sent only part of it (§6.5), or it is folded. The answers that
+    /// allow it wait, so what is allowed is what was shown; a denial does not.
+    private var hidesCommand: Bool {
+        guard let command = item.command, !command.isEmpty else { return false }
+        return item.truncated == true || (isCommandCut && !isCommandOpen)
+    }
+
     @ViewBuilder
     private var legacyButtons: some View {
         let options = item.options ?? []
@@ -143,22 +154,26 @@ private struct ApprovalAnswer: View {
             button(item.optionTitles?["deny"] ?? String(localized: "Deny"), role: "destructive") { answer(.deny) }
         }
         if options.contains("allowForSession") {
-            button(item.optionTitles?["allowForSession"] ?? String(localized: "Allow for This Session"), role: "secondary") {
+            button(item.optionTitles?["allowForSession"] ?? String(localized: "Allow for This Session"), role: "secondary",
+                   locked: hidesCommand) {
                 answer(.allowForSession)
             }
         }
         if options.contains("allowOnce") {
-            button(item.optionTitles?["allowOnce"] ?? String(localized: "Allow Once"), role: "primary") { answer(.allowOnce) }
+            button(item.optionTitles?["allowOnce"] ?? String(localized: "Allow Once"), role: "primary", locked: hidesCommand) {
+                answer(.allowOnce)
+            }
         }
     }
 
-    private func button(_ title: String, role: String, action: @escaping () -> Void) -> some View {
+    private func button(_ title: String, role: String, locked: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .frame(maxWidth: .infinity)
                 .multilineTextAlignment(.center)
         }
         .buttonStyle(CardButtonStyle(role: role))
+        .disabled(locked)
     }
 
     private func choose(_ choice: RemoteChoice, note: String?) {
@@ -178,6 +193,50 @@ private struct ApprovalAnswer: View {
             await context.session.perform(.answerApproval(taskID: context.taskID, requestID: requestID, answer: answer))
             isSending = false
         }
+    }
+}
+
+/// A request's command, wrapped as the Mac's card shows it and folded to three lines until the person opens it.
+/// `isCut`: the folded lines hide part of it. It starts true and is measured while folded, so nothing allows a
+/// command before its lines were laid out.
+private struct CommandText: View {
+    let command: String
+    @Binding var isOpen: Bool
+    @Binding var isCut: Bool
+    @State private var shownHeight: CGFloat = 0
+    @State private var wholeHeight: CGFloat = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            text
+                .lineLimit(isOpen ? nil : 3)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { shownHeight = $0; measure() }
+                .background(alignment: .topLeading) {
+                    // The whole command at the same width, to tell whether three lines hide some of it.
+                    text
+                        .fixedSize(horizontal: false, vertical: true)
+                        .hidden()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { wholeHeight = $0; measure() }
+                }
+                .padding(10)
+                .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            if isCut && (isOpen || wholeHeight > 0) {
+                Button(isOpen ? "Show Less" : "Show Whole Command") { isOpen.toggle() }
+                    .font(.footnote)
+            }
+        }
+    }
+
+    private var text: Text {
+        Text(command).font(.system(.footnote, design: .monospaced))
+    }
+
+    private func measure() {
+        guard !isOpen, shownHeight > 0, wholeHeight > 0 else { return }
+        let cut = wholeHeight > shownHeight + 1
+        if cut != isCut { isCut = cut }
     }
 }
 

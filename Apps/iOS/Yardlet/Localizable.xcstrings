@@ -1483,6 +1483,16 @@
         }
       }
     },
+    "Show Whole Command": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "명령 전체 보기"
+          }
+        }
+      }
+    },
     "Show Whole Plan": {
       "localizations": {
         "ko": {
@@ -1749,6 +1759,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "만료되었거나 이미 쓴 코드입니다. Mac에서 새 코드를 띄우고 다시 스캔하세요."
+          }
+        }
+      }
+    },
+    "This command is too long to reach the phone whole. Allow it on your Mac.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "명령이 길어 휴대폰에는 일부만 왔습니다. 허용은 Mac에서 하세요."
           }
         }
       }

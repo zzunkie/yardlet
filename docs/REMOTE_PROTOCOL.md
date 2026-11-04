@@ -438,6 +438,9 @@ Unknown kinds: skip them. Text fields are capped (`truncated: true` when cut).
   at its turn's end; once answered it moves into the turn's work (`inWork`) where it happened.
 - `title`, `detail` (≤ 1,000), `command` (≤ 2,000): what the Mac's card shows. `text`: a plan review's
   plan (Markdown, ≤ 8,000). `questions`: a question's texts (each ≤ 500).
+- A pending request's `command` is cut at 200,000 characters rather than 2,000 in every subscription, as full detail
+  cuts it (§15.24): the person reads the whole command to answer it. Once answered it is cut at 2,000 again. A phone
+  does not allow a `command` that came `truncated`.
 - `message` (≤ 1,000, optional, since 2026-11-03): the provider's own words the Mac's card shows above its form or
   answers: a Codex request's message and reason, such as the sentence an MCP form (§15.19) asks with, joined by a
   blank line. Absent when the request sends none.
@@ -575,6 +578,8 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
 
 Every revision of protocol 2 only adds optional fields or states a rule, except where it says otherwise.
 
+- 2026-11-05: a pending request's `command` up to 200,000 characters in every subscription, not only in full detail
+  (§6.5), so a phone can read and allow a long command; an answered request's stays at 2,000.
 - 2026-11-04: host accounts, harness runtimes and connectors in Settings (§15.37).
 - 2026-11-04: desktop conversation next steps and remaining content (§15.31).
 - 2026-11-04: optional composer extensions, scoped file mentions, task connectors, queue controls, suggestions and new-task choices (§15.33).
