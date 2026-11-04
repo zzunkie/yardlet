@@ -58,14 +58,17 @@ final class ACPAdapterTests: XCTestCase {
     }
 
     /// A failed `initialize` stops its process and leaves the adapter able to try again: the
-    /// registry keeps the adapter, so the next attempt starts a process of its own.
-    func testFailedInitializationStopsTheTransportAndTheNextAttemptStartsANewOne() async throws {
+    /// registry keeps the adapter, so the next attempt starts a process of its own. A process that
+    /// ends on its own, killed mid-turn, ends every session it served, the turn with an error, and
+    /// the next session or prompt starts a new process at once.
+    func testAFailedOrEndedProcessIsReplacedByTheNextSessionsOwn() async throws {
         let transport = FakeACPTransport(protocolVersion: 2)
         let next = FakeACPTransport()
+        let third = FakeACPTransport()
         let adapter = ACPAdapter(
             kind: .grokBuild,
             executableURL: URL(filePath: "/tmp/fake-grok"),
-            transportFactory: transportSequence(transport, next)
+            transportFactory: transportSequence(transport, next, third)
         )
 
         do {
@@ -93,7 +96,75 @@ final class ACPAdapterTests: XCTestCase {
         XCTAssertEqual(handle.providerSessionID, "acp-session-1")
         let methods = await next.requestMethods
         XCTAssertEqual(methods, ["initialize", "session/new"])
+
+        let idle = try await adapter.resumeSession(
+            providerSessionID: "existing-session",
+            localSessionID: UUID(),
+            workspaceURL: URL(filePath: "/tmp/acp-workspace")
+        )
+        let running = ACPPayloadRecorder()
+        let waiting = ACPPayloadRecorder()
+        let collectors = [(handle, running), (idle, waiting)].map { session, recorder in
+            Task {
+                for await event in await adapter.events(for: session) {
+                    await recorder.append(event.payload)
+                }
+                await recorder.end()
+            }
+        }
+        defer { collectors.forEach { $0.cancel() } }
+        try await adapter.send("hello", to: handle)
+        try await waitUntil { await next.pendingPromptCount == 1 }
+        await next.exit()
+        try await waitUntil {
+            let ran = await running.ended
+            let waited = await waiting.ended
+            return ran && waited
+        }
+        let runningPayloads = await running.payloads
+        XCTAssertEqual(Array(runningPayloads.suffix(2)), [
+            .error(message: L10n.format("Connection to %@ ended.", HarnessKind.grokBuild.displayName), recoverable: true),
+            .sessionStatusChanged(.failed)
+        ])
+        XCTAssertEqual(runningPayloads.filter { if case .error = $0 { true } else { false } }.count, 1)
+        let waitingPayloads = await waiting.payloads
+        XCTAssertFalse(waitingPayloads.contains { if case .error = $0 { true } else { false } },
+                       "A session with no turn running ends without an error")
+        do {
+            try await adapter.send("after", to: handle)
+            XCTFail("A session ends with its process")
+        } catch let error as HarnessAdapterError {
+            XCTAssertEqual(error, .invalidProviderEvent(L10n.string("ACP session is not attached")))
+        }
+
+        // A new task starts a new process at once, and closing the ended sessions leaves it alone.
+        let fresh = try await adapter.createSession(
+            CreateHarnessSessionRequest(
+                localSessionID: UUID(),
+                workspaceURL: URL(filePath: "/tmp/acp-workspace"),
+                initialPrompt: nil
+            )
+        )
         await adapter.close(handle)
+        let nextStops = await next.stopCount
+        let thirdStops = await third.stopCount
+        XCTAssertEqual(nextStops, 1)
+        XCTAssertEqual(thirdStops, 0)
+        // The waiting task's next prompt loads its conversation on the new process.
+        let resumed = try await adapter.resumeSession(
+            providerSessionID: idle.providerSessionID,
+            localSessionID: idle.localSessionID,
+            workspaceURL: URL(filePath: "/tmp/acp-workspace")
+        )
+        try await adapter.send("again", to: resumed)
+        try await waitUntil { await third.pendingPromptCount == 1 }
+        let thirdMethods = await third.requestMethods
+        XCTAssertEqual(thirdMethods, ["initialize", "session/new", "session/load", "session/prompt"])
+        await third.completePrompt()
+        await adapter.close(fresh)
+        await adapter.close(resumed)
+        let thirdStopsAfterClose = await third.stopCount
+        XCTAssertEqual(thirdStopsAfterClose, 1)
     }
 
     func testResumeFailsClosedWhenRuntimeDoesNotAdvertiseSessionLoading() async throws {
@@ -814,7 +885,9 @@ final class ACPAdapterTests: XCTestCase {
 
 private actor ACPPayloadRecorder {
     private(set) var payloads: [HarnessEventPayload] = []
+    private(set) var ended = false
     func append(_ payload: HarnessEventPayload) { payloads.append(payload) }
+    func end() { ended = true }
 }
 
 private actor ACPEventRecorder {
@@ -842,6 +915,7 @@ actor FakeACPTransport: ACPTransport {
     private(set) var requestMethodsWithoutTimeout: [String] = []
     private(set) var sentMessages: [JSONValue] = []
     private(set) var stopCount = 0
+    private var exited = false
 
     init(
         protocolVersion: Int64 = 1,
@@ -874,6 +948,7 @@ actor FakeACPTransport: ACPTransport {
 
     func request(_ value: JSONValue, id: Int64) async throws -> JSONValue {
         let method = value["method"]?.stringValue ?? "unknown"
+        guard !exited else { throw HarnessAdapterError.processExited(code: -1, message: "ACP agent is not running") }
         requestMethods.append(method)
         requestValues.append(value)
         switch method {
@@ -983,10 +1058,25 @@ actor FakeACPTransport: ACPTransport {
         ])
     }
 
-    func send(_ value: JSONValue) async throws { sentMessages.append(value) }
+    func send(_ value: JSONValue) async throws {
+        guard !exited else { throw HarnessAdapterError.processExited(code: -1, message: "ACP agent is not running") }
+        sentMessages.append(value)
+    }
     func messages() async -> AsyncStream<ACPRawFrame> { stream }
     func stop() async {
         stopCount += 1
+        continuation.finish()
+    }
+
+    /// Ends as `ACPProcessTransport` does when its process is killed: the requests waiting on it
+    /// fail, its messages end, and later requests find it not running.
+    func exit() {
+        exited = true
+        let prompts = promptContinuations
+        promptContinuations.removeAll()
+        for prompt in prompts {
+            prompt.resume(throwing: HarnessAdapterError.processExited(code: SIGKILL, message: ""))
+        }
         continuation.finish()
     }
 
