@@ -3813,3 +3813,9 @@
 
 "Allow Yardlet in the background in System Settings on the Mac itself." = "그 Mac의 시스템 설정에서 Yardlet의 백그라운드 실행을 허용하세요.";
 
+"Sign in, add, remove, or share accounts on %@." = "계정 로그인·추가·제거·공유는 %@에서 하세요.";
+"Sign in, add, remove, or share accounts on %@. To choose accounts or change settings from here, allow Change settings for this device in Settings › Remote › Paired devices on %@." = "계정 로그인·추가·제거·공유는 %@에서 하세요. 여기서 계정을 고르거나 설정을 바꾸려면 %@의 설정 › 원격 연결 › 연결된 기기에서 이 기기에 “설정 바꾸기”를 허용하세요.";
+"Sign in or connect providers on %@." = "로그인과 제공자 연결은 %@에서 하세요.";
+"Sign in or connect providers on %@. To choose runtimes from here, allow Change settings for this device in Settings › Remote › Paired devices on %@." = "로그인과 제공자 연결은 %@에서 하세요. 여기서 런타임을 고르려면 %@의 설정 › 원격 연결 › 연결된 기기에서 이 기기에 “설정 바꾸기”를 허용하세요.";
+"Connect services, sign in, or edit connectors on %@." = "서비스 연결, 로그인, 커넥터 편집은 %@에서 하세요.";
+"Connect services, sign in, or edit connectors on %@. To turn connectors on or off from here, allow Change settings for this device in Settings › Remote › Paired devices on %@." = "서비스 연결, 로그인, 커넥터 편집은 %@에서 하세요. 여기서 커넥터를 켜고 끄려면 %@의 설정 › 원격 연결 › 연결된 기기에서 이 기기에 “설정 바꾸기”를 허용하세요.";

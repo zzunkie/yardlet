@@ -11,7 +11,7 @@ extension RemoteHostModel {
             return L10n.format("Sign in, add, remove, or share accounts on %@.", name)
         }
         return L10n.format(
-            "Sign in, add, remove, or share accounts on %@. To choose accounts or change settings from here, allow Settings for this device in Settings › Remote › Paired devices on %@.",
+            "Sign in, add, remove, or share accounts on %@. To choose accounts or change settings from here, allow Change settings for this device in Settings › Remote › Paired devices on %@.",
             name, name
         )
     }
@@ -21,7 +21,7 @@ extension RemoteHostModel {
             return L10n.format("Sign in or connect providers on %@.", name)
         }
         return L10n.format(
-            "Sign in or connect providers on %@. To choose runtimes from here, allow Settings for this device in Settings › Remote › Paired devices on %@.",
+            "Sign in or connect providers on %@. To choose runtimes from here, allow Change settings for this device in Settings › Remote › Paired devices on %@.",
             name, name
         )
     }
@@ -31,7 +31,7 @@ extension RemoteHostModel {
             return L10n.format("Connect services, sign in, or edit connectors on %@.", name)
         }
         return L10n.format(
-            "Connect services, sign in, or edit connectors on %@. To turn connectors on or off from here, allow Settings for this device in Settings › Remote › Paired devices on %@.",
+            "Connect services, sign in, or edit connectors on %@. To turn connectors on or off from here, allow Change settings for this device in Settings › Remote › Paired devices on %@.",
             name, name
         )
     }
