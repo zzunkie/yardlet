@@ -1986,6 +1986,7 @@
 "Antigravity will change files and run commands without asking." = "Antigravity will change files and run commands without asking.";
 "Antigravity asks before actions that need approval. Bypass permissions approves every request without asking." = "Antigravity asks before actions that need approval. Bypass permissions approves every request without asking.";
 "Antigravity CLI does not offer %@ to Yardlet" = "Antigravity CLI does not offer %@ to Yardlet";
+"%@ (it offers %@)" = "%@ (it offers %@)";
 "Continue a conversation started in another app or CLI. Its history stays where it is." = "Continue a conversation started in another app or CLI. Its history stays where it is.";
 "Continue a conversation started in another app or CLI." = "Continue a conversation started in another app or CLI.";
 "Conversations from the Claude and Codex apps, Claude Code and Codex run elsewhere, and Antigravity CLI. Their history stays where it is." = "Conversations from the Claude and Codex apps, Claude Code and Codex run elsewhere, and Antigravity CLI. Their history stays where it is.";

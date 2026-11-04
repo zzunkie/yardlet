@@ -247,8 +247,14 @@ extension AppModel {
            let provider = adapter as? any CodexCapabilityProviding {
             _ = try await provider.selectModel(selection, for: handle)
         } else if !options.isEmpty, run.harness != .claudeCode, let provider = adapter as? any ProviderCapabilityProviding {
+            // An option the session does not take ends the run, which would otherwise go on the harness's
+            // default model or setting; one with no counterpart there is the adapter's to pass over.
             for (key, value) in options.sorted(by: { $0.key < $1.key }) {
-                _ = try? await provider.setProviderOption(id: key, value: value, in: handle)
+                do {
+                    _ = try await provider.setProviderOption(id: key, value: value, in: handle)
+                } catch where key == ClaudeLaunchOption.model {
+                    throw SessionToolError(message: await modelRefusal(error, provider: provider, handle: handle))
+                }
             }
         }
         let events = await adapter.events(for: handle)

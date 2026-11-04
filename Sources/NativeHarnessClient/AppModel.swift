@@ -283,7 +283,7 @@ final class AppModel {
     @ObservationIgnored private var transcriptPublicationTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var codexSnapshotCheckpointTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var savedCodexRequests: [UUID: [CodexPendingServerRequest]] = [:]
-    @ObservationIgnored private var codexModelRestoreErrors: [UUID: String] = [:]
+    @ObservationIgnored private var modelRestoreErrors: [UUID: String] = [:]
     @ObservationIgnored private var savedCodexItems: [UUID: [CodexPersistedTimelineItem]] = [:]
     /// Each Codex task's saved cards and settled turns, reused while their items stay the same.
     @ObservationIgnored private var codexPersistedTimelines: [UUID: CodexPersistedTimeline] = [:]
@@ -1238,6 +1238,9 @@ final class AppModel {
                     L10n.string("Task did not attach to its harness")
                 )
             }
+            if let message = modelRestoreErrors[session.id] {
+                throw HarnessAdapterError.capabilityUnavailable(message)
+            }
             await markSubmissionStarted(for: session.id)
             errorBySessionID.removeValue(forKey: session.id)
             let submission = try contextualDraft(
@@ -1380,7 +1383,7 @@ final class AppModel {
                     L10n.string("Task did not attach to its harness")
                 )
             }
-            if let message = codexModelRestoreErrors[session.id] {
+            if let message = modelRestoreErrors[session.id] {
                 throw HarnessAdapterError.capabilityUnavailable(message)
             }
             let runningTurn = await delivery.runningTurn(reportedRunning: followsRunningTurn)
@@ -1534,7 +1537,7 @@ final class AppModel {
     private func sendFollowUpNow(_ itemID: UUID, into target: FollowUpTarget, in session: SessionRecord) async {
         guard let item = followUps.item(itemID, in: session.id), followUps.claim(itemID) else { return }
         defer { followUps.finish(itemID) }
-        if let message = codexModelRestoreErrors[session.id] {
+        if let message = modelRestoreErrors[session.id] {
             markFollowUpFailed(itemID, message: message, in: session.id)
             return
         }
@@ -1694,7 +1697,7 @@ final class AppModel {
             guard let delivery = followUpDelivery(for: session) else {
                 throw HarnessAdapterError.invalidProviderEvent(L10n.string("Task did not attach to its harness"))
             }
-            if let message = codexModelRestoreErrors[session.id] {
+            if let message = modelRestoreErrors[session.id] {
                 throw HarnessAdapterError.capabilityUnavailable(message)
             }
             await markSubmissionStarted(for: session.id)
@@ -2189,7 +2192,7 @@ final class AppModel {
             guard let recovery = adapter as? any CodexTurnRecovering else {
                 throw HarnessAdapterError.capabilityUnavailable(L10n.string("Retry is unavailable for this Codex runtime."))
             }
-            if let message = codexModelRestoreErrors[session.id] {
+            if let message = modelRestoreErrors[session.id] {
                 throw HarnessAdapterError.capabilityUnavailable(message)
             }
             await markSubmissionStarted(for: session.id)
@@ -3035,7 +3038,7 @@ final class AppModel {
                 !$0.hasPrefix("\(session.id.uuidString):")
             }
             codexSnapshotCheckpointTasks.removeValue(forKey: session.id)?.cancel()
-            codexModelRestoreErrors.removeValue(forKey: session.id)
+            modelRestoreErrors.removeValue(forKey: session.id)
             savedCodexRequests.removeValue(forKey: session.id)
             savedCodexItems.removeValue(forKey: session.id)
             codexPersistedTimelines.removeValue(forKey: session.id)
@@ -3198,7 +3201,7 @@ final class AppModel {
         // The mode stays: the adapter sends it with this model and effort on the next turn.
         codexCapabilitiesBySessionID[session.id, default: .empty].modelCatalog = catalog
         modelCatalogs.recordCodex(catalog, for: session)
-        if codexModelRestoreErrors.removeValue(forKey: session.id) != nil {
+        if modelRestoreErrors.removeValue(forKey: session.id) != nil {
             errorBySessionID.removeValue(forKey: session.id)
         }
     }
@@ -4959,6 +4962,10 @@ final class AppModel {
                 nextState,
                 for: session.id
             )
+            // A model the session takes is the task's own again, so its turns may start.
+            if id == ClaudeLaunchOption.model, modelRestoreErrors.removeValue(forKey: session.id) != nil {
+                errorBySessionID.removeValue(forKey: session.id)
+            }
         } catch { updateProviderActionError(error, for: session.id) }
     }
 
@@ -5123,6 +5130,15 @@ final class AppModel {
         }
     }
 
+    /// Why a session did not take the model asked of it, with the models it offers instead.
+    func modelRefusal(_ error: any Error, provider: any ProviderCapabilityProviding,
+                      handle: HarnessSessionHandle) async -> String {
+        let offered = (try? await provider.providerCapabilities(for: handle))?.selectors
+            .first { $0.id == ClaudeLaunchOption.model }?.choices.map(\.value) ?? []
+        guard !offered.isEmpty else { return error.localizedDescription }
+        return L10n.format("%@ (it offers %@)", error.localizedDescription, offered.joined(separator: ", "))
+    }
+
     func performProviderAction(_ id: String, for session: SessionRecord) async {
         do {
             let (_, provider, handle) = try await providerCapabilityProvider(for: session)
@@ -5173,7 +5189,7 @@ final class AppModel {
         await codexTimelineItemRepository.flushed()
         codexSnapshotCheckpointTasks.values.forEach { $0.cancel() }
         codexSnapshotCheckpointTasks.removeAll()
-        codexModelRestoreErrors.removeAll()
+        modelRestoreErrors.removeAll()
         eventTasksBySessionID.values.forEach { $0.cancel() }
         transcriptPublicationTasks.values.forEach { $0.cancel() }
         codexPresentationTasks.values.forEach { $0.cancel() }
@@ -6578,14 +6594,15 @@ final class AppModel {
             let negotiatedImageInput = await (adapter as? any HarnessImageInputReporting)?
                 .acceptsImageInput(for: session.id) ?? nil
             var providerOptionRestoreErrors: [String] = []
+            // The task's model is restored with each runtime; until it is, no turn starts on another.
+            modelRestoreErrors.removeValue(forKey: session.id)
             if let selection = CodexModelSelection.restored(from: session.providerOptions),
                let provider = adapter as? any CodexCapabilityProviding {
                 // Restore one atomic model/effort pair before the next queued or manual turn.
                 do {
                     _ = try await provider.selectModel(selection, for: handle)
-                    codexModelRestoreErrors.removeValue(forKey: session.id)
                 } catch {
-                    codexModelRestoreErrors[session.id] = error.localizedDescription
+                    modelRestoreErrors[session.id] = error.localizedDescription
                     providerOptionRestoreErrors.append(error.localizedDescription)
                 }
             }
@@ -6602,6 +6619,10 @@ final class AppModel {
                             value: option.value,
                             in: handle
                         )
+                    } catch where option.key == ClaudeLaunchOption.model {
+                        let message = await modelRefusal(error, provider: provider, handle: handle)
+                        modelRestoreErrors[session.id] = message
+                        providerOptionRestoreErrors.append(message)
                     } catch {
                         providerOptionRestoreErrors.append(error.localizedDescription)
                     }

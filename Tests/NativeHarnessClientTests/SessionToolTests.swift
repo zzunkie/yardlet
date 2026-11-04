@@ -1140,7 +1140,8 @@ final class SessionToolTests: XCTestCase {
 
     /// A child or subagent on the caller's harness starts with the caller's model, effort and
     /// permission mode unless the call names them (2026-10-22 user decision); a named model drops
-    /// the caller's effort, and another harness keeps its own defaults.
+    /// the caller's effort, another harness keeps its own defaults, and a model it does not offer
+    /// starts nothing.
     func testChildrenInheritTheCallersModelEffortAndPermissionMode() async throws {
         let parent = [ClaudeLaunchOption.permissionMode: "bypassPermissions", ClaudeLaunchOption.model: "opus",
                       ClaudeLaunchOption.effort: "xhigh", ClaudeLaunchOption.nextMessageSuggestions: "off"]
@@ -1154,7 +1155,9 @@ final class SessionToolTests: XCTestCase {
                        [ClaudeLaunchOption.permissionMode: "bypassPermissions", ClaudeLaunchOption.model: "haiku",
                         ClaudeLaunchOption.effort: "low"])
 
-        let fixture = try Fixture(callerOptions: parent)
+        let antigravity = FakeHarnessAdapter(kind: .antigravityCLI)
+        await antigravity.offerModels(["gemini-4-argon", "gemini-3.8-flash"])
+        let fixture = try Fixture(callerOptions: parent, antigravity: antigravity)
         defer { fixture.tearDown() }
         let model = fixture.model
         let created = await call(model, "create_task", ["prompt": "Write the migration guide"], from: fixture.caller)
@@ -1166,6 +1169,21 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(child.providerOptions[ClaudeLaunchOption.permissionMode], "bypassPermissions")
         XCTAssertEqual(child.providerOptions[ClaudeLaunchOption.model], "opus")
         XCTAssertEqual(child.providerOptions[ClaudeLaunchOption.effort], "xhigh")
+
+        // A model the harness does not offer is not swapped for its default: the subagent does not start,
+        // the task's first message does not go, and both name the models the harness offers.
+        let offered = L10n.format("%@ (it offers %@)", "claude-opus-5-5-high is not offered", "gemini-4-argon, gemini-3.8-flash")
+        let unoffered: [String: Any] = ["harness": "antigravity-cli", "model": "claude-opus-5-5-high", "prompt": "Review the guide"]
+        let run = await call(model, "run_agent", unoffered, from: fixture.caller)
+        XCTAssertEqual(run.text, "Not started: " + offered)
+        let task = await call(model, "create_task", unoffered, from: fixture.caller)
+        XCTAssertTrue(task.isError && task.text.hasSuffix("its first message failed: " + offered), task.text)
+        let sent = await antigravity.sentPrompts
+        XCTAssertEqual(sent, [])
+        // list_accounts names the models the harness last offered, for a call to choose from.
+        model.modelCatalogs.recordAntigravity(["gemini-4-argon", "gemini-3.8-flash"].map { HarnessModelOption(value: $0, name: $0) })
+        let listed = await call(model, "list_accounts", ["harness": "antigravity-cli"], from: fixture.caller)
+        XCTAssertTrue(listed.text.contains(#""models":["gemini-4-argon","gemini-3.8-flash"]"#), listed.text)
         await model.shutdown()
     }
 
@@ -2692,7 +2710,7 @@ final class SessionToolTests: XCTestCase {
              codexOptions: [String: String] = [:], codexState: CodexTaskState? = nil,
              repository: (([SessionRecord]) -> any SessionRepository)? = nil,
              connections: ProviderConnectionStore? = nil, callerTranscript: [TranscriptEntry] = [],
-             preferences: UserDefaults? = nil) throws {
+             preferences: UserDefaults? = nil, antigravity: FakeHarnessAdapter? = nil) throws {
             root = FileManager.default.temporaryDirectory.appending(path: "session-tools-\(UUID().uuidString.prefix(8))")
             let appRoot = root.appending(path: "app", directoryHint: .isDirectory)
             let siteRoot = root.appending(path: "site", directoryHint: .isDirectory)
@@ -2733,6 +2751,12 @@ final class SessionToolTests: XCTestCase {
             let preferences = preferences ?? defaults
             let selections = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
             for harness in [HarnessKind.claudeCode, .codex, .openCode] { selections.select(runtime, for: harness) }
+            if antigravity != nil {
+                // Yardlet takes only a runtime named `agy` for Antigravity CLI.
+                let agy = root.appending(path: "agy")
+                try FileManager.default.createSymbolicLink(at: agy, withDestinationURL: runtime)
+                selections.select(agy, for: .antigravityCLI)
+            }
             let adapter = adapter
             let codexAdapter = codexAdapter
             let codexID = codex.id
@@ -2744,7 +2768,13 @@ final class SessionToolTests: XCTestCase {
                     store: SessionStore(sessions: sessions,
                                         repository: repository?(sessions) ?? InMemorySessionRepository(sessions: sessions)),
                     runtimeSelections: selections,
-                    registry: HarnessRegistry { kind, _ in kind == .codex ? codexAdapter as any HarnessAdapter : adapter },
+                    registry: HarnessRegistry { kind, _ in
+                        switch kind {
+                        case .codex: codexAdapter
+                        case .antigravityCLI: antigravity ?? adapter
+                        default: adapter
+                        }
+                    },
                     connections: connections,
                     initialTranscripts: transcripts,
                     initialCodexPresentation: codexPresentation,

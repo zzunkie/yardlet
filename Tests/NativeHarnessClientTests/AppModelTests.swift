@@ -1004,6 +1004,9 @@ final class AppModelTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// A task's saved options are restored as its runtime attaches. A saved model the runtime does not
+    /// offer holds the task's turns, naming the models it does offer, until one is chosen: no turn
+    /// goes on the harness's default model instead.
     func testPersistedHeadlessOptionsRestoreBeforeTheNextInvocation() async throws {
         let session = SessionRecord(
             harness: .antigravityCLI,
@@ -1012,11 +1015,13 @@ final class AppModelTests: XCTestCase {
             title: "Configured Antigravity task",
             providerSessionID: "agy-session",
             providerOptions: [
+                StructuredHeadlessOptionID.model: "claude-opus-5-5-high",
                 StructuredHeadlessOptionID.executionMode: "plan",
                 StructuredHeadlessOptionID.reasoningEffort: "high"
             ]
         )
         let adapter = FakeHarnessAdapter(kind: .antigravityCLI)
+        await adapter.offerModels(["gemini-4-argon", "gemini-3.8-flash"])
         let defaults = try XCTUnwrap(UserDefaults(
             suiteName: testDefaultsSuite("NativeHarnessClientTests")
         ))
@@ -1035,6 +1040,17 @@ final class AppModelTests: XCTestCase {
         let restored = await adapter.providerOptionSelections
         XCTAssertEqual(restored[StructuredHeadlessOptionID.executionMode], "plan")
         XCTAssertEqual(restored[StructuredHeadlessOptionID.reasoningEffort], "high")
+
+        await model.send("Review the guide", to: session)
+        var sent = await adapter.sentPrompts
+        XCTAssertEqual(sent, [])
+        XCTAssertEqual(model.errorBySessionID[session.id], L10n.format(
+            "%@ (it offers %@)", "claude-opus-5-5-high is not offered", "gemini-4-argon, gemini-3.8-flash"))
+        await model.setProviderOption(StructuredHeadlessOptionID.model, value: "gemini-4-argon", for: session)
+        XCTAssertNil(model.errorBySessionID[session.id])
+        await model.send("Review the guide", to: session)
+        sent = await adapter.sentPrompts
+        XCTAssertEqual(sent.count, 1)
         await model.shutdown()
     }
 
@@ -3888,6 +3904,9 @@ actor FakeHarnessAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresent
     private(set) var interruptedSessionIDs: [UUID] = []
     private(set) var deletedSessionIDs: [UUID] = []
     private(set) var providerOptionSelections: [String: String] = [:]
+    /// The models its session offers, when it names any; it refuses the others.
+    private var offeredModels: [String]?
+    func offerModels(_ models: [String]) { offeredModels = models }
     private(set) var itemPageLoads: [(localSessionID: UUID, turnID: String?, cursor: String?, limit: Int64?)] = []
     private(set) var turnPageLoads: [(localSessionID: UUID, cursor: String?, limit: Int64?)] = []
     private(set) var recentPageLoads: [(workspaceURL: URL, cursor: String?, limit: Int64)] = []
@@ -4405,7 +4424,12 @@ actor FakeHarnessAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresent
     ) async throws -> ProviderCapabilityState {
         let current = providerOptionSelections[StructuredHeadlessOptionID.executionMode]
             ?? "default"
-        return ProviderCapabilityState(selectors: [ProviderCapabilitySelector(
+        let models = offeredModels.map { models in [ProviderCapabilitySelector(
+            id: StructuredHeadlessOptionID.model, name: "Model", description: nil, category: "model",
+            currentValue: providerOptionSelections[StructuredHeadlessOptionID.model] ?? "default",
+            choices: models.map { ProviderCapabilityChoice(value: $0, name: $0, description: nil) }
+        )] } ?? []
+        return ProviderCapabilityState(selectors: models + [ProviderCapabilitySelector(
             id: StructuredHeadlessOptionID.executionMode,
             name: "Execution mode",
             description: nil,
@@ -4423,6 +4447,9 @@ actor FakeHarnessAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresent
         value: String,
         in session: HarnessSessionHandle
     ) async throws -> ProviderCapabilityState {
+        if id == StructuredHeadlessOptionID.model, let offeredModels, !offeredModels.contains(value) {
+            throw HarnessAdapterError.capabilityUnavailable("\(value) is not offered")
+        }
         providerOptionSelections[id] = value
         return try await providerCapabilities(for: session)
     }
