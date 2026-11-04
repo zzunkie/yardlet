@@ -22,6 +22,7 @@ struct RemoteNewTaskView: View {
     @State private var showsAccounts = false
     @State private var startConfirmation: RemoteSetting?
     @State private var showsCommands = false
+    @State private var showsTypedCommands = false
     @State private var commandSearch = ""
     @State private var commands: [RemoteComposerCommand] = []
     @State private var commandContext: String?
@@ -59,6 +60,13 @@ struct RemoteNewTaskView: View {
                 .defaultScrollAnchor(.top)
                 VStack(spacing: 0) {
                     NewTaskHeroTitle(kind: heroKind) { destinationMenuItems }
+                    if projectID == nil || isChat {
+                        NewTaskDestinationButton(title: L10n.string(isChat ? "Chat (no project)" : "Choose project"),
+                                                 systemName: isChat ? "bubble.left" : "folder") {
+                            destinationMenuItems
+                        }
+                        .padding(.top, 8)
+                    }
                     composer
                         .padding(.top, 20)
                 }
@@ -70,7 +78,9 @@ struct RemoteNewTaskView: View {
             }
         }
         .onAppear {
-            if projectID == nil { projectID = projects.first(where: { $0.kind != .chats })?.id ?? projects.first?.id }
+            if projectID == nil {
+                projectID = projects.first(where: { $0.kind != .chats })?.id
+            }
             isFocused = true
         }
         .onChange(of: chosenProjectID, initial: true) { _, chosen in
@@ -98,10 +108,10 @@ struct RemoteNewTaskView: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 10) {
             ComposerEditor(
-                draft: draft, placeholder: L10n.string("Describe the task"),
+                draft: draft, placeholder: NewTaskComposerText.placeholder(harnessName: chosenHarness?.harnessName ?? model.newTask?.harnessName),
                 accessibilityHint: L10n.string("Press Return to start the task"), metrics: .newTask,
                 input: nil, onExternalInput: acceptsAttachments ? { receive($0) } : nil, mentionRoots: [],
-                mentionSearch: model.composerExtensions && !isChat ? { query in
+                mentionSearch: model.composerExtensions && projectID != nil && !isChat ? { query in
                     guard let projectID else { return .init() }
                     return await mentionIndex.search(query, key: projectID) {
                         await model.response(to: .projectWorkspaceFiles(projectID: projectID))
@@ -111,18 +121,28 @@ struct RemoteNewTaskView: View {
                 commands: editorCommands,
                 isCommandMenuOpen: showsCommands, isMenuOpen: showsCommands || showsAccounts,
                 showsChips: !draft.hostMentions.isEmpty, isFocused: $isFocused, onSubmit: start,
-                onCommandQueryChange: { old, query in if old == nil, query != nil { Task { await loadCommands() } } }
+                onCommandQueryChange: { old, query in
+                    showsTypedCommands = query != nil
+                    if old == nil, query != nil { Task { await loadCommands() } }
+                }
             ) {
+                EmptyView()
+            } chips: {
+                RemoteComposerMentionChips(draft: draft)
+            } footer: {
                 if let line = options?.accountLine {
                     NewTaskAccountExplanation(line: line)
                         .padding(.horizontal, 16).padding(.bottom, 6)
                 }
-            } chips: {
-                RemoteComposerMentionChips(draft: draft)
-            } footer: {
-                HStack(spacing: 8) {
+                NewTaskComposerControlRow {
                     commandMenu
+                    if let worktree {
+                        Toggle(L10n.string("New worktree"), isOn: Binding(get: { worktree }, set: { self.worktree = $0 }))
+                            .toggleStyle(.checkbox)
+                            .controlSize(.small)
+                    }
                     harnessMenu
+                } secondary: {
                     accountPicker
                     if model.composerExtensions {
                         ComposerSessionControls(options: sessionOptions, placement: .leading,
@@ -130,22 +150,14 @@ struct RemoteNewTaskView: View {
                     } else {
                         ForEach(options?.settings ?? [], id: \.id) { setting in settingMenu(setting) }
                     }
-                    if let worktree {
-                        Toggle(L10n.string("New worktree"), isOn: Binding(get: { worktree }, set: { self.worktree = $0 }))
-                            .toggleStyle(.checkbox)
-                            .controlSize(.small)
-                    }
-                    Spacer()
+                } trailing: {
                     if model.composerExtensions {
                         ComposerSessionControls(options: sessionOptions, placement: .trailing,
                             isDisabled: isStarting, onChoose: choose, onPrepare: readOptions)
                     }
-                    if isStarting { ProgressView().controlSize(.small) }
-                    ParityIconButton(systemName: "arrow.up", help: L10n.string("Start task"), isProminent: true, action: start)
-                        .accessibilityLabel(L10n.string("Start task"))
-                        .disabled(!canStart)
+                    NewTaskStartControl(canStart: canStart, isStarting: isStarting,
+                        commandMenuOpen: showsCommands || showsTypedCommands, onStart: start)
                 }
-                .padding(.horizontal, 12).padding(.bottom, 10)
             }
             if let error = model.commandError {
                 Text(error).font(.caption).foregroundStyle(.orange)
@@ -250,21 +262,18 @@ struct RemoteNewTaskView: View {
     private var acceptsAttachments: Bool { chosenHarness?.acceptsImages == true || chosenHarness?.acceptsFiles == true }
 
     private var harnessMenu: some View {
-        Menu {
+        NewTaskHarnessControl(harness: (harness ?? options?.harness ?? model.newTask?.harness).map(HarnessKind.init(rawValue:))) {
             ForEach(options?.harnesses ?? [], id: \.harness) { option in
-                Button(option.harnessName) {
+                Button {
                     harness = option.harness
                     picks = [:]
                     confirmedChoices = [:]
                     accountID = nil
+                } label: {
+                    HarnessIdentityLabel(harness: HarnessKind(rawValue: option.harness))
                 }
             }
-        } label: {
-            Text(chosenHarness?.harnessName ?? model.newTask?.harnessName ?? L10n.string("Harness"))
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .disabled((options?.harnesses ?? []).count < 2)
     }
 
     private var sessionOptions: ComposerSessionOptions {
@@ -287,7 +296,10 @@ struct RemoteNewTaskView: View {
         if let accounts = options?.accounts, !accounts.isEmpty {
             let title = accounts.first { $0.id == accountID }?.name
                 ?? accounts.first { $0.current == true }?.name ?? L10n.string("Account unavailable")
-            ProviderConnectionControl(title: title, accessibilityTitle: title) { showsAccounts = true }
+            ProviderConnectionControl(title: title, accessibilityTitle: title) {
+                showsAccounts = true
+                Task { await readOptions() }
+            }
                 .fixedSize(horizontal: true, vertical: false)
                 .popover(isPresented: $showsAccounts) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -317,7 +329,7 @@ struct RemoteNewTaskView: View {
     }
 
     private var editorCommands: ComposerEditorCommands? {
-        guard model.composerExtensions, chosenHarness?.harness == HarnessKind.claudeCode.rawValue, !isChat else { return nil }
+        guard model.composerExtensions, chosenHarness?.harness == HarnessKind.claudeCode.rawValue, projectID != nil, !isChat else { return nil }
         return ComposerEditorCommands(commands: commandRows, isLoading: loadingCommands, choose: insertCommand)
     }
 
@@ -327,13 +339,14 @@ struct RemoteNewTaskView: View {
     }
 
     @ViewBuilder private var commandMenu: some View {
-        if editorCommands != nil {
+        if model.composerExtensions, chosenHarness?.harness == HarnessKind.claudeCode.rawValue {
             Button { commandSearch = ""; showsCommands = true; Task { await loadCommands() } } label: {
                 Image(systemName: "plus").font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary).frame(width: 28, height: 28)
             }
             .buttonStyle(.borderless).parityPointer()
             .accessibilityLabel(L10n.string("Slash commands"))
+            .disabled(projectID == nil || isChat || isStarting)
             .popover(isPresented: $showsCommands) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(L10n.string("Slash commands")).font(.callout.weight(.semibold))

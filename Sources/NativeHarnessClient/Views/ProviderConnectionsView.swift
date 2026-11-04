@@ -48,16 +48,11 @@ struct ProviderConnectionPicker: View {
     private var selectedChoice: AccountChoice? {
         store.choices(for: [harness]).first { $0.connection?.id == store.selection[harness] }
     }
-    private var title: String {
-        if store.startsNewTasksAutomatically(for: harness) { return L10n.string("Automatic") }
-        return selectedChoice?.composerTitle ?? L10n.string("Account unavailable")
-    }
-    private var accessibilityTitle: String {
-        if store.startsNewTasksAutomatically(for: harness) { return L10n.string("Automatic") }
-        return selectedChoice?.title ?? L10n.string("Account unavailable")
+    private var display: ProviderConnectionDisplay {
+        ProviderConnectionDisplay(choice: selectedChoice, automatic: store.startsNewTasksAutomatically(for: harness))
     }
     var body: some View {
-        ProviderConnectionControl(title: title, accessibilityTitle: accessibilityTitle) { isPresented.toggle() }
+        ProviderConnectionControl(title: display.title, accessibilityTitle: display.accessibilityTitle) { isPresented.toggle() }
         .popover(isPresented: $isPresented) {
             AccountList(mode: .newTask(harness), store: store, runtimeSelections: runtimeSelections,
                 onChoose: { store.choose($0); isPresented = false },
@@ -71,6 +66,17 @@ struct ProviderConnectionPicker: View {
         .task(id: harness) {
             await store.checkNewTaskAccounts(for: harness, runtimeSelections: runtimeSelections)
         }
+    }
+}
+
+/// The account chip's words, projected from the host's current saved readings without starting a check.
+struct ProviderConnectionDisplay {
+    let title: String
+    let accessibilityTitle: String
+
+    init(choice: AccountChoice?, automatic: Bool = false) {
+        title = automatic ? L10n.string("Automatic") : choice?.composerTitle ?? L10n.string("Account unavailable")
+        accessibilityTitle = automatic ? L10n.string("Automatic") : choice?.title ?? L10n.string("Account unavailable")
     }
 }
 

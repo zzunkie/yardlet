@@ -441,6 +441,7 @@ final class RemoteBridgeTests: XCTestCase {
 
     func testNewTaskComposerChecksConfirmationAndKeepsTheHostsChoices() async throws {
         let model = try Self.model(sessions: [], transcripts: [:])
+        model.connections.usesFixtureSnapshots = true
         model.runtimeSelections.select(URL(filePath: "/usr/bin/true"), for: .claudeCode)
         let bridge = AppModelRemoteBridge(model: model)
         let beforeSelection = model.connections.selection
@@ -465,6 +466,44 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(model.connections.selection, beforeSelection)
         XCTAssertEqual(model.composerDrafts.home.modelChoices[.claudeCode], beforeChoice)
         XCTAssertTrue(model.store.sessions.isEmpty)
+        await model.shutdown()
+    }
+
+    func testNewTaskOptionsReadTheSameDefaultsAndAccountLabelAsTheLocalComposer() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "remote-home-defaults-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data(#"{"model":"fable","effortLevel":"xhigh"}"#.utf8).write(to: root.appending(path: "settings.json"))
+        let catalogs = HarnessModelCatalogStore(locations: HarnessModelSettingsLocations(
+            claudeConfigDirectory: root, codexHome: root.appending(path: "codex"),
+            codexYardletHome: root.appending(path: "other")), environment: [:])
+        catalogs.recordClaude(ModelVisibilityFixtures.claudeModels, for: nil)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteHomeDefaults")))
+        let runtimes = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
+        runtimes.select(URL(filePath: "/usr/bin/true"), for: .claudeCode)
+        let connections = ProviderConnectionStore()
+        connections.usesFixtureSnapshots = true
+        connections.publishDefaults([HarnessAccountSnapshot(id: HarnessKind.claudeCode.rawValue, harness: .claudeCode,
+            providerID: nil, state: .signedIn, accountLabel: "Current connection", detail: "", credentialOwner: "Claude Code",
+            checkedAt: Date(), usage: [], canLogin: false, canLogout: false)])
+        let model = AppModel(store: SessionStore(sessions: [], repository: InMemorySessionRepository()),
+            runtimeSelections: runtimes, connections: connections, modelCatalogs: catalogs, restoresIndexOnLaunch: false)
+        model.composerDrafts.home.harness = .claudeCode
+        XCTAssertNil(catalogs.defaults(for: .claudeCode, connection: nil, workspaceURL: nil))
+        let reply = try await AppModelRemoteBridge(model: model).newTaskComposerOptions(
+            projectID: RemoteTaskProjection.chatsProjectID, harness: "claude-code", settings: [:], accountID: nil).get()
+        let localOptions = ComposerSessionOptionsProjection.newTask(harness: .claudeCode, choice: nil,
+            catalogs: catalogs, connection: nil, workspaceURL: nil)
+        XCTAssertEqual(reply.settings, AppModelRemoteBridge.taskSettings(localOptions))
+        XCTAssertEqual(reply.settings.first { $0.role == "model" }?.value, "fable")
+        XCTAssertEqual(reply.settings.first { $0.role == "effort" }?.value, "xhigh")
+        XCTAssertEqual(localOptions.model?.menu.title, "Fable · " + L10n.string("Extra high"))
+        let localAccount = try XCTUnwrap(connections.choices(for: [.claudeCode]).first)
+        XCTAssertEqual(reply.accounts?.first { $0.current == true }?.name, ProviderConnectionDisplay(choice: localAccount).title)
+        XCTAssertEqual(reply.accounts?.first { $0.current == true }?.name, "Current connection")
+        let remoteOptions = RemoteTaskSettingsProjection.options(reply.settings, task: RemoteTask(id: "", title: "",
+            harness: "claude-code", harnessName: "Claude Code", projectId: nil, attention: .idle, lastActivityAt: 0))
+        XCTAssertEqual(remoteOptions.model?.menu.title, localOptions.model?.menu.title)
         await model.shutdown()
     }
 

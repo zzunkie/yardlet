@@ -567,7 +567,7 @@ private struct NewTaskDottedLine: Shape {
 
 /// Under a title without a project: a small button naming where the task starts, which opens the
 /// same project menu.
-private struct NewTaskDestinationButton<Items: View>: View {
+struct NewTaskDestinationButton<Items: View>: View {
     let title: String
     let systemName: String
     @ViewBuilder let items: () -> Items
@@ -843,35 +843,15 @@ private struct NewTaskComposer: View {
                     .padding(.horizontal, 16).padding(.bottom, 6)
             }
 
-            HStack(alignment: .newTaskControlRow, spacing: 7) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 7) {
-                        commandMenu
-                        primaryRootMenu
-                        worktreeMenu
-                        harnessMenu
-                        accountPicker
-                        sessionControls(.leading)
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 7) {
-                            commandMenu
-                            primaryRootMenu
-                            worktreeMenu
-                            harnessMenu
-                        }
-                        HStack(spacing: 7) {
-                            accountPicker
-                            sessionControls(.leading)
-                        }
-                        // Start and the model menu line up with this row.
-                        .alignmentGuide(.newTaskControlRow) { $0[VerticalAlignment.center] }
-                    }
-                }
-                Spacer(minLength: 8)
-                // Outside the two arrangements above: each arrangement has views of its own, so a
-                // model menu inside them lost its open popover when the list it was reading
-                // arrived and the longer model name moved the row onto two lines.
+            NewTaskComposerControlRow {
+                commandMenu
+                primaryRootMenu
+                worktreeMenu
+                harnessMenu
+            } secondary: {
+                accountPicker
+                sessionControls(.leading)
+            } trailing: {
                 sessionControls(.trailing)
                 startAction
             }
@@ -881,9 +861,6 @@ private struct NewTaskComposer: View {
                 await models.catalogs.refreshDefaults(for: context.harness, connection: context.connection,
                                                       workspaceURL: context.workspace)
             }
-            .padding(.leading, 11)
-            .padding(.trailing, 10)
-            .padding(.bottom, 9)
         }
         .onChange(of: commandContext) { _, _ in
             commandLoad?.cancel()
@@ -909,7 +886,7 @@ private struct NewTaskComposer: View {
 
     /// The Codex app's placeholder in the chosen harness's name (`composer.placeholder.newTask.doAnything`).
     private var placeholder: String {
-        draft.harness.map { L10n.format("Ask %@ to do anything", $0.displayName) } ?? L10n.string("Describe a task…")
+        NewTaskComposerText.placeholder(harnessName: draft.harness?.displayName)
     }
 
     /// The project whose roots the primary-folder picker offers. A folder chosen directly still
@@ -998,7 +975,7 @@ private struct NewTaskComposer: View {
     }
 
     private var harnessMenu: some View {
-        Menu {
+        NewTaskHarnessControl(harness: draft.harness) {
             if availableHarnesses.isEmpty {
                 Text(L10n.string("No available harnesses"))
             } else {
@@ -1012,43 +989,12 @@ private struct NewTaskComposer: View {
             }
             Divider()
             Button(L10n.string("Manage harnesses"), action: onShowHarnesses)
-        } label: {
-            HStack(spacing: 5) {
-                if let harness = draft.harness {
-                    HarnessIdentityLabel(harness: harness)
-                } else {
-                    Label(L10n.string("Choose harness"), systemImage: "square.stack.3d.up")
-                }
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .semibold))
-            }
-            .font(.system(size: 13 * interfaceScale, weight: .medium))
-            .padding(.horizontal, 7)
-            .frame(height: 28 * interfaceScale)
         }
-        .menuStyle(.borderlessButton)
-        .parityPointer()
-        .layoutPriority(1)
-        .help(draft.harness?.displayName ?? L10n.string("No available harnesses"))
-        .accessibilityLabel(L10n.string("Harness"))
-        .accessibilityValue(draft.harness?.displayName ?? L10n.string("No available harnesses"))
-        .fixedSize(horizontal: true, vertical: false)
     }
 
-    @ViewBuilder
     private var startAction: some View {
-        if draft.isCreating {
-            ProgressView().controlSize(.small)
-        }
-        ParityIconButton(
-            systemName: "arrow.up",
-            help: L10n.string(draft.isCreating ? "Starting task…" : "Start task"),
-            isProminent: true,
-            action: create
-        )
-        .disabled(!canCreate || showsTypedCommands || isShowingCommands)
-        .opacity(canCreate ? 1 : 0.4)
-        .keyboardShortcut(.return, modifiers: .command)
+        NewTaskStartControl(canStart: canCreate, isStarting: draft.isCreating,
+            commandMenuOpen: showsTypedCommands || isShowingCommands, onStart: create)
     }
 
     private func create() {
@@ -1189,14 +1135,4 @@ private struct NewTaskComposer: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16).padding(.bottom, 12)
     }
-}
-
-/// The new-task composer's control row: the controls beside Start line up with the row of
-/// controls before them, the second of two rows when the composer is narrow.
-private enum NewTaskControlRowAlignment: AlignmentID {
-    static func defaultValue(in dimensions: ViewDimensions) -> CGFloat { dimensions[VerticalAlignment.center] }
-}
-
-private extension VerticalAlignment {
-    static let newTaskControlRow = VerticalAlignment(NewTaskControlRowAlignment.self)
 }

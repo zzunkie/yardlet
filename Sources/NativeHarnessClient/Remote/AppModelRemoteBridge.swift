@@ -917,6 +917,13 @@ final class AppModelRemoteBridge: RemoteBridge {
         case let .success(found): harness = found
         case let .failure(error): return .failure(error)
         }
+        if composer {
+            // Opening the local account control checks the same cached readings. This starts no sign-in
+            // or model turn, and concurrent requests join the store's in-flight check.
+            await RemoteServer.waitAtMost(8) { @MainActor in
+                await model.connections.checkNewTaskAccounts(for: harness, runtimeSelections: model.runtimeSelections)
+            }
+        }
         let accountChoices = model.connections.choices(for: [harness])
         if let accountID, accountID != "automatic", !accountChoices.contains(where: { $0.id == accountID && $0.canSelect }) {
             return .failure(RemoteError(.notAllowed, "The account is unavailable"))
@@ -926,6 +933,9 @@ final class AppModelRemoteBridge: RemoteBridge {
         // A native account intentionally has no separate binding.
         let selectedConnection = accountID.flatMap { id in accountChoices.first { $0.id == id } }
         let binding = selectedConnection.map { $0.connection } ?? connection
+        // The local home refreshes these settings files when its context changes. Read the same defaults
+        // before projecting the remote menu, without starting a provider turn.
+        await model.modelCatalogs.refreshDefaults(for: harness, connection: binding, workspaceURL: place.folder)
         var choice = model.composerDrafts.home.modelChoices[harness]
         func options() -> ComposerSessionOptions {
             ComposerSessionOptionsProjection.newTask(harness: harness, choice: choice, catalogs: model.modelCatalogs,
@@ -951,12 +961,14 @@ final class AppModelRemoteBridge: RemoteBridge {
             harness: Self.option(harness), harnesses: model.runtimeSelections.connectedDescriptors.map { Self.option($0.id) },
             settings: composer ? Self.taskSettings(options()) : Self.settings(options()), worktree: worktree)
         if composer {
-            result.accounts = accountChoices.map { choice in
-                RemoteAccount(id: choice.id, name: choice.composerTitle, detail: choice.subtitle,
+            // Model preparation can suspend; read account labels again so a completed host check is reflected.
+            let currentAccounts = model.connections.choices(for: [harness])
+            result.accounts = currentAccounts.map { choice in
+                RemoteAccount(id: choice.id, name: ProviderConnectionDisplay(choice: choice).title, detail: choice.subtitle,
                               current: (accountID.map { $0 == choice.id } ?? (choice.connection == connection)) ? true : nil,
                               available: choice.canSelect ? true : nil)
             }
-            if accountChoices.filter(\.canSelect).count > 1 {
+            if model.connections.offersAutomaticNewTaskAccount(for: harness) {
                 result.accounts?.insert(RemoteAccount(id: "automatic", name: L10n.string("Automatic"),
                     current: (accountID == "automatic" || (accountID == nil && model.connections.startsNewTasksAutomatically(for: harness))) ? true : nil,
                     available: true), at: 0)

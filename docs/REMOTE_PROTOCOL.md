@@ -2104,13 +2104,17 @@ composer with hosts that omit it. Existing requests and optional fields remain r
   enter the client's local-file upload path (§15.20).
 - `newTaskOptions` accepts optional `composer: true` and `accountId` for the desktop's composer catalog.
   Optional `readCommands: true` reads user commands when the slash menu opens, not on every options refresh.
+  It refreshes the harness's native model/effort defaults and joins the host home's cached account-status
+  check before projecting the choices; it starts neither a sign-in nor a model turn.
   Its optional account choices contain display data only; `accountLine` is the host's automatic-account
   explanation for the selected model, drawn with the local explanation view. `createTask` takes optional `accountId` and
   `confirmed`; an elevated permission choice requires confirmation, using the local control's wording.
   Choices apply to the created task and leave the host's home draft and selected account unchanged.
 
 The desktop shares the local file picker, command rows, connector menu, queue rows, permission and model
-controls. Queue editing saves back into the existing queue item rather than withdrawing it into the host's draft.
+controls. The new-task prompt, harness identity, destination control, wrapping footer and disabled Start
+button also use the local views. The first available project seeds a new draft; without one the destination
+control remains unselected, as on the host. Queue editing saves back into the existing queue item rather than withdrawing it into the host's draft.
 The account button shares the local control; its popover lists the host's safe account summaries rather than
 the local account-management view. Connector setup, reconnect and account management remain on the host. Side chat is not advertised: it needs
 host-owned temporary child creation, a child subscription and draft, and explicit close/reconnect ownership so

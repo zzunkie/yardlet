@@ -872,7 +872,18 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
     /// conversation and composer: a Codex task's turns with Edit message and Fork from here and its bottom row once the
     /// model menu read its list, the same task editing its latest message, and a Claude Code task in Bypass permissions.
     func testATasksControlsDrawAsTheLocalComposerAndTurnsDo() async throws {
-        let folder = URL(filePath: "/tmp/remote-render/yardlet", directoryHint: .isDirectory)
+        let root = FileManager.default.temporaryDirectory.appending(path: "remote-composer-window-\(UUID())")
+        let folder = root.appending(path: "yardlet")
+        let claudeHome = root.appending(path: "claude")
+        let codexHome = root.appending(path: "codex")
+        for directory in [folder, claudeHome, codexHome] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data(#"{"model":"fable","effortLevel":"xhigh"}"#.utf8).write(to: claudeHome.appending(path: "settings.json"))
+        let catalogs = HarnessModelCatalogStore(locations: HarnessModelSettingsLocations(
+            claudeConfigDirectory: claudeHome, codexHome: codexHome, codexYardletHome: root.appending(path: "yardlet-codex")), environment: [:])
+        catalogs.recordClaude(ModelVisibilityFixtures.claudeModels, for: nil)
         let codexAdapter = FakeHarnessAdapter(kind: .codex)
         let claudeAdapter = FakeHarnessAdapter(kind: .claudeCode)
         var thread = CodexTaskState.empty
@@ -890,11 +901,16 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                             TranscriptEntry(content: .assistant(text: "The guide is in docs/MIGRATION.md.", isStreaming: false))]
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteHostWindowRenderingTests.controls")))
         let host = AppModel(store: SessionStore(sessions: [parser, guide], repository: InMemorySessionRepository()),
-                            runtimeSelections: RuntimeSelectionStore(defaults: defaults),
-                            registry: HarnessRegistry { kind, _ in kind == .codex ? codexAdapter : claudeAdapter },
+                            runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
+                            registry: HarnessRegistry { kind, _ in kind == .codex ? codexAdapter : claudeAdapter }, modelCatalogs: catalogs,
                             initialTranscripts: [guide.id: guideEntries], initialCodexPresentation: [parser.id: thread],
-                            transcriptRepository: UserDefaultsTranscriptRepository(defaults: defaults),
+                            preferences: defaults, transcriptRepository: UserDefaultsTranscriptRepository(defaults: defaults),
                             sessionTitleResolver: { _ in nil }, restoresIndexOnLaunch: false)
+        host.projects.ensureProject(forRoot: folder)
+        host.connections.usesFixtureSnapshots = true
+        host.connections.publishDefaults([HarnessAccountSnapshot(id: "claude-code", harness: .claudeCode, providerID: nil,
+            state: .signedIn, accountLabel: nil, detail: "", credentialOwner: "", checkedAt: Date(), usage: [],
+            canLogin: false, canLogout: true)])
         await codexAdapter.emitPresentation(thread, for: parser.id)
         let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(model: host))
         defer { stack.stop() }
@@ -954,24 +970,71 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
             localTask(host, guideNow, draft: TaskComposerDraft()).environment(\.revealsSentMessageActions, true)
         }
         host.runtimeSelections.select(URL(filePath: "/usr/bin/true"), for: .claudeCode)
+        host.composerDrafts.home.workspaceURL = nil
+        host.composerDrafts.home.projectID = nil
         host.composerDrafts.home.harness = .claudeCode
+        host.revealNewTask()
+        await catalogs.refreshDefaults(for: .claudeCode, connection: host.connections.selected(for: .claudeCode), workspaceURL: nil)
+        let homeOptions = ComposerSessionOptionsProjection.newTask(harness: .claudeCode,
+            choice: host.composerDrafts.home.modelChoices[.claudeCode], catalogs: catalogs,
+            connection: host.connections.selected(for: .claudeCode), workspaceURL: nil)
+        let expectedModel = try XCTUnwrap(homeOptions.model?.menu.accessibilityValue)
+        XCTAssertTrue(expectedModel.contains("Fable"))
+        func ready(_ elements: [WindowlessRender.AccessibilityElement]) -> Bool {
+            elements.contains { $0.label == L10n.string("Model") && $0.value == expectedModel }
+                && elements.contains { $0.label == L10n.string("Permissions") }
+                && !elements.contains { $0.label.contains(L10n.string("Checking account…")) }
+        }
         model.select(.newTask)
         func remoteHome() -> some View {
             let newDrafts = RemoteComposerDrafts()
-            newDrafts.newTaskProjectID = RemoteTaskProjection.chatsProjectID
             return RemoteHostView(model: model, directory: hosts, drafts: newDrafts)
         }
-        try await render("remote-composer-new-task", size: size, titled: true, title: model.name) { remoteHome() }
-        let homeDraft = NewTaskDraft()
-        homeDraft.harness = .claudeCode
-        try await render("local-composer-new-task", size: column, titled: false) {
-            NewTaskHome(recentSessions: [], projects: [], draft: homeDraft, runtimeSelections: host.runtimeSelections,
-                connections: host.connections,
-                models: NewTaskModelSource(catalogs: host.modelCatalogs, load: { _, _, _, _ in }),
-                accounts: NewTaskAccountSource(preview: { host.newTaskAccountPreview(harness: $0, model: $1) }, pick: { _, _ in nil }),
-                onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {}, onCreate: { _ in nil },
-                readMacConditions: { [] })
-                .background(ParityTheme.canvas)
+        try await render("remote-composer-new-task", size: size, titled: false, ready: ready) { remoteHome() }
+        try await render("local-composer-new-task", size: size, titled: false, ready: ready) {
+            MainWindow(model: host)
+        }
+        hosts.close(paired.id)
+        await host.shutdown()
+    }
+
+    func testEmptyHomesShareTheNewTaskDestinationControl() async throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteEmptyHome")))
+        let runtimes = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false)
+        runtimes.select(URL(filePath: "/usr/bin/true"), for: .claudeCode)
+        let catalogs = HarnessModelCatalogStore(environment: [:])
+        catalogs.recordClaude(ModelVisibilityFixtures.claudeModels, for: nil)
+        let host = AppModel(store: SessionStore(repository: InMemorySessionRepository()), runtimeSelections: runtimes,
+            registry: HarnessRegistry { _, _ in FakeHarnessAdapter(kind: .claudeCode) }, modelCatalogs: catalogs,
+            preferences: defaults, restoresIndexOnLaunch: false)
+        host.connections.usesFixtureSnapshots = true
+        host.connections.publishDefaults([HarnessAccountSnapshot(id: "claude-code", harness: .claudeCode, providerID: nil,
+            state: .signedIn, accountLabel: nil, detail: "", credentialOwner: "", checkedAt: Date(), usage: [],
+            canLogin: false, canLogout: true)])
+        host.composerDrafts.home.harness = .claudeCode
+        host.revealNewTask()
+        let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(model: host))
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+            name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let hosts = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+            hello: RemoteHandshakeHello(name: "Client", platform: "macos", appVersion: "test"))
+        let paired = try await hosts.pair(link: link.absoluteString)
+        let model = try XCTUnwrap(hosts.model(for: paired.id))
+        try await waitUntil { model.hasSnapshot && model.composerExtensions }
+        model.select(.newTask)
+        func ready(_ elements: [WindowlessRender.AccessibilityElement]) -> Bool {
+            elements.contains { $0.label == L10n.string("Model") && !$0.value.isEmpty }
+                && elements.contains { $0.label == L10n.string("Permissions") }
+                && !elements.contains { $0.label.contains(L10n.string("Checking account…")) }
+        }
+        let size = NSSize(width: 1280, height: 820)
+        try await render("remote-composer-new-task-empty", size: size, titled: false, ready: ready) {
+            RemoteHostView(model: model, directory: hosts)
+        }
+        try await render("local-composer-new-task-empty", size: size, titled: false, ready: ready) {
+            MainWindow(model: host)
         }
         hosts.close(paired.id)
         await host.shutdown()
@@ -1309,6 +1372,7 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
     /// nothing does (Show more on a long answer), then what `press` matches once.
     func render<Content: View>(_ name: String, size: NSSize, titled: Bool, title: String = "", subtitle: String = "",
                                        opening: ((String) -> Bool)? = nil, press: ((String) -> Bool)? = nil,
+                                       ready: (([WindowlessRender.AccessibilityElement]) -> Bool)? = nil,
                                        @ViewBuilder content: () -> Content,
                                        check: ([WindowlessRender.AccessibilityElement]) -> Void = { _ in }) async throws {
         let directory = try WindowlessRender.directory("remote-qa")
@@ -1337,6 +1401,12 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                     Self.turnRunLoop(hosting)
                     await Task.yield()
                     try await Task.sleep(for: .milliseconds(15))
+                }
+            }
+            if let ready {
+                try await waitUntil {
+                    Self.turnRunLoop(hosting)
+                    return ready(WindowlessRender.accessibilityElements(in: hosting))
                 }
             }
             // Folded parts opened, and a line pressed, as the person would, through the accessibility tree.
