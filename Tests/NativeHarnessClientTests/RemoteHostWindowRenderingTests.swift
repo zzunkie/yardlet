@@ -1502,6 +1502,14 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                     .defaultAppStorage(defaults)
             }
         }
+        // With `hostAccounts` (§15.37) the same sheet lists the host's Accounts, Harnesses and Connectors.
+        for (section, slug) in [(SettingsSection.accounts, "accounts"), (SettingsSection.connectors, "connectors")] {
+            client.requestedSettingsSection = section.rawValue
+            try await render("remote-settings-sheet-\(slug)", size: sheetSize, titled: false) {
+                SettingsCenterView(size: SettingsCenterView.preferredSize, initialSection: section.rawValue,
+                                   remoteHost: client)
+            }
+        }
 
         client.closeSettings()
         directory.close(paired.id)

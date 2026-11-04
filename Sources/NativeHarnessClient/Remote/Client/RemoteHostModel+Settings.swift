@@ -124,10 +124,11 @@ enum RemoteHostSettingsProjection {
         var id: String { settingID + ":" + value }
     }
 
-    static func availableSections(_ settings: RemoteHostSettings?) -> [SettingsSection] {
+    /// With `hostAccounts` (§15.37) the host's Accounts, Harnesses and Connectors sections show too.
+    static func availableSections(_ settings: RemoteHostSettings?, offersAccounts: Bool = false) -> [SettingsSection] {
         SettingsSection.available(
-            hasAccounts: false,
-            hasConnectors: false,
+            hasAccounts: offersAccounts,
+            hasConnectors: offersAccounts,
             hasVault: false,
             hasRemote: false,
             hasCLIUpdates: settings?.cliUpdates != nil,

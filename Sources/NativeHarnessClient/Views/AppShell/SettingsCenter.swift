@@ -146,7 +146,7 @@ struct SettingsCenterView: View {
         self.initialSectionRawValue = initialSection
         self.notificationCenter = notificationCenter
         _notifications = State(initialValue: SystemNotificationSettingsModel(center: notificationCenter))
-        let available = remoteHost.map { RemoteHostSettingsProjection.availableSections($0.hostSettings) }
+        let available = remoteHost.map { RemoteHostSettingsProjection.availableSections($0.hostSettings, offersAccounts: $0.offersHostAccounts) }
             ?? SettingsSection.available(
                 hasAccounts: accounts != nil, hasConnectors: connectors != nil, hasVault: vault != nil,
                 hasRemote: remote != nil, hasCLIUpdates: cliUpdates != nil, hasInstructions: instructions != nil,
@@ -224,6 +224,16 @@ struct SettingsCenterView: View {
                         VStack(alignment: .leading, spacing: 0) {
                             detailHeader.padding(.horizontal, 20).padding(.top, 20)
                             connectionContent(accounts)
+                        }
+                    } else if section.isConnectionSection, let remoteHost {
+                        // Another Mac's Accounts and Harnesses, drawn by the same content from its values (§15.37).
+                        VStack(alignment: .leading, spacing: 0) {
+                            detailHeader.padding(.horizontal, 20).padding(.top, 20)
+                            if section == .harnesses {
+                                remoteHost.harnessesSettingsSectionView()
+                            } else {
+                                remoteHost.accountsSettingsSectionView()
+                            }
                         }
                     } else {
                         ScrollView {
@@ -313,7 +323,7 @@ struct SettingsCenterView: View {
 
     private var sections: [SettingsSection] {
         if let remoteHost {
-            return RemoteHostSettingsProjection.availableSections(remoteHost.hostSettings)
+            return RemoteHostSettingsProjection.availableSections(remoteHost.hostSettings, offersAccounts: remoteHost.offersHostAccounts)
         }
         return SettingsSection.available(hasAccounts: accounts != nil, hasConnectors: connectors != nil, hasVault: vault != nil,
                                          hasRemote: remote != nil, hasCLIUpdates: cliUpdates != nil,
@@ -414,7 +424,11 @@ struct SettingsCenterView: View {
                     .disabled(!isRemoteWritable)
                 }
             case .connectors:
-                if let connectors { ConnectorSettingsView(center: connectors) }
+                if let connectors {
+                    ConnectorSettingsView(center: connectors)
+                } else if let remoteHost {
+                    remoteHost.connectorsSettingsSectionView()
+                }
             case .vault:
                 if let vault { VaultSettingsView(vault: vault) }
             case .remote:
