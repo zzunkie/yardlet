@@ -20,6 +20,35 @@ final class MacAgentToolService: NativeSurfaceResource {
     private var sharesTerminal = true
     private var terminalSharingObserver: NSObjectProtocol?
 
+    /// The connector settings on their way to the service, read off the main thread: the file holds
+    /// every connector's tool list, and decoding it where the service is made held the main thread
+    /// for hundreds of milliseconds at each launch.
+    private enum Preparation {
+        case none
+        case reading(Task<ConnectorSavedSettings, Never>)
+        case read(ConnectorSavedSettings)
+        /// `shared` is made, and what it reads is its own.
+        case made
+    }
+
+    private static var preparation = Preparation.none
+
+    /// Starts reading the connector settings off the main thread, as Yardlet launches.
+    static func startPreparing() {
+        guard case .none = preparation else { return }
+        let repository = FileConnectorRepository.live()
+        preparation = .reading(Task.detached(priority: .userInitiated) { repository.loadSettings() })
+    }
+
+    /// Waits for the connector settings, so `shared` starts from them instead of reading them on the
+    /// main thread. Yardlet waits for it before it first uses the service.
+    static func prepare() async {
+        startPreparing()
+        guard case let .reading(task) = preparation else { return }
+        let settings = await task.value
+        if case .reading = preparation { preparation = .read(settings) }
+    }
+
     /// The helper in the app bundle, or next to the executable in a development build.
     nonisolated static var executableURL: URL? {
         let bundled = Bundle.main.bundleURL.appending(path: "Contents/Helpers/\(AgentToolEnvironment.executableName)")
@@ -86,7 +115,9 @@ final class MacAgentToolService: NativeSurfaceResource {
                 .appending(path: Bundle.main.bundleIdentifier ?? "com.zzunkie.yardlet", directoryHint: .isDirectory)
                 .appending(path: "ConnectorPrograms", directoryHint: .isDirectory)
         }
-        connectors = ConnectorCenter(environment: connectorEnvironment)
+        let saved: ConnectorSavedSettings? = if case let .read(settings) = Self.preparation { settings } else { nil }
+        Self.preparation = .made
+        connectors = ConnectorCenter(environment: connectorEnvironment, saved: saved)
         broker.connectors = connectors
         connectors.onToolsChanged = { [weak broker = self.broker] in broker?.toolsMayHaveChanged() }
         vault = MacVault.makeCenter()

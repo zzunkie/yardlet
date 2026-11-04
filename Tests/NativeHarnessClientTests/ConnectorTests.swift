@@ -604,7 +604,7 @@ final class ConnectorTests: XCTestCase {
         XCTAssertTrue(center.connectors.isEmpty)
     }
 
-    func testTheRecordFileKeepsNoSecret() throws {
+    func testTheRecordFileKeepsNoSecret() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "connectors-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let repository = FileConnectorRepository(fileURL: directory.appending(path: "connectors.json"))
@@ -618,6 +618,16 @@ final class ConnectorTests: XCTestCase {
         let text = try String(contentsOf: directory.appending(path: "connectors.json"), encoding: .utf8)
         XCTAssertFalse(text.contains("access"), text)
         XCTAssertTrue(text.contains("\"version\" : 1"))
+
+        // Read off the main thread, as the app reads it at launch, the file starts a center that does
+        // not read it again.
+        let settings = await Task.detached { repository.loadSettings() }.value
+        try FileManager.default.removeItem(at: directory)
+        let center = ConnectorCenter(environment: ConnectorCenter.Environment(
+            repository: repository, credentials: InMemoryConnectorCredentialStore(), http: FakeConnectorServer(),
+            userAgent: nil, sha256: MacOAuthUserAgent.sha256, clientVersion: "9.9"), saved: settings)
+        XCTAssertEqual(center.connectors, [record])
+        XCTAssertFalse(center.cannotReadSavedSettings)
     }
 
     /// A file that is there but cannot be read, such as one holding a connector this Yardlet cannot

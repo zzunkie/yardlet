@@ -453,6 +453,7 @@ struct NativeHarnessClientApp: App {
     /// The app's model, once what Yardlet kept of addresses that carried a vault password is gone: before the task
     /// workspaces and the browser host read it (`BrowserFilledValueCleanup`).
     private static func liveModel() -> AppModel {
+        MacAgentToolService.startPreparing()
         BrowserFilledValueCleanup.runAtLaunch()
         return AppModel.live()
     }
@@ -491,6 +492,9 @@ struct NativeHarnessClientApp: App {
                     model.pullRequests.setApplicationActive(false)
                 }
                 .task {
+                    // The agent tools' connector settings, read off the main thread, come first, so the
+                    // wiring below still runs without a pause.
+                    await MacAgentToolService.prepare()
                     appDelegate.model = model
                     if !model.usesVisualFixture {
                         appDelegate.remoteHosts = remoteHosts
