@@ -64,9 +64,15 @@ final class MailboxRenderingTests: XCTestCase {
                 XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Mail")))
                 await host.settle(until: { host.accessibilityElements().contains { $0.label == L10n.string("Mailboxes") } })
 
-                // The accounts and their folders, in the list's place.
+                // The accounts and their folders, in the list's place. With two accounts each starts
+                // folded to its own line; opening one shows its folders and labels.
                 XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Mailboxes")))
                 let labelsRow = { host.accessibilityElements().contains { $0.label == "거래처" } }
+                await host.settle(until: { host.accessibilityElements().contains { $0.label == MailFixture.work.address } })
+                host.settle(passes: 6)
+                XCTAssertFalse(labelsRow(), "Each account starts folded")
+                try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "folders-folded-\(name)"))
+                XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: MailFixture.work.address))
                 await host.settle(until: labelsRow)
                 host.settle(passes: 6)
                 try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(path: "folders-\(name)"))

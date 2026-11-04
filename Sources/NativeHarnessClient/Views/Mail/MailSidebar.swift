@@ -179,8 +179,9 @@ struct MailFolderTree: View {
     }
 
     private var lines: [Line] {
-        center.accounts.flatMap { account -> [Line] in
-            let folded = window.foldedAccounts.contains(account.id)
+        let startsFolded = center.accounts.count > 1
+        return center.accounts.flatMap { account -> [Line] in
+            let folded = startsFolded != window.toggledAccounts.contains(account.id)
             var lines: [Line] = [.account(account, folded: folded)]
             if !folded {
                 let folders = center.folders[account.id] ?? []
@@ -205,7 +206,7 @@ struct MailFolderTree: View {
             switch line {
             case let .account(account, folded):
                 disclosure(account.address, folded: folded, depth: 0) {
-                    window.foldedAccounts.formSymmetricDifference([account.id])
+                    window.toggledAccounts.formSymmetricDifference([account.id])
                 }
             case let .folder(folder, account, depth):
                 row(folder, of: account, depth: depth)

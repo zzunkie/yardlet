@@ -539,8 +539,10 @@ final class MailWindowState {
     var mailbox: MailboxSelection = .allInboxes
     /// The sidebar shows the accounts and their folders rather than a list.
     var showsFolders = false
-    /// Accounts whose folders are folded in the sidebar, and accounts whose labels are.
-    var foldedAccounts: Set<UUID> = []
+    /// Accounts the person folded or opened in the sidebar, against where each starts: with more than
+    /// one account each starts folded to its own line, as a long list of accounts reads best that way.
+    var toggledAccounts: Set<UUID> = []
+    /// Accounts whose labels are folded in the sidebar.
     var foldedLabels: Set<UUID> = []
     var selection: MailThreadKey?
     var searchText = ""
