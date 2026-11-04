@@ -6,6 +6,9 @@ import YardletAgentTools
 /// Graph's errors and a sign-in that ended are thrown to the connector center, which words them.
 struct OutlookMailToolRunner {
     let api: GraphAPI
+    /// The calling task's folders, where attachments may come from besides the person's own
+    /// (`GmailAttachmentFiles`).
+    var taskFolders: [URL] = []
 
     typealias Problem = ConnectorToolArguments.Problem
     private typealias Arguments = ConnectorToolArguments
@@ -33,6 +36,8 @@ struct OutlookMailToolRunner {
             }
             return .text(Arguments.text(result))
         } catch let problem as Problem {
+            return .error(problem.localizedDescription)
+        } catch let problem as GmailOutgoingMessage.Problem {
             return .error(problem.localizedDescription)
         } catch GraphAPI.Failure.invalidID(let id) {
             return .error("Not an ID Outlook takes: \(id)")
@@ -116,6 +121,24 @@ struct OutlookMailToolRunner {
         }
     }
 
+    /// What a draft holds, for the request card before it is sent (`GmailToolApproval`).
+    func draftPreview(_ arguments: [String: ToolJSON]) async throws -> MailDraftPreview? {
+        let id = try GraphAPI.segment(try Arguments.required(arguments, "draftId"))
+        let json = try await api.get(
+            ["me", "messages", id],
+            [URLQueryItem(name: "$select", value: "id,subject,toRecipients,ccRecipients,bccRecipients,isDraft,createdDateTime,"
+                + "lastModifiedDateTime,body"),
+             URLQueryItem(name: "$expand", value: "attachments($select=id,name,size,isInline)")],
+            headers: ["Prefer": "outlook.body-content-type=\"text\""])
+        guard var message = OutlookMailTransport.message(json)?.message else { return nil }
+        message.date = OutlookMailTransport.date(json["lastModifiedDateTime"]) ?? message.date
+        message.attachments = (json["attachments"]?.arrayValue ?? []).filter { $0["isInline"] != .bool(true) }.map {
+            MailAttachment(id: $0["id"]?.stringValue ?? "", name: $0["name"]?.stringValue ?? "",
+                           size: OutlookMailTransport.integer($0["size"]) ?? 0, mimeType: "")
+        }
+        return MailDraftPreview(message)
+    }
+
     static func summary(_ message: ToolJSON) -> ToolJSON {
         var fields = Arguments.pick(message, ["id", "conversationId", "subject", "receivedDateTime", "bodyPreview", "isRead",
                                               "isDraft", "hasAttachments", "categories", "parentFolderId", "webLink"])
@@ -161,16 +184,36 @@ struct OutlookMailToolRunner {
         return .object(body)
     }
 
-    private func draft(_ arguments: [String: ToolJSON]) async throws -> ToolJSON {
-        let draft: ToolJSON
+    /// The files the call attaches, checked before any request: Gmail's rules (`GmailAttachmentFiles`),
+    /// and no more in one file than a single request to Graph carries.
+    private func attachments(_ arguments: [String: ToolJSON]) throws -> [GmailAttachmentFiles.Checked] {
+        let files = try GmailAttachmentFiles.check(try Arguments.strings(arguments, "attachments"),
+                                                   roots: GmailAttachmentFiles.roots(taskFolders: taskFolders))
+        if let large = files.first(where: { $0.size > OutlookMailTransport.attachmentLimit }) {
+            throw GmailOutgoingMessage.Problem.unattachable(path: large.path, reason: "Outlook takes at most 3 MB in one file.")
+        }
+        return files
+    }
+
+    /// A draft of what the call gives, in Drafts: a reply in the original's conversation, or a new message.
+    private func saveDraft(_ arguments: [String: ToolJSON]) async throws -> ToolJSON {
         if let original = Arguments.string(arguments, "replyToMessageId") {
             let action = Arguments.bool(arguments["replyAll"]) == true ? "createReplyAll" : "createReply"
-            draft = try await api.post(["me", "messages", try GraphAPI.segment(original), action], try replyBody(arguments))
-        } else {
-            draft = try await api.post(["me", "messages"], .object(try outgoing(arguments, body: true)))
+            return try await api.post(["me", "messages", try GraphAPI.segment(original), action], try replyBody(arguments))
+        }
+        return try await api.post(["me", "messages"], .object(try outgoing(arguments, body: true)))
+    }
+
+    private func draft(_ arguments: [String: ToolJSON]) async throws -> ToolJSON {
+        let files = try attachments(arguments)
+        let draft = try await saveDraft(arguments)
+        if !files.isEmpty {
+            guard let id = draft["id"]?.stringValue else { throw GraphAPI.Failure.unreadableAnswer }
+            try await OutlookMailTransport.attach(files.map(\.url), to: id, api: api)
         }
         var fields = Arguments.pick(draft, ["id", "conversationId", "subject", "webLink"])
         fields["to"] = GraphShape.people(draft["toRecipients"])
+        if !files.isEmpty { fields["attachments"] = MailAccountToolRunner.attached(files) }
         return .object(fields)
     }
 
@@ -180,18 +223,37 @@ struct OutlookMailToolRunner {
         return .object(["sent": .bool(true), "draftId": .string(id)])
     }
 
+    /// A reply goes as Graph's reply, a new message through sendMail. Graph adds files only to a saved
+    /// message, so one with files is saved as a draft, given them, and sent, as Outlook sends one; a
+    /// draft whose files could not all be added is deleted rather than left in Drafts.
     private func send(_ arguments: [String: ToolJSON]) async throws -> ToolJSON {
-        if let original = Arguments.string(arguments, "replyToMessageId") {
-            let action = Arguments.bool(arguments["replyAll"]) == true ? "replyAll" : "reply"
-            _ = try await api.post(["me", "messages", try GraphAPI.segment(original), action], try replyBody(arguments))
-            return .object(["sent": .bool(true), "replyTo": .string(original)])
-        }
+        let files = try attachments(arguments)
+        let original = Arguments.string(arguments, "replyToMessageId")
         let message = try outgoing(arguments, body: true)
-        guard message["toRecipients"] != nil || message["ccRecipients"] != nil || message["bccRecipients"] != nil else {
+        guard original != nil || message["toRecipients"] != nil || message["ccRecipients"] != nil
+                || message["bccRecipients"] != nil else {
             throw Problem.missing("to")
         }
-        _ = try await api.post(["me", "sendMail"], .object(["message": .object(message), "saveToSentItems": .bool(true)]))
-        return .object(["sent": .bool(true)])
+        var result: [String: ToolJSON] = ["sent": .bool(true)]
+        if let original { result["replyTo"] = .string(original) }
+        if !files.isEmpty {
+            guard let id = try await saveDraft(arguments)["id"]?.stringValue else { throw GraphAPI.Failure.unreadableAnswer }
+            let draft = try GraphAPI.segment(id)
+            do {
+                try await OutlookMailTransport.attach(files.map(\.url), to: id, api: api)
+            } catch {
+                try? await api.delete(["me", "messages", draft])
+                throw error
+            }
+            _ = try await api.post(["me", "messages", draft, "send"], .object([:]))
+            result["attachments"] = MailAccountToolRunner.attached(files)
+        } else if let original {
+            let action = Arguments.bool(arguments["replyAll"]) == true ? "replyAll" : "reply"
+            _ = try await api.post(["me", "messages", try GraphAPI.segment(original), action], try replyBody(arguments))
+        } else {
+            _ = try await api.post(["me", "sendMail"], .object(["message": .object(message), "saveToSentItems": .bool(true)]))
+        }
+        return .object(result)
     }
 
     private func update(_ arguments: [String: ToolJSON]) async throws -> ToolJSON {

@@ -267,23 +267,28 @@ struct OutlookMailTransport: MailAccountTransport {
         }
         guard !composition.attachments.isEmpty else { return draftID }
         let present = Set(try await files(of: draftID).map(\.name))
-        for url in composition.attachments {
+        try await Self.attach(composition.attachments.filter { !present.contains(GmailAttachmentFiles.displayName($0.path)) },
+                              to: draftID, api: api)
+        return draftID
+    }
+
+    /// The most one request attaches; larger files need an upload session.
+    static let attachmentLimit = 3 * 1024 * 1024
+
+    /// Adds the files to a saved message, one request each, as the mailbox and Outlook's tools both do.
+    static func attach(_ files: [URL], to messageID: String, api: GraphAPI) async throws {
+        for url in files {
             let name = GmailAttachmentFiles.displayName(url.path)
-            guard !present.contains(name) else { continue }
             let data = try Data(contentsOf: url)
-            guard data.count <= Self.attachmentLimit else { throw GraphAPI.Failure.tooLarge(bytes: data.count, limit: Self.attachmentLimit) }
-            _ = try await api.post(["me", "messages", try GraphAPI.segment(draftID), "attachments"], .object([
+            guard data.count <= attachmentLimit else { throw GraphAPI.Failure.tooLarge(bytes: data.count, limit: attachmentLimit) }
+            _ = try await api.post(["me", "messages", try GraphAPI.segment(messageID), "attachments"], .object([
                 "@odata.type": .string("#microsoft.graph.fileAttachment"),
                 "name": .string(name),
                 "contentType": .string(FileTypes.mimeType(forExtension: url.pathExtension) ?? "application/octet-stream"),
                 "contentBytes": .string(data.base64EncodedString()),
             ]))
         }
-        return draftID
     }
-
-    /// The most one request attaches; larger files need an upload session.
-    static let attachmentLimit = 3 * 1024 * 1024
 
     func sendDraft(_ draftID: String) async throws {
         _ = try await api.post(["me", "messages", try GraphAPI.segment(draftID), "send"], .object([:]))

@@ -35,7 +35,8 @@ enum OutlookMailToolCatalog {
         "body": Schema.string("Plain-text body."),
         "htmlBody": Schema.string("HTML body, in place of body."),
         "replyToMessageId": Schema.string("The message this replies to; the reply stays in its conversation."),
-        "replyAll": Schema.boolean("With replyToMessageId, reply to everyone on the original. Defaults to false.")
+        "replyAll": Schema.boolean("With replyToMessageId, reply to everyone on the original. Defaults to false."),
+        "attachments": Schema.stringArray(GmailAttachmentFiles.argumentDescription + " At most 3 MB each.")
     ]
 
     static let tools: [ToolJSON] = [

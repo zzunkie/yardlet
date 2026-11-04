@@ -565,7 +565,7 @@ final class GmailConnectorTests: XCTestCase {
         try Data("TOKEN=x".utf8).write(to: hidden)
         let link = folder.appending(path: "hosts.txt")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: URL(filePath: "/etc/hosts"))
-        for (path, reason) in [(big.path(percentEncoded: false), "over Gmail's 25 MB"),
+        for (path, reason) in [(big.path(percentEncoded: false), "over the 25 MB"),
                                (hidden.path(percentEncoded: false), "hidden"),
                                (link.path(percentEncoded: false), "files come from"),
                                ("notes.md", "absolute path"),

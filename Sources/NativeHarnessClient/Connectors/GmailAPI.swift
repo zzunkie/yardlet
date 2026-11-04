@@ -338,7 +338,7 @@ struct GmailOutgoingMessage: Equatable {
             case .unattachable(let path, let reason): "Cannot attach \(path): \(reason)"
             case .attachmentsTooLarge(let bytes):
                 "The attachments come to \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)), "
-                    + "over Gmail's 25 MB. Share large files as a Drive link instead."
+                    + "over the 25 MB one message carries. Share large files as a link instead."
             }
         }
     }
@@ -453,13 +453,17 @@ struct GmailOutgoingMessage: Equatable {
     }
 }
 
-/// Local files a draft or a send attaches, by absolute path (`~/` for the home folder). A file
-/// comes only from the task's folders, the temporary folders where agents keep what they make, or
-/// the person's Desktop, Documents, and Downloads; never from a hidden file or folder below one of
-/// them (`.env`, `.ssh`), and only after `..` and symbolic links are resolved. Together they stay
-/// within Gmail's 25 MB for attachments.
+/// Local files a draft or a send attaches, by absolute path (`~/` for the home folder), in every
+/// mailbox's tools. A file comes only from the task's folders, the temporary folders where agents
+/// keep what they make, or the person's Desktop, Documents, and Downloads; never from a hidden file
+/// or folder below one of them (`.env`, `.ssh`), and only after `..` and symbolic links are
+/// resolved. Together they stay within Gmail's 25 MB for attachments.
 enum GmailAttachmentFiles {
     static let limit = 25 * 1024 * 1024
+
+    /// The `attachments` argument as every mail tool that takes it describes it.
+    static let argumentDescription = "Local files to attach, as absolute paths (~/ for the home folder): from the "
+        + "task's folders, the temporary folder, Desktop, Documents, or Downloads, not hidden ones. 25 MB in all."
 
     /// What a request card shows of one: its name and size, nil when it is not there to read.
     struct File: Equatable, Sendable {
@@ -472,29 +476,50 @@ enum GmailAttachmentFiles {
         taskFolders + [URL(filePath: "/tmp"), temporary] + ["Desktop", "Documents", "Downloads"].map { home.appending(path: $0) }
     }
 
-    static func load(_ paths: [String], roots: [URL]) throws -> [GmailOutgoingMessage.Attachment] {
-        var files: [(path: String, url: URL)] = []
-        var total = 0
+    /// A file a call names, checked and not yet read: the path as given and the file it resolved to.
+    struct Checked: Equatable {
+        var path: String
+        var url: URL
+        var size: Int
+
+        /// The name the mailboxes' transports attach it under, the resolved file's.
+        var name: String { GmailAttachmentFiles.displayName(url.path(percentEncoded: false)) }
+    }
+
+    /// The files the paths name, each inside the roots and a regular file, together within the limit;
+    /// nothing is read.
+    static func check(_ paths: [String], roots: [URL]) throws -> [Checked] {
+        var files: [Checked] = []
         for path in paths {
             let url = try resolve(path, roots: roots)
             let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
             guard values?.isRegularFile == true, let size = values?.fileSize else {
                 throw GmailOutgoingMessage.Problem.unattachable(path: path, reason: "it is not a file.")
             }
-            total += size
-            files.append((path, url))
+            files.append(Checked(path: path, url: url, size: size))
         }
+        let total = files.reduce(0) { $0 + $1.size }
         guard total <= limit else { throw GmailOutgoingMessage.Problem.attachmentsTooLarge(bytes: total) }
-        return try files.map { file in
-            guard let data = try? Data(contentsOf: file.url) else {
+        return files
+    }
+
+    static func load(_ paths: [String], roots: [URL]) throws -> [GmailOutgoingMessage.Attachment] {
+        try check(paths, roots: roots).map { file in
+            guard let attachment = try? attachment(file.url, named: file.path) else {
                 throw GmailOutgoingMessage.Problem.unattachable(path: file.path, reason: "it could not be read.")
             }
-            let name = displayName(file.path)
-            var type = FileTypes.mimeType(forExtension: (name as NSString).pathExtension)
-                ?? "application/octet-stream"
-            if type.hasPrefix("text/"), String(data: data, encoding: .utf8) != nil { type += "; charset=\"UTF-8\"" }
-            return GmailOutgoingMessage.Attachment(filename: name, mimeType: type, data: data)
+            return attachment
         }
+    }
+
+    /// A file as a message carries it: under its name as given (`displayName`), its type from the
+    /// extension, and text marked UTF-8 when it is.
+    static func attachment(_ url: URL, named path: String? = nil) throws -> GmailOutgoingMessage.Attachment {
+        let data = try Data(contentsOf: url)
+        let name = displayName(path ?? url.path(percentEncoded: false))
+        var type = FileTypes.mimeType(forExtension: (name as NSString).pathExtension) ?? "application/octet-stream"
+        if type.hasPrefix("text/"), String(data: data, encoding: .utf8) != nil { type += "; charset=\"UTF-8\"" }
+        return GmailOutgoingMessage.Attachment(filename: name, mimeType: type, data: data)
     }
 
     /// The file a path names, inside one of the roots and under no hidden name there.

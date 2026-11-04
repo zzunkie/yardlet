@@ -4,14 +4,15 @@ import YardletAgentTools
 /// What Claude Code's request card says for a Microsoft tool that writes: an Outlook send or a
 /// message changed, an Outlook event created, changed, deleted, or answered, a OneDrive file or
 /// folder created, or a Teams message sent. It names the account and what the call would do, as
-/// the Gmail and Google cards do (`GmailToolApproval`, `GoogleToolApproval`). Claude Code asks
-/// before each such call; the card offers no "always allow".
+/// the Gmail and Google cards do (`GmailToolApproval`, `GoogleToolApproval`); a draft to send shows
+/// what it holds, read from Outlook first. Claude Code asks before each such call; the card offers
+/// no "always allow".
 enum MicrosoftToolApproval {
     static func request(_ service: LocalConnectorService, tool: String, account: String?,
-                        input: JSONValue) -> (title: String, detail: String)? {
+                        input: JSONValue, draft: MailDraftPreview? = nil) -> (title: String, detail: String)? {
         let account = account ?? service.name
         switch service {
-        case .outlookMail: return mail(tool, account: account, input: input)
+        case .outlookMail: return mail(tool, account: account, input: input, draft: draft)
         case .outlookCalendar: return calendar(tool, account: account, input: input)
         case .oneDrive: return drive(tool, account: account, input: input)
         case .teams: return teams(tool, account: account, input: input)
@@ -44,7 +45,8 @@ enum MicrosoftToolApproval {
         return detail
     }
 
-    private static func mail(_ tool: String, account: String, input: JSONValue) -> (title: String, detail: String)? {
+    private static func mail(_ tool: String, account: String, input: JSONValue,
+                             draft: MailDraftPreview?) -> (title: String, detail: String)? {
         var lines: [String] = []
         switch tool {
         case OutlookMailToolCatalog.sendMessage:
@@ -57,11 +59,12 @@ enum MicrosoftToolApproval {
                 lines.append(input["replyAll"] == .bool(true) ? L10n.string("Replies to everyone on the message.")
                              : L10n.string("Replies in the message's thread."))
             }
+            lines += GmailToolApproval.attachmentLines(GmailAttachmentFiles.describe(list(input, "attachments")))
             let body = text(input, "body") ?? text(input, "htmlBody").map(GmailText.plainText(fromHTML:))
             return (L10n.format("Allow Claude to send an email from %@?", account), joined(lines, body: body))
         case OutlookMailToolCatalog.sendDraft:
             return (L10n.format("Allow Claude to send a draft from %@?", account),
-                    text(input, "draftId").map { L10n.format("Draft %@", $0) } ?? "")
+                    draft.map(GmailToolApproval.draftDetail) ?? text(input, "draftId").map { L10n.format("Draft %@", $0) } ?? "")
         case OutlookMailToolCatalog.updateMessage:
             if let message = text(input, "messageId") { lines.append(L10n.format("Message %@", message)) }
             switch input["isRead"] {

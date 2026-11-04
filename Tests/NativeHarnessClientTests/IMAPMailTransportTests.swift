@@ -1,12 +1,14 @@
 import Foundation
 import XCTest
 @testable import NativeHarnessClient
+import YardletAgentTools
 
 /// An IMAP mail account behind the mailbox's contract, against a fake IMAP server that answers as Korean
 /// webmail does (no special-use attributes, folder names in Korean) and a fake SMTP server: folders by
 /// role, a list page and a message read without marking it, flags and an archive made on first use, a
 /// draft saved and saved over, a send without its Bcc line and its copy in Sent, new mail from the inbox's
-/// STATUS, and adding an account through Settings › Connectors with its password in the secure store only.
+/// STATUS, and adding an account through Settings › Connectors with its password in the secure store only,
+/// whose tools draft with the task's files and whose card before a send names them.
 final class IMAPMailTransportTests: XCTestCase {
     private static let now = Date(timeIntervalSince1970: 1_793_620_800) // 2026-11-02 12:00 UTC
     private static let drafts = "&x4TC3Lz0rQDVaA-"   // 임시보관함
@@ -194,6 +196,48 @@ final class IMAPMailTransportTests: XCTestCase {
         let accounts = center.mailAccounts()
         XCTAssertEqual(accounts.map(\.0.provider), [.imap])
         XCTAssertEqual(accounts.map(\.0.serviceName), ["Example Mail"])
+
+        // An agent's draft carries files from the task's folders as Gmail's does, and the card before it is
+        // sent reads the draft back and names them.
+        let folder = FileManager.default.temporaryDirectory.appending(path: "yardlet-imap-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let quote = folder.appending(path: "견적서.pdf".decomposedStringWithCanonicalMapping)
+        try Data(repeating: 7, count: 2_048).write(to: quote)
+        let notes = folder.appending(path: "notes.md")
+        try Data("# 견적 메모".utf8).write(to: notes)
+        let context = ConnectorToolContext(workspaceRoots: [folder])
+        let made = try XCTUnwrapAsync(await center.callConnectorTool(named: "mail_create_draft", arguments: .object([
+            "to": .array([.string("haneul@example.com")]), "subject": .string("견적"), "body": .string("첨부 확인 부탁드립니다."),
+            "attachments": .array([.string(quote.path(percentEncoded: false)), .string(notes.path(percentEncoded: false))])
+        ]), for: context))
+        XCTAssertFalse(made.isError, made.text)
+        let answer = try JSONDecoder().decode(ToolJSON.self, from: Data(made.text.utf8))
+        XCTAssertEqual(answer["attachments"]?.arrayValue?.map { $0["filename"] }, [.string("견적서.pdf"), .string("notes.md")])
+        let saved = String(decoding: try XCTUnwrap(state.appended.last), as: UTF8.self)
+        let encodedName = "=?UTF-8?B?\(Data("견적서.pdf".utf8).base64EncodedString())?="
+        XCTAssertTrue(saved.contains("Content-Type: multipart/mixed; boundary="), saved)
+        XCTAssertTrue(saved.contains("Content-Type: application/pdf; name=\"\(encodedName)\""), saved)
+        XCTAssertTrue(saved.contains("Content-Type: text/markdown; charset=\"UTF-8\"; name=\"notes.md\""), saved)
+
+        let appended = state.appended.count
+        let refused = try XCTUnwrapAsync(await center.callConnectorTool(named: "mail_create_draft", arguments: .object([
+            "to": .array([.string("haneul@example.com")]), "attachments": .array([.string("/etc/hosts")])
+        ]), for: context))
+        XCTAssertTrue(refused.isError && refused.text.contains("files come from"), refused.text)
+        XCTAssertEqual(state.appended.count, appended, "A file from elsewhere saves nothing")
+
+        let draftID = try XCTUnwrap(answer["draftId"]?.stringValue)
+        XCTAssertTrue(GmailToolApproval.readsDraft(toolName: "mcp__yardlet__mail_send_draft"))
+        let preview = await center.mailDraftPreview(tool: "mail_send_draft", arguments: ["draftId": .string(draftID)])
+        let card = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__mail_send_draft",
+                                                            input: .object(["draftId": .string(draftID)]), mailDraft: preview))
+        XCTAssertEqual(card.title, L10n.format("Allow Claude to send a draft from %@?", "dana@example.com"))
+        XCTAssertTrue(card.detail.contains(L10n.format("To: %@", "haneul@example.com")), card.detail)
+        XCTAssertTrue(card.detail.contains(L10n.format("Subject: %@", "견적")), card.detail)
+        let size = ByteCountFormatter.string(fromByteCount: 2_048, countStyle: .file)
+        XCTAssertTrue(card.detail.contains("• 견적서.pdf (\(size))"), card.detail)
+        XCTAssertTrue(card.detail.contains("첨부 확인 부탁드립니다."), card.detail)
 
         center.remove(record.id)
         try await waitUntil { (try? credentials.load(record.id)) == nil }

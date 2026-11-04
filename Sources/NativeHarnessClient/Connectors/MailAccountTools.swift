@@ -44,7 +44,8 @@ enum MailAccountToolCatalog {
                         "subject": Schema.string("Subject. A reply takes the original's when left out."),
                         "body": Schema.string("Plain-text body. A reply's quote of the original follows it."),
                         "replyToMessageId": Schema.string("The message this replies to."),
-                        "replyAll": Schema.boolean("With replyToMessageId, reply to everyone on the original. Defaults to false.")
+                        "replyAll": Schema.boolean("With replyToMessageId, reply to everyone on the original. Defaults to false."),
+                        "attachments": Schema.stringArray(GmailAttachmentFiles.argumentDescription)
                     ], readOnly: false, openWorld: true),
         Schema.tool(sendDraft, "Send draft", "Sends a draft saved earlier and keeps a copy in Sent.",
                     properties: ["draftId": Schema.string("The draft's ID, from create_draft.")],
@@ -58,6 +59,9 @@ enum MailAccountToolCatalog {
 struct MailAccountToolRunner {
     let transport: any MailAccountTransport
     let account: MailAccount
+    /// The calling task's folders, where attachments may come from besides the person's own
+    /// (`GmailAttachmentFiles`).
+    var taskFolders: [URL] = []
 
     typealias Problem = ConnectorToolArguments.Problem
     private typealias Arguments = ConnectorToolArguments
@@ -80,6 +84,8 @@ struct MailAccountToolRunner {
             }
             return .text(Arguments.text(result))
         } catch let problem as Problem {
+            return .error(problem.localizedDescription)
+        } catch let problem as GmailOutgoingMessage.Problem {
             return .error(problem.localizedDescription)
         }
     }
@@ -141,6 +147,8 @@ struct MailAccountToolRunner {
         let to = try Arguments.strings(arguments, "to"), cc = try Arguments.strings(arguments, "cc")
         let bcc = try Arguments.strings(arguments, "bcc")
         let body = Arguments.string(arguments, "body") ?? ""
+        let files = try GmailAttachmentFiles.check(try Arguments.strings(arguments, "attachments"),
+                                                   roots: GmailAttachmentFiles.roots(taskFolders: taskFolders))
         var composition: MailComposition
         if let replyTo = Arguments.string(arguments, "replyToMessageId") {
             let thread = try await transport.thread(replyTo)
@@ -161,8 +169,22 @@ struct MailAccountToolRunner {
         }
         composition.bcc = bcc.joined(separator: ", ")
         if let subject = Arguments.string(arguments, "subject") { composition.subject = subject }
+        composition.attachments = files.map(\.url)
         let draftID = try await transport.saveDraft(composition)
-        return .object(["draftId": .string(draftID), "to": .string(composition.to), "subject": .string(composition.subject)])
+        var answer: [String: ToolJSON] = ["draftId": .string(draftID), "to": .string(composition.to),
+                                          "subject": .string(composition.subject)]
+        if !files.isEmpty { answer["attachments"] = Self.attached(files) }
+        return .object(answer)
+    }
+
+    /// Each attached file's name and size, as Gmail's tools answer them.
+    static func attached(_ files: [GmailAttachmentFiles.Checked]) -> ToolJSON {
+        .array(files.map { .object(["filename": .string($0.name), "size": .integer(Int64($0.size))]) })
+    }
+
+    /// What a draft holds, for the request card before it is sent (`GmailToolApproval`).
+    func draftPreview(_ arguments: [String: ToolJSON]) async throws -> MailDraftPreview? {
+        try await transport.thread(try Arguments.required(arguments, "draftId")).messages.last.map(MailDraftPreview.init)
     }
 
     private func send(_ arguments: [String: ToolJSON]) async throws -> ToolJSON {

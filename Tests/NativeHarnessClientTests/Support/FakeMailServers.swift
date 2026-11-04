@@ -6,7 +6,8 @@ import Foundation
 
 /// A Korean webmail account as the fake IMAP server holds it, shared by its connections: the inbox
 /// (two messages, one with a PDF), Sent, Drafts, Spam, Trash and two folders of the person's own, all
-/// without special-use attributes; what was appended; and an Archive once made.
+/// without special-use attributes; what was appended, read back as drafts by its UID; and an Archive
+/// once made.
 final class FakeMailState: @unchecked Sendable {
     private let lock = NSLock()
     private var _inbox = (validity: UInt32(7), next: UInt32(12), messages: 2, unseen: 1)
@@ -78,6 +79,11 @@ final class FakeMailState: @unchecked Sendable {
                     + "BODYSTRUCTURE \(Self.plain))\r\n", "OK Fetch completed")
         case "UID FETCH 10 (BODY.PEEK[])":
             return ("* 1 FETCH (UID 10 BODY[] \(Self.literal(Self.raw)))\r\n", "OK Fetch completed")
+        case let fetch where fetch.hasPrefix("UID FETCH") && fetch.hasSuffix("(UID FLAGS INTERNALDATE RFC822.SIZE BODYSTRUCTURE)"):
+            let uid = Int(fetch.split(separator: " ")[2]) ?? 0
+            guard _appended.indices.contains(uid - 1) else { return ("", "OK Fetch completed") }
+            return ("* 1 FETCH (UID \(uid) FLAGS (\\Draft \\Seen) INTERNALDATE \"02-Nov-2026 12:00:00 +0000\" "
+                    + "RFC822.SIZE \(_appended[uid - 1].count))\r\n", "OK Fetch completed")
         case let fetch where fetch.hasPrefix("UID FETCH") && fetch.hasSuffix("(BODY.PEEK[])"):
             let uid = Int(fetch.split(separator: " ")[2]) ?? 0
             let message = String(decoding: _appended[uid - 1], as: UTF8.self)

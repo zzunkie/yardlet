@@ -121,8 +121,7 @@ enum GmailToolCatalog {
             "body": string("The plain-text body, without Markdown."),
             "htmlBody": string("An HTML body, sent beside the plain-text one."),
             "replyToMessageId": string("The message this replies to."),
-            "attachments": stringArray("Local files to attach, as absolute paths (~/ for the home folder): from the "
-                + "task's folders, the temporary folder, Desktop, Documents, or Downloads, not hidden ones. 25 MB in all.")
+            "attachments": stringArray(GmailAttachmentFiles.argumentDescription)
         ]
     }
 
