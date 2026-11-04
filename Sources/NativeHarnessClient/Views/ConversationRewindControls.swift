@@ -17,6 +17,7 @@ struct ConversationRewindActions {
     let loadFilePoints: @MainActor () async throws -> [ClaudeConversationPoint]
     let previewFiles: @MainActor (String) async throws -> FileRewindPreview
     let restoreFiles: @MainActor (FileRewindPreview) async throws -> HarnessFileRewindResult
+    var confirmsRestore = false
 }
 
 struct ConversationEditBanner: View {
@@ -46,6 +47,7 @@ struct ClaudeFileRewindSheet: View {
     @State private var result: HarnessFileRewindResult?
     @State private var error: String?
     @State private var busy = false
+    @State private var confirmsRestore = false
     @State private var generation = UUID()
 
     var body: some View {
@@ -73,9 +75,12 @@ struct ClaudeFileRewindSheet: View {
                     FileRewindPreviewContent(result: result ?? preview.result)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 240)
+                .frame(minHeight: 80, maxHeight: 240)
                 if result == nil, preview.result.canRewind, preview.result.filesChanged != nil {
-                    Button(L10n.string("Restore these files"), role: .destructive) { Task { await restore(preview) } }
+                    Button(L10n.string("Restore these files"), role: .destructive) {
+                        if actions.confirmsRestore { confirmsRestore = true }
+                        else { Task { await restore(preview) } }
+                    }
                         .disabled(busy)
                 }
             }
@@ -83,6 +88,12 @@ struct ClaudeFileRewindSheet: View {
             HStack { Spacer(); Button(L10n.string("Close")) { dismiss() }.disabled(busy) }
         }
         .padding(20).frame(width: 480)
+        .confirmationDialog(L10n.string("Restore these files"), isPresented: $confirmsRestore) {
+            Button(L10n.string("Restore these files"), role: .destructive) {
+                if let preview { Task { await restore(preview) } }
+            }
+            Button(L10n.string("Cancel"), role: .cancel) {}
+        }
         .onChange(of: selectedPointID) { _, _ in
             generation = UUID(); preview = nil; result = nil; error = nil
         }

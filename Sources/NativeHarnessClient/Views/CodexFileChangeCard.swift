@@ -4,7 +4,17 @@ private struct OpenTaskChangesKey: EnvironmentKey {
     static let defaultValue: (@MainActor @Sendable () -> Void)? = nil
 }
 
+private struct OpenTaskFileChangesKey: EnvironmentKey {
+    static let defaultValue: (@MainActor @Sendable (String) -> Void)? = nil
+}
+
 extension EnvironmentValues {
+    /// Opens the same panel with a particular task-relative file selected.
+    var openTaskFileChanges: (@MainActor @Sendable (String) -> Void)? {
+        get { self[OpenTaskFileChangesKey.self] }
+        set { self[OpenTaskFileChangesKey.self] = newValue }
+    }
+
     /// Opens the task's Changes panel, where a diff the conversation leaves out continues. Nil
     /// where the conversation has no task panels to open.
     var openTaskChanges: (@MainActor @Sendable () -> Void)? {
@@ -140,6 +150,7 @@ struct CodexFileDiffBox<FileLink: View>: View {
     @ViewBuilder let fileLink: () -> FileLink
 
     @Environment(\.openTaskChanges) private var openTaskChanges
+    @Environment(\.openTaskFileChanges) private var openTaskFileChanges
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -185,8 +196,11 @@ struct CodexFileDiffBox<FileLink: View>: View {
     private func notice(_ text: String, continuesInChanges: Bool) -> some View {
         HStack(spacing: 8) {
             Text(text).foregroundStyle(.secondary)
-            if continuesInChanges, let openTaskChanges {
-                Button(L10n.string("Open in Changes")) { openTaskChanges() }
+            if continuesInChanges, openTaskFileChanges != nil || openTaskChanges != nil {
+                Button(L10n.string("Open in Changes")) {
+                    if let openTaskFileChanges { openTaskFileChanges(row.displayPath) }
+                    else { openTaskChanges?() }
+                }
                     .buttonStyle(.link)
                     .parityPointer()
             }

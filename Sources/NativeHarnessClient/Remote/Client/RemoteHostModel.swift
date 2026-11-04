@@ -49,6 +49,8 @@ final class RemoteHostModel: Identifiable {
     private(set) var newTask: RemoteNewTask?
     private(set) var followUp: RemoteFollowUpMode?
     /// The host lists its scheduled tasks (§15.21) and serves what its tasks made (§15.22).
+    private(set) var offersSubtasks = false
+    private(set) var offersFileRewind = false
     private(set) var offersSchedules = false
     private(set) var offersWorkspaceFiles = false
     private(set) var offersTaskFiles = false
@@ -72,6 +74,8 @@ final class RemoteHostModel: Identifiable {
     /// The last command the host refused, in a line for the window.
     var commandError: String?
     /// The host answers a task's settings, slash commands, edit and fork (§15.23).
+    private(set) var nextSteps = false
+    private(set) var bankedResets = false
     private(set) var taskControls = false
     /// Each open task's composer settings as the host last answered them (§15.23).
     var taskSettings: [String: [RemoteSetting]] = [:]
@@ -267,6 +271,8 @@ final class RemoteHostModel: Identifiable {
             tasks = (response.tasks ?? []).sorted { $0.lastActivityAt > $1.lastActivityAt }
             newTask = response.newTask
             followUp = response.followUp
+            offersSubtasks = response.subtasks == true
+            offersFileRewind = response.fileRewind == true
             offersSchedules = response.scheduledTasks == true
             offersTaskFiles = response.taskFiles == true
             offersReview = response.reviewReading == true
@@ -275,6 +281,8 @@ final class RemoteHostModel: Identifiable {
             if case let .task(taskID) = selection { Task { await readTaskRail(taskID) } }
             offersWorkspaceFiles = response.workspaceFiles == true
             offersTerminals = response.terminals == true
+            nextSteps = response.nextSteps == true
+            bankedResets = response.bankedResets == true
             taskControls = response.taskControls == true
             let full = response.fullConversation == true
             if full != sendsFullConversation {

@@ -34,6 +34,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     private var turnMemos: [ConversationKey: [String: (turn: ConversationTurn, remote: RemoteTurn)]] = [:]
     /// Sent pictures as small previews for full detail; nil where the platform makes none.
     private let previews: RemoteImagePreviews?
+    let subtaskPreviewMaker: RemoteImagePreviews.Make?
     /// How many turns were projected so far: a change projects only the turns it touched.
     private(set) var projectedTurnCount = 0
     private(set) var watched: Set<UUID> = []
@@ -49,9 +50,11 @@ final class AppModelRemoteBridge: RemoteBridge {
     var railWatches: Set<UUID> = []
     var railCache: [UUID: (key: String, git: SessionRailGitInfo, sources: TaskInstructionSources)] = [:]
     var railTimers: [UUID: Task<Void, Never>] = [:]
+    var remoteFilePreviews: [String: FileRewindPreview] = [:]
     var answeredSettings: [UUID: [RemoteSetting]] = [:]
     var watchesSettings: Set<UUID> = []
     /// A task's browser tabs (§15.25), when this build has a browser engine.
+    var resetOffers: [UUID: RemoteResetOffer] = [:]
     let terminals = RemoteTerminalBridge()
     let browser: RemoteTabBridge
 
@@ -59,6 +62,7 @@ final class AppModelRemoteBridge: RemoteBridge {
          browser: RemoteTabBridge.Environment = .init(client: { nil })) {
         self.model = model
         previews = makePreview.map(RemoteImagePreviews.init(make:))
+        subtaskPreviewMaker = makePreview
         self.browser = RemoteTabBridge(model: model, environment: browser)
         previews?.onReady = { [weak self] askers in self?.previewsReady(askers) }
         // A tab's `file:` page is shown only when `readFile` would serve it (§15.22, §15.25).
@@ -84,6 +88,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.followUp = model.followUpMode == .steer ? .steer : .queue
         snapshot.taskRail = true
         snapshot.reviewReading = true
+        snapshot.bankedResets = true
         snapshot.browserTabs = browser.isAvailable
         snapshot.terminals = RemoteTerminalBridge.isAvailable
         snapshot.tabControls = browser.isAvailable
@@ -107,13 +112,19 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.scheduledTasks = true
         snapshot.taskFiles = true
         snapshot.taskControls = true
+        snapshot.conversationBodies = true
+        snapshot.nextSteps = true
         snapshot.fullConversation = true
+        snapshot.fileRewind = true
+        snapshot.taskNotices = true
+        snapshot.subtasks = true
         let listed = Dictionary(model.sidebarSessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for index in snapshot.tasks.indices {
             guard let id = UUID(uuidString: snapshot.tasks[index].id), let session = listed[id] else { continue }
             snapshot.tasks[index].answerLine = model.answerLineBySessionID[id]
             snapshot.tasks[index].latestTurnStartedAt = model.latestTurnBySessionID[id]?.startedAt.map(RemoteJSON.milliseconds)
             snapshot.tasks[index].completed = session.status == .completed
+            snapshot.tasks[index].notices = Self.taskNotices(session, model: model)
             if acceptsImages(session, in: model) { snapshot.tasks[index].acceptsImages = true }
             if inputPolicy(session, in: model).showsMentionControl { snapshot.tasks[index].acceptsFiles = true }
             if FollowUpPolicy(harness: session.harness)?.steers == true { snapshot.tasks[index].steers = true }
@@ -263,6 +274,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         var options: [String] = []
         if !model.usageLimitAccounts(for: session).isEmpty { options.append("continueWithAccount") }
         if card.resetsAt != nil { options.append("autoContinue") }
+        options.append("resumeAfterReset")
         guard !options.isEmpty else { return conversation }
         var conversation = conversation
         conversation.turns[turn].items[index].options = options
@@ -293,8 +305,14 @@ final class AppModelRemoteBridge: RemoteBridge {
     private func withSuggestionStates(_ conversation: RemoteConversation, of session: SessionRecord,
                                       in model: AppModel) -> RemoteConversation {
         var conversation = conversation
+        // Read outside the turn memo: attachment can change without any transcript item changing.
+        // Observation invalidates the conversation when the provider handle comes or goes.
+        let canStopSubtasks = model.isAttached(session.id)
         for turn in conversation.turns.indices {
             for index in conversation.turns[turn].items.indices {
+                if !canStopSubtasks, conversation.turns[turn].items[index].subagent?.canStop == true {
+                    conversation.turns[turn].items[index].subagent?.canStop = nil
+                }
                 guard let id = conversation.turns[turn].items[index].suggestionId else { continue }
                 var item = conversation.turns[turn].items[index]
                 let resolution = model.taskSuggestions.resolution(of: id, in: session.id)
@@ -356,6 +374,11 @@ final class AppModelRemoteBridge: RemoteBridge {
             case let .userMessage(_, images):
                 guard let previews else { continue }
                 for url in images.compactMap(\.url) where full.previews[url] == nil {
+                    full.previews[url] = previews.preview(url, for: asker)
+                }
+            case .tool:
+                guard let previews else { continue }
+                for url in RemoteConversationProjection.bodyImages(item, workspaceURL: session.workspaceURL) where full.previews[url] == nil {
                     full.previews[url] = previews.preview(url, for: asker)
                 }
             case let .subagent(subagent):
@@ -585,6 +608,10 @@ final class AppModelRemoteBridge: RemoteBridge {
                 Task { await model.removeQueued(id, for: session) }
             }
             return nil
+        case let .cancelAccountMove(taskID):
+            guard let session = session(taskID) else { return RemoteError(.notFound) }
+            model.cancelAccountSwitchAfterTurn(for: session.id)
+            return nil
         case let .continueWithAccount(taskID, accountID):
             guard let session = session(taskID) else { return RemoteError(.notFound) }
             guard Self.latestLimit(presentation(of: session, in: model), of: session, in: model) != nil else {
@@ -599,6 +626,8 @@ final class AppModelRemoteBridge: RemoteBridge {
             // The limit card's list.
             Task { await model.continueAfterUsageLimit(using: connection, for: session) }
             return nil
+        case let .nextStep(taskID, turnID, action, text):
+            return await nextStep(taskID: taskID, turnID: turnID, action: action, text: text)
         case let .setAutoContinue(taskID, enabled):
             guard let session = session(taskID) else { return RemoteError(.notFound) }
             guard let card = Self.latestLimit(presentation(of: session, in: model), of: session, in: model),
@@ -1235,7 +1264,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     }
 
     /// The Codex thread the timeline draws, once it has turns; otherwise the timeline draws the shared transcript.
-    private static func codexState(of session: SessionRecord, in model: AppModel) -> CodexTaskState? {
+    static func codexState(of session: SessionRecord, in model: AppModel) -> CodexTaskState? {
         guard HarnessPresentationPolicy(harness: session.harness).usesCodexTimeline,
               let state = model.codexPresentationBySessionID[session.id], state.thread?.turns.isEmpty == false else { return nil }
         return state

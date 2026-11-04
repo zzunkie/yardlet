@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 @testable import NativeHarnessClient
+@testable import YardletRemote
 
 final class ConversationRewindTests: XCTestCase {
     func testSupportedLegacyRuntimeStillUsesRollbackThroughBothRoutes() async throws {
@@ -149,6 +150,39 @@ final class ConversationRewindTests: XCTestCase {
             XCTAssertEqual(requests.suffix(3).map { $0["request"]?["dry_run"] }, [.bool(true), .bool(true), .bool(false)])
             let inputs = await transport.sentValues
             XCTAssertTrue(inputs.isEmpty)
+            await adapter.close(handle)
+        }
+    }
+
+    func testClaudeRestoreRechecksAuthorizationAfterTheFreshPreviewThroughBothRoutes() async throws {
+        for routed in [false, true] {
+            let transport = FakeClaudeTransport()
+            await transport.setFileRewindResponses([previewJSON, previewJSON, previewJSON, previewJSON])
+            let direct = ClaudeAdapter(executableURL: URL(filePath: "/tmp/claude"), transportFactory: { _ in transport })
+            let adapter: any HarnessAdapter = routed
+                ? YHPProviderCompatibilityAdapter(adapter: direct, manifest: HarnessProtocolCompatibilityManifest.claude()) : direct
+            let handle = try await adapter.createSession(.init(localSessionID: UUID(), workspaceURL: URL(filePath: "/tmp"), initialPrompt: nil))
+            let controller = try XCTUnwrap(adapter as? any HarnessFileRewinding)
+            let userID = UUID().uuidString
+            let preview = try await controller.previewFileRewind(userMessageID: userID, in: handle)
+            let permit = RemoteFileWritePermit()
+            await transport.holdRewindPreview()
+            let restore = Task {
+                try await controller.restoreFiles(userMessageID: userID, expecting: preview, in: handle, authorizing: {
+                    guard permit.isValid else { throw RemoteError(.notAllowed) }
+                })
+            }
+            try await waitUntil { await transport.hasHeldRewindPreview }
+            permit.revoke()
+            await transport.releaseRewindPreview()
+            do { _ = try await restore.value; XCTFail("Revoked authorization must stop before dispatch") }
+            catch let error as RemoteError { XCTAssertEqual(error.code, .notAllowed) }
+            let requests = await transport.requestedValues
+            XCTAssertFalse(requests.contains { $0["request"]?["dry_run"] == .bool(false) })
+            // A refusal sent no write and must not poison the adapter as an uncertain restore.
+            _ = try await controller.restoreFiles(userMessageID: userID, expecting: preview, in: handle)
+            let retried = await transport.requestedValues
+            XCTAssertEqual(retried.filter { $0["request"]?["dry_run"] == .bool(false) }.count, 1)
             await adapter.close(handle)
         }
     }

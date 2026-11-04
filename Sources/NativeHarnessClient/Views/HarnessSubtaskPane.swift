@@ -20,6 +20,10 @@ struct HarnessSubtaskPane: View {
     var actions = ConversationActions()
     let load: @MainActor @Sendable () async throws -> HarnessSubtaskTranscript
     let onClose: () -> Void
+    var loadPresented: (@MainActor @Sendable () async throws -> (ConversationPresentation, Bool))? = nil
+    var hostWorkspace = false
+    @State private var presented: ConversationPresentation?
+    @State private var presentedTruncated = false
     @State private var snapshot: HarnessSubtaskTranscript?
     @State private var error: String?
     @State private var loading = false
@@ -28,7 +32,7 @@ struct HarnessSubtaskPane: View {
     var body: some View {
         VStack(spacing: 0) {
             WorkSurfaceHeader(title: activity.title, systemName: "person.2",
-                              workspaceURL: session.workspaceURL, onClose: onClose) {
+                              workspaceURL: hostWorkspace ? nil : session.workspaceURL, onClose: onClose) {
                 ParityIconButton(systemName: "arrow.clockwise", help: L10n.string("Refresh")) {
                     Task { await refresh() }
                 }
@@ -37,6 +41,11 @@ struct HarnessSubtaskPane: View {
             if let error {
                 WorkSurfaceEmptyState(title: L10n.string("Child conversation unavailable"),
                                       message: error, systemName: "text.bubble")
+            } else if let presented {
+                if presentedTruncated {
+                    Text(L10n.string("Showing recent conversation")).font(.caption).foregroundStyle(.secondary).padding(8)
+                }
+                ConversationTimeline(source: .presented(presented), placement: .panel, readingPosition: readingPosition, actions: actions)
             } else if let snapshot, !snapshot.entries.isEmpty {
                 if snapshot.isTruncated {
                     Text(L10n.string("Showing recent conversation"))
@@ -60,6 +69,12 @@ struct HarnessSubtaskPane: View {
         loading = true
         error = nil
         do {
+            if let loadPresented {
+                let (value, truncated) = try await loadPresented()
+                guard token == generation, !Task.isCancelled else { return }
+                presented = value; presentedTruncated = truncated; loading = false
+                return
+            }
             let value = try await load()
             guard token == generation, !Task.isCancelled else { return }
             snapshot = value

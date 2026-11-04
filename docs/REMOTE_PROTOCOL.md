@@ -575,6 +575,8 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
 
 Every revision of protocol 2 only adds optional fields or states a rule, except where it says otherwise.
 
+- 2026-11-04: desktop conversation next steps and remaining content (§15.31).
+
 - 2026-11-04: per-task session rail facts and actions, and cached home task lines (§15.34).
 
 - 2026-11-04: §15.26 adds read-only Review, advertised by optional `reviewReading`; no mutation request is added.
@@ -1943,6 +1945,86 @@ The desktop client provides `openHostBrowserLink` for window and terminal link h
 handling. These addresses refer to the host's servers; no port forwarding is created. With an older host, the hook
 shows an update notice instead of sending those links to the client's own loopback interface.
 
+### 15.31 Conversation next steps and content
+
+The optional snapshot flag `nextSteps: true` advertises `nextStep`. Full-detail turn headers carry
+optional `planToImplement`, `nextQuestions` and `answeredQuestions`; each question carries `title`,
+`options`, and the provider's `itemID`. Answered questions additionally carry `answerOptions` and
+`customAnswer`. Full assistant items retain `sentWhileWorking` and `unmarkedAnswer`, so questions
+keep their host position instead of becoming a closing answer. These fields are derived from the host's conversation projection and retained with
+its per-turn cache. Up to 32 questions with 32 options each are carried; question and option text
+is capped at 500 characters, custom answers at 8,000 and the offered plan at 200,000. The existing header `options` includes `retry` only when the host offers it.
+
+`{"type":"nextStep","taskId":"…","turnId":"…","action":"implementPlan"}` is a command. Actions are
+`implementPlan`, `answer`, `answerWhileWorking`, `retry`, and `resumeAfterReset`. Question answers carry
+`text` (at most 32,000 characters), the same provider-native reply the local question form submits.
+The host rereads the named turn and validates that the action remains available. Question replies must
+use the provider-native answer envelope and reference only current question IDs; the host rebuilds
+the reply with its own question titles. A working-turn answer requires that same turn to remain active.
+The client captures the shown turn ID in the button's handler, so a stale button cannot target a newer turn. Plan implementation
+uses the plan on the host, ignoring client text. Retry uses the host's retry path. Resume targets the
+current Claude Code limit card and requires that its reset time has passed; its item advertises
+`resumeAfterReset` even before that time so the same local countdown can reveal Resume when due.
+Stale targets return `notFound`; unavailable actions return `notAllowed`, and an edit or account move
+returns `busy`. No additional device permission is required. Each accepted or rejected command is
+logged with its kind, task, device and result, never answer or plan text.
+
+The optional `conversationBodies` flag advertises the additional full-detail bodies below. Older
+clients ignore these optional fields. The desktop client uses the same conversation views as the
+local window and leaves actions unavailable when the host does not advertise their capability.
+Tool input remains host-only; output and result bodies do not add a route to account credentials or
+environment settings.
+
+Full-detail items optionally carry `body`, preserving command output while running, reasoning text,
+file-change rows, MCP result blocks and shell-message output. The existing `images` previews also
+apply to tool lines. `body` can contain `output`, `hasOutput`, `reasoning`, `command`, `headBytes`,
+`background`, `files` and `mcp`. File rows carry relative `path`, `kind`, `state`, `preview`, line counts,
+`lines`, `hidden` and `firstChangedLine`; MCP blocks carry `kind`, `text`, `image`, `name`, `title`, `uri`
+and `mimeType`. No host file URL is handed to the client's filesystem. File rows open through the
+host's existing scoped `readFile` path. Open in Changes selects that file in the existing remote
+Review panel using its host repository metadata; it adds no mutation request. Output is capped at 64,000 characters (the provider's already bounded live head/tail buffer is kept intact), reasoning and commands
+at 200,000; at most 50 files share 100,000 preview characters, and at most 50 MCP blocks share 64,000
+text characters and four image previews. These bodies use the existing per-turn projection cache.
+
+`bankedResets: true` advertises `usageReset(taskId)` and `useUsageReset(taskId, token, confirmed)`.
+The read describes the current limit card's account and its available banked resets, including the
+next reset and the limit metrics it restores. The token is opaque, tied to that task's current account
+and valid for one hour. The client uses the same confirmation content as the local account control;
+only confirmation sends `useUsageReset` with `confirmed: true`. The host calls its account store's
+normal reset path. Missing confirmation, an account change or changed reset availability is refused.
+A completed token's result is retained, so retrying its response cannot consume another reset.
+The write is an audited command with no additional device permission. Provider reset identifiers,
+credentials and purchase URLs are never sent; buying a reset remains on the host.
+
+`subtasks: true` advertises `subtask(taskId, itemId, action)`, where `action` is `read` or `stop`.
+The item identifies a Claude Code subagent of that task. A read considers the latest ten turns and
+uses the normal 120-item, approximately 384 KiB page targets, retaining at least the latest whole
+turn. Only the hard reply budget (8 MiB minus 4 KiB for the envelope) trims individual items from the
+oldest end; the reply marks omissions, including any earlier content the host reader omitted.
+An item too large even on its own becomes a visible omission notice. Read presents its conversation through the
+same subtask pane as the local window; Stop goes through the host's existing subtask control and is
+an audited command. Neither requires an additional device permission. A Codex child thread continues
+to open as the host's own task.
+
+`taskNotices: true` advertises the optional task `notices`: provider limit warnings, restart resume,
+reconnecting, missing folder and account-move state. The desktop composer uses the local notice
+views. `cancelAccountMove` invokes the host's own cancellation path and is audited. Recreating a
+missing worktree remains on the host; the client keeps that notice's action disabled.
+
+`fileRewind: true` advertises `fileRewind(taskId, action, pointId?, receipt?, confirmed?)`, with actions
+`points`, `preview` and `restore`. Points and preview are scoped reads without an additional device
+permission. Preview returns an opaque receipt retained by the host, tied to the provider checkpoint
+and the file fingerprints the local restore path records. All reported files must resolve inside
+the task's workspace; names on the wire are relative. Restore requires the device's `fileWrites`
+permission (§15.28), that receipt and `confirmed: true`. The client uses the local restore sheet and
+asks once more before submitting. The host revalidates the receipt and current file state through
+its normal restore method, consumes the receipt and audits the command without file content.
+A live permit is revoked when the connection ends or file-write permission is removed. The provider
+adapter checks it after its fresh dry run, immediately before dispatching the actual restore request;
+a restore already dispatched to the provider cannot be undone by revoking permission. A
+missing or changed checkpoint, changed files, unknown file list or out-of-scope target cannot be
+restored through this path. Nothing is written to the client's workspace.
+
 ### 15.34 Session rail and home task lines
 
 A snapshot may advertise `taskRail: true`. A desktop asks `{type: "taskRail", taskId}` for the task
@@ -2078,6 +2160,14 @@ device's push key, associated data the UTF-8 bytes of `yardlet-push/1`, over the
   payload, message 2's payload and a chunked transport message.
 
 ## 18. Yardlet as a client
+
+Conversation next steps (§15.31) use the host's current turn and the local conversation controls:
+plan implementation, question options, failed-turn retry and resuming after a limit reset. All
+requests act on the host; the client does not execute a plan or retry against its own workspace.
+The same cards also draw command output, file rows, reasoning, shell output and MCP result bodies.
+Claude subagents open in the local subtask pane with host reads and Stop, composer notices use the
+same notice lines, banked resets use the common confirmation, and file restore uses the common
+preview sheet plus a client confirmation and the host's file-write permission.
 
 Yardlet on another Mac follows a Mac's tasks over this protocol, unchanged: File › Connect to Mac… pairs with a
 link from §12 (copied on the host, pasted or opened as a `yardlet-remote` link; nothing pairs until the person

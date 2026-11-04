@@ -44,6 +44,33 @@ final class RemoteServerTests: XCTestCase {
     }
 
 
+    func testNextStepCommandsAreAuditedWithoutTheirAnswers() async throws {
+        let harness = try await ServerHarness()
+        let phone = try await harness.authenticatedPhone()
+        let request = RemoteRequest.nextStep(taskID: "A", turnID: "turn", action: .answer, text: "private answer")
+        XCTAssertNil(request.requiredPermission)
+        await harness.server.receive(RemoteRequestEnvelope(id: "next", request: request).encoded(),
+                                     on: try XCTUnwrap(phone.id))
+        let response = try await phone.response("next")
+        XCTAssertTrue(response.ok)
+        let commands = await harness.bridge.commands
+        guard case let .nextStep(taskID, turnID, action, text)? = commands.last else { return XCTFail("Missing next step") }
+        XCTAssertEqual(taskID, "A")
+        XCTAssertEqual(turnID, "turn")
+        XCTAssertEqual(action, .answer)
+        XCTAssertEqual(text, "private answer")
+        let entry = try XCTUnwrap(harness.audit.entries().last)
+        XCTAssertEqual(entry.type, "nextStep")
+        XCTAssertEqual(entry.task, "A")
+        XCTAssertFalse(try String(contentsOf: harness.auditURL, encoding: .utf8).contains("private answer"))
+        await harness.server.receive(RemoteRequestEnvelope(id: "reset-read", request: .usageReset(taskID: "A")).encoded(),
+                                     on: try XCTUnwrap(phone.id))
+        _ = try await phone.response("reset-read")
+        XCTAssertEqual(harness.audit.entries().last?.type, "usageReset")
+        XCTAssertEqual(harness.audit.entries().last?.task, "A")
+        await harness.server.shutdown(reason: "test")
+    }
+
     func testTerminalOwnershipFlowAndPermissionRevocation() async throws {
         let harness = try await ServerHarness()
         let key = Data(RemoteRandom.bytes(32))
@@ -163,6 +190,28 @@ final class RemoteServerTests: XCTestCase {
         try await waitUntil { await harness.bridge.closedTerminals.contains(second) }
         let invalid = RemoteRequestEnvelope(id: "bad", request: .terminalResize(taskID: "A", terminalID: terminal, columns: 0, rows: 1))
         guard case .failure = RemoteRequestEnvelope.decode(invalid.encoded()) else { return XCTFail("Invalid size accepted") }
+    }
+
+    func testPendingFileWritesLoseTheirPermitOnPermissionRevocationOrDisconnect() async throws {
+        let harness = try await ServerHarness()
+        let phone = try await harness.authenticatedPhone()
+        let connection = try XCTUnwrap(phone.id)
+        let devices = await harness.devices.all()
+        let device = try XCTUnwrap(devices.first)
+        try await harness.server.setPermission(.fileWrites, allowed: true, for: device.id)
+        let first = await harness.server.fileWritePermit(on: connection, requestID: UUID())
+        let permit = try XCTUnwrap(first)
+        XCTAssertTrue(permit.isValid)
+        try await harness.server.setPermission(.fileWrites, allowed: false, for: device.id)
+        XCTAssertFalse(permit.isValid)
+        try await harness.server.setPermission(.fileWrites, allowed: true, for: device.id)
+        XCTAssertFalse(permit.isValid, "Regranting must not revive an old operation")
+        let second = await harness.server.fileWritePermit(on: connection, requestID: UUID())
+        let disconnectPermit = try XCTUnwrap(second)
+        await harness.server.closed(connection)
+        XCTAssertFalse(disconnectPermit.isValid)
+        let afterClose = await harness.server.fileWritePermit(on: connection, requestID: UUID())
+        XCTAssertNil(afterClose)
     }
 
     func testDevicePermissionsDefaultToDeniedPersistAndRevokeLive() async throws {

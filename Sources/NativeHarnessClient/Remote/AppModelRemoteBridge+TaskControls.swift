@@ -283,12 +283,13 @@ extension AppModelRemoteBridge {
 
     /// What a turn offers another device, as its own message actions offer it (`ConversationTurnAction`): Codex's edit
     /// of its request and fork from any finished turn, Claude Code's edit of its latest message and fork of the whole
-    /// conversation from its latest turn. Restoring files changes them, and stays on the Mac. An edit is offered only
+    /// conversation from its latest turn. Restoring files uses the host-reviewed receipt and device file permission. An edit is offered only
     /// where the message reaches the other device whole.
     static func turnOptions(_ turn: ConversationTurn, canBranch: Bool) -> [String] {
         var options: [String] = []
         if editText(of: turn).map({ $0.count <= RemoteText.userLimit }) == true { options.append("edit") }
         if turn.actions.canFork, canBranch { options.append("fork") }
+        if turn.actions.restoreFiles != nil { options.append("restoreFiles") }
         return options
     }
 
@@ -304,17 +305,20 @@ extension AppModelRemoteBridge {
                          of session: SessionRecord, in model: AppModel) -> RemoteConversation {
         // Codex forks by its turn menu's own path; any other harness where its adapter has a fork.
         let canBranch = HarnessPresentationPolicy(harness: session.harness).usesCodexTimeline || model.canBranch(session)
-        var offered: [String: [String]] = [:]
+        var offered: [String: (options: [String], actions: ConversationTurnActions)] = [:]
         for turn in presentation.turns {
             let options = Self.turnOptions(turn, canBranch: canBranch)
-            if !options.isEmpty { offered[turn.id] = options }
+            offered[turn.id] = (options, turn.actions)
         }
         guard !offered.isEmpty else { return conversation }
         var conversation = conversation
         for index in conversation.turns.indices {
-            guard let options = offered[conversation.turns[index].id],
+            guard let offer = offered[conversation.turns[index].id],
                   let header = conversation.turns[index].items.firstIndex(where: { $0.kind == .turn }) else { continue }
-            conversation.turns[index].items[header].options = options
+            let local = offer.actions
+            var next = offer.options
+            if local.canRetry, (session.status == .ready || session.status == .failed), model.followUps.queue(for: session.id).isEmpty { next.append("retry") }
+            conversation.turns[index].items[header].options = next
         }
         return conversation
     }

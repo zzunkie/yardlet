@@ -607,6 +607,9 @@ actor FakeClaudeTransport: ClaudeTransport {
     private(set) var stopCount = 0
     private let initializeResponse: JSONValue
     private var fileRewindResponses: [JSONValue] = []
+    private var holdsRewindPreview = false
+    private var heldRewindPreview: CheckedContinuation<Void, Never>?
+    var hasHeldRewindPreview: Bool { heldRewindPreview != nil }
     private var fileRewindError: HarnessAdapterError?
     private var flagValues: [String: JSONValue] = [:]
     private var appliedValues: [String: JSONValue] = [:]
@@ -660,6 +663,9 @@ actor FakeClaudeTransport: ClaudeTransport {
             return interruptResponse
         }
         if subtype == "rewind_files" {
+            if holdsRewindPreview, value["request"]?["dry_run"] == .bool(true) {
+                await withCheckedContinuation { heldRewindPreview = $0 }
+            }
             if let fileRewindError { throw fileRewindError }
             guard !fileRewindResponses.isEmpty else { throw HarnessAdapterError.invalidProviderEvent("No fixture rewind response") }
             return fileRewindResponses.removeFirst()
@@ -682,6 +688,10 @@ actor FakeClaudeTransport: ClaudeTransport {
     func setSettings(effective: [String: JSONValue], applied: [String: JSONValue]) {
         flagValues = effective
         appliedValues = applied
+    }
+    func holdRewindPreview() { holdsRewindPreview = true }
+    func releaseRewindPreview() {
+        holdsRewindPreview = false; heldRewindPreview?.resume(); heldRewindPreview = nil
     }
     func setFileRewindResponses(_ values: [JSONValue]) { fileRewindResponses = values }
     func setContextUsageResponse(_ value: JSONValue?) { contextUsageResponse = value }

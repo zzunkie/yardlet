@@ -129,7 +129,17 @@ public struct RemoteConversationWindow: Sendable {
         let texts = [item.text, item.title, item.detail, item.command, item.message, item.explanation,
                      item.subagent?.input, item.subagent?.output, item.subagent?.copyText, item.providerNotice?.message,
                      item.providerNotice?.details]
-        return 160 + texts.reduce(0) { $0 + ($1?.utf8.count ?? 0) }
+        func questionBytes(_ questions: [RemoteNextQuestion]?) -> Int {
+            (questions ?? []).reduce(0) { bytes, question in
+                bytes + question.title.utf8.count + question.itemID.utf8.count
+                    + question.options.reduce(0) { $0 + $1.utf8.count + 8 }
+                    + (question.answerOptions?.reduce(0) { $0 + $1.utf8.count + 8 } ?? 0)
+                    + (question.customAnswer?.utf8.count ?? 0) + 80
+            }
+        }
+        return 160 + (item.body?.estimatedBytes ?? 0) + (item.planToImplement?.utf8.count ?? 0)
+            + questionBytes(item.nextQuestions) + questionBytes(item.answeredQuestions)
+            + texts.reduce(0) { $0 + ($1?.utf8.count ?? 0) }
             + (item.steps?.reduce(0) { $0 + $1.text.utf8.count + 40 } ?? 0)
             + (item.questions?.reduce(0) { $0 + $1.utf8.count } ?? 0)
             + (item.sender?.quotes?.reduce(0) { $0 + $1.text.utf8.count + 40 } ?? 0)

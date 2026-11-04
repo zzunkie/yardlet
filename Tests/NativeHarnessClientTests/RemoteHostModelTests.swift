@@ -14,6 +14,81 @@ import XCTest
 /// the change, and what a window showed shown again when it reopens.
 @MainActor
 final class RemoteHostModelTests: XCTestCase {
+    func testRemoteFileCardLinksStayTaskRelative() throws {
+        let url = try XCTUnwrap(RemoteConversationFileLink.url("Sources/A file.swift"))
+        XCTAssertFalse(url.isFileURL)
+        XCTAssertEqual(RemoteConversationFileLink.path(url), "Sources/A file.swift")
+        XCTAssertNil(RemoteConversationFileLink.url("../secret"))
+        XCTAssertNil(RemoteConversationFileLink.url("/outside/task"))
+        XCTAssertNil(RemoteConversationFileLink.path(URL(filePath: "/outside/task")))
+    }
+
+    func testFullFileRowsAndMCPBlocksKeepTheirOwnCards() throws {
+        let record = ConversationItemSource.transcript(TranscriptEntry(id: UUID(), createdAt: .distantPast, content: .user(text: "")))
+        let row = CodexFileChangeCardProjection.Row(id: "Sources/A.swift", change: .null, displayPath: "Sources/A.swift", fileName: "A.swift",
+            kind: .update, state: .applied, lineCounts: .init(additions: 1, deletions: 0), preview: .available, fileURL: nil,
+            precomputedPreview: .init(lines: [.init(id: 0, kind: .addition, number: 1, text: "let value = 1")], hiddenLineCount: 0, firstChangedLine: 1))
+        let entry = ConversationItem(id: "file", kind: .fileChange(.init(rows: [row], handoffs: [])), phase: .completed, source: record)
+        let wire = try XCTUnwrap(RemoteConversationProjection.item(entry, turnID: "turn", harness: .codex, workspaceURL: nil, inWork: false, full: .init()))
+        let remote = try XCTUnwrap(RemoteTurnProjection.item(wire, details: [:], hostName: "Host"))
+        guard case let .fileChange(change) = remote.kind else { return XCTFail("Expected the shared file card") }
+        XCTAssertEqual(change.rows.first?.previewLines, row.previewLines)
+        XCTAssertEqual(change.rows.first?.lineCounts, row.lineCounts)
+        XCTAssertEqual(change.rows.first?.fileURL.flatMap(RemoteConversationFileLink.path), "Sources/A.swift")
+        var tool = ConversationTool(kind: .mcp, name: "preview")
+        tool.input = "PRIVATE_INPUT_MUST_STAY_ON_HOST"
+        tool.output = "Latest tool output"
+        tool.mcpResult = CodexMCPResultProjection(result: .array([
+            .object(["type": .string("text"), "text": .string("Result body")]),
+            .object(["type": .string("resource_link"), "uri": .string("file:///outside/task/secret"), "name": .string("Secret")])
+        ]))
+        let call = ConversationItem(id: "mcp", kind: .tool(tool), phase: .completed, source: record)
+        let projected = try XCTUnwrap(RemoteConversationProjection.item(call, turnID: "turn", harness: .codex, workspaceURL: nil, inWork: false, full: .init()))
+        XCTAssertFalse(String(decoding: try JSONEncoder().encode(projected), as: UTF8.self).contains("PRIVATE_INPUT_MUST_STAY_ON_HOST"))
+        XCTAssertEqual(projected.body?.mcp?.count, 1)
+        guard case let .tool(remoteTool)? = RemoteTurnProjection.item(projected, details: [:], hostName: "Host")?.kind else { return XCTFail("Expected MCP tool") }
+        XCTAssertEqual(remoteTool.mcpResult?.textBlockCount, 1)
+        guard case let .tool(updated)? = RemoteTurnProjection.item(projected,
+            details: [projected.id: RemoteItemDetail(output: "An earlier opened detail")], hostName: "Host")?.kind else {
+            return XCTFail("Expected updated tool")
+        }
+        XCTAssertEqual(updated.output, "Latest tool output", "A cached detail must not replace a newer streamed body")
+        XCTAssertGreaterThan(RemoteConversationWindow.estimatedBytes(projected), 160)
+    }
+
+    func testFullBodiesRoundTripThroughTheSharedCards() throws {
+        let record = ConversationItemSource.transcript(TranscriptEntry(id: UUID(), createdAt: .distantPast, content: .user(text: "")))
+        let output = String(repeating: "h", count: CodexLiveCommandOutput.headLimit)
+            + CodexLiveCommandOutput.truncationLine
+            + String(repeating: "t", count: CodexLiveCommandOutput.tailLimit - 6) + "LATEST"
+        XCTAssertGreaterThan(output.count, RemoteItemDetail.outputLimit)
+        let command = ConversationCommand(command: "swift test", workingDirectory: nil, status: "running", output: output,
+                                          exitCode: nil, durationMilliseconds: nil, liveOutputHeadByteCount: CodexLiveCommandOutput.headLimit)
+        let entries = [
+            ConversationItem(id: "cmd", kind: .command(command), phase: .running, source: record),
+            ConversationItem(id: "thought", kind: .reasoning(summary: "Checking", detail: "The full reasoning body", isStreaming: false), phase: .completed, source: record),
+            ConversationItem(id: "shell", kind: .shellCommand(.init(command: "pwd", output: "workspace", hasOutput: true), entryID: UUID()), phase: .completed, source: record)
+        ]
+        for entry in entries {
+            let basic = try XCTUnwrap(RemoteConversationProjection.item(entry, turnID: "turn", harness: .codex, workspaceURL: nil, inWork: false))
+            XCTAssertNil(basic.body)
+            let wire = try XCTUnwrap(RemoteConversationProjection.item(entry, turnID: "turn", harness: .codex, workspaceURL: nil, inWork: false, full: .init()))
+            let decoded = try JSONDecoder().decode(RemoteItem.self, from: JSONEncoder().encode(wire))
+            let converted = try XCTUnwrap(RemoteTurnProjection.item(decoded, details: [:], hostName: "Host"))
+            switch (entry.kind, converted.kind) {
+            case let (.command(before), .command(after)):
+                XCTAssertEqual(after.output, before.output)
+                XCTAssertTrue(after.output?.hasSuffix("LATEST") == true)
+                XCTAssertEqual(after.liveOutputHeadByteCount, before.liveOutputHeadByteCount)
+                XCTAssertEqual(ConversationLineWording.command(before, phase: .running, harness: .codex),
+                               ConversationLineWording.command(after, phase: .running, harness: .codex))
+            case let (.reasoning(_, before, _), .reasoning(_, after, _)): XCTAssertEqual(before, after)
+            case let (.shellCommand(before, _), .shellCommand(after, _)): XCTAssertEqual(before, after)
+            default: XCTFail("The remote card changed kind")
+            }
+        }
+    }
+
     /// A real host PTY belongs to its normal workspace, yet runs before either panel has a view.
     func testRemoteTerminalUsesTheHostsSessionAndEndsWhenPermissionIsRemoved() async throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "remote-terminal-\(UUID())")

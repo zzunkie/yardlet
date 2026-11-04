@@ -797,6 +797,13 @@ struct RemoteTaskView: View {
     @State private var width: CGFloat = 0
     /// A file read from the host, shown in Quick Look.
     @State private var preview: URL?
+    @State private var changesSelectionID = UUID()
+    @State private var selectedSubtask: HarnessActivity?
+    @State private var stoppingSubtasks: Set<String> = []
+    @State private var subtaskErrors: [String: String] = [:]
+    @State private var subtaskReading = TranscriptReadingPosition()
+    @State private var subtaskReturnSurface: String?
+    @State private var stopSubtask: HarnessActivity?
 
     private var task: RemoteTask? { model.task(conversation.taskID) }
 
@@ -857,10 +864,18 @@ struct RemoteTaskView: View {
         .onChange(of: panels.trailingSurfaceID) { old, new in
             if let old, Self.isBrowserTab(old), new.map(Self.isBrowserTab) != true, showsBrowser { model.browser.hide() }
         }
+        .confirmationDialog(L10n.string("Stop task"), isPresented: Binding(
+            get: { stopSubtask != nil }, set: { if !$0 { stopSubtask = nil } })) {
+            Button(L10n.string("Stop task"), role: .destructive) {
+                if let activity = stopSubtask { requestSubtaskStop(activity) }; stopSubtask = nil
+            }
+            Button(L10n.string("Cancel"), role: .cancel) { stopSubtask = nil }
+        }
         .focusedSceneValue(\.yardletConversationFind, find)
         .environment(\.taskSuggestionActions, suggestionActions)
         // The host's files: named here, and opened once read from the host where it serves them.
         .environment(\.transcriptOpensLocalFiles, false)
+        .environment(\.openTaskFileChanges, fileChangesAction)
         .transformEnvironment(\.conversationLinkPlaces) { $0.fileElsewhere = fileElsewhere }
         .environment(\.openURL, OpenURLAction(handler: openLink))
         .quickLookPreview($preview)
@@ -911,6 +926,15 @@ struct RemoteTaskView: View {
         case TaskSurface.diff.rawValue?:
             RemoteReviewPane(model: model, taskID: conversation.taskID, review: $review,
                              onClose: { closeSidePanelTab(TaskSurface.diff.rawValue) })
+        case "subtask"?:
+            if let activity = selectedSubtask, let session = railSession {
+                HarnessSubtaskPane(activity: activity, session: session, readingPosition: subtaskReading,
+                    actions: actions.readOnlyChild, load: { HarnessSubtaskTranscript(entries: [], isTruncated: false) },
+                    onClose: { panels.trailingSurfaceID = subtaskReturnSurface; selectedSubtask = nil },
+                    loadPresented: { try await model.readSubtask(taskID: conversation.taskID, activityID: activity.id) },
+                    hostWorkspace: true)
+                    .id(activity.id)
+            }
         case "files"?:
             RemoteFilesPane(model: model, taskID: conversation.taskID, onClose: { closeSidePanelTab("files") })
                 .id(conversation.taskID)
@@ -997,6 +1021,35 @@ struct RemoteTaskView: View {
             closePanel: { closeSidePanel() })
     }
 
+    private var fileChangesAction: (@MainActor @Sendable (String) -> Void)? {
+        guard model.offersReview else { return nil }
+        return { path in showChanges(path) }
+    }
+
+    private func showChanges(_ path: String) {
+        guard model.offersReview, RemoteConversationFileLink.url(path) != nil else { return }
+        let ticket = UUID()
+        changesSelectionID = ticket
+        // Provider turn diffs are task-relative; git scopes use repository-relative paths.
+        if review.scope == .lastTurn {
+            review.selectedPath = path
+            showSidePanelTab(TaskSurface.diff.rawValue)
+            return
+        }
+        let previousReview = review
+        let previousSurface = panels.trailingSurfaceID
+        Task {
+            let target = try? await RemoteReviewFileTarget.read(path: path,
+                reader: RemoteGitDiffReading(model: model, taskID: conversation.taskID))
+            // Do not overwrite a file, scope or panel the person picked while metadata was read.
+            guard changesSelectionID == ticket, review == previousReview,
+                  panels.trailingSurfaceID == previousSurface else { return }
+            if let target { review.repositoryPath = target.repository }
+            review.selectedPath = target?.path ?? path
+            showSidePanelTab(TaskSurface.diff.rawValue)
+        }
+    }
+
     private func openSidePanel(_ id: String) {
         guard sidePanelChoices.first(where: { $0.id == id })?.isAvailable != false
                 || id == TaskSurfaceNavigationProjection.launcherID else { return }
@@ -1055,6 +1108,11 @@ struct RemoteTaskView: View {
                         .padding(.top, 8)
                         .padding(.horizontal, 16)
                 }
+            if let notices = task?.notices {
+                RemoteTaskNoticeLines(notices: notices, cancelAccountMove: {
+                    model.send(.cancelAccountMove(taskID: conversation.taskID))
+                })
+            }
             if let editing {
                 ConversationEditBanner(canCancel: true) {
                     draft.text = editing.previousText
@@ -1122,6 +1180,7 @@ struct RemoteTaskView: View {
 
     private var actions: ConversationActions {
         var actions = ConversationActions()
+        let nextTurnID = conversation.presentation.turns.last?.id
         actions.decide = { id, decision in respond(id, .decision(decision)) }
         actions.chooseOption = { id, action in
             if action.kind == RemoteTurnProjection.Route.standing {
@@ -1143,6 +1202,24 @@ struct RemoteTaskView: View {
         }
         // A subagent's child thread is the host's task it runs in (§15.24).
         actions.openCodexSubagent = { [model] taskID in model.select(.task(taskID)) }
+        if model.nextSteps, model.isConnected {
+            actions.retryTurn = { turnID in model.send(.nextStep(taskID: conversation.taskID, turnID: turnID, action: .retry)) }
+            if model.task(conversation.taskID)?.running != true, conversation.queued.isEmpty, editing == nil {
+                actions.implementCodexPlan = { _ in sendNextStep(.implementPlan, turnID: nextTurnID) }
+                actions.answerQuestion = { sendNextStep(.answer, turnID: nextTurnID, text: $0) }
+            }
+            actions.answerQuestionWhileWorking = { sendNextStep(.answerWhileWorking, turnID: nextTurnID, text: $0) }
+        }
+        if model.offersFileRewind, task?.harness == "claude-code", let session = railSession {
+            actions.rewind = model.fileRewindActions(taskID: conversation.taskID, session: session)
+        }
+        if model.offersSubtasks {
+            actions.subtaskControls = HarnessActivityActions(open: { activity in
+                if panels.trailingSurfaceID != "subtask" { subtaskReturnSurface = panels.trailingSurfaceID }
+                selectedSubtask = activity; panels.trailingSurfaceID = "subtask"
+            }, stop: { activity in stopSubtask = activity },
+                isStopping: { stoppingSubtasks.contains($0) }, error: { subtaskErrors[$0] })
+        }
         actions.providerNotices = limitActions
         return actions
     }
@@ -1150,10 +1227,23 @@ struct RemoteTaskView: View {
     /// What the latest limit card offers, as the host offers it (§15.17): continuing under another account that
     /// shares the task's history, and continuing once the limit resets.
     private var limitActions: TaskProviderNotices? {
-        guard let limit = conversation.usageLimit, let options = limit.options, !options.isEmpty else { return nil }
+        guard let limit = conversation.usageLimit else { return nil }
+        let options = limit.options ?? []
+        guard !options.isEmpty || model.bankedResets else { return nil }
         let taskID = conversation.taskID
         var notices = TaskProviderNotices()
-        notices.canContinue = true
+        notices.canContinue = model.isConnected && model.task(taskID)?.running != true
+        if model.nextSteps, options.contains("resumeAfterReset") {
+            notices.continueAfterReset = { _ in
+                model.send(.nextStep(taskID: taskID, turnID: limit.turnId, action: .resumeAfterReset))
+            }
+        }
+        if model.bankedResets {
+            notices.hostUsageReset = { [model] in await model.response(to: .usageReset(taskID: taskID)).usageReset }
+            notices.useHostUsageReset = { [model] token in
+                await model.response(to: .useUsageReset(taskID: taskID, token: token, confirmed: true)).usageReset
+            }
+        }
         // An armed continue is known by the reset it waits for, as on the host.
         if limit.autoContinue == true, let resetsAt = limit.resetsAt {
             notices.autoContinueResetsAt = Date(timeIntervalSince1970: TimeInterval(resetsAt) / 1000)
@@ -1168,6 +1258,23 @@ struct RemoteTaskView: View {
             notices.continueWithHostAccount = { [model] id in model.send(.continueWithAccount(taskID: taskID, accountID: id)) }
         }
         return notices
+    }
+
+    private func sendNextStep(_ action: RemoteNextStep, turnID: String?, text: String? = nil) {
+        guard let turnID else { return }
+        model.send(.nextStep(taskID: conversation.taskID, turnID: turnID, action: action, text: text))
+    }
+
+    private func requestSubtaskStop(_ activity: HarnessActivity) {
+        guard stoppingSubtasks.insert(activity.id).inserted else { return }
+        subtaskErrors[activity.id] = nil
+        Task {
+            let response = await model.response(to: .subtask(taskID: conversation.taskID, activityID: activity.id, stop: true))
+            if !response.ok {
+                stoppingSubtasks.remove(activity.id)
+                subtaskErrors[activity.id] = RemoteHostModel.message(for: response.error, host: model.name)
+            }
+        }
     }
 
     private func respond(_ requestID: String, _ route: ConversationRequestRoute) {
@@ -1197,6 +1304,11 @@ struct RemoteTaskView: View {
     /// the same path on this Mac; a task the host lists opens here; a web page on the host's own address (a server the
     /// task runs) in the host's browser, any other in this Mac's default browser.
     private func openLink(_ url: URL) -> OpenURLAction.Result {
+        if url.scheme == "yardlet-remote-file" {
+            guard let path = RemoteConversationFileLink.path(url), model.offersTaskFiles else { return .discarded }
+            open(path: path, .viewer)
+            return .handled
+        }
         switch ConversationLinkKind(url) {
         case .file:
             guard model.offersTaskFiles else { return .discarded }
@@ -1216,7 +1328,15 @@ struct RemoteTaskView: View {
     }
 
     private func open(_ url: URL, _ opening: RemoteFileOpening) {
-        let path = url.path(percentEncoded: false)
+        if url.scheme == "yardlet-remote-file" {
+            guard let path = RemoteConversationFileLink.path(url) else { return }
+            open(path: path, opening)
+        } else {
+            open(path: url.path(percentEncoded: false), opening)
+        }
+    }
+
+    private func open(path: String, _ opening: RemoteFileOpening) {
         guard !path.isEmpty else { return }
         let taskID = conversation.taskID
         Task {

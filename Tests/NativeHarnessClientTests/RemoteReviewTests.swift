@@ -29,6 +29,26 @@ private enum ReviewFixture {
 }
 
 extension RemoteBridgeTests {
+    func testAConversationFileSelectsItsHostRepositoryRelativePath() async throws {
+        let reader = RemoteGitDiffReading(taskID: "task") { request in
+            var response = RemoteResponse(re: "read")
+            var value = RemoteReviewResult()
+            if case let .readReview(_, query) = request {
+                switch query.operation {
+                case .context: value.workspace = "/host/project/Sources"
+                case .root: value.root = "/host/project"
+                default: XCTFail("Only existing Review metadata reads are needed")
+                }
+            } else { XCTFail("No file mutation or local file read is needed") }
+            response.review = value
+            return response
+        }
+        let target = try await RemoteReviewFileTarget.read(path: "Parser.swift", reader: reader)
+        XCTAssertEqual(target, RemoteReviewFileTarget(repository: "/host/project", path: "Sources/Parser.swift"))
+        let escaped = try await RemoteReviewFileTarget.read(path: "../outside", reader: reader)
+        XCTAssertNil(escaped)
+    }
+
     func testReviewLastTurnUsesTheHostsProviderProjection() async throws {
         let root = try ReviewFixture.repository()
         defer { try? FileManager.default.removeItem(at: root) }

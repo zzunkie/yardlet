@@ -538,7 +538,7 @@ actor ClaudeAdapter:
     }
 
     func restoreFiles(userMessageID: String, expecting preview: HarnessFileRewindResult,
-        in session: HarnessSessionHandle) async throws -> HarnessFileRewindResult {
+        in session: HarnessSessionHandle, authorizing: HarnessFileRestoreAuthorization? = nil) async throws -> HarnessFileRewindResult {
         try requireReadyForRewind(in: session)
         guard preview.canRewind, preview.filesChanged != nil,
               fileRewindsInFlight.insert(session.localSessionID).inserted else {
@@ -549,6 +549,9 @@ actor ClaudeAdapter:
         guard fresh == preview else {
             throw HarnessAdapterError.capabilityUnavailable(L10n.string("The file changes have changed. Review them again."))
         }
+        // The fresh dry run suspended. A remote device may have lost permission or disconnected meanwhile.
+        // Check before the dispatch, outside the uncertain-write catch: refusal has not sent a mutation.
+        try authorizing?()
         do {
             let result = try await fileRewind(userMessageID: userMessageID, dryRun: false, in: session)
             if result.inFlight == true { uncertainFileRewinds.insert(session.localSessionID) }

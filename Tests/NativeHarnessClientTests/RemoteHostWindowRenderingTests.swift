@@ -44,6 +44,53 @@ import XCTest
 /// - `remote-controls-claude-*.png` and `local-controls-claude-*.png`: a Claude Code task in Bypass permissions.
 @MainActor
 final class RemoteHostWindowRenderingTests: XCTestCase {
+    func testBankedResetConfirmationMatchesHostOverLoopback() async throws {
+        let now = Date()
+        let task = SessionRecord(harness: .codex, workspaceURL: URL(filePath: "/tmp/remote-reset-render"),
+            runtimeExecutableURL: URL(filePath: "/tmp/codex"), title: "Continue the migration", completionState: .completed)
+        let entries = [TranscriptEntry(content: .user(text: "Continue the migration")),
+                       TranscriptEntry(content: .usageLimit(HarnessRateLimit(status: .rejected, window: .session,
+                           resetsAt: now.addingTimeInterval(3600), usedFraction: 1)))]
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteResetRender")))
+        let host = AppModel(store: SessionStore(sessions: [task], repository: InMemorySessionRepository(sessions: [task])),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false),
+            initialTranscripts: [task.id: entries], restoresIndexOnLaunch: false)
+        host.connections.publishDefaults([HarnessAccountSnapshot(id: "codex", harness: .codex, providerID: "openai-codex",
+            state: .signedIn, accountLabel: "developer@example.test", detail: "", credentialOwner: "", checkedAt: now,
+            usage: [.init(id: "session", label: "5-hour", usedFraction: 1, detail: "100% used",
+                resetsAt: now.addingTimeInterval(3600), evidence: .exactQuota)],
+            usageResets: AccountUsageResets(availableCount: 2, resets: [.init(id: "private-reset", title: "Full reset",
+                expiresAt: now.addingTimeInterval(7200))]), canLogin: false, canLogout: false)])
+        let stack = try await LoopbackStack(name: "Host Mac", bridge: AppModelRemoteBridge(model: host))
+        defer { stack.stop(); Task { await host.shutdown() } }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+            name: "Host Mac", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let hosts = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+            hello: RemoteHandshakeHello(name: "Client Mac", platform: "macos", appVersion: "test"))
+        let paired = try await hosts.pair(link: link.absoluteString)
+        let model = try XCTUnwrap(hosts.model(for: paired.id))
+        try await waitUntil { model.hasSnapshot && model.bankedResets }
+        let response = await model.response(to: .usageReset(taskID: task.id.uuidString))
+        let remote = try XCTUnwrap(response.usageReset)
+        let choice = host.connections.choice(for: .codex, connection: nil)
+        XCTAssertEqual(remote.resets.availableCount, choice.snapshot?.usageResets?.availableCount)
+        XCTAssertNil(remote.resets.next?.id, "Provider reset identifiers stay on the host")
+        let size = NSSize(width: 380, height: 330)
+        try await render("local-banked-reset", size: size, titled: false) {
+            UsageResetConfirmation(choice: choice, context: UsageResetContext(store: host.connections,
+                runtimeSelections: host.runtimeSelections), close: {})
+                .frame(width: size.width, height: size.height, alignment: .top)
+                .background(ParityTheme.elevated)
+        }
+        try await render("remote-banked-reset", size: size, titled: false) {
+            UsageResetConfirmationContent(title: remote.title, resets: remote.resets, quotas: remote.quotas,
+                state: remote.localState, close: {}, use: {})
+                .frame(width: size.width, height: size.height, alignment: .top)
+                .background(ParityTheme.elevated)
+        }
+    }
+
     func testTheConnectWindowAndAHostWindowDraw() async throws {
         let directory = try WindowlessRender.directory("remote-qa")
         // At its own pace, so a turn still runs when a message is queued behind it.
@@ -198,16 +245,12 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
             }
         }
 
-        // The same turn's lines opened: the Read's output and the Edit's diff, read from the host as they open.
+        // Full subscriptions carry the same Read output and per-file Edit card as the host.
         model.select(.task(migrate.id.uuidString))
         let conversation = try XCTUnwrap(model.conversations[migrate.id.uuidString])
-        let lines = try XCTUnwrap(conversation.presentation.turns.last).work.filter { item in
-            if case let .tool(tool) = item.kind { return tool.loadsDetailOnOpen }
-            return false
-        }
-        XCTAssertEqual(lines.count, 2)
-        for line in lines { model.loadDetail(migrate.id.uuidString, itemID: line.id) }
-        try await waitUntil { lines.allSatisfy { conversation.details[$0.id] != nil } }
+        let lines = try XCTUnwrap(conversation.presentation.turns.last).work
+        XCTAssertTrue(lines.contains { if case let .tool(tool) = $0.kind { return tool.output?.isEmpty == false }; return false })
+        XCTAssertTrue(lines.contains { if case let .fileChange(change) = $0.kind { return !change.rows.isEmpty }; return false })
         // The waiting turn folds its calls into one line, here as there; it is opened as the person would.
         let folded = { (label: String) in label.contains(L10n.string("Awaiting approval")) }
         try await render("remote-host-lines", size: size, model: model, hosts: hosts, opensDetails: true, check: { _ in },
@@ -495,7 +538,9 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                 .object(["id": .string("plan-1"), "type": .string("plan"),
                          "text": .string("1. Store each change with its vector clock.\n2. Merge on read.\n3. Compact the log nightly.")]),
                 .object(["id": .string("answer-1"), "type": .string("agentMessage"), "phase": .string("final_answer"),
-                         "text": .string("The plan is above. Say the word and I'll implement it.")])
+                         "text": .string("The plan is above. Say the word and I'll implement it."),
+                         "questions": .array([.object(["title": .string("Which store should be migrated first?"),
+                             "options": .array([.string("The task index"), .string("The transcript store")])])])])
             ])
         ]), fallbackID: "turn-1"))]
         let codexState = CodexTaskState(thread: thread)
@@ -563,7 +608,7 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                        transcript(limitEntries).turns.last?.prompt.map(\.backgroundTaskNotice))
         XCTAssertEqual(remoteReport.windows.map(\.window), localReport.windows.map(\.window))
         XCTAssertEqual(remoteReport.window, localReport.window)
-        try await waitUntil { model.conversations[limit.id.uuidString]?.usageLimit?.options == ["autoContinue"] }
+        try await waitUntil { model.conversations[limit.id.uuidString]?.usageLimit?.options == ["autoContinue", "resumeAfterReset"] }
         let toggle = L10n.string("Auto-continue when limits reset")
         try await render("remote-full-limit", size: size, model: model, hosts: hosts) { elements in
             XCTAssertTrue(elements.contains { $0.label == toggle }, elements.description)
@@ -598,10 +643,12 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
             return nil
         }
         XCTAssertEqual(routes, [[.codexThread(child.id.uuidString)]])
-        let worked = { (label: String) in label.contains(L10n.format("Worked for %lld minutes", 2)) }
-        try await render("remote-full-codex", size: size, model: model, hosts: hosts, press: worked)
-        try await render("local-full-codex", size: column, titled: false, press: worked) {
-            ConversationTimeline(source: .codex(codexState, workspaceURL: folder, historySelection: nil))
+        try await render("remote-full-codex", size: size, model: model, hosts: hosts)
+        XCTAssertEqual(remoteTurn.actions.planToImplement, localTurn.actions.planToImplement)
+        XCTAssertEqual(remoteTurn.actions.questionsToAnswer, localTurn.actions.questionsToAnswer)
+        try await render("local-full-codex", size: column, titled: false) {
+            ConversationTimeline(source: .codex(codexState, workspaceURL: folder, historySelection: nil),
+                                 actions: ConversationActions(implementCodexPlan: { _ in }, answerQuestion: { _ in }))
                 .environment(\.transcriptWorkspaceURL, folder)
                 .background(ParityTheme.canvas)
         }
@@ -610,7 +657,7 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
     }
 
     /// A picture to send: a field of one color with its name.
-    private static func picture(color: NSColor, label: String) throws -> Data {
+    static func picture(color: NSColor, label: String) throws -> Data {
         let image = NSImage(size: NSSize(width: 1200, height: 800), flipped: false) { rect in
             color.setFill()
             rect.fill()
@@ -972,7 +1019,7 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func render(_ name: String, size: NSSize, model: RemoteHostModel, hosts: RemoteHostDirectory,
+    func render(_ name: String, size: NSSize, model: RemoteHostModel, hosts: RemoteHostDirectory,
                         opensDetails: Bool = false,
                         check: ([WindowlessRender.AccessibilityElement]) -> Void = { _ in },
                         opening: ((String) -> Bool)? = nil, press: ((String) -> Bool)? = nil) async throws {
@@ -986,7 +1033,7 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
     /// Draws the view in an unshown window of `size`, in both appearances; a titled window draws its title
     /// bar too, as the host's window shows its name and connection there. What `opening` matches is pressed until
     /// nothing does (Show more on a long answer), then what `press` matches once.
-    private func render<Content: View>(_ name: String, size: NSSize, titled: Bool, title: String = "", subtitle: String = "",
+    func render<Content: View>(_ name: String, size: NSSize, titled: Bool, title: String = "", subtitle: String = "",
                                        opening: ((String) -> Bool)? = nil, press: ((String) -> Bool)? = nil,
                                        @ViewBuilder content: () -> Content,
                                        check: ([WindowlessRender.AccessibilityElement]) -> Void = { _ in }) async throws {

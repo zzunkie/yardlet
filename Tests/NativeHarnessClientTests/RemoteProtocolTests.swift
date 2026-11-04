@@ -7,10 +7,35 @@ import XCTest
 /// public keys in a file only the person reads, Tailscale and LAN addresses are told apart, and a
 /// conversation window pages whole turns and describes updates as changes a client can apply.
 final class RemoteProtocolTests: XCTestCase {
+    func testFileRestoreRequiresDeviceWritesButReadingCheckpointsDoesNot() {
+        for action in [RemoteFileRewindAction.points, .preview, .restore] {
+            let request = RemoteRequest.fileRewind(taskID: "T", action: action, pointID: "P", receipt: "R", confirmed: true)
+            XCTAssertEqual(request.requiredPermission, action == .restore ? .fileWrites : nil)
+            XCTAssertEqual(request.taskID, "T")
+            XCTAssertEqual(request.isCommand, action == .restore)
+        }
+    }
+
+    func testSubtaskStopAndAccountCancellationUseCommandRateLimits() {
+        XCTAssertFalse(RemoteRequest.subtask(taskID: "T", activityID: "A", stop: false).isCommand)
+        XCTAssertTrue(RemoteRequest.subtask(taskID: "T", activityID: "A", stop: true).isCommand)
+        XCTAssertTrue(RemoteRequest.cancelAccountMove(taskID: "T").isCommand)
+    }
+
     // MARK: - Requests
 
     func testEveryRequestDecodesWhatItEncodes() throws {
         let requests: [RemoteRequest] = [
+            .fileRewind(taskID: "T1", action: .points, pointID: nil, receipt: nil, confirmed: false),
+            .fileRewind(taskID: "T1", action: .preview, pointID: "p", receipt: nil, confirmed: false),
+            .fileRewind(taskID: "T1", action: .restore, pointID: nil, receipt: "receipt", confirmed: true),
+            .cancelAccountMove(taskID: "T1"),
+            .subtask(taskID: "T1", activityID: "agent", stop: false),
+            .subtask(taskID: "T1", activityID: "agent", stop: true),
+            .nextStep(taskID: "T1", turnID: "turn", action: .implementPlan),
+            .nextStep(taskID: "T1", turnID: "turn", action: .answer, text: "A native question reply"),
+            .usageReset(taskID: "T1"),
+            .useUsageReset(taskID: "T1", token: "receipt", confirmed: true),
             .snapshot,
             .subscribeTask(taskID: "T1"),
             .loadOlder(taskID: "T1", cursor: "t:turn-3"),
@@ -589,6 +614,26 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertNil(oldest.cursor)
         XCTAssertEqual(window.older("t:t16", in: conversation), .invalidCursor)
         XCTAssertEqual(window.sent.count, 75)
+    }
+
+    func testNextStepMetadataCountsTowardThePageBudget() {
+        for plans in [true, false] {
+            let turns = ["a", "b"].map { id in
+                var item = RemoteItem(id: id, turnId: id, kind: .turn)
+                if plans { item.planToImplement = String(repeating: "p", count: 200_000) }
+                else {
+                    item.nextQuestions = (0..<32).map { index in
+                        RemoteNextQuestion(title: "Choose", options: Array(repeating: String(repeating: "q", count: 200), count: 32),
+                                           itemID: "question-\(index)")
+                    }
+                }
+                return RemoteTurn(id: id, items: [item])
+            }
+            var window = RemoteConversationWindow()
+            let page = window.open(RemoteConversation(turns: turns))
+            XCTAssertEqual(page.items.map(\.id), ["b"])
+            XCTAssertTrue(page.hasOlder)
+        }
     }
 
     func testAPageStopsAtItsItemLimitButKeepsOneTurnWhole() {

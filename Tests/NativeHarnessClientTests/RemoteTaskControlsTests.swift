@@ -11,6 +11,63 @@ import XCTest
 /// client started.
 @MainActor
 final class RemoteTaskControlsTests: XCTestCase {
+    func testNextStepsRoundTripAndRejectActionsTheHostDoesNotOffer() async throws {
+        let adapter = FakeHarnessAdapter(kind: .codex)
+        let decoder = CodexTaskDecoder()
+        let turn = try XCTUnwrap(decoder.turn(from: .object([
+            "id": .string("plan-turn"), "status": .string("completed"),
+            "items": .array([.object(["id": .string("plan"), "type": .string("plan"),
+                                     "text": .string("Update the parser and run its tests.")]),
+                .object(["id": .string("question"), "type": .string("agentMessage"), "phase": .string("final_answer"),
+                    "text": .string("Which parser first?"), "questions": .array([.object([
+                        "title": .string("Which parser first?"), "options": .array([.string("JSON"), .string("XML")])])])])])
+        ]), fallbackID: "plan-turn"))
+        var thread = try XCTUnwrap(decoder.thread(from: .object(["id": .string("thread")])) )
+        thread.turns = [turn]
+        let state = CodexTaskState(thread: thread)
+        let session = SessionRecord(harness: .codex, workspaceURL: URL(filePath: "/tmp/remote-next"),
+            runtimeExecutableURL: URL(filePath: "/tmp/codex"), title: "Plan parser changes", providerSessionID: "thread")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteNextSteps")))
+        let host = AppModel(store: SessionStore(sessions: [session], repository: InMemorySessionRepository()),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults), registry: HarnessRegistry { _, _ in adapter },
+            initialCodexPresentation: [session.id: state], transcriptRepository: UserDefaultsTranscriptRepository(defaults: defaults),
+            sessionTitleResolver: { _ in nil }, restoresIndexOnLaunch: false)
+        await adapter.emitPresentation(state, for: session.id)
+        let (client, close) = try await Self.connect(to: host)
+        defer { close() }
+        try await waitUntil { client.nextSteps }
+        let taskID = session.id.uuidString
+        client.select(.task(taskID))
+        try await waitUntil { client.conversations[taskID]?.isLoaded == true }
+        let remote = try XCTUnwrap(client.conversations[taskID]?.presentation.turns.last)
+        let local = try XCTUnwrap(CodexConversationProjection.presentation(state, workspaceURL: session.workspaceURL,
+                                                                          historySelection: nil).turns.last)
+        XCTAssertEqual(remote.actions.planToImplement, local.actions.planToImplement)
+        XCTAssertNotNil(remote.actions.planToImplement)
+        let stale = await client.response(to: .nextStep(taskID: taskID, turnID: "gone", action: .implementPlan))
+        XCTAssertEqual(stale.error?.code, .notFound)
+        let retry = await client.response(to: .nextStep(taskID: taskID, turnID: remote.id, action: .retry))
+        XCTAssertEqual(retry.error?.code, .notAllowed)
+        let answer = await client.response(to: .nextStep(taskID: taskID, turnID: remote.id, action: .answer, text: "yes"))
+        XCTAssertEqual(answer.error?.code, .notAllowed)
+        XCTAssertFalse(remote.actions.questionsToAnswer.isEmpty)
+        let staleAnswer = CodexAsyncQuestionReply.message([.init(questionItemID: "old-question", question: "Old?", answer: "/init")])
+        let rejected = await client.response(to: .nextStep(taskID: taskID, turnID: remote.id, action: .answer, text: staleAnswer))
+        XCTAssertEqual(rejected.error?.code, .notAllowed)
+        let lateSteer = await client.response(to: .nextStep(taskID: taskID, turnID: remote.id, action: .answerWhileWorking,
+            text: CodexAsyncQuestionReply.message([.init(questionItemID: remote.actions.questionsToAnswer[0].itemID,
+                question: "Wrong client title", answer: "JSON")])))
+        XCTAssertEqual(lateSteer.error?.code, .notAllowed)
+        let accepted = await client.response(to: .nextStep(taskID: taskID, turnID: remote.id, action: .implementPlan,
+                                                          text: "This client text must not become the plan"))
+        XCTAssertTrue(accepted.ok)
+        try await waitUntil { await !adapter.codexSubmissions.isEmpty }
+        let submitted = await adapter.codexSubmissions.last?.0.text
+        XCTAssertFalse(submitted?.contains("This client text") == true)
+        XCTAssertTrue(submitted?.contains("Update the parser") == true)
+        await host.shutdown()
+    }
+
     func testACodexTasksSettingsCommandsEditAndForkGoThroughTheHostsOwnPaths() async throws {
         let adapter = FakeHarnessAdapter(kind: .codex)
         var state = CodexTaskState.empty

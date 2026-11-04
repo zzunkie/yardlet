@@ -1,4 +1,5 @@
 import Foundation
+import YardletRemote
 
 /// What a task shows about its provider's retries and plan limits, and the actions its limit card
 /// offers. The app model owns the state; these views read it and call back.
@@ -25,6 +26,8 @@ struct TaskProviderNotices {
     var continueAfterReset: (@MainActor (_ entryID: UUID) -> Void)?
     /// The account the task runs under, for a limit card to offer its resets; nil where its
     /// harness reports none.
+    var hostUsageReset: (@MainActor () async -> RemoteUsageReset?)?
+    var useHostUsageReset: @MainActor (String) async -> RemoteUsageReset? = { _ in nil }
     var usageReset: @MainActor () -> (choice: AccountChoice, context: UsageResetContext)? = { nil }
     /// For a task on another Mac (docs/REMOTE_PROTOCOL.md §15.17): the accounts that Mac can continue it under,
     /// read when the card's menu opens, in place of `accounts`. Nil for this Mac's own tasks.

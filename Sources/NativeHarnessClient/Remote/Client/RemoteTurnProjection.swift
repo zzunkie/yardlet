@@ -61,6 +61,25 @@ enum RemoteTurnProjection {
             turn.actions.editLatest = ConversationMessageTarget(entryID: uuid(request.id), text: text)
         }
         turn.actions.canFork = offered.contains("fork")
+        turn.actions.canRetry = offered.contains("retry")
+        if let header {
+            if let answered = items[header].answeredQuestions {
+                turn.actions.answeredQuestions = ConversationAnsweredAsyncQuestions(
+                    questions: answered.map { CodexAsyncQuestion(title: $0.title, options: $0.options, itemID: $0.itemID) },
+                    answers: Dictionary(answered.compactMap { question in
+                        guard question.answerOptions != nil || question.customAnswer != nil else { return nil }
+                        return (question.itemID, ConversationQuestionAnswer(options: question.answerOptions ?? [], custom: question.customAnswer))
+                    }, uniquingKeysWith: { _, newer in newer }))
+            }
+            turn.actions.planToImplement = items[header].planToImplement
+            turn.actions.questionsToAnswer = (items[header].nextQuestions ?? []).map {
+                CodexAsyncQuestion(title: $0.title, options: $0.options, itemID: $0.itemID)
+            }
+        }
+        if offered.contains("restoreFiles"), let sent = turn.prompt.last(where: \.isPersonMessage),
+           case let .userMessage(text, _) = sent.kind {
+            turn.actions.restoreFiles = ConversationMessageTarget(entryID: uuid(sent.id), text: text)
+        }
         (turn.work, turn.answers) = ConversationTurnLayout.arrange(flow)
         turn.hasWorkDetails = !turn.work.isEmpty || turn.plan != nil
         turn.showsHeader = header != nil && (turn.hasWorkDetails || turn.timing.durationMilliseconds != nil)
@@ -91,6 +110,7 @@ enum RemoteTurnProjection {
     // MARK: - Items
 
     static func item(_ item: RemoteItem, details: [String: RemoteItemDetail], hostName: String) -> ConversationItem? {
+        if let body = bodyItem(item) { return body }
         switch item.kind {
         case .user:
             return message(item)
@@ -102,11 +122,16 @@ enum RemoteTurnProjection {
             case "commentary": .commentary(text: text, isStreaming: streaming)
             default: .answer(text: text, isStreaming: streaming)
             }
-            return ConversationItem(id: item.id, kind: kind, phase: streaming ? .running : .completed,
+            var result = ConversationItem(id: item.id, kind: kind, phase: streaming ? .running : .completed,
                                     source: source(item, .assistant(text: text, isStreaming: streaming)))
+            result.isSentWhileWorking = item.sentWhileWorking == true
+            result.isUnmarkedAnswer = item.unmarkedAnswer == true
+            return result
         case .activity where item.activity == "reasoning":
-            return ConversationItem(id: item.id, kind: .reasoning(summary: item.detail, detail: nil, isStreaming: item.status == "running"),
+            var result = ConversationItem(id: item.id, kind: .reasoning(summary: item.detail, detail: item.body?.reasoning, isStreaming: item.status == "running"),
                                     phase: phase(item.status), source: source(item, .reasoning(text: item.detail ?? "", isStreaming: false)))
+            result.copyDetails = bodyCopyText(item)
+            return result
         case .activity where item.activity == "taskSuggestion" && item.suggestionId != nil:
             return taskSuggestion(item)
         case .activity, .notice:
@@ -125,6 +150,7 @@ enum RemoteTurnProjection {
     /// A sent message: the person's, or one someone else sent as the host draws it (§15.24): another task's under its
     /// name, a background command's notice, a schedule's prompt.
     private static func message(_ item: RemoteItem) -> ConversationItem {
+        if let body = bodyItem(item) { return body }
         let text = item.text ?? ""
         let record = source(item, .user(text: text))
         if item.scheduled == true {
@@ -184,7 +210,8 @@ enum RemoteTurnProjection {
             kind = .subagent(ConversationSubagent(
                 title: item.title ?? "", status: nil, detail: subagent.detail,
                 // A child thread opens as the host's task it runs in.
-                routes: (subagent.taskIds ?? []).map(ConversationSubagentRoute.codexThread), isApproved: item.approved == true,
+                routes: (subagent.taskIds ?? []).map(ConversationSubagentRoute.codexThread)
+                    + (subagent.activityId.map { [.harnessSubtask(HarnessSubtaskReference(taskID: subagent.canStop == true ? $0 : nil, taskType: "local_agent"), activityID: $0)] } ?? []), isApproved: item.approved == true,
                 kind: subagent.kind, input: subagent.input, output: subagent.output, isBackground: subagent.background == true,
                 model: subagent.model, harnessLabel: subagent.harnessLabel))
         } else if let schedule = item.schedule, let id = UUID(uuidString: schedule.id) {
@@ -214,8 +241,14 @@ enum RemoteTurnProjection {
         let lines = item.words.map { $0.map { ConversationLineWords(leading: $0.leading ?? "", verb: $0.verb, trailing: $0.trailing ?? "") } }
         var tool = ConversationTool(kind: .worded(lines ?? [ConversationLineWords(verb: "", trailing: title)]), name: "",
                                     status: item.status)
+        tool.images = images(item)
+        tool.mcpResult = mcpBody(item.body?.mcp, itemID: item.id)
+        if item.body?.mcp != nil { tool.kind = .mcp }
         tool.isApproved = item.approved == true
-        tool.detail = item.detail
+        tool.detail = item.body == nil ? item.detail : item.body?.detail
+        tool.name = item.body?.toolName ?? ""
+        tool.output = item.body?.output
+        tool.errorMessage = item.body?.error
         if let additions = item.additions, let deletions = item.deletions {
             tool.lineCounts = .init(additions: additions, deletions: deletions)
         }
@@ -225,7 +258,7 @@ enum RemoteTurnProjection {
             tool.loadsDetailOnOpen = true
             if let detail {
                 // A change's line shows its diff; its output, when it has one, beside it.
-                tool.output = detail.output ?? (detail.diffs.isEmpty ? "" : nil)
+                tool.output = item.body?.output ?? detail.output ?? (detail.diffs.isEmpty ? "" : nil)
                 tool.diffs = detail.diffs.map { HarnessActivityDiff(path: $0.path, unified: $0.patch) }
             }
         }
@@ -233,7 +266,7 @@ enum RemoteTurnProjection {
         var line = ConversationItem(id: item.id, kind: .tool(tool), phase: phase(item.status),
                                     source: source(item, .activity(activity, state: activityState(item.status))))
         // What "Copy item details" takes, as a local line copies what it ran and returned.
-        line.copyDetails = [title, item.detail, detail?.output].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
+        line.copyDetails = bodyCopyText(item) ?? [title, item.detail, detail?.output].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
         return line
     }
 

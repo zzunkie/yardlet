@@ -29,6 +29,8 @@ struct CodexMCPResultProjection: Equatable, Sendable {
         let uri: String
         let description: String?
         let mimeType: String?
+        /// A host-scoped resource supplied by the remote projection, never parsed from provider content.
+        var remoteURL: URL? = nil
 
         /// The title the tool gave, else its name, else the URI itself.
         var label: String {
@@ -39,6 +41,7 @@ struct CodexMCPResultProjection: Equatable, Sendable {
         /// files, both through the conversation's `openURL`. Any other scheme (`javascript:`,
         /// `data:`, another app's) is left as text, so a tool's result never launches something.
         var openableURL: URL? {
+            if let remoteURL { return remoteURL }
             guard let url = URL(string: uri), let scheme = url.scheme?.lowercased() else { return nil }
             switch scheme {
             case "http", "https":
@@ -72,6 +75,8 @@ struct CodexMCPResultProjection: Equatable, Sendable {
     var imageBlockCount: Int {
         blocks.filter { if case .image = $0 { return true } else { return false } }.count
     }
+
+    init(blocks: [Block]) { self.blocks = blocks }
 
     init(result: JSONValue?, itemID: String = "mcp") {
         let content: [JSONValue]

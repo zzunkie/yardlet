@@ -685,7 +685,8 @@ private actor ForkRecordingAdapter: HarnessAdapter, HarnessSessionForkConfigurin
         .init(canRewind: true, error: nil, filesChanged: ["file.swift"], insertions: 1, deletions: 1, skippedLinks: nil, inFlight: nil)
     }
     func restoreFiles(userMessageID: String, expecting preview: HarnessFileRewindResult,
-        in session: HarnessSessionHandle) async throws -> HarnessFileRewindResult {
+        in session: HarnessSessionHandle, authorizing: HarnessFileRestoreAuthorization? = nil) async throws -> HarnessFileRewindResult {
+        try authorizing?()
         fileRestoreCount += 1
         return preview
     }

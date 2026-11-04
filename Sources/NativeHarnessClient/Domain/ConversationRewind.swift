@@ -70,10 +70,19 @@ struct HarnessFileRewindResult: Codable, Equatable, Sendable {
     let inFlight: Bool?
 }
 
+typealias HarnessFileRestoreAuthorization = @Sendable () throws -> Void
+
 protocol HarnessFileRewinding: Actor {
     func previewFileRewind(userMessageID: String, in session: HarnessSessionHandle) async throws -> HarnessFileRewindResult
     func restoreFiles(userMessageID: String, expecting preview: HarnessFileRewindResult,
-        in session: HarnessSessionHandle) async throws -> HarnessFileRewindResult
+        in session: HarnessSessionHandle, authorizing: HarnessFileRestoreAuthorization?) async throws -> HarnessFileRewindResult
+}
+
+extension HarnessFileRewinding {
+    func restoreFiles(userMessageID: String, expecting preview: HarnessFileRewindResult,
+                      in session: HarnessSessionHandle) async throws -> HarnessFileRewindResult {
+        try await restoreFiles(userMessageID: userMessageID, expecting: preview, in: session, authorizing: nil)
+    }
 }
 
 protocol HarnessConversationQuiescing: Actor {

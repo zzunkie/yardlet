@@ -34,16 +34,11 @@ struct UsageResetButton: View {
         if let context, let resets = context.store.choice(for: choice.harness, connection: choice.connection)
             .snapshot?.usageResets,
            resets.availableCount > 0 || context.store.usageResetStates[choice.id] != nil {
-            Button { showsConfirmation = true } label: { label(resets) }
-                .buttonStyle(.borderless)
-                .fixedSize()
-                .parityPointer()
-                .help(L10n.string("Use a reset to restore this account's usage limits now"))
-                .popover(isPresented: Binding(get: { showsConfirmation }, set: { shown in
+            UsageResetButtonContent(count: resets.availableCount, placement: placement,
+                showsConfirmation: Binding(get: { showsConfirmation }, set: { shown in
                     showsConfirmation = shown
-                    // Closing it is seeing its answer; an attempt still running keeps its own.
                     if !shown { context.store.dismissUsageReset(for: choice) }
-                }), arrowEdge: .bottom) {
+                })) {
                     UsageResetConfirmation(choice: choice, context: context) {
                         showsConfirmation = false
                         context.store.dismissUsageReset(for: choice)
@@ -51,16 +46,33 @@ struct UsageResetButton: View {
                 }
         }
     }
+}
 
-    @ViewBuilder private func label(_ resets: AccountUsageResets) -> some View {
+/// The local and remote card use the same control, changing only where its confirmation reads and acts.
+struct UsageResetButtonContent<Confirmation: View>: View {
+    let count: Int
+    var placement: UsageResetButton.Placement = .limitCard
+    @Binding var showsConfirmation: Bool
+    @ViewBuilder var confirmation: () -> Confirmation
+
+    var body: some View {
+        Button { showsConfirmation = true } label: { label }
+            .buttonStyle(.borderless)
+            .fixedSize()
+            .parityPointer()
+            .help(L10n.string("Use a reset to restore this account's usage limits now"))
+            .popover(isPresented: $showsConfirmation, arrowEdge: .bottom, content: confirmation)
+    }
+
+    @ViewBuilder private var label: some View {
         switch placement {
         case .accountLimits:
-            Label(UsageResetText.available(resets.availableCount), systemImage: "arrow.counterclockwise")
+            Label(UsageResetText.available(count), systemImage: "arrow.counterclockwise")
                 .font(.system(size: 10.5, weight: .medium))
                 .foregroundStyle(ParityTheme.accent)
                 .lineLimit(1)
         case .limitCard:
-            Text(L10n.format("Use a reset (%lld left)", Int64(resets.availableCount)))
+            Text(L10n.format("Use a reset (%lld left)", Int64(count)))
         }
     }
 }
@@ -76,18 +88,35 @@ struct UsageResetConfirmation: View {
     private var state: UsageResetState? { context.store.usageResetStates[choice.id] }
 
     var body: some View {
-        let current = current
-        let resets = current.snapshot?.usageResets
+        UsageResetConfirmationContent(title: current.title + " · " + current.harness.displayName,
+            resets: current.snapshot?.usageResets, quotas: current.quotas, state: state,
+            isChecking: context.store.isChecking(choice), close: close,
+            use: { Task { await context.store.useUsageReset(choice, runtimeSelections: context.runtimeSelections) } })
+            .task { await context.store.check(choice, runtimeSelections: context.runtimeSelections) }
+    }
+}
+
+/// The same confirmation content for an account here or on the task's host.
+struct UsageResetConfirmationContent: View {
+    let title: String
+    let resets: AccountUsageResets?
+    let quotas: [AccountUsageMetric]
+    let state: UsageResetState?
+    var isChecking = false
+    let close: () -> Void
+    let use: () -> Void
+
+    var body: some View {
         // Once answered, the limits read again show what changed and the answer says what is left.
         let answered: Bool = if case .answered? = state { true } else { false }
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(L10n.string(answered ? "Usage limit reset" : "Use a usage limit reset?")).font(.headline)
-                Text(current.title + " · " + current.harness.displayName)
+                Text(title)
                     .font(.callout).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
             let restores = resets?.restores ?? []
-            let restored = restores.isEmpty ? current.quotas : current.quotas.filter { restores.contains($0.id) }
+            let restored = restores.isEmpty ? quotas : quotas.filter { restores.contains($0.id) }
             if !restored.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(L10n.string(answered ? "Limits now:" : "Resets these limits now:")).font(.callout)
@@ -125,10 +154,6 @@ struct UsageResetConfirmation: View {
         }
         .padding(18)
         .frame(width: 380)
-        .task {
-            // Show the account as it is now: a reading over a minute old is checked again.
-            await context.store.check(choice, runtimeSelections: context.runtimeSelections)
-        }
     }
 
     @ViewBuilder private func buttons(resets: AccountUsageResets?) -> some View {
@@ -145,12 +170,8 @@ struct UsageResetConfirmation: View {
             Button(L10n.string("Cancel"), action: close).keyboardShortcut(.cancelAction)
             Button(L10n.string("Use Reset"), action: use)
                 .keyboardShortcut(.defaultAction)
-                .disabled((resets?.availableCount ?? 0) == 0 || context.store.isChecking(choice))
+                .disabled((resets?.availableCount ?? 0) == 0 || isChecking)
         }
-    }
-
-    private func use() {
-        Task { await context.store.useUsageReset(choice, runtimeSelections: context.runtimeSelections) }
     }
 
     private func isTrouble(_ state: UsageResetState) -> Bool {

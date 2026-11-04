@@ -178,6 +178,16 @@ final class ConversationConveniencesTests: XCTestCase {
         var readable = ConversationLinkPlaces()
         readable.fileElsewhere = { _ in }
         XCTAssertEqual(ConversationLinkMenu.items(for: elsewhere, opensLocalFiles: false, places: readable), [[.open], [.copyPath]])
+        // A task-relative host file keeps its remote-only menu even in a local-files environment.
+        let remoteFile = RemoteConversationFileLink.url("Sources/Parser.swift")!
+        XCTAssertEqual(ConversationLinkKind(remoteFile), .file)
+        XCTAssertEqual(ConversationLinkMenu.items(for: remoteFile, opensLocalFiles: true, places: ConversationLinkPlaces()), [[.copyPath]])
+        XCTAssertEqual(ConversationLinkMenu.items(for: remoteFile, opensLocalFiles: true, places: readable), [[.open], [.copyPath]])
+        XCTAssertEqual(ConversationLinkMenu.copiedPath(remoteFile), "Sources/Parser.swift")
+        var hostOpened: URL?
+        readable.fileElsewhere = { hostOpened = $0 }
+        ConversationLinkMenu.perform(.open, url: remoteFile, text: nil, places: readable) { _ in XCTFail("Opened on this Mac") }
+        XCTAssertEqual(hostOpened, remoteFile)
         // A Codex thread copies as the address the Codex app opens.
         XCTAssertEqual(ConversationLinkMenu.copiedLink(URL(string: "codex://threads/thread_1")!, text: "the thread"),
                        "codex://threads/thread_1")

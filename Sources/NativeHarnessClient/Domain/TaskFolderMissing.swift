@@ -12,6 +12,10 @@ struct TaskFolderMissing: LocalizedError, Equatable, Sendable {
     /// The branch the task's worktree can be made again from, in the same place; nil when it cannot.
     var worktreeBranch: String? = nil
 
+    init(path: String, worktreeBranch: String?) {
+        self.path = path; self.worktreeBranch = worktreeBranch
+    }
+
     /// Nil while the folder is there.
     init?(workspaceURL: URL) {
         var isDirectory: ObjCBool = false

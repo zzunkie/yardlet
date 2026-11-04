@@ -10,6 +10,47 @@ import XCTest
 /// window's own model calls — on a fake adapter, so no provider runs.
 @MainActor
 final class RemoteBridgeTests: XCTestCase {
+    func testBankedResetRequiresConfirmationAndDoesNotRepeatAnAnsweredToken() async throws {
+        let task = SessionRecord(harness: .codex, workspaceURL: URL(filePath: "/tmp/reset-fixture"),
+            runtimeExecutableURL: URL(filePath: "/tmp/codex"), title: "Reset")
+        let noLimit = SessionRecord(harness: .codex, workspaceURL: task.workspaceURL,
+            runtimeExecutableURL: task.runtimeExecutableURL, title: "Already continued")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteReset")))
+        let model = AppModel(store: SessionStore(sessions: [task, noLimit], repository: InMemorySessionRepository(sessions: [task, noLimit])),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false),
+            initialTranscripts: [task.id: [TranscriptEntry(content: .user(text: "Continue")),
+                TranscriptEntry(content: .usageLimit(HarnessRateLimit(status: .rejected, usedFraction: 1)))]],
+            restoresIndexOnLaunch: false)
+        defer { Task { await model.shutdown() } }
+        model.connections.publishDefaults([HarnessAccountSnapshot(id: "codex", harness: .codex, providerID: nil,
+            state: .signedIn, accountLabel: "fixture@example.test", detail: "", credentialOwner: "", checkedAt: Date(),
+            usage: [], usageResets: AccountUsageResets(availableCount: 2), canLogin: false, canLogout: false)])
+        let bridge = AppModelRemoteBridge(model: model)
+        let account = model.connections.choice(for: .codex, connection: nil)
+        bridge.resetOffers[task.id] = RemoteResetOffer(token: "confirmation", account: account.id,
+            createdAt: Date(), count: 2, resetID: nil)
+        var calls = 0
+        model.connections.usageResetRunner = { _, _, _ in calls += 1; return .reset }
+        bridge.resetOffers[noLimit.id] = RemoteResetOffer(token: "stale-card", account: account.id,
+            createdAt: Date(), count: 2, resetID: nil)
+        let stale = await bridge.usageReset(taskID: noLimit.id.uuidString, token: "stale-card", confirmed: true)
+        if case let .failure(error) = stale { XCTAssertEqual(error.code, .notAllowed) } else { XCTFail("The card no longer offers a reset") }
+        XCTAssertEqual(calls, 0)
+        let refused = await bridge.usageReset(taskID: task.id.uuidString, token: "confirmation", confirmed: false)
+        if case let .failure(error) = refused { XCTAssertEqual(error.code, .notAllowed) } else { XCTFail("Confirmation required") }
+        let first = try await bridge.usageReset(taskID: task.id.uuidString, token: "confirmation", confirmed: true).get()
+        let replay = try await bridge.usageReset(taskID: task.id.uuidString, token: "confirmation", confirmed: true).get()
+        XCTAssertEqual(first, replay)
+        XCTAssertEqual(calls, 1, "A lost response cannot consume another banked reset")
+        XCTAssertEqual(first.state, "reset")
+        for request in [RemoteRequest.usageReset(taskID: task.id.uuidString),
+                        .useUsageReset(taskID: task.id.uuidString, token: "confirmation", confirmed: true)] {
+            XCTAssertNil(request.requiredPermission)
+            XCTAssertEqual(request.taskID, task.id.uuidString)
+        }
+        XCTAssertTrue(RemoteRequest.useUsageReset(taskID: "task", token: "confirmation", confirmed: true).isCommand)
+    }
+
     func testHeadlessTerminalBackpressurePreservesOutputBeforeExit() async throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "remote-terminal-tail-\(UUID())")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

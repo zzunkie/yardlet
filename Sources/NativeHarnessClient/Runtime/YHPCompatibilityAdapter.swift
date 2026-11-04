@@ -836,9 +836,9 @@ actor YHPProviderCompatibilityAdapter:
     }
 
     func restoreFiles(userMessageID: String, expecting preview: HarnessFileRewindResult,
-        in session: HarnessSessionHandle) async throws -> HarnessFileRewindResult {
+        in session: HarnessSessionHandle, authorizing: HarnessFileRestoreAuthorization? = nil) async throws -> HarnessFileRewindResult {
         guard let fileRewinding else { throw HarnessAdapterError.capabilityUnavailable("File restore is unavailable") }
-        return try await fileRewinding.restoreFiles(userMessageID: userMessageID, expecting: preview, in: session)
+        return try await fileRewinding.restoreFiles(userMessageID: userMessageID, expecting: preview, in: session, authorizing: authorizing)
     }
 
     func sendFollowUp(

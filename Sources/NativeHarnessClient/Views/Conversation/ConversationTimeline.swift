@@ -485,6 +485,7 @@ struct ConversationTimeline: View {
             }
             handlers.fork = actions.forkCodexTurn.map { fork in { fork(turnID) } }
         case .presented:
+            if actions.rewind != nil { handlers.restoreFiles = { showsFileRewind = true } }
             // Another Mac's turn offers its edit and fork as that Mac's own turn does, and that Mac carries them out.
             if let edit = actions.editTurnMessage { handlers.editMessage = { target in edit(turnID, target.text) } }
             if turn.actions.canFork, let branch = actions.branch { handlers.fork = { branch(.turn(turnID)) } }

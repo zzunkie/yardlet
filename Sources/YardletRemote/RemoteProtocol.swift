@@ -198,6 +198,7 @@ public struct RemoteTask: Codable, Equatable, Sendable {
     /// A message sent while its turn runs can go into that turn now (§15.15).
     public var steers: Bool?
     /// A message to the task can carry files (§15.20).
+    public var notices: RemoteTaskNotices?
     public var acceptsFiles: Bool?
 
     public init(
@@ -244,12 +245,18 @@ public struct RemoteSnapshot: Equatable, Sendable {
     /// The bridge answers a task's settings, slash commands, edit and fork (§15.23).
     public var taskControls: Bool
     /// The bridge answers `subscribeTask` with `"detail": "full"` (§15.24).
+    public var conversationBodies: Bool = false
+    public var nextSteps: Bool = false
     public var fullConversation: Bool
     /// The bridge shows a task's browser tabs and takes input for them (§15.25).
     public var browserTabs: Bool
     public var terminals: Bool
     public var taskRail: Bool = false
+    public var bankedResets: Bool = false
     public var tabControls: Bool = false
+    public var subtasks: Bool = false
+    public var taskNotices: Bool = false
+    public var fileRewind: Bool = false
 
     public init(projects: [RemoteProject] = [], tasks: [RemoteTask] = [], newestRequestIDs: [String: String] = [:],
                 requestSummaries: [String: String] = [:], newTask: RemoteNewTask? = nil,
@@ -417,6 +424,11 @@ public struct RemoteItem: Codable, Equatable, Sendable {
     /// What only the Mac's card does, in one line, beside `moreOnMac` (§15.13).
     public var macNote: String?
     /// A plan limit's automatic continue is armed (§15.17).
+    public var answeredQuestions: [RemoteNextQuestion]?
+    public var sentWhileWorking: Bool?
+    public var unmarkedAnswer: Bool?
+    public var nextQuestions: [RemoteNextQuestion]?
+    public var planToImplement: String?
     public var autoContinue: Bool?
     /// Every answer the Mac's card gives, in its order (§15.19).
     public var choices: [RemoteChoice]?
@@ -449,6 +461,8 @@ public struct RemoteItem: Codable, Equatable, Sendable {
     public var schedule: RemoteScheduleCreation?
     /// A plan limit's card.
     public var limit: RemoteLimit?
+    /// Display bodies of the shared cards (§15.31), full subscriptions only.
+    public var body: RemoteConversationBody?
 
     public init(id: String, turnId: String, kind: Kind) {
         self.id = id
@@ -558,6 +572,8 @@ public struct RemoteSubagent: Codable, Equatable, Sendable {
     public var harnessLabel: String?
     public var background: Bool?
     /// The listed tasks its child threads run in, which "Open child task" opens.
+    public var canStop: Bool?
+    public var activityId: String?
     public var taskIds: [String]?
     /// What the card's copy button takes.
     public var copyText: String?
@@ -939,6 +955,19 @@ public enum RemoteSuggestionAction: String, Codable, Sendable, CaseIterable {
 }
 
 /// A request a client sends, after decoding.
+public struct RemoteNextQuestion: Codable, Equatable, Sendable {
+    public var title: String
+    public var options: [String]
+    public var itemID: String
+    public var answerOptions: [String]?
+    public var customAnswer: String?
+    public init(title: String, options: [String], itemID: String) {
+        self.title = title; self.options = options; self.itemID = itemID
+    }
+}
+
+public enum RemoteNextStep: String, Codable, Sendable { case implementPlan, answer, answerWhileWorking, retry, resumeAfterReset }
+
 public enum RemoteRequest: Equatable, Sendable {
     case snapshot
     /// `detail` `full` is v2's, to a Mac that announces it (§15.24).
@@ -960,8 +989,11 @@ public enum RemoteRequest: Equatable, Sendable {
     /// `settings` already picked, so a menu that depends on another (an effort on its model) answers as it would
     /// after those picks (§15.16).
     case newTaskOptions(projectID: String?, harness: String?, settings: [String: String] = [:])
+    case usageReset(taskID: String)
+    case useUsageReset(taskID: String, token: String, confirmed: Bool)
     case limitAccounts(taskID: String)
     case continueWithAccount(taskID: String, accountID: String)
+    case nextStep(taskID: String, turnID: String, action: RemoteNextStep, text: String? = nil)
     case setAutoContinue(taskID: String, enabled: Bool)
     case actOnQueued(taskID: String, itemID: String, action: RemoteQueuedAction)
     case answerHandoff(taskID: String, requestID: String, answer: RemoteHandoffAnswer)
@@ -1011,11 +1043,18 @@ public enum RemoteRequest: Equatable, Sendable {
     case closeTerminal(taskID: String, terminalID: String)
     case terminalOutputAck(taskID: String, terminalID: String, sequence: Int)
 
+    case subtask(taskID: String, activityID: String, stop: Bool)
+    case cancelAccountMove(taskID: String)
+    case fileRewind(taskID: String, action: RemoteFileRewindAction, pointID: String?, receipt: String?, confirmed: Bool)
+
     case openTab(taskID: String, tabID: String?, address: String)
     case closeTab(taskID: String, tabID: String)
 
     public var type: String {
         switch self {
+        case .subtask: "subtask"
+        case .cancelAccountMove: "cancelAccountMove"
+        case .fileRewind: "fileRewind"
         case .snapshot: "snapshot"
         case .subscribeTask: "subscribeTask"
         case .loadOlder: "loadOlder"
@@ -1029,8 +1068,11 @@ public enum RemoteRequest: Equatable, Sendable {
         case .reviewPlan: "reviewPlan"
         case .createTask: "createTask"
         case .newTaskOptions: "newTaskOptions"
+        case .usageReset: "usageReset"
+        case .useUsageReset: "useUsageReset"
         case .limitAccounts: "limitAccounts"
         case .continueWithAccount: "continueWithAccount"
+        case .nextStep: "nextStep"
         case .setAutoContinue: "setAutoContinue"
         case .actOnQueued: "actOnQueued"
         case .answerHandoff: "answerHandoff"
@@ -1081,7 +1123,11 @@ public enum RemoteRequest: Equatable, Sendable {
     public var requiredPermission: RemoteDevicePermission? {
         switch self {
         case .taskRail, .railAction: nil
+        case .nextStep: nil
+        case .usageReset, .useUsageReset: nil
         case .readReview, .workspaceFiles: nil
+        case let .fileRewind(_, action, _, _, _): action == .restore ? .fileWrites : nil
+        case .subtask, .cancelAccountMove: nil
         case .openTerminal, .terminalInput, .terminalResize, .terminalStatus, .terminalOutputAck, .closeTerminal: .terminal
         case .openTab, .closeTab: nil
         case .snapshot, .subscribeTask, .loadOlder, .unsubscribeTask, .ping, .sendMessage, .answerApproval,
@@ -1098,6 +1144,9 @@ public enum RemoteRequest: Equatable, Sendable {
     public var taskID: String? {
         switch self {
         case let .taskRail(id, _), let .railAction(id, _, _, _): id
+        case let .nextStep(id, _, _, _): id
+        case let .usageReset(id), let .useUsageReset(id, _, _): id
+        case let .subtask(id, _, _), let .cancelAccountMove(id), let .fileRewind(id, _, _, _, _): id
         case let .subscribeTask(id, _), let .loadOlder(id, _), let .unsubscribeTask(id), let .sendMessage(id, _, _, _, _),
              let .answerApproval(id, _, _, _), let .stopTurn(id), let .markRead(id), let .answerQuestion(id, _, _),
              let .reviewPlan(id, _, _, _), let .itemDetail(id, _), let .actOnSuggestion(id, _, _), let .setPinned(id, _),
@@ -1127,6 +1176,11 @@ public enum RemoteRequest: Equatable, Sendable {
     /// it is written to the audit log.
     public var isCommand: Bool {
         switch self {
+        case .nextStep: true
+        case .useUsageReset: true
+        case let .subtask(_, _, stop): stop
+        case let .fileRewind(_, action, _, _, _): action == .restore
+        case .cancelAccountMove: true
         case .sendMessage, .answerApproval, .stopTurn, .markRead, .answerQuestion, .reviewPlan, .createTask,
              .actOnSuggestion, .setPinned, .archiveTask, .answerLink, .continueWithAccount, .setAutoContinue, .actOnQueued,
              .answerHandoff, .chooseAnswer, .runScheduledTask, .setScheduledTaskEnabled, .setTaskSetting, .runComposerCommand,
@@ -1181,6 +1235,8 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var reason: String?
         var projectId: String?
         var provider: String?
+        var pointId: String?
+        var receipt: String?
         var itemId: String?
         var suggestionId: String?
         var watching: Bool?
@@ -1345,6 +1401,12 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         case "newTaskOptions":
             request = .newTaskOptions(projectID: required(wire.projectId), harness: required(wire.harness),
                                       settings: wire.settings ?? [:])
+        case "usageReset":
+            guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
+            request = .usageReset(taskID: taskID)
+        case "useUsageReset":
+            guard let taskID = required(wire.taskId), let token = required(wire.token) else { return fail(.badRequest, "Missing taskId or token") }
+            request = .useUsageReset(taskID: taskID, token: token, confirmed: wire.confirmed == true)
         case "limitAccounts":
             guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
             request = .limitAccounts(taskID: taskID)
@@ -1353,6 +1415,13 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 return fail(.badRequest, "Missing taskId or accountId")
             }
             request = .continueWithAccount(taskID: taskID, accountID: accountID)
+        case "nextStep":
+            guard let taskID = required(wire.taskId), let turnID = required(wire.turnId),
+                  let action = wire.action.flatMap(RemoteNextStep.init(rawValue:)) else {
+                return fail(.badRequest, "Missing next-step target or action")
+            }
+            guard (wire.text?.count ?? 0) <= 32_000 else { return fail(.tooLarge, "Answer is too large") }
+            request = .nextStep(taskID: taskID, turnID: turnID, action: action, text: wire.text)
         case "setAutoContinue":
             guard let taskID = required(wire.taskId), let enabled = wire.enabled else {
                 return fail(.badRequest, "Missing taskId or enabled")
@@ -1450,6 +1519,15 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         case "taskOutputs":
             guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
             request = .taskOutputs(taskID: taskID)
+        case "subtask":
+            guard let taskID = required(wire.taskId), let activityID = required(wire.itemId), ["read", "stop"].contains(wire.action) else { return fail(.badRequest, "Missing or invalid subtask") }
+            request = .subtask(taskID: taskID, activityID: activityID, stop: wire.action == "stop")
+        case "cancelAccountMove":
+            guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing or invalid task control") }
+            request = .cancelAccountMove(taskID: taskID)
+        case "fileRewind":
+            guard let taskID = required(wire.taskId), let action = wire.action.flatMap(RemoteFileRewindAction.init(rawValue:)) else { return fail(.badRequest, "Missing or invalid task control") }
+            request = .fileRewind(taskID: taskID, action: action, pointID: required(wire.pointId), receipt: required(wire.receipt), confirmed: wire.confirmed == true)
         case "readReview":
             guard let taskID = required(wire.taskId), let query = wire.reviewQuery, query.isValid else {
                 return fail(.badRequest, "Missing or invalid review query")
@@ -1616,11 +1694,19 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             wire.projectId = projectID
             wire.harness = harness
             wire.settings = settings.isEmpty ? nil : settings
+        case let .usageReset(taskID):
+            wire.taskId = taskID
+        case let .useUsageReset(taskID, token, confirmed):
+            wire.taskId = taskID
+            wire.token = token
+            wire.confirmed = confirmed
         case let .limitAccounts(taskID):
             wire.taskId = taskID
         case let .continueWithAccount(taskID, accountID):
             wire.taskId = taskID
             wire.accountId = accountID
+        case let .nextStep(taskID, turnID, action, text):
+            wire.taskId = taskID; wire.turnId = turnID; wire.action = action.rawValue; wire.text = text
         case let .setAutoContinue(taskID, enabled):
             wire.taskId = taskID
             wire.enabled = enabled
@@ -1680,6 +1766,11 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             wire.taskId = taskID
         case let .taskOutputs(taskID):
             wire.taskId = taskID
+        case let .subtask(taskID, activityID, stop):
+            wire.taskId = taskID; wire.itemId = activityID; wire.action = stop ? "stop" : "read"
+        case let .cancelAccountMove(taskID): wire.taskId = taskID
+        case let .fileRewind(taskID, action, pointID, receipt, confirmed):
+            wire.taskId = taskID; wire.action = action.rawValue; wire.pointId = pointID; wire.receipt = receipt; wire.confirmed = confirmed ? true : nil
         case let .readReview(taskID, query):
             wire.taskId = taskID
             wire.reviewQuery = query
@@ -1820,6 +1911,10 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var filePaths: [String]?
     public var filesLimited: Bool?
     /// `snapshot` on v2: the Mac answers `subscribeTask` with `"detail": "full"` (§15.24).
+    public var conversationBodies: Bool?
+    public var nextSteps: Bool?
+    public var bankedResets: Bool?
+    public var usageReset: RemoteUsageReset?
     public var fullConversation: Bool?
     /// `taskOutputs` (§15.22).
     public var outputs: [RemoteOutput]?
@@ -1837,6 +1932,11 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     /// `composerCommands` (§15.23).
     public var commands: [RemoteComposerCommand]?
     /// `snapshot` on v2: the Mac shows a task's browser tabs (§15.25).
+    public var subtasks: Bool?
+    public var subtask: RemoteSubtaskTranscript?
+    public var taskNotices: Bool?
+    public var fileRewind: Bool?
+    public var rewind: RemoteFileRewind?
     public var tabControls: Bool?
     public var browserTabs: Bool?
     /// `watchTab` (§15.25): the task's tabs, and the one watched.

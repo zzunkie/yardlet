@@ -189,6 +189,7 @@ enum ConversationLineWording {
         harness: HarnessKind,
         localize: Localize = { L10n.string($0) }
     ) -> [ConversationLineWords] {
+        if let words = command.words { return words }
         switch harness {
         case .codex:
             let actions = command.actions.isEmpty ? [.unknown(command: command.command)] : command.actions

@@ -53,6 +53,9 @@ struct UsageLimitCard: View {
                         UsageResetButton(choice: usageReset.choice, placement: .limitCard)
                             .environment(\.usageResetContext, usageReset.context)
                     }
+                    if let load = notices.hostUsageReset {
+                        RemoteUsageResetButton(load: load, use: notices.useHostUsageReset)
+                    }
                     if let accounts, !accounts.others.isEmpty {
                         Button { showsAccounts.toggle() } label: {
                             HStack(spacing: 4) {

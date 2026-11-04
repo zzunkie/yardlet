@@ -332,6 +332,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
                 replaceItem(item, in: taskID)
             }
             return nil
+        case .cancelAccountMove: return RemoteError(.unavailable)
         case let .setPinned(taskID, pinned):
             guard tasks[taskID] != nil else { return RemoteError(.notFound) }
             tasks[taskID]?.task.pinned = pinned
@@ -371,6 +372,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
             settleLimit(limit, in: taskID)
             startReply(to: "Continue where you left off.", in: taskID)
             return nil
+        case .nextStep: return RemoteError(.notAllowed)
         case let .setAutoContinue(taskID, enabled):
             guard let entry = tasks[taskID], var limit = latestLimit(in: entry),
                   limit.options?.contains("autoContinue") == true else { return RemoteError(.notAllowed) }

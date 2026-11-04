@@ -22,7 +22,7 @@ enum ConversationLinkKind: Equatable {
             self = .web
         } else if url.scheme == nil, url.path(percentEncoded: false).isEmpty {
             self = .place
-        } else if url.isFileURL || url.scheme == nil {
+        } else if url.isFileURL || url.scheme == nil || RemoteConversationFileLink.path(url) != nil {
             self = .file
         } else {
             self = .other
@@ -97,7 +97,9 @@ enum ConversationLinkMenu {
             return [(places.browserPanel == nil ? [] : [.open]) + [.openInDefaultBrowser], [.copyLink]]
         case .file:
             // A file on another computer is named, and opened only where it can be read from there.
-            guard opensLocalFiles else { return places.fileElsewhere == nil ? [[.copyPath]] : [[.open], [.copyPath]] }
+            guard opensLocalFiles, RemoteConversationFileLink.path(url) == nil else {
+                return places.fileElsewhere == nil ? [[.copyPath]] : [[.open], [.copyPath]]
+            }
             // A program or a package is only shown in Finder: its own app would run it.
             let itsApp: [Item] = FileElsewhereButtons.runs(url) ? [] : [.openInItsApp]
             return [[.open] + itsApp + [.revealInFinder], [.copyPath]]
@@ -130,6 +132,12 @@ enum ConversationLinkMenu {
     /// Does `item` for `url`; `open` is what a click on it does, and `text` the words it is written with.
     @MainActor
     static func perform(_ item: Item, url: URL, text: String?, places: ConversationLinkPlaces, open: (URL) -> Void) {
+        // A host file never reaches a local-file action, even when drawn outside a remote environment.
+        if RemoteConversationFileLink.path(url) != nil {
+            if item == .open { places.fileElsewhere?(url) }
+            if item == .copyPath { TranscriptClipboard.copy(copiedPath(url)) }
+            return
+        }
         switch item {
         case .open:
             if ConversationLinkKind(url) == .web, let browserPanel = places.browserPanel { browserPanel(url) } else { open(url) }
@@ -140,8 +148,12 @@ enum ConversationLinkMenu {
         case .openInItsApp: NSWorkspace.shared.open(url)
         case .revealInFinder: NSWorkspace.shared.activateFileViewerSelecting([url])
         case .copyLink: TranscriptClipboard.copy(copiedLink(url, text: text))
-        case .copyPath: TranscriptClipboard.copy(url.path(percentEncoded: false))
+        case .copyPath: TranscriptClipboard.copy(copiedPath(url))
         }
+    }
+
+    static func copiedPath(_ url: URL) -> String {
+        RemoteConversationFileLink.path(url) ?? url.path(percentEncoded: false)
     }
 
     /// A link as it is copied: an anchor to a task names it only inside a conversation, so it is copied as

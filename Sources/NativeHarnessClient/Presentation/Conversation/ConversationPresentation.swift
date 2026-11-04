@@ -321,6 +321,8 @@ enum ConversationItemKind: Equatable, Sendable {
 }
 
 struct ConversationCommand: Equatable, Sendable {
+    /// A remote host already worded the command with its provider projection.
+    var words: [ConversationLineWords]? = nil
     var command: String
     var workingDirectory: String?
     /// The provider's own status word.

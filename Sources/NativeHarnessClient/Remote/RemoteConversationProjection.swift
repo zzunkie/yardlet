@@ -55,7 +55,9 @@ enum RemoteConversationProjection {
             add(self.outcome(outcome, id: "outcome:\(turn.id)", turnID: turn.id, inWork: false, isFull: full != nil))
         }
         for request in turn.requests { add(self.request(request, turnID: turn.id, inWork: false, isFull: full != nil)) }
-        items.insert(header(turn, workCount: items.filter { $0.inWork == true }.count), at: headerIndex)
+        var heading = header(turn, workCount: items.filter { $0.inWork == true }.count)
+        if full != nil { addNextSteps(turn.actions, to: &heading) }
+        items.insert(heading, at: headerIndex)
         return RemoteTurn(id: turn.id, items: items)
     }
 
@@ -149,6 +151,10 @@ enum RemoteConversationProjection {
     ) -> RemoteItem? {
         var result = RemoteItem(id: "i:\(item.id)", turnId: turnID, kind: .activity)
         if inWork { result.inWork = true }
+        if full != nil {
+            result.sentWhileWorking = item.isSentWhileWorking ? true : nil
+            result.unmarkedAnswer = item.isUnmarkedAnswer ? true : nil
+        }
         let userLimit = full == nil ? RemoteText.userLimit : RemoteText.fullTextLimit
         switch item.kind {
         case let .userMessage(text, images):
@@ -186,7 +192,7 @@ enum RemoteConversationProjection {
             assistant(&result, text, role: "proposedPlan", isStreaming: isWriting, isFull: full != nil)
         case let .reasoning(summary, detail, isStreaming):
             // The Mac draws a summary row, or a "Thinking" line while it streams or has a body.
-            let summary = RemoteText.short(summary, RemoteText.detailLimit)
+            let summary = RemoteText.short(summary, full == nil ? RemoteText.detailLimit : RemoteText.fullTextLimit)
             guard summary != nil || isStreaming || detail?.isEmpty == false else { return nil }
             let verb = isStreaming ? L10n.string("Thinking") : L10n.string("Thought process")
             activity(&result, "reasoning", verb, item.phase)
@@ -229,6 +235,12 @@ enum RemoteConversationProjection {
             if subagent.isApproved { result.approved = true }
             if let full {
                 result.subagent = self.subagent(subagent, full: full)
+                for route in subagent.routes {
+                    if case let .harnessSubtask(reference, activityID) = route {
+                        result.subagent?.activityId = activityID
+                        result.subagent?.canStop = reference.taskID != nil && item.phase == .running ? true : nil
+                    }
+                }
                 result.subagent?.copyText = RemoteText.short(item.copyDetails, RemoteText.fullSubagentLimit)
             }
         case let .taskSuggestion(suggestion):
@@ -265,6 +277,14 @@ enum RemoteConversationProjection {
             return self.request(request, turnID: turnID, inWork: inWork, isFull: full != nil)
         case let .outcome(outcome):
             return self.outcome(outcome, id: "i:\(item.id)", turnID: turnID, inWork: inWork, isFull: full != nil)
+        }
+        if let full { result.body = body(item, full: full, workspaceURL: workspaceURL)
+            if case let .tool(tool) = item.kind {
+                result.imageCount = tool.images.isEmpty ? nil : tool.images.count
+                result.images = tool.images.prefix(4).compactMap { image in
+                    image.url.flatMap { full.previews[$0] }.map { RemoteImagePreview(data: $0, name: image.name) }
+                }
+            }
         }
         return result
     }

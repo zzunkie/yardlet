@@ -3418,7 +3418,7 @@ final class AppModel {
     }
 
     /// Compare the saved provider/account/storage identity after every asynchronous boundary.
-    private func matchingSession(_ source: SessionRecord, allowingInitialAttachment: Bool = false) -> SessionRecord? {
+    func matchingSession(_ source: SessionRecord, allowingInitialAttachment: Bool = false) -> SessionRecord? {
         store.sessions.first { $0.id == source.id && $0.harness == source.harness
             && ($0.providerSessionID == source.providerSessionID || (allowingInitialAttachment
                 && source.providerSessionID == nil && $0.providerSessionID == handlesBySessionID[source.id]?.providerSessionID))
@@ -8142,7 +8142,7 @@ extension AppModel {
         return preview
     }
 
-    func restoreClaudeFiles(_ preview: FileRewindPreview) async throws -> HarnessFileRewindResult {
+    func restoreClaudeFiles(_ preview: FileRewindPreview, authorizing: HarnessFileRestoreAuthorization? = nil) async throws -> HarnessFileRewindResult {
         guard reviewedFileRewinds[preview.id] == preview, let session = matchingSession(preview.session),
               preview.result.canRewind, let files = preview.result.filesChanged,
               session.status != .running, session.status != .waitingForApproval,
@@ -8159,6 +8159,6 @@ extension AppModel {
               let handle = handlesBySessionID[session.id] else {
             throw HarnessAdapterError.capabilityUnavailable(L10n.string("File restore is unavailable."))
         }
-        return try await controller.restoreFiles(userMessageID: preview.point.id, expecting: preview.result, in: handle)
+        return try await controller.restoreFiles(userMessageID: preview.point.id, expecting: preview.result, in: handle, authorizing: authorizing)
     }
 }

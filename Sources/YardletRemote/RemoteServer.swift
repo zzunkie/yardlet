@@ -29,6 +29,7 @@ public enum RemoteCommand: Equatable, Sendable {
     case sendMessage(taskID: String, text: String, images: [RemoteImage] = [], followUp: RemoteFollowUpMode? = nil,
                      files: [RemoteFile] = [])
     case answerApproval(taskID: String, requestID: String, answer: RemoteApprovalAnswer, note: String? = nil)
+    case cancelAccountMove(taskID: String)
     case stopTurn(taskID: String)
     case markRead(taskID: String)
     case answerQuestion(taskID: String, requestID: String, answers: [RemoteQuestionAnswer])
@@ -37,6 +38,7 @@ public enum RemoteCommand: Equatable, Sendable {
     case setPinned(taskID: String, pinned: Bool)
     case archiveTask(taskID: String)
     case continueWithAccount(taskID: String, accountID: String)
+    case nextStep(taskID: String, turnID: String, action: RemoteNextStep, text: String?)
     case setAutoContinue(taskID: String, enabled: Bool)
     case actOnQueued(taskID: String, itemID: String, action: RemoteQueuedAction)
     case answerHandoff(taskID: String, requestID: String, answer: RemoteHandoffAnswer)
@@ -121,6 +123,7 @@ public protocol RemoteBridge: AnyObject, Sendable {
     /// What a task started in the project may run on (§15.16).
     func newTaskOptions(projectID: String?, harness: String?, settings: [String: String]) async -> Result<RemoteNewTaskOptions, RemoteError>
     /// The accounts a task a plan limit stopped may continue under (§15.17).
+    func usageReset(taskID: String, token: String?, confirmed: Bool) async -> Result<RemoteUsageReset, RemoteError>
     func limitAccounts(taskID: String) async -> Result<[RemoteAccount], RemoteError>
     /// The Mac's Scheduled tasks list (§15.21). A bridge that answers it says so in its snapshot (`scheduledTasks`).
     func scheduledTasks() async -> Result<[RemoteSchedule], RemoteError>
@@ -137,6 +140,8 @@ public protocol RemoteBridge: AnyObject, Sendable {
     func taskRail(taskID: String) async -> Result<RemoteRailFacts, RemoteError>
     func railDraft(taskID: String, confirmed: Bool) async -> Result<String, RemoteError>
     func railAction(taskID: String, action: String, targetID: String?, confirmed: Bool) async -> RemoteError?
+    func subtask(taskID: String, activityID: String, stop: Bool) async -> Result<RemoteSubtaskTranscript, RemoteError>
+    func fileRewind(taskID: String, action: RemoteFileRewindAction, pointID: String?, receipt: String?, confirmed: Bool, permit: RemoteFileWritePermit?) async -> Result<RemoteFileRewind, RemoteError>
     func taskSettings(taskID: String, prepare: Bool) async -> Result<[RemoteSetting], RemoteError>
     /// Applies a choice as the Mac's menu does; the controls after it.
     func setTaskSetting(taskID: String, setting: String, value: String, confirmed: Bool) async -> Result<[RemoteSetting], RemoteError>
@@ -175,6 +180,8 @@ extension RemoteBridge {
     public func railDraft(taskID: String, confirmed: Bool) async -> Result<String, RemoteError> { .failure(RemoteError(.unavailable)) }
     public func taskRail(taskID: String) async -> Result<RemoteRailFacts, RemoteError> { .failure(RemoteError(.unavailable)) }
     public func railAction(taskID: String, action: String, targetID: String?, confirmed: Bool) async -> RemoteError? { RemoteError(.unavailable) }
+    public func subtask(taskID: String, activityID: String, stop: Bool) async -> Result<RemoteSubtaskTranscript, RemoteError> { .failure(RemoteError(.unavailable)) }
+    public func fileRewind(taskID: String, action: RemoteFileRewindAction, pointID: String?, receipt: String?, confirmed: Bool, permit: RemoteFileWritePermit?) async -> Result<RemoteFileRewind, RemoteError> { .failure(RemoteError(.unavailable)) }
     public func announcesFinish(of taskID: String) async -> Bool { true }
     public func openTerminal(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit,
                              output: @escaping @Sendable (RemoteTerminalUpdate) async -> Void) async -> RemoteError? { RemoteError(.unavailable) }
@@ -199,6 +206,10 @@ extension RemoteBridge {
         .failure(RemoteError(.unavailable))
     }
     public func newTaskOptions(projectID: String?, harness: String?, settings: [String: String]) async -> Result<RemoteNewTaskOptions, RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+
+    public func usageReset(taskID: String, token: String?, confirmed: Bool) async -> Result<RemoteUsageReset, RemoteError> {
         .failure(RemoteError(.unavailable))
     }
 
@@ -435,6 +446,8 @@ public actor RemoteServer {
     private var uploads: RemoteUploadStore
     /// What each device's file reads may still carry (§15.22), shared by its connections.
     private var readBudgets: [String: RemoteRateBucket] = [:]
+    /// Live grants for pending writes, keyed by connection and server-owned request identity.
+    var fileWritePermits: [UUID: [UUID: RemoteFileWritePermit]] = [:]
     /// When each `readFile` line was last written, by device, task, file and result: the same line again within
     /// `readAuditWindow` is not written, so repeating a request cannot flood the log.
     private var auditedReads: [String: Date] = [:]
@@ -548,6 +561,7 @@ public actor RemoteServer {
         if connection.isPresent { Task { await self.releaseHeldPushes() } }
         endTabWatch(on: id)
         endTerminals(on: id, reason: "disconnected")
+        revokeFileWrites(on: id)
         Task { await self.updateWatched() }
         publishStatus()
     }
@@ -935,6 +949,7 @@ public actor RemoteServer {
 
     func notifyPermissionsChanged(_ deviceID: String, permissions: RemoteDevicePermissions) {
         let effective = permissionRequestsEnabled ? permissions : RemoteDevicePermissions()
+        if !effective.fileWrites { revokeFileWrites(deviceID: deviceID) }
         if !effective.terminal { endTerminals(deviceID: deviceID, reason: "notAllowed") }
         for handler in permissionObservers.values { handler(deviceID, effective) }
     }
@@ -1293,6 +1308,54 @@ public actor RemoteServer {
             case let .failure(error):
                 respond(.failure(envelope.id, error), to: id)
             }
+        case let .usageReset(taskID):
+            let requestingDevice = connections[id]?.deviceID
+            let result = await bridge.usageReset(taskID: taskID, token: nil, confirmed: false)
+            var response = RemoteResponse(re: envelope.id)
+            switch result {
+            case let .success(reset): response.usageReset = reset
+            case let .failure(error): response = .failure(envelope.id, error)
+            }
+            audit?.record(device: requestingDevice, type: request.type, task: taskID,
+                          result: response.error?.code.rawValue ?? "ok", at: now())
+            respond(response, to: id)
+        case let .useUsageReset(taskID, token, confirmed):
+            var reset: RemoteUsageReset?
+            await command(envelope.id, request: request, on: id) {
+                switch await self.bridge.usageReset(taskID: taskID, token: token, confirmed: confirmed) {
+                case let .success(value): reset = value; return nil
+                case let .failure(error): return error
+                }
+            } answer: { $0.usageReset = reset }
+        case let .subtask(taskID, activityID, stop):
+            let result = await bridge.subtask(taskID: taskID, activityID: activityID, stop: stop)
+            var response = RemoteResponse(re: envelope.id)
+            switch result {
+            case let .success(value): response.subtask = value
+            case let .failure(error): response = .failure(envelope.id, error)
+            }
+            audit?.record(device: connections[id]?.deviceID, type: stop ? "stopSubtask" : "readSubtask", task: taskID, result: response.error?.code.rawValue ?? "ok", at: now())
+            respond(response, to: id)
+        case let .cancelAccountMove(taskID):
+            await command(envelope.id, request: request, on: id) {
+                await self.bridge.perform(.cancelAccountMove(taskID: taskID))
+            }
+        case let .fileRewind(taskID, action, pointID, receipt, confirmed):
+            let requestingDevice = connections[id]?.deviceID
+            let permitID = UUID()
+            let permit = action == .restore ? fileWritePermit(on: id, requestID: permitID) : nil
+            defer { fileWritePermits[id]?[permitID] = nil; permit?.revoke() }
+            let result: Result<RemoteFileRewind, RemoteError>
+            if action == .restore, permit == nil { result = .failure(RemoteError(.notAllowed)) }
+            else { result = await bridge.fileRewind(taskID: taskID, action: action, pointID: pointID, receipt: receipt,
+                                                    confirmed: confirmed, permit: permit) }
+            var response = RemoteResponse(re: envelope.id)
+            switch result {
+            case let .success(value): response.rewind = value
+            case let .failure(error): response = .failure(envelope.id, error)
+            }
+            audit?.record(device: requestingDevice, type: request.type + "." + action.rawValue, task: taskID, result: response.error?.code.rawValue ?? "ok", at: now())
+            respond(response, to: id)
         case let .limitAccounts(taskID):
             switch await bridge.limitAccounts(taskID: taskID) {
             case let .success(accounts):
@@ -1306,6 +1369,10 @@ public actor RemoteServer {
         case let .continueWithAccount(taskID, accountID):
             await command(envelope.id, request: request, on: id) {
                 await self.bridge.perform(.continueWithAccount(taskID: taskID, accountID: accountID))
+            }
+        case let .nextStep(taskID, turnID, action, text):
+            await command(envelope.id, request: request, on: id) {
+                await self.bridge.perform(.nextStep(taskID: taskID, turnID: turnID, action: action, text: text))
             }
         case let .setAutoContinue(taskID, enabled):
             await command(envelope.id, request: request, on: id) {
@@ -1537,11 +1604,17 @@ public actor RemoteServer {
             response.workspaceFiles = response.taskFiles
             response.presence = true
             response.taskControls = published?.taskControls == true ? true : nil
+            response.conversationBodies = published?.conversationBodies == true ? true : nil
+            response.nextSteps = published?.nextSteps == true ? true : nil
+            response.bankedResets = published?.bankedResets == true ? true : nil
             response.fullConversation = published?.fullConversation == true ? true : nil
             response.reviewReading = published?.reviewReading == true ? true : nil
             response.browserTabs = published?.browserTabs == true ? true : nil
             response.terminals = published?.terminals == true ? true : nil
             response.taskRail = published?.taskRail == true ? true : nil
+            response.subtasks = published?.subtasks == true ? true : nil
+            response.taskNotices = published?.taskNotices == true ? true : nil
+            response.fileRewind = published?.fileRewind == true ? true : nil
             response.tabControls = published?.tabControls == true ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)
@@ -2041,6 +2114,7 @@ public actor RemoteServer {
         forgetLink(on: id)
         endTabWatch(on: id)
         endTerminals(on: id, reason: "disconnected")
+        revokeFileWrites(on: id)
         connection.channel.close(code)
         Task { await self.updateWatched() }
         publishStatus()
