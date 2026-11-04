@@ -448,11 +448,7 @@ actor IMAPMailSession {
         message.references = composition.references
         message.date = now()
         message.messageID = Self.messageID(for: address)
-        message.attachments = try composition.attachments.map { url in
-            GmailOutgoingMessage.Attachment(filename: GmailAttachmentFiles.displayName(url.path),
-                                            mimeType: FileTypes.mimeType(forExtension: url.pathExtension) ?? "application/octet-stream",
-                                            data: try Data(contentsOf: url))
-        }
+        message.attachments = try composition.attachments.map { try GmailAttachmentFiles.attachment($0) }
         let earlier = try composition.draftID.map(IMAPMessageRef.parse)
         let messageID = message.messageID ?? ""
         let date = message.date ?? now()

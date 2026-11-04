@@ -6,7 +6,7 @@ import YardletAgentTools
 struct ConnectorToolContext: Equatable, Sendable {
     var taskID: UUID?
     var scope: ConnectorTaskScope?
-    /// The task's folders, primary first, where a Gmail attachment may come from.
+    /// The task's folders, primary first, where a mail attachment may come from.
     var workspaceRoots: [URL] = []
 }
 

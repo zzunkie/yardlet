@@ -43,8 +43,10 @@ final class MicrosoftConnectorTests: XCTestCase {
         return (center, settled)
     }
 
-    private func call(_ center: ConnectorCenter, _ name: String, _ arguments: [String: ToolJSON] = [:]) async throws -> AgentToolResult {
-        try XCTUnwrapAsync(await center.callConnectorTool(named: name, arguments: .object(arguments), for: ConnectorToolContext()))
+    private func call(_ center: ConnectorCenter, _ name: String, _ arguments: [String: ToolJSON] = [:],
+                      folders: [URL] = []) async throws -> AgentToolResult {
+        try XCTUnwrapAsync(await center.callConnectorTool(named: name, arguments: .object(arguments),
+                                                          for: ConnectorToolContext(workspaceRoots: folders)))
     }
 
     private func json(_ result: AgentToolResult, file: StaticString = #filePath, line: UInt = #line) throws -> ToolJSON {
@@ -130,7 +132,7 @@ final class MicrosoftConnectorTests: XCTestCase {
 
     // MARK: - Tools
 
-    func testMailSearchesSendsAndRepliesThroughGraph() async throws {
+    func testMailSearchesSendsRepliesAndAttachesFilesThroughGraph() async throws {
         let microsoft = FakeMicrosoft()
         let (center, _) = try await signedIn([.outlookMail], microsoft: microsoft)
 
@@ -164,6 +166,62 @@ final class MicrosoftConnectorTests: XCTestCase {
 
         let refused = try await call(center, "outlook_send_message", ["to": .array([.string("a@b.test, c@d.test")])])
         XCTAssertTrue(refused.isError)
+
+        // Files go on a saved draft, one request each, by Gmail's rules; a send with files is that draft, sent.
+        let folder = FileManager.default.temporaryDirectory.appending(path: "yardlet-outlook-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let report = folder.appending(path: "보고서.pdf".decomposedStringWithCanonicalMapping)
+        let reportBytes = Data(repeating: 7, count: 2_048)
+        try reportBytes.write(to: report)
+        let drafted = try json(try await call(center, "outlook_create_draft", [
+            "to": .array([.string("bo@contoso.test")]), "subject": .string("Report"), "body": .string("Attached."),
+            "attachments": .array([.string(report.path(percentEncoded: false))])
+        ], folders: [folder]))
+        XCTAssertEqual(drafted["id"], .string("d1"))
+        XCTAssertEqual(drafted["attachments"]?.arrayValue?.first?["filename"], .string("보고서.pdf"))
+        let file = try XCTUnwrap(microsoft.posted.last)
+        XCTAssertEqual(file.path, "/v1.0/me/messages/d1/attachments")
+        XCTAssertEqual(file.body["@odata.type"], .string("#microsoft.graph.fileAttachment"))
+        XCTAssertEqual(file.body["name"], .string("보고서.pdf"))
+        XCTAssertEqual(file.body["contentBytes"], .string(reportBytes.base64EncodedString()))
+
+        _ = try json(try await call(center, "outlook_send_message", [
+            "to": .string("bo@contoso.test"), "subject": .string("Report"), "attachments": .string(report.path(percentEncoded: false))
+        ], folders: [folder]))
+        XCTAssertEqual(microsoft.posted.suffix(3).map(\.path),
+                       ["/v1.0/me/messages", "/v1.0/me/messages/d1/attachments", "/v1.0/me/messages/d1/send"])
+
+        // A file over the 3 MB one request carries, or from outside the folders, is refused before anything is made.
+        let posts = microsoft.posted.count
+        let large = folder.appending(path: "video.mov")
+        FileManager.default.createFile(atPath: large.path(percentEncoded: false), contents: nil)
+        let handle = try FileHandle(forWritingTo: large)
+        try handle.truncate(atOffset: UInt64(OutlookMailTransport.attachmentLimit + 1))
+        try handle.close()
+        for (path, reason) in [(large.path(percentEncoded: false), "at most 3 MB"), ("/etc/hosts", "files come from")] {
+            let refused = try await call(center, "outlook_send_message", ["to": .string("bo@contoso.test"),
+                                                                          "attachments": .string(path)], folders: [folder])
+            XCTAssertTrue(refused.isError && refused.text.contains(reason), "\(path): \(refused.text)")
+        }
+        XCTAssertEqual(microsoft.posted.count, posts)
+
+        // The cards name the files: a send's from the disk, a draft's as Outlook keeps it.
+        let size = ByteCountFormatter.string(fromByteCount: 2_048, countStyle: .file)
+        let sending = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__outlook_send_message", input: .object([
+            "to": .string("bo@contoso.test"), "attachments": .array([.string(report.path(percentEncoded: false))])
+        ])))
+        XCTAssertTrue(sending.detail.contains(L10n.format("Attachments: %@", size)), sending.detail)
+        XCTAssertTrue(sending.detail.contains("• 보고서.pdf (\(size))"), sending.detail)
+        XCTAssertTrue(GmailToolApproval.readsDraft(toolName: "mcp__yardlet__outlook_send_draft"))
+        let preview = await center.mailDraftPreview(tool: "outlook_send_draft", arguments: ["draftId": .string("d1")])
+        let draftCard = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__outlook_send_draft",
+                                                                 input: .object(["draftId": .string("d1")]), mailDraft: preview))
+        XCTAssertEqual(draftCard.title, L10n.format("Allow Claude to send a draft from %@?", "person@contoso.test"))
+        XCTAssertTrue(draftCard.detail.contains(L10n.format("To: %@", "Bo <bo@contoso.test>")), draftCard.detail)
+        XCTAssertTrue(draftCard.detail.contains("• 보고서.pdf (\(size))"), draftCard.detail)
+        XCTAssertFalse(draftCard.detail.contains("logo.png"), "An inline image is the body's, not a file")
+        XCTAssertTrue(draftCard.detail.contains("Attached."), draftCard.detail)
     }
 
     /// Times go to Graph in UTC and come back with the offset of the call's zone; a personal
@@ -328,8 +386,24 @@ final class FakeMicrosoft: ConnectorHTTPTransport, @unchecked Sendable {
             ])
         case ("GET", "me/mailFolders"):
             return Self.reply(url, 200, ["value": .array([.object(["id": .string("inbox-id"), "displayName": .string("Inbox")])])])
-        case ("POST", "me/sendMail"), ("POST", "me/messages/m1/reply"):
+        case ("POST", "me/sendMail"), ("POST", "me/messages/m1/reply"), ("POST", "me/messages/d1/send"):
             return (Data(), Self.ok(url, status: 202))
+        case ("POST", "me/messages"):
+            return Self.reply(url, 201, ["id": .string("d1"), "conversationId": .string("c-d1"), "subject": body["subject"] ?? .null,
+                                         "toRecipients": body["toRecipients"] ?? .array([]), "isDraft": .bool(true)])
+        case ("POST", "me/messages/d1/attachments"):
+            return Self.reply(url, 201, ["id": .string("a1"), "name": body["name"] ?? .null])
+        case ("GET", "me/messages/d1"):
+            func file(_ id: String, _ name: String, _ size: Int64, inline: Bool) -> ToolJSON {
+                .object(["id": .string(id), "name": .string(name), "size": .integer(size), "isInline": .bool(inline)])
+            }
+            return Self.reply(url, 200, [
+                "id": .string("d1"), "subject": .string("Report"), "isDraft": .bool(true),
+                "toRecipients": .array([.object(["emailAddress": .object(["name": .string("Bo"), "address": .string("bo@contoso.test")])])]),
+                "lastModifiedDateTime": .string("2026-10-27T09:00:00Z"),
+                "body": .object(["contentType": .string("text"), "content": .string("Attached.")]),
+                "attachments": .array([file("a1", "보고서.pdf", 2_048, inline: false), file("a2", "logo.png", 10, inline: true)])
+            ])
         case ("POST", "me/events"):
             return Self.reply(url, 201, ["id": .string("e1"), "subject": body["subject"] ?? .null, "start": body["start"] ?? .null,
                                          "end": body["end"] ?? .null, "isAllDay": .bool(false)])

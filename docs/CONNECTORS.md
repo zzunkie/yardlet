@@ -768,13 +768,14 @@ Gmail (`GmailToolCatalog`, `GmailToolRunner`, Gmail API v1):
   Outgoing mail has a UTF-8 base64 body, non-ASCII subjects and display names in RFC 2047, and HTML together with a text
   part in `multipart/alternative`. Addresses with a line break or a comma are refused before sending (header injection).
   Gmail fills in From.
-- Attachments (`GmailAttachmentFiles`): the agent gives absolute paths of local files (`~/` works), and the connector
-  reads them and attaches them after the body in `multipart/mixed`. Files come only from the task's folders
+- Attachments (`GmailAttachmentFiles`, shared by the Outlook Mail and Mail (IMAP) tools): the agent gives absolute
+  paths of local files (`~/` works), and the connector reads them and attaches them after the body in
+  `multipart/mixed`. Files come only from the task's folders
   (`ConnectorToolContext.workspaceRoots`, the same list browser uploads use), the temporary folders (`/tmp` and
   `$TMPDIR`, where agents keep files they make, such as Claude Code's scratchpad) and the person's Desktop, Documents
   and Downloads, never from a hidden file or folder below them (`.env`, `.ssh`, `.git`). `..` and symbolic links are
-  resolved with `realpath` before the check. Only regular files, up to 25 MB in all (Gmail's attachment limit); more is
-  refused before anything is read. The MIME type comes from the extension (`UTType`, else
+  resolved with `realpath` before the check. Only regular files, up to 25 MB in all (Gmail's attachment limit, kept for
+  every mailbox); more is refused before anything is read. The MIME type comes from the extension (`UTType`, else
   `application/octet-stream`), and UTF-8 text gets `charset="UTF-8"`. File names are composed to NFC (macOS keeps
   Korean names decomposed) without control characters, and a non-ASCII name goes in `name` and `filename` as RFC 2047
   encoded words, as Gmail's web client sends it. A message with attachments goes through the upload endpoint (up to
@@ -893,9 +894,10 @@ none is sent:
   `LocalConnectorService.approvalRequiredTools`) use Yardlet's text and have no "Always allow" (`GmailToolApproval`,
   `GoogleToolApproval`): mail shows the recipients, cc, bcc, subject, attachments (the total, then each file's name
   and size, up to 20, or "not found" when it is not on disk) and the first 1,200 characters of the body; a card that
-  sends or deletes a draft first reads the draft from Gmail (`GmailDraftReader`, up to 5 seconds, while that session's
+  sends or deletes a draft first reads the draft from Gmail (`MailDraftReader`, up to 5 seconds, while that session's
   next frames wait) and shows its recipients, subject, last saved time, attachments and body instead of an ID, or the
-  ID and "could not read" when Gmail did not answer; labels
+  ID and "could not read" when Gmail did not answer (an Outlook or Mail (IMAP) `send_draft` card reads its draft the
+  same way, and shows the ID alone when it could not); labels
   show the thread, what is added and removed, and archive, read or unread; events show the title, date and time,
   invitees, Meet, and whether Google sends mail; Drive shows the title, type, folder and the first 600 characters of the
   content. Docs, Sheets and Slides show "Allow Claude to change a document (a spreadsheet, a presentation) in
@@ -935,8 +937,7 @@ that organization only.
 
 ### Not included
 
-- Gmail: downloading attachments and sending with attachments, trash and spam, creating and editing labels, and listing,
-  editing and deleting drafts.
+- Gmail: downloading attachments, trash and spam, creating and editing labels, and listing, editing and deleting drafts.
 - Drive: reading the body of PDF, Office and image files (download them and read them separately), deleting files, and
   changing sharing.
 - Docs, Sheets and Slides: editing in place a file Yardlet did not create or copy. That would need requesting the
@@ -1400,12 +1401,15 @@ Outlook Mail (`OutlookMailToolCatalog`, `OutlookMailToolRunner`):
 | `search_messages` | `GET me/messages` or `me/mailFolders/{id}/messages` | `query` as `$search` (KQL; Graph sorts by date and takes no `$orderby` with it), otherwise newest first; `folderId` (an ID or `inbox`, `archive`…), `unreadOnly`, 1–50 per page. No body |
 | `get_message` | `GET me/messages/{id}` with attachments' names | `format` text (default, `Prefer: outlook.body-content-type="text"`) or html, 40,000 characters |
 | `list_folders` | `GET me/mailFolders` or `…/childFolders` | |
-| `create_draft` | `POST me/messages`, or `createReply`/`createReplyAll` | to, cc, bcc, subject, body or htmlBody, `replyToMessageId`, `replyAll` |
+| `create_draft` | `POST me/messages`, or `createReply`/`createReplyAll`; then `POST …/attachments` for each file | to, cc, bcc, subject, body or htmlBody, `replyToMessageId`, `replyAll`, `attachments` |
 | `send_draft` | `POST me/messages/{id}/send` | |
-| `send_message` | `POST me/sendMail` (kept in Sent Items), or `reply`/`replyAll` | A reply's text goes as `comment`, which keeps the quoted original |
+| `send_message` | `POST me/sendMail` (kept in Sent Items), or `reply`/`replyAll`; with attachments, a draft as for `create_draft`, then `POST …/send` | A reply's text goes as `comment`, which keeps the quoted original. A draft whose files could not all be added is deleted |
 | `update_message` | `PATCH me/messages/{id}`, `POST …/move` | `isRead`, `flag`, `categories`, `moveToFolderId`; moving gives a new ID |
 
-Addresses with a comma, a line break or no `@` are refused before the request.
+Addresses with a comma, a line break or no `@` are refused before the request. Attachments follow Gmail's rules
+(`GmailAttachmentFiles`, above) and are checked before any request; Graph takes a file in one request only up to 3 MB
+(`OutlookMailTransport.attachmentLimit`, larger ones need an upload session), so a larger file is refused. The result
+lists each attached file's name and size.
 
 Outlook Calendar (`OutlookCalendarToolCatalog`, `OutlookCalendarToolRunner`):
 
@@ -1497,7 +1501,7 @@ Microsoft Entra. The Microsoft page opens the steps in order (`ConnectorSetupAss
 
 ### Not included
 
-- Mail: attachments (reading their content, sending them), deleting, rules, shared mailboxes.
+- Mail: reading attachments' content, sending a file over 3 MB, deleting, rules, shared mailboxes.
 - Calendar: recurrence rules on create, shared calendars of other people, rooms.
 - OneDrive: replacing or deleting files, sharing, SharePoint sites, reading Word, Excel, PowerPoint and PDF as text.
 - Teams: reading channel messages (administrator consent), creating chats or teams, meeting transcripts.
@@ -1514,10 +1518,11 @@ what belongs to connectors.
   replaces its password and servers. The first account's slug is `mail`; later ones add the part before the `@`
   (`mail_dana`).
 - **Tools** (`MailAccountToolCatalog`): `search_messages` (a folder's newest messages, or the server's search),
-  `get_message`, `list_folders`, `create_draft` (a new message, or a reply with the original's subject and quote) and
-  `send_draft`. Names and arguments follow Outlook Mail's. There is no delete. A message read through them is not
-  marked read.
-- **When the harness asks.** `send_draft` asks the person before every call, with the account and the draft named.
+  `get_message`, `list_folders`, `create_draft` (a new message, or a reply with the original's subject and quote, with
+  `attachments` by Gmail's rules, `GmailAttachmentFiles`) and `send_draft`. Names and arguments follow Outlook Mail's.
+  There is no delete. A message read through them is not marked read.
+- **When the harness asks.** `send_draft` asks the person before every call, with the account named and the draft read
+  back from the server: its recipients, subject, files and body, or its ID when it could not be read.
 - **Connecting** signs in to the IMAP server; a refused password marks the connector as needing the account again,
   from the mailbox, a tool call or a reconnect alike. Its row then offers **Set up…**, which opens the page to enter
   the address and a new app password, and the row's menu has **Mail accounts…** at any time.

@@ -1008,15 +1008,15 @@ actor ClaudeAdapter:
             // A scheduled-task change, and a Google write (a Gmail send, draft deletion, or label
             // change, a Calendar event, a Drive file), is asked each time, with no "always allow", as
             // the Claude app asks before its own (`ScheduleToolApproval`, `GoogleToolApproval`). A
-            // Gmail draft to send or delete is read first, so its card shows what it holds; the
-            // session's later frames wait for it.
+            // mail draft to send (or a Gmail draft to delete) is read first, so its card shows what
+            // it holds; the session's later frames wait for it.
             let toolName = request["tool_name"]?.stringValue
-            var gmailDraft: GmailDraftPreview?
+            var mailDraft: MailDraftPreview?
             if GmailToolApproval.readsDraft(toolName: toolName) {
-                gmailDraft = await GmailToolApproval.draft(toolName: toolName, input: input)
+                mailDraft = await GmailToolApproval.draft(toolName: toolName, input: input)
             }
             let schedule = ScheduleToolApproval.request(toolName: toolName, input: input)
-                ?? GoogleToolApproval.request(toolName: toolName, input: input, gmailDraft: gmailDraft)
+                ?? GoogleToolApproval.request(toolName: toolName, input: input, mailDraft: mailDraft)
             let suggestionOffer = structured == nil && !isAnswerableTool && schedule == nil
                 ? ClaudePermissionSuggestions.offer(from: request)
                 : nil

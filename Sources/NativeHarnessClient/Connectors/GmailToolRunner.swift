@@ -245,14 +245,14 @@ struct GmailToolRunner {
     }
 
     /// What a draft holds, for the request card before it is sent or deleted (`GmailToolApproval`).
-    func draftPreview(_ arguments: [String: ToolJSON]) async throws -> GmailDraftPreview {
+    func draftPreview(_ arguments: [String: ToolJSON]) async throws -> MailDraftPreview {
         let full = [URLQueryItem(name: "format", value: "full")]
         if let draft = Self.text(arguments, "draftId") {
             let id = try GmailAPI.segment(draft)
-            return GmailDraftPreview(GmailMessage(json: try await api.get("users/me/drafts/\(id)", full)["message"] ?? .null))
+            return MailDraftPreview(GmailMessage(json: try await api.get("users/me/drafts/\(id)", full)["message"] ?? .null))
         }
         let id = try GmailAPI.segment(try Self.required(arguments, "messageId"))
-        return GmailDraftPreview(GmailMessage(json: try await api.get("users/me/messages/\(id)", full)))
+        return MailDraftPreview(GmailMessage(json: try await api.get("users/me/messages/\(id)", full)))
     }
 
     /// The draft a call names: by its ID, or the draft whose message it gives, found in the

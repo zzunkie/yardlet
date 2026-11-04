@@ -114,11 +114,7 @@ struct GmailMailTransport: MailAccountTransport {
         message.body = composition.body
         message.inReplyTo = composition.inReplyTo
         message.references = composition.references
-        message.attachments = try composition.attachments.map { url in
-            GmailOutgoingMessage.Attachment(filename: GmailAttachmentFiles.displayName(url.path),
-                                            mimeType: FileTypes.mimeType(forExtension: url.pathExtension) ?? "application/octet-stream",
-                                            data: try Data(contentsOf: url))
-        }
+        message.attachments = try composition.attachments.map { try GmailAttachmentFiles.attachment($0) }
         if let forwarded = composition.forwardedMessageID { message.attachments += try await files(of: forwarded) }
         // An edited draft keeps its files: they are read from the draft as it is now.
         if composition.keepsDraftFiles, let id = composition.draftID,

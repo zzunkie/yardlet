@@ -436,8 +436,8 @@ final class ConnectorCenter: ConnectorToolProviding {
         microsoftApp = saved.microsoftApp
         cannotReadSavedSettings = !saved.canRead
         ConnectorToolLabels.shared.update(connectors)
-        GmailDraftReader.shared.set { [weak self] tool, arguments in
-            await self?.gmailDraftPreview(tool: tool, arguments: arguments)
+        MailDraftReader.shared.set { [weak self] tool, arguments in
+            await self?.mailDraftPreview(tool: tool, arguments: arguments)
         }
         holdServicesYardletsGoogleAppDoesNotServe()
     }
@@ -1276,12 +1276,13 @@ final class ConnectorCenter: ConnectorToolProviding {
         }
     }
 
-    private func callMicrosoftTool(_ record: ConnectorRecord, tool: String, arguments: ToolJSON) async -> AgentToolResult {
+    private func callMicrosoftTool(_ record: ConnectorRecord, tool: String, arguments: ToolJSON,
+                                   taskFolders: [URL]) async -> AgentToolResult {
         let graph = GraphAPI(base: environment.microsoft.graph, session: accountSession(record.credentialID))
         do {
             switch record.localService {
             case .outlookMail?:
-                return try await OutlookMailToolRunner(api: graph).call(tool, arguments)
+                return try await OutlookMailToolRunner(api: graph, taskFolders: taskFolders).call(tool, arguments)
             case .outlookCalendar?:
                 return try await OutlookCalendarToolRunner(api: graph, account: record.account, timeZone: environment.timeZone(),
                                                            now: environment.now)
@@ -1426,14 +1427,21 @@ final class ConnectorCenter: ConnectorToolProviding {
         return session
     }
 
-    private func callMailAccountTool(_ record: ConnectorRecord, tool: String, arguments: ToolJSON) async -> AgentToolResult {
-        guard let address = record.account, let session = imapSession(record) else {
+    /// The tools' runner for a mail account, over the connection the mailbox shares; nil without its servers.
+    private func mailAccountRunner(_ record: ConnectorRecord, taskFolders: [URL] = []) -> MailAccountToolRunner? {
+        guard let address = record.account, let session = imapSession(record) else { return nil }
+        let account = MailAccount(id: record.id, address: address, provider: .imap, connectorSlug: record.slug, service: record.name)
+        return MailAccountToolRunner(transport: IMAPMailTransport(session: session, account: account), account: account,
+                                     taskFolders: taskFolders)
+    }
+
+    private func callMailAccountTool(_ record: ConnectorRecord, tool: String, arguments: ToolJSON,
+                                     taskFolders: [URL]) async -> AgentToolResult {
+        guard let runner = mailAccountRunner(record, taskFolders: taskFolders) else {
             return .error("\(record.name) has no mail server settings; the user can add the account again in Yardlet Settings → Connectors.")
         }
-        let account = MailAccount(id: record.id, address: address, provider: .imap, connectorSlug: record.slug, service: record.name)
         do {
-            return try await MailAccountToolRunner(transport: IMAPMailTransport(session: session, account: account), account: account)
-                .call(tool, arguments)
+            return try await runner.call(tool, arguments)
         } catch where (error as? MailFailure)?.kind == .signInRequired {
             return .error("\(record.displayName)'s mail server refused its app password: it was deleted or changed. The user can "
                 + "add the account again in Yardlet Settings → Connectors → Mail (IMAP).")
@@ -1897,9 +1905,11 @@ final class ConnectorCenter: ConnectorToolProviding {
         switch record.localService {
         case let service? where service.isGoogle:
             return await callGoogleTool(record, tool: toolName, arguments: arguments, taskFolders: context.workspaceRoots)
-        case let service? where service.isMicrosoft: return await callMicrosoftTool(record, tool: toolName, arguments: arguments)
+        case let service? where service.isMicrosoft:
+            return await callMicrosoftTool(record, tool: toolName, arguments: arguments, taskFolders: context.workspaceRoots)
         case .appStoreConnect?: return await callAppStoreConnectTool(record, tool: toolName, arguments: arguments)
-        case .imapMail?: return await callMailAccountTool(record, tool: toolName, arguments: arguments)
+        case .imapMail?:
+            return await callMailAccountTool(record, tool: toolName, arguments: arguments, taskFolders: context.workspaceRoots)
         case .xcode?: return await callXcodeTool(record, tool: toolName, arguments: arguments)
         case let service?: return await callMacTool(record, service: service, tool: toolName, arguments: arguments)
         case nil: break
@@ -2031,14 +2041,22 @@ final class ConnectorCenter: ConnectorToolProviding {
         }
     }
 
-    /// The draft a Gmail send or delete names, read for its request card (`GmailToolApproval`); nil
-    /// when the tool is not a connected Gmail account's or Gmail did not answer.
-    func gmailDraftPreview(tool name: String, arguments: [String: ToolJSON]) async -> GmailDraftPreview? {
-        guard let (record, _) = owner(ofTool: name), record.localService == .gmail, record.status == .connected else {
+    /// The draft a mail send (or a Gmail delete) names, read for its request card (`GmailToolApproval`);
+    /// nil when the tool is not a connected mail account's or its server did not answer.
+    func mailDraftPreview(tool name: String, arguments: [String: ToolJSON]) async -> MailDraftPreview? {
+        guard let (record, _) = owner(ofTool: name), record.status == .connected else { return nil }
+        switch record.localService {
+        case .gmail?:
+            let api = GmailAPI(base: environment.google.gmailAPI, session: accountSession(record.credentialID))
+            return try? await GmailToolRunner(api: api).draftPreview(arguments)
+        case .outlookMail?:
+            let api = GraphAPI(base: environment.microsoft.graph, session: accountSession(record.credentialID))
+            return try? await OutlookMailToolRunner(api: api).draftPreview(arguments)
+        case .imapMail?:
+            return try? await mailAccountRunner(record)?.draftPreview(arguments)
+        default:
             return nil
         }
-        let api = GmailAPI(base: environment.google.gmailAPI, session: accountSession(record.credentialID))
-        return try? await GmailToolRunner(api: api).draftPreview(arguments)
     }
 
     /// The connector and server tool name behind one of Yardlet's names.
