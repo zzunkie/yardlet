@@ -61,6 +61,9 @@ extension ShellLaunchEnvironment {
 extension ClaudeConversationCatalog {
     /// Which Claude Code processes run cannot be told here, so none is taken for running.
     static func runningSessionIDs(configDirectory: URL, excludingProcessesOf owner: Int32 = 0) -> Set<String> { [] }
+    /// Nor which of them a Yardlet that has gone left, so none is ended.
+    @discardableResult
+    static func endYardletLeftovers(holding sessionID: String, configDirectory: URL) -> [Int32] { [] }
 }
 
 /// The phone remote is not offered.

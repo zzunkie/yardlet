@@ -359,7 +359,15 @@ homes, and stores the provider session ID, the `.native` scope and the account b
   another app holds that session ID in the chosen account's `sessions/<pid>.json` (child and grandchild processes
   Yardlet started are excluded), Yardlet refuses attach, send and `resume`, and shows "This conversation is still open
   in the Claude app. It continues here once you close it there." on the task. The draft stays and the task state does
-  not change. Import itself is not blocked. Once that process ends, sending attaches as usual.
+  not change. Import itself is not blocked. Once that process ends, sending attaches as usual. A registration whose
+  process started at another time than its `procStart` says belongs to a process that has gone and holds nothing.
+- **Processes a Yardlet that has gone left behind:** the CLI keeps running after its standard input closes while a tool
+  call or a background command runs, so when Yardlet crashes or is killed, such a process is adopted by launchd and
+  stays registered with Yardlet's entrypoint (`native-harness-client`). Nothing reads it any more, so it is not taken
+  for another app: before Yardlet continues that conversation, it sends the process SIGTERM (the CLI then ends its own
+  commands and removes its registration) and ends what is still running a few seconds later. A process whose parent is
+  alive, such as one a development build of Yardlet runs at the same time, is not touched and still holds its
+  conversation.
 - **Read-only following:** while a detached Claude or Codex task is visible, Yardlet checks the size and modification
   time of the native file (the Claude JSONL, or for Codex the rollout `path` the last `thread/read` reported) every 2
   seconds, and if they changed, reads it again with the same guards as the open path. Only the newest part is reread

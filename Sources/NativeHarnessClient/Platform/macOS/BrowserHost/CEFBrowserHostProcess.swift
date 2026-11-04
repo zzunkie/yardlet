@@ -82,11 +82,11 @@ final class CEFBrowserHostProcess: BrowserHostConnection {
             try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
 
-        let commands = Pipe()
+        // A host that died must surface as an error, not a SIGPIPE that ends Yardlet; the end of
+        // its commands, Yardlet going away, ends the host.
+        let commands = Pipe.childInput()
         let events = Pipe()
         input = commands.fileHandleForWriting
-        // A host that died must surface as an error, not a SIGPIPE that ends Yardlet.
-        _ = fcntl(input.fileDescriptor, F_SETNOSIGPIPE, 1)
         process.executableURL = Self.executableURL
         let korean = Locale.preferredLanguages.first?.hasPrefix("ko") == true
         process.arguments = [
