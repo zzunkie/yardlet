@@ -116,7 +116,7 @@ struct FileConnectorRepository: ConnectorRepository {
     /// What the file holds; nil when there is no file yet. Throws when the file is there but
     /// cannot be read: damaged, kept from this user, or written by a Yardlet that saves something
     /// this one cannot decode.
-    private func snapshot() throws -> Snapshot? {
+    nonisolated private func snapshot() throws -> Snapshot? {
         let data: Data
         do {
             data = try Data(contentsOf: fileURL)
@@ -143,8 +143,9 @@ struct FileConnectorRepository: ConnectorRepository {
         Self.taskChoices((try? snapshot())?.offInTasks)
     }
 
-    /// The file read and decoded once: it holds every server's tool list and can be large.
-    func loadSettings() -> ConnectorSavedSettings {
+    /// The file read and decoded once: it holds every server's tool list and can be large, so the app
+    /// reads it off the main thread at launch and hands it to its center (`ConnectorCenter.init`).
+    nonisolated func loadSettings() -> ConnectorSavedSettings {
         do {
             let snapshot = try snapshot()
             return ConnectorSavedSettings(connectors: snapshot?.connectors ?? [],
@@ -156,7 +157,7 @@ struct FileConnectorRepository: ConnectorRepository {
         }
     }
 
-    private static func taskChoices(_ offInTasks: [String: [String]]?) -> ConnectorTaskChoices {
+    nonisolated private static func taskChoices(_ offInTasks: [String: [String]]?) -> ConnectorTaskChoices {
         var choices: ConnectorTaskChoices = [:]
         for (task, connectors) in offInTasks ?? [:] {
             guard let taskID = UUID(uuidString: task) else { continue }
@@ -424,12 +425,13 @@ final class ConnectorCenter: ConnectorToolProviding {
     @ObservationIgnored private var toolRefreshes: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var pendingDeletion: Task<Void, Never>?
 
-    init(environment: Environment) {
+    /// - Parameter saved: what the repository holds, read already; nil reads it here.
+    init(environment: Environment, saved: ConnectorSavedSettings? = nil) {
         self.environment = environment
         registry = MCPRegistryDirectory(client: environment.registries.map {
             MCPRegistryClient(endpoints: $0, http: environment.http, clientVersion: environment.clientVersion)
         }, now: environment.now)
-        let saved = environment.repository.loadSettings()
+        let saved = saved ?? environment.repository.loadSettings()
         connectors = saved.connectors
         offInTasks = saved.taskChoices
         googleAppClientID = saved.googleAppClientID
