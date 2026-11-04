@@ -4,9 +4,10 @@ import XCTest
 
 /// The IMAP client against exchanges as servers send them: a greeting with capabilities, AUTHENTICATE
 /// PLAIN through a continuation, folders with special-use attributes and Korean names in modified UTF-7,
-/// a message's envelope and MIME structure, a body part as a literal among other untagged responses, a
-/// search in Korean, APPEND through a continuation, MOVE done by hand where the server lacks it, and
-/// CREATE of a folder that is already there.
+/// a message's envelope and MIME structure, a body part as a literal among other untagged responses,
+/// searches in Korean, answered over two lines and as an IMAP4rev2 server's ESEARCH, APPEND through a
+/// continuation, MOVE done by hand where the server lacks it, and CREATE of a folder that is already
+/// there.
 final class IMAPClientTests: XCTestCase {
     func testSessionReadsFoldersAndMessagesAndFilesAReplyAsAServerSendsThem() async throws {
         try await runSession(chunkSize: nil)
@@ -136,8 +137,12 @@ final class IMAPClientTests: XCTestCase {
         let afterNewMail = await client.selection?.exists
         XCTAssertEqual(afterNewMail, 4, "EXISTS among the FETCH responses")
 
-        let found = try await client.uidSearch("SUBJECT \(IMAPClient.quoted("견적"))")
-        XCTAssertEqual(found, [103])
+        let found = try await client.search("SUBJECT \(IMAPClient.quoted("견적"))")
+        XCTAssertEqual(found, [3], "Sequence numbers, for the FETCH that follows")
+        let split = try await client.search("TEXT \(IMAPClient.quoted("quote"))")
+        XCTAssertEqual(split, [1, 3], "One answer over two SEARCH lines")
+        let extended = try await client.search("UNSEEN")
+        XCTAssertEqual(extended, [1, 2, 4], "ESEARCH's ALL, a sequence set")
 
         let reply = "From: Dana <dana@example.com>\nTo: =?UTF-8?B?6rmA7ZWY64qY?= <haneul@example.com>\nSubject: Re: quote\n\nThanks, I'll reply by Thursday.\n"
         let filed = try await client.append("&vPSwuNO4ycDVaA-", message: Data(reply.utf8), flags: [#"\Seen"#],
@@ -190,12 +195,19 @@ final class IMAPClientTests: XCTestCase {
     S:
     S: )
     S: A5 OK Fetch completed
-    C: A6 UID SEARCH CHARSET UTF-8 SUBJECT {6}
+    C: A6 SEARCH CHARSET UTF-8 SUBJECT {6}
     S: + Ready for literal data
     C: 견적
-    S: * SEARCH 103
+    S: * SEARCH 3
     S: A6 OK Search completed
-    C: A7 APPEND "&vPSwuNO4ycDVaA-" (\Seen) "02-Nov-2026 00:30:00 +0000" {137}
+    C: A7 SEARCH TEXT "quote"
+    S: * SEARCH 1
+    S: * SEARCH 3
+    S: A7 OK Search completed
+    C: A8 SEARCH UNSEEN
+    S: * ESEARCH (TAG "A8") ALL 1:2,4 COUNT 3
+    S: A8 OK Search completed
+    C: A9 APPEND "&vPSwuNO4ycDVaA-" (\Seen) "02-Nov-2026 00:30:00 +0000" {137}
     S: + Ready for literal data
     C: From: Dana <dana@example.com>
     C: To: =?UTF-8?B?6rmA7ZWY64qY?= <haneul@example.com>
@@ -203,16 +215,16 @@ final class IMAPClientTests: XCTestCase {
     C:
     C: Thanks, I'll reply by Thursday.
     C:
-    S: A7 OK [APPENDUID 1730000002 12] Append completed
-    C: A8 UID COPY 101 "Archive"
-    S: A8 OK [COPYUID 1730000003 101 7] Copy completed
-    C: A9 UID STORE 101 +FLAGS.SILENT (\Deleted)
-    S: A9 OK Store completed
-    C: A10 UID EXPUNGE 101
+    S: A9 OK [APPENDUID 1730000002 12] Append completed
+    C: A10 UID COPY 101 "Archive"
+    S: A10 OK [COPYUID 1730000003 101 7] Copy completed
+    C: A11 UID STORE 101 +FLAGS.SILENT (\Deleted)
+    S: A11 OK Store completed
+    C: A12 UID EXPUNGE 101
     S: * 1 EXPUNGE
-    S: A10 OK Expunge completed
-    C: A11 LOGOUT
+    S: A12 OK Expunge completed
+    C: A13 LOGOUT
     S: * BYE Logging out
-    S: A11 OK Logout completed
+    S: A13 OK Logout completed
     """#
 }

@@ -143,11 +143,11 @@ actor IMAPClient {
         return opened
     }
 
-    /// FETCH for a range of sequence numbers, or UID FETCH for `uids` when given; all messages when
-    /// neither is. `items` are FETCH's data items as IMAP writes them (`UID FLAGS ENVELOPE`,
+    /// FETCH for these sequence numbers, or UID FETCH for `uids` when given; all messages when neither
+    /// is. `items` are FETCH's data items as IMAP writes them (`UID FLAGS ENVELOPE`,
     /// `BODY.PEEK[1]<0.2048>`). Responses for one message are merged, and unsolicited ones for messages
     /// the command did not name are left out.
-    func fetch(sequence: ClosedRange<UInt32>? = nil, uids: [UInt32]? = nil, items: String) async throws -> [IMAPFetch] {
+    func fetch(sequence: [UInt32]? = nil, uids: [UInt32]? = nil, items: String) async throws -> [IMAPFetch] {
         await acquire()
         defer { release() }
         let command: String
@@ -158,8 +158,10 @@ actor IMAPClient {
             command = "UID FETCH \(Self.sequenceSet(uids))"
             wanted = { $0.uid.map(set.contains) ?? false }
         } else if let sequence {
-            command = "FETCH \(sequence.lowerBound):\(sequence.upperBound)"
-            wanted = { sequence.contains($0.sequence) }
+            guard !sequence.isEmpty else { return [] }
+            let set = Set(sequence)
+            command = "FETCH \(Self.sequenceSet(sequence))"
+            wanted = { set.contains($0.sequence) }
         } else {
             command = "FETCH 1:*"
             wanted = { _ in true }
@@ -178,19 +180,15 @@ actor IMAPClient {
         return order.compactMap { fetched[$0] }.filter(wanted)
     }
 
-    /// UID SEARCH with `criteria` as IMAP writes them (`UNSEEN SINCE 1-Nov-2026`). Put strings in with
-    /// `quoted(_:)`: one that is not ASCII is sent as a literal, under `CHARSET UTF-8` unless `charset`
-    /// names another.
-    func uidSearch(_ criteria: String, charset: String? = nil) async throws -> [UInt32] {
+    /// SEARCH with `criteria` as IMAP writes them (`UNSEEN SINCE 1-Nov-2026`): the sequence numbers of
+    /// the open folder's messages that match, for a FETCH that follows at once. Put strings in with
+    /// `quoted(_:)`: one that is not ASCII is sent as a literal, under `CHARSET UTF-8`.
+    func search(_ criteria: String) async throws -> [UInt32] {
         await acquire()
         defer { release() }
         let parts = Self.parts(criteria)
-        var command = "UID SEARCH "
-        if let charset {
-            command += "CHARSET \(charset) "
-        } else if parts.contains(where: \.isLiteral) {
-            command += "CHARSET UTF-8 "
-        }
+        var command = "SEARCH "
+        if parts.contains(where: \.isLiteral) { command += "CHARSET UTF-8 " }
         var found: [UInt32] = []
         for case let .search(numbers) in try await run([.text(Array(command.utf8))] + parts).untagged {
             found += numbers

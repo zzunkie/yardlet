@@ -1483,12 +1483,16 @@ Microsoft Entra. The Microsoft page opens the steps in order (`ConnectorSetupAss
    directory and personal Microsoft accounts", or only the organization's; no redirect yet.
 2. **Manifest**: add `http://127.0.0.1:47823/callback` to `publicClient` → `redirectUris`, or in the older AAD Graph
    manifest `{ "url": "http://127.0.0.1:47823/callback", "type": "InstalledClient" }` to `replyUrlsWithType`, and save.
-   Microsoft's redirect form does not take a `127.0.0.1` address (learn.microsoft.com/entra/identity-platform/reply-url),
-   and a public client redirect makes the app a desktop client with no secret. Not as a web or single-page redirect:
-   those need a secret or an `Origin` header.
+   **Authentication → Add a platform → Mobile and desktop applications** (the "Public client/native" platform) takes
+   the same address as a custom redirect URI. A public client redirect makes the app a desktop client with no secret
+   (learn.microsoft.com/entra/identity-platform/reply-url). Not as a web or single-page redirect: those need a secret
+   or an `Origin` header.
 3. **API permissions → Microsoft Graph → Delegated**: the permissions above. An administrator may grant consent for the
    organization here.
 4. Paste the **Application (client) ID**, and for a single-organization app its **Directory (tenant) ID**, then Save.
+   A school or work account that cannot open the admin center's app list finds the client ID as the app's `appId` in
+   Graph Explorer (developer.microsoft.com/graph/graph-explorer):
+   `GET https://graph.microsoft.com/v1.0/me/ownedObjects`.
 5. Pick the services and **Sign in with Microsoft**.
 
 ### Not included

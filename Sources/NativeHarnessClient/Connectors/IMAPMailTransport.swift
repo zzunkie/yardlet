@@ -74,6 +74,8 @@ actor IMAPMailSession {
     static let wholeMessageLimit = 4 * 1024 * 1024
     /// A connection unused this long is checked with NOOP before it is used: servers close idle ones.
     static let idleCheck: TimeInterval = 120
+    /// The newest messages of a folder looked through for one just added there.
+    static let recentCount = 20
 
     private static let listItems = "UID FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODYSTRUCTURE BODY.PEEK[TEXT]<0.2048>"
 
@@ -228,26 +230,38 @@ actor IMAPMailSession {
             }
             guard end > 0 else { return MailPage(threads: [], nextPageToken: nil) }
             let start = max(1, end - Self.pageSize + 1)
-            let fetched = try await client.fetch(sequence: UInt32(start)...UInt32(end), items: Self.listItems)
+            let fetched = try await client.fetch(sequence: Array(UInt32(start)...UInt32(end)), items: Self.listItems)
             let threads = fetched.compactMap { self.summary($0, folder: raw, validity: validity) }.sorted { $0.date > $1.date }
             return MailPage(threads: threads, nextPageToken: start > 1 ? "\(validity):\(start - 1)" : nil)
         }
     }
 
     /// The server's own search (`TEXT`, headers and body) in the inbox, the archive and sent mail; the
-    /// newest results of all three.
+    /// newest results of all three. A folder where TEXT finds nothing is searched again by subject and
+    /// sender, as some servers leave the message out of TEXT. When nothing is found anywhere, the
+    /// server is asked to find a message by its number; one that cannot answer that has no search to
+    /// offer, which is said rather than shown as no results.
     func search(_ query: String) async throws -> MailPage {
         try await run { client in
             let boxes = try await self.mailboxList(client)
             let roles = Self.roles(boxes)
             let searched = [MailFolderRole.inbox, .archive, .sent].compactMap { role in roles.first { $0.value == role }?.key }
+            let term = IMAPClient.quoted(query)
             var threads: [MailThreadSummary] = []
+            var answers = false
             for raw in searched {
                 let selection = try await self.select(client, raw, fresh: true)
-                guard let validity = selection.uidValidity else { continue }
-                let uids = try await client.uidSearch("TEXT \(IMAPClient.quoted(query))").sorted().suffix(Self.pageSize)
-                guard !uids.isEmpty else { continue }
-                threads += try await client.fetch(uids: Array(uids), items: Self.listItems)
+                guard let validity = selection.uidValidity, selection.exists > 0 else { continue }
+                var found: [UInt32]
+                do { found = try await client.search("TEXT \(term)") } catch IMAPFailure.refused { found = [] }
+                if found.isEmpty { found = try await client.search("OR SUBJECT \(term) FROM \(term)") }
+                if found.isEmpty, !answers {
+                    let last = UInt32(selection.exists)
+                    guard try await client.search("\(last)") == [last] else { throw Self.noSearch }
+                    answers = true
+                }
+                // Sequence numbers, read by the FETCH that follows at once, as the folder's list reads them.
+                threads += try await client.fetch(sequence: Array(found.sorted().suffix(Self.pageSize)), items: Self.listItems)
                     .compactMap { self.summary($0, folder: raw, validity: validity) }
             }
             return MailPage(threads: Array(threads.sorted { $0.date > $1.date }.prefix(Self.pageSize)), nextPageToken: nil)
@@ -268,7 +282,7 @@ actor IMAPMailSession {
         let ref = IMAPMessageRef(validity: validity, uid: uid, folder: folder)
         return MailThreadSummary(
             id: MailThreadKey(accountID: id, threadID: ref.id),
-            subject: MIMEWords.decode(envelope?.subject ?? ""),
+            subject: MIMEWords.decode(envelope?.subject ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
             senders: (envelope?.from ?? []).prefix(1).map(Self.address),
             snippet: snippet,
             date: fetch.internalDate ?? .distantPast,
@@ -327,10 +341,8 @@ actor IMAPMailSession {
             return MIMECharset.string(Data(decoded), charset: part.charset).replacingOccurrences(of: "\r\n", with: "\n")
         }
         var message = Self.message(MIMEMessage.parse(fetched?.sections["HEADER"] ?? Data()), id: ref.id, flags: flags, date: date)
-        let htmlText = text(html)
-        message.html = htmlText
-        message.text = text(plain).flatMap { $0.contains(where: { !$0.isWhitespace }) ? $0 : nil }
-            ?? htmlText.map(GmailText.plainText(fromHTML:)) ?? ""
+        message.html = text(html)
+        message.text = GmailText.bodyText(plain: text(plain), html: message.html) ?? ""
         message.snippet = Self.snippet(message.text)
         message.attachments = Self.files(structure).enumerated().map { index, part in
             MailAttachment(id: part.section.isEmpty ? "\(index)" : part.section,
@@ -458,7 +470,7 @@ actor IMAPMailSession {
             guard let validity = selection.uidValidity else { throw IMAPFailure.unexpected("The folder has no UIDVALIDITY.") }
             // Without UIDPLUS the server does not say the new UID, so the draft is found by its Message-ID.
             var uid = appended
-            if uid == nil { uid = try await client.uidSearch("HEADER Message-ID \(IMAPClient.quoted(messageID))").max() }
+            if uid == nil { uid = try await self.recent(client, selection, messageID: messageID) }
             guard let uid else { throw Self.gone }
             if let earlier {
                 try? await self.open(client, earlier)
@@ -482,8 +494,8 @@ actor IMAPMailSession {
             if let sent = try? await self.folder(client, .sent) {
                 let messageID = part.header("Message-ID")?.trimmingCharacters(in: .whitespaces)
                 var copied = false
-                if let messageID, (try? await self.select(client, sent, fresh: true)) != nil {
-                    copied = !((try? await client.uidSearch("HEADER Message-ID \(IMAPClient.quoted(messageID))")) ?? []).isEmpty
+                if let messageID, let selection = try? await self.select(client, sent, fresh: true) {
+                    copied = (try? await self.recent(client, selection, messageID: messageID)) != nil
                 }
                 if !copied { _ = try? await client.append(sent, message: raw, flags: ["\\Seen"], date: self.now()) }
             }
@@ -497,6 +509,16 @@ actor IMAPMailSession {
             try await self.open(client, ref)
             try await client.uidExpunge([ref.uid])
         }
+    }
+
+    /// The UID of the message with this Message-ID among the newest few of the open folder, where a
+    /// message just added or filed is. Read from their envelopes, as the folder's list reads them: some
+    /// servers' search does not find a message by its header.
+    private func recent(_ client: IMAPClient, _ selection: IMAPSelection, messageID: String) async throws -> UInt32? {
+        guard selection.exists > 0 else { return nil }
+        let first = max(1, selection.exists - Self.recentCount + 1)
+        return try await client.fetch(sequence: Array(UInt32(first)...UInt32(selection.exists)), items: "UID ENVELOPE")
+            .last { $0.envelope?.messageID?.trimmingCharacters(in: .whitespaces) == messageID }?.uid
     }
 
     /// A message's files with their content, for a forward or a draft edited again.
@@ -553,8 +575,8 @@ actor IMAPMailSession {
     }
 
     /// What changed since `cursor`: nothing while the inbox's counts and next UID stay; unread messages
-    /// that came after the cursor's next UID, not drafts, as arrived. A new UIDVALIDITY reads the inbox
-    /// again and tells nothing.
+    /// given UIDs from the cursor's next UID up to the new one, not drafts, as arrived. A new UIDVALIDITY
+    /// reads the inbox again and tells nothing.
     func changes(since cursor: String) async throws -> MailChanges {
         try await run { client in
             let current = try await self.cursor(client)
@@ -566,9 +588,20 @@ actor IMAPMailSession {
             }
             var arrived: [String] = []
             if new[1] > old[1], let inbox = try await self.folder(client, .inbox) {
-                _ = try await self.select(client, inbox, fresh: true)
-                arrived = try await client.uidSearch("UID \(old[1]):* UNSEEN UNDRAFT").filter { $0 >= old[1] }.sorted()
-                    .map { IMAPMessageRef(validity: new[0], uid: $0, folder: inbox).id }
+                let selection = try await self.select(client, inbox, fresh: true)
+                // New messages are the folder's last, no more of them than UIDs given out since; read with
+                // their flags as the list reads messages, since some servers' search does not find them.
+                let given = Int(max(selection.uidNext ?? new[1], new[1]) - old[1])
+                let count = min(given, Self.pageSize, selection.exists)
+                if count > 0 {
+                    let tail = Array(UInt32(selection.exists - count + 1)...UInt32(selection.exists))
+                    arrived = try await client.fetch(sequence: tail, items: "UID FLAGS").filter { fetch in
+                        let flags = Set(fetch.flags.map { $0.lowercased() })
+                        return !flags.contains("\\seen") && !flags.contains("\\draft")
+                    }
+                    .compactMap(\.uid).filter { (old[1]..<new[1]).contains($0) }.sorted()
+                    .map { IMAPMessageRef(validity: selection.uidValidity ?? new[0], uid: $0, folder: inbox).id }
+                }
             }
             return MailChanges(cursor: current, changed: true, arrivedThreadIDs: arrived)
         }
@@ -583,6 +616,8 @@ actor IMAPMailSession {
     // MARK: Connection
 
     private static let gone = MailFailure(kind: .unavailable, message: L10n.string("This message is no longer in the account."))
+    private static let noSearch = MailFailure(kind: .unavailable,
+                                              message: L10n.string("This mail server does not answer searches, so its mail cannot be searched here."))
 
     /// Runs `work` alone on the connection, signing in first when there is none. A connection the
     /// server closed is opened again, and `work` runs once more when `retrying` says it may: a read, or

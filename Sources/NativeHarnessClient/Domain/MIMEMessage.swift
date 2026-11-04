@@ -94,6 +94,19 @@ enum MIMECharset {
         return String(data: data, encoding: .isoLatin1) ?? ""
     }
 
+    /// Header bytes outside ASCII, which mail should carry as RFC 2047 encoded words but some mailers send
+    /// raw: as UTF-8 (RFC 6532), else in `charset` when the message names one, else as Korean code page
+    /// 949, which older Korean mailers write raw, else as Latin-1, which reads any bytes.
+    static func header(_ data: Data, charset: String? = nil) -> String {
+        if let text = String(data: data, encoding: .utf8) { return text }
+        for encoding in [charset.flatMap(encoding(named:)), korean949] {
+            if let encoding, let text = String(data: data, encoding: encoding) { return text }
+        }
+        return String(data: data, encoding: .isoLatin1) ?? ""
+    }
+
+    private static let korean949 = encoding(named: "cp949")
+
     private static let korean: Set = [
         "ks_c_5601-1987", "ks_c_5601-1989", "ks_c_5601", "ksc5601", "ksc_5601", "euc-kr", "euckr", "x-euc-kr",
         "cp949", "ms949", "windows-949", "x-windows-949", "uhc", "korean", "csksc56011987", "iso-ir-149",
@@ -213,10 +226,10 @@ extension MIMEPart {
         return found
     }
 
-    /// The body as text: `plainText` when it has any, else `html` read as text, else empty.
+    /// The body as text: `plainText` when it has any and is not HTML, else `html` read as text, else
+    /// empty (`GmailText.bodyText`).
     var bodyText: String {
-        if let plain = plainText, plain.contains(where: { !$0.isWhitespace }) { return plain }
-        return html.map(GmailText.plainText(fromHTML:)) ?? plainText ?? ""
+        GmailText.bodyText(plain: plainText, html: html) ?? ""
     }
 
     private var isMessage: Bool {
@@ -266,8 +279,8 @@ enum MIMESnippet {
     static let limit = 200
 
     /// The partial decoded with its transfer encoding and charset; for the whole TEXT of a multipart
-    /// message, its first plain or HTML part, past the boundaries and part headers. HTML is read as text,
-    /// whitespace collapsed, at most `limit` characters.
+    /// message, its first plain or HTML part, past the boundaries and part headers. HTML, and a plain part
+    /// that is HTML, is read as text, whitespace collapsed, at most `limit` characters.
     static func text(fromPartial data: Data, transferEncoding: String?, charset: String?, contentType: String?,
                      boundary: String?) -> String {
         var type = contentType ?? (boundary == nil ? "text/plain" : "multipart/mixed")
@@ -277,8 +290,9 @@ enum MIMESnippet {
         if let transferEncoding { headers.append((name: "Content-Transfer-Encoding", value: transferEncoding)) }
         let bytes = [UInt8](data)
         let part = MIMEMessage.entity(headers: headers, content: bytes[...], defaultType: "text/plain", depth: 0)
-        if let plain = part.plainText.map(collapsed), !plain.isEmpty { return plain }
-        return part.html.map { collapsed(GmailText.plainText(fromHTML: withoutCutMarkup($0))) } ?? ""
+        let plain = part.plainText
+        if let plain, !GmailText.isHTML(plain), case let text = collapsed(plain), !text.isEmpty { return text }
+        return (part.html ?? plain).map { collapsed(GmailText.plainText(fromHTML: withoutCutMarkup($0))) } ?? ""
     }
 
     private static func collapsed(_ text: String) -> String {
@@ -288,8 +302,8 @@ enum MIMESnippet {
         return String(visible.split(whereSeparator: \.isWhitespace).joined(separator: " ").prefix(limit))
     }
 
-    /// HTML without what a cut leaves unreadable: a style, script or head block that never closes, a tag
-    /// cut in the middle, and the invisible entities that pad a newsletter's preview text.
+    /// HTML without what a cut leaves unreadable: a comment, style, script or head block that never
+    /// closes, a tag cut in the middle, and the invisible entities that pad a newsletter's preview text.
     private static func withoutCutMarkup(_ html: String) -> String {
         var text = html
         func remove(_ pattern: String) {
@@ -297,6 +311,7 @@ enum MIMESnippet {
         }
         remove("<(script|style|head)\\b[^>]*>[\\s\\S]*?</\\1\\s*>")
         remove("<(script|style|head)\\b[\\s\\S]*$")
+        remove("<!--(?:(?!-->)[\\s\\S])*$")
         remove("<[^>]*$")
         remove("&(zwnj|zwj|shy|lrm|rlm);")
         return text
@@ -421,7 +436,7 @@ struct MIMEHeaderValue {
 private enum MIMEHeaders {
     /// The unfolded fields, and the content after the blank line that ends them. A line that is neither a
     /// field nor a continuation starts the content, for a part that left out the blank line. Raw 8-bit
-    /// values are read as UTF-8, else in the part's charset.
+    /// values are read as `MIMECharset.header` reads them, the part's charset first after UTF-8.
     static func split(_ bytes: ArraySlice<UInt8>) -> (headers: [(name: String, value: String)], content: ArraySlice<UInt8>) {
         var fields: [(name: String, value: [UInt8])] = []
         var index = bytes.startIndex
@@ -452,8 +467,7 @@ private enum MIMEHeaders {
             charset = MIMEHeaderValue(String(decoding: type.value, as: UTF8.self)).parameters["charset"]
         }
         let headers = fields.map { field in
-            let data = Data(field.value)
-            let text = String(data: data, encoding: .utf8) ?? MIMECharset.string(data, charset: charset)
+            let text = MIMECharset.header(Data(field.value), charset: charset)
             return (name: field.name, value: text.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         return (headers, bytes[contentStart..<end])

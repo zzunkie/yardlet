@@ -123,9 +123,13 @@ connector › **Mail (IMAP)**, as Apple Mail and Thunderbird add them.
 - **Lists and threads.** IMAP has no threads, so each message is a line of its own, newest first, 50 at a
   time, with its first words from the start of its body. Opening one reads it whole up to 4 MB; a larger
   message reads only its text and HTML and lists its files. Reading uses `BODY.PEEK`, so only the
-  mailbox's own read sync marks it read.
+  mailbox's own read sync marks it read. A plain-text part that is itself HTML, as some senders' are, is
+  read as HTML, and a subject or name sent as raw bytes that are not UTF-8 is read in the message's
+  charset, else as Korean code page 949, else as Latin-1.
 - **Search** is the server's (`SEARCH TEXT`, any language as UTF-8) over the inbox, the archive and sent
-  mail.
+  mail, its sequence numbers read with the FETCH the list uses. A folder where TEXT finds nothing is
+  searched again by subject and sender. When nothing is found, the server is asked to find its last
+  message by number; a server that cannot is said to have no search, rather than shown as no results.
 - **Changes.** Read and Star are the `\Seen` and `\Flagged` flags; Archive moves the message to the
   archive folder, made as "Archive" the first time on an account without one, as Mail and Thunderbird
   do; Not spam and Move out of the Trash move it to the inbox. There is no **Open in** button: these
@@ -133,11 +137,13 @@ connector › **Mail (IMAP)**, as Apple Mail and Thunderbird add them.
 - **Writing and sending.** A draft is a message saved in the account's Drafts (`APPEND`, `\Draft`), with
   its own `From`, `Date` and `Message-ID`; saving again saves a new one and deletes the one before.
   Sending reads the draft as saved, sends it over SMTP to its To, Cc and Bcc with the Bcc line left out of
-  the message, keeps a copy in Sent unless the server already put one there (found by its `Message-ID`),
-  and deletes the draft. Once the SMTP server took the message, a failure after it does not fail the send.
+  the message, keeps a copy in Sent unless the server already put one there (its `Message-ID` among the
+  envelopes of Sent's newest 20 messages), and deletes the draft. Once the SMTP server took the message, a
+  failure after it does not fail the send.
 - **New mail.** The inbox's `STATUS` every minute (one command on the open connection): a new UIDVALIDITY
-  reads the inbox again, a higher next UID asks which messages after the old one are unread and not drafts,
-  and those are told. IMAP IDLE is not used; most services do not document it and a minute is what the
+  reads the inbox again, a higher next UID reads the flags of the inbox's newest messages, no more than
+  the UIDs given out since and at most 50, and those given a UID since the last check that are unread and
+  not drafts are told. IMAP IDLE is not used; most services do not document it and a minute is what the
   other accounts wait.
 - **Refused password.** A server that refuses the app password later marks the connector as needing the
   account again and stops the account's watch; adding the same address again replaces the password.

@@ -6,8 +6,10 @@ import XCTest
 /// mailer writes; the mailbox reads its subject, body, attachments and list snippet from them.
 final class MIMEMessageTests: XCTestCase {
     /// A Korean webmail message: the subject in `ks_c_5601-1987` encoded words split in the middle of a
-    /// character, and an `euc-kr` quoted-printable body with a character only code page 949 has.
-    func testKoreanMessageReadsInCodePage949() {
+    /// character, and an `euc-kr` quoted-printable body with a character only code page 949 has. A
+    /// subject some Korean mailers send as raw code page 949 bytes reads the same in a message whose top
+    /// level names no charset and in an IMAP envelope; raw Latin-1 still reads as Latin-1.
+    func testKoreanMessageReadsInCodePage949() throws {
         let message = MIMEMessage.parse(crlf("""
         Return-Path: <sales@example.co.kr>
         Received: from mail.example.co.kr (mail.example.co.kr [192.0.2.10])
@@ -36,6 +38,21 @@ final class MIMEMessageTests: XCTestCase {
         XCTAssertEqual(message.parameters["charset"], "euc-kr")
         XCTAssertEqual(message.bodyText, "안녕하세요.\n요청하신 견적서를 보내드립니다.\n점심은 똠양꿍 어떠세요?")
         XCTAssertTrue(message.attachments.isEmpty)
+
+        let subject = "(광고)★역대급 혜택"
+        let raw = try XCTUnwrap(subject.data(using: try XCTUnwrap(MIMECharset.encoding(named: "euc-kr"))))
+        let multipart = MIMEMessage.parse(Data("Subject: ".utf8) + raw + crlf("""
+
+        Content-Type: multipart/alternative; boundary="b"
+
+        --b
+        Content-Type: text/plain; charset=euc-kr
+
+        --b--
+        """))
+        XCTAssertEqual(multipart.header("Subject"), subject)
+        XCTAssertEqual(IMAPValue.string(raw).text, subject)
+        XCTAssertEqual(IMAPValue.string(Data([0x43, 0x61, 0x66, 0xE9])).text, "Café")
     }
 
     func testEncodedWordsAsMailersWriteThem() {
@@ -86,6 +103,21 @@ final class MIMEMessageTests: XCTestCase {
         XCTAssertEqual(message.html, "<html><body><p>주문하신 상품이 <b>출발</b>했습니다.</p></body></html>")
         XCTAssertEqual(message.bodyText, message.plainText)
         XCTAssertTrue(message.attachments.isEmpty)
+
+        let htmlInPlain = MIMEMessage.parse(Data("""
+        Content-Type: multipart/alternative; boundary="alt"
+
+        --alt
+        Content-Type: text/plain; charset=utf-8
+
+        <!DOCTYPE html><html><body><p>Shipped</p></body></html>
+        --alt
+        Content-Type: text/html; charset=utf-8
+
+        <html><body><p>Your order <b>shipped</b>.</p></body></html>
+        --alt--
+        """.utf8))
+        XCTAssertEqual(htmlInPlain.bodyText, "Your order shipped.", "A plain part that is HTML gives way to the HTML part")
     }
 
     /// File names as mailers write them: RFC 2231 in UTF-8, RFC 2231 continuations in a Korean charset,
@@ -219,6 +251,16 @@ final class MIMEMessageTests: XCTestCase {
         let style = Data("<html><head><style>body { font-family: sans-serif; }".utf8)
         XCTAssertEqual(MIMESnippet.text(fromPartial: style, transferEncoding: nil, charset: nil,
                                         contentType: "text/html", boundary: nil), "")
+
+        // A plain alternative that holds the HTML, as some notification senders' does, cut inside a
+        // conditional comment; plain text that only mentions a tag stays as it is.
+        let htmlAsPlain = Data(#"<!-- notice --> <!--[if (gte mso 9)|(IE)]> <table width="600"><tr><td> <![endif]--><table><tr><td>Your package&nbsp;has shipped.</td></tr></table><!--[if mso]><table><tr><td"#.utf8)
+        XCTAssertEqual(MIMESnippet.text(fromPartial: htmlAsPlain, transferEncoding: nil, charset: "utf-8",
+                                        contentType: "text/plain", boundary: nil), "Your package has shipped.")
+        let mention = Data("<dana@example.com> wrote:\r\n> Use <b>bold</b> sparingly.\r\n".utf8)
+        XCTAssertEqual(MIMESnippet.text(fromPartial: mention, transferEncoding: nil, charset: "utf-8",
+                                        contentType: "text/plain", boundary: nil),
+                       "<dana@example.com> wrote: > Use <b>bold</b> sparingly.")
 
         let long = Data(String(repeating: "Weekly report line=20\r\n", count: 40).utf8)
         let snippet = MIMESnippet.text(fromPartial: long, transferEncoding: "quoted-printable", charset: "us-ascii",

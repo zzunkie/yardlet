@@ -5,23 +5,51 @@ import Foundation
 // transcript, so a message's random Message-ID or a draft's date does not have to be known in advance.
 
 /// A Korean webmail account as the fake IMAP server holds it, shared by its connections: the inbox
-/// (two messages, one with a PDF), Sent, Drafts, Spam, Trash and two folders of the person's own, all
-/// without special-use attributes; what was appended; and an Archive once made.
+/// (two messages, one with a PDF, and the unread ones that arrive after them), Sent, Drafts, Spam, Trash
+/// and two folders of the person's own, all without special-use attributes; the messages appended to a
+/// folder, and copies of sent mail when the server files them itself; and an Archive once made. Its
+/// search leaves messages out of TEXT, as some servers' does, but finds them by subject.
 final class FakeMailState: @unchecked Sendable {
     private let lock = NSLock()
     private var _inbox = (validity: UInt32(7), next: UInt32(12), messages: 2, unseen: 1)
-    private var _appended: [Data] = []
+    /// Messages outside the inbox by folder; a message's UID is its place in this list, from 1.
+    private var messages: [(folder: String, data: Data, appended: Bool)] = []
+    private var selected = ""
     private var archived = false
     private var _refusesSignIn = false
+    private var _filesSentCopies = false
+    private var _searchesNothing = false
 
     var inbox: (validity: UInt32, next: UInt32, messages: Int, unseen: Int) {
         get { lock.withLock { _inbox } }
         set { lock.withLock { _inbox = newValue } }
     }
-    var appended: [Data] { lock.withLock { _appended } }
+    /// What the client appended, to any folder.
+    var appended: [Data] { lock.withLock { messages.filter(\.appended).map(\.data) } }
     var refusesSignIn: Bool {
         get { lock.withLock { _refusesSignIn } }
         set { lock.withLock { _refusesSignIn = newValue } }
+    }
+    /// Whether the server files a copy of what it sends in Sent, as webmail services do.
+    var filesSentCopies: Bool {
+        get { lock.withLock { _filesSentCopies } }
+        set { lock.withLock { _filesSentCopies = newValue } }
+    }
+    /// Whether every SEARCH comes back without a number, as from a server whose search does not work.
+    var searchesNothing: Bool {
+        get { lock.withLock { _searchesNothing } }
+        set { lock.withLock { _searchesNothing = newValue } }
+    }
+
+    func folder(_ name: String) -> [Data] {
+        lock.withLock { messages.filter { $0.folder == name }.map(\.data) }
+    }
+
+    /// The SMTP server took `message`; the server files it in Sent when it does that.
+    func sent(_ message: Data) {
+        lock.withLock {
+            if _filesSentCopies { messages.append((Self.sentName, message, false)) }
+        }
     }
 
     private static let subject = "=?UTF-8?B?7ZqM7J2YIOyekOujjA==?="
@@ -52,27 +80,35 @@ final class FakeMailState: @unchecked Sendable {
             let counts = switch name {
             case "INBOX": "MESSAGES \(_inbox.messages) UNSEEN \(_inbox.unseen) UIDNEXT \(_inbox.next) UIDVALIDITY \(_inbox.validity)"
             case "&wqTTONO4ycDVaA-": "MESSAGES 3 UNSEEN 3 UIDNEXT 4 UIDVALIDITY 8"
-            default: "MESSAGES 0 UNSEEN 0 UIDNEXT \(_appended.count + 1) UIDVALIDITY 9"
+            default: "MESSAGES 0 UNSEEN 0 UIDNEXT \(messages.count + 1) UIDVALIDITY 9"
             }
             return ("* STATUS \"\(name)\" (\(counts))\r\n", "OK Status completed")
         case #"SELECT "INBOX""#:
+            selected = "INBOX"
             return ("* \(_inbox.messages) EXISTS\r\n* OK [UIDVALIDITY \(_inbox.validity)] UIDs valid\r\n"
                     + "* OK [UIDNEXT \(_inbox.next)] Next\r\n", "OK [READ-WRITE] Select completed")
         case let select where select.hasPrefix("SELECT"):
-            return ("* \(_appended.count) EXISTS\r\n* OK [UIDVALIDITY 9] UIDs valid\r\n", "OK [READ-WRITE] Select completed")
-        case "FETCH 1:2 (UID FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODYSTRUCTURE BODY.PEEK[TEXT]<0.2048>)":
-            let first = "내일 회의 자료 보내 드립니다.\r\n"
-            let second = "--b1\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nQuote attached\r\n--b1\r\nContent-Type: application/pdf"
-            return ("* 1 FETCH (UID 10 FLAGS (\\Seen) INTERNALDATE \"02-Nov-2026 09:00:00 +0900\" RFC822.SIZE 300 ENVELOPE "
-                    + "(\"Mon, 2 Nov 2026 09:00:00 +0900\" \"\(Self.subject)\" \(Self.sender) \(Self.sender) \(Self.sender) "
-                    + "((NIL NIL \"dana\" \"example.com\")) NIL NIL NIL \"<a1@example.kr>\") BODYSTRUCTURE \(Self.plain) "
-                    + "BODY[TEXT]<0> \(Self.literal(first)))\r\n"
-                    + "* 2 FETCH (UID 11 FLAGS (\\Flagged) INTERNALDATE \"02-Nov-2026 10:30:00 +0900\" RFC822.SIZE 9000 ENVELOPE "
-                    + "(\"Mon, 2 Nov 2026 10:30:00 +0900\" \"Price inside\" ((\"Min\" NIL \"min\" \"example.com\")) NIL NIL "
-                    + "((NIL NIL \"dana\" \"example.com\")) NIL NIL NIL \"<b2@example.com>\") BODYSTRUCTURE (\(Self.plain)"
-                    + "(\"APPLICATION\" \"PDF\" (\"NAME\" \"quote.pdf\") NIL NIL \"BASE64\" 8000 NIL (\"ATTACHMENT\" "
-                    + "(\"FILENAME\" \"quote.pdf\")) NIL NIL) \"MIXED\" (\"BOUNDARY\" \"b1\") NIL NIL NIL) "
-                    + "BODY[TEXT]<0> \(Self.literal(second)))\r\n", "OK Fetch completed")
+            selected = String(select.split(separator: "\"")[1])
+            return ("* \(messages.filter { $0.folder == selected }.count) EXISTS\r\n* OK [UIDVALIDITY 9] UIDs valid\r\n",
+                    "OK [READ-WRITE] Select completed")
+        case let fetch where fetch.hasPrefix("FETCH ") && fetch.hasSuffix(" \(Self.listItems)"):
+            return (Self.numbers(fetch.split(separator: " ")[1]).compactMap(Self.listed).joined(), "OK Fetch completed")
+        case let fetch where fetch.hasPrefix("FETCH ") && fetch.hasSuffix(" (UID FLAGS)") && selected == "INBOX":
+            // The inbox's messages after the two listed: UID 12 already read elsewhere, UID 13 unread.
+            let flags: [UInt32: String] = [10: #"\Seen"#, 11: #"\Flagged"#, 12: #"\Seen"#]
+            return (Self.numbers(fetch.split(separator: " ")[1]).map { sequence in
+                let uid = UInt32(9 + sequence)
+                return "* \(sequence) FETCH (UID \(uid) FLAGS (\(flags[uid] ?? "")))\r\n"
+            }.joined(), "OK Fetch completed")
+        case let fetch where fetch.hasPrefix("FETCH ") && fetch.hasSuffix(" (UID ENVELOPE)"):
+            let here = messages.indices.filter { messages[$0].folder == selected }
+            return (Self.numbers(fetch.split(separator: " ")[1]).compactMap { sequence in
+                guard sequence <= here.count else { return nil }
+                let index = here[sequence - 1]
+                let id = String(decoding: messages[index].data, as: UTF8.self).components(separatedBy: "\r\n")
+                    .first { $0.hasPrefix("Message-ID: ") }?.dropFirst(12) ?? ""
+                return "* \(sequence) FETCH (UID \(index + 1) ENVELOPE (NIL NIL NIL NIL NIL NIL NIL NIL NIL \"\(id)\"))\r\n"
+            }.joined(), "OK Fetch completed")
         case "UID FETCH 10 (UID FLAGS INTERNALDATE RFC822.SIZE BODYSTRUCTURE)":
             return ("* 1 FETCH (UID 10 FLAGS (\\Seen) INTERNALDATE \"02-Nov-2026 09:00:00 +0900\" RFC822.SIZE 300 "
                     + "BODYSTRUCTURE \(Self.plain))\r\n", "OK Fetch completed")
@@ -80,21 +116,58 @@ final class FakeMailState: @unchecked Sendable {
             return ("* 1 FETCH (UID 10 BODY[] \(Self.literal(Self.raw)))\r\n", "OK Fetch completed")
         case let fetch where fetch.hasPrefix("UID FETCH") && fetch.hasSuffix("(BODY.PEEK[])"):
             let uid = Int(fetch.split(separator: " ")[2]) ?? 0
-            let message = String(decoding: _appended[uid - 1], as: UTF8.self)
+            let message = String(decoding: messages[uid - 1].data, as: UTF8.self)
             return ("* 1 FETCH (UID \(uid) BODY[] \(Self.literal(message)))\r\n", "OK Fetch completed")
         case let append where append.hasPrefix("APPEND"):
-            _appended.append(literal ?? Data())
-            return ("", "OK [APPENDUID 9 \(_appended.count)] Append completed")
+            messages.append((String(append.split(separator: "\"")[1]), literal ?? Data(), true))
+            return ("", "OK [APPENDUID 9 \(messages.count)] Append completed")
         case #"CREATE "Archive""#:
             archived = true
             return ("", "OK Create completed")
-        case let search where search.hasPrefix("UID SEARCH UID"):
-            let found = _inbox.next > 13 ? " 13" : ""
-            return ("* SEARCH\(found)\r\n", "OK Search completed")
-        case let search where search.hasPrefix("UID SEARCH"):
-            return ("* SEARCH\r\n", "OK Search completed")
+        case let search where search.hasPrefix("SEARCH "):
+            let criteria = search.dropFirst(7)
+            let found: [Int] = switch criteria {
+            case _ where _searchesNothing: []
+            case #"OR SUBJECT "Price" FROM "Price""#: [2]
+            case let number where Int(number) != nil: [Int(number) ?? 0]
+            default: []
+            }
+            return ("* SEARCH\(found.map { " \($0)" }.joined())\r\n", "OK Search completed")
         default:
             return ("", "OK Done")
+        }
+    }
+
+    private static let listItems = "(UID FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODYSTRUCTURE BODY.PEEK[TEXT]<0.2048>)"
+
+    /// The list's FETCH response for an inbox message by its place: the meeting notes, and the quote
+    /// with its PDF.
+    private static func listed(_ sequence: Int) -> String? {
+        switch sequence {
+        case 1:
+            "* 1 FETCH (UID 10 FLAGS (\\Seen) INTERNALDATE \"02-Nov-2026 09:00:00 +0900\" RFC822.SIZE 300 ENVELOPE "
+                + "(\"Mon, 2 Nov 2026 09:00:00 +0900\" \"\(subject)\" \(sender) \(sender) \(sender) "
+                + "((NIL NIL \"dana\" \"example.com\")) NIL NIL NIL \"<a1@example.kr>\") BODYSTRUCTURE \(plain) "
+                + "BODY[TEXT]<0> \(literal("내일 회의 자료 보내 드립니다.\r\n")))\r\n"
+        case 2:
+            "* 2 FETCH (UID 11 FLAGS (\\Flagged) INTERNALDATE \"02-Nov-2026 10:30:00 +0900\" RFC822.SIZE 9000 ENVELOPE "
+                + "(\"Mon, 2 Nov 2026 10:30:00 +0900\" \"Price inside\" ((\"Min\" NIL \"min\" \"example.com\")) NIL NIL "
+                + "((NIL NIL \"dana\" \"example.com\")) NIL NIL NIL \"<b2@example.com>\") BODYSTRUCTURE (\(plain)"
+                + "(\"APPLICATION\" \"PDF\" (\"NAME\" \"quote.pdf\") NIL NIL \"BASE64\" 8000 NIL (\"ATTACHMENT\" "
+                + "(\"FILENAME\" \"quote.pdf\")) NIL NIL) \"MIXED\" (\"BOUNDARY\" \"b1\") NIL NIL NIL) "
+                + "BODY[TEXT]<0> \(literal(quoteText)))\r\n"
+        default: nil
+        }
+    }
+
+    private static let quoteText = "--b1\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nQuote attached\r\n--b1\r\nContent-Type: application/pdf"
+
+    /// The numbers of a sequence set such as `3:4` or `2,5`.
+    private static func numbers(_ set: Substring) -> [Int] {
+        set.split(separator: ",").flatMap { run -> [Int] in
+            let ends = run.split(separator: ":").compactMap { Int($0) }
+            guard let first = ends.first, let last = ends.last else { return [] }
+            return Array(first...last)
         }
     }
 
@@ -180,14 +253,20 @@ final class FakeIMAPServer: MailSocket, @unchecked Sendable {
     }
 }
 
-/// An SMTP submission server that takes every command, records them and the message.
+/// An SMTP submission server that takes every command, records them and the message, and hands the
+/// message to `delivered` once it is taken.
 final class FakeSMTPServer: MailSocket, @unchecked Sendable {
     private let lock = NSLock()
+    private let delivered: @Sendable (Data) -> Void
     private var pending = Data("220 smtp.example.com ESMTP ready\r\n".utf8)
     private var received = Data()
     private var inData = false
     private var lines: [String] = []
     private var log: [String] = []
+
+    init(delivered: @escaping @Sendable (Data) -> Void = { _ in }) {
+        self.delivered = delivered
+    }
 
     var commands: [String] { lock.withLock { log } }
     var message: String { lock.withLock { lines.joined(separator: "\n") } }
@@ -208,6 +287,7 @@ final class FakeSMTPServer: MailSocket, @unchecked Sendable {
                 if inData {
                     if line == "." {
                         inData = false
+                        delivered(Data(lines.joined(separator: "\r\n").utf8))
                         pending.append(Data("250 2.0.0 Ok: queued\r\n".utf8))
                     } else {
                         lines.append(line)
@@ -232,16 +312,19 @@ final class FakeSMTPServer: MailSocket, @unchecked Sendable {
     func close() {}
 }
 
-/// Opens a new fake IMAP or SMTP server for each connection, by the host's name.
+/// Opens a new fake IMAP or SMTP server for each connection, by the host's name; what an SMTP server
+/// takes goes to `sent`.
 final class FakeMailOpener: MailSocketOpening, @unchecked Sendable {
     private let lock = NSLock()
     private let makeIMAP: () -> FakeIMAPServer
+    private let sent: @Sendable (Data) -> Void
     private var imap: [FakeIMAPServer] = []
     private var smtp: [FakeSMTPServer] = []
     private var log: [String] = []
 
-    init(imap: @escaping () -> FakeIMAPServer) {
+    init(imap: @escaping () -> FakeIMAPServer, sent: @escaping @Sendable (Data) -> Void = { _ in }) {
         makeIMAP = imap
+        self.sent = sent
     }
 
     var imapServers: [FakeIMAPServer] { lock.withLock { imap } }
@@ -252,7 +335,7 @@ final class FakeMailOpener: MailSocketOpening, @unchecked Sendable {
         lock.withLock {
             log.append("\(host):\(port) \(tls ? "tls" : "plain")")
             if host.hasPrefix("smtp") {
-                let server = FakeSMTPServer()
+                let server = FakeSMTPServer(delivered: sent)
                 smtp.append(server)
                 return server
             }

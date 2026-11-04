@@ -3194,7 +3194,7 @@
 "App registrations → New registration, name Yardlet. Supported accounts: any organization and personal accounts, or only your organization's. Leave the redirect empty, then Register." = "앱 등록 → 새 등록, 이름은 Yardlet. 지원 계정은 모든 조직과 개인 계정, 또는 내 조직 계정만 고릅니다. 리디렉션은 비워 두고 등록을 누르세요.";
 "App registrations" = "앱 등록";
 "Add Yardlet's redirect in the manifest" = "매니페스트에 Yardlet 리디렉션 추가";
-"In the app, Manifest: add the redirect URL below to publicClient → redirectUris, or in the older AAD Graph manifest the entry below to replyUrlsWithType, then Save. The redirect form doesn't take this address." = "앱의 매니페스트에서 아래 리디렉션 URL을 publicClient → redirectUris에 넣거나, 이전 형식(AAD Graph) 매니페스트라면 아래 항목을 replyUrlsWithType에 넣고 저장하세요. 리디렉션 입력 양식은 이 주소를 받지 않습니다.";
+"In the app, Manifest: add the redirect URL below to publicClient → redirectUris, or in the older AAD Graph manifest the entry below to replyUrlsWithType, then Save." = "앱의 매니페스트에서 아래 리디렉션 URL을 publicClient → redirectUris에 넣거나, 이전 형식(AAD Graph) 매니페스트라면 아래 항목을 replyUrlsWithType에 넣고 저장하세요.";
 "Manifest entry" = "매니페스트 항목";
 "Add the Microsoft Graph permissions" = "Microsoft Graph 권한 추가";
 "API permissions → Add a permission → Microsoft Graph → Delegated permissions: add the ones below. An administrator can then grant consent for the whole organization." = "API 권한 → 권한 추가 → Microsoft Graph → 위임된 권한에서 아래 항목을 추가하세요. 관리자는 이어서 조직 전체에 동의해 줄 수 있습니다.";
@@ -3691,6 +3691,7 @@
 "The account has no mail server settings." = "이 계정에는 메일 서버 설정이 없습니다.";
 "This account has no Drafts folder." = "이 계정에는 임시 보관함이 없습니다.";
 "This message is no longer in the account." = "이 메일은 더 이상 계정에 없습니다.";
+"This mail server does not answer searches, so its mail cannot be searched here." = "이 메일 서버는 검색에 응답하지 않아 여기서 메일을 검색할 수 없습니다.";
 "Choose a service" = "서비스 선택";
 "Mail accounts…" = "메일 계정…";
 "Move tasks to an account with room" = "한도가 남은 계정으로 작업 옮기기";

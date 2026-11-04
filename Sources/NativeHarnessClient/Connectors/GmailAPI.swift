@@ -184,7 +184,7 @@ struct GmailMessage {
         put("snippet", snippet)
         guard format == .plainText || format == .fullContent else { return .object(fields) }
         let parts = GmailMessage.parts(json["payload"])
-        let plain = parts.plain ?? parts.html.map(GmailText.plainText(fromHTML:))
+        let plain = GmailText.bodyText(plain: parts.plain, html: parts.html)
         put("body", plain.map { GmailText.limited($0, to: bodyLimit) })
         if format == .fullContent { put("htmlBody", parts.html.map { GmailText.limited($0, to: bodyLimit) }) }
         if !parts.attachments.isEmpty { fields["attachments"] = .array(parts.attachments) }
@@ -258,12 +258,31 @@ enum GmailText {
         return String(text.prefix(limit)) + "\n[… \(text.count - limit) more characters]"
     }
 
-    /// Readable text from an HTML body: no scripts or styles, line breaks where blocks end.
+    /// The text to read from a message's plain and HTML bodies: the plain one, unless it is blank or is
+    /// HTML itself, as some senders' plain alternatives are; else the HTML read as text.
+    static func bodyText(plain: String?, html: String?) -> String? {
+        if let plain, plain.contains(where: { !$0.isWhitespace }), !isHTML(plain) { return plain }
+        return (html ?? plain).map(plainText(fromHTML:))
+    }
+
+    /// Whether text sent as plain text is HTML: it opens with a comment or a doctype, or with a tag and
+    /// closes a tag somewhere, which plain text that only mentions a tag or an `<address>` does not.
+    static func isHTML(_ text: String) -> Bool {
+        let start = String(text.drop { $0.isWhitespace || $0 == "\u{FEFF}" })
+        guard start.hasPrefix("<") else { return false }
+        func has(_ pattern: String) -> Bool {
+            start.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+        }
+        return has("^<!(--|doctype\\b)") || (has("^<[a-z][a-z0-9]*[\\s/>]") && has("</[a-z][a-z0-9]*\\s*>"))
+    }
+
+    /// Readable text from an HTML body: no comments, scripts or styles, line breaks where blocks end.
     static func plainText(fromHTML html: String) -> String {
         var text = html
         func replace(_ pattern: String, _ template: String) {
             text = text.replacingOccurrences(of: pattern, with: template, options: [.regularExpression, .caseInsensitive])
         }
+        replace("<!--[\\s\\S]*?-->", "")
         replace("<(script|style|head)[^>]*>[\\s\\S]*?</\\1>", "")
         replace("<br\\s*/?>", "\n")
         replace("</(p|div|li|tr|h[1-6]|blockquote|table)>", "\n")
