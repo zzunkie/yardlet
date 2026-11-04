@@ -94,6 +94,7 @@ struct RemoteHostView: View {
         .navigationSubtitle(RemoteConnectionText.line(model.connection))
         .modifier(RemotePresence(model: model))
         .modifier(RemoteTaskActionAlerts(model: model))
+        .modifier(RemoteScheduleSheets(model: model))
         .focusedSceneValue(\.yardletTaskCommands, taskCommands)
         .focusedSceneValue(\.yardletSplitCommands, splitCommands)
         .onChange(of: windowSelection) { old, new in shell.follow(new, from: old) }
@@ -539,16 +540,10 @@ private struct RemotePresence: ViewModifier {
 extension RemoteHostView {
     /// The detail while the host's scheduled tasks are listed and none is chosen.
     var schedulePlaceholder: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "clock")
-                .font(.system(size: 22, weight: .regular))
-                .foregroundStyle(.tertiary)
-            Text(L10n.string(model.schedules.list?.isEmpty == false ? "Choose a scheduled task." : "No scheduled tasks."))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ScheduledTaskEmptyDetail(hasSchedules: model.schedules.list?.isEmpty == false,
+                                 actions: model.schedules.actions)
     }
+
 }
 
 /// Each task's unsent words, the message it edits, its find and where the person was reading, kept on this Mac (a

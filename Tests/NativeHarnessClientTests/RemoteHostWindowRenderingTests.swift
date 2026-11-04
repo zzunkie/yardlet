@@ -433,7 +433,10 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                                     trigger: .daily(ScheduleTime(hour: 9, minute: 0)),
                                     destination: ScheduleDestination(harness: .claudeCode, workspacePath: website.path(percentEncoded: false)),
                                     createdAt: now)
-        morning.state.runs = [run(.started, hoursAgo: 1, task: crash.id)]
+        morning.state.runs = [run(.started, hoursAgo: 1, task: crash.id),
+                              run(.started, hoursAgo: 25, task: footer.id),
+                              run(.failed, hoursAgo: 72, failure: "The runtime was unavailable.")]
+        morning.state.lastRunAt = morning.state.runs.first?.at
         var weekly = ScheduledTask(name: "Check the footer links", prompt: "Check the footer links",
                                    trigger: .weekly(days: [.monday], time: ScheduleTime(hour: 10, minute: 0)),
                                    destination: ScheduleDestination(mode: .continueTask, harness: .claudeCode, targetTaskID: footer.id),
@@ -450,10 +453,15 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
         let sessions = [crash, footer]
         let transcripts = [footer.id: footerEntries, crash.id: crashEntries]
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteHostWindowRenderingTests.parity")))
+        let runtimes = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
+        runtimes.select(URL(filePath: "/usr/bin/true"), for: .claudeCode)
         let host = AppModel(store: SessionStore(sessions: sessions, repository: InMemorySessionRepository(sessions: sessions)),
-                            runtimeSelections: RuntimeSelectionStore(defaults: defaults), initialTranscripts: transcripts,
+                            runtimeSelections: runtimes, initialTranscripts: transcripts,
                             scheduleRepository: InMemoryScheduledTaskRepository(snapshot: ScheduleSnapshot(schedules: schedules)),
                             restoresIndexOnLaunch: false)
+        let scheduleProject = host.projects.ensureProject(forRoot: website, name: "website")
+        morning.destination.projectID = scheduleProject.id
+        host.scheduledTasks.update(morning)
         let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(model: host))
         defer { stack.stop() }
         let ticket = await stack.server.openPairing()
@@ -517,6 +525,42 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
         try await render("remote-host-schedules", size: size, model: model, hosts: hosts) { elements in
             XCTAssertTrue(elements.contains { $0.label == "Summarize new crash reports" }, elements.description)
             XCTAssertTrue(elements.contains { $0.label == L10n.string("Run now") }, elements.description)
+        }
+        let detailSize = NSSize(width: 900, height: 1000)
+        let remoteMorning = try XCTUnwrap(model.schedules.schedule(morning.id.uuidString))
+        try await render("remote-schedule-detail", size: detailSize, titled: false) {
+            RemoteScheduleDetail(model: model, schedule: remoteMorning, now: now)
+        }
+        try await render("local-schedule-detail", size: detailSize, titled: false) {
+            ScheduledTaskDetail(schedule: morning, nextRun: host.scheduledTasks.nextRun(of: morning),
+                                isStarting: false, now: host.scheduledTasks.displayNow,
+                                context: ScheduledTaskContext(task: { id in sessions.first { $0.id == id } },
+                                                              projectName: { _ in "website" },
+                                                              accountName: { schedule in
+                let harness = schedule.destination.harness
+                let accountID = schedule.destination.accountID ?? host.connections.selection[harness] ?? AccountChoice.nativeID(for: harness)
+                return host.connections.choices(for: [harness], includingMoving: true).first { $0.id == accountID }?.title
+            }),
+                                actions: ScheduledTaskActions())
+        }
+        let editorSize = NSSize(width: 600, height: 680)
+        var draft = ScheduleDraft(now: now, place: .chat, harness: .claudeCode)
+        draft.name = "Morning check"
+        draft.prompt = "Summarize the new crash reports and list what needs attention."
+        let editorOptions = await model.response(to: .scheduledTaskOptions(
+            projectID: RemoteTaskProjection.chatsProjectID, harness: HarnessKind.claudeCode.rawValue, settings: [:]))
+        XCTAssertTrue(editorOptions.ok)
+        try await render("remote-schedule-editor", size: editorSize, titled: false) {
+            RemoteScheduleEditor(model: model, request: .init(draft: draft, existing: nil),
+                                 initialOptions: editorOptions, loadsOptions: false)
+                .background(ParityTheme.canvas)
+        }
+        try await render("local-schedule-editor", size: editorSize, titled: false) {
+            ScheduledTaskEditor(draft: draft, existing: nil, projects: host.projects.projects.filter { !$0.isHidden },
+                                tasks: sessions, runtimeSelections: runtimes, connections: host.connections,
+                                models: NewTaskModelSource(catalogs: host.modelCatalogs) { _, _, _, _ in },
+                                now: { now }, projectName: { _ in "website" }, onCancel: {}, onSave: { _ in })
+                .background(ParityTheme.canvas)
         }
         let state = ScheduledTasksWindowState()
         state.isShowing = true

@@ -4,14 +4,17 @@ import YardletRemote
 
 /// A host's scheduled tasks as its window lists them (docs/REMOTE_PROTOCOL.md §15.21): read when the list
 /// first shows and again on each `schedulesChanged`, which the host sends only to a connection that asked;
-/// Run now, Pause and Resume go through the host's own paths. Creating, editing and deleting stay on the
-/// host.
+/// Reading and editing go through the host's own paths; this Mac keeps only presentation state.
 @MainActor
 @Observable
 final class RemoteHostSchedules {
     /// In the host list's order: the ones that will run, soonest first, then those that are off, then the
     /// one-offs that ran. Nil until read.
     private(set) var list: [RemoteSchedule]?
+    var canEdit = false
+    var timeZone: String?
+    var sessionJobs: [ScheduledSessionJob] = []
+    var window = ScheduledTasksWindowState()
     /// Schedules whose Run now is on its way to the host.
     private(set) var starting: Set<String> = []
     /// The list was asked for on this window, so it follows the host's changes.
@@ -26,7 +29,16 @@ final class RemoteHostSchedules {
     func load() {
         isFollowing = true
         model?.request(.scheduledTasks) { [weak self] response in
-            guard let self, response.ok else { return }
+            guard let self else { return }
+            refused(response)
+            guard response.ok else { return }
+            canEdit = response.scheduleEditing == true
+            timeZone = response.scheduleTimeZone
+            sessionJobs = (response.sessionSchedules ?? []).compactMap { item in
+                guard let session = model?.sidebar.sessions.first(where: { $0.id.uuidString == item.taskId }),
+                      let job = try? JSONDecoder().decode(ClaudeSessionJob.self, from: item.job) else { return nil }
+                return ScheduledSessionJob(session: session, job: job)
+            }
             let schedules = response.schedules ?? []
             if schedules != list { list = schedules }
         }
@@ -49,7 +61,7 @@ final class RemoteHostSchedules {
         }
     }
 
-    private func refused(_ response: RemoteResponse) {
+    func refused(_ response: RemoteResponse) {
         guard !response.ok, let model else { return }
         model.commandError = response.error?.code == .busy
             ? L10n.string("This scheduled task is starting already.")

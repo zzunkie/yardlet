@@ -766,6 +766,58 @@ final class RemoteHostModelTests: XCTestCase {
         model.schedules.runNow(ID.morningSchedule)
         try await waitUntil { model.schedules.schedule(ID.morningSchedule)?.lastRun?.at != lastRun }
 
+        // Editing uses the host's schedules and leaves its full history available to the shared detail.
+        XCTAssertTrue(model.schedules.canEdit)
+        XCTAssertFalse(model.schedules.actions.canImport)
+        let original = try XCTUnwrap(model.schedules.schedule(ID.morningSchedule)?.localDefinition)
+        XCTAssertFalse(original.prompt.isEmpty)
+        XCTAssertFalse(original.state.runs.isEmpty)
+        model.schedules.actions.edit(original.id)
+        XCTAssertEqual(model.schedules.window.editor?.existing?.id, original.id)
+        model.schedules.window.editor = nil
+
+        let created = ScheduledTask(name: "Remote editor test", prompt: "Review the latest changes.",
+                                    trigger: .daily(ScheduleTime(hour: 9, minute: 0)),
+                                    destination: original.destination, createdAt: Date())
+        let saved = await model.response(to: .saveScheduledTask(scheduleID: nil,
+            definition: try JSONEncoder().encode(created), settings: [:], confirmed: false))
+        XCTAssertTrue(saved.ok)
+        let createdID = try XCTUnwrap(saved.scheduleId)
+        model.schedules.load()
+        try await waitUntil { model.schedules.schedule(createdID)?.localDefinition != nil }
+        var edited = try XCTUnwrap(model.schedules.schedule(createdID)?.localDefinition)
+        edited.name = "Edited on the remote Mac"
+        let changed = await model.response(to: .saveScheduledTask(scheduleID: createdID,
+            definition: try JSONEncoder().encode(edited), settings: [:], confirmed: false))
+        XCTAssertTrue(changed.ok)
+        model.schedules.load()
+        try await waitUntil { model.schedules.schedule(createdID)?.name == edited.name }
+        // An account change refreshes the host's choices and is persisted only by the host.
+        let accountOptions = await model.response(to: .scheduledTaskOptions(
+            projectID: edited.destination.projectID?.uuidString, harness: edited.destination.harness.rawValue,
+            settings: [:], scheduleID: createdID))
+        XCTAssertTrue(accountOptions.ok)
+        let otherAccount = try XCTUnwrap(accountOptions.accounts?.first { $0.available == true && $0.id != accountOptions.accountId })
+        let otherOptions = await model.response(to: .scheduledTaskOptions(
+            projectID: edited.destination.projectID?.uuidString, harness: edited.destination.harness.rawValue,
+            settings: [:], scheduleID: createdID, accountID: otherAccount.id))
+        XCTAssertTrue(otherOptions.ok)
+        XCTAssertEqual(otherOptions.accountId, otherAccount.id)
+        edited.destination.accountID = otherAccount.id
+        let reassigned = await model.response(to: .saveScheduledTask(scheduleID: createdID,
+            definition: try JSONEncoder().encode(edited), settings: [:], confirmed: false))
+        XCTAssertTrue(reassigned.ok)
+        let retainedAccount = await model.response(to: .scheduledTaskOptions(
+            projectID: edited.destination.projectID?.uuidString, harness: edited.destination.harness.rawValue,
+            settings: [:], scheduleID: createdID))
+        XCTAssertEqual(retainedAccount.accountId, otherAccount.id)
+
+        let unconfirmed = await model.response(to: .deleteScheduledTasks(scheduleIDs: [createdID], confirmed: false))
+        XCTAssertFalse(unconfirmed.ok)
+        XCTAssertNotNil(model.schedules.schedule(createdID))
+        model.schedules.delete([try XCTUnwrap(UUID(uuidString: createdID))], completedOnly: false)
+        try await waitUntil { model.schedules.schedule(createdID) == nil }
+
         // A task's outputs, read as the host's card lists them, and its files copied here, privately.
         model.files.loadOutputs(ID.history)
         try await waitUntil { model.files.outputs[ID.history]?.count == 2 }

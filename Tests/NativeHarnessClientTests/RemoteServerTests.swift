@@ -949,6 +949,33 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertFalse(log.contains("clear"))
     }
 
+    func testScheduleEditingAuditsEveryScheduleWithoutItsDefinition() async throws {
+        let harness = try await ServerHarness()
+        let phone = try await harness.authenticatedPhone()
+        func request(_ id: String, _ value: RemoteRequest) async throws -> RemoteResponse {
+            await harness.send(String(decoding: RemoteRequestEnvelope(id: id, request: value).encoded(), as: UTF8.self), on: phone)
+            return try await phone.response(id)
+        }
+        let options = try await request("options", .scheduledTaskOptions(projectID: nil, harness: nil, settings: [:], scheduleID: "one"))
+        XCTAssertEqual(options.error?.code, .unavailable)
+        XCTAssertEqual(harness.audit.entries().last?.type, "scheduledTaskOptions")
+        XCTAssertEqual(harness.audit.entries().last?.schedule, "one")
+        let saved = try await request("save", .saveScheduledTask(scheduleID: nil, definition: Data("private instructions".utf8),
+            settings: ["permissionMode": "bypassPermissions"], confirmed: true))
+        XCTAssertTrue(saved.ok)
+        XCTAssertEqual(saved.scheduleId, "created-schedule")
+        let refused = try await request("refuse", .deleteScheduledTasks(scheduleIDs: ["one", "two"], confirmed: false))
+        XCTAssertEqual(refused.error?.code, .notAllowed)
+        let deleted = try await request("delete", .deleteScheduledTasks(scheduleIDs: ["one", "two"], completedOnly: true, confirmed: true))
+        XCTAssertTrue(deleted.ok)
+        let entries = harness.audit.entries().filter { $0.type == "saveScheduledTask" || $0.type == "deleteScheduledTasks" }
+        XCTAssertEqual(entries.map(\.schedule), ["created-schedule", "one", "two", "one", "two"])
+        XCTAssertEqual(entries.map(\.result), ["ok", "notAllowed", "notAllowed", "ok", "ok"])
+        let log = try String(contentsOf: harness.auditURL, encoding: .utf8)
+        XCTAssertFalse(log.contains("private instructions") || log.contains("bypassPermissions"))
+        await harness.server.shutdown(reason: "test")
+    }
+
     func testCommandsAreRateLimited() async throws {
         let harness = try await ServerHarness()
         let phone = try await harness.authenticatedPhone()
@@ -1688,6 +1715,13 @@ actor FakeBridge: RemoteBridge {
         commands.append(command)
         defer { nextFailure = nil }
         return nextFailure
+    }
+
+    func saveScheduledTask(scheduleID: String?, definition: Data, settings: [String: String], confirmed: Bool) -> Result<String, RemoteError> {
+        .success(scheduleID ?? "created-schedule")
+    }
+    func deleteScheduledTasks(scheduleIDs: [String], completedOnly: Bool, confirmed: Bool) -> RemoteError? {
+        confirmed ? nil : RemoteError(.notAllowed)
     }
 
     func createTask(_ start: RemoteTaskStart) -> Result<String, RemoteError> {

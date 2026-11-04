@@ -69,9 +69,11 @@ public actor RemoteFixtureBridge: RemoteBridge {
 
     /// A scheduled task as the Mac keeps it (§15.21): when, where its runs go, whether it is on, and its runs.
     private struct Schedule {
-        enum When {
+        enum When: Equatable {
             case daily(hour: Int, minute: Int)
             case weekdays(hour: Int, minute: Int)
+            case weekly(days: [Int], hour: Int, minute: Int)
+            case interval(hours: Int, anchor: Date, days: [Int])
             case once(Date)
         }
 
@@ -86,6 +88,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
         }
 
         struct Run {
+            var id = UUID().uuidString
             var at: Date
             var outcome: RemoteSchedule.Run.Outcome
             var taskID: String?
@@ -106,6 +109,10 @@ public actor RemoteFixtureBridge: RemoteBridge {
         /// Newest first.
         var runs: [Run] = []
         var starting = false
+        var modelChoice: [String: String] = [:]
+        var accountID = "fixture-home"
+        var worktree = false
+        var createdAt = Date()
 
         /// The task its latest started run started or continued.
         var latestTaskID: String? { runs.first { $0.outcome == .started && $0.taskID != nil }?.taskID }
@@ -207,10 +214,12 @@ public actor RemoteFixtureBridge: RemoteBridge {
             listed[index].task.pendingSummary = summary
             listed[index].task.pendingKind = item?.requestKind
         }
-        return RemoteSnapshot(projects: projects, tasks: listed.map(\.task), newestRequestIDs: requests,
+        var snapshot = RemoteSnapshot(projects: projects, tasks: listed.map(\.task), newestRequestIDs: requests,
                               requestSummaries: summaries,
                               newTask: RemoteNewTask(harness: "claude-code", harnessName: "Claude Code"), followUp: .steer,
                               scheduledTasks: true, taskFiles: true, taskControls: true, browserTabs: true)
+        snapshot.scheduleEditing = true
+        return snapshot
     }
 
     /// The fixture's tasks hold nothing beyond the phone's projection (§15.24).
@@ -468,8 +477,161 @@ public actor RemoteFixtureBridge: RemoteBridge {
                     taskId: run.outcome == .started ? run.taskID.flatMap { tasks[$0] == nil ? nil : $0 } : nil,
                     line: run.reason.map { "\(when) · \($0)" } ?? when)
             }
+            remote.accountName = Self.scheduleAccounts(current: schedule.accountID).first { $0.id == schedule.accountID }?.name
+            remote.definition = scheduleDefinition(schedule)
             return remote
         })
+    }
+
+    /// The native editor's value, without importing the desktop target into the portable fixture.
+    private func scheduleDefinition(_ schedule: Schedule) -> Data? {
+        let trigger: [String: Any]
+        switch schedule.when {
+        case let .daily(hour, minute): trigger = ["kind": "daily", "time": String(format: "%02d:%02d", hour, minute)]
+        case let .weekdays(hour, minute): trigger = ["kind": "weekly", "days": [2, 3, 4, 5, 6], "time": String(format: "%02d:%02d", hour, minute)]
+        case let .weekly(days, hour, minute): trigger = ["kind": "weekly", "days": days, "time": String(format: "%02d:%02d", hour, minute)]
+        case let .interval(hours, anchor, days): trigger = ["kind": "interval", "hours": hours, "anchor": anchor.timeIntervalSinceReferenceDate, "days": days]
+        case let .once(date): trigger = ["kind": "once", "at": date.timeIntervalSinceReferenceDate]
+        }
+        var destination: [String: Any] = ["harness": harness(of: schedule).id, "startsInNewWorktree": schedule.worktree,
+                                         "modelChoice": schedule.modelChoice, "accountID": schedule.accountID]
+        switch schedule.destination {
+        case let .newTask(project, _):
+            destination["mode"] = "newTask"
+            if project != "chats" {
+                destination["projectID"] = project
+                destination["workspacePath"] = "/fixture/" + (projects.first { $0.id == project }?.name ?? "project")
+            }
+        case let .continueTask(task): destination["mode"] = "continueTask"; destination["targetTaskID"] = task
+        }
+        var state: [String: Any] = ["scanFloor": schedule.createdAt.timeIntervalSinceReferenceDate,
+                                    "consecutiveFailures": schedule.failures,
+                                    "runs": schedule.runs.map { run -> [String: Any] in
+            var item: [String: Any] = ["id": run.id, "at": run.at.timeIntervalSinceReferenceDate,
+                                      "trigger": "scheduled", "outcome": run.outcome.rawValue]
+            item["taskID"] = run.taskID
+            if run.outcome == .failed { item["failure"] = run.reason }
+            if run.outcome == .skipped { item["skipReason"] = "previousRunActive" }
+            return item
+        }]
+        state["lastRunAt"] = schedule.runs.first?.at.timeIntervalSinceReferenceDate
+        if let stop = schedule.stop { state["stopReason"] = stop == .finished ? "finished" : "repeatedFailures" }
+        return try? JSONSerialization.data(withJSONObject: ["id": schedule.id, "name": schedule.name, "prompt": schedule.prompt,
+            "trigger": trigger, "destination": destination, "isEnabled": schedule.enabled,
+            "createdAt": schedule.createdAt.timeIntervalSinceReferenceDate, "updatedAt": schedule.createdAt.timeIntervalSinceReferenceDate,
+            "state": state])
+    }
+
+    public func scheduledTaskOptions(projectID: String?, harness: String?, settings: [String: String], scheduleID: String? = nil,
+                                     accountID: String? = nil) async -> Result<RemoteNewTaskOptions, RemoteError> {
+        if let scheduleID, !schedules.contains(where: { $0.id == scheduleID }) { return .failure(RemoteError(.notFound)) }
+        if let projectID, !projects.contains(where: { $0.id == projectID }) { return .failure(RemoteError(.notFound)) }
+        guard let chosen = harness.map(Harness.init(id:)) ?? .claude else { return .failure(RemoteError(.notAllowed)) }
+        let selectedAccount = accountID ?? scheduleID.flatMap { id in schedules.first { $0.id == id }?.accountID } ?? "fixture-home"
+        let accounts = Self.scheduleAccounts(current: selectedAccount)
+        guard accounts.contains(where: { $0.id == selectedAccount && $0.available == true }) else { return .failure(RemoteError(.notAllowed)) }
+        var offered = Self.taskSettings(for: chosen)
+        // A second account has its own default, so the fixture catches stale menu values after a switch.
+        if selectedAccount == "fixture-work", let model = offered.firstIndex(where: { $0.id == "model" }) {
+            offered[model].value = chosen == .codex ? "gpt-6-astra" : "sonnet"
+        }
+        for (id, value) in settings {
+            guard let index = offered.firstIndex(where: { $0.id == id }), offered[index].choices.contains(where: { $0.value == value }) else {
+                return .failure(RemoteError(.notAllowed))
+            }
+            offered[index].value = value
+        }
+        var options = RemoteNewTaskOptions(harness: chosen.option, harnesses: Harness.allCases.map(\.option),
+            settings: offered, worktree: projectID == nil || projectID == "chats" ? nil : false)
+        options.scheduleAccounts = accounts
+        options.scheduleAccountID = selectedAccount
+        options.scheduleAccountName = accounts.first { $0.id == selectedAccount }?.name
+        return .success(options)
+    }
+
+    private static func scheduleAccounts(current: String) -> [RemoteAccount] {
+        [RemoteAccount(id: "fixture-home", name: "Personal", current: current == "fixture-home", available: true),
+         RemoteAccount(id: "fixture-work", name: "Work", current: current == "fixture-work", available: true)]
+    }
+
+    public func saveScheduledTask(scheduleID: String?, definition: Data, settings: [String: String], confirmed: Bool) async -> Result<String, RemoteError> {
+        guard definition.count <= 256_000,
+              let object = try? JSONSerialization.jsonObject(with: definition) as? [String: Any],
+              let name = object["name"] as? String, let prompt = object["prompt"] as? String, !prompt.isEmpty,
+              let trigger = object["trigger"] as? [String: Any], let kind = trigger["kind"] as? String,
+              let destination = object["destination"] as? [String: Any] else { return .failure(RemoteError(.badRequest)) }
+        let index = scheduleID.flatMap { id in schedules.firstIndex { $0.id == id } }
+        if scheduleID != nil, index == nil { return .failure(RemoteError(.notFound)) }
+        let when: Schedule.When
+        switch kind {
+        case "once":
+            guard let at = trigger["at"] as? Double, Date(timeIntervalSinceReferenceDate: at) > Date() else { return .failure(RemoteError(.notAllowed)) }
+            when = .once(Date(timeIntervalSinceReferenceDate: at))
+        case "daily", "weekly":
+            let parts = (trigger["time"] as? String ?? "").split(separator: ":").compactMap { Int($0) }
+            guard parts.count == 2, (0...23).contains(parts[0]), (0...59).contains(parts[1]) else { return .failure(RemoteError(.badRequest)) }
+            if kind == "daily" { when = .daily(hour: parts[0], minute: parts[1]) }
+            else {
+                guard let days = trigger["days"] as? [Int], !days.isEmpty, days.allSatisfy({ (1...7).contains($0) }) else { return .failure(RemoteError(.badRequest)) }
+                when = .weekly(days: days, hour: parts[0], minute: parts[1])
+            }
+        case "interval":
+            guard let hours = trigger["hours"] as? Int, (1...24).contains(hours), let anchor = trigger["anchor"] as? Double else { return .failure(RemoteError(.badRequest)) }
+            when = .interval(hours: hours, anchor: Date(timeIntervalSinceReferenceDate: anchor), days: trigger["days"] as? [Int] ?? [])
+        default: return .failure(RemoteError(.badRequest))
+        }
+        let target: Schedule.Destination
+        var choice: [String: String] = [:]
+        var selectedAccount = index.map { schedules[$0].accountID } ?? "fixture-home"
+        if destination["mode"] as? String == "continueTask" {
+            guard let task = destination["targetTaskID"] as? String, tasks[task] != nil else { return .failure(RemoteError(.notFound)) }
+            target = .continueTask(task)
+        } else {
+            let project = destination["projectID"] as? String ?? "chats"
+            guard let harness = (destination["harness"] as? String).flatMap(Harness.init(id:)) else { return .failure(RemoteError(.notAllowed)) }
+            let options: RemoteNewTaskOptions
+            switch await scheduledTaskOptions(projectID: project, harness: harness.id, settings: settings,
+                                             scheduleID: scheduleID, accountID: destination["accountID"] as? String) {
+            case let .success(value): options = value
+            case let .failure(error): return .failure(error)
+            }
+            selectedAccount = options.scheduleAccountID ?? "fixture-home"
+            for setting in options.settings {
+                if setting.choices.first(where: { $0.value == setting.value })?.confirm != nil, !confirmed { return .failure(RemoteError(.notAllowed)) }
+                if let role = setting.role {
+                    choice[role == "permission" ? "permissionMode" : role] = setting.value
+                }
+            }
+            target = .newTask(project: project, harness: harness)
+        }
+        var value = index.map { schedules[$0] } ?? Schedule(id: UUID().uuidString, name: name, prompt: prompt, when: when, destination: target)
+        if value.when != when {
+            value.runs.removeAll { $0.outcome == .deferred }
+            if value.stop == .finished { value.stop = nil; value.enabled = true }
+        }
+        value.name = name; value.prompt = prompt; value.when = when; value.destination = target
+        value.accountID = selectedAccount
+        value.modelChoice = choice; value.worktree = destination["startsInNewWorktree"] as? Bool ?? false
+        if let index { schedules[index] = value } else { schedules.append(value) }
+        handler?(.schedules)
+        return .success(value.id)
+    }
+
+    public func deleteScheduledTasks(scheduleIDs: [String], completedOnly: Bool, confirmed: Bool) async -> RemoteError? {
+        guard confirmed else { return RemoteError(.notAllowed) }
+        guard !scheduleIDs.isEmpty, scheduleIDs.count <= RemoteProtocol.maxSchedules else { return RemoteError(.badRequest) }
+        if !completedOnly, scheduleIDs.contains(where: { id in !schedules.contains { $0.id == id } }) { return RemoteError(.notFound) }
+        schedules.removeAll { scheduleIDs.contains($0.id) && (!completedOnly || $0.stop == .finished) }
+        handler?(.schedules)
+        return nil
+    }
+
+    public func sessionSchedules() async -> [RemoteSessionSchedule] {
+        guard tasks[ID.idle] != nil else { return [] }
+        let job: [String: Any] = ["id": "fixture-link-check", "kind": "recurring", "cron": "*/15 * * * *",
+                                  "schedule": "Every 15 minutes", "prompt": "Check the footer links."]
+        guard let data = try? JSONSerialization.data(withJSONObject: job) else { return [] }
+        return [RemoteSessionSchedule(taskId: ID.idle, job: data)]
     }
 
     // MARK: - Files (§15.22)
@@ -1365,6 +1527,18 @@ public actor RemoteFixtureBridge: RemoteBridge {
             return date > now ? date : nil
         case let .daily(hour, minute):
             return calendar.nextDate(after: now, matching: DateComponents(hour: hour, minute: minute), matchingPolicy: .nextTime)
+        case let .interval(hours, anchor, days):
+            let interval = Double(hours) * 3_600
+            var next = anchor.addingTimeInterval((floor(now.timeIntervalSince(anchor) / interval) + 1) * interval)
+            for _ in 0..<200 {
+                if days.isEmpty || days.contains(calendar.component(.weekday, from: next)) { return next }
+                next = next.addingTimeInterval(interval)
+            }
+            return nil
+        case let .weekly(days, hour, minute):
+            return days.compactMap { day in
+                calendar.nextDate(after: now, matching: DateComponents(hour: hour, minute: minute, weekday: day), matchingPolicy: .nextTime)
+            }.min()
         case let .weekdays(hour, minute):
             var next = now
             for _ in 0..<8 {
@@ -1391,6 +1565,8 @@ public actor RemoteFixtureBridge: RemoteBridge {
         case let .daily(hour, minute): return "Every day at \(time(hour, minute))"
         case let .weekdays(hour, minute): return "Weekdays at \(time(hour, minute))"
         case let .once(date): return "Once, \(moment(date, now: now))"
+        case let .weekly(_, hour, minute): return "Weekly at \(time(hour, minute))"
+        case let .interval(hours, _, _): return "Every \(hours) hours"
         }
     }
 

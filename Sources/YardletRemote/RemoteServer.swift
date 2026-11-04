@@ -132,6 +132,11 @@ public protocol RemoteBridge: AnyObject, Sendable {
     func limitAccounts(taskID: String) async -> Result<[RemoteAccount], RemoteError>
     /// The Mac's Scheduled tasks list (§15.21). A bridge that answers it says so in its snapshot (`scheduledTasks`).
     func scheduledTasks() async -> Result<[RemoteSchedule], RemoteError>
+    func sessionSchedules() async -> [RemoteSessionSchedule]
+    func scheduledTaskOptions(projectID: String?, harness: String?, settings: [String: String], scheduleID: String?, accountID: String?) async -> Result<RemoteNewTaskOptions, RemoteError>
+    func saveScheduledTask(scheduleID: String?, definition: Data, settings: [String: String], confirmed: Bool) async -> Result<String, RemoteError>
+    func deleteScheduledTasks(scheduleIDs: [String], completedOnly: Bool, confirmed: Bool) async -> RemoteError?
+
     /// The files the Mac's Outputs card lists for a task, in its order (§15.22); the server reads their sizes. A bridge
     /// that answers it and `fileScope` says so in its snapshot (`taskFiles`).
     func taskOutputs(taskID: String) async -> Result<[RemoteOutput], RemoteError>
@@ -224,6 +229,11 @@ extension RemoteBridge {
     public func limitAccounts(taskID: String) async -> Result<[RemoteAccount], RemoteError> {
         .failure(RemoteError(.unavailable))
     }
+
+    public func sessionSchedules() async -> [RemoteSessionSchedule] { [] }
+    public func scheduledTaskOptions(projectID: String?, harness: String?, settings: [String: String], scheduleID: String?, accountID: String?) async -> Result<RemoteNewTaskOptions, RemoteError> { .failure(RemoteError(.unavailable)) }
+    public func saveScheduledTask(scheduleID: String?, definition: Data, settings: [String: String], confirmed: Bool) async -> Result<String, RemoteError> { .failure(RemoteError(.unavailable)) }
+    public func deleteScheduledTasks(scheduleIDs: [String], completedOnly: Bool, confirmed: Bool) async -> RemoteError? { RemoteError(.unavailable) }
 
     public func scheduledTasks() async -> Result<[RemoteSchedule], RemoteError> {
         .failure(RemoteError(.unavailable))
@@ -425,6 +435,7 @@ public actor RemoteServer {
     /// The schedules the connections that follow them were last told of (§15.21), and the read they came from:
     /// a read that returns after a newer one is dropped.
     private var publishedSchedules: [RemoteSchedule]?
+    private var publishedSessionSchedules: [RemoteSessionSchedule] = []
     private var publishedScheduleRead = 0
     private var scheduleReads = 0
     private var schedulesTimer: Task<Void, Never>?
@@ -1442,12 +1453,53 @@ public actor RemoteServer {
             connections[id]?.isPresent = active
             respond(RemoteResponse(re: envelope.id), to: id)
             if !active { await releaseHeldPushes() }
+        case let .scheduledTaskOptions(projectID, harness, settings, scheduleID, accountID):
+            switch await bridge.scheduledTaskOptions(projectID: projectID, harness: harness, settings: settings, scheduleID: scheduleID, accountID: accountID) {
+            case let .success(options):
+                var response = RemoteResponse(re: envelope.id)
+                response.harness = options.harness.harness
+                response.harnessName = options.harness.harnessName
+                response.harnesses = options.harnesses
+                response.settings = options.settings
+                response.worktree = options.worktree
+                response.scheduleAccountName = options.scheduleAccountName
+                response.accounts = options.scheduleAccounts
+                response.accountId = options.scheduleAccountID
+                response.scheduleTimeZone = (await bridge.snapshot()).scheduleTimeZone
+                respond(response, to: id)
+                audit?.record(device: connections[id]?.deviceID, type: request.type, task: nil,
+                              schedule: scheduleID, result: "ok", at: now())
+            case let .failure(error):
+                respond(.failure(envelope.id, error), to: id)
+                audit?.record(device: connections[id]?.deviceID, type: request.type, task: nil,
+                              schedule: scheduleID, result: error.code.rawValue, at: now())
+            }
+        case let .saveScheduledTask(scheduleID, definition, settings, confirmed):
+            var savedID: String?
+            await command(envelope.id, request: request, on: id) {
+                switch await self.bridge.saveScheduledTask(scheduleID: scheduleID, definition: definition, settings: settings, confirmed: confirmed) {
+                case let .success(id): savedID = id; return nil
+                case let .failure(error): return error
+                }
+            } answer: { $0.scheduleId = savedID }
+        case let .deleteScheduledTasks(ids, completedOnly, confirmed):
+            await command(envelope.id, request: request, on: id) {
+                await self.bridge.deleteScheduledTasks(scheduleIDs: ids, completedOnly: completedOnly, confirmed: confirmed)
+            }
         case .scheduledTasks:
             let read = await readSchedules()
             switch read.result {
             case let .success(schedules):
                 var response = RemoteResponse(re: envelope.id)
                 response.schedules = schedules
+                response.sessionSchedules = await bridge.sessionSchedules()
+                let capabilities = await bridge.snapshot()
+                response.scheduleEditing = capabilities.scheduleEditing ? true : nil
+                response.scheduleTimeZone = capabilities.scheduleTimeZone
+                guard RemoteJSON.string(response).utf8.count <= RemoteProtocol.maxServerMessageBytes else {
+                    respond(.failure(envelope.id, RemoteError(.tooLarge, "The schedule list exceeds the response limit")), to: id)
+                    return
+                }
                 respond(response, to: id)
                 // The list later changes are told against, unless another connection that follows them has yet
                 // to hear of one.
@@ -1645,6 +1697,8 @@ public actor RemoteServer {
             response.newTask = published?.newTask
             response.followUp = published?.followUp
             response.scheduledTasks = published?.scheduledTasks == true ? true : nil
+            response.scheduleEditing = published?.scheduleEditing == true ? true : nil
+            response.scheduleTimeZone = published?.scheduleTimeZone
             response.taskFiles = published?.taskFiles == true && RemoteFileReader.isSupported ? true : nil
             response.workspaceFiles = response.taskFiles
             response.presence = true
@@ -1716,7 +1770,14 @@ public actor RemoteServer {
         if error == nil, response.taskId != nil { tasksDirty = true; await refreshTasks(force: true) }
         respond(error.map { .failure(requestID, $0) } ?? response, to: id)
         audit?.record(device: connections[id]?.deviceID, type: request.type, task: request.taskID,
-                      schedule: request.scheduleID, project: request.projectID, result: error?.code.rawValue ?? "ok", at: now())
+                      schedule: request.scheduleID ?? response.scheduleId, project: request.projectID,
+                      result: error?.code.rawValue ?? "ok", at: now())
+        if case let .deleteScheduledTasks(ids, _, _) = request {
+            for scheduleID in ids.dropFirst() {
+                audit?.record(device: connections[id]?.deviceID, type: request.type, task: nil, schedule: scheduleID,
+                              result: error?.code.rawValue ?? "ok", at: now())
+            }
+        }
     }
 
     /// A part of one of the task's files (§15.22), read off this actor and Swift's threads so a large file or a slow disk
@@ -2049,7 +2110,9 @@ public actor RemoteServer {
     private func refreshSchedules() async {
         let read = await readSchedules()
         guard case let .success(schedules) = read.result, read.number > publishedScheduleRead else { return }
-        let changed = schedules != publishedSchedules
+        let sessionSchedules = await bridge.sessionSchedules()
+        let changed = schedules != publishedSchedules || sessionSchedules != publishedSessionSchedules
+        publishedSessionSchedules = sessionSchedules
         publishedSchedules = schedules
         publishedScheduleRead = read.number
         guard changed else { return }

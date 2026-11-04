@@ -2,6 +2,8 @@ import SwiftUI
 
 /// What the schedule views do, in one place for the sidebar list, the detail and the menus.
 struct ScheduledTaskActions {
+    var canEdit = true
+    var canImport = true
     var select: (UUID) -> Void = { _ in }
     var create: () -> Void = {}
     var importFromApps: () -> Void = {}
@@ -33,6 +35,7 @@ struct ScheduledTaskList: View {
     @Binding var expandedSections: Set<ScheduleListSections.Section>
     let onBack: () -> Void
     let actions: ScheduledTaskActions
+    var calendar: Calendar = .autoupdatingCurrent
 
     var body: some View {
         let sections = ScheduleListSections(schedules, nextRun: nextRun)
@@ -53,6 +56,7 @@ struct ScheduledTaskList: View {
                                  titleWeight: .medium, height: 32, isFilled: true)
             }
             .buttonStyle(.borderless)
+            .disabled(!actions.canEdit)
             .parityPointer()
             .padding(.horizontal, SidebarMetrics.rowInset)
             .padding(.top, 4)
@@ -99,6 +103,7 @@ struct ScheduledTaskList: View {
             .parityPointer()
             .padding(.horizontal, SidebarMetrics.rowInset)
             .padding(.vertical, 5)
+            .disabled(!actions.canImport)
         }
         .background(ParityTheme.sidebar)
         .onExitCommand(perform: onBack)
@@ -123,7 +128,7 @@ struct ScheduledTaskList: View {
         let isStarting = startingIDs.contains(schedule.id)
         return ScheduledTaskRow(
             schedule: schedule,
-            status: ScheduleText.row(schedule, nextRun: entry.nextRun, isStarting: isStarting, now: now),
+            status: ScheduleText.row(schedule, nextRun: entry.nextRun, isStarting: isStarting, now: now, calendar: calendar),
             isSelected: selection == schedule.id,
             isStarting: isStarting,
             actions: actions)
@@ -141,7 +146,7 @@ struct ScheduledTaskList: View {
                 onToggle: {
                     if isExpanded { expandedSections.remove(section) } else { expandedSections.insert(section) }
                 },
-                onDeleteAll: section == .finished ? actions.deleteCompleted : nil)
+                onDeleteAll: section == .finished && actions.canEdit ? actions.deleteCompleted : nil)
             if isExpanded {
                 ForEach(entries) { row($0) }
             }
@@ -371,7 +376,9 @@ struct ScheduledTaskMenuItems: View {
             Button(L10n.string("Resume")) { actions.setEnabled(schedule.id, true) }
         }
         Button(L10n.string("Edit…")) { actions.edit(schedule.id) }
+            .disabled(!actions.canEdit)
         Divider()
         Button(L10n.string("Delete…"), role: .destructive) { actions.delete(schedule.id) }
+            .disabled(!actions.canEdit)
     }
 }

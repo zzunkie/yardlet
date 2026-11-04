@@ -110,6 +110,8 @@ final class AppModelRemoteBridge: RemoteBridge {
         )
         snapshot.newTask = newTaskHarness(in: model).map { RemoteNewTask(harness: $0.rawValue, harnessName: $0.displayName) }
         snapshot.scheduledTasks = true
+        snapshot.scheduleEditing = true
+        snapshot.scheduleTimeZone = model.scheduledTasks.calendar().timeZone.identifier
         snapshot.taskFiles = true
         Self.decorateProjectActions(&snapshot, model: model)
         snapshot.taskControls = true
@@ -813,7 +815,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     }
 
     /// Where a task started in the project goes: its folder and project, nil for a chat.
-    private func place(_ projectID: String, in model: AppModel) -> Result<(folder: URL?, project: Project?), RemoteError> {
+    func place(_ projectID: String, in model: AppModel) -> Result<(folder: URL?, project: Project?), RemoteError> {
         guard projectID != RemoteTaskProjection.chatsProjectID else { return .success((nil, nil)) }
         guard let group = model.projects.visibleGroups(sessions: model.store.sessions)
             .first(where: { RemoteTaskProjection.projectID(for: $0) == projectID }) else { return .failure(RemoteError(.notFound)) }
@@ -828,7 +830,7 @@ final class AppModelRemoteBridge: RemoteBridge {
 
     /// The harness a phone's new task runs on: the one it named, among those the Mac's new-task composer
     /// offers, else the composer's own.
-    private static func harness(_ named: String?, in model: AppModel) -> Result<HarnessKind, RemoteError> {
+    static func harness(_ named: String?, in model: AppModel) -> Result<HarnessKind, RemoteError> {
         let offered = model.runtimeSelections.connectedDescriptors.map(\.id)
         if let named {
             guard let harness = offered.first(where: { $0.rawValue == named }) else {
@@ -881,7 +883,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         return .success(choice)
     }
 
-    private static func option(_ harness: HarnessKind) -> RemoteHarnessOption {
+    static func option(_ harness: HarnessKind) -> RemoteHarnessOption {
         let policy = HarnessComposerInputPolicy(harness: harness)
         return RemoteHarnessOption(harness: harness.rawValue, harnessName: harness.displayName,
                                    acceptsImages: policy.carriesImages ? true : nil,
@@ -1023,6 +1025,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     /// Reads the schedules, their starting runs, the projects they start in, and the time the list redraws by
     /// (each look of the schedule loop), so "tomorrow" becomes "today" on the phone as on the Mac.
     static func schedules(in model: AppModel, snapshot: RemoteSnapshot) -> [RemoteSchedule] {
+        _ = model.scheduledSessionJobs
         let center = model.scheduledTasks
         let now = center.displayNow
         let calendar = center.calendar()
@@ -1043,8 +1046,18 @@ final class AppModelRemoteBridge: RemoteBridge {
                 let project = destination.targetTaskID.flatMap { tasks[$0.uuidString]?.projectId }.flatMap { taskProjects[$0] }
                 projectName = project?.kind == .chats ? nil : project?.name
             }
-            return Self.schedule(schedule, nextRun: entry.nextRun, isStarting: starting.contains(schedule.id),
-                                 now: now, calendar: calendar, projectName: projectName, tasks: tasks)
+            var remote = Self.schedule(schedule, nextRun: entry.nextRun, isStarting: starting.contains(schedule.id),
+                                       now: now, calendar: calendar, projectName: projectName, tasks: tasks)
+            remote.definition = Self.scheduleDefinition(schedule, model: model)
+            let root = model.projects.project(id: destination.projectID)?.primaryRoot
+            remote.name = Self.scheduleText(remote.name, root: root)
+            remote.status = remote.status.map { Self.scheduleText($0, root: root) }
+            if let line = remote.lastRun?.line { remote.lastRun?.line = Self.scheduleText(line, root: root) }
+            let accountID = destination.accountID ?? model.connections.selection[destination.harness]
+                ?? AccountChoice.nativeID(for: destination.harness)
+            remote.accountName = model.connections.choices(for: [destination.harness], includingMoving: true)
+                .first { $0.id == accountID }.map { Self.scheduleText($0.title, root: nil) }
+            return remote
         }
     }
 

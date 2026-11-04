@@ -249,6 +249,8 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var followUp: RemoteFollowUpMode?
     /// The bridge answers `scheduledTasks` (§15.21).
     public var scheduledTasks: Bool
+    public var scheduleEditing: Bool = false
+    public var scheduleTimeZone: String?
     /// The bridge answers `taskOutputs` and `readFile` (§15.22).
     public var taskFiles: Bool
     public var reviewReading: Bool = false
@@ -1028,6 +1030,9 @@ public enum RemoteRequest: Equatable, Sendable {
     case revealLink(nonce: Data)
     /// The Mac's Scheduled tasks list, Run now, and Pause or Resume (§15.21).
     case scheduledTasks
+    case scheduledTaskOptions(projectID: String?, harness: String?, settings: [String: String], scheduleID: String? = nil, accountID: String? = nil)
+    case saveScheduledTask(scheduleID: String?, definition: Data, settings: [String: String], confirmed: Bool)
+    case deleteScheduledTasks(scheduleIDs: [String], completedOnly: Bool = false, confirmed: Bool)
     case runScheduledTask(scheduleID: String)
     case setScheduledTaskEnabled(scheduleID: String, enabled: Bool)
     /// What a task made, and a part of one of its files (§15.22).
@@ -1108,6 +1113,9 @@ public enum RemoteRequest: Equatable, Sendable {
         case .archiveTask: "archiveTask"
         case .answerLink: "answerLink"
         case .revealLink: "revealLink"
+        case .scheduledTaskOptions: "scheduledTaskOptions"
+        case .saveScheduledTask: "saveScheduledTask"
+        case .deleteScheduledTasks: "deleteScheduledTasks"
         case .scheduledTasks: "scheduledTasks"
         case .runScheduledTask: "runScheduledTask"
         case .setScheduledTaskEnabled: "setScheduledTaskEnabled"
@@ -1147,6 +1155,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .nextStep: nil
         case .usageReset, .useUsageReset: nil
         case .openOriginalConversation, .taskAccounts, .projectAction, .archivedTasks, .taskAction: nil
+        case .scheduledTaskOptions, .saveScheduledTask, .deleteScheduledTasks: nil
         case .readReview, .workspaceFiles: nil
         case let .fileRewind(_, action, _, _, _): action == .restore ? .fileWrites : nil
         case .subtask, .cancelAccountMove: nil
@@ -1172,6 +1181,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .projectAction, .archivedTasks: nil
         case let .openOriginalConversation(id), let .taskAccounts(id, _): id
         case let .taskAction(id, _): id
+        case .scheduledTaskOptions, .saveScheduledTask, .deleteScheduledTasks: nil
         case let .subscribeTask(id, _), let .loadOlder(id, _), let .unsubscribeTask(id), let .sendMessage(id, _, _, _, _),
              let .answerApproval(id, _, _, _), let .stopTurn(id), let .markRead(id), let .answerQuestion(id, _, _),
              let .reviewPlan(id, _, _, _), let .itemDetail(id, _), let .actOnSuggestion(id, _, _), let .setPinned(id, _),
@@ -1196,6 +1206,9 @@ public enum RemoteRequest: Equatable, Sendable {
     /// The schedule a request names (§15.21).
     public var scheduleID: String? {
         switch self {
+        case let .scheduledTaskOptions(_, _, _, id, _): id
+        case let .saveScheduledTask(id, _, _, _): id
+        case let .deleteScheduledTasks(ids, _, _): ids.first
         case let .runScheduledTask(id), let .setScheduledTaskEnabled(id, _): id
         default: nil
         }
@@ -1211,6 +1224,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case let .fileRewind(_, action, _, _, _): action == .restore
         case .cancelAccountMove: true
         case .openOriginalConversation, .projectAction, .taskAction: true
+        case .saveScheduledTask, .deleteScheduledTasks: true
         case .sendMessage, .answerApproval, .stopTurn, .markRead, .answerQuestion, .reviewPlan, .createTask,
              .actOnSuggestion, .setPinned, .archiveTask, .answerLink, .continueWithAccount, .setAutoContinue, .actOnQueued,
              .answerHandoff, .chooseAnswer, .runScheduledTask, .setScheduledTaskEnabled, .setTaskSetting, .runComposerCommand,
@@ -1295,6 +1309,9 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var nonce: String?
         var scheduleId: String?
         var taskAction: RemoteTaskAction?
+        var scheduleIds: [String]?
+        var definition: Data?
+        var completedOnly: Bool?
         var reviewQuery: RemoteReviewQuery?
         var path: String?
         var refresh: Bool?
@@ -1550,6 +1567,18 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 return fail(.badRequest, "Missing or invalid nonce")
             }
             request = .revealLink(nonce: nonce)
+        case "scheduledTaskOptions":
+            request = .scheduledTaskOptions(projectID: required(wire.projectId), harness: required(wire.harness), settings: wire.settings ?? [:], scheduleID: required(wire.scheduleId), accountID: required(wire.accountId))
+        case "saveScheduledTask":
+            guard let definition = wire.definition, definition.count <= 256_000 else { return fail(.badRequest, "Missing or oversized definition") }
+            request = .saveScheduledTask(scheduleID: required(wire.scheduleId), definition: definition,
+                                         settings: wire.settings ?? [:], confirmed: wire.confirmed == true)
+        case "deleteScheduledTasks":
+            guard let ids = wire.scheduleIds, !ids.isEmpty, ids.count <= RemoteProtocol.maxSchedules,
+                  ids.allSatisfy({ !$0.isEmpty && $0.utf8.count <= RemoteProtocol.maxOwnIDBytes }) else {
+                return fail(.badRequest, "Missing or oversized scheduleIds")
+            }
+            request = .deleteScheduledTasks(scheduleIDs: ids, completedOnly: wire.completedOnly == true, confirmed: wire.confirmed == true)
         case "scheduledTasks":
             request = .scheduledTasks
         case "presence":
@@ -1812,6 +1841,21 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             wire.approve = approve
         case let .revealLink(nonce):
             wire.nonce = RemoteEncoding.base64url(nonce)
+        case let .scheduledTaskOptions(projectID, harness, settings, scheduleID, accountID):
+            wire.projectId = projectID
+            wire.harness = harness
+            wire.settings = settings
+            wire.scheduleId = scheduleID
+            wire.accountId = accountID
+        case let .saveScheduledTask(scheduleID, definition, settings, confirmed):
+            wire.scheduleId = scheduleID
+            wire.definition = definition
+            wire.settings = settings
+            wire.confirmed = confirmed
+        case let .deleteScheduledTasks(ids, completedOnly, confirmed):
+            wire.scheduleIds = ids
+            wire.completedOnly = completedOnly
+            wire.confirmed = confirmed
         case .scheduledTasks:
             break
         case let .presence(active):
@@ -1957,6 +2001,12 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var uploadId: String?
     public var received: Int?
     /// `snapshot` on v2: the Mac answers `scheduledTasks` (§15.21).
+    public var scheduleTimeZone: String?
+    public var accountId: String?
+    public var scheduleAccountName: String?
+    public var scheduleEditing: Bool?
+    public var scheduleId: String?
+    public var sessionSchedules: [RemoteSessionSchedule]?
     public var scheduledTasks: Bool?
     /// `snapshot` (§18): the Mac takes `presence` and holds phone pushes while a desktop is in use.
     public var presence: Bool?
@@ -2131,6 +2181,9 @@ public struct RemoteComposerCommand: Codable, Equatable, Sendable {
 
 /// What `newTaskOptions` answers with (§15.16).
 public struct RemoteNewTaskOptions: Equatable, Sendable {
+    public var scheduleAccounts: [RemoteAccount]?
+    public var scheduleAccountID: String?
+    public var scheduleAccountName: String?
     public var harness: RemoteHarnessOption
     public var harnesses: [RemoteHarnessOption]
     public var settings: [RemoteSetting]
@@ -2184,7 +2237,16 @@ public struct RemoteAccount: Codable, Equatable, Sendable {
 }
 
 /// A schedule of the Mac's Scheduled tasks list (§15.21), with its words as the Mac shows them.
+public struct RemoteSessionSchedule: Codable, Equatable, Sendable {
+    public var taskId: String
+    public var job: Data
+    public init(taskId: String, job: Data) { self.taskId = taskId; self.job = job }
+}
+
 public struct RemoteSchedule: Codable, Equatable, Sendable {
+    /// Sanitized native schedule, including its complete run history (§15.35).
+    public var definition: Data?
+    public var accountName: String?
     /// Its latest run.
     public struct Run: Codable, Equatable, Sendable {
         public enum Outcome: String, Codable, Sendable {

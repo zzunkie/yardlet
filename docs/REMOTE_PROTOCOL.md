@@ -580,6 +580,7 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
 - 2026-11-04: per-task session rail facts and actions, and cached home task lines (§15.34).
 - 2026-11-04: optional `taskActions`, sidebar and title actions, host account selection and paged archived tasks (§15.32).
 
+- 2026-11-04: schedule editing, full detail and Claude Code session schedules (§15.35).
 - 2026-11-04: §15.26 adds read-only Review, advertised by optional `reviewReading`; no mutation request is added.
 - 2026-11-04: workspace file listing (§15.27), with the existing bounded `readFile` requests for content.
 
@@ -1317,7 +1318,7 @@ in parts first, then a message or a new task names it.
 
 Added on 2026-11-02. The phone lists the Mac's scheduled tasks (Yardlet's own, the Mac's Scheduled tasks list), runs
 one now and pauses or resumes one, through the same paths as the Mac's Run now, Pause and Resume. Creating, editing
-and deleting schedules stay on the Mac.
+and deleting schedules stay on the Mac unless it advertises §15.35.
 
 - The snapshot carries `scheduledTasks: true` when the Mac answers the requests below. A phone shows schedules only then.
 - ```json
@@ -1347,7 +1348,7 @@ and deleting schedules stay on the Mac.
   `taskId` when the run started or continued a task the snapshot lists, and `line`, the Mac's own line for it in
   the Mac's language: when it ran, and for a skip or a failed start why, as the run history says it ("Last run
   today at 9:00 AM · Skipped: the previous run is still going"). The session schedules a Claude Code task's CLI
-  holds are not listed. Not a command. Errors: `unavailable`.
+  holds are not listed by this base response; §15.35 adds them separately. Not a command. Errors: `unavailable`.
 - ```json
   {"id": "32", "type": "runScheduledTask", "scheduleId": "6B0E…"}
   ```
@@ -2140,6 +2141,50 @@ fields never loads history or scans a conversation. The desktop supplies them to
 completed tasks keep that status after being read, so the shared home projection counts tasks finished
 today. Older hosts omit these fields and retain the previous home behavior.
 
+### 15.35 Editing schedules from another Mac
+
+The optional snapshot flag `scheduleEditing: true` advertises the requests and additional fields below.
+The optional `scheduleTimeZone` names the host calendar's time zone for trigger editing and previews.
+Without the editing flag, the client keeps New, Edit and Delete dimmed and reads the original §15.21 list. Existing phone
+clients may ignore these fields. All changes run through the host's scheduled-task center; the client never
+writes a schedule to its own repository.
+
+- `scheduledTasks` additionally returns each schedule's optional `definition` and `accountName`, and optional
+  `sessionSchedules`. `definition` is base64-encoded JSON using the host's `ScheduledTask` Codable shape, with
+  instructions, trigger, destination choices and retained run history. It is a presentation copy: connection
+  data, account identifiers and import source identifiers are removed; secrets and paths outside a listed
+  project are masked in text. An undisclosed existing folder uses the presentation marker `yardlet-host-folder`;
+  retaining it preserves that folder, while choosing Chat clears it. Failed-start diagnostics use the same masking. The
+  host retains its original data when applying an edit. `sessionSchedules` contains `{taskId, job}`, where
+  `job` is base64-encoded JSON using `ClaudeSessionJob`'s Codable shape; these are the CLI's session jobs and
+  open their owning task, as on the host. They have no independent edit or delete control.
+- `scheduledTaskOptions` takes optional `projectId`, optional `harness`, optional `scheduleId`, optional `accountId`, and `settings`, and returns the host's
+  new-task choices as in §15.16. With `scheduleId`, the host resolves the existing account, folder and saved
+  choices before constructing the menus. `accounts` reuses §15.17's `RemoteAccount` shape, with only selectable
+  accounts' identifiers and display names; `scheduleAccountName` names the selection. Choosing an account reads
+  its own model catalog. The host rejects an account outside the harness's current selectable list and keeps
+  credentials and account home paths on the host. Unlike the ordinary new-task request, its permission choices may include
+  `confirm`: the local editor's Bypass permissions and Full access confirmation must be accepted before saving.
+- `saveScheduledTask` takes optional `scheduleId` (absent to create), `definition` (the edited presentation
+  copy), `settings` (the host's option identifiers and values), and `confirmed`. The host validates the
+  destination, account and choices against its own projects, tasks and option catalog, and requires confirmation for
+  elevated permissions. It creates or updates through the same center methods as the local editor, retaining
+  the host-owned run history on edits. A successful response carries `scheduleId`.
+- `deleteScheduledTasks` takes `scheduleIds`, `completedOnly` (default false), and `confirmed`. The client asks
+  the local window's deletion question first. Delete All captures the completed schedules shown at confirmation;
+  with `completedOnly: true`, the host deletes only those still completed, preserving one edited to run again.
+  Started tasks and their conversations are retained.
+- These reads and ordinary schedule actions require no new device permission. Save and delete are commands:
+  the audit log records their kind, schedule identifier, device and result, never instructions or settings.
+  Options reads also record their kind, schedule identifier when supplied, and result.
+  Refusals use the existing errors, including `notFound` and `notAllowed`. The existing `schedulesChanged`
+  notification refreshes the definitions, history and session jobs as well as the list. A response exceeding
+  the protocol message limit returns `tooLarge` rather than sending an oversized frame.
+
+The desktop client draws the local scheduled-task list, editor and detail with host values and actions,
+including the instructions and grouped run history. Import Schedules from Other Apps stays dimmed: its
+catalog and selection flow belong to the host, and reading the client's app data would import the wrong data.
+
 ## 16. Push notifications
 
 The Mac pushes to a device that registered (§15.6) and **has no open v2 connection**, for these
@@ -2251,7 +2296,8 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   the plan limit's actions, Stop, Pin and Archive, new tasks with the host's choices (§15.16), and pictures and
   files (§15.14, §15.20). A suggested task draws as Yardlet's own chip, whose Start, Do it here and ✕ are
   `actOnSuggestion` (§15.9); what it starts with stays the host's. When the snapshot says so, the sidebar lists the
-  host's scheduled tasks with Run now, Pause and Resume (§15.21), and a task's session rail shows its Outputs card
+  host's scheduled tasks with Run now, Pause and Resume (§15.21), and with `scheduleEditing` the local list,
+  editor and full detail, New, Edit, confirmed Delete and Delete All, and Claude Code session schedules (§15.35), and a task's session rail shows its Outputs card
   (§15.22). An output, or a file a conversation's link names, is read with `readFile` into a folder of its own in
   this Mac's temporary folder, readable only by the person, and opened there in Quick Look (from the output's
   menu, in its own app or Finder); the copies go when the window closes. A file link never opens the same path on
@@ -2266,7 +2312,7 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   the address field, new-tab button and tab close buttons act on the host (§15.30), and a hook routes loopback links
   there for the window's link handler. The tab strip uses the same `WorkSurfaceHeader` as other side panels.
   With `taskRail`, the rail reads the host's additional facts and the composer shows its context ring (§15.34).
-  Settings, connectors, creating or editing a schedule and the other side panels stay on the host.
+  Settings, connectors, importing schedules from other apps and the other side panels stay on the host.
 - **Paths:** as §11.4. While a host's window is open it browses Bonjour (§11.3) for the instance with the
   discovery id of the host key it saved, and resolves it to the host's name and port (`Name.local:47616`; the
   system resolves the name when connecting). Those addresses go first, never saved, then the direct addresses the

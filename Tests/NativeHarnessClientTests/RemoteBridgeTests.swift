@@ -761,6 +761,104 @@ final class RemoteBridgeTests: XCTestCase {
 
     // MARK: - Scheduled tasks (§15.21)
 
+    func testRemoteScheduleEditsKeepHostAuthorityAndRequireConfirmation() async throws {
+        let now = Date(timeIntervalSince1970: 1_900_000_000)
+        let originalPath = "/tmp/host-private-folder"
+        var original = ScheduledTask(name: "Original", prompt: "TOKEN=private-value Read /tmp/other-private-file",
+            trigger: .daily(.init(hour: 9, minute: 0)),
+            destination: ScheduleDestination(harness: .claudeCode, accountID: "host-account", workspacePath: originalPath),
+            createdAt: now)
+        original.state.runs = [.init(at: now, trigger: .manual, outcome: .failed, failure: "SECRET=value /tmp/account-home")]
+        let model = try Self.model(sessions: [], transcripts: [:], schedules: [original])
+        // Existing schedules keep their harness even if its executable temporarily disappears.
+        model.runtimeSelections.select(URL(filePath: "/missing-schedule-runtime"), for: .claudeCode)
+        model.scheduledTasks.now = { now }
+        let connections = ProviderConnectionStore()
+        let selected = try connections.add(name: "Selected account", harness: .claudeCode, home: URL(filePath: "/tmp/selected-schedule-account"))
+        connections.selection[.claudeCode] = selected.id
+        XCTAssertEqual(AppModelRemoteBridge.scheduleConnection(accountID: nil, harness: .claudeCode, connections: connections), selected)
+        XCTAssertNil(AppModelRemoteBridge.scheduleConnection(accountID: AccountChoice.nativeID(for: .claudeCode), harness: .claudeCode, connections: connections))
+        XCTAssertNil(AppModelRemoteBridge.scheduleConnection(accountID: "removed-account", harness: .claudeCode, connections: connections))
+        let bridge = AppModelRemoteBridge(model: model)
+        let options = try await bridge.scheduledTaskOptions(projectID: RemoteTaskProjection.chatsProjectID,
+            harness: HarnessKind.claudeCode.rawValue, settings: [:], scheduleID: original.id.uuidString).get()
+        XCTAssertEqual(options.harness.harness, HarnessKind.claudeCode.rawValue)
+        let list = try await bridge.scheduledTasks().get()
+        let data = try XCTUnwrap(list.first?.definition)
+        let text = String(decoding: data, as: UTF8.self)
+        XCTAssertFalse(text.contains("private-value") || text.contains(originalPath) || text.contains("account-home"))
+        var supplied = try JSONDecoder().decode(ScheduledTask.self, from: data)
+        XCTAssertEqual(supplied.state.runs.count, original.state.runs.count)
+        XCTAssertNil(supplied.destination.accountID)
+        XCTAssertEqual(supplied.destination.workspacePath, "yardlet-host-folder")
+        supplied.name = "Edited"
+        supplied.id = UUID()
+        supplied.destination.accountID = "forged-account"
+        supplied.state.runs = []
+        supplied.origin = .init(app: .claudeApp, sourceID: "/tmp/forged-source")
+        supplied.isEnabled = false
+        let forgedAccount = try await bridge.saveScheduledTask(scheduleID: original.id.uuidString, definition: JSONEncoder().encode(supplied),
+            settings: [:], confirmed: false)
+        guard case let .failure(accountError) = forgedAccount else { return XCTFail("An unlisted account was accepted") }
+        XCTAssertEqual(accountError.code, .notAllowed)
+        supplied.destination.accountID = nil
+        let saved = try await bridge.saveScheduledTask(scheduleID: original.id.uuidString, definition: JSONEncoder().encode(supplied),
+            settings: [:], confirmed: false).get()
+        XCTAssertEqual(saved, original.id.uuidString)
+        let actual = try XCTUnwrap(model.scheduledTasks.schedule(id: original.id))
+        XCTAssertEqual(actual.name, "Edited")
+        XCTAssertEqual(actual.prompt, original.prompt, "An unchanged masked prompt preserves the host's full instructions")
+        XCTAssertEqual(actual.destination.workspacePath, originalPath)
+        XCTAssertEqual(actual.destination.accountID, "host-account")
+        XCTAssertEqual(actual.state.runs, original.state.runs)
+        XCTAssertEqual(actual.isEnabled, original.isEnabled)
+        XCTAssertNil(actual.origin)
+        let elevated = try await bridge.saveScheduledTask(scheduleID: original.id.uuidString, definition: JSONEncoder().encode(supplied),
+            settings: ["permissionMode": "bypassPermissions"], confirmed: false)
+        guard case let .failure(error) = elevated else { return XCTFail("Unconfirmed elevated permissions saved") }
+        XCTAssertEqual(error.code, .notAllowed)
+        _ = try await bridge.saveScheduledTask(scheduleID: original.id.uuidString, definition: JSONEncoder().encode(supplied),
+            settings: ["permissionMode": "bypassPermissions"], confirmed: true).get()
+        XCTAssertEqual(model.scheduledTasks.schedule(id: original.id)?.destination.modelChoice?.permissionMode, "bypassPermissions")
+        let selectable = try model.connections.add(name: "Schedule account", harness: .claudeCode,
+            home: URL(filePath: "/tmp/remote-schedule-account-private-home"))
+        let accountOptions = try await bridge.scheduledTaskOptions(projectID: RemoteTaskProjection.chatsProjectID,
+            harness: HarnessKind.claudeCode.rawValue, settings: [:], scheduleID: original.id.uuidString, accountID: selectable.id).get()
+        XCTAssertEqual(accountOptions.scheduleAccountID, selectable.id)
+        XCTAssertEqual(accountOptions.scheduleAccounts?.first { $0.id == selectable.id }?.name, selectable.name)
+        let accountWire = String(decoding: try JSONEncoder().encode(accountOptions.scheduleAccounts), as: UTF8.self)
+        XCTAssertFalse(accountWire.contains("homePath") || accountWire.contains("private-home"))
+        let unknownAccount = await bridge.scheduledTaskOptions(projectID: RemoteTaskProjection.chatsProjectID,
+            harness: HarnessKind.claudeCode.rawValue, settings: [:], scheduleID: original.id.uuidString, accountID: "unlisted-account")
+        guard case let .failure(optionError) = unknownAccount else { return XCTFail("An unlisted account's catalogs were offered") }
+        XCTAssertEqual(optionError.code, .notAllowed)
+        supplied.destination.accountID = selectable.id
+        _ = try await bridge.saveScheduledTask(scheduleID: original.id.uuidString, definition: JSONEncoder().encode(supplied),
+            settings: [:], confirmed: false).get()
+        XCTAssertEqual(model.scheduledTasks.schedule(id: original.id)?.destination.accountID, selectable.id)
+        XCTAssertNil(model.scheduledTasks.schedule(id: original.id)?.destination.modelChoice, "Changing accounts resets the previous account's picks")
+        supplied.destination.projectID = UUID()
+        let invalidProject = try await bridge.saveScheduledTask(scheduleID: original.id.uuidString, definition: JSONEncoder().encode(supplied),
+            settings: [:], confirmed: true)
+        guard case let .failure(projectError) = invalidProject else { return XCTFail("Unknown project accepted") }
+        XCTAssertEqual(projectError.code, .notFound)
+        supplied.destination.mode = .continueTask
+        supplied.destination.targetTaskID = UUID()
+        let invalidTask = try await bridge.saveScheduledTask(scheduleID: original.id.uuidString, definition: JSONEncoder().encode(supplied),
+            settings: [:], confirmed: true)
+        guard case let .failure(taskError) = invalidTask else { return XCTFail("Unknown task accepted") }
+        XCTAssertEqual(taskError.code, .notFound)
+        let refusedDelete = await bridge.deleteScheduledTasks(scheduleIDs: [original.id.uuidString], completedOnly: false, confirmed: false)
+        XCTAssertEqual(refusedDelete?.code, .notAllowed)
+        let completedDelete = await bridge.deleteScheduledTasks(scheduleIDs: [original.id.uuidString], completedOnly: true, confirmed: true)
+        XCTAssertNil(completedDelete)
+        XCTAssertNotNil(model.scheduledTasks.schedule(id: original.id), "Delete All preserves schedules that are no longer finished")
+        let deleted = await bridge.deleteScheduledTasks(scheduleIDs: [original.id.uuidString], completedOnly: false, confirmed: true)
+        XCTAssertNil(deleted)
+        XCTAssertNil(model.scheduledTasks.schedule(id: original.id))
+        await model.shutdown()
+    }
+
     func testScheduledTasksAreTheMacsListAndActThroughItsMenu() async throws {
         let now = Date(timeIntervalSince1970: 1_792_158_000)
         let folder = URL(filePath: "/tmp/remote-bridge-schedules", directoryHint: .isDirectory)

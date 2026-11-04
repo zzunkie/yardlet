@@ -8,22 +8,27 @@ struct ScheduledTaskEditor: View {
     let projects: [Project]
     /// The tasks "Continue this task" can choose, most recent first.
     let tasks: [SessionRecord]
-    let runtimeSelections: RuntimeSelectionStore
-    let connections: ProviderConnectionStore
+    let runtimeSelections: RuntimeSelectionStore?
+    let connections: ProviderConnectionStore?
     var models: NewTaskModelSource? = nil
+    var destinationChoices: ((Binding<ScheduleDraft>) -> AnyView)? = nil
     var calendar: Calendar = .autoupdatingCurrent
     var now: () -> Date = Date.init
     let projectName: (SessionRecord) -> String
     let onCancel: () -> Void
     let onSave: (ScheduledTask) -> Void
+    var canSave: (ScheduleDraft) -> Bool = { _ in true }
+    var errorMessage: String? = nil
 
     @State private var draft: ScheduleDraft
 
     init(draft: ScheduleDraft, existing: ScheduledTask?, projects: [Project], tasks: [SessionRecord],
-         runtimeSelections: RuntimeSelectionStore, connections: ProviderConnectionStore,
+         runtimeSelections: RuntimeSelectionStore? = nil, connections: ProviderConnectionStore? = nil,
+         destinationChoices: ((Binding<ScheduleDraft>) -> AnyView)? = nil,
          models: NewTaskModelSource? = nil, calendar: Calendar = .autoupdatingCurrent, now: @escaping () -> Date = Date.init,
          projectName: @escaping (SessionRecord) -> String,
-         onCancel: @escaping () -> Void, onSave: @escaping (ScheduledTask) -> Void) {
+         onCancel: @escaping () -> Void, onSave: @escaping (ScheduledTask) -> Void,
+         canSave: @escaping (ScheduleDraft) -> Bool = { _ in true }, errorMessage: String? = nil) {
         _draft = State(initialValue: draft)
         self.existing = existing
         self.projects = projects
@@ -31,11 +36,14 @@ struct ScheduledTaskEditor: View {
         self.runtimeSelections = runtimeSelections
         self.connections = connections
         self.models = models
+        self.destinationChoices = destinationChoices
         self.calendar = calendar
         self.now = now
         self.projectName = projectName
         self.onCancel = onCancel
         self.onSave = onSave
+        self.canSave = canSave
+        self.errorMessage = errorMessage
     }
 
     private var problem: String? { draft.problem(now: now(), calendar: calendar) }
@@ -195,7 +203,7 @@ struct ScheduledTaskEditor: View {
                 case .continueTask:
                     continuePicker
                 case .newTask:
-                    newTaskChoices
+                    if let destinationChoices { destinationChoices($draft) } else { newTaskChoices }
                 }
             }
         }
@@ -218,17 +226,17 @@ struct ScheduledTaskEditor: View {
         }
     }
 
-    private var harnesses: [HarnessDescriptor] { runtimeSelections.connectedDescriptors }
+    private var harnesses: [HarnessDescriptor] { runtimeSelections?.connectedDescriptors ?? [] }
 
     private var accountChoices: [AccountChoice] {
         guard let harness = draft.harness else { return [] }
-        return connections.choices(for: [harness]).filter(\.canSelect)
+        return connections?.choices(for: [harness]).filter(\.canSelect) ?? []
     }
 
     private var selectedConnection: ProviderConnection? {
         guard let harness = draft.harness else { return nil }
-        guard let id = draft.accountID else { return connections.selected(for: harness) }
-        return connections.connections(for: harness).first { $0.id == id }
+        guard let id = draft.accountID else { return connections?.selected(for: harness) }
+        return connections?.connections(for: harness).first { $0.id == id }
     }
 
     private var workspaceURL: URL? {
@@ -283,7 +291,7 @@ struct ScheduledTaskEditor: View {
                     set: { harness in
                         guard harness != draft.harness else { return }
                         draft.harness = harness
-                        draft.accountID = harness.flatMap { connections.selection[$0] }
+                        draft.accountID = harness.flatMap { connections?.selection[$0] }
                         draft.modelChoice = nil
                     })) {
                     if draft.harness == nil || !harnesses.contains(where: { $0.id == draft.harness }) {
@@ -298,7 +306,7 @@ struct ScheduledTaskEditor: View {
                 GridRow {
                     label(L10n.string("Account"))
                     Picker(L10n.string("Account"), selection: Binding(
-                        get: { draft.accountID ?? connections.selection[harness] ?? AccountChoice.nativeID(for: harness) },
+                        get: { draft.accountID ?? connections?.selection[harness] ?? AccountChoice.nativeID(for: harness) },
                         set: { draft.accountID = $0 })) {
                         ForEach(accountChoices) { Text($0.title).tag($0.id) }
                     }
@@ -342,7 +350,7 @@ struct ScheduledTaskEditor: View {
     }
 
     private func prepare(_ harness: HarnessKind, models: NewTaskModelSource) async {
-        guard let runtime = runtimeSelections.selectedURL(for: harness) else { return }
+        guard let runtime = runtimeSelections?.selectedURL(for: harness) else { return }
         await models.load(harness, runtime, selectedConnection, workspaceURL)
     }
 
@@ -350,7 +358,7 @@ struct ScheduledTaskEditor: View {
 
     private var footer: some View {
         HStack(spacing: 10) {
-            if let problem {
+            if let problem = errorMessage ?? problem {
                 Text(problem)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -364,7 +372,7 @@ struct ScheduledTaskEditor: View {
             }
             .keyboardShortcut(.defaultAction)
             .parityProminentButton()
-            .disabled(problem != nil)
+            .disabled(problem != nil || !canSave(draft))
         }
     }
 }

@@ -6,7 +6,7 @@ import YardletRemote
 /// groups, those that are off and the one-offs that ran, in the host's order and words
 /// (docs/REMOTE_PROTOCOL.md §15.21). Run now, Pause and Resume act through the host; creating, editing and
 /// deleting are the host's, so they show without acting.
-struct RemoteScheduleList: View {
+struct LegacyRemoteScheduleList: View {
     let model: RemoteHostModel
     @State private var expanded: Set<ScheduleListSections.Section> = []
     @Environment(\.yardletInterfaceScale) private var interfaceScale
@@ -129,7 +129,7 @@ private struct RemoteScheduleRow: View {
                         .foregroundStyle(schedule.enabled ? .primary : .secondary)
                         .lineLimit(1)
                     HStack(spacing: 4) {
-                        if RemoteScheduleList.stoppedItself(schedule) {
+                        if LegacyRemoteScheduleList.stoppedItself(schedule) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.system(size: 9))
                                 .foregroundStyle(.orange)
@@ -192,7 +192,7 @@ private struct RemoteScheduleMenuItems: View {
 /// A schedule of the host beside the list, as the Mac's detail heads one (`ScheduledTaskDetail`): its name,
 /// when it runs and its status, Run now and Pause or Resume, then where it runs, its next run and its latest
 /// run, which opens the task it started. Its instructions, full run history, Edit and Delete stay on the host.
-struct RemoteScheduleDetail: View {
+struct LegacyRemoteScheduleDetail: View {
     let model: RemoteHostModel
     let schedule: RemoteSchedule
 
@@ -203,7 +203,7 @@ struct RemoteScheduleDetail: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 header
-                if RemoteScheduleList.stoppedItself(schedule), let line = schedule.lastRun?.line {
+                if LegacyRemoteScheduleList.stoppedItself(schedule), let line = schedule.lastRun?.line {
                     Label {
                         Text(line).fixedSize(horizontal: false, vertical: true)
                     } icon: {

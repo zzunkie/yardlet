@@ -97,6 +97,7 @@ struct ScheduledTaskDetail: View {
     let now: Date
     let context: ScheduledTaskContext
     let actions: ScheduledTaskActions
+    var calendar: Calendar = .autoupdatingCurrent
 
     private var destination: ScheduleDestination { schedule.destination }
 
@@ -124,8 +125,8 @@ struct ScheduledTaskDetail: View {
                     .font(.title2.weight(.semibold))
                     .lineLimit(2)
                     .textSelection(.enabled)
-                Text(verbatim: "\(ScheduleText.summary(schedule.trigger, now: now)) · "
-                     + ScheduleText.status(schedule, nextRun: nextRun, isStarting: isStarting, now: now))
+                Text(verbatim: "\(ScheduleText.summary(schedule.trigger, calendar: calendar, now: now)) · "
+                     + ScheduleText.status(schedule, nextRun: nextRun, isStarting: isStarting, now: now, calendar: calendar))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -145,9 +146,11 @@ struct ScheduledTaskDetail: View {
                     .parityPointer()
             }
             Button(L10n.string("Edit…")) { actions.edit(schedule.id) }
+                .disabled(!actions.canEdit)
                 .parityPointer()
             Menu {
                 Button(L10n.string("Delete…"), role: .destructive) { actions.delete(schedule.id) }
+                    .disabled(!actions.canEdit)
             } label: {
                 Image(systemName: "ellipsis")
             }
@@ -236,8 +239,8 @@ struct ScheduledTaskDetail: View {
                 rows.append((L10n.string("Permissions"), permission))
             }
         }
-        rows.append((L10n.string("Next run"), nextRun.map { ScheduleText.moment($0, relativeTo: now) } ?? "—"))
-        rows.append((L10n.string("Last run"), schedule.state.lastRunAt.map { ScheduleText.moment($0, relativeTo: now) } ?? "—"))
+        rows.append((L10n.string("Next run"), nextRun.map { ScheduleText.moment($0, relativeTo: now, calendar: calendar) } ?? "—"))
+        rows.append((L10n.string("Last run"), schedule.state.lastRunAt.map { ScheduleText.moment($0, relativeTo: now, calendar: calendar) } ?? "—"))
         return rows
     }
 
@@ -267,7 +270,7 @@ struct ScheduledTaskDetail: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(ScheduledRunRow.groups(rows, now: now), id: \.title) { group in
+                ForEach(ScheduledRunRow.groups(rows, now: now, calendar: calendar), id: \.title) { group in
                     Text(group.title)
                         .font(.caption)
                         .foregroundStyle(.tertiary)
@@ -293,7 +296,7 @@ struct ScheduledTaskDetail: View {
                 .fill(row.isUnread ? ParityTheme.accent : .clear)
                 .frame(width: 6, height: 6)
                 .centeredOnCapHeight(ofTextSize: capHeightSize)
-            Text(ScheduleText.moment(row.at, relativeTo: now))
+            Text(ScheduleText.moment(row.at, relativeTo: now, calendar: calendar))
                 .font(.callout.monospacedDigit())
                 .frame(width: 150, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
@@ -357,9 +360,11 @@ struct ScheduledTaskEmptyDetail: View {
                 .frame(maxWidth: 420)
             HStack(spacing: 10) {
                 Button(L10n.string("New scheduled task"), action: actions.create)
+                    .disabled(!actions.canEdit)
                     .parityProminentButton()
                     .parityPointer()
                 Button(L10n.string("Import Schedules from Other Apps…"), action: actions.importFromApps)
+                    .disabled(!actions.canImport)
                     .parityPointer()
             }
         }

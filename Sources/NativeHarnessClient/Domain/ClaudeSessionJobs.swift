@@ -134,8 +134,8 @@ enum ClaudeSessionJobs {
 }
 
 /// A session job a task's CLI holds, as the task's rail and the scheduled tasks list show it.
-struct ClaudeSessionJob: Identifiable, Equatable, Sendable {
-    enum Kind: Equatable, Sendable {
+struct ClaudeSessionJob: Identifiable, Codable, Equatable, Sendable {
+    enum Kind: String, Codable, Equatable, Sendable {
         case recurring
         case once
         /// The next wakeup of a `/loop` without an interval (`ScheduleWakeup`).
