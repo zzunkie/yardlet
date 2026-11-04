@@ -424,12 +424,22 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                              "oneOf": .array([.object(["const": .string("web"), "title": .string("Web")]),
                                               .object(["const": .string("ios"), "title": .string("iOS")])])])
         ], required: ["repo"], message: "Create a repository for the new service.")
-        var user = RemoteItem(id: "u1", turnId: "t1", kind: .user)
-        user.text = "Create a GitHub repository for the billing service"
-        let sent = RemoteConversationProjection.request(local, turnID: "t1", inWork: false)
-        let wire = try JSONDecoder().decode(RemoteItem.self, from: JSONEncoder().encode(sent))
+        let text = "Create a GitHub repository for the billing service"
+        var turn = ConversationTurn(id: "t1", status: .running, timing: ConversationTurnTiming())
+        turn.prompt = [ConversationItem(id: "u1", kind: .userMessage(text: text, images: []), phase: .completed,
+                                        source: .transcript(TranscriptEntry(content: .user(text: text))))]
+        turn.requests = [local]
+        var presentation = ConversationPresentation(harness: .codex, turns: [turn])
+        presentation.pendingRequestIDs = [local.id]
+        // Send the entire host turn, including its running header, just as the real bridge does.
+        let sent = RemoteConversationProjection.turn(turn, harness: .codex, workspaceURL: nil, full: .init())
+        let wire = try JSONDecoder().decode([RemoteItem].self, from: JSONEncoder().encode(sent.items))
         let conversation = RemoteConversationModel(taskID: "T", harness: .codex, hostName: "Mac Studio")
-        conversation.load([user, wire], cursor: nil, hasOlder: false)
+        conversation.load(wire, cursor: nil, hasOlder: false)
+        let remoteTurn = try XCTUnwrap(conversation.presentation.turns.last)
+        XCTAssertEqual(remoteTurn.status, turn.status)
+        XCTAssertEqual(ConversationLiveWork.make(turn, harness: .codex, workspaceURL: nil)?.activity, .waitingForAnswer)
+        XCTAssertEqual(ConversationLiveWork.make(remoteTurn, harness: .codex, workspaceURL: nil)?.activity, .waitingForAnswer)
         let remote = try XCTUnwrap(conversation.presentation.turns.last?.requests.first)
         guard case let .mcpForm(localForm)? = local.form, case let .mcpForm(remoteForm)? = remote.form else {
             return XCTFail("No form: \(String(describing: remote.form))")
@@ -456,12 +466,6 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
             ConversationTimeline(source: .presented(conversation.presentation), actions: actions)
                 .background(ParityTheme.canvas)
         }
-        var turn = ConversationTurn(id: "t1", status: .running, timing: ConversationTurnTiming())
-        turn.prompt = [ConversationItem(id: "u1", kind: .userMessage(text: user.text ?? "", images: []), phase: .completed,
-                                        source: .transcript(TranscriptEntry(content: .user(text: user.text ?? ""))))]
-        turn.requests = [local]
-        var presentation = ConversationPresentation(harness: .codex, turns: [turn])
-        presentation.pendingRequestIDs = [local.id]
         try await render("local-form", size: width, titled: false) {
             ConversationTimeline(source: .presented(presentation), actions: actions)
                 .background(ParityTheme.canvas)
