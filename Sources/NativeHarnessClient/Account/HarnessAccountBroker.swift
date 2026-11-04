@@ -470,22 +470,14 @@ actor HarnessAccountBroker {
     }
 
     private func antigravitySnapshot(descriptor: HarnessDescriptor, executableURL: URL) async -> HarnessAccountSnapshot {
-        var environment = connection?.environment ?? [:]
-        if let homePath = connection?.homePath, environment["HOME"] == nil {
-            environment["HOME"] = homePath
-        }
-        var checkEnvironment = environment
-        checkEnvironment["AGY_CLI_CDE_AUTH_ACTION"] = "check"
+        // `agy` starts its own updater whenever it runs; these reads leave updating to CLI Updates.
+        let environment = (connection?.environment ?? [:]).merging(["AGY_CLI_DISABLE_AUTO_UPDATE": "true"]) { _, new in new }
         let checkResult = try? await AccountCommandRunner.run(
             executableURL: executableURL,
             arguments: [],
-            environment: checkEnvironment,
-            timeout: .seconds(5)
+            environment: environment.merging(["AGY_CLI_CDE_AUTH_ACTION": "check"]) { _, new in new }
         )
-        let checked = Self.antigravityAccountCheck(
-            checkResult,
-            fallbackState: connection?.homePath == nil ? Self.antigravityCredentialState() : .unknown
-        )
+        let checked = Self.antigravityAccountCheck(checkResult, fallbackState: Self.antigravityCredentialState())
         let state = checked.state
         // The plan limits, which the CLI reports without a turn; none while signed out or unread.
         var usage: [AccountUsageMetric] = []
@@ -509,7 +501,7 @@ actor HarnessAccountBroker {
             harness: descriptor.id,
             providerID: nil,
             state: state,
-            accountLabel: state == .signedIn ? checked.accountLabel : nil,
+            accountLabel: checked.accountLabel,
             detail: detail,
             credentialOwner: L10n.string("macOS Keychain (Antigravity CLI)"),
             checkedAt: Date(),
@@ -519,19 +511,16 @@ actor HarnessAccountBroker {
         )
     }
 
-    /// Reads the signed-in status and email from `AGY_CLI_CDE_AUTH_ACTION=check agy`, falling back
-    /// to Keychain item presence when the variable is unsupported or the output is unexpected.
+    /// The sign-in `AGY_CLI_CDE_AUTH_ACTION=check agy` confirms, with the address it names. The check
+    /// reads the stored login and starts no turn or browser. Anything else it answers (signed out,
+    /// offline, an `agy` without the action) leaves the state to the keychain item's presence.
     static func antigravityAccountCheck(
         _ result: AccountCommandResult?,
-        fallbackState: AccountAuthState = antigravityCredentialState()
+        fallbackState: @autoclosure () -> AccountAuthState
     ) -> (state: AccountAuthState, accountLabel: String?) {
-        guard let result else { return (fallbackState, nil) }
-        let lines = AccountLoginController.stripANSI(result.output)
-            .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        if result.exitCode == 0 {
-            for line in lines {
+        if let result, result.exitCode == 0 {
+            for line in AccountLoginController.stripANSI(result.output).split(whereSeparator: \.isNewline) {
+                let line = line.trimmingCharacters(in: .whitespaces)
                 if let label = antigravityAccountLabel(fromLine: line) {
                     return (.signedIn, label)
                 }
@@ -540,18 +529,11 @@ actor HarnessAccountBroker {
                     return (.signedIn, nil)
                 }
             }
-            return (fallbackState, nil)
         }
-        if commandAccountState(for: .antigravityCLI, result: result) == .signedOut {
-            return (.signedOut, nil)
-        }
-        if result.exitCode == 1, lines.isEmpty, fallbackState == .unknown {
-            return (.signedOut, nil)
-        }
-        return (fallbackState, nil)
+        return (fallbackState(), nil)
     }
 
-    static func antigravityAccountLabel(fromLine line: String) -> String? {
+    private static func antigravityAccountLabel(fromLine line: String) -> String? {
         let prefix = "Already authenticated as "
         guard line.hasPrefix(prefix) else { return nil }
         var candidate = Substring(line.dropFirst(prefix.count))

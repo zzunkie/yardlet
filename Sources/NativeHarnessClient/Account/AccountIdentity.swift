@@ -61,6 +61,8 @@ enum AccountIdentityProjection {
         switch harness {
         case .codex: "openai-codex"
         case .claudeCode: "anthropic"
+        // A Google sign-in with Antigravity's own limits: its address is an account no other harness shares.
+        case .antigravityCLI: harnessScopePrefix + harness.rawValue
         default: nil
         }
     }
@@ -112,9 +114,9 @@ enum AccountIdentityProjection {
             ?? normalizedProvider(snapshot?.providerID)
             ?? defaultProvider(for: harness)
         let label = snapshot?.accountLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let accountKey = accountKey(snapshot: snapshot) {
+        if let provider, let accountKey = accountKey(snapshot: snapshot) {
             return AccountIdentity(
-                provider: provider ?? harnessScopePrefix + harness.rawValue,
+                provider: provider,
                 accountKey: accountKey,
                 displayLabel: label.flatMap { $0.isEmpty ? nil : $0 }
                     ?? connection?.name

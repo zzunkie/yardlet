@@ -212,17 +212,18 @@ Code did not report plan limits for this login." and is not turned into 0.
 
 ## Antigravity account and plan limit lookup
 
-Yardlet checks Antigravity CLI's sign-in by running `AGY_CLI_CDE_AUTH_ACTION=check agy` with a short timeout, in the
-account's environment (`HarnessAccountBroker.antigravitySnapshot`). When signed in, `agy` validates its stored token
-without starting a model turn or opening a browser, prints `Already authenticated as <email>.` (or
-`Already authenticated.`) and exits 0; Yardlet reads only the email address from that line. When the variable is
-unsupported or the output is unexpected, Yardlet falls back to checking whether the `gemini`/`antigravity` Keychain item
-exists, without reading its value. When signed in, Yardlet then runs `agy --print /usage --output-format json`
-(`AntigravityUsage`). The CLI answers this command without a model turn and keeps no conversation for it (`num_turns`
-0, an empty `conversation_id`); like any `agy` run it writes its own log. The models share limits by group ("Gemini
-Models", "Claude and GPT models"), and each group lists buckets with the share left (`remaining_fraction`) and when it
-refills (`reset_time`). Each bucket is one row, named by its group without the word "models" and by its window's
-length ("Gemini · 7 day limit", "Gemini · 5 hour limit"), as Claude's and Codex's windows are named. The length comes
+Yardlet reads Antigravity CLI's sign-in with `AGY_CLI_CDE_AUTH_ACTION=check agy`
+(`HarnessAccountBroker.antigravitySnapshot`). Signed in, `agy` checks its stored login without starting a model turn or
+opening a browser, prints `Already authenticated as <email>.` (or `Already authenticated.`) and exits 0; Yardlet takes
+only the address from that line. Any other answer (signed out, offline, no answer in time, an `agy` without the action)
+leaves the sign-in to whether the `gemini`/`antigravity` keychain item exists, which Yardlet checks without reading its
+value. While signed in, Yardlet then runs `agy --print /usage --output-format json` (`AntigravityUsage`). The CLI
+answers this command without a model turn and keeps no conversation for it (`num_turns` 0, an empty
+`conversation_id`); like any `agy` run it writes its own log. Both runs set `AGY_CLI_DISABLE_AUTO_UPDATE`, so a reading
+never starts `agy`'s own updater. The models share limits by group ("Gemini Models", "Claude and GPT models"), and
+each group lists buckets with the share left (`remaining_fraction`) and when it refills (`reset_time`). Each bucket is
+one row, named by its group without the word "models" and by its window's length ("Gemini · 7 day limit", "Gemini · 5
+hour limit"), as Claude's and Codex's windows are named. The length comes
 from the bucket's `window` (`weekly`, `daily`, or a count and a unit such as `5h`) or, when that is not one, from the
 end of its `id`, which names the window too (`gemini-weekly`, `gemini-5h`); a bucket whose length neither gives keeps
 the CLI's own name. An answer that is not `SUCCESS`, or none, shows no rows rather than 0. AI credits (`/credits`) are
