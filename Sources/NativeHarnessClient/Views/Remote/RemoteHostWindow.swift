@@ -54,17 +54,43 @@ struct RemoteHostWindow: View {
             model = hostID.flatMap(directory.model(for:))
         }
         // A closed window ends its connection; reopening it connects again.
-        .onDisappear { if let hostID { directory.close(hostID) } }
+        .onDisappear {
+            if let hostID {
+                Self.unregister(window: nil, forHostID: hostID)
+                directory.close(hostID)
+            }
+        }
     }
 
     @MainActor
     private static let windowsByHostID = NSMapTable<NSString, NSWindow>.strongToWeakObjects()
+    @MainActor
+    private static var closeObserversByHostID: [String: any NSObjectProtocol] = [:]
 
     @MainActor
     static func register(window: NSWindow?, forHostID hostID: String?) {
         guard let hostID else { return }
+        if let observer = closeObserversByHostID.removeValue(forKey: hostID) {
+            NotificationCenter.default.removeObserver(observer)
+        }
         if let window {
+            window.identifier = windowIdentifier(hostID: hostID)
             windowsByHostID.setObject(window, forKey: hostID as NSString)
+            closeObserversByHostID[hostID] = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: window,
+                queue: nil
+            ) { [weak window] _ in
+                if Thread.isMainThread {
+                    MainActor.assumeIsolated {
+                        unregister(window: window, forHostID: hostID)
+                    }
+                } else {
+                    Task { @MainActor in
+                        unregister(window: window, forHostID: hostID)
+                    }
+                }
+            }
         } else {
             windowsByHostID.removeObject(forKey: hostID as NSString)
         }
@@ -75,6 +101,9 @@ struct RemoteHostWindow: View {
         guard let hostID else { return }
         if window == nil || windowsByHostID.object(forKey: hostID as NSString) === window {
             windowsByHostID.removeObject(forKey: hostID as NSString)
+            if let observer = closeObserversByHostID.removeValue(forKey: hostID) {
+                NotificationCenter.default.removeObserver(observer)
+            }
         }
     }
 
@@ -87,11 +116,17 @@ struct RemoteHostWindow: View {
     @discardableResult
     static func bringForward(hostID: String?) -> NSWindow? {
         guard let hostID else { return nil }
+        if let registered = windowsByHostID.object(forKey: hostID as NSString),
+           !registered.isVisible, !registered.isMiniaturized {
+            unregister(window: registered, forHostID: hostID)
+        }
         let window = windowsByHostID.object(forKey: hostID as NSString)
             ?? NSApp.windows.first {
-                $0.identifier == windowIdentifier(hostID: hostID) && $0.canBecomeMain
+                $0.identifier == windowIdentifier(hostID: hostID)
+                    && ($0.isVisible || $0.isMiniaturized)
+                    && $0.canBecomeMain
             }
-        guard let window else { return nil }
+        guard let window, window.isVisible || window.isMiniaturized else { return nil }
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
         return window

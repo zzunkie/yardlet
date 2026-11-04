@@ -685,6 +685,19 @@ final class NotificationRoutingTests: XCTestCase {
         try await waitUntil { center.events.last == "remove:\(posted.identifier)" }
         center.onPost = nil
 
+        // Bringing the task into view while post() is in flight (with no withdraw call and the delivery task
+        // still in remoteNotificationTasks) removes the notice once post() returns.
+        host.isWindowInFront = false
+        center.onPost = { [weak attention, weak host] _ in
+            attention?.isActive = true
+            host?.isWindowInFront = true
+            host?.select(.task(ID.approval))
+        }
+        directory.onAttention?(host, waitingEvent)
+        _ = try await waitForPost(in: center, count: postedCountBeforeFront + 2)
+        try await waitUntil { center.events.last == "remove:\(posted.identifier)" }
+        center.onPost = nil
+
         // When system notifications are denied on this Mac, no remote notification is posted.
         center.authorizationStatus = .denied
         host.isWindowInFront = false

@@ -434,9 +434,11 @@ final class AppModel {
     @ObservationIgnored var openRemoteTask: ((String, String) -> Void)?
     /// "Allow once" from a host task's notification, by the host, task and request; whether the host took it.
     @ObservationIgnored var allowRemoteOnce: ((String, String, String) async -> Bool)?
-    /// The latest notification generation for each `(hostID, taskID)` and any in-flight delivery task,
-    /// so a withdrawal or newer event cancels or removes a notification whose authorization or delivery was awaiting.
+    /// The latest notification generation for each `(hostID, taskID)`, whether it was withdrawn, and any
+    /// in-flight delivery task, so a withdrawal or state change cancels or removes a notification whose
+    /// authorization or delivery was awaiting.
     @ObservationIgnored var remoteNotificationGenerations: [String: UInt64] = [:]
+    @ObservationIgnored var remoteNotificationWithdrawn = Set<String>()
     @ObservationIgnored var remoteNotificationTasks: [String: Task<Void, Never>] = [:]
     /// The display is kept on while tasks work ("Keep the screen unlocked while tasks work"), which
     /// the menu bar menu says (`RunningWorkActivity`).

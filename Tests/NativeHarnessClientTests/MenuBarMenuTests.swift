@@ -500,19 +500,31 @@ final class MenuBarMenuTests: XCTestCase {
             name: "Mac Studio", hosts: ["127.0.0.1:\(secondStack.port)"]).url)
         let secondPaired = try await directory.pair(link: secondLink.absoluteString)
         let windowOne = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 200),
-                                 styleMask: [.titled], backing: .buffered, defer: true)
+                                 styleMask: [.titled], backing: .buffered, defer: false)
+        windowOne.isReleasedWhenClosed = false
         windowOne.title = "Mac Studio"
+        windowOne.orderBack(nil)
         let windowTwo = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 200),
-                                 styleMask: [.titled], backing: .buffered, defer: true)
+                                 styleMask: [.titled], backing: .buffered, defer: false)
+        windowTwo.isReleasedWhenClosed = false
         windowTwo.title = "Mac Studio"
+        windowTwo.orderBack(nil)
         RemoteHostWindow.register(window: windowOne, forHostID: paired.id)
         RemoteHostWindow.register(window: windowTwo, forHostID: secondPaired.id)
         defer {
+            windowOne.close()
+            windowTwo.close()
             RemoteHostWindow.unregister(window: windowOne, forHostID: paired.id)
             RemoteHostWindow.unregister(window: windowTwo, forHostID: secondPaired.id)
         }
         XCTAssertTrue(RemoteHostWindow.bringForward(hostID: paired.id) === windowOne)
         XCTAssertTrue(RemoteHostWindow.bringForward(hostID: secondPaired.id) === windowTwo)
+
+        // Closing a host window unregisters it, and bringForward ignores a window that is neither visible nor miniaturized.
+        windowOne.close()
+        XCTAssertNil(RemoteHostWindow.bringForward(hostID: paired.id))
+        RemoteHostWindow.register(window: windowOne, forHostID: paired.id)
+        XCTAssertNil(RemoteHostWindow.bringForward(hostID: paired.id))
 
         // Disconnecting a host removes its tasks from the menu bar menu even while its window stays open.
         stack.stop()

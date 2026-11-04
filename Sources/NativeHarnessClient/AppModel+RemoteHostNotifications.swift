@@ -70,6 +70,7 @@ extension AppModel {
             offersAllowOnce: host.offersAllowOnce(event)
         ) else { return }
         let key = Self.remoteNotificationKey(hostID: host.id, taskID: taskID)
+        remoteNotificationWithdrawn.remove(key)
         remoteNotificationTasks.removeValue(forKey: key)?.cancel()
         let generation = advanceRemoteNotificationGeneration(hostID: host.id, taskID: taskID)
         remoteNotificationTasks[key] = Task { [weak self, weak host] in
@@ -81,10 +82,12 @@ extension AppModel {
             }
             guard (await self.systemNotificationCenter.authorization()).isDeliverable else { return }
             guard !Task.isCancelled,
-                  self.shouldKeepRemoteTaskNotification(host: host, taskID: taskID, generation: generation) else { return }
+                  self.remoteNotificationGenerations[key] == generation,
+                  !self.remoteNotificationWithdrawn.contains(key),
+                  self.remoteTaskStillNeedsNotification(host: host, taskID: taskID) else { return }
             await self.systemNotificationCenter.post(notice)
-            if Task.isCancelled || !self.shouldKeepRemoteTaskNotification(host: host, taskID: taskID, generation: generation),
-               self.remoteNotificationTasks[key] == nil {
+            if self.remoteNotificationWithdrawn.contains(key)
+                || !self.remoteTaskStillNeedsNotification(host: host, taskID: taskID) {
                 self.systemNotificationCenter.removeNotifications(identifiers: [notice.identifier])
             }
         }
@@ -94,6 +97,7 @@ extension AppModel {
     /// the task leaves the host's list.
     func withdrawRemoteTaskNotification(hostID: String, taskID: String, forgetApprovals: Bool = true) {
         let key = Self.remoteNotificationKey(hostID: hostID, taskID: taskID)
+        remoteNotificationWithdrawn.insert(key)
         remoteNotificationTasks.removeValue(forKey: key)?.cancel()
         advanceRemoteNotificationGeneration(hostID: hostID, taskID: taskID)
         let identifier = RemoteAttentionNotice.identifier(hostID: hostID, taskID: taskID)
@@ -111,9 +115,8 @@ extension AppModel {
         return next
     }
 
-    private func shouldKeepRemoteTaskNotification(host: RemoteHostModel?, taskID: String, generation: UInt64) -> Bool {
+    private func remoteTaskStillNeedsNotification(host: RemoteHostModel?, taskID: String) -> Bool {
         guard let host,
-              remoteNotificationGenerations[Self.remoteNotificationKey(hostID: host.id, taskID: taskID)] == generation,
               remoteHosts?.openHostIDs.contains(host.id) == true,
               host.isConnected,
               !isRemoteTaskShownInFront(host: host, taskID: taskID),

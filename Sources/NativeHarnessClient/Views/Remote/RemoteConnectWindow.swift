@@ -170,8 +170,10 @@ struct RemoteWindowOpening: ViewModifier {
         content.onAppear {
             guard let directory else { return }
             directory.openHostWindow = { hostID in
-                openWindow(id: RemoteHostWindow.sceneID, value: hostID)
-                RemoteHostWindow.bringForward(hostID: hostID)
+                if RemoteHostWindow.bringForward(hostID: hostID) == nil {
+                    openWindow(id: RemoteHostWindow.sceneID, value: hostID)
+                    RemoteHostWindow.bringForward(hostID: hostID)
+                }
             }
             directory.openConnectWindow = { openWindow(id: RemoteConnectWindow.sceneID) }
         }
