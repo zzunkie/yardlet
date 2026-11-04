@@ -72,7 +72,7 @@ service: the mailbox reads it when it is shown and keeps it in memory only.
   out of the Trash move the conversation's messages in the inbox, Junk Email or Deleted Items.
 - A reply, reply to all or forward starts from Graph's own (`createReply`, `createReplyAll`,
   `createForward`), which threads it and carries a forward's files; what was written then replaces its
-  fields, as text. Chosen files are added once each, up to 3 MB a file.
+  fields, as text. Chosen files are added once each, a file from 3 MB through an upload session.
 - New mail: the inbox's delta query, begun over the last day's mail and followed to its `deltaLink`,
   every minute. Unread mail that came after the link was taken, not a draft and not in the Other inbox,
   is told. A link Graph no longer knows (410) starts again.

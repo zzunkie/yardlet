@@ -184,15 +184,10 @@ struct OutlookMailToolRunner {
         return .object(body)
     }
 
-    /// The files the call attaches, checked before any request: Gmail's rules (`GmailAttachmentFiles`),
-    /// and no more in one file than a single request to Graph carries.
+    /// The files the call attaches, checked before any request by Gmail's rules (`GmailAttachmentFiles`).
     private func attachments(_ arguments: [String: ToolJSON]) throws -> [GmailAttachmentFiles.Checked] {
-        let files = try GmailAttachmentFiles.check(try Arguments.strings(arguments, "attachments"),
-                                                   roots: GmailAttachmentFiles.roots(taskFolders: taskFolders))
-        if let large = files.first(where: { $0.size > OutlookMailTransport.attachmentLimit }) {
-            throw GmailOutgoingMessage.Problem.unattachable(path: large.path, reason: "Outlook takes at most 3 MB in one file.")
-        }
-        return files
+        try GmailAttachmentFiles.check(try Arguments.strings(arguments, "attachments"),
+                                       roots: GmailAttachmentFiles.roots(taskFolders: taskFolders))
     }
 
     /// A draft of what the call gives, in Drafts: a reply in the original's conversation, or a new message.
