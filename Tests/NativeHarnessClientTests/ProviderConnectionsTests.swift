@@ -32,6 +32,11 @@ import XCTest
             "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CONFIG_DIR", "ENABLE_CLAUDEAI_MCP_SERVERS"])
         XCTAssertEqual(HostSessionEnvironment.hostVariables(in: ["CLAUDE_CONFIG_DIR": "/mine", "HOME": "/Users/me"]), [],
             "Without a host session a person's own setting is kept")
+        // Opened with `open` from an SSH shell: the connection's variables would send Antigravity CLI
+        // away from the keychain, so it found no sign-in.
+        XCTAssertEqual(HostSessionEnvironment.hostVariables(in: ["SSH_CONNECTION": "10.0.0.2 52000 10.0.0.3 22",
+            "SSH_CLIENT": "10.0.0.2 52000 22", "SSH_TTY": "/dev/ttys004", "SSH_AUTH_SOCK": "/tmp/agent", "HOME": "/Users/me"]),
+            ["SSH_CLIENT", "SSH_CONNECTION", "SSH_TTY"])
     }
 
     func testMetadataRoundTripAndCorruptionNeverOverwriteAuthOrOriginalStore() throws {

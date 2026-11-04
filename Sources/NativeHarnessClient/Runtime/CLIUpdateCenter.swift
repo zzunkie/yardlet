@@ -56,7 +56,9 @@ final class CLIUpdateCenter {
     enum Outcome: Equatable, Sendable {
         case updated(from: String, to: String)
         case failedWithoutPrevious(String)
-        /// The current version failed the check before an update, so the update did not run.
+        /// The current version failed the check where the failure could not be its own: before an
+        /// update, or after one made outside Yardlet that no earlier version passes in place of. No
+        /// update ran and nothing is held or marked failed.
         case couldNotVerifyCurrent(String)
         case updateFailed(String)
     }
@@ -288,12 +290,13 @@ final class CLIUpdateCenter {
     private func verifyOutsideUpdate(_ plan: CLIUpdatePlan, installed: String, record: CLIUpdateRecord) async {
         let harness = plan.harness
         update(harness) { $0.phase = .verifying }
-        if await dependencies.verifier.verify(harness, executable: plan.launcher) == .passed {
+        guard case let .failed(reason) = await dependencies.verifier.verify(harness, executable: plan.launcher) else {
             accept(plan, version: installed, previous: record.previous)
             return
         }
         // The version that worked, where its installer kept it, or else the copy Yardlet made
         // before its last update (a CLI such as `agy` updates itself between Yardlet's checks).
+        // The failure is the new version's only when one of these passes in its place.
         var candidates: [CLIPreviousVersion] = []
         if let verifiedVersion = record.verifiedVersion, let earlier = record.verifiedExecutable {
             candidates.append(CLIPreviousVersion(version: verifiedVersion, executable: earlier, isCopy: false))
@@ -307,7 +310,9 @@ final class CLIUpdateCenter {
                 return
             }
         }
-        await goBack(plan, failed: installed, to: nil)
+        // Nothing earlier passes either, so the check cannot blame the new version: the CLI may be
+        // signed out or offline. Nothing is held or marked failed, and the next check looks again.
+        update(harness) { $0.outcome = .couldNotVerifyCurrent(reason) }
     }
 
     private func runUpdate(_ plan: CLIUpdatePlan, installed: String?) async {
@@ -321,6 +326,11 @@ final class CLIUpdateCenter {
         if case let .failed(reason) = await dependencies.verifier.verify(harness, executable: running) {
             update(harness) { $0.outcome = .couldNotVerifyCurrent(reason) }
             return
+        }
+        if held == nil, let installed, installed != records[harness.rawValue]?.verifiedVersion {
+            // The install passes now, so an earlier failure was not this version's (a sign-in since
+            // restored, say), and the copy kept below is of a version that works.
+            accept(plan, version: installed, previous: records[harness.rawValue]?.previous)
         }
 
         update(harness) { $0.phase = .updating }
@@ -574,9 +584,10 @@ struct CLIUpdateRowPresentation: Equatable {
             isWarning = true
             status = L10n.format("%@ did not pass Yardlet's check", version)
             return
-        case .couldNotVerifyCurrent?:
+        case let .couldNotVerifyCurrent(reason)?:
+            // The CLI's own words: a signed-out CLI says to sign in.
             isWarning = true
-            status = L10n.string("Yardlet could not check the current version, so it did not update it")
+            status = L10n.format("Yardlet could not check the current version, so it did not update it: %@", reason)
             return
         case let .updateFailed(reason)?:
             isWarning = true

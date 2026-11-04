@@ -18,7 +18,8 @@ protocol CLIVerifying: Sendable {
 /// - Claude Code: `--version`, then the stream-json `initialize` control request Yardlet sends
 ///   before every session (the same exchange the usage check makes).
 /// - Antigravity CLI: `agy models`, which must list a model, and from the version Yardlet runs over
-///   ACP (`AntigravityTransport`), ACP `initialize` on `agy acp` as well.
+///   ACP (`AntigravityTransport`), ACP `initialize` on `agy acp` as well; both with agy's own
+///   updater off.
 /// - ACP harnesses: `--version`, then ACP `initialize` (no session).
 ///
 /// Other harnesses have no check, so Yardlet does not update them on its own.
@@ -42,7 +43,8 @@ struct CLIVerificationProbe: CLIVerifying {
                                                           timeout: CLIUpdatePlan.versionTimeout))
             let reported = version.succeeded ? CLIVersion.parse(version.stdout + "\n" + version.stderr) : nil
             guard AntigravityTransport.servesACP(version: reported) else { return .passed }
-            return await acp(executable, arguments: HarnessCatalog.descriptor(for: .antigravityCLI)?.launchArguments ?? ["acp"])
+            return await acp(executable, arguments: HarnessCatalog.descriptor(for: .antigravityCLI)?.launchArguments ?? ["acp"],
+                             environment: Self.antigravityCheckEnvironment)
         default:
             guard let descriptor = HarnessCatalog.descriptor(for: harness), descriptor.transport == .acp else {
                 return .failed(L10n.string("Yardlet has no check for this CLI"))
@@ -106,7 +108,8 @@ struct CLIVerificationProbe: CLIVerifying {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: folder) }
-        let result = await CLIProcess.run(CLICommand(executable: executable, arguments: ["models"], timeout: timeout),
+        let result = await CLIProcess.run(CLICommand(executable: executable, arguments: ["models"],
+                                                     environment: Self.antigravityCheckEnvironment, timeout: timeout),
                                           currentDirectory: folder)
         guard result.succeeded else { return .failed(result.failureSummary) }
         return StructuredHeadlessAdapter.catalogChoices(in: result.stdout).isEmpty
@@ -114,7 +117,11 @@ struct CLIVerificationProbe: CLIVerifying {
             : .passed
     }
 
-    private func acp(_ executable: URL, arguments: [String]) async -> CLIVerification {
+    /// `agy` starts its own updater whenever it runs, which would replace the version under check,
+    /// and the copy Yardlet keeps of it next, with one nobody checked.
+    private static let antigravityCheckEnvironment = ["AGY_CLI_DISABLE_AUTO_UPDATE": "true"]
+
+    private func acp(_ executable: URL, arguments: [String], environment overrides: [String: String] = [:]) async -> CLIVerification {
         let version = await CLIProcess.run(CLICommand(executable: executable, arguments: ["--version"],
                                                       timeout: CLIUpdatePlan.versionTimeout))
         guard version.succeeded else { return .failed(L10n.format("--version failed: %@", version.failureSummary)) }
@@ -123,7 +130,8 @@ struct CLIVerificationProbe: CLIVerifying {
         }
         return await CLIProcess.exchange(
             executable: executable, arguments: arguments,
-            environment: RuntimeProcessEnvironment.values(executableURL: executable, overrides: ["NO_COLOR": "1"]),
+            environment: RuntimeProcessEnvironment.values(executableURL: executable,
+                overrides: ["NO_COLOR": "1"].merging(overrides) { _, new in new }),
             steps: [.init(line: line) { value in
                 Self.answer(value, id: 1) { $0["protocolVersion"] != nil }
             }],
