@@ -11,7 +11,7 @@ enum AccountListMode: Hashable {
     case switchTask(SessionRecord)
     /// The same list, opened from the card of a task a plan limit stopped.
     case continueAfterLimit(SessionRecord)
-    /// Settings › Accounts: every harness the filter covers, grouped by account.
+    /// Settings › Harness Accounts: every harness the filter covers, grouped by account.
     case manage
 
     /// The task whose account the list moves, if it moves one.
@@ -23,7 +23,7 @@ enum AccountListMode: Hashable {
     }
 }
 
-/// What Settings › Accounts does with a harness's default login, through the harness's own CLI.
+/// What Settings › Harness Accounts does with a harness's default login, through the harness's own CLI.
 enum DefaultLoginAction: Hashable {
     /// Signed out, as the Harnesses page's sign-out does.
     case signOut

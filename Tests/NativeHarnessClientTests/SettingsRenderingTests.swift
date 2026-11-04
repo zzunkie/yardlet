@@ -2,10 +2,12 @@ import AppKit
 import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
+@testable import YardletRemote
 
-/// Settings sections and the Accounts section with remembered, current, unfinished and signed-out
-/// readings, and the Claude Code and Codex harness pages opened from their rows, drawn in an offscreen
-/// window (never shown) in both appearances into `.build/settings-qa`.
+/// Settings sections and the Harness Accounts section with remembered, current, unfinished and signed-out
+/// readings, the Claude Code and Codex harness pages opened from their rows, and the whole list with
+/// General's headings, drawn in an offscreen window (never shown) in both appearances into
+/// `.build/settings-qa`.
 @MainActor final class SettingsRenderingTests: XCTestCase {
     private let directory = WindowlessRender.repositoryRoot.appending(path: ".build/settings-qa")
     private var roots: [URL] = []
@@ -32,10 +34,7 @@ import XCTest
             "jordan@example.test", "personal@example.test", "old@example.test"])
         XCTAssertFalse(groups.flatMap(\.harnesses).contains(.museCode))
 
-        let connectors = ConnectorCenter(environment: ConnectorCenter.Environment(
-            repository: InMemoryConnectorRepository(), credentials: InMemoryConnectorCredentialStore(),
-            http: FakeConnectorServer(), userAgent: FakeUserAgent(), sha256: MacOAuthUserAgent.sha256,
-            clientVersion: "9.9", now: { Date() }))
+        let connectors = makeConnectors()
         for appearance in [ColorScheme.light, .dark] {
             let suffix = appearance == .dark ? "dark" : "light"
             for section in SettingsSection.available(hasAccounts: true, hasConnectors: true) {
@@ -105,6 +104,60 @@ import XCTest
         store.usesFixtureSnapshots = true
         await gate.open()
         await check.value
+    }
+
+    /// Every section the app offers: the Yardlet account above the Personal, Integrations and Harnesses
+    /// headings, with General open and its rows under the App, Tasks, Browser and Terminal headings.
+    /// `list-general-*.png` is the window's size; `general-headings-*.png` is tall enough for every heading.
+    func testTheWholeListAndGeneralsHeadingsDraw() async throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let (store, runtime) = try accountsFixture()
+        let accounts = SettingsAccountsContext(runtimeSelections: runtime, connections: store, fixtureSnapshots: [])
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("SettingsRenderingTests.list")))
+        defaults.set("wss://relay.example.test", forKey: RemoteControlService.relayURLKey)
+        let remote = RemoteControlService(bridge: FakeBridge(), deviceStore: RemoteDeviceStore(fileURL: nil), audit: nil,
+            defaults: defaults, environment: [:], interfaces: { [] }, resolveName: { _ in nil }, listens: false)
+        let vault = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore([:]), repository: InMemoryVaultRepository(items: []), hmac: MacVault.hmac,
+            isAllowedBuild: true, confirm: { _ in true }, defaults: .vaultTests()))
+        let root = FileManager.default.temporaryDirectory.appending(path: "settings-list-\(UUID().uuidString)")
+        roots.append(root)
+        let cliUpdates = CLIUpdateCenter(dependencies: .init(
+            runtimes: { [:] }, busyHarnesses: { [] },
+            runner: FakeCLIRunner { _ in CLICommandResult(exitCode: 0, stdout: "", stderr: "") }, verifier: FakeVerifier(),
+            overrides: CLIRuntimeOverrides(defaults: defaults), defaults: defaults,
+            previousVersionsDirectory: root.appending(path: "cli-previous"), environment: [:]))
+        let instructions = YardletInstructionsStore(directory: root.appending(path: "instructions"), defaults: defaults)
+        let usage = SettingsUsageContext(overview: { TokenUsageFixture.overview() }, isCounting: { true },
+                                         limitsCheckedAt: { nil })
+        let connectors = makeConnectors()
+
+        for appearance in WindowlessRender.Appearance.allCases {
+            for (name, height) in [("list-general", 620.0), ("general-headings", 1560.0)] {
+                let host = WindowlessRender.Host(SettingsCenterView(initialSection: SettingsSection.general.rawValue,
+                    notificationCenter: QuietNotificationCenter(), connectors: connectors, vault: vault, accounts: accounts,
+                    remote: remote, cliUpdates: cliUpdates, instructions: instructions, usage: usage)
+                    .environment(\.colorScheme, appearance.colorScheme),
+                    size: NSSize(width: 820, height: height), appearance: appearance)
+                defer { host.close() }
+                host.settle()
+                try write(try host.capture().bitmap, "\(name)-\(appearance.suffix).png")
+                guard appearance == .light, name == "general-headings" else { continue }
+                let labels = host.accessibilityElements().map(\.label)
+                XCTAssertTrue(host.accessibilityElements().contains { $0.label == SettingsSection.yardletAccount.title
+                    && $0.value == L10n.string("Not signed in") })
+                let headings = SettingsSection.Group.allCases.map(\.title) + GeneralSettingsGroup.allCases.map(\.title)
+                XCTAssertTrue((headings + SettingsSection.allCases.map(\.title)).allSatisfy(labels.contains),
+                              labels.description)
+            }
+        }
+    }
+
+    private func makeConnectors() -> ConnectorCenter {
+        ConnectorCenter(environment: ConnectorCenter.Environment(
+            repository: InMemoryConnectorRepository(), credentials: InMemoryConnectorCredentialStore(),
+            http: FakeConnectorServer(), userAgent: FakeUserAgent(), sha256: MacOAuthUserAgent.sha256,
+            clientVersion: "9.9", now: { Date() }))
     }
 
     /// Codex's default login remembered from an earlier run, and four Claude accounts: one

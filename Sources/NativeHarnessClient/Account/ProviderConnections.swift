@@ -278,7 +278,7 @@ final class ProviderConnectionStore {
     /// The person's own answers to which accounts automatic assignment may use,
     /// by `AccountChoice.id`. An account without one follows `isInAutomaticAssignmentByDefault`.
     private(set) var automaticAssignment: [String: Bool] = [:]
-    /// Settings › Accounts: whether the person's new tasks start, by default, on the account
+    /// Settings › Harness Accounts: whether the person's new tasks start, by default, on the account
     /// automatic assignment picks (`startsNewTasksAutomatically`). On unless the person turned it off.
     private(set) var picksNewTaskAccount = true
     /// The harnesses whose new-task account the person chose themselves while Automatic was offered.

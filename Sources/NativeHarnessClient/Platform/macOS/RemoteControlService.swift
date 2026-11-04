@@ -23,6 +23,9 @@ final class RemoteControlService {
     /// Keeps this Mac from sleeping on its own while remote connections are allowed and it is on power,
     /// so a device elsewhere can still reach it; off unless the person turned it on.
     static let keepAwakeKey = "Yardlet.remote.keepAwakeOnPower"
+    /// The signed-in relay account's id, provider and name, kept so Settings names it while remote
+    /// connections are off; removed on sign-out. The token stays in the Keychain.
+    static let accountKey = "Yardlet.remote.account"
     static let relayURLEnvironmentKey = "YARDLET_REMOTE_RELAY_URL"
     /// The Yardlet relay a build carries, from `YardletRelayURL` in Info.plist (scripts/build-app.sh
     /// writes it from Packaging/RelayURL, which stays out of git; REMOTE_V2_DESIGN.md §12).
@@ -62,14 +65,14 @@ final class RemoteControlService {
     private(set) var interfaceAddresses: [RemoteInterfaceAddress] = []
     /// The relay account this Mac is on, when signed in (§14.4).
     private(set) var account: RemoteAccountClient.Account?
-    /// The sign-in providers the relay offers; empty hides the account row.
+    /// The sign-in providers the relay offers; empty where it has none (a relay without OAuth
+    /// credentials has no accounts, and the phone remote still goes through it).
     private(set) var accountProviders: [String] = []
+    /// Whether the providers were read: nil until Settings › Yardlet Account or the remote first asks,
+    /// false when the relay could not be reached and none were read before.
+    private(set) var accountProvidersRead: Bool?
     private(set) var isSigningIn = false
     private(set) var accountError: String?
-
-    /// Settings shows the account row while signed in, or when the relay offers a sign-in provider: a relay
-    /// without OAuth credentials has no accounts, and the phone remote still goes through it.
-    var showsAccount: Bool { account != nil || !accountProviders.isEmpty }
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let environment: [String: String]
@@ -129,6 +132,8 @@ final class RemoteControlService {
         isEnabled = defaults.bool(forKey: Self.enabledKey)
         isRelayEnabled = defaults.object(forKey: Self.relayEnabledKey) as? Bool ?? true
         keepsAwakeOnPower = defaults.bool(forKey: Self.keepAwakeKey)
+        account = defaults.data(forKey: Self.accountKey)
+            .flatMap { try? JSONDecoder().decode(RemoteAccountClient.Account.self, from: $0) }
         server = RemoteServer(
             configuration: RemoteServer.Configuration(server: RemoteServerInfo(name: macName, appVersion: appVersion),
                                                       macKey: nil),
@@ -165,23 +170,55 @@ final class RemoteControlService {
     /// have changed) and takes link requests. A token the relay no longer knows is dropped.
     func refreshAccount() async {
         guard isEnabled, let client = accountClient else { return }
-        accountProviders = (try? await client.providers()) ?? accountProviders
-        guard let token = await withAccountToken({ $0.load() }), let identity = await ensureIdentity() else { return }
+        await readAccountProviders(client)
+        guard let token = await withAccountToken({ $0.load() }) else { return keep(account: nil) }
+        guard let identity = await ensureIdentity() else { return }
         do {
             let current = try await client.account(token: token)
             try await client.registerMac(token: token, identity: identity, name: macName, accountID: current.id)
-            account = current
+            keep(account: current)
             await server.setAcceptsLinks(true)
         } catch let failure as RemoteAccountClient.Failure where failure.isUnauthorized {
             await withAccountToken { $0.delete() }
-            account = nil
+            keep(account: nil)
             await server.setAcceptsLinks(false)
         } catch {
             accountError = error.localizedDescription
         }
     }
 
-    /// Signs in with a provider in the browser sheet and puts this Mac on the account.
+    /// Settings › Yardlet Account as it opens: with remote connections on, the account as
+    /// `refreshAccount` reads it; with them off, only the sign-in providers, so the person can sign in
+    /// before turning them on, and whether a token is still kept. Nothing reads them on a schedule.
+    func refreshAccountPage() async {
+        if isEnabled { return await refreshAccount() }
+        guard let client = accountClient else { return }
+        await readAccountProviders(client)
+        if account != nil, await withAccountToken({ $0.load() }) == nil { keep(account: nil) }
+    }
+
+    private func readAccountProviders(_ client: RemoteAccountClient) async {
+        if let providers = try? await client.providers() {
+            accountProviders = providers
+            accountProvidersRead = true
+        } else {
+            accountProvidersRead = !accountProviders.isEmpty
+        }
+    }
+
+    /// The account Settings names, kept for the next launch without its list of Macs.
+    private func keep(account: RemoteAccountClient.Account?) {
+        self.account = account
+        if var kept = account {
+            kept.macs = nil
+            defaults.set(try? JSONEncoder().encode(kept), forKey: Self.accountKey)
+        } else {
+            defaults.removeObject(forKey: Self.accountKey)
+        }
+    }
+
+    /// Signs in with a provider in the browser sheet and puts this Mac on the account. It works with remote
+    /// connections off; the account finds this Mac once they are on.
     func signIn(with provider: String) async {
         guard let client = accountClient, !isSigningIn else { return }
         isSigningIn = true
@@ -200,7 +237,7 @@ final class RemoteControlService {
             let (token, signedIn) = try await client.exchange(code: code, pkce: pkce, deviceName: macName)
             await withAccountToken { $0.save(token) }
             try await client.registerMac(token: token, identity: identity, name: macName, accountID: signedIn.id)
-            account = signedIn
+            keep(account: signedIn)
             await server.setAcceptsLinks(true)
         } catch is CancellationError {
             return
@@ -218,7 +255,7 @@ final class RemoteControlService {
             try? await client.logout(token: token)
         }
         await withAccountToken { $0.delete() }
-        account = nil
+        keep(account: nil)
         await server.setAcceptsLinks(false)
     }
 

@@ -148,7 +148,7 @@ extension AppModel {
         }
         guard connections.isInAutomaticAssignment(choice) else {
             return .failure(SessionToolError(message: "\(choice.title) is not one of the accounts tasks are started on "
-                + "automatically; the person includes it in Settings › Accounts."))
+                + "automatically; the person includes it in Settings › Harness Accounts."))
         }
         guard choice.snapshot?.state == .signedIn, choice.canSelect else {
             return .failure(SessionToolError(message: "\(choice.title) is not signed in."))

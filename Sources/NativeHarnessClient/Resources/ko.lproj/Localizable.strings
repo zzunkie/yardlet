@@ -3819,3 +3819,11 @@
 "Sign in or connect providers on %@. To choose runtimes from here, allow Change settings for this device in Settings › Remote › Paired devices on %@." = "로그인과 제공자 연결은 %@에서 하세요. 여기서 런타임을 고르려면 %@의 설정 › 원격 연결 › 연결된 기기에서 이 기기에 “설정 바꾸기”를 허용하세요.";
 "Connect services, sign in, or edit connectors on %@." = "서비스 연결, 로그인, 커넥터 편집은 %@에서 하세요.";
 "Connect services, sign in, or edit connectors on %@. To turn connectors on or off from here, allow Change settings for this device in Settings › Remote › Paired devices on %@." = "서비스 연결, 로그인, 커넥터 편집은 %@에서 하세요. 여기서 커넥터를 켜고 끄려면 %@의 설정 › 원격 연결 › 연결된 기기에서 이 기기에 “설정 바꾸기”를 허용하세요.";
+
+/* Settings' list (2026-11-04): the Yardlet account above three headings, as the ChatGPT app's Personal, Integrations and Coding. */
+"Yardlet Account" = "Yardlet 계정";
+"Harness Accounts" = "하네스 계정";
+"Integrations" = "통합";
+"Not signed in" = "로그인하지 않음";
+"Turn on remote connections so a new phone can find this Mac." = "원격 연결을 켜야 새 휴대폰이 이 Mac을 찾을 수 있습니다.";
+"This Yardlet server doesn't offer sign-in." = "이 Yardlet 서버는 로그인을 제공하지 않습니다.";

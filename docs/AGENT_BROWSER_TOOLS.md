@@ -499,8 +499,9 @@ The agent reads Yardlet's settings and changes one when the person asks in the c
 switch in Settings (`SettingsToolCatalog`). Both tools are listed with the session tools, for every task that has them.
 They answer from the catalog Settings draws from (`YardletSettingCatalog`): each setting's id, section, symbol, title,
 the lines under it and its tooltip in the person's language, its values, where the value lives, and whether a change
-asks every time. Settings › General draws its rows from it, and the switches of the other sections take their words from
-it, so a setting added to Settings is added there and the tools list it.
+asks every time. Settings › General draws its rows from it under their headings (App, Tasks, Browser, Terminal: each
+General setting names its heading), and the switches of the other sections take their words from it, so a setting
+added to Settings is added there and the tools list it.
 
 | Tool | Arguments | Behavior |
 |---|---|---|

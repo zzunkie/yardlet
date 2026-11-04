@@ -52,7 +52,7 @@ import XCTest
             let start = ContinuousClock.now
             // Every row shows a reading the moment the list opens.
             let shownAtOpen = store.choices(for: [.claudeCode]).filter { $0.snapshot != nil }.count
-            // What Settings › Accounts runs when it opens.
+            // What Settings › Harness Accounts runs when it opens.
             await store.check(defaultsOf: nil, savedOf: nil, runtimeSelections: fixture.runtime)
             let elapsed = ContinuousClock.now - start
             await picker?.value

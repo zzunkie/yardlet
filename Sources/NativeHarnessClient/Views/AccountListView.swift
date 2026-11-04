@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The one account list. The new-task account chip, a task's account sheet, a limit card's
-/// "Continue with another account" and Settings › Accounts all show it, each in its own mode: the
+/// "Continue with another account" and Settings › Harness Accounts all show it, each in its own mode: the
 /// same rows, limits, freshness wording and refresh button in the same places for every harness.
 /// Readings and checks belong to the `ProviderConnectionStore`.
 struct AccountList: View {
@@ -17,7 +17,7 @@ struct AccountList: View {
     var onConnect: ((AccountChoice) -> Void)? = nil
     /// Adding an account: for the new task's harness, or for the Settings filter's harness.
     var onAdd: ((HarnessKind?) -> Void)? = nil
-    /// Opening Settings › Accounts (new task only).
+    /// Opening Settings › Harness Accounts (new task only).
     var onManage: (() -> Void)? = nil
     /// Closing the sheet the list is shown in.
     var onDone: (() -> Void)? = nil
@@ -29,7 +29,7 @@ struct AccountList: View {
     var onAddFound: ((DiscoveredAccountHome) -> Void)? = nil
     /// Settings only: signing a harness's default login out, alone or to sign in with another account.
     var onSignOut: ((HarnessKind, DefaultLoginAction) -> Void)? = nil
-    /// Settings › Accounts' harness filter, and how harnesses are used for its default scope. Nil
+    /// Settings › Harness Accounts' harness filter, and how harnesses are used for its default scope. Nil
     /// usage lists every available harness.
     var harnessFilter: Binding<HarnessKind?> = .constant(nil)
     var harnessUsage: AccountHarnessScope.Usage? = nil
@@ -538,7 +538,7 @@ private struct AccountGroupHeader: View {
     }
 }
 
-/// How a saved account leaves Settings › Accounts.
+/// How a saved account leaves Settings › Harness Accounts.
 enum AccountRemoval: Hashable {
     /// Off Yardlet's list only; the login and its folder stay.
     case fromList
@@ -565,7 +565,7 @@ struct AccountTitleLine: View {
     }
 }
 
-/// Settings › Accounts' folders with a Claude or Codex login that are not saved accounts, each
+/// Settings › Harness Accounts' folders with a Claude or Codex login that are not saved accounts, each
 /// with where it was found and a button that adds it as it is (or, for a Claude folder whose
 /// conversations are apart, after showing what linking it would change).
 struct DiscoveredAccountsSection: View {
@@ -694,7 +694,7 @@ struct AccountLimitsView: View {
     }
 }
 
-/// Settings › Accounts' switch for moving Claude Code tasks to an account with room
+/// Settings › Harness Accounts' switch for moving Claude Code tasks to an account with room
 /// (`AccountMovePreference`), shown once there is another Claude Code account to move to.
 struct AccountMoveSettingRow: View {
     var isOn: Binding<Bool>? = nil

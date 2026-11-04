@@ -14,7 +14,7 @@ the menu bar menu and the sidebar's account menu. Nothing is sent anywhere and n
   Mac's own warnings. With Home shown, an account's limits are read again once its reading is 15 minutes old, the span
   the pace needs between two readings; a reading a menu, a list or a limit card made meanwhile is used instead of
   starting the account's CLI again (`AccountCheckPolicy.ifOlderThan`).
-- **Settings › Usage** (after Accounts), as the Claude and Codex apps put usage in Settings:
+- **Settings › Usage** (after Harness Accounts), as the Claude and Codex apps put usage in Settings:
   - **Plan limits:** every account with a limit, each window on the bar grid every limit uses, with when it resets or,
     in orange, when it runs out first at this pace.
   - **Token usage** for Today, 7 days or 30 days: tokens, API-equivalent cost, requests and the share of input read

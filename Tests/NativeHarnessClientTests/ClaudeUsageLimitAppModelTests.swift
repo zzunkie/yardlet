@@ -276,7 +276,7 @@ import XCTest
         await after.shutdown()
     }
 
-    /// With Settings › Accounts' moves to an account with room on, a task a limit stopped whose limit
+    /// With Settings › Harness Accounts' moves to an account with room on, a task a limit stopped whose limit
     /// resets after its cache would expire moves at the end of its turn to the account with room, keeps
     /// its conversation and why it moved, and asks Claude to pick up there. The continue the default
     /// setting armed as the limit came stands aside for the move.

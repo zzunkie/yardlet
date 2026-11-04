@@ -51,7 +51,7 @@ struct UsageLimitAutoContinue: Codable, Equatable, Sendable {
     }
 }
 
-/// Settings › Accounts' "Continue automatically at usage limit", on unless turned off, as Claude
+/// Settings › Harness Accounts' "Continue automatically at usage limit", on unless turned off, as Claude
 /// Code 2.1.291's setting of that name is: a limit that stops a Claude Code task and resets within
 /// `horizon` arms its card's automatic continue as it comes. Off, each card waits for the person to
 /// arm it, and the continues the setting armed are disarmed.

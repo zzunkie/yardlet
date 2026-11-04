@@ -889,6 +889,13 @@ address and 8 in a room; a new one closes the oldest of them (4503). A socket st
 Optional (the QR stays the way to pair without one). The account only lists the person's Macs and lets a new
 phone ask one of them to link (§12.1); it never carries tasks or conversations.
 
+On the Mac it is Settings › Yardlet Account, first in Settings' list with the account or "Not signed in" under its
+name. Signing in works with remote connections on or off; while they are off, the page says the account finds this
+Mac once they are on. Opening the page reads `GET /v1/auth/providers` (with remote connections on, also the account
+and the Mac's entry), and nothing reads them on a schedule. The account's id, provider and name are kept in Yardlet's
+preferences (`Yardlet.remote.account`) so the list names it while remote connections are off; signing out removes
+them with the token.
+
 | request | | answer |
 |---|---|---|
 | `GET /v1/auth/providers` | | `{"providers": ["github", "google"]}`: the ones the relay is configured for. Empty (or no answer): apps show no sign-in at all, and the relay still carries connections |
@@ -2291,7 +2298,7 @@ snapshot flag and the new event.
 ### 15.37 Host accounts, harness runtimes and connectors
 
 The optional snapshot flag `hostAccounts: true` advertises the requests, event and fields below for
-the remote window's Settings › Accounts, Harnesses and Connectors sections. Without it, the client
+the remote window's Settings › Harness Accounts, Harnesses and Connectors sections. Without it, the client
 leaves those sections out of a remote host's Settings. Phones may ignore the flag and the event.
 
 - `hostAccounts` (`watching?: bool`, `refreshHarnesses?: [string]`): reads the host's Account Center

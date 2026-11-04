@@ -171,7 +171,7 @@ private struct UsageLimitHostAccountMenu: View {
     }
 }
 
-/// Settings › Accounts' switch for continuing a Claude Code task once the limit that stopped it
+/// Settings › Harness Accounts' switch for continuing a Claude Code task once the limit that stopped it
 /// resets (`UsageLimitAutoContinuePreference`), named as Claude Code names its own.
 struct UsageLimitAutoContinueSettingRow: View {
     var isOn: Binding<Bool>? = nil

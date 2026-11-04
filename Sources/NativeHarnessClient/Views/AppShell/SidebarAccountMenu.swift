@@ -58,9 +58,9 @@ struct SidebarAccountMenu: Equatable {
         case settings
         /// A Settings section: Accounts, Connectors, Remote, Harnesses.
         case settingsSection(SettingsSection)
-        /// Settings › Accounts, showing a harness's accounts (a Usage line).
+        /// Settings › Harness Accounts, showing a harness's accounts (a Usage line).
         case accountUsage(HarnessKind)
-        /// Settings › Accounts, where each account's usage is, while no account has a reading to
+        /// Settings › Harness Accounts, where each account's usage is, while no account has a reading to
         /// list here.
         case usage
         case archivedTasks
@@ -132,7 +132,8 @@ struct SidebarAccountMenu: Equatable {
     ) -> SidebarAccountMenu {
         var settings = [Item(destination: .settings, title: L10n.string("Settings…"), systemName: "gearshape",
                              shortcut: YardletAppShortcut.settings)]
-        // The sections reached from elsewhere, in Settings' own order; the ones a window offers.
+        // The sections reached from elsewhere, the harness accounts first as the sidebar's Connections
+        // opens them; the ones a window offers.
         for section in [SettingsSection.accounts, .connectors, .remote, .harnesses]
         where settingsSections.contains(section) {
             settings.append(Item(destination: .settingsSection(section), title: section.title,

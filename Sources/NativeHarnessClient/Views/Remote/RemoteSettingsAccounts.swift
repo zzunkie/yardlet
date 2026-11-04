@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The remote window's Settings › Accounts section (§15.37), drawing the local `ConnectionCenterContent`
+/// The remote window's Settings › Harness Accounts section (§15.37), drawing the local `ConnectionCenterContent`
 /// (`AccountList` in `.manage` mode) fed by the host's accounts and settings.
 struct RemoteSettingsAccountsSection: View {
     @Bindable var model: RemoteHostModel
