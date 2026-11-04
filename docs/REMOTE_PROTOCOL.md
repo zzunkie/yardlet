@@ -575,6 +575,8 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
 
 Every revision of protocol 2 only adds optional fields or states a rule, except where it says otherwise.
 
+- 2026-11-04: per-task session rail facts and actions, and cached home task lines (§15.34).
+
 - 2026-11-04: §15.26 adds read-only Review, advertised by optional `reviewReading`; no mutation request is added.
 - 2026-11-04: workspace file listing (§15.27), with the existing bounded `readFile` requests for content.
 
@@ -1941,6 +1943,76 @@ The desktop client provides `openHostBrowserLink` for window and terminal link h
 handling. These addresses refer to the host's servers; no port forwarding is created. With an older host, the hook
 shows an update notice instead of sending those links to the client's own loopback interface.
 
+### 15.34 Session rail and home task lines
+
+A snapshot may advertise `taskRail: true`. A desktop asks `{type: "taskRail", taskId}` for the task
+on screen and receives `rail`. Older hosts omit the flag; the additional cards stay absent. These
+facts feed the existing `SessionRailContent` projection and `SessionRailView`, and the same context
+usage feeds `ComposerSessionOptions` for the composer ring. Optional `compactOffered` and
+`compactAvailable` carry the host's availability; Compact session uses the existing
+`runComposerCommand` with `compact` (§15.23).
+
+The rail contains display facts only: the task's branch and instruction files; its account name and
+limit windows; numeric context usage and usage breakdowns; plan steps; agent and child-task rows;
+background tasks and Codex terminals; the change counts, pull request, checks, reviews and available
+merge methods. Timestamps are milliseconds since 1970. Account credentials and environment values
+are never included. Host folders remain host folders: the client names them, keeps `folderURL` nil,
+and labels the environment with the host name. It does not read Git or instruction files locally.
+
+`taskRailChanged` names the task whose facts should be read again, only for a connection that read
+its rail while subscribed. `taskRail` with optional `watching: false` ends that rail watch without
+reading any facts; absent `watching` means true. Leaving the displayed task ends its watch even
+when its conversation remains cached. Unsubscribing or disconnecting also ends the watch, and the
+host stops periodic rail reads once no connection watches it. Reads follow the displayed task;
+they do not expand the general snapshot with every task's rail. A client coalesces invalidations
+while a read is in flight. Loopback links use `openHostBrowserLink` (§15.30); they never open the
+client's localhost. The local rail currently has no separate Servers card, so the remote adds none.
+
+`railAction` takes `taskId`, `action`, optional `targetId`, and optional `confirmed`. The host
+validates the current task and target before using the same app-model or pull-request-center path
+as its local control. Stops name an agent belonging to the task, a direct child task, a current
+background activity, or a current Codex terminal. Unknown actions are refused. Pull-request writes
+use the current pull request and require confirmation where the local control asks; a merge cannot
+silently confirm a different pending choice. Fix CI prepares the host's existing request text for
+the remote draft, without sending a model turn.
+
+| `action` | `targetId` and behavior |
+|---|---|
+| `stopAgent` | the task's `run_agent` ID |
+| `stopChild` | a child task ID |
+| `stopBackground` | the task's running background activity ID |
+| `stopTerminal` | a current Codex process ID |
+| `stopAllTerminals` | no target; requires `confirmed: true` after the card's confirmation |
+| `refreshPR` | refresh the current pull request |
+| `loadLog`, `closeLog` | a current check ID; read or dismiss its failed log |
+| `rerunFailed` | rerun the current failed checks through the host's check client |
+| `requestMerge` | `merge:<method>`, `enableAuto:<method>` or `disableAuto`; prepare the local confirmation state |
+| `cancelMerge` | dismiss the pending merge |
+| `confirmMerge` | the pending choice followed by `|` and its head SHA; requires `confirmed: true` and an exact current match |
+| `setAutoFix` | `true` or `false`, with `confirmed: true`; enabling asks before it can send automatic fixes |
+| `draftFix` | requires `confirmed: true`; the response's `output` is the host's Fix CI draft |
+
+Errors include `notFound` for a task or target outside the current task, `notAllowed` for a missing
+confirmation or stale merge choice, `unsupportedCommand` for an unknown action, `unavailable` for an
+operation that failed, and `tooLarge` for facts exceeding the server message limit.
+
+Both new request kinds explicitly require no additional device permission (§15.28): they read facts
+or operate the paired device's ordinary task controls. Their audit lines contain kind, task, device
+and outcome, never the action's values, account names or message text. Phones may ignore the optional
+snapshot fields and the new event; none of their existing requests change.
+
+Agent rows retain their kind, status and reason for waiting. Child tasks open through ordinary remote
+task navigation. Agent conversations, background output and inline agent approval/question cards
+are not carried by this rail-facts response; their detail transport remains separate. Controls to
+open those unavailable detail views are disabled.
+
+The task snapshot optionally carries `answerLine`, the same cached first line of the latest finished
+answer the host home reads (at most 240 characters plus an ellipsis), `latestTurnStartedAt` in milliseconds
+since 1970, and `completed`, whether the task currently has the host's completed status. Reading these
+fields never loads history or scans a conversation. The desktop supplies them to `NewTaskHomeActivity`;
+completed tasks keep that status after being read, so the shared home projection counts tasks finished
+today. Older hosts omit these fields and retain the previous home behavior.
+
 ## 16. Push notifications
 
 The Mac pushes to a device that registered (§15.6) and **has no open v2 connection**, for these
@@ -2024,7 +2096,8 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   window's tabs (New Tab, Close Tab, Reopen Closed Tab, the next and previous tab, a row's Open in New Tab, ⌃1–⌃9 for the
   pinned rows). Its home lists the host's projects with what their tasks need, as the local home does, and a task's
   session rail is the local rail: where the task runs (its project and harness; the folder stays the host's), its
-  settings (§15.23), chosen there through the host, and its outputs (§15.22). A task lays out as the local task does,
+  settings (§15.23), chosen there through the host, and its outputs (§15.22). The home also reads the host's
+  cached answer lines, latest-turn times and completed status (§15.34). A task lays out as the local task does,
   its side panel's tab strip sharing the title bar's row and the title bar's buttons toggling the rail and the panels:
   the side panel's New tab, Review (§15.26) and Files (§15.27) where the host serves them, the browser (§15.25), whose
   tabs share the panel's strip and close when the host's list says they did (§15.30), and the task's terminal
@@ -2057,7 +2130,8 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   sends no `viewport`, so the tab keeps its size. A handoff's card has Show Tab, which opens it there. With `tabControls`,
   the address field, new-tab button and tab close buttons act on the host (§15.30), and a hook routes loopback links
   there for the window's link handler. The tab strip uses the same `WorkSurfaceHeader` as other side panels.
-  Settings, connectors, the context ring, creating or editing a schedule and the other side panels stay on the host.
+  With `taskRail`, the rail reads the host's additional facts and the composer shows its context ring (§15.34).
+  Settings, connectors, creating or editing a schedule and the other side panels stay on the host.
 - **Paths:** as §11.4. While a host's window is open it browses Bonjour (§11.3) for the instance with the
   discovery id of the host key it saved, and resolves it to the host's name and port (`Name.local:47616`; the
   system resolves the name when connecting). Those addresses go first, never saved, then the direct addresses the

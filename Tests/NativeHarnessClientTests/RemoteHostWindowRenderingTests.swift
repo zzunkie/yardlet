@@ -19,6 +19,10 @@ import XCTest
 /// - `remote-host-outputs-*.png` and `local-outputs-*.png`: a task that wrote a report and a chart, with the
 ///   session rail's Outputs card beside it.
 /// - `remote-host-schedules-*.png` and `local-schedules-*.png`: the scheduled tasks list beside a schedule.
+/// - `remote-rail-facts-*.png` and `local-rail-facts-*.png`: the host's account, context, limits, plan, child task
+///   and pull-request checks on the shared rail; `comparison-rail-facts-*.png` puts them side by side.
+/// - `remote-home-facts-*.png` and `local-home-facts-*.png`: the same answer line and finished-today count;
+///   `comparison-home-facts-*.png` puts the local home on the left and the remote home on the right.
 /// - `remote-form-*.png` and `local-form-*.png`: a Codex MCP form's card, the remote one read from what the host
 ///   sends for it.
 /// - In full detail (§15.24), `remote-full-*.png` and `local-full-*.png`: `answer`, an answer past the phone's 32,000
@@ -765,6 +769,205 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                 actions: ComposerActions(runCodexCommand: session.harness == .codex ? { _ in } : nil))
         }
         .background(ParityTheme.canvas)
+    }
+
+    /// The host's account, usage, plan, child and pull request survive the real encrypted loopback.
+    func testRailFactsDrawAsTheLocalRailDoes() async throws {
+        let fixture = try railHomeFixture()
+        let host = fixture.host
+        let session = fixture.task
+        let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(model: host))
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                       name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let hosts = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                       hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
+        let paired = try await hosts.pair(link: link.absoluteString)
+        let model = try XCTUnwrap(hosts.model(for: paired.id))
+        try await waitUntil { model.hasSnapshot && model.offersTaskRail }
+        let taskID = session.id.uuidString
+        model.select(.task(taskID))
+        try await waitUntil { model.conversations[taskID]?.isLoaded == true }
+        await model.readTaskRail(taskID)
+        try await waitUntil { model.taskRailFacts[taskID] != nil }
+        let remoteSession = try XCTUnwrap(model.sidebar.sessions.first { $0.id == session.id })
+        let remoteOptions = model.railComposerOptions(taskID)
+        let remote = RemoteRailProjection.content(
+            session: remoteSession, projectName: "rail-home", options: remoteOptions, outputs: [],
+            hostName: model.name, facts: model.taskRailFacts[taskID])
+        let localOptions = ComposerSessionOptionsProjection.make(
+            harness: session.harness, session: session, providerCapabilities: host.composerProviderCapabilities(for: session),
+            providerUsage: ComposerUnificationFixtures.providerUsage, entries: fixture.entries, isAttached: host.isAttached(session.id))
+        let local = SessionRailContent.make(
+            session: session, projectName: "rail-home", instructionSources: host.instructionSources(for: session),
+            git: nil, options: localOptions, connectors: nil, account: fixture.account, entries: fixture.entries,
+            codexPlan: nil, pullRequest: host.pullRequests.pullRequest(for: session.id),
+            pullRequestState: host.pullRequestDetails.state(for: session.id), childTasks: host.railChildTasks(of: session.id))
+        XCTAssertEqual(remote.cards(SessionRailPreferences()), local.cards(SessionRailPreferences()))
+        XCTAssertEqual(remote.environment.locationTitle, "Mac Studio")
+        XCTAssertNil(remote.environment.folderURL)
+        XCTAssertEqual(remote.settings?.accountName, local.settings?.accountName)
+        XCTAssertEqual(remote.context, local.context)
+        XCTAssertEqual(remote.contextUsage?.contextUsedTokens, local.contextUsage?.contextUsedTokens)
+        XCTAssertEqual(remoteOptions?.contextUsage?.contextUsedTokens, local.contextUsage?.contextUsedTokens)
+        XCTAssertEqual(remote.usage?.windows.map(\.remainingPercent), local.usage?.windows.map(\.remainingPercent))
+        XCTAssertEqual(remote.progress?.plan.steps.map(\.text), local.progress?.plan.steps.map(\.text))
+        XCTAssertEqual(remote.progress?.plan.steps.map(\.status), local.progress?.plan.steps.map(\.status))
+        XCTAssertEqual(remote.agents?.agents.map(\.title), local.agents?.agents.map(\.title))
+        XCTAssertEqual(remote.changes?.pullRequest, local.changes?.pullRequest)
+        XCTAssertEqual(remote.changes?.detail?.checks, local.changes?.detail?.checks)
+        var folds = SessionRailFolds()
+        folds.setAll(folded: false)
+        let preferences = SessionRailPreferenceStore(defaults: fixture.defaults)
+        let actions = SessionRailActions(pullRequest: SessionRailPullRequestActions())
+        let size = NSSize(width: SessionRailPlacement.width, height: 1900)
+        for (name, content) in [("local-rail-facts", local), ("remote-rail-facts", remote)] {
+            try await render(name, size: size, titled: false) {
+                SessionRailView(content: content, folds: .constant(folds), preferences: preferences, actions: actions)
+                    .background(ParityTheme.canvas)
+            } check: { elements in
+                for title in ["Context", "Usage", "Progress", "Agents", "Changes"] {
+                    XCTAssertTrue(elements.contains { $0.label == L10n.string(title) }, "Missing \(title): \(elements)")
+                }
+            }
+        }
+        try await render("comparison-rail-facts", size: NSSize(width: size.width * 2 + 1, height: size.height), titled: false) {
+            HStack(spacing: 0) {
+                SessionRailView(content: local, folds: .constant(folds), preferences: preferences, actions: actions)
+                Divider()
+                SessionRailView(content: remote, folds: .constant(folds), preferences: preferences, actions: actions)
+            }
+            .background(ParityTheme.canvas)
+        }
+        hosts.close(paired.id)
+        await host.shutdown()
+    }
+
+    /// The home reads its answer lines and finished count from the same host as the task rail.
+    func testHomeAnswerLinesAndFinishedTodayDrawAsTheLocalOnesDo() async throws {
+        let fixture = try railHomeFixture()
+        let host = fixture.host
+        let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(model: host))
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                       name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let hosts = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                       hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
+        let paired = try await hosts.pair(link: link.absoluteString)
+        let model = try XCTUnwrap(hosts.model(for: paired.id))
+        try await waitUntil { model.hasSnapshot }
+        let remote = RemoteNewTaskView(model: model, draft: TaskComposerDraft(), chosenProjectID: .constant(nil)).activity
+        let local = NewTaskHomeActivity(
+            sessions: host.sidebarSessions, details: host.taskAttentionDetails,
+            groups: host.projects.visibleGroups(sessions: host.sidebarSessions),
+            chats: host.projects.chats(sessions: host.sidebarSessions),
+            now: remote.now, answerLine: { host.answerLineBySessionID[$0] }, latestTurn: { host.latestTurnBySessionID[$0] })
+        XCTAssertEqual(remote.answerLine(fixture.task.id), local.answerLine(fixture.task.id))
+        XCTAssertEqual(remote.answerLine(fixture.task.id), "The migration is ready for review.")
+        XCTAssertEqual(remote.latestTurn(fixture.task.id)?.startedAt?.timeIntervalSince1970 ?? 0,
+                       local.latestTurn(fixture.task.id)?.startedAt?.timeIntervalSince1970 ?? 0, accuracy: 0.001)
+        func summaries(_ activity: NewTaskHomeActivity) -> [NewTaskProjectSummary] {
+            NewTaskHomeListsProjection.projectSummaries(groups: activity.groups, chats: activity.chats,
+                details: activity.details, answerLine: activity.answerLine, latestTurn: activity.latestTurn, now: activity.now)
+        }
+        XCTAssertEqual(summaries(remote).map(\.finishedToday), summaries(local).map(\.finishedToday))
+        XCTAssertEqual(summaries(remote).reduce(0) { $0 + $1.finishedToday }, 1)
+        let size = NSSize(width: 640, height: 500)
+        for (name, activity) in [("local-home-facts", local), ("remote-home-facts", remote)] {
+            try await render(name, size: size, titled: false) {
+                RailHomeListsRender(activity: activity)
+            } check: { elements in
+                XCTAssertTrue(elements.contains { $0.label.contains("The migration is ready for review.") }, elements.description)
+                XCTAssertTrue(elements.contains { $0.label.contains(L10n.format("%lld finished today", 1)) }, elements.description)
+            }
+        }
+        try await render("comparison-home-facts", size: NSSize(width: 1281, height: 500), titled: false) {
+            HStack(spacing: 0) {
+                RailHomeListsRender(activity: local).frame(width: 640)
+                Divider()
+                RailHomeListsRender(activity: remote).frame(width: 640)
+            }
+        }
+        hosts.close(paired.id)
+        await host.shutdown()
+    }
+
+    private struct RailHomeFixture {
+        let host: AppModel
+        let task: SessionRecord
+        let entries: [TranscriptEntry]
+        let account: SessionRailAccount
+        let defaults: UserDefaults
+    }
+
+    /// Entirely in-memory account and pull-request readings; no credentials, CLI or GitHub requests.
+    private func railHomeFixture() throws -> RailHomeFixture {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteHostWindowRenderingTests.railHome")))
+        let connections = ProviderConnectionStore()
+        let connection = ProviderConnection(id: "render-account", name: "Review account", harness: .claudeCode,
+                                            providerID: nil, homePath: nil, credentialSelector: nil)
+        try connections.save(connection)
+        let now = Date()
+        let accountSnapshot = HarnessAccountSnapshot(
+            id: connection.id, harness: .claudeCode, providerID: nil, state: .signedIn,
+            accountLabel: "review@example.test", accountOrganization: nil, accountPlan: nil, detail: "",
+            credentialOwner: "", checkedAt: now,
+            usage: [AccountUsageMetric(id: "claude:session", label: "5 hour limit", usedFraction: 0.36, detail: "",
+                                        resetsAt: now.addingTimeInterval(7200), evidence: .exactQuota),
+                    AccountUsageMetric(id: "claude:week", label: "7 day limit", usedFraction: 0.19, detail: "",
+                                        resetsAt: now.addingTimeInterval(345600), evidence: .exactQuota)],
+            canLogin: false, canLogout: false)
+        connections.publish(accountSnapshot, for: connection)
+        let folder = URL(filePath: "/tmp/remote-render/rail-home", directoryHint: .isDirectory)
+        let task = SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                 title: "Migrate the session index", status: .completed, updatedAt: now,
+                                 hasUnreadUpdate: true, completionState: .completed, connection: connection)
+        let child = SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                  title: "Review the migration", status: .running, updatedAt: now.addingTimeInterval(-10),
+                                  parentTaskID: task.id)
+        let entries = [
+            TranscriptEntry(createdAt: now.addingTimeInterval(-120), content: .user(text: "Migrate the session index")),
+            TranscriptEntry(createdAt: now.addingTimeInterval(-60), content: .plan(
+                "☑ Read the current schema\n☑ Write the migration\n◉ Review the migration\n☐ Run the full suite")),
+            TranscriptEntry(createdAt: now, content: .assistant(text: "The migration is ready for review.", isStreaming: false))
+        ]
+        let host = AppModel(store: SessionStore(sessions: [task, child], repository: InMemorySessionRepository()),
+                            runtimeSelections: RuntimeSelectionStore(defaults: defaults), connections: connections,
+                            initialTranscripts: [task.id: entries],
+                            initialProviderCapabilities: [task.id: ComposerUnificationFixtures.claudeLiveCapabilities],
+                            initialProviderUsage: [task.id: ComposerUnificationFixtures.providerUsage], preferences: defaults,
+                            transcriptRepository: UserDefaultsTranscriptRepository(defaults: defaults),
+                            sessionTitleResolver: { _ in nil }, restoresIndexOnLaunch: false)
+        let pullRequest = TaskPullRequest(number: 341, url: PullRequestDetailTests.url, repository: nil,
+                                          state: .open, checks: .failing, review: .changesRequested)
+        host.pullRequests.setPullRequest(pullRequest, for: task.id)
+        var state = PullRequestDetailCenter.TaskState(url: pullRequest.url, folder: folder)
+        state.detail = GitHubPullRequestDetailParser.parse(Data(PullRequestDetailTests.viewJSON().utf8))
+        state.mergeMethods = .all
+        host.pullRequestDetails.setState(state, for: task.id)
+        return RailHomeFixture(host: host, task: task, entries: entries,
+                               account: SessionRailAccount(choice: AccountChoice(harness: .claudeCode,
+                                                                                connection: connection, snapshot: accountSnapshot)),
+                               defaults: defaults)
+    }
+
+    private struct RailHomeListsRender: View {
+        let activity: NewTaskHomeActivity
+        @State private var keyboard = NewTaskHomeListKeyboard()
+        @FocusState private var focus: NewTaskHomeLists.Part?
+
+        var body: some View {
+            NewTaskHomeLists(part: .projects, folder: nil, startsChat: false, canUseWorktree: false,
+                             startsInNewWorktree: false, git: .none, activity: activity, rowLimit: 8,
+                             recentSessions: activity.sessions, onAction: { _ in }, keyboard: $keyboard, focus: $focus,
+                             onListed: { _, _ in }, onReturnToComposer: {},
+                             readFolderGit: { _ in .none }, readLeftWork: { _ in nil })
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(ParityTheme.canvas)
+        }
     }
 
     // MARK: - Helpers

@@ -5,6 +5,8 @@ import SwiftUI
 struct SessionRailAgentActions {
     /// Opens an agent's conversation beside the task, or goes to a child task.
     var open: (SessionRailAgents.Agent) -> Void = { _ in }
+    /// Whether this window can open the agent conversation.
+    var canOpen: (SessionRailAgents.Agent) -> Bool = { _ in true }
     /// Stops a running agent the way its card in the conversation does.
     var stop: ((SessionRailAgents.Agent) -> Void)? = nil
     var isStopping: (SessionRailAgents.Agent) -> Bool = { _ in false }
@@ -39,7 +41,7 @@ struct SessionRailAgentRow: View {
 
     private var isStopping: Bool { actions?.isStopping(agent) == true }
     private var opens: Bool {
-        guard actions != nil else { return false }
+        guard let actions, actions.canOpen(agent) else { return false }
         if case .childTask = agent.kind { return true }
         return agent.opensPanel
     }

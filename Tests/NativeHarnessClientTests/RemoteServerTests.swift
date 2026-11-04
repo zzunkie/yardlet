@@ -8,6 +8,42 @@ import XCTest
 /// attention events, conversation pages and changes, and commands reaching the bridge with their audit
 /// lines — never the message text.
 final class RemoteServerTests: XCTestCase {
+    func testRailFactsAreAdvertisedAuditedAndWatchedOnlyByTheirReader() async throws {
+        let harness = try await ServerHarness()
+        var snapshot = FakeBridge.snapshot
+        snapshot.taskRail = true
+        await harness.bridge.setSnapshot(snapshot)
+        await harness.bridge.setConversation(RemoteConversation(turns: []), for: "A")
+        let desktop = try await harness.authenticatedPhone()
+        let phone = try await harness.authenticatedPhone()
+        func request(_ id: String, _ value: RemoteRequest, on channel: TestChannel) async throws -> RemoteResponse {
+            await harness.server.receive(RemoteRequestEnvelope(id: id, request: value).encoded(), on: try XCTUnwrap(channel.id))
+            return try await channel.response(id)
+        }
+        let advertised = try await request("snapshot", .snapshot, on: desktop)
+        XCTAssertEqual(advertised.taskRail, true)
+        _ = try await request("sub", .subscribeTask(taskID: "A"), on: desktop)
+        _ = try await request("sub", .subscribeTask(taskID: "A"), on: phone)
+        let facts = try await request("rail", .taskRail(taskID: "A"), on: desktop)
+        XCTAssertEqual(facts.rail?.accountName, "Display name only")
+        let watched = await harness.bridge.watchedRails
+        XCTAssertEqual(watched, ["A"])
+        await harness.bridge.signal(.taskRail("A"))
+        _ = try await desktop.event(.taskRailChanged)
+        XCTAssertTrue(phone.events(.taskRailChanged).isEmpty)
+        let released = try await request("release", .taskRail(taskID: "A", watching: false), on: desktop)
+        XCTAssertTrue(released.ok)
+        XCTAssertNil(released.rail)
+        let after = await harness.bridge.watchedRails
+        XCTAssertTrue(after.isEmpty)
+        let conversations = await harness.bridge.watchedTasks
+        XCTAssertEqual(conversations, ["A"], "Releasing a rail must preserve the conversation")
+        let audit = harness.audit.entries().filter { $0.type == "taskRail" }
+        XCTAssertEqual(audit.map(\.task), ["A", "A"])
+        XCTAssertFalse(try String(contentsOf: harness.auditURL, encoding: .utf8).contains("Display name only"))
+    }
+
+
     func testTerminalOwnershipFlowAndPermissionRevocation() async throws {
         let harness = try await ServerHarness()
         let key = Data(RemoteRandom.bytes(32))
@@ -1523,6 +1559,7 @@ actor FakeBridge: RemoteBridge {
     private var earlier: [String: RemoteConversation] = [:]
     private var nextFailure: RemoteError?
     private(set) var commands: [RemoteCommand] = []
+    private(set) var watchedRails: Set<String> = []
     private(set) var watchedTasks: Set<String> = []
     private(set) var preparedTasks: [String] = []
     private(set) var createdTasks: [(projectID: String, text: String)] = []
@@ -1556,6 +1593,13 @@ actor FakeBridge: RemoteBridge {
     func prepareConversation(of taskID: String) { preparedTasks.append(taskID) }
     func loadEarlierConversation(of taskID: String) {
         if let earlier = earlier.removeValue(forKey: taskID) { conversations[taskID] = earlier }
+    }
+    func setWatchedRailTasks(_ taskIDs: Set<String>) { watchedRails = taskIDs }
+    func taskRail(taskID: String) -> Result<RemoteRailFacts, RemoteError> {
+        guard current.tasks.contains(where: { $0.id == taskID }) else { return .failure(RemoteError(.notFound)) }
+        var facts = RemoteRailFacts()
+        facts.accountName = "Display name only"
+        return .success(facts)
     }
     func setWatchedTasks(_ taskIDs: Set<String>) { watchedTasks = taskIDs }
     func perform(_ command: RemoteCommand) -> RemoteError? {

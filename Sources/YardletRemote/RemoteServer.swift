@@ -14,6 +14,8 @@ public enum RemoteBridgeChange: Equatable, Sendable {
     case conversation(String)
     /// Something `scheduledTasks` reads may have changed: a schedule, a run, or the task of its latest run (§15.21).
     case schedules
+    /// The shown task's rail facts changed (§15.34).
+    case taskRail(String)
     /// A task's composer controls changed since `taskSettings` last read them (§15.23).
     case taskSettings(String)
     /// What a task's browser tabs list may have changed: a tab opened or closed, or a tab's page, title or wait (§15.25).
@@ -110,6 +112,7 @@ public protocol RemoteBridge: AnyObject, Sendable {
     /// Carries out a command through the app's own paths. Nil when it was accepted.
     func perform(_ command: RemoteCommand) async -> RemoteError?
     /// The tasks some phone reads the conversation of.
+    func setWatchedRailTasks(_ taskIDs: Set<String>) async
     func setWatchedTasks(_ taskIDs: Set<String>) async
     /// Starts a task as the Mac's new-task composer would (§15.5, §15.16); the new task's ID.
     func createTask(_ start: RemoteTaskStart) async -> Result<String, RemoteError>
@@ -131,6 +134,9 @@ public protocol RemoteBridge: AnyObject, Sendable {
     /// the Mac's menu does. Told as `.taskSettings` when they change since this read. A bridge that answers this,
     /// `setTaskSetting`, `composerCommands`, `runComposerCommand`, `forkTask` and `editMessage` says so in its snapshot
     /// (`taskControls`).
+    func taskRail(taskID: String) async -> Result<RemoteRailFacts, RemoteError>
+    func railDraft(taskID: String, confirmed: Bool) async -> Result<String, RemoteError>
+    func railAction(taskID: String, action: String, targetID: String?, confirmed: Bool) async -> RemoteError?
     func taskSettings(taskID: String, prepare: Bool) async -> Result<[RemoteSetting], RemoteError>
     /// Applies a choice as the Mac's menu does; the controls after it.
     func setTaskSetting(taskID: String, setting: String, value: String, confirmed: Bool) async -> Result<[RemoteSetting], RemoteError>
@@ -165,6 +171,10 @@ public protocol RemoteBridge: AnyObject, Sendable {
 }
 
 extension RemoteBridge {
+    public func setWatchedRailTasks(_ taskIDs: Set<String>) async {}
+    public func railDraft(taskID: String, confirmed: Bool) async -> Result<String, RemoteError> { .failure(RemoteError(.unavailable)) }
+    public func taskRail(taskID: String) async -> Result<RemoteRailFacts, RemoteError> { .failure(RemoteError(.unavailable)) }
+    public func railAction(taskID: String, action: String, targetID: String?, confirmed: Bool) async -> RemoteError? { RemoteError(.unavailable) }
     public func announcesFinish(of taskID: String) async -> Bool { true }
     public func openTerminal(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit,
                              output: @escaping @Sendable (RemoteTerminalUpdate) async -> Void) async -> RemoteError? { RemoteError(.unavailable) }
@@ -311,6 +321,7 @@ public actor RemoteServer {
         /// A desktop in use (`presence`, §18): phone pushes wait while one is.
         var isPresent = false
         /// Subscribed tasks whose `taskSettings` it read, so it is told when they change (§15.23).
+        var followsRail: Set<String> = []
         var followsSettings: Set<String> = []
         /// The file it read last (the path the Mac read) and where its next part starts (§15.22): a read that goes on
         /// from there is not written to the audit log again.
@@ -1385,6 +1396,46 @@ public actor RemoteServer {
             }
         case let .readFile(taskID, path, offset):
             await readFile(envelope.id, taskID: taskID, path: path, offset: offset, on: id)
+        case let .taskRail(taskID, watching):
+            if !watching {
+                connections[id]?.followsRail.remove(taskID)
+                await updateWatched()
+                var response = RemoteResponse(re: envelope.id)
+                response.taskId = taskID
+                respond(response, to: id)
+                audit?.record(device: connections[id]?.deviceID, type: request.type, task: taskID, result: "ok", at: now())
+                return
+            }
+            if connections[id]?.subscriptions[taskID] != nil {
+                connections[id]?.followsRail.insert(taskID)
+                await updateWatched()
+            }
+            let result = await bridge.taskRail(taskID: taskID)
+            switch result {
+            case let .success(facts):
+                var response = RemoteResponse(re: envelope.id)
+                response.taskId = taskID; response.rail = facts
+                guard let encoded = try? JSONEncoder().encode(response), encoded.count <= RemoteProtocol.maxServerMessageBytes else {
+                    audit?.record(device: connections[id]?.deviceID, type: request.type, task: taskID, result: "tooLarge", at: now())
+                    respond(.failure(envelope.id, RemoteError(.tooLarge)), to: id)
+                    return
+                }
+                respond(response, to: id)
+            case let .failure(error): respond(.failure(envelope.id, error), to: id)
+            }
+            audit?.record(device: connections[id]?.deviceID, type: request.type, task: taskID,
+                          result: (try? result.get()) == nil ? "failed" : "ok", at: now())
+        case let .railAction(taskID, action, targetID, confirmed):
+            var draft: String?
+            await command(envelope.id, request: request, on: id) {
+                if action == "draftFix" {
+                    switch await self.bridge.railDraft(taskID: taskID, confirmed: confirmed) {
+                    case let .success(text): draft = text; return nil
+                    case let .failure(error): return error
+                    }
+                }
+                return await self.bridge.railAction(taskID: taskID, action: action, targetID: targetID, confirmed: confirmed)
+            } answer: { response in response.output = draft }
         case let .taskSettings(taskID, prepare):
             let result = await bridge.taskSettings(taskID: taskID, prepare: prepare)
             respondSettings(envelope.id, taskID: taskID, result, on: id)
@@ -1490,6 +1541,7 @@ public actor RemoteServer {
             response.reviewReading = published?.reviewReading == true ? true : nil
             response.browserTabs = published?.browserTabs == true ? true : nil
             response.terminals = published?.terminals == true ? true : nil
+            response.taskRail = published?.taskRail == true ? true : nil
             response.tabControls = published?.tabControls == true ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)
@@ -1500,6 +1552,7 @@ public actor RemoteServer {
             await loadOlder(envelope.id, taskID: taskID, cursor: cursor, on: id)
         case let .unsubscribeTask(taskID):
             connections[id]?.subscriptions[taskID] = nil
+            connections[id]?.followsRail.remove(taskID)
             connections[id]?.followsSettings.remove(taskID)
             respond(RemoteResponse(re: envelope.id), to: id)
             await updateWatched()
@@ -1759,6 +1812,7 @@ public actor RemoteServer {
                       subscription.generation < generation else { continue }
                 guard let conversation else {
                     connections[id]?.subscriptions[taskID] = nil
+                    connections[id]?.followsRail.remove(taskID)
                     connections[id]?.followsSettings.remove(taskID)
                     var event = RemoteEvent(.conversationEnded)
                     event.taskId = taskID
@@ -1800,6 +1854,7 @@ public actor RemoteServer {
 
     private func updateWatched() async {
         let tasks = Set(connections.values.flatMap(\.subscriptions.keys))
+        await bridge.setWatchedRailTasks(Set(connections.values.flatMap(\.followsRail)))
         guard tasks != watched else { return }
         watched = tasks
         await bridge.setWatchedTasks(tasks)
@@ -1843,6 +1898,12 @@ public actor RemoteServer {
                 try? await Task.sleep(for: interval)
                 self.schedulesTimer = nil
                 await self.refreshSchedules()
+            }
+        case let .taskRail(taskID):
+            var event = RemoteEvent(.taskRailChanged)
+            event.taskId = taskID
+            for (id, connection) in connections where connection.followsRail.contains(taskID) {
+                send(event, to: id)
             }
         case let .taskSettings(taskID):
             // The bridge tells only of a change since the last read; the phone reads them again.

@@ -6,14 +6,17 @@ import YardletRemote
 /// where it runs (its project and harness; the folder is the host's, so it is named and not opened here), its settings
 /// as the host's composer reads them (§15.23), chosen here through the host, and the files its Outputs card lists
 /// (§15.22). A file opens once read from the host: a click in this Mac's Quick Look, its menu in its own app or in
-/// Finder, each on the copy. Cards whose facts the host does not send yet (context, usage, changes, agents) stay out,
-/// as the local rail leaves out a card with nothing for it.
+/// Finder, each on the copy. The shown task reads its remaining facts from the host (§15.34),
+/// through the same local projections; older hosts leave those cards out.
 struct RemoteTaskRail: View {
     /// The host's task as the sidebar reads it (`RemoteSidebarMirror`).
     let session: SessionRecord
     let projectName: String
     let options: ComposerSessionOptions?
     let outputs: [RemoteOutput]
+    var hostName: String? = nil
+    var facts: RemoteRailFacts? = nil
+    var hostActions = SessionRailActions()
     let preferences: SessionRailPreferenceStore
     @Binding var folds: SessionRailFolds
     let choose: (ComposerSessionChoice) -> Void
@@ -31,30 +34,24 @@ struct RemoteTaskRail: View {
             })
     }
 
-    private var content: SessionRailContent {
-        var content = SessionRailContent.make(
-            session: session, projectName: projectName,
-            instructionSources: TaskInstructionSources(origin: .detected, paths: []), git: nil,
-            options: options ?? ComposerSessionOptions(harnessName: session.harness.displayName,
-                                                       input: HarnessComposerInputPolicy(harness: session.harness),
-                                                       submission: .providerInput),
-            connectors: nil, account: nil, entries: [], codexPlan: nil, pullRequest: nil, pullRequestState: nil)
-        content.environment.folderURL = nil
-        content.outputs = Self.rows(outputs)
-        return content
+    var content: SessionRailContent {
+        RemoteRailProjection.content(session: session, projectName: projectName, options: options,
+                                     outputs: outputs, hostName: hostName, facts: facts)
     }
 
     private var actions: SessionRailActions {
-        var actions = SessionRailActions()
+        var actions = hostActions
         actions.onChoose = choose
         actions.onPrepareSettings = prepareSettings
-        actions.openURL = openInItsApp
+        actions.openURL = { url in
+            if url.isFileURL { openInItsApp(url) } else { hostActions.openURL(url) }
+        }
         actions.revealInFinder = revealInFinder
         return actions
     }
 
     /// The host's outputs as the card's rows: each at its path on the host, which the card shows as its help.
-    static func rows(_ outputs: [RemoteOutput]) -> [SessionRailContent.Output] {
+    nonisolated static func rows(_ outputs: [RemoteOutput]) -> [SessionRailContent.Output] {
         outputs.map { output in
             SessionRailContent.Output(url: URL(filePath: output.path),
                                       writtenAt: output.writtenAt.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) })

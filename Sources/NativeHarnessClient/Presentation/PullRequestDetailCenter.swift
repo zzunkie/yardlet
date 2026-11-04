@@ -55,6 +55,7 @@ final class PullRequestDetailCenter {
     @ObservationIgnored private(set) var commands: [[String]] = []
 
     @ObservationIgnored private var shown: Set<UUID> = []
+    @ObservationIgnored private var remoteShown: Set<UUID> = []
     @ObservationIgnored private var asking: Set<UUID> = []
     @ObservationIgnored private var delivering: Set<UUID> = []
     @ObservationIgnored private var loop: Task<Void, Never>?
@@ -101,6 +102,19 @@ final class PullRequestDetailCenter {
             || now().timeIntervalSince(previous?.lastAsked ?? .distantPast) >= 60 {
             Task { await refresh(taskID) }
         }
+    }
+
+    /// Remote rails have their own visibility lease; closing one does not hide a local rail.
+    func showRemote(taskID: UUID, pullRequest: TaskPullRequest, folder: URL) {
+        let localWasShown = shown.contains(taskID)
+        remoteShown.insert(taskID)
+        show(taskID: taskID, pullRequest: pullRequest, folder: folder)
+        if !localWasShown { shown.remove(taskID) }
+    }
+
+    func hideRemote(taskID: UUID) {
+        remoteShown.remove(taskID)
+        updateLoop()
     }
 
     /// The card left the screen, or the task has no pull request any more.
@@ -285,7 +299,7 @@ final class PullRequestDetailCenter {
         if let detail = state?.detail, !detail.isOpen { return false }
         guard let lastAsked = state?.lastAsked else { return true }
         let elapsed = now().timeIntervalSince(lastAsked)
-        if shown.contains(taskID) {
+        if shown.contains(taskID) || remoteShown.contains(taskID) {
             let interval = state?.detail?.count(.pending) ?? 0 > 0 ? runningChecksInterval : shownInterval
             if elapsed >= interval { return true }
         }
@@ -293,14 +307,14 @@ final class PullRequestDetailCenter {
     }
 
     func tick() async {
-        let watched = shown.union(autoFix.enabledTaskIDs)
+        let watched = shown.union(remoteShown).union(autoFix.enabledTaskIDs)
         for taskID in watched where isDue(taskID) {
             await refresh(taskID)
         }
     }
 
     private func updateLoop() {
-        let wanted = client != nil && isLooking && !(shown.isEmpty && autoFix.enabledTaskIDs.isEmpty)
+        let wanted = client != nil && isLooking && !(shown.isEmpty && remoteShown.isEmpty && autoFix.enabledTaskIDs.isEmpty)
         if !wanted {
             loop?.cancel()
             loop = nil

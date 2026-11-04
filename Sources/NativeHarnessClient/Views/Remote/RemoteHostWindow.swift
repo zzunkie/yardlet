@@ -802,7 +802,7 @@ struct RemoteTaskView: View {
 
     /// The task's settings as the composer's bottom row reads them, from a host that sent them.
     private var settingsOptions: ComposerSessionOptions? {
-        model.taskSettings[conversation.taskID].map { RemoteTaskSettingsProjection.options($0, task: task) }
+        model.railComposerOptions(conversation.taskID)
     }
 
     /// The project the task is listed under, or Chats.
@@ -888,6 +888,12 @@ struct RemoteTaskView: View {
         if let session = railSession {
             RemoteTaskRail(
                 session: session, projectName: projectName, options: settingsOptions, outputs: outputs,
+                hostName: model.name, facts: model.taskRailFacts[conversation.taskID],
+                hostActions: model.railActions(conversation.taskID, openChanges: { openSidePanel(TaskSurface.diff.rawValue) },
+                    draftFix: { text in
+                        let typed = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        draft.text = typed.isEmpty ? text : draft.text + "\n\n" + text
+                    }),
                 preferences: railPreferences, folds: $railFolds,
                 choose: { [model, taskID = conversation.taskID] in model.chooseTaskSetting(taskID, $0) },
                 prepareSettings: { [model, taskID = conversation.taskID] in await model.readTaskSettings(taskID, prepare: true) },

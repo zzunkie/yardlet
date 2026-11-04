@@ -67,8 +67,11 @@ struct SessionRailContent: Equatable {
         var instructionSources: TaskInstructionSources
         var harness: HarnessKind
 
+        /// The host name for a task running on another Mac.
+        var hostName: String? = nil
+
         /// Where the task runs, the Claude app's folded line.
-        var locationTitle: String { worktreeName == nil ? L10n.string("Local") : L10n.string("Worktree") }
+        var locationTitle: String { worktreeName == nil ? (hostName ?? L10n.string("Local")) : L10n.string("Worktree") }
     }
 
     struct Settings: Equatable {

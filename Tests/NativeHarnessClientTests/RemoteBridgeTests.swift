@@ -489,6 +489,7 @@ final class RemoteBridgeTests: XCTestCase {
 
         // A phone reads the same conversation in its own detail; the two keep their turns apart.
         let basic = try XCTUnwrap(bridge.conversation(of: taskID))
+        _ = await bridge.taskRail(taskID: taskID)
         XCTAssertEqual(bridge.projectedTurnCount, 603)
         XCTAssertNil(basic.turns.last?.items.first?.images)
         for index in 1...20 {
@@ -500,6 +501,7 @@ final class RemoteBridgeTests: XCTestCase {
             try await waitUntil { changes.value > before }
             _ = bridge.conversation(of: taskID, detail: .full)
             _ = bridge.conversation(of: taskID)
+            _ = await bridge.taskRail(taskID: taskID)
         }
         XCTAssertEqual(bridge.projectedTurnCount, 643)
         XCTAssertEqual(made.value, 3)
@@ -520,11 +522,17 @@ final class RemoteBridgeTests: XCTestCase {
                                            command: "curl -H 'Authorization: Bearer sk-live-9f8e7d6c' https://example.test")
         let queued = QueuedFollowUp(draft: CodexComposerDraft(inputs: [.text("Then update the changelog")]))
         let model = try Self.model(sessions: [waiting, unread, child], transcripts: [
-            waiting.id: [TranscriptEntry(content: .user(text: "Go")), TranscriptEntry(content: .permission(permission, state: .pending))]
+            waiting.id: [TranscriptEntry(content: .user(text: "Go")), TranscriptEntry(content: .permission(permission, state: .pending))],
+            unread.id: [TranscriptEntry(createdAt: Date(timeIntervalSince1970: 180), content: .user(text: "Check the update")),
+                        TranscriptEntry(content: .assistant(text: "The update is ready.", isStreaming: false))]
         ], queues: [waiting.id: [queued]])
         let bridge = AppModelRemoteBridge(model: model)
         let snapshot = bridge.snapshot()
         XCTAssertEqual(snapshot.tasks.map(\.title), ["Approve", "Done", "Child"])
+        XCTAssertEqual(snapshot.tasks[1].answerLine, "The update is ready.")
+        XCTAssertEqual(snapshot.tasks[1].latestTurnStartedAt, 180_000)
+        XCTAssertEqual(snapshot.tasks[1].completed, true)
+        XCTAssertEqual(snapshot.tasks[0].completed, false)
         XCTAssertEqual(snapshot.tasks.map(\.attention), [.waiting, .unread, .idle])
         XCTAssertEqual(snapshot.tasks.map(\.indicator), [.awaitingApproval, .unread, nil])
         XCTAssertEqual(snapshot.tasks[0].pendingRequest, .approval)

@@ -53,6 +53,11 @@ final class RemoteHostModel: Identifiable {
     private(set) var offersWorkspaceFiles = false
     private(set) var offersTaskFiles = false
     private(set) var offersReview = false
+    private(set) var offersTaskRail = false
+    var taskRailFacts: [String: RemoteRailFacts] = [:]
+    var runningRailActions: Set<String> = []
+    @ObservationIgnored var readingTaskRails: Set<String> = []
+    @ObservationIgnored var dirtyTaskRails: Set<String> = []
     /// The sidebar lists the host's scheduled tasks in place of its tasks, as the Mac's sidebar does.
     var showsSchedules = false
     /// The host's scheduled tasks, and its tasks' outputs and files, read when shown.
@@ -232,8 +237,12 @@ final class RemoteHostModel: Identifiable {
             guard let taskID = event.taskId else { return }
             conversations[taskID] = nil
             taskSettings[taskID] = nil
+            taskRailFacts[taskID] = nil
             subscribed.removeAll { $0 == taskID }
             applyTasks(changed: [], removed: [taskID])
+        case .taskRailChanged:
+            guard let taskID = event.taskId, selection == .task(taskID) else { return }
+            Task { await readTaskRail(taskID) }
         case .taskSettingsChanged:
             guard let taskID = event.taskId, conversations[taskID] != nil else { return }
             Task { await readTaskSettings(taskID) }
@@ -261,6 +270,9 @@ final class RemoteHostModel: Identifiable {
             offersSchedules = response.scheduledTasks == true
             offersTaskFiles = response.taskFiles == true
             offersReview = response.reviewReading == true
+            offersTaskRail = response.taskRail == true
+            if !offersTaskRail { taskRailFacts.removeAll() }
+            if case let .task(taskID) = selection { Task { await readTaskRail(taskID) } }
             offersWorkspaceFiles = response.workspaceFiles == true
             offersTerminals = response.terminals == true
             taskControls = response.taskControls == true
@@ -329,6 +341,9 @@ final class RemoteHostModel: Identifiable {
 
     func select(_ selection: Selection) {
         guard selection != self.selection else { return }
+        if offersTaskRail, isConnected, case let .task(previous) = self.selection {
+            requestInOrder(.taskRail(taskID: previous, watching: false))
+        }
         self.selection = selection
         commandError = nil
         // The panel follows the task shown, as each task's side panel is its own.
@@ -336,6 +351,7 @@ final class RemoteHostModel: Identifiable {
             if case let .task(taskID) = selection { browser.show(taskID: taskID) } else { browser.hide() }
         }
         guard case let .task(taskID) = selection else { return }
+        Task { await readTaskRail(taskID) }
         // A task opened from a schedule, a chip or a notification shows among the tasks.
         showsSchedules = false
         if conversations[taskID] == nil {
@@ -360,6 +376,7 @@ final class RemoteHostModel: Identifiable {
             let dropped = subscribed.removeFirst()
             conversations[dropped] = nil
             taskSettings[dropped] = nil
+            taskRailFacts[dropped] = nil
             send(.unsubscribeTask(taskID: dropped))
         }
         guard isConnected else { return }

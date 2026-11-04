@@ -811,7 +811,7 @@ final class RemoteHostModelTests: XCTestCase {
             task.pendingKind = kind
             return task
         }
-        let tasks = [
+        var tasks = [
             task(1, .waiting, .awaitingApproval, running: true),
             task(2, .waiting, .needsInput, running: true),
             task(3, .waiting, .needsInput, running: true, kind: "browserHandoff"),
@@ -821,6 +821,9 @@ final class RemoteHostModelTests: XCTestCase {
             task(7, .unread, .unread, projectID: RemoteTaskProjection.chatsProjectID, unread: true),
             task(8, .idle, nil),
         ]
+        tasks[7].completed = true
+        tasks[7].answerLine = "The update is ready."
+        tasks[7].latestTurnStartedAt = 900_000
         let mirror = RemoteSidebarMirror(hostID: "host", projects: [
             RemoteProject(id: project, name: "acme-web", kind: .project, canCreateTask: true),
             RemoteProject(id: RemoteTaskProjection.chatsProjectID, name: "Chats", kind: .chats, canCreateTask: true),
@@ -841,6 +844,12 @@ final class RemoteHostModelTests: XCTestCase {
         XCTAssertEqual(status(6), .running)
         XCTAssertEqual(status(7), .unread)
         XCTAssertNil(status(8))
+        let finishedID = try XCTUnwrap(UUID(uuidString: Self.taskID(8)))
+        XCTAssertEqual(mirror.sessions.first { $0.id == finishedID }?.status, .completed)
+        XCTAssertEqual(mirror.answerLines[finishedID], "The update is ready.")
+        XCTAssertEqual(mirror.latestTurns[finishedID]?.startedAt, Date(timeIntervalSince1970: 900))
+        let roundTrip = try JSONDecoder().decode(RemoteTask.self, from: JSONEncoder().encode(tasks[7]))
+        XCTAssertEqual(roundTrip, tasks[7])
         // The folder stands only for the group: no Mac has it.
         let folder = try XCTUnwrap(mirror.groups.first?.workspaceURL)
         XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path(percentEncoded: false)))

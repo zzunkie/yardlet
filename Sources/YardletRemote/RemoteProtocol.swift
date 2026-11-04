@@ -185,6 +185,10 @@ public struct RemoteTask: Codable, Equatable, Sendable {
     public var pinned: Bool
     public var lastActivityAt: Int64
     public var parentTaskId: String?
+    /// Cached home facts (§15.34); absent on older hosts.
+    public var answerLine: String?
+    public var latestTurnStartedAt: Int64?
+    public var completed: Bool?
     /// While `waiting`: the newest request's one line (as the `attention` event's `summary`) and its
     /// kind (`approval`, `question`, `planReview`, `form`), so a list can say what waits (§15.1).
     public var pendingSummary: String?
@@ -244,6 +248,7 @@ public struct RemoteSnapshot: Equatable, Sendable {
     /// The bridge shows a task's browser tabs and takes input for them (§15.25).
     public var browserTabs: Bool
     public var terminals: Bool
+    public var taskRail: Bool = false
     public var tabControls: Bool = false
 
     public init(projects: [RemoteProject] = [], tasks: [RemoteTask] = [], newestRequestIDs: [String: String] = [:],
@@ -986,6 +991,8 @@ public enum RemoteRequest: Equatable, Sendable {
     case presence(active: Bool)
     /// A task's composer controls, its slash commands, and the edit and fork of its turns (§15.23). `prepare` reads
     /// the choices first, as opening the Mac's menu does.
+    case taskRail(taskID: String, watching: Bool = true)
+    case railAction(taskID: String, action: String, targetID: String? = nil, confirmed: Bool = false)
     case taskSettings(taskID: String, prepare: Bool = false)
     case setTaskSetting(taskID: String, setting: String, value: String, confirmed: Bool = false)
     case composerCommands(taskID: String)
@@ -1046,6 +1053,8 @@ public enum RemoteRequest: Equatable, Sendable {
         case .readFile: "readFile"
         case .workspaceFiles: "workspaceFiles"
         case .presence: "presence"
+        case .taskRail: "taskRail"
+        case .railAction: "railAction"
         case .taskSettings: "taskSettings"
         case .setTaskSetting: "setTaskSetting"
         case .composerCommands: "composerCommands"
@@ -1071,6 +1080,7 @@ public enum RemoteRequest: Equatable, Sendable {
     /// this exhaustive switch; task-specific controls retain their established paired-device access.
     public var requiredPermission: RemoteDevicePermission? {
         switch self {
+        case .taskRail, .railAction: nil
         case .readReview, .workspaceFiles: nil
         case .openTerminal, .terminalInput, .terminalResize, .terminalStatus, .terminalOutputAck, .closeTerminal: .terminal
         case .openTab, .closeTab: nil
@@ -1087,6 +1097,7 @@ public enum RemoteRequest: Equatable, Sendable {
     /// The task a request names.
     public var taskID: String? {
         switch self {
+        case let .taskRail(id, _), let .railAction(id, _, _, _): id
         case let .subscribeTask(id, _), let .loadOlder(id, _), let .unsubscribeTask(id), let .sendMessage(id, _, _, _, _),
              let .answerApproval(id, _, _, _), let .stopTurn(id), let .markRead(id), let .answerQuestion(id, _, _),
              let .reviewPlan(id, _, _, _), let .itemDetail(id, _), let .actOnSuggestion(id, _, _), let .setPinned(id, _),
@@ -1119,7 +1130,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .sendMessage, .answerApproval, .stopTurn, .markRead, .answerQuestion, .reviewPlan, .createTask,
              .actOnSuggestion, .setPinned, .archiveTask, .answerLink, .continueWithAccount, .setAutoContinue, .actOnQueued,
              .answerHandoff, .chooseAnswer, .runScheduledTask, .setScheduledTaskEnabled, .setTaskSetting, .runComposerCommand,
-             .editMessage, .forkTask: true
+             .editMessage, .forkTask, .railAction: true
         default: false
         }
     }
@@ -1172,6 +1183,8 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var provider: String?
         var itemId: String?
         var suggestionId: String?
+        var watching: Bool?
+        var targetId: String?
         var action: String?
         var pinned: Bool?
         var approve: Bool?
@@ -1448,6 +1461,16 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             }
             guard let offset = wire.offset, offset >= 0 else { return fail(.badRequest, "Missing or negative offset") }
             request = .readFile(taskID: taskID, path: path, offset: offset)
+        case "taskRail", "railAction":
+            guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
+            if wire.type == "taskRail" { request = .taskRail(taskID: taskID, watching: wire.watching != false) }
+            else {
+                guard let action = wire.action, action.count <= 64,
+                      wire.targetId.map({ $0.utf8.count <= RemoteProtocol.maxProviderIDBytes }) ?? true else {
+                    return fail(.badRequest, "Invalid rail action")
+                }
+                request = .railAction(taskID: taskID, action: action, targetID: wire.targetId, confirmed: wire.confirmed == true)
+            }
         case "taskSettings", "composerCommands", "forkTask":
             guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
             switch type {
@@ -1664,6 +1687,10 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             wire.taskId = taskID
             wire.path = path
             wire.offset = offset
+        case let .taskRail(taskID, watching):
+            wire.taskId = taskID; wire.watching = watching ? nil : false
+        case let .railAction(taskID, action, targetID, confirmed):
+            wire.taskId = taskID; wire.action = action; wire.targetId = targetID; wire.confirmed = confirmed
         case let .taskSettings(taskID, prepare):
             wire.taskId = taskID
             wire.prepare = prepare ? true : nil
@@ -1738,6 +1765,8 @@ public struct RemoteServerInfo: Codable, Equatable, Sendable {
 
 /// A response to one request. Each request fills the result fields its section names.
 public struct RemoteResponse: Codable, Equatable, Sendable {
+    public var taskRail: Bool?
+    public var rail: RemoteRailFacts?
     public var re: String
     public var ok: Bool
     public var error: RemoteError?
@@ -2106,6 +2135,7 @@ public struct RemoteEvent: Codable, Equatable, Sendable {
         // §15.21
         case schedulesChanged
         // §15.23
+        case taskRailChanged
         case taskSettingsChanged
         case tabFrame
         case browserTabsChanged

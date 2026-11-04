@@ -444,6 +444,7 @@ struct SessionRailProgressCard: View {
 @MainActor
 struct SessionRailTerminalActions {
     var open: (CodexBackgroundTerminal) -> Void = { _ in }
+    var canOpen = true
     var stop: (CodexBackgroundTerminal) -> Void = { _ in }
     /// The Codex app's "Stop all background terminals".
     var stopAll: () -> Void = {}
@@ -550,6 +551,7 @@ struct SessionRailBackgroundTasksCard: View {
             .buttonStyle(.plain)
             .parityPointer()
             .help(terminal.command)
+            .disabled(terminalActions?.canOpen != true)
             Spacer(minLength: 8)
             if isStopping {
                 Text(L10n.string("Stopping…"))

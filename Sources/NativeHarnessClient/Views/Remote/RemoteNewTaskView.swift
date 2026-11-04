@@ -109,7 +109,7 @@ struct RemoteNewTaskView: View {
     // MARK: The home's lists
 
     /// The host's tasks as the local home reads this Mac's (`NewTaskHomeActivity`), from the lists the sidebar reads.
-    private var activity: NewTaskHomeActivity {
+    var activity: NewTaskHomeActivity {
         let mirror = model.sidebar
         let names = Dictionary(mirror.groups.flatMap { group in group.sessions.map { ($0.id, group.displayName) } },
                                uniquingKeysWith: { first, _ in first })
@@ -118,6 +118,8 @@ struct RemoteNewTaskView: View {
         activity.details = mirror.details
         activity.groups = mirror.groups
         activity.chats = mirror.chats
+        activity.answerLine = { mirror.answerLines[$0] }
+        activity.latestTurn = { mirror.latestTurns[$0] }
         activity.placeName = { names[$0.id] ?? L10n.string("Chats") }
         activity.onMarkRead = { [model] ids in for id in ids { model.send(.markRead(taskID: id.uuidString)) } }
         return activity

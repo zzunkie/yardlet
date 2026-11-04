@@ -9,8 +9,8 @@ import YardletRemote
 /// the host's follow-up setting in place of this Mac's, its queue's rows above the text, and Stop. From a host
 /// that offers them (§15.23) its bottom row draws the task's own settings with the local controls
 /// (`ComposerSessionControls`), "+" and a typed `/` list the slash commands that may run from here, and an
-/// edited message goes as the host's edit. The host's own composer keeps what only it offers (connectors, a
-/// folder, the context ring); while the host cannot be reached, sending waits and the words stay.
+/// edited message goes as the host's edit. The context ring reads the same host facts as the session rail;
+/// while the host cannot be reached, sending waits and the words stay.
 struct RemoteComposer: View {
     let model: RemoteHostModel
     let taskID: String
@@ -56,7 +56,7 @@ struct RemoteComposer: View {
 
     /// The task's settings as the local bottom row reads them, from a host that sent them.
     private var options: ComposerSessionOptions? {
-        model.taskSettings[taskID].map { RemoteTaskSettingsProjection.options($0, task: task) }
+        model.railComposerOptions(taskID)
     }
 
     var body: some View {
@@ -123,7 +123,8 @@ struct RemoteComposer: View {
         HStack(spacing: 7) {
             if let options {
                 ComposerSessionControls(options: options, placement: .trailing, isDisabled: !model.isConnected,
-                                        registersTaskFocus: false, onChoose: choose, onPrepare: prepareSettings)
+                                        registersTaskFocus: false, onChoose: choose, onPrepare: prepareSettings,
+                                        compact: model.railCompact(taskID))
             }
             if isSending { ProgressView().controlSize(.small) }
             if isRunning {

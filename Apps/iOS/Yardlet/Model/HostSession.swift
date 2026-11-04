@@ -183,6 +183,8 @@ final class HostSession: Identifiable {
             taskSettings[taskID] = nil
             subscribed.removeAll { $0 == taskID }
             applyTasks(changed: [], removed: [taskID])
+        case .taskRailChanged:
+            break
         case .taskSettingsChanged:
             guard let taskID = event.taskId, conversations[taskID] != nil else { return }
             Task { await readTaskSettings(taskID) }

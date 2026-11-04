@@ -10,6 +10,8 @@ struct RemoteSidebarMirror: Equatable {
     var groups: [WorkspaceGroup] = []
     var chats: [SessionRecord] = []
     var details: [UUID: TaskAttentionDetail] = [:]
+    var answerLines: [UUID: String] = [:]
+    var latestTurns: [UUID: TaskLatestTurn] = [:]
     /// The host's projects, as the sidebar's project rows and New task in a project read them.
     var projects: [Project] = []
     /// The host's project ID of each group, by the group's folder.
@@ -43,6 +45,8 @@ struct RemoteSidebarMirror: Equatable {
             let projectID = task.projectId.flatMap { folders[$0] == nil ? nil : $0 } ?? RemoteTaskProjection.chatsProjectID
             let session = Self.session(task, id: id, folder: folders[projectID] ?? chatsFolder, project: projectsByID[projectID])
             sessionsByProject[projectID, default: []].append(session)
+            answerLines[id] = task.answerLine
+            latestTurns[id] = task.latestTurnStartedAt.map { TaskLatestTurn(startedAt: Date(timeIntervalSince1970: TimeInterval($0) / 1000)) }
             if let detail = Self.detail(task) { details[id] = detail }
         }
         for remote in remoteProjects where remote.kind != .chats {
@@ -62,7 +66,7 @@ struct RemoteSidebarMirror: Equatable {
         case .awaitingApproval?, .needsInput?: .waitingForApproval
         case .failed?: .failed
         case .running?: .running
-        case .usageLimit?, .unread?, nil: task.running ? .running : .ready
+        case .usageLimit?, .unread?, nil: task.running ? .running : (task.completed == true ? .completed : .ready)
         }
         let updatedAt = Date(timeIntervalSince1970: TimeInterval(task.lastActivityAt) / 1000)
         return SessionRecord(id: id, harness: HarnessKind(rawValue: task.harness), workspaceURL: folder,
@@ -75,7 +79,7 @@ struct RemoteSidebarMirror: Equatable {
     /// How the latest turn ended, where the host's list says: failed, or finished with a result still unread.
     private static func completion(_ task: RemoteTask) -> SessionCompletionState {
         if task.indicator == .failed { return .failed }
-        return task.unread && !task.running ? .completed : .none
+        return (task.completed == true || task.unread) && !task.running ? .completed : .none
     }
 
     /// What the host's mark says beyond the record: the request a task waits on, a tab handed to the person, a plan

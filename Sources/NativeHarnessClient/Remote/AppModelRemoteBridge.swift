@@ -44,6 +44,11 @@ final class AppModelRemoteBridge: RemoteBridge {
     private var watchesSchedules = false
     /// Each followed task's settings as `taskSettings` last answered them (§15.23), and the tasks whose settings are
     /// watched until they change; one watch per task, since every read reads the same properties.
+    var railHasTerminals: Set<UUID> = []
+    var watchedRails: Set<UUID> = []
+    var railWatches: Set<UUID> = []
+    var railCache: [UUID: (key: String, git: SessionRailGitInfo, sources: TaskInstructionSources)] = [:]
+    var railTimers: [UUID: Task<Void, Never>] = [:]
     var answeredSettings: [UUID: [RemoteSetting]] = [:]
     var watchesSettings: Set<UUID> = []
     /// A task's browser tabs (§15.25), when this build has a browser engine.
@@ -77,6 +82,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         cachedSnapshot = snapshot
         // A setting, which Observation does not see change: read each time.
         snapshot.followUp = model.followUpMode == .steer ? .steer : .queue
+        snapshot.taskRail = true
         snapshot.reviewReading = true
         snapshot.browserTabs = browser.isAvailable
         snapshot.terminals = RemoteTerminalBridge.isAvailable
@@ -105,6 +111,9 @@ final class AppModelRemoteBridge: RemoteBridge {
         let listed = Dictionary(model.sidebarSessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for index in snapshot.tasks.indices {
             guard let id = UUID(uuidString: snapshot.tasks[index].id), let session = listed[id] else { continue }
+            snapshot.tasks[index].answerLine = model.answerLineBySessionID[id]
+            snapshot.tasks[index].latestTurnStartedAt = model.latestTurnBySessionID[id]?.startedAt.map(RemoteJSON.milliseconds)
+            snapshot.tasks[index].completed = session.status == .completed
             if acceptsImages(session, in: model) { snapshot.tasks[index].acceptsImages = true }
             if inputPolicy(session, in: model).showsMentionControl { snapshot.tasks[index].acceptsFiles = true }
             if FollowUpPolicy(harness: session.harness)?.steers == true { snapshot.tasks[index].steers = true }
