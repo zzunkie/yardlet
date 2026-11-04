@@ -176,7 +176,8 @@ enum SessionToolText {
     static let cursorPrefix = "before:"
 
     /// The latest `turns` turns before `cursor` (a turn ID after `cursorPrefix`), as text no longer
-    /// than `limit`: a turn that does not fit is cut, and older turns are left for the cursor.
+    /// than `limit`: a turn that does not fit is cut, and older turns are left for the cursor. Only the
+    /// turns `shownTurns` picks are read, so the others may be the IDs alone.
     static func conversation(
         _ presentation: ConversationPresentation,
         workspaceURL: URL?,
@@ -185,16 +186,10 @@ enum SessionToolText {
         limit: Int = SessionToolPolicy.readCharacterLimit
     ) -> Conversation? {
         let all = presentation.turns
-        var end = all.count
-        if let cursor {
-            guard cursor.hasPrefix(cursorPrefix),
-                  let index = all.firstIndex(where: { $0.id == String(cursor.dropFirst(cursorPrefix.count)) })
-            else { return nil }
-            end = index
-        }
-        let count = max(1, min(requested, SessionToolPolicy.readMaximumTurns))
-        var start = max(0, end - count)
-        var blocks = all[start..<end].map { block(for: $0, harness: presentation.harness, workspaceURL: workspaceURL) }
+        guard let shown = shownTurns(ids: all.map(\.id), turns: requested, cursor: cursor) else { return nil }
+        var start = shown.lowerBound
+        let end = shown.upperBound
+        var blocks = all[shown].map { block(for: $0, harness: presentation.harness, workspaceURL: workspaceURL) }
         // Older turns give way first; the newest is cut when it alone is too long.
         while blocks.count > 1, blocks.reduce(0, { $0 + $1.count + 2 }) > limit {
             blocks.removeFirst()
@@ -209,6 +204,19 @@ enum SessionToolText {
             shownTurns: end - start,
             totalTurns: all.count
         )
+    }
+
+    /// The turns `conversation` reads of a conversation whose turns have `ids`: the latest `turns`
+    /// before the one `cursor` names, or before the end. Nil when the cursor names none of them.
+    static func shownTurns(ids: [String], turns requested: Int, cursor: String?) -> Range<Int>? {
+        var end = ids.count
+        if let cursor {
+            guard cursor.hasPrefix(cursorPrefix), let index = ids.firstIndex(of: String(cursor.dropFirst(cursorPrefix.count)))
+            else { return nil }
+            end = index
+        }
+        let count = max(1, min(requested, SessionToolPolicy.readMaximumTurns))
+        return max(0, end - count)..<end
     }
 
     private static func block(for turn: ConversationTurn, harness: HarnessKind, workspaceURL: URL?) -> String {

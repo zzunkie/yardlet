@@ -37,7 +37,8 @@ extension AppModel {
                 : CodexConversationProjection.pendingQuestions(in: turn)
         }
         guard waitsOnRequest || !questions.isEmpty else { return nil }
-        let pending = waitsOnRequest ? (sessionToolPresentation(of: child).turns.last?.requests ?? []) : []
+        let pending = waitsOnRequest
+            ? (sessionToolPresentation(of: child) { $0.indices.suffix(1) }.turns.last?.requests ?? []) : []
         return SessionRailAgents.Wait(requests: pending + heldRequests(in: child.id), questions: questions,
                                       attention: attention)
     }

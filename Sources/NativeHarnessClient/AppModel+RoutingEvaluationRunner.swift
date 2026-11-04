@@ -55,9 +55,7 @@ extension AppModel {
                 await refreshConversationStatus(for: session)
                 session = store.sessions.first(where: { $0.id == task.taskID }) ?? session
             }
-            if let text = SessionToolText.conversation(sessionToolPresentation(of: session),
-                                                       workspaceURL: session.workspaceURL, turns: 2, cursor: nil)?.text,
-               !text.isEmpty {
+            if let text = sessionToolConversation(of: session, turns: 2, cursor: nil)?.text, !text.isEmpty {
                 excerpts[task.taskID] = RoutingJudgePrompt.excerpt(text)
             }
         }
