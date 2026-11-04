@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import XCTest
+import YardletRemote
 @testable import NativeHarnessClient
 
 /// The editing both composers share (`ComposerEditor` over `ComposerDraftEditing`): the same
@@ -52,6 +53,37 @@ final class ComposerEditorTests: XCTestCase {
             XCTAssertEqual(draft.selection?.lowerBound, draft.text.endIndex, name)
             draft.rememberSelection(NSRange(location: 1, length: 0), in: draft.text)
             XCTAssertEqual(draft.selection.map { NSRange($0, in: draft.text) }, NSRange(location: 1, length: 0), name)
+        }
+    }
+
+    func testHostMentionSearchCachesTheListingAndNeverUsesClientFiles() async throws {
+        let index = RemoteComposerMentionIndex()
+        var reads = 0
+        let load: @MainActor () async -> RemoteResponse = {
+            reads += 1
+            var response = RemoteResponse(re: "mention", ok: true)
+            response.workspaceRoot = "/host-only/project"
+            response.filePaths = ["Sources/Reader.swift", "../outside.txt", "/absolute.txt"]
+            return response
+        }
+        let first = await index.search("Reader", key: "task-one", load: load)
+        let second = await index.search("Sources", key: "task-one", load: load)
+        XCTAssertEqual(reads, 1)
+        XCTAssertEqual(first.matches.first?.url.path, "/host-only/project/Sources/Reader.swift")
+        XCTAssertFalse(second.matches.isEmpty)
+        let outside = await index.search("outside", key: "task-one", load: load)
+        XCTAssertTrue(outside.matches.isEmpty)
+        _ = await index.search("Reader", key: "task-two", load: load)
+        XCTAssertEqual(reads, 2, "Each task owns its listing")
+        for (_, draft) in drafts() {
+            draft.text = "Read @Reader"
+            let token = try XCTUnwrap(ComposerMentions.token(in: draft.text, caret: nil as Int?))
+            _ = RemoteComposerMentionIndex.insert(try XCTUnwrap(first.matches.first), replacing: token, into: draft)
+            XCTAssertEqual(draft.text, "Read")
+            XCTAssertEqual(draft.hostMentions, first.matches)
+            XCTAssertEqual(RemoteComposerMentionIndex.message(draft.text, mentions: draft.hostMentions),
+                           "Read\n@\"/host-only/project/Sources/Reader.swift\"")
+            XCTAssertTrue(draft.attachments.isEmpty, "Host paths must never enter the local upload path")
         }
     }
 

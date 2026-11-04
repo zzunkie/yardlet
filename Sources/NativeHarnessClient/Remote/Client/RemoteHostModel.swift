@@ -88,9 +88,11 @@ final class RemoteHostModel: Identifiable {
     var deleteTask: SessionRecord?
     var archiveProject: WorkspaceGroup?
     private(set) var taskActions = false
+    private(set) var composerExtensions = false
     private(set) var taskControls = false
     /// Each open task's composer settings as the host last answered them (§15.23).
     var taskSettings: [String: [RemoteSetting]] = [:]
+    var composerStates: [String: RemoteComposerState] = [:]
     /// The host shows a task's browser tabs (§15.25).
     private(set) var offersBrowser = false
     /// The browser panel's task, tabs and picture.
@@ -254,6 +256,7 @@ final class RemoteHostModel: Identifiable {
             conversations[taskID] = nil
             taskSettings[taskID] = nil
             taskRailFacts[taskID] = nil
+            composerStates[taskID] = nil
             subscribed.removeAll { $0 == taskID }
             applyTasks(changed: [], removed: [taskID])
         case .taskRailChanged:
@@ -261,7 +264,10 @@ final class RemoteHostModel: Identifiable {
             Task { await readTaskRail(taskID) }
         case .taskSettingsChanged:
             guard let taskID = event.taskId, conversations[taskID] != nil else { return }
-            Task { await readTaskSettings(taskID) }
+            Task {
+                await readTaskSettings(taskID)
+                _ = await readComposerState(taskID)
+            }
         case .closing:
             closingReason = event.reason
         case .schedulesChanged:
@@ -296,6 +302,7 @@ final class RemoteHostModel: Identifiable {
             nextSteps = response.nextSteps == true
             bankedResets = response.bankedResets == true
             taskActions = response.taskActions == true
+            composerExtensions = response.composerExtensions == true
             taskControls = response.taskControls == true
             let full = response.fullConversation == true
             if full != sendsFullConversation {
@@ -398,6 +405,7 @@ final class RemoteHostModel: Identifiable {
             conversations[dropped] = nil
             taskSettings[dropped] = nil
             taskRailFacts[dropped] = nil
+            composerStates[dropped] = nil
             send(.unsubscribeTask(taskID: dropped))
         }
         guard isConnected else { return }

@@ -675,13 +675,21 @@ private struct NewTaskAutomaticAccountLine: View {
 
     var body: some View {
         if let assignment = assignment ?? preview() {
-            let line = assignment.accountName + " · " + assignment.reasonLine()
-            Text(line)
-                .font(.caption).foregroundStyle(.secondary)
-                .lineLimit(1).truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .help(line)
+            NewTaskAccountExplanation(line: assignment.accountName + " · " + assignment.reasonLine())
         }
+    }
+}
+
+/// The automatic account's explanation, drawn identically for local and host-projected choices.
+struct NewTaskAccountExplanation: View {
+    let line: String
+
+    var body: some View {
+        Text(line)
+            .font(.caption).foregroundStyle(.secondary)
+            .lineLimit(1).truncationMode(.middle)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .help(line)
     }
 }
 

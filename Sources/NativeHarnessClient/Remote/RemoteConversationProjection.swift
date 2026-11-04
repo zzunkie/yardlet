@@ -90,6 +90,11 @@ enum RemoteConversationProjection {
                 let chip = ComposerQueueChip.make(policy: policy, queue: followUps, at: index, canSend: true)
                 item.options = [chip.send == nil ? nil : RemoteQueuedAction.sendNow, chip.stopAndSend == nil ? nil : .stopAndSend,
                                 .remove].compactMap { $0?.rawValue }
+                if chip.canMoveUp { item.options?.append("moveUp") }
+                if chip.canMoveDown { item.options?.append("moveDown") }
+                if followUp.state == .failed { item.options?.append("retry") }
+                if followUp.state != .sent, followUp.draft.text.count <= RemoteText.userLimit,
+                   sent == nil { item.options?.append("edit") }
             }
             return item
         }

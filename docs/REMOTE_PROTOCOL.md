@@ -576,6 +576,8 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
 Every revision of protocol 2 only adds optional fields or states a rule, except where it says otherwise.
 
 - 2026-11-04: desktop conversation next steps and remaining content (§15.31).
+- 2026-11-04: optional composer extensions, scoped file mentions, task connectors, queue controls, suggestions and new-task choices (§15.33).
+- 2026-11-04: per-task session rail facts and actions, and cached home task lines (§15.34).
 
 - 2026-11-04: per-task session rail facts and actions, and cached home task lines (§15.34).
 - 2026-11-04: optional `taskActions`, sidebar and title actions, host account selection and paged archived tasks (§15.32).
@@ -1151,7 +1153,8 @@ that does not know them ignores them.
   the menus do not offer is `notAllowed`.
 - `settings`: the new-task screen's model menu (model, effort) and, where the harness starts in one, its
   permission (Claude Code's `permissionMode`, Codex's `runLocation`), each with its value now and its choices. Choices
-  the Mac asks to confirm (Bypass permissions, full access) are left out. When the Mac has not read the harness's model list for this account yet it reads it
+  the Mac asks to confirm (Bypass permissions, full access) are left out unless the client requests
+  the extended composer catalog (§15.33). When the Mac has not read the harness's model list for this account yet it reads it
   first, as opening the menu does (up to about 10 s); until then the menu holds only the value now.
 - `worktree`: present for a project in a Git repository, whether the Mac starts its tasks there in a new
   worktree now.
@@ -1486,10 +1489,10 @@ message's Edit message, and Fork from here. Each acts through the path the Mac's
   ```
 
   The slash commands the task's composer lists that may run from another device, in its list's order and words:
-  Claude Code's `/compact` and `/clear`; the Codex app's Compact, Fork chat, New chat, Plan mode and its speed
-  (`service-tier:…`). Commands that change files, settings or accounts, need a window of the Mac's (code review,
-  rename, a side chat, status), or are the sidebar's (pin, archive, §15.10) are not listed, nor are a Codex task's
-  skills. `title` is the list's own name for a command where it shows one in place of `/name`; `group` its heading;
+  Claude Code's `/compact`, `/clear` and explicitly classified user commands; the Codex app's Compact, Fork chat,
+  New chat, Plan mode, speed (`service-tier:…`) and skills (§15.33). Built-in commands that change files, settings
+  or accounts, need a window of the Mac's (code review, rename, a side chat, status), or are the sidebar's
+  (pin, archive, §15.10) are not listed. `title` is the list's own name for a command where it shows one in place of `/name`; `group` its heading;
   `argumentHint` the words it takes after its name, absent when it takes none. `runs: true`: choosing it runs it at
   once (the Codex app's); otherwise choosing it types `/name ` into the draft, and sending that draft runs it. Not a
   command. Errors: `notFound`.
@@ -1497,8 +1500,8 @@ message's Edit message, and Fork from here. Each acts through the path the Mac's
   {"id": "43", "type": "runComposerCommand", "taskId": "4C1F…", "command": "compact", "arguments": "Keep the API notes"}
   ```
 
-  A command: runs it as the Mac's composer does. `arguments` (≤ 4,000 characters) only for a command with an
-  `argumentHint`. A command that starts a task (`clear`, `new`, `fork`) answers with its `taskId`, listed before the
+  A command: runs it as the Mac's composer does. `arguments` (≤ 4,000 characters) are accepted for a command with an
+  `argumentHint` or an explicitly classified CLI user command. A command that starts a task (`clear`, `new`, `fork`) answers with its `taskId`, listed before the
   answer as a new task is (§15.5); the Mac's window does not switch to it. `compact`, `clear` and `new` wait for the
   task's turn to end, as on the Mac. Errors: `notFound`, `notAllowed` (not listed now, or `arguments` it does not take),
   `busy` (a turn runs, the task is changing, or another app holds it), `tooLarge`, `unavailable` (the task's folder is
@@ -2071,6 +2074,48 @@ Task snapshots optionally include `originalConversation`, `canOpenOriginalConver
 These are presentation values, read from the host's existing state; reading a snapshot starts no provider or GitHub request.
 The desktop title menu and header draw the shared local views; Finder is disabled for host workspaces.
 
+### 15.33 Desktop composer extensions
+
+The optional snapshot flag `composerExtensions: true` advertises these additions. Clients keep the earlier
+composer with hosts that omit it. Existing requests and optional fields remain readable by phone clients.
+
+- `composerState` takes `taskId` and returns `composerState`: `nextMessageSuggestion` when available,
+  `queuePaused`, and optional `connectors` with their display names, state, tool count, source and opaque IDs.
+  Connector credentials, server configuration and environment values never travel. The desktop draws the local
+  connector menu and accepts the next-message suggestion with Tab.
+- `composerAction` takes `taskId`, `action`, optional `itemId` and optional `value`. Actions are `connector`
+  (`itemId` is the offered connector ID, `value` is `on` or `off`), `pause`, `resume`, `moveUp`, `moveDown`,
+  `retry` and `edit` (a queued item ID; `value` is replacement text). The host revalidates each action against
+  its current task and queue. Editing keeps the host-held attachments and position; provider-held or claimed
+  messages cannot be edited. It leaves the host's own draft untouched. The response returns current composer
+  state. Commands are audited by kind and task, never by the connector value or message text.
+- The existing `composerCommands` list includes the CLI's user commands and Codex skills. Skill IDs resolve on
+  the host to native skill inputs; skill paths are not sent. The host rechecks its current catalog at execution.
+  Codex init, review, rename, side chat and status remain excluded; model and reasoning use the existing
+  settings controls. Other CLI built-ins and commands without an explicit user-command classification are
+  excluded, including account and settings management. Skill selection is inserted as a slash invocation;
+  the host converts it to its native skill input when sent. Skill prompts share the 4,000-character
+  command argument bound (§15.23).
+- A task's `@` picker reads `workspaceFiles` (§15.27), caching the bounded listing between searches and ranking
+  it locally with the app's file picker. A new task uses `projectWorkspaceFiles` with `projectId`, returning
+  the same `workspaceRoot`, `filePaths` and `filesLimited`. Only a visible project's existing primary folder
+  can be listed; Chats and unknown projects are refused. Neither request grants general host filesystem browsing.
+  Host paths draw in the local mention chip and are sent as quoted references in the message; they never
+  enter the client's local-file upload path (§15.20).
+- `newTaskOptions` accepts optional `composer: true` and `accountId` for the desktop's composer catalog.
+  Optional `readCommands: true` reads user commands when the slash menu opens, not on every options refresh.
+  Its optional account choices contain display data only; `accountLine` is the host's automatic-account
+  explanation for the selected model, drawn with the local explanation view. `createTask` takes optional `accountId` and
+  `confirmed`; an elevated permission choice requires confirmation, using the local control's wording.
+  Choices apply to the created task and leave the host's home draft and selected account unchanged.
+
+The desktop shares the local file picker, command rows, connector menu, queue rows, permission and model
+controls. Queue editing saves back into the existing queue item rather than withdrawing it into the host's draft.
+The account button shares the local control; its popover lists the host's safe account summaries rather than
+the local account-management view. Connector setup, reconnect and account management remain on the host. Side chat is not advertised: it needs
+host-owned temporary child creation, a child subscription and draft, and explicit close/reconnect ownership so
+closing a remote panel cannot discard a side chat another window is using.
+
 ### 15.34 Session rail and home task lines
 
 A snapshot may advertise `taskRail: true`. A desktop asks `{type: "taskRail", taskId}` for the task
@@ -2315,7 +2360,10 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   the address field, new-tab button and tab close buttons act on the host (§15.30), and a hook routes loopback links
   there for the window's link handler. The tab strip uses the same `WorkSurfaceHeader` as other side panels.
   With `taskRail`, the rail reads the host's additional facts and the composer shows its context ring (§15.34).
-  Settings, connectors, importing schedules from other apps and the other side panels stay on the host.
+  Task connector switches, file mentions, extended commands, queue controls and next-message suggestions use
+  the shared composer views when the host offers §15.33. New tasks also offer host account choices and confirmed
+  elevated permissions. Connector setup, Settings, importing schedules from other apps and the other
+  side panels stay on the host.
 - **Paths:** as §11.4. While a host's window is open it browses Bonjour (§11.3) for the instance with the
   discovery id of the host key it saved, and resolves it to the host's name and port (`Name.local:47616`; the
   system resolves the name when connecting). Those addresses go first, never saved, then the direct addresses the

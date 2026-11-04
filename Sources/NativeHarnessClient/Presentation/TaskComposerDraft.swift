@@ -15,6 +15,8 @@ final class TaskComposerDraft {
             onChange?()
         }
     }
+    /// Host references for a remote composer, never client files to upload.
+    var hostMentions: [WorkspaceFileMatch] = []
     var attachments: [CodexUserInput] = [] { didSet { if attachments != oldValue { onChange?() } } }
     var notice: String?
     var editState: ConversationEditState? { didSet { if editState != oldValue { onChange?() } } }

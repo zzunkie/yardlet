@@ -630,6 +630,18 @@ final class FollowUpQueueStore {
         return true
     }
 
+    /// Replaces only a held message's text; its host-owned attachment inputs and queue position stay intact.
+    @discardableResult
+    func editText(_ itemID: UUID, in sessionID: UUID, text: String) -> Bool {
+        guard let index = queues[sessionID]?.firstIndex(where: { $0.id == itemID }),
+              let item = queues[sessionID]?[index], item.state != .sent,
+              !claimed.contains(itemID), !item.isFromAnotherTask else { return false }
+        let attachments = item.draft.inputs.filter { if case .text = $0 { return false }; return true }
+        queues[sessionID]?[index].draft = CodexComposerDraft(inputs: [.text(text)] + attachments)
+        save(sessionID)
+        return true
+    }
+
     /// A failed message waits to be sent again.
     @discardableResult
     func retry(_ itemID: UUID, in sessionID: UUID) -> Bool {

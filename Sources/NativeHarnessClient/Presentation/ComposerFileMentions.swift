@@ -83,13 +83,14 @@ final class ComposerFileMentionSearch {
         matches.indices.contains(highlightedIndex) ? matches[highlightedIndex] : nil
     }
 
-    func update(query: String?, roots: [URL]) {
+    func update(query: String?, roots: [URL],
+                search externalSearch: (@MainActor (String) async -> WorkspaceFileSearchResult)? = nil) {
         guard query != self.query || roots != self.roots else { return }
         search?.cancel()
         self.query = query
         self.roots = roots
         failed = false
-        guard let query, !query.isEmpty, !roots.isEmpty else {
+        guard let query, !query.isEmpty, externalSearch != nil || !roots.isEmpty else {
             matches = []
             highlightedIndex = 0
             isSearching = false
@@ -101,7 +102,9 @@ final class ComposerFileMentionSearch {
             // Let a burst of keystrokes settle before ranking.
             try? await Task.sleep(for: .milliseconds(40))
             guard !Task.isCancelled else { return }
-            let result = await index.search(query, in: roots)
+            let result: WorkspaceFileSearchResult
+            if let externalSearch { result = await externalSearch(query) }
+            else { result = await index.search(query, in: roots) }
             guard !Task.isCancelled, let self, self.query == query else { return }
             matches = result.matches
             failed = result.failed

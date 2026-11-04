@@ -25,17 +25,21 @@ struct RemoteComposer: View {
     @State private var menu: Menu?
     @State private var commands: [RemoteComposerCommand]?
     @State private var commandSearch = ""
+    private var composerState: RemoteComposerState? { model.composerStates[taskID] }
+    @State private var mentionIndex = RemoteComposerMentionIndex()
+    @State private var queuedEdit: (id: String, text: String, attachments: [CodexUserInput], mentions: [WorkspaceFileMatch])?
 
     enum Menu {
         case attachments
         case commands
+        case connectors
     }
 
     private var task: RemoteTask? { model.task(taskID) }
     private var isRunning: Bool { task?.running == true }
 
     private var hasMessage: Bool {
-        !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.attachments.isEmpty
+        !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.attachments.isEmpty || !draft.hostMentions.isEmpty
     }
 
     private var canSend: Bool { model.isConnected && !isSending && hasMessage }
@@ -64,10 +68,15 @@ struct RemoteComposer: View {
             draft: draft, placeholder: placeholder,
             accessibilityHint: isRunning ? policy.returnHint(preferred: preferred) : L10n.string("Press Return to send"),
             metrics: .task(), input: nil, onExternalInput: acceptsAttachments ? { receive($0) } : nil, mentionRoots: [],
+            mentionSearch: model.offersWorkspaceFiles ? { await mentionIndex.search($0, model: model, taskID: taskID) } : nil,
+            onInsertMention: { RemoteComposerMentionIndex.insert($0, replacing: $1, into: draft) },
             commands: editorCommands, isCommandMenuOpen: menu == .commands, isMenuOpen: showsFollowUpMenu || menu != nil,
+            showsChips: !draft.hostMentions.isEmpty,
             isFocused: $isFocused,
             onSubmit: { send(isRunning ? returnMode : nil) },
             onAlternateSubmit: isRunning && policy.steers ? { send(preferred.other) } : nil,
+            takeSuggestion: takeSuggestion,
+            suggestion: !isRunning && draft.text.isEmpty ? draft.nextMessageSuggestion : nil,
             // Escape stops the running turn, as the local composer's does.
             onEscape: { if isRunning, model.isConnected { model.send(.stopTurn(taskID: taskID)) } },
             onCommandQueryChange: { old, query in
@@ -75,6 +84,16 @@ struct RemoteComposer: View {
                 if old == nil, query != nil { Task { await readCommands() } }
             }
         ) {
+            if queuedEdit != nil {
+                HStack {
+                    Text(L10n.string("Edit message"))
+                    Spacer()
+                    Button(L10n.string("Cancel")) { cancelQueueEdit() }.buttonStyle(.borderless)
+                }.font(.caption).padding(.horizontal, 15).padding(.top, 9)
+            }
+            if composerState?.queuePaused == true {
+                ComposerQueuePausedRow { act("resume") }
+            }
             if !queued.isEmpty {
                 VStack(spacing: 4) {
                     ForEach(queued, id: \.id) { item in queueRow(item) }
@@ -83,7 +102,7 @@ struct RemoteComposer: View {
                 .padding(.top, 8)
             }
         } chips: {
-            EmptyView()
+            RemoteComposerMentionChips(draft: draft)
         } footer: {
             // The local composer's bottom row: what goes into the message and the task's settings, then the model
             // menu and Send pinned at the end.
@@ -95,7 +114,19 @@ struct RemoteComposer: View {
             .padding(.leading, 10).padding(.trailing, 9).padding(.bottom, 9)
         }
         .shadow(color: .black.opacity(0.05), radius: 10, y: 3)
-        .task(id: "\(taskID)|\(model.isConnected)|\(model.taskControls)") { await readCommands() }
+        .task(id: "\(taskID)|\(model.isConnected)|\(model.taskControls)") {
+            await readCommands()
+            _ = await model.readComposerState(taskID)
+        }
+        .task(id: "\(taskID)|\(isRunning)|\(queued.map(\.id).joined(separator: ","))") {
+            _ = await model.readComposerState(taskID)
+        }
+        .onChange(of: composerState?.nextMessageSuggestion, initial: true) { _, suggestion in
+            draft.nextMessageSuggestion = draft.text.isEmpty ? suggestion : nil
+        }
+        .onChange(of: isRunning) { _, running in
+            if running { draft.nextMessageSuggestion = nil }
+        }
         .onChange(of: editing) { _, edit in
             if edit != nil { isFocused = true }
         }
@@ -154,7 +185,7 @@ struct RemoteComposer: View {
     /// The local composer's "+": files and photos where the task takes them, and the slash commands that may run from
     /// here. From a host that offers no commands it opens the file panel at once, as before.
     private var plusButton: some View {
-        let hasMenu = !(commands ?? []).isEmpty
+        let hasMenu = !(commands ?? []).isEmpty || composerState?.connectorList != nil
         return Button {
             if hasMenu { menu = .attachments } else { chooseFiles() }
         } label: {
@@ -170,12 +201,18 @@ struct RemoteComposer: View {
         .help(hasMenu ? L10n.string("Add files and more") : L10n.string("Add files or photos"))
         .popover(isPresented: Binding(get: { menu != nil }, set: { if !$0 { menu = nil } })) {
             switch menu {
+            case .connectors?:
+                if let list = composerState?.connectorList {
+                    ComposerConnectorsMenu(list: list, onManage: nil,
+                        onSwitch: { id, enabled in act("connector", itemID: id.uuidString, value: enabled ? "on" : "off") },
+                        onBack: { menu = .attachments }, onDismiss: { menu = nil })
+                }
             case .commands?:
                 commandsPage
             default:
                 ComposerMenuList(
                     entries: ComposerPlusMenu.entries(
-                        carriesImages: task?.acceptsImages == true, connectors: nil,
+                        carriesImages: task?.acceptsImages == true, connectors: composerState?.connectorList,
                         actions: ComposerPlusMenu.Actions(
                             addFiles: acceptsAttachments ? {
                                 menu = nil
@@ -187,7 +224,7 @@ struct RemoteComposer: View {
                                 menu = .commands
                                 Task { await readCommands() }
                             },
-                            openConnectors: nil)),
+                            openConnectors: composerState?.connectorList == nil ? nil : { menu = .connectors })),
                     onDismiss: { menu = nil })
             }
         }
@@ -284,6 +321,12 @@ struct RemoteComposer: View {
         .help(policy.runningPlaceholder(preferred: preferred))
         .popover(isPresented: $showsFollowUpMenu) {
             VStack(alignment: .leading, spacing: 4) {
+                if model.composerExtensions, !queued.isEmpty {
+                    Button(composerState?.queuePaused == true ? L10n.string("Resume") : L10n.string("Pause")) {
+                        showsFollowUpMenu = false
+                        act(composerState?.queuePaused == true ? "resume" : "pause")
+                    }.buttonStyle(.borderless)
+                }
                 Button {
                     showsFollowUpMenu = false
                     send(.queue)
@@ -328,61 +371,57 @@ struct RemoteComposer: View {
     /// host offers for it (§15.15).
     private func queueRow(_ item: RemoteItem) -> some View {
         let failed = item.queueFailed == true
-        let actions = (item.options ?? []).compactMap(RemoteQueuedAction.init(rawValue:))
-        let status = failed ? L10n.string("Failed") : policy.pendingHelp
-        return HStack(spacing: 6) {
-            Image(systemName: failed ? "exclamationmark.circle" : "clock")
-                .frame(width: 14)
-            Text(item.text ?? "")
-                .foregroundStyle(failed ? AnyShapeStyle(.red) : AnyShapeStyle(.primary))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text(status)
-                .lineLimit(1)
-                .fixedSize()
-            HStack(spacing: 4) {
-                if actions.contains(.sendNow), let label = policy.sendLabel {
-                    Button { model.send(.actOnQueued(taskID: taskID, itemID: item.id, action: .sendNow)) } label: {
-                        Label(label, systemImage: "arrow.turn.up.right")
-                            .labelStyle(.titleAndIcon)
-                            .fontWeight(.medium)
-                            .fixedSize()
-                    }
-                    .buttonStyle(.borderless)
-                    .parityPointer()
-                    .accessibilityLabel(label)
-                    .help(policy.sendHelp ?? label)
-                }
-                if actions.contains(.remove) {
-                    Button { model.send(.actOnQueued(taskID: taskID, itemID: item.id, action: .remove)) } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .buttonStyle(.borderless)
-                    .parityPointer()
-                    .accessibilityLabel(policy.removeLabel)
-                    .help(policy.removeLabel)
-                }
-            }
-            .fixedSize()
-        }
-        .font(.caption)
-        .foregroundStyle(failed ? .red : .secondary)
-        .padding(.horizontal, 9)
-        .frame(maxWidth: .infinity, minHeight: 28)
-        .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 8))
-        .help(status)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(L10n.string("Queue")), \(status)")
-        .accessibilityValue(item.text ?? "")
-        .contextMenu {
-            if actions.contains(.stopAndSend), let label = policy.stopAndSendLabel {
-                Button(label) { model.send(.actOnQueued(taskID: taskID, itemID: item.id, action: .stopAndSend)) }
-            }
-            if actions.contains(.remove) {
-                Button(policy.removeLabel) { model.send(.actOnQueued(taskID: taskID, itemID: item.id, action: .remove)) }
+        let offered = item.options ?? []
+        let extended = model.composerExtensions
+        let index = queued.firstIndex(where: { $0.id == item.id }) ?? 0
+        let send = offered.contains("sendNow") ? policy.sendLabel.map {
+            ComposerQueueChip.Send(label: $0, icon: "arrow.turn.up.right", help: policy.sendHelp ?? $0)
+        } : nil
+        let chip = ComposerQueueChip(icon: failed ? "exclamationmark.circle" : "clock",
+            status: failed ? L10n.string("Failed") : policy.pendingHelp, help: policy.pendingHelp,
+            send: send, stopAndSend: offered.contains("stopAndSend") ? policy.stopAndSendLabel : nil,
+            removeLabel: policy.removeLabel, canMoveUp: extended && offered.contains("moveUp") && index > 0,
+            canMoveDown: extended && offered.contains("moveDown") && index + 1 < queued.count)
+        return ComposerQueueRow(title: item.text ?? "", failed: failed, fromTask: false, chip: chip,
+            moveUp: { act("moveUp", itemID: item.id) }, moveDown: { act("moveDown", itemID: item.id) },
+            retry: extended ? { act("retry", itemID: item.id) } : nil,
+            sendNow: offered.contains("sendNow") ? { model.send(.actOnQueued(taskID: taskID, itemID: item.id, action: .sendNow)) } : nil,
+            stopAndSend: offered.contains("stopAndSend") ? { model.send(.actOnQueued(taskID: taskID, itemID: item.id, action: .stopAndSend)) } : nil,
+            edit: extended && offered.contains("edit") ? { beginQueueEdit(item) } : nil,
+            remove: offered.contains("remove") ? { model.send(.actOnQueued(taskID: taskID, itemID: item.id, action: .remove)) } : nil)
+        .disabled(!model.isConnected)
+    }
+
+    private func beginQueueEdit(_ item: RemoteItem) {
+        guard queuedEdit == nil else { return }
+        queuedEdit = (item.id, draft.text, draft.attachments, draft.hostMentions)
+        draft.text = item.text ?? ""
+        draft.attachments = []
+        draft.hostMentions = []
+        isFocused = true
+    }
+
+    private func cancelQueueEdit() {
+        guard let edit = queuedEdit else { return }
+        draft.text = edit.text
+        draft.attachments = edit.attachments
+        draft.hostMentions = edit.mentions
+        queuedEdit = nil
+    }
+
+    private func act(_ action: String, itemID: String? = nil, value: String? = nil) {
+        Task {
+            if let state = await model.actOnComposer(taskID, action: action, itemID: itemID, value: value) {
+                model.composerStates[taskID] = state
             }
         }
+    }
+
+    private func takeSuggestion() -> Bool {
+        guard !isRunning, draft.text.isEmpty, let suggestion = draft.nextMessageSuggestion,
+              !suggestion.isEmpty else { return false }
+        draft.text = suggestion
+        return true
     }
 
     // MARK: - Attachments
@@ -413,9 +452,23 @@ struct RemoteComposer: View {
     private func send(_ mode: FollowUpMode?) {
         guard canSend else { return }
         let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let queuedEdit {
+            guard !text.isEmpty, draft.attachments.isEmpty else { return }
+            isSending = true
+            Task {
+                defer { isSending = false }
+                guard let state = await model.actOnComposer(taskID, action: "edit", itemID: queuedEdit.id, value: RemoteComposerMentionIndex.message(text, mentions: draft.hostMentions)) else {
+                    draft.notice = model.commandError
+                    return
+                }
+                model.composerStates[taskID] = state
+                cancelQueueEdit()
+            }
+            return
+        }
         if let editing { return sendEdit(editing, text: text) }
         // A typed command runs as the host's composer runs it once sent.
-        if draft.attachments.isEmpty, let command = typedCommand(text) {
+        if draft.attachments.isEmpty, draft.hostMentions.isEmpty, let command = typedCommand(text) {
             isSending = true
             Task {
                 defer { isSending = false }
@@ -429,13 +482,15 @@ struct RemoteComposer: View {
             return
         }
         let attachments = draft.attachments
+        let hostMentions = draft.hostMentions
+        let message = RemoteComposerMentionIndex.message(text, mentions: hostMentions)
         let followUp = mode.flatMap { RemoteFollowUpMode(rawValue: $0.rawValue) }
         isSending = true
         Task {
             defer { isSending = false }
             guard let parts = await RemoteAttachments.prepare(attachments, for: model, acceptsImages: task?.acceptsImages == true,
                                                              acceptsFiles: task?.acceptsFiles == true) else { return }
-            let sent = await model.perform(.sendMessage(taskID: taskID, text: text, images: parts.images, followUp: followUp,
+            let sent = await model.perform(.sendMessage(taskID: taskID, text: message, images: parts.images, followUp: followUp,
                                                         files: parts.files))
             guard sent else {
                 draft.notice = model.commandError
@@ -444,6 +499,7 @@ struct RemoteComposer: View {
             // What was sent leaves the draft; anything typed meanwhile stays.
             if draft.text.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft.text = "" }
             draft.attachments.removeAll { attachments.contains($0) }
+            draft.hostMentions.removeAll { hostMentions.contains($0) }
             draft.notice = nil
             RemoteAttachments.discard(attachments)
         }
@@ -452,15 +508,18 @@ struct RemoteComposer: View {
     /// The edited message, as the host's composer sends an edit; it leaves the draft once the host took it, as the
     /// local composer's edit does.
     private func sendEdit(_ edit: RemoteMessageEdit, text: String) {
-        guard !text.isEmpty else { return }
+        let mentions = draft.hostMentions
+        let message = RemoteComposerMentionIndex.message(text, mentions: mentions)
+        guard !message.isEmpty else { return }
         isSending = true
         Task {
             defer { isSending = false }
-            guard await model.editMessage(taskID, turnID: edit.turnID, text: text) else {
+            guard await model.editMessage(taskID, turnID: edit.turnID, text: message) else {
                 draft.notice = model.commandError
                 return
             }
             if editing == edit { editing = nil }
+            draft.hostMentions.removeAll { mentions.contains($0) }
             if draft.text.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft.text = "" }
             draft.notice = nil
         }

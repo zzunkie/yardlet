@@ -428,6 +428,44 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertFalse(permission?.choices.contains { $0.value == ClaudePermissionMode.bypassPermissions } == true)
         XCTAssertTrue(ClaudePermissionMode.selectable.contains(ClaudePermissionMode.bypassPermissions),
                       "The Mac's own menu still offers it, after asking")
+        let remote = AppModelRemoteBridge.taskSettings(options)
+        XCTAssertNotNil(remote.first { $0.role == "permission" }?.choices.first {
+            $0.value == ClaudePermissionMode.bypassPermissions
+        }?.confirm)
+        XCTAssertFalse(AppModelRemoteBridge.newTaskRequiresConfirmation(options))
+        var elevated = options
+        elevated.permission?.selector?.currentValue = ClaudePermissionMode.bypassPermissions
+        XCTAssertTrue(AppModelRemoteBridge.newTaskRequiresConfirmation(elevated),
+                      "An inherited elevated choice also needs confirmation on the client")
+    }
+
+    func testNewTaskComposerChecksConfirmationAndKeepsTheHostsChoices() async throws {
+        let model = try Self.model(sessions: [], transcripts: [:])
+        model.runtimeSelections.select(URL(filePath: "/usr/bin/true"), for: .claudeCode)
+        let bridge = AppModelRemoteBridge(model: model)
+        let beforeSelection = model.connections.selection
+        let beforeChoice = model.composerDrafts.home.modelChoices[.claudeCode]
+        let accountID = AccountChoice.nativeID(for: .claudeCode)
+        let options = try await bridge.newTaskComposerOptions(projectID: RemoteTaskProjection.chatsProjectID,
+            harness: HarnessKind.claudeCode.rawValue, settings: [:], accountID: accountID).get()
+        XCTAssertTrue(options.accounts?.contains { $0.id == accountID && $0.current == true } == true)
+        XCTAssertNil(options.accountLine, "A specific account has no automatic-assignment explanation")
+        let automatic = try await bridge.newTaskComposerOptions(projectID: RemoteTaskProjection.chatsProjectID,
+            harness: HarnessKind.claudeCode.rawValue, settings: [:], accountID: "automatic").get()
+        let assignment = model.automaticStart(harness: .claudeCode, model: nil, now: Date()).assignment
+        XCTAssertEqual(automatic.accountLine, assignment.accountName + " · " + assignment.reasonLine())
+        XCTAssertNotNil(options.settings.first { $0.role == "permission" }?.choices.first {
+            $0.value == ClaudePermissionMode.bypassPermissions
+        }?.confirm)
+        let refusal = await bridge.createTask(RemoteTaskStart(projectID: RemoteTaskProjection.chatsProjectID,
+            text: "Run", harness: HarnessKind.claudeCode.rawValue,
+            settings: [ClaudeLaunchOption.permissionMode: ClaudePermissionMode.bypassPermissions], accountID: accountID))
+        guard case let .failure(error) = refusal else { return XCTFail("Unconfirmed elevation must not start a task") }
+        XCTAssertEqual(error.code, .notAllowed)
+        XCTAssertEqual(model.connections.selection, beforeSelection)
+        XCTAssertEqual(model.composerDrafts.home.modelChoices[.claudeCode], beforeChoice)
+        XCTAssertTrue(model.store.sessions.isEmpty)
+        await model.shutdown()
     }
 
     func testAPhonesFormValuesAreTheFormsOwnOrRefused() {
@@ -662,7 +700,7 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(lastItems.last?.id, "queued:\(queued.id.uuidString)")
         XCTAssertEqual(lastItems.last?.queued, true)
         XCTAssertEqual(lastItems.last?.text, "Then update the changelog")
-        XCTAssertEqual(lastItems.last?.options, ["sendNow", "stopAndSend", "remove"], "The chip's actions (§15.15)")
+        XCTAssertEqual(lastItems.last?.options, ["sendNow", "stopAndSend", "remove", "edit"], "The chip's actions (§15.15, §15.33)")
         XCTAssertNil(bridge.conversation(of: UUID().uuidString))
         XCTAssertNotNil(snapshot.followUp, "A Mac that takes §15.13–§15.18 always says what Return does")
         XCTAssertEqual(snapshot.tasks.map(\.steers), [true, true, true])
@@ -1683,6 +1721,28 @@ final class RemoteBridgeTests: XCTestCase {
         try await waitUntil { model.store.sessions.first?.status == .running }
         let awaited35 = await bridge.perform(.stopTurn(taskID: taskID))
         XCTAssertNil(awaited35)
+        await model.shutdown()
+    }
+
+    func testComposerEditsKeepHostAttachmentsAndDraftAndRejectProviderHeldMessages() async throws {
+        let session = SessionRecord(harness: .codex, workspaceURL: URL(filePath: "/tmp/composer-queue"),
+            runtimeExecutableURL: URL(filePath: "/tmp/codex"), title: "Queue")
+        let attachment = CodexUserInput.localImage(URL(filePath: "/tmp/composer-queue/image.png"))
+        let queued = QueuedFollowUp(draft: CodexComposerDraft(inputs: [.text("Original"), attachment]))
+        let held = QueuedFollowUp(draft: CodexComposerDraft(inputs: [.text("Provider held")]), state: .sent)
+        let model = try Self.model(sessions: [session], transcripts: [:], queues: [session.id: [queued, held]])
+        model.composerDrafts.tasks.draft(for: session.id).text = "Host draft"
+        let bridge = AppModelRemoteBridge(model: model)
+        let result = await bridge.composerAction(taskID: session.id.uuidString, action: "edit",
+            itemID: "queued:\(queued.id.uuidString)", value: "Changed")
+        _ = try result.get()
+        XCTAssertEqual(model.followUps.item(queued.id, in: session.id)?.draft.inputs, [.text("Changed"), attachment])
+        XCTAssertEqual(model.composerDrafts.tasks.draft(for: session.id).text, "Host draft")
+        let refusal = await bridge.composerAction(taskID: session.id.uuidString, action: "edit",
+            itemID: "queued:\(held.id.uuidString)", value: "Changed")
+        guard case let .failure(error) = refusal else { return XCTFail("Provider-held messages cannot be overwritten") }
+        XCTAssertEqual(error.code, .notAllowed)
+        XCTAssertEqual(model.followUps.item(held.id, in: session.id)?.draft.text, "Provider held")
         await model.shutdown()
     }
 

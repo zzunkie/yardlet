@@ -51,6 +51,8 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
     let onExternalInput: ((ComposerExternalInput) -> Void)?
     /// The folders a typed `@word` searches.
     let mentionRoots: [URL]
+    let mentionSearch: (@MainActor (String) async -> WorkspaceFileSearchResult)?
+    let onInsertMention: ((WorkspaceFileMatch, ComposerMentionToken) -> ComposerMentionEdit?)?
     /// Nil where a typed `/` opens nothing.
     let commands: ComposerEditorCommands?
     /// Bash mode exists where the harness has it and the window can run the command.
@@ -94,6 +96,8 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
         input: HarnessComposerInputPolicy?,
         onExternalInput: ((ComposerExternalInput) -> Void)? = nil,
         mentionRoots: [URL],
+        mentionSearch: (@MainActor (String) async -> WorkspaceFileSearchResult)? = nil,
+        onInsertMention: ((WorkspaceFileMatch, ComposerMentionToken) -> ComposerMentionEdit?)? = nil,
         commands: ComposerEditorCommands?,
         bashModeAvailable: Bool = false,
         isCommandMenuOpen: Bool,
@@ -118,6 +122,8 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
         self.input = input
         self.onExternalInput = onExternalInput
         self.mentionRoots = mentionRoots
+        self.mentionSearch = mentionSearch
+        self.onInsertMention = onInsertMention
         self.commands = commands
         self.bashModeAvailable = bashModeAvailable
         self.isCommandMenuOpen = isCommandMenuOpen
@@ -240,7 +246,7 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
         .overlay { if isDropTargeted { ComposerDropHighlight() } }
         .background { ComposerWindowProbe(context: fieldContext).accessibilityHidden(true) }
         .onChange(of: typedMention?.query, initial: true) { _, query in
-            fileMentions.update(query: query, roots: mentionRoots)
+            fileMentions.update(query: query, roots: mentionRoots, search: mentionSearch)
         }
         .onChange(of: typedCommandQuery) { old, query in
             commandHighlight = 0
@@ -392,8 +398,8 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
     /// A typed `@word` searches the task's folders wherever the `@` button is offered.
     private var typedMention: ComposerMentionToken? {
         ComposerTypedLists.mention(
-            in: draft.text, caret: promptCaret, offersMentions: input?.showsMentionControl == true,
-            hasRoots: !mentionRoots.isEmpty, isFocused: isFocused.wrappedValue, isMenuOpen: isMenuOpen,
+            in: draft.text, caret: promptCaret, offersMentions: mentionSearch != nil || input?.showsMentionControl == true,
+            hasRoots: mentionSearch != nil || !mentionRoots.isEmpty, isFocused: isFocused.wrappedValue, isMenuOpen: isMenuOpen,
             isBashMode: isBashMode, showsCommands: typedCommandQuery != nil, dismissedText: dismissedMentionText)
     }
 
@@ -434,7 +440,8 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
     /// The chosen file joins the draft exactly as the `@` button adds it; the typed word is
     /// removed so the reference is not sent twice.
     private func insertMention(_ match: WorkspaceFileMatch, replacing token: ComposerMentionToken) {
-        guard let edit = draft.insertMention(match, replacing: token) else { return }
+        let edit = onInsertMention.map { $0(match, token) } ?? draft.insertMention(match, replacing: token)
+        guard let edit else { return }
         dismissedMentionText = draft.text
         fileMentions.reset()
         isFocused.wrappedValue = true

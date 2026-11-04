@@ -13,6 +13,7 @@ protocol ComposerDraftEditing: AnyObject, Observable {
     var text: String { get set }
     /// Attachments, mentions and skills, in the order they were added.
     var attachments: [CodexUserInput] { get set }
+    var hostMentions: [WorkspaceFileMatch] { get set }
     /// Why the last edit or send left the draft as it is, shown beside the text.
     var notice: String? { get set }
     /// The selection to restore, while the text it was measured in is unchanged.

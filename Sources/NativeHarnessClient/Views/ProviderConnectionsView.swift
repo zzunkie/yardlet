@@ -57,18 +57,7 @@ struct ProviderConnectionPicker: View {
         return selectedChoice?.title ?? L10n.string("Account unavailable")
     }
     var body: some View {
-        Button { isPresented.toggle() } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "person.crop.circle")
-                Text(title).lineLimit(1)
-                Image(systemName: "chevron.down").font(.system(size: 8))
-            }
-        }
-        .font(.caption).buttonStyle(.borderless).parityPointer()
-        .frame(maxWidth: 190, alignment: .leading)
-        .help(accessibilityTitle)
-        .accessibilityLabel(L10n.string("Choose account"))
-        .accessibilityValue(accessibilityTitle)
+        ProviderConnectionControl(title: title, accessibilityTitle: accessibilityTitle) { isPresented.toggle() }
         .popover(isPresented: $isPresented) {
             AccountList(mode: .newTask(harness), store: store, runtimeSelections: runtimeSelections,
                 onChoose: { store.choose($0); isPresented = false },
@@ -82,6 +71,28 @@ struct ProviderConnectionPicker: View {
         .task(id: harness) {
             await store.checkNewTaskAccounts(for: harness, runtimeSelections: runtimeSelections)
         }
+    }
+}
+
+/// The account chip shared by local and remote composers; its menu supplies only the actions available there.
+struct ProviderConnectionControl: View {
+    let title: String
+    let accessibilityTitle: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: "person.crop.circle")
+                Text(title).lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 8))
+            }
+        }
+        .font(.caption).buttonStyle(.borderless).parityPointer()
+        .frame(maxWidth: 190, alignment: .leading)
+        .help(accessibilityTitle)
+        .accessibilityLabel(L10n.string("Choose account"))
+        .accessibilityValue(accessibilityTitle)
     }
 }
 

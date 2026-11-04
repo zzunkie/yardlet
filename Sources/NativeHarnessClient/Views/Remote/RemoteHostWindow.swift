@@ -613,8 +613,12 @@ final class RemoteComposerDrafts {
     func save() {
         guard let file else { return }
         var words: [String: String] = [:]
-        for (key, draft) in drafts where !draft.text.isEmpty { words[key] = draft.text }
-        if !newTask.text.isEmpty { words[Self.newTaskKey] = newTask.text }
+        for (key, draft) in drafts {
+            let text = RemoteComposerMentionIndex.message(draft.text, mentions: draft.hostMentions)
+            if !text.isEmpty { words[key] = text }
+        }
+        let newText = RemoteComposerMentionIndex.message(newTask.text, mentions: newTask.hostMentions)
+        if !newText.isEmpty { words[Self.newTaskKey] = newText }
         guard words != savedWords else { return }
         savedWords = words
         let manager = FileManager.default
@@ -635,7 +639,7 @@ private struct RemoteDraftAutosave: View {
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
-            .task(id: draft.text) {
+            .task(id: RemoteComposerMentionIndex.message(draft.text, mentions: draft.hostMentions)) {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled else { return }
                 drafts.save()

@@ -953,6 +953,26 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
         try await render("local-controls-claude", size: column, titled: false) {
             localTask(host, guideNow, draft: TaskComposerDraft()).environment(\.revealsSentMessageActions, true)
         }
+        host.runtimeSelections.select(URL(filePath: "/usr/bin/true"), for: .claudeCode)
+        host.composerDrafts.home.harness = .claudeCode
+        model.select(.newTask)
+        func remoteHome() -> some View {
+            let newDrafts = RemoteComposerDrafts()
+            newDrafts.newTaskProjectID = RemoteTaskProjection.chatsProjectID
+            return RemoteHostView(model: model, directory: hosts, drafts: newDrafts)
+        }
+        try await render("remote-composer-new-task", size: size, titled: true, title: model.name) { remoteHome() }
+        let homeDraft = NewTaskDraft()
+        homeDraft.harness = .claudeCode
+        try await render("local-composer-new-task", size: column, titled: false) {
+            NewTaskHome(recentSessions: [], projects: [], draft: homeDraft, runtimeSelections: host.runtimeSelections,
+                connections: host.connections,
+                models: NewTaskModelSource(catalogs: host.modelCatalogs, load: { _, _, _, _ in }),
+                accounts: NewTaskAccountSource(preview: { host.newTaskAccountPreview(harness: $0, model: $1) }, pick: { _, _ in nil }),
+                onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {}, onCreate: { _ in nil },
+                readMacConditions: { [] })
+                .background(ParityTheme.canvas)
+        }
         hosts.close(paired.id)
         await host.shutdown()
     }
@@ -1184,6 +1204,91 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background(ParityTheme.canvas)
         }
+    }
+
+    func testComposerListsDrawFromTheHostsValues() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "composer-render-\(UUID())")
+        try FileManager.default.createDirectory(at: root.appending(path: "Sources"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("struct Parser {}".utf8).write(to: root.appending(path: "Sources/Parser.swift"))
+        let session = SessionRecord(harness: .claudeCode, workspaceURL: root,
+            runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Review the parser")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteComposerMenus")))
+        let host = AppModel(store: SessionStore(sessions: [session], repository: InMemorySessionRepository()),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults), restoresIndexOnLaunch: false)
+        let center = ConnectorCenter(environment: .init(
+            repository: InMemoryConnectorRepository(records: Array(ConnectorsRenderingTests.records.prefix(2))),
+            credentials: InMemoryConnectorCredentialStore(), http: FakeConnectorServer(), userAgent: FakeUserAgent(),
+            sha256: MacOAuthUserAgent.sha256, clientVersion: "test"))
+        host.connectorCenter = center
+        let bridge = AppModelRemoteBridge(model: host)
+        let wireCommands = try await bridge.composerCommands(taskID: session.id.uuidString).get()
+        let decodedCommands = try JSONDecoder().decode([RemoteComposerCommand].self,
+            from: JSONEncoder().encode(wireCommands))
+        func commands(_ values: [RemoteComposerCommand]) -> [ProviderComposerCommand] {
+            values.map { .init(name: $0.name, description: $0.description ?? "", argumentHint: $0.argumentHint ?? "",
+                               builtin: true, title: $0.title, group: $0.group) }
+        }
+        let localSearch = ComposerFileMentionSearch()
+        localSearch.update(query: "Parser", roots: [root])
+        let scope = try await bridge.fileScope(taskID: session.id.uuidString).get()
+        let index = try RemoteFileReader.index(in: scope).get()
+        let remoteSearch = ComposerFileMentionSearch()
+        remoteSearch.update(query: "Parser", roots: [], search: { query in
+            .init(matches: WorkspaceFileRanking.rank(WorkspaceFileRanking.entries(forFiles: index.paths),
+                query: query, limit: 50).map { .init(root: scope.folder, relativePath: $0.relativePath, isDirectory: $0.isDirectory) })
+        })
+        try await waitUntil { !localSearch.isSearching && !remoteSearch.isSearching }
+        XCTAssertEqual(localSearch.matches, remoteSearch.matches)
+        let state = try await bridge.composerState(taskID: session.id.uuidString).get()
+        let wireState = try JSONDecoder().decode(RemoteComposerState.self, from: JSONEncoder().encode(state))
+        let empty = ComposerConnectorList(rows: [], toolListFollowsNextTurn: false)
+        let localConnectors = ComposerConnectorList.make(AppModelRemoteBridge.composerOptions(of: session, in: host).connectors,
+            connectors: center.connectors, taskState: { center.state(of: $0, inTask: session.id,
+                scope: ConnectorTaskScope(harness: session.harness)) }) ?? empty
+        let remoteConnectors = wireState.connectorList ?? empty
+        XCTAssertEqual(localConnectors.rows.map(\.name), remoteConnectors.rows.map(\.name))
+        XCTAssertEqual(localConnectors.rows.map(\.state), remoteConnectors.rows.map(\.state))
+        XCTAssertFalse(remoteConnectors.rows.isEmpty)
+        let chip = ComposerQueueChip(icon: "clock", status: L10n.string("Queued"), help: nil,
+            send: .init(label: L10n.string("Send now"), icon: "arrow.turn.up.right", help: ""),
+            stopAndSend: nil, removeLabel: L10n.string("Delete"), canMoveUp: true, canMoveDown: true)
+        for (name, values, search, connectors) in [("local", wireCommands, localSearch, localConnectors),
+                                                   ("remote", decodedCommands, remoteSearch, remoteConnectors)] {
+            try await render("\(name)-composer-mentions", size: .init(width: 640, height: 150), titled: false) {
+                ComposerFileMentionPicker(search: search, onSelect: { _ in }).padding().background(ParityTheme.canvas)
+            }
+            try await render("\(name)-composer-commands", size: .init(width: 640, height: 260), titled: false) {
+                ComposerCommandRows(commands: commands(values), highlightedIndex: 0).padding().background(ParityTheme.canvas)
+            }
+            try await render("\(name)-composer-connectors", size: .init(width: 340, height: 250), titled: false) {
+                ComposerConnectorsMenu(list: connectors, onManage: nil, onSwitch: { _, _ in })
+                    .background(ParityTheme.canvas)
+            }
+            try await render("\(name)-composer-queue", size: .init(width: 740, height: 130), titled: false) {
+                VStack {
+                    ComposerQueueRow(title: "Run the parser tests", failed: false, fromTask: false, chip: chip,
+                        moveUp: {}, moveDown: {}, sendNow: {}, edit: {}, remove: {})
+                    ComposerQueueRow(title: "Update the migration guide", failed: true, fromTask: false, chip: chip,
+                        moveUp: {}, moveDown: {}, retry: {}, edit: {}, remove: {})
+                }.padding().background(ParityTheme.canvas)
+            }
+        }
+        try await render("composer-mentions-local-remote", size: .init(width: 1280, height: 160), titled: false) {
+            HStack {
+                ComposerFileMentionPicker(search: localSearch, onSelect: { _ in }).frame(width: 620)
+                Divider()
+                ComposerFileMentionPicker(search: remoteSearch, onSelect: { _ in }).frame(width: 620)
+            }.padding().background(ParityTheme.canvas)
+        }
+        try await render("composer-commands-local-remote", size: .init(width: 1280, height: 260), titled: false) {
+            HStack {
+                ComposerCommandRows(commands: commands(wireCommands), highlightedIndex: 0).frame(width: 620)
+                Divider()
+                ComposerCommandRows(commands: commands(decodedCommands), highlightedIndex: 0).frame(width: 620)
+            }.padding().background(ParityTheme.canvas)
+        }
+        await host.shutdown()
     }
 
     // MARK: - Helpers

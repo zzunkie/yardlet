@@ -323,24 +323,7 @@ struct PromptComposer: View {
             }
         ) {
             if showsPausedCodexQueue {
-                HStack(spacing: 6) {
-                    Image(systemName: "pause.circle")
-                    Text(L10n.string("Queue paused because you interrupted"))
-                        .lineLimit(1)
-                    Spacer(minLength: 8)
-                    if let resumeQueue = actions.resumeQueue {
-                        Button(action: resumeQueue) {
-                            Label(L10n.string("Resume"), systemImage: "play.fill")
-                        }
-                        .buttonStyle(.borderless)
-                        .parityPointer()
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 15)
-                .padding(.top, 9)
-                .accessibilityElement(children: .contain)
+                ComposerQueuePausedRow(resume: actions.resumeQueue)
             }
             // Queued messages, one full-width row each above the text, as the Codex and Claude
             // apps list them: a long message shortens and its actions stay in view.
@@ -434,138 +417,15 @@ struct PromptComposer: View {
     /// One queued message: what it says, shortened to the row, then where it goes and its actions,
     /// which keep their size so a long message never pushes them out of view.
     private func queueChip(_ item: CodexQueuedSubmission, chip: ComposerQueueChip, at index: Int) -> some View {
-        // A message another task sent waits here too, but it is that task's, not the person's: it
-        // says who sent it and offers no edit.
-        let fromTask = TaskMessage.parse(item.draft.text) != nil
-        return HStack(spacing: 6) {
-            Image(systemName: fromTask && item.state != .failed ? "bubble.left.and.bubble.right" : chip.icon)
-                .frame(width: 14)
-            Text(Self.queueTitle(item.draft))
-                .foregroundStyle(item.state == .failed ? AnyShapeStyle(.red) : AnyShapeStyle(.primary))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            // When the turn ends, or at Claude's next step.
-            Text(chip.status)
-                .lineLimit(1)
-                .fixedSize()
-            HStack(spacing: 4) {
-            if chip.canMoveUp {
-                Button {
-                    actions.moveQueued?(item.id, index - 1)
-                } label: {
-                    Image(systemName: "arrow.up")
-                }
-                .buttonStyle(.borderless)
-                .parityPointer()
-                .accessibilityLabel(L10n.string("Move up"))
-                .help(L10n.string("Move up"))
-            }
-            if chip.canMoveDown {
-                Button {
-                    actions.moveQueued?(item.id, index + 1)
-                } label: {
-                    Image(systemName: "arrow.down")
-                }
-                .buttonStyle(.borderless)
-                .parityPointer()
-                .accessibilityLabel(L10n.string("Move down"))
-                .help(L10n.string("Move down"))
-            }
-            if item.state == .failed {
-                Button {
-                    actions.retryQueued?(item.id)
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .parityPointer()
-                .accessibilityLabel(L10n.string("Retry"))
-                .help(L10n.string("Retry"))
-            } else if let send = chip.send, let sendQueuedNow = actions.sendQueuedNow {
-                // In words, as the Codex app's queued message offers its Steer: the message goes
-                // now and the turn goes on.
-                Button {
-                    sendQueuedNow(item.id)
-                } label: {
-                    Label(send.label, systemImage: send.icon)
-                        .labelStyle(.titleAndIcon)
-                        .fontWeight(.medium)
-                        .fixedSize()
-                }
-                .buttonStyle(.borderless)
-                .parityPointer()
-                .accessibilityLabel(send.label)
-                .accessibilityHint(send.help)
-                .help(send.help)
-            }
-            if let editQueued = actions.editQueued, !fromTask {
-                Button {
-                    _ = editQueued(item.id)
-                } label: {
-                    Image(systemName: "pencil")
-                }
-                .buttonStyle(.borderless)
-                .parityPointer()
-                .accessibilityLabel(L10n.string("Edit message"))
-                .help(L10n.string("Edit message"))
-            }
-            Button {
-                actions.removeQueued?(item.id)
-            } label: {
-                Image(systemName: "xmark")
-            }
-            .buttonStyle(.borderless)
-            .parityPointer()
-            .accessibilityLabel(chip.removeLabel)
-            .help(chip.removeLabel)
-            }
-            .fixedSize()
-        }
-        .font(.caption)
-        .foregroundStyle(item.state == .failed ? .red : .secondary)
-        .padding(.horizontal, 9)
-        .frame(maxWidth: .infinity, minHeight: 28)
-        .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 8))
-        .help(chip.help ?? "")
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(L10n.string("Queue")), \(chip.status)")
-        .accessibilityValue(Self.queueTitle(item.draft))
-        .contextMenu {
-            if chip.canMoveUp {
-                Button(L10n.string("Move up")) {
-                    actions.moveQueued?(item.id, index - 1)
-                }
-            }
-            if chip.canMoveDown {
-                Button(L10n.string("Move down")) {
-                    actions.moveQueued?(item.id, index + 1)
-                }
-            }
-            if item.state == .failed {
-                Button(L10n.string("Retry")) {
-                    actions.retryQueued?(item.id)
-                }
-            } else if let send = chip.send, let sendQueuedNow = actions.sendQueuedNow {
-                Button(send.label) {
-                    sendQueuedNow(item.id)
-                }
-            }
-            if let stop = chip.stopAndSend, let stopAndSend = actions.stopAndSendQueued {
-                // The one queue action that stops the running turn, named for it.
-                Button(stop) {
-                    stopAndSend(item.id)
-                }
-            }
-            if let editQueued = actions.editQueued, !fromTask {
-                Button(L10n.string("Edit message")) {
-                    _ = editQueued(item.id)
-                }
-            }
-            Button(chip.removeLabel, role: .destructive) {
-                actions.removeQueued?(item.id)
-            }
-        }
+        ComposerQueueRow(title: Self.queueTitle(item.draft), failed: item.state == .failed,
+                         fromTask: TaskMessage.parse(item.draft.text) != nil, chip: chip,
+                         moveUp: { actions.moveQueued?(item.id, index - 1) },
+                         moveDown: { actions.moveQueued?(item.id, index + 1) },
+                         retry: { actions.retryQueued?(item.id) },
+                         sendNow: actions.sendQueuedNow.map { action in { action(item.id) } },
+                         stopAndSend: actions.stopAndSendQueued.map { action in { action(item.id) } },
+                         edit: actions.editQueued.map { action in { _ = action(item.id) } },
+                         remove: { actions.removeQueued?(item.id) })
     }
 
     private var composerFooterLayout: AnyLayout {

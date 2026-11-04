@@ -359,6 +359,14 @@ final class RemoteHostModelTests: XCTestCase {
         try render("source")
         let outside = await client.response(to: .readFile(taskID: session.id.uuidString, path: "../outside.txt", offset: 0))
         XCTAssertEqual(outside.error?.code, .notFound)
+        let project = try XCTUnwrap(client.projects.first { $0.id != "chats" })
+        let projectFiles = await client.response(to: .projectWorkspaceFiles(projectID: project.id))
+        XCTAssertTrue(projectFiles.ok)
+        XCTAssertEqual(projectFiles.filePaths, ["Greeting.swift"])
+        let chatFiles = await client.response(to: .projectWorkspaceFiles(projectID: "chats"))
+        XCTAssertEqual(chatFiles.error?.code, .notAllowed)
+        let unknownProject = await client.response(to: .projectWorkspaceFiles(projectID: UUID().uuidString))
+        XCTAssertEqual(unknownProject.error?.code, .notFound)
         let missing = await client.response(to: .workspaceFiles(taskID: UUID().uuidString))
         XCTAssertEqual(missing.error?.code, .notFound)
         await host.shutdown()
@@ -993,13 +1001,16 @@ final class RemoteHostModelTests: XCTestCase {
         drafts.restore(from: folder)
         drafts.draft(for: "4C1F").text = "Then update the changelog"
         drafts.newTask.text = "Add a dark mode toggle"
+        let hostFile = WorkspaceFileMatch(root: URL(filePath: "/host/project"), relativePath: "docs/Release notes.md", isDirectory: false)
+        drafts.draft(for: "4C1F").hostMentions = [hostFile]
         drafts.save()
         let file = folder.appending(path: "drafts.json")
         let permissions = try FileManager.default.attributesOfItem(atPath: file.path(percentEncoded: false))[.posixPermissions]
         XCTAssertEqual(permissions as? Int, 0o600)
         let reopened = RemoteComposerDrafts()
         reopened.restore(from: folder)
-        XCTAssertEqual(reopened.draft(for: "4C1F").text, "Then update the changelog")
+        XCTAssertEqual(reopened.draft(for: "4C1F").text, RemoteComposerMentionIndex.message("Then update the changelog", mentions: [hostFile]))
+        XCTAssertTrue(reopened.draft(for: "4C1F").attachments.isEmpty)
         XCTAssertEqual(reopened.newTask.text, "Add a dark mode toggle")
         // A draft sent and emptied is no longer kept.
         reopened.draft(for: "4C1F").text = ""

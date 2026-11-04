@@ -17,6 +17,17 @@ struct RemoteNewTaskView: View {
     @State private var picks: [String: String] = [:]
     @State private var worktree: Bool?
     @State private var isStarting = false
+    @State private var accountID: String?
+    @State private var confirmedChoices: [String: String] = [:]
+    @State private var showsAccounts = false
+    @State private var startConfirmation: RemoteSetting?
+    @State private var showsCommands = false
+    @State private var commandSearch = ""
+    @State private var commands: [RemoteComposerCommand] = []
+    @State private var commandContext: String?
+    @State private var loadingCommands = false
+    @State private var optionReadID: UUID?
+    @State private var mentionIndex = RemoteComposerMentionIndex()
     @FocusState private var isFocused: Bool
     @State private var listKeyboard = NewTaskHomeListKeyboard()
     @FocusState private var listFocus: NewTaskHomeLists.Part?
@@ -67,7 +78,19 @@ struct RemoteNewTaskView: View {
             projectID = chosen
             chosenProjectID = nil
         }
-        .task(id: OptionsKey(projectID: projectID, harness: harness, picks: picks, connected: model.isConnected)) {
+        .alert(startConfirmation?.choices.first { $0.value == startConfirmation?.value }?.confirm?.title ?? "",
+            isPresented: Binding(get: { startConfirmation != nil }, set: { if !$0 { startConfirmation = nil } }),
+            presenting: startConfirmation) { setting in
+                Button(L10n.string("Cancel"), role: .cancel) {}
+                Button(setting.choices.first { $0.value == setting.value }?.confirm?.button ?? "", role: .destructive) {
+                    confirmedChoices[setting.id] = setting.value
+                    startConfirmation = nil
+                    start()
+                }
+            } message: { setting in
+                Text(setting.choices.first { $0.value == setting.value }?.confirm?.message ?? "")
+            }
+        .task(id: OptionsKey(projectID: projectID, harness: harness, picks: picks, accountID: accountID, connected: model.isConnected)) {
             await readOptions()
         }
     }
@@ -77,22 +100,46 @@ struct RemoteNewTaskView: View {
             ComposerEditor(
                 draft: draft, placeholder: L10n.string("Describe the task"),
                 accessibilityHint: L10n.string("Press Return to start the task"), metrics: .newTask,
-                input: nil, onExternalInput: acceptsAttachments ? { receive($0) } : nil, mentionRoots: [], commands: nil,
-                isCommandMenuOpen: false, isMenuOpen: false, isFocused: $isFocused, onSubmit: start
+                input: nil, onExternalInput: acceptsAttachments ? { receive($0) } : nil, mentionRoots: [],
+                mentionSearch: model.composerExtensions && !isChat ? { query in
+                    guard let projectID else { return .init() }
+                    return await mentionIndex.search(query, key: projectID) {
+                        await model.response(to: .projectWorkspaceFiles(projectID: projectID))
+                    }
+                } : nil,
+                onInsertMention: { RemoteComposerMentionIndex.insert($0, replacing: $1, into: draft) },
+                commands: editorCommands,
+                isCommandMenuOpen: showsCommands, isMenuOpen: showsCommands || showsAccounts,
+                showsChips: !draft.hostMentions.isEmpty, isFocused: $isFocused, onSubmit: start,
+                onCommandQueryChange: { old, query in if old == nil, query != nil { Task { await loadCommands() } } }
             ) {
-                EmptyView()
+                if let line = options?.accountLine {
+                    NewTaskAccountExplanation(line: line)
+                        .padding(.horizontal, 16).padding(.bottom, 6)
+                }
             } chips: {
-                EmptyView()
+                RemoteComposerMentionChips(draft: draft)
             } footer: {
                 HStack(spacing: 8) {
+                    commandMenu
                     harnessMenu
-                    ForEach(options?.settings ?? [], id: \.id) { setting in settingMenu(setting) }
+                    accountPicker
+                    if model.composerExtensions {
+                        ComposerSessionControls(options: sessionOptions, placement: .leading,
+                            isDisabled: isStarting, onChoose: choose, onPrepare: readOptions)
+                    } else {
+                        ForEach(options?.settings ?? [], id: \.id) { setting in settingMenu(setting) }
+                    }
                     if let worktree {
                         Toggle(L10n.string("New worktree"), isOn: Binding(get: { worktree }, set: { self.worktree = $0 }))
                             .toggleStyle(.checkbox)
                             .controlSize(.small)
                     }
                     Spacer()
+                    if model.composerExtensions {
+                        ComposerSessionControls(options: sessionOptions, placement: .trailing,
+                            isDisabled: isStarting, onChoose: choose, onPrepare: readOptions)
+                    }
                     if isStarting { ProgressView().controlSize(.small) }
                     ParityIconButton(systemName: "arrow.up", help: L10n.string("Start task"), isProminent: true, action: start)
                         .accessibilityLabel(L10n.string("Start task"))
@@ -187,12 +234,13 @@ struct RemoteNewTaskView: View {
         var projectID: String?
         var harness: String?
         var picks: [String: String]
+        var accountID: String?
         var connected: Bool
     }
 
     private var canStart: Bool {
-        model.isConnected && !isStarting && projectID != nil
-            && !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        model.isConnected && !isStarting && optionReadID == nil && projectID != nil
+            && (!draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.hostMentions.isEmpty)
     }
 
     private var chosenHarness: RemoteHarnessOption? {
@@ -207,6 +255,8 @@ struct RemoteNewTaskView: View {
                 Button(option.harnessName) {
                     harness = option.harness
                     picks = [:]
+                    confirmedChoices = [:]
+                    accountID = nil
                 }
             }
         } label: {
@@ -215,6 +265,83 @@ struct RemoteNewTaskView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .disabled((options?.harnesses ?? []).count < 2)
+    }
+
+    private var sessionOptions: ComposerSessionOptions {
+        RemoteTaskSettingsProjection.options(options?.settings ?? [], task: RemoteTask(
+            id: "", title: "", harness: harness ?? options?.harness ?? "claude-code",
+            harnessName: chosenHarness?.harnessName ?? "", projectId: projectID, attention: .idle, lastActivityAt: 0))
+    }
+
+    private func choose(_ choice: ComposerSessionChoice) {
+        guard case let .providerOption(id, value) = choice else { return }
+        if options?.settings?.first(where: { $0.id == id })?.choices.first(where: { $0.value == value })?.confirm != nil {
+            confirmedChoices[id] = value
+        } else {
+            confirmedChoices[id] = nil
+        }
+        picks[id] = value
+    }
+
+    @ViewBuilder private var accountPicker: some View {
+        if let accounts = options?.accounts, !accounts.isEmpty {
+            let title = accounts.first { $0.id == accountID }?.name
+                ?? accounts.first { $0.current == true }?.name ?? L10n.string("Account unavailable")
+            ProviderConnectionControl(title: title, accessibilityTitle: title) { showsAccounts = true }
+                .fixedSize(horizontal: true, vertical: false)
+                .popover(isPresented: $showsAccounts) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(accounts, id: \.id) { account in
+                            Button {
+                                accountID = account.id
+                                picks = [:]
+                                confirmedChoices = [:]
+                                showsAccounts = false
+                            } label: {
+                                VStack(alignment: .leading) {
+                                    Text(account.name)
+                                    if let detail = account.detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
+                                }.frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(.plain).padding(6)
+                            .disabled(account.available != true)
+                        }
+                    }.padding(8).frame(width: 300)
+                }
+        }
+    }
+
+    private var commandRows: [ProviderComposerCommand] {
+        commands.map { ProviderComposerCommand(name: $0.name, description: $0.description ?? "",
+            argumentHint: $0.argumentHint ?? "", title: $0.title, group: $0.group) }
+    }
+
+    private var editorCommands: ComposerEditorCommands? {
+        guard model.composerExtensions, chosenHarness?.harness == HarnessKind.claudeCode.rawValue, !isChat else { return nil }
+        return ComposerEditorCommands(commands: commandRows, isLoading: loadingCommands, choose: insertCommand)
+    }
+
+    private func insertCommand(_ command: ProviderComposerCommand) {
+        showsCommands = false
+        ComposerFieldEditor.insert(command, into: draft, isFocused: $isFocused)
+    }
+
+    @ViewBuilder private var commandMenu: some View {
+        if editorCommands != nil {
+            Button { commandSearch = ""; showsCommands = true; Task { await loadCommands() } } label: {
+                Image(systemName: "plus").font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary).frame(width: 28, height: 28)
+            }
+            .buttonStyle(.borderless).parityPointer()
+            .accessibilityLabel(L10n.string("Slash commands"))
+            .popover(isPresented: $showsCommands) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.string("Slash commands")).font(.callout.weight(.semibold))
+                    TextField(L10n.string("Search commands"), text: $commandSearch).textFieldStyle(.roundedBorder)
+                    ComposerCommandPicker(commands: commandRows, query: commandSearch, isLoading: loadingCommands, onSelect: insertCommand)
+                }.padding(8).frame(width: 340)
+            }
+        }
     }
 
     private func settingMenu(_ setting: RemoteSetting) -> some View {
@@ -233,10 +360,31 @@ struct RemoteNewTaskView: View {
 
     private func readOptions() async {
         guard model.isConnected else { return }
-        let response = await model.response(to: .newTaskOptions(projectID: projectID, harness: harness, settings: picks))
-        guard response.ok else { return }
+        let requestID = UUID()
+        optionReadID = requestID
+        defer { if optionReadID == requestID { optionReadID = nil } }
+        let response = await model.response(to: .newTaskOptions(projectID: projectID, harness: harness, settings: picks, accountID: accountID, composer: model.composerExtensions))
+        guard !Task.isCancelled, optionReadID == requestID else { return }
+        guard response.ok else {
+            model.commandError = RemoteHostModel.message(for: response.error, host: model.name)
+            return
+        }
         options = response
+        let key = [projectID ?? "", harness ?? response.harness ?? "", accountID ?? ""].joined(separator: "\n")
+        if commandContext != key { commands = []; commandContext = nil }
         if worktree == nil || response.worktree == nil { worktree = response.worktree }
+    }
+
+    private func loadCommands() async {
+        let key = [projectID ?? "", harness ?? options?.harness ?? "", accountID ?? ""].joined(separator: "\n")
+        guard !loadingCommands, commandContext != key else { return }
+        loadingCommands = true
+        defer { loadingCommands = false }
+        let reply = await model.response(to: .newTaskOptions(projectID: projectID, harness: harness ?? options?.harness,
+            settings: picks, accountID: accountID, composer: true, readCommands: true))
+        guard key == [projectID ?? "", harness ?? options?.harness ?? "", accountID ?? ""].joined(separator: "\n"), reply.ok else { return }
+        commands = reply.commands ?? []
+        commandContext = key
     }
 
     private func receive(_ input: ComposerExternalInput) {
@@ -251,24 +399,42 @@ struct RemoteNewTaskView: View {
 
     private func start() {
         guard canStart, let projectID else { return }
-        let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let setting = options?.settings?.first(where: { setting in
+            setting.choices.first { $0.value == setting.value }?.confirm != nil
+                && confirmedChoices[setting.id] != setting.value
+        }) {
+            startConfirmation = setting
+            return
+        }
+        let text = RemoteComposerMentionIndex.message(draft.text, mentions: draft.hostMentions).trimmingCharacters(in: .whitespacesAndNewlines)
         let attachments = draft.attachments
+        let mentions = draft.hostMentions
+        let originalText = draft.text
+        var settings = picks
+        for setting in options?.settings ?? [] where settings[setting.id] == nil { settings[setting.id] = setting.value }
+        let selectedHarness = harness ?? options?.harness
+        let selectedAccount = accountID
+        let selectedWorktree = worktree
+        let acceptsImages = chosenHarness?.acceptsImages == true
+        let acceptsFiles = chosenHarness?.acceptsFiles == true
+        let confirmed = options?.settings?.filter { setting in
+            setting.choices.first { $0.value == settings[setting.id] }?.confirm != nil
+        }.allSatisfy { confirmedChoices[$0.id] == settings[$0.id] } == true
         isStarting = true
         Task {
             defer { isStarting = false }
-            guard let parts = await RemoteAttachments.prepare(attachments, for: model, acceptsImages: chosenHarness?.acceptsImages == true,
-                                                             acceptsFiles: chosenHarness?.acceptsFiles == true) else { return }
-            var settings = picks
-            for setting in options?.settings ?? [] where settings[setting.id] == nil { settings[setting.id] = setting.value }
+            guard let parts = await RemoteAttachments.prepare(attachments, for: model, acceptsImages: acceptsImages,
+                                                             acceptsFiles: acceptsFiles) else { return }
             let response = await model.response(to: .createTask(RemoteTaskStart(
-                projectID: projectID, text: text, harness: harness ?? options?.harness, settings: settings, worktree: worktree,
-                images: parts.images, files: parts.files)))
+                projectID: projectID, text: text, harness: selectedHarness, settings: settings, worktree: selectedWorktree,
+                images: parts.images, files: parts.files, accountID: selectedAccount, confirmed: confirmed)))
             guard response.ok, let taskID = response.taskId else {
                 model.commandError = RemoteHostModel.message(for: response.error, host: model.name)
                 return
             }
-            draft.text = ""
-            draft.attachments = []
+            if draft.text == originalText { draft.text = "" }
+            draft.attachments.removeAll { attachments.contains($0) }
+            draft.hostMentions.removeAll { mentions.contains($0) }
             RemoteAttachments.discard(attachments)
             model.select(.task(taskID))
         }

@@ -270,6 +270,7 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var subtasks: Bool = false
     public var taskNotices: Bool = false
     public var fileRewind: Bool = false
+    public var composerExtensions: Bool = false
 
     public init(projects: [RemoteProject] = [], tasks: [RemoteTask] = [], newestRequestIDs: [String: String] = [:],
                 requestSummaries: [String: String] = [:], newTask: RemoteNewTask? = nil,
@@ -948,9 +949,12 @@ public struct RemoteTaskStart: Equatable, Sendable {
     /// The uploads it carries (§15.20), and once the server found them, the files.
     public var files: [String]
     public var attachedFiles: [RemoteFile] = []
+    public var accountID: String?
+    public var confirmed: Bool
 
     public init(projectID: String, text: String, harness: String? = nil, settings: [String: String] = [:],
-                worktree: Bool? = nil, images: [RemoteImage] = [], files: [String] = []) {
+                worktree: Bool? = nil, images: [RemoteImage] = [], files: [String] = [],
+                accountID: String? = nil, confirmed: Bool = false) {
         self.projectID = projectID
         self.text = text
         self.harness = harness
@@ -958,6 +962,8 @@ public struct RemoteTaskStart: Equatable, Sendable {
         self.worktree = worktree
         self.images = images
         self.files = files
+        self.accountID = accountID
+        self.confirmed = confirmed
     }
 }
 
@@ -1001,7 +1007,7 @@ public enum RemoteRequest: Equatable, Sendable {
     case createTask(RemoteTaskStart)
     /// `settings` already picked, so a menu that depends on another (an effort on its model) answers as it would
     /// after those picks (§15.16).
-    case newTaskOptions(projectID: String?, harness: String?, settings: [String: String] = [:])
+    case newTaskOptions(projectID: String?, harness: String?, settings: [String: String] = [:], accountID: String? = nil, composer: Bool = false, readCommands: Bool = false)
     case usageReset(taskID: String)
     case useUsageReset(taskID: String, token: String, confirmed: Bool)
     case limitAccounts(taskID: String)
@@ -1040,6 +1046,7 @@ public enum RemoteRequest: Equatable, Sendable {
     case readReview(taskID: String, query: RemoteReviewQuery)
     case readFile(taskID: String, path: String, offset: Int)
     case workspaceFiles(taskID: String)
+    case projectWorkspaceFiles(projectID: String)
     /// A desktop in use, or no longer (§18): the Mac holds phone pushes meanwhile.
     case presence(active: Bool)
     /// A task's composer controls, its slash commands, and the edit and fork of its turns (§15.23). `prepare` reads
@@ -1048,6 +1055,8 @@ public enum RemoteRequest: Equatable, Sendable {
     case railAction(taskID: String, action: String, targetID: String? = nil, confirmed: Bool = false)
     case taskSettings(taskID: String, prepare: Bool = false)
     case setTaskSetting(taskID: String, setting: String, value: String, confirmed: Bool = false)
+    case composerState(taskID: String)
+    case composerAction(taskID: String, action: String, itemID: String?, value: String?)
     case composerCommands(taskID: String)
     case runComposerCommand(taskID: String, command: String, arguments: String? = nil)
     case editMessage(taskID: String, turnID: String, text: String)
@@ -1123,11 +1132,14 @@ public enum RemoteRequest: Equatable, Sendable {
         case .readReview: "readReview"
         case .readFile: "readFile"
         case .workspaceFiles: "workspaceFiles"
+        case .projectWorkspaceFiles: "projectWorkspaceFiles"
         case .presence: "presence"
         case .taskRail: "taskRail"
         case .railAction: "railAction"
         case .taskSettings: "taskSettings"
         case .setTaskSetting: "setTaskSetting"
+        case .composerState: "composerState"
+        case .composerAction: "composerAction"
         case .composerCommands: "composerCommands"
         case .runComposerCommand: "runComposerCommand"
         case .editMessage: "editMessage"
@@ -1156,7 +1168,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .usageReset, .useUsageReset: nil
         case .openOriginalConversation, .taskAccounts, .projectAction, .archivedTasks, .taskAction: nil
         case .scheduledTaskOptions, .saveScheduledTask, .deleteScheduledTasks: nil
-        case .readReview, .workspaceFiles: nil
+        case .readReview, .workspaceFiles, .projectWorkspaceFiles, .composerState, .composerAction: nil
         case let .fileRewind(_, action, _, _, _): action == .restore ? .fileWrites : nil
         case .subtask, .cancelAccountMove: nil
         case .openTerminal, .terminalInput, .terminalResize, .terminalStatus, .terminalOutputAck, .closeTerminal: .terminal
@@ -1188,12 +1200,12 @@ public enum RemoteRequest: Equatable, Sendable {
              let .archiveTask(id), let .limitAccounts(id), let .continueWithAccount(id, _), let .setAutoContinue(id, _),
              let .actOnQueued(id, _, _), let .answerHandoff(id, _, _), let .chooseAnswer(id, _, _, _, _),
              let .readReview(id, _), let .workspaceFiles(id), let .taskOutputs(id), let .readFile(id, _, _), let .taskSettings(id, _), let .setTaskSetting(id, _, _, _),
-             let .composerCommands(id), let .runComposerCommand(id, _, _), let .editMessage(id, _, _), let .forkTask(id, _),
+             let .composerState(id), let .composerAction(id, _, _, _), let .composerCommands(id), let .runComposerCommand(id, _, _), let .editMessage(id, _, _), let .forkTask(id, _),
              let .watchTab(id, _, _, _, _), let .unwatchTab(id),
              let .tabFrameAck(id, _, _), let .tabInput(id, _, _), let .openTab(id, _, _), let .closeTab(id, _),
              let .openTerminal(id, _, _), let .terminalInput(id, _, _), let .terminalResize(id, _, _, _),
              let .closeTerminal(id, _), let .terminalOutputAck(id, _, _), let .terminalStatus(id, _): id
-        case .snapshot, .ping, .createTask, .newTaskOptions, .registerPush, .unregisterPush, .forgetDevice,
+        case .projectWorkspaceFiles, .snapshot, .ping, .createTask, .newTaskOptions, .registerPush, .unregisterPush, .forgetDevice,
              .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled,
              .presence: nil
         }
@@ -1228,7 +1240,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .sendMessage, .answerApproval, .stopTurn, .markRead, .answerQuestion, .reviewPlan, .createTask,
              .actOnSuggestion, .setPinned, .archiveTask, .answerLink, .continueWithAccount, .setAutoContinue, .actOnQueued,
              .answerHandoff, .chooseAnswer, .runScheduledTask, .setScheduledTaskEnabled, .setTaskSetting, .runComposerCommand,
-             .editMessage, .forkTask, .railAction: true
+             .composerAction, .editMessage, .forkTask, .railAction: true
         default: false
         }
     }
@@ -1295,6 +1307,8 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var settings: [String: String]?
         var worktree: Bool?
         var accountId: String?
+        var composer: Bool?
+        var readCommands: Bool?
         var enabled: Bool?
         var active: Bool?
         var choice: String?
@@ -1377,7 +1391,8 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             ("requestId", wire.requestId, RemoteProtocol.maxProviderIDBytes), ("itemId", wire.itemId, RemoteProtocol.maxProviderIDBytes),
             ("suggestionId", wire.suggestionId, RemoteProtocol.maxProviderIDBytes),
             ("choice", wire.choice, RemoteProtocol.maxProviderIDBytes), ("setting", wire.setting, RemoteProtocol.maxProviderIDBytes),
-            ("value", wire.value, RemoteProtocol.maxProviderIDBytes), ("command", wire.command, RemoteProtocol.maxProviderIDBytes),
+            ("value", wire.value, type == "composerAction" && wire.action == "edit" ? RemoteProtocol.maxMessageCharacters * 4 : RemoteProtocol.maxProviderIDBytes),
+            ("command", wire.command, RemoteProtocol.maxProviderIDBytes),
             ("turnId", wire.turnId, RemoteProtocol.maxProviderIDBytes),
             ("tabId", wire.tabId, RemoteProtocol.maxOwnIDBytes), ("terminalId", wire.terminalId, RemoteProtocol.maxOwnIDBytes)
         ]
@@ -1446,10 +1461,10 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             guard let images = images(wire.images) else { return fail(.badRequest, "An image is not base64") }
             request = .createTask(RemoteTaskStart(projectID: projectID, text: text, harness: required(wire.harness),
                                                   settings: wire.settings ?? [:], worktree: wire.worktree, images: images,
-                                                  files: wire.files ?? []))
+                                                  files: wire.files ?? [], accountID: wire.accountId, confirmed: wire.confirmed == true))
         case "newTaskOptions":
             request = .newTaskOptions(projectID: required(wire.projectId), harness: required(wire.harness),
-                                      settings: wire.settings ?? [:])
+                                      settings: wire.settings ?? [:], accountID: wire.accountId, composer: wire.composer == true, readCommands: wire.readCommands == true)
         case "usageReset":
             guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
             request = .usageReset(taskID: taskID)
@@ -1592,6 +1607,9 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 return fail(.badRequest, "Missing scheduleId or enabled")
             }
             request = .setScheduledTaskEnabled(scheduleID: scheduleID, enabled: enabled)
+        case "projectWorkspaceFiles":
+            guard let projectID = required(wire.projectId) else { return fail(.badRequest, "Missing projectId") }
+            request = .projectWorkspaceFiles(projectID: projectID)
         case "workspaceFiles":
             guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
             request = .workspaceFiles(taskID: taskID)
@@ -1628,6 +1646,15 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 }
                 request = .railAction(taskID: taskID, action: action, targetID: wire.targetId, confirmed: wire.confirmed == true)
             }
+        case "composerState":
+            guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
+            request = .composerState(taskID: taskID)
+        case "composerAction":
+            guard let taskID = required(wire.taskId), let action = required(wire.action),
+                  ["moveUp", "moveDown", "retry", "edit", "pause", "resume", "connector"].contains(action) else {
+                return fail(.badRequest, "Invalid composer action")
+            }
+            request = .composerAction(taskID: taskID, action: action, itemID: wire.itemId, value: wire.value)
         case "taskSettings", "composerCommands", "forkTask":
             guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
             switch type {
@@ -1769,10 +1796,15 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             wire.worktree = start.worktree
             wire.images = Self.wire(start.images)
             wire.files = start.files.isEmpty ? nil : start.files
-        case let .newTaskOptions(projectID, harness, settings):
+            wire.accountId = start.accountID
+            wire.confirmed = start.confirmed ? true : nil
+        case let .newTaskOptions(projectID, harness, settings, accountID, composer, readCommands):
             wire.projectId = projectID
             wire.harness = harness
             wire.settings = settings.isEmpty ? nil : settings
+            wire.accountId = accountID
+            wire.composer = composer ? true : nil
+            wire.readCommands = readCommands ? true : nil
         case let .usageReset(taskID):
             wire.taskId = taskID
         case let .useUsageReset(taskID, token, confirmed):
@@ -1865,6 +1897,8 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         case let .setScheduledTaskEnabled(scheduleID, enabled):
             wire.scheduleId = scheduleID
             wire.enabled = enabled
+        case let .projectWorkspaceFiles(projectID):
+            wire.projectId = projectID
         case let .workspaceFiles(taskID):
             wire.taskId = taskID
         case let .taskOutputs(taskID):
@@ -1893,6 +1927,13 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             wire.setting = setting
             wire.value = value
             wire.confirmed = confirmed ? true : nil
+        case let .composerState(taskID):
+            wire.taskId = taskID
+        case let .composerAction(taskID, action, itemID, value):
+            wire.taskId = taskID
+            wire.action = action
+            wire.itemId = itemID
+            wire.value = value
         case let .composerCommands(taskID):
             wire.taskId = taskID
         case let .runComposerCommand(taskID, command, arguments):
@@ -1993,6 +2034,7 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var harness: String?
     public var harnessName: String?
     public var harnesses: [RemoteHarnessOption]?
+    public var accountLine: String?
     public var settings: [RemoteSetting]?
     public var worktree: Bool?
     /// `limitAccounts` (§15.17).
@@ -2042,6 +2084,8 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var taskControls: Bool?
     /// `composerCommands` (§15.23).
     public var commands: [RemoteComposerCommand]?
+    public var composerExtensions: Bool?
+    public var composerState: RemoteComposerState?
     /// `snapshot` on v2: the Mac shows a task's browser tabs (§15.25).
     public var subtasks: Bool?
     public var subtask: RemoteSubtaskTranscript?
@@ -2188,6 +2232,9 @@ public struct RemoteNewTaskOptions: Equatable, Sendable {
     public var harnesses: [RemoteHarnessOption]
     public var settings: [RemoteSetting]
     public var worktree: Bool?
+    public var accounts: [RemoteAccount]?
+    public var accountLine: String?
+    public var commands: [RemoteComposerCommand]?
 
     public init(harness: RemoteHarnessOption, harnesses: [RemoteHarnessOption], settings: [RemoteSetting] = [],
                 worktree: Bool? = nil) {
@@ -2508,5 +2555,32 @@ public struct RemoteHandshakeReply: Codable, Equatable, Sendable {
     public init(ok: Bool, error: RemoteError? = nil) {
         self.ok = ok
         self.error = error
+    }
+}
+
+/// Task-scoped composer presentation. No credentials or connector configuration leave the host.
+public struct RemoteComposerConnector: Codable, Equatable, Sendable {
+    public var id: String
+    public var name: String
+    public var state: String
+    public var toolCount: Int?
+    public var source: String
+    public var connectorID: String?
+    public var presetID: String?
+    public init(id: String, name: String, state: String, toolCount: Int? = nil, source: String,
+                connectorID: String? = nil, presetID: String? = nil) {
+        self.id = id; self.name = name; self.state = state; self.toolCount = toolCount
+        self.source = source; self.connectorID = connectorID; self.presetID = presetID
+    }
+}
+public struct RemoteComposerState: Codable, Equatable, Sendable {
+    public var nextMessageSuggestion: String?
+    public var queuePaused: Bool
+    public var connectors: [RemoteComposerConnector]?
+    public var toolListFollowsNextTurn: Bool
+    public init(nextMessageSuggestion: String? = nil, queuePaused: Bool = false,
+                connectors: [RemoteComposerConnector]? = nil, toolListFollowsNextTurn: Bool = false) {
+        self.nextMessageSuggestion = nextMessageSuggestion; self.queuePaused = queuePaused
+        self.connectors = connectors; self.toolListFollowsNextTurn = toolListFollowsNextTurn
     }
 }

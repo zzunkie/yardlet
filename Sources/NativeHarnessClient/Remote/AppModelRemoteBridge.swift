@@ -39,6 +39,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     private(set) var projectedTurnCount = 0
     private(set) var watched: Set<UUID> = []
     private var cachedSchedules: [RemoteSchedule]?
+    private var homeCommandCache: [String: (Date, [RemoteComposerCommand])] = [:]
     private var cachedOutputs: [UUID: [SessionRailContent.Output]] = [:]
     /// A read of the schedules is watched until they change; one watch at a time, since every read
     /// reads the same properties.
@@ -53,6 +54,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     var remoteFilePreviews: [String: FileRewindPreview] = [:]
     var answeredSettings: [UUID: [RemoteSetting]] = [:]
     var watchesSettings: Set<UUID> = []
+    var watchesComposer: Set<UUID> = []
     /// A task's browser tabs (§15.25), when this build has a browser engine.
     var resetOffers: [UUID: RemoteResetOffer] = [:]
     let terminals = RemoteTerminalBridge()
@@ -117,6 +119,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.taskControls = true
         snapshot.conversationBodies = true
         snapshot.nextSteps = true
+        snapshot.composerExtensions = true
         snapshot.fullConversation = true
         snapshot.fileRewind = true
         snapshot.taskNotices = true
@@ -865,12 +868,13 @@ final class AppModelRemoteBridge: RemoteBridge {
     /// settings (§15.16); refused when one names a setting or value the menus do not offer then.
     private static func choosing(_ picks: [String: String], harness: HarnessKind, from start: NewTaskModelChoice?,
                                  model: AppModel, connection: ProviderConnection?,
-                                 folder: URL?) -> Result<NewTaskModelChoice?, RemoteError> {
+                                 folder: URL?, allowsConfirmed: Bool = false) -> Result<NewTaskModelChoice?, RemoteError> {
         var choice = start
         var left = picks
         while !left.isEmpty {
-            let settings = Self.settings(ComposerSessionOptionsProjection.newTask(
-                harness: harness, choice: choice, catalogs: model.modelCatalogs, connection: connection, workspaceURL: folder))
+            let projected = ComposerSessionOptionsProjection.newTask(
+                harness: harness, choice: choice, catalogs: model.modelCatalogs, connection: connection, workspaceURL: folder)
+            let settings = allowsConfirmed ? Self.taskSettings(projected) : Self.settings(projected)
             guard let setting = settings.first(where: { left[$0.id] != nil }), let value = left.removeValue(forKey: setting.id),
                   setting.choices.contains(where: { $0.value == value }),
                   let chosen = NewTaskModelProjection.choosing(setting.id, value: value, harness: harness, choice: choice,
@@ -892,6 +896,16 @@ final class AppModelRemoteBridge: RemoteBridge {
 
     func newTaskOptions(projectID: String?, harness named: String?,
                         settings picked: [String: String]) async -> Result<RemoteNewTaskOptions, RemoteError> {
+        await newTaskOptions(projectID: projectID, harness: named, settings: picked, accountID: nil, composer: false, readCommands: false)
+    }
+
+    func newTaskComposerOptions(projectID: String?, harness: String?, settings: [String: String],
+                                accountID: String?, readCommands: Bool = false) async -> Result<RemoteNewTaskOptions, RemoteError> {
+        await newTaskOptions(projectID: projectID, harness: harness, settings: settings, accountID: accountID, composer: true, readCommands: readCommands)
+    }
+
+    private func newTaskOptions(projectID: String?, harness named: String?, settings picked: [String: String],
+                                accountID: String?, composer: Bool, readCommands: Bool) async -> Result<RemoteNewTaskOptions, RemoteError> {
         guard let model else { return .failure(RemoteError(.unavailable, "Yardlet is closing")) }
         let place: (folder: URL?, project: Project?)
         switch self.place(projectID ?? RemoteTaskProjection.chatsProjectID, in: model) {
@@ -903,21 +917,29 @@ final class AppModelRemoteBridge: RemoteBridge {
         case let .success(found): harness = found
         case let .failure(error): return .failure(error)
         }
-        let connection = model.connections.selected(for: harness)
+        let accountChoices = model.connections.choices(for: [harness])
+        if let accountID, accountID != "automatic", !accountChoices.contains(where: { $0.id == accountID && $0.canSelect }) {
+            return .failure(RemoteError(.notAllowed, "The account is unavailable"))
+        }
+        let connection = accountID.flatMap { id in accountChoices.first { $0.id == id } }?.connection
+            ?? model.connections.selected(for: harness)
+        // A native account intentionally has no separate binding.
+        let selectedConnection = accountID.flatMap { id in accountChoices.first { $0.id == id } }
+        let binding = selectedConnection.map { $0.connection } ?? connection
         var choice = model.composerDrafts.home.modelChoices[harness]
         func options() -> ComposerSessionOptions {
             ComposerSessionOptionsProjection.newTask(harness: harness, choice: choice, catalogs: model.modelCatalogs,
-                                                     connection: connection, workspaceURL: place.folder)
+                                                     connection: binding, workspaceURL: place.folder)
         }
         // As opening the menu does, the harness's model list is read first where none is known yet.
         if options().model?.menu.canChoose == false, let runtime = model.runtimeSelections.selectedURL(for: harness) {
             let folder = place.folder
             await RemoteServer.waitAtMost(10) { @MainActor in
-                await model.loadNewTaskModels(harness: harness, runtimeURL: runtime, connection: connection, workspaceURL: folder)
+                await model.loadNewTaskModels(harness: harness, runtimeURL: runtime, connection: binding, workspaceURL: folder)
             }
         }
         // What the phone picked so far, so the menus answer as they would after those picks.
-        switch Self.choosing(picked, harness: harness, from: choice, model: model, connection: connection, folder: place.folder) {
+        switch Self.choosing(picked, harness: harness, from: choice, model: model, connection: binding, folder: place.folder, allowsConfirmed: composer) {
         case let .success(chosen): choice = chosen
         case let .failure(error): return .failure(error)
         }
@@ -925,9 +947,57 @@ final class AppModelRemoteBridge: RemoteBridge {
             place.folder.map(SuggestedTaskPlace.isInRepository) == true
                 ? model.composerDrafts.home.startsInNewWorktree(projectID: project.id) : nil
         }
-        return .success(RemoteNewTaskOptions(
+        var result = RemoteNewTaskOptions(
             harness: Self.option(harness), harnesses: model.runtimeSelections.connectedDescriptors.map { Self.option($0.id) },
-            settings: Self.settings(options()), worktree: worktree))
+            settings: composer ? Self.taskSettings(options()) : Self.settings(options()), worktree: worktree)
+        if composer {
+            result.accounts = accountChoices.map { choice in
+                RemoteAccount(id: choice.id, name: choice.composerTitle, detail: choice.subtitle,
+                              current: (accountID.map { $0 == choice.id } ?? (choice.connection == connection)) ? true : nil,
+                              available: choice.canSelect ? true : nil)
+            }
+            if accountChoices.filter(\.canSelect).count > 1 {
+                result.accounts?.insert(RemoteAccount(id: "automatic", name: L10n.string("Automatic"),
+                    current: (accountID == "automatic" || (accountID == nil && model.connections.startsNewTasksAutomatically(for: harness))) ? true : nil,
+                    available: true), at: 0)
+            }
+        }
+        if composer {
+            let modelName = AppModel.modelOption(choice?.providerOptions(for: harness) ?? [:], harness: harness)
+            let assignment: AccountAssignment?
+            if accountID == "automatic" {
+                assignment = model.automaticStart(harness: harness, model: modelName, now: Date()).assignment
+            } else if accountID == nil {
+                assignment = model.newTaskAccountPreview(harness: harness, model: modelName)
+            } else {
+                assignment = nil
+            }
+            result.accountLine = assignment.map {
+                RemoteText.capped($0.accountName + " · " + $0.reasonLine(), RemoteText.detailLimit).text
+            }
+        }
+        if composer, readCommands, harness == .claudeCode, let folder = place.folder,
+           let runtime = model.runtimeSelections.selectedURL(for: harness) {
+            let key = folder.path + "\n" + runtime.path + "\n" + (binding?.id ?? "native")
+            if let cached = homeCommandCache[key], Date().timeIntervalSince(cached.0) < 30 {
+                result.commands = cached.1
+            } else {
+                let rows = (try? await model.readHomeComposerCommands(workspaceURL: folder, runtimeURL: runtime, connection: binding)) ?? []
+                let commands = rows.filter { $0.builtin == false }.map {
+                    RemoteComposerCommand(name: $0.name, description: RemoteText.short($0.description, RemoteText.detailLimit),
+                                          argumentHint: RemoteText.short($0.argumentHint, RemoteText.detailLimit))
+                }
+                if homeCommandCache.count >= 32 { homeCommandCache.removeAll() }
+                homeCommandCache[key] = (Date(), commands)
+                result.commands = commands
+            }
+        }
+        return .success(result)
+    }
+
+    static func newTaskRequiresConfirmation(_ options: ComposerSessionOptions) -> Bool {
+        guard let permission = options.permission, let selected = permission.selector?.currentValue else { return false }
+        return permission.confirmations[selected] != nil
     }
 
     func createTask(_ start: RemoteTaskStart) async -> Result<String, RemoteError> {
@@ -948,12 +1018,22 @@ final class AppModelRemoteBridge: RemoteBridge {
         guard let runtime = model.runtimeSelections.selectedURL(for: harness) else {
             return .failure(RemoteError(.unavailable, "No harness can start a task"))
         }
-        let connection = model.connections.selected(for: harness)
+        let accountChoices = model.connections.choices(for: [harness])
+        let explicitAccount = start.accountID.flatMap { id in accountChoices.first { $0.id == id && $0.canSelect } }
+        if let accountID = start.accountID, accountID != "automatic", explicitAccount == nil {
+            return .failure(RemoteError(.notAllowed, "The account is unavailable"))
+        }
+        let connection = explicitAccount.map { $0.connection } ?? model.connections.selected(for: harness)
         let choice: NewTaskModelChoice?
         switch Self.choosing(start.settings, harness: harness, from: draft.modelChoices[harness], model: model,
-                             connection: connection, folder: folder) {
+                             connection: connection, folder: folder, allowsConfirmed: start.confirmed) {
         case let .success(chosen): choice = chosen
         case let .failure(error): return .failure(error)
+        }
+        let chosenOptions = ComposerSessionOptionsProjection.newTask(harness: harness, choice: choice,
+            catalogs: model.modelCatalogs, connection: connection, workspaceURL: folder)
+        guard start.confirmed || !Self.newTaskRequiresConfirmation(chosenOptions) else {
+            return .failure(RemoteError(.notAllowed, "Confirm the permission choice before starting the task"))
         }
         var worktree = folder != nil && draft.startsInNewWorktree(projectID: project?.id)
         if let asked = start.worktree {
@@ -977,7 +1057,15 @@ final class AppModelRemoteBridge: RemoteBridge {
         let attachments = stored.compactMap { CodexUserInput.localAttachment(for: $0.url) } + fileInputs
         let text = start.text
         let providerOptions = choice?.providerOptions(for: harness) ?? [:]
-        let account = await model.newTaskAccount(harness: harness, model: AppModel.modelOption(providerOptions, harness: harness))
+        let account: AppModel.AccountStart?
+        if explicitAccount != nil {
+            account = nil
+        } else if start.accountID == "automatic" {
+            await model.refreshAccountReadings(of: harness)
+            account = model.automaticStart(harness: harness, model: AppModel.modelOption(providerOptions, harness: harness), now: Date())
+        } else {
+            account = await model.newTaskAccount(harness: harness, model: AppModel.modelOption(providerOptions, harness: harness))
+        }
         let submission = NewTaskDraft.Submission(
             originalText: text, attachments: attachments, harness: harness, workspaceURL: folder, projectID: project?.id,
             runtimeURL: runtime, connection: account.map(\.connection) ?? connection,
@@ -1150,6 +1238,16 @@ final class AppModelRemoteBridge: RemoteBridge {
 
     /// The task's own folders as its harness was given them (its working folder or worktree, and the project's
     /// other folders) and its outputs.
+    func projectFileScope(projectID: String) async -> Result<RemoteFileScope, RemoteError> {
+        guard let model else { return .failure(RemoteError(.unavailable)) }
+        switch place(projectID, in: model) {
+        case let .success(place):
+            guard let folder = place.folder else { return .failure(RemoteError(.notAllowed)) }
+            return .success(RemoteFileScope(folder: folder, otherFolders: [], outputs: []))
+        case let .failure(error): return .failure(error)
+        }
+    }
+
     func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError> {
         guard let model, let session = session(taskID) else { return .failure(RemoteError(.notFound)) }
         return .success(RemoteFileScope(folder: session.workspaceURL, otherFolders: session.additionalRootURLs,

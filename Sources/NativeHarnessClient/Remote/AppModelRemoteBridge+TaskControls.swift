@@ -162,16 +162,19 @@ extension AppModelRemoteBridge {
 
     /// The Codex app's commands a phone may run: Compact, Fork chat, New chat, Plan mode and the speed (`service-tier:`).
     /// The others edit files (Init), need a window of the Mac's (Code review, Rename, Side, Status), or are the
-    /// sidebar's (Pin, Archive, §15.10) or the composer's own (Model, Reasoning, skills).
+    /// sidebar's (Pin, Archive, §15.10) or the composer's own settings (Model, Reasoning).
+    /// Skills resolve against the host catalog when sent; their filesystem paths never travel.
     static let codexCommandNames: Set<String> = ["compact", "fork", "new", "plan-mode"]
-    /// Claude Code's commands a phone may run: `/compact` and `/clear` (a new conversation, keeping this one). Every
-    /// other command the CLI lists may change files, settings or accounts, or answers in the terminal only.
+    /// Claude Code built-ins allowed remotely. Explicitly advertised user commands join these below;
+    /// unclassified and other built-in commands may change settings or accounts and stay on the host.
     static let claudeCommandNames = ["compact", "clear"]
     /// What Claude Code's `/compact` takes, in the CLI's words.
     static let claudeCompactHint = "<optional custom summarization instructions>"
 
     func composerCommands(taskID: String) async -> Result<[RemoteComposerCommand], RemoteError> {
         guard let model, let session = session(taskID) else { return .failure(RemoteError(.notFound)) }
+        if session.harness == .codex { await model.prepareCodexComposerCommands(for: session) }
+        else if session.harness == .claudeCode, !model.isAttached(session.id) { await model.loadProviderCapabilities(for: session) }
         return .success(Self.commands(of: session, in: model))
     }
 
@@ -180,15 +183,17 @@ extension AppModelRemoteBridge {
         switch session.harness {
         case .codex:
             return CodexComposerCommands.catalog(codexCommandContext(of: session, in: model)).compactMap { row in
-                guard codexCommandNames.contains(row.name) || row.name.hasPrefix("service-tier:") else { return nil }
+                guard codexCommandNames.contains(row.name) || row.name.hasPrefix("service-tier:") || row.name.hasPrefix("skill:") else { return nil }
                 return RemoteComposerCommand(name: row.name, title: row.title, description: RemoteText.short(row.description, RemoteText.detailLimit),
-                                             group: row.group, runs: true)
+                                             argumentHint: row.name.hasPrefix("skill:") ? "<prompt>" : nil,
+                                             group: row.group, runs: !row.name.hasPrefix("skill:"))
             }
         case .claudeCode:
             // The CLI's own words where it listed them; before the task read them, Yardlet's, and `/compact` takes its
             // instructions either way.
             let listed = model.providerCapabilitiesBySessionID[session.id]?.composerCommands ?? []
-            return claudeCommandNames.map { name in
+            let names = claudeCommandNames + listed.filter { $0.builtin == false && !claudeCommandNames.contains($0.name) }.map(\.name)
+            return names.map { name in
                 let row = listed.first { $0.name == name }
                 let description = row?.description.isEmpty == false ? row?.description : name == "clear"
                     ? L10n.string("Start a new conversation and keep this chat.") : L10n.string("Compact this chat's context")
@@ -210,7 +215,7 @@ extension AppModelRemoteBridge {
         return CodexComposerCommandContext(
             hasThread: session.providerSessionID != nil, isRunning: isRunning(session), workspaceURL: session.workspaceURL,
             modelCatalog: capabilities.modelCatalog, modes: capabilities.modes, selectedModeID: capabilities.selectedModeID,
-            tokenUsage: tokenUsage)
+            tokenUsage: tokenUsage, skills: capabilities.skills)
     }
 
     func runComposerCommand(taskID: String, command name: String, arguments: String?) async -> Result<String?, RemoteError> {
@@ -219,7 +224,9 @@ extension AppModelRemoteBridge {
         guard let command = listed.first(where: { $0.name == name }) else {
             return .failure(RemoteError(.notAllowed, "The task's composer offers no such command here"))
         }
-        guard arguments == nil || command.argumentHint != nil else {
+        let isUserCommand = session.harness == .claudeCode && model.providerCapabilitiesBySessionID[session.id]?
+            .composerCommands.first(where: { $0.name == name })?.builtin == false
+        guard arguments == nil || command.argumentHint != nil || isUserCommand else {
             return .failure(RemoteError(.notAllowed, "/\(name) takes nothing after it"))
         }
         if model.switchingAccounts.contains(session.id) || model.sessionMutations.contains(session.id) {
@@ -241,6 +248,10 @@ extension AppModelRemoteBridge {
                 return .failure(RemoteError(.notAllowed))
             }
             switch codex {
+            case let .skill(name, path):
+                let draft = CodexComposerDraft(inputs: [.text(arguments ?? "", textElements: []), .skill(name: name, path: URL(filePath: path))])
+                Task { await model.submitCodex(draft, action: .automatic, to: session) }
+                return .success(nil)
             case .fork, .newChat:
                 // A task of its own, which the Mac's window does not switch to.
                 let point: BranchPoint = codex == .fork ? .latest : .start

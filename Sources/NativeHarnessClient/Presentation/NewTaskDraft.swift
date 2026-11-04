@@ -18,6 +18,8 @@ final class NewTaskDraft {
     /// a draft saved then still holds it). The task the draft starts is that suggestion's.
     var suggestion: NewTaskSuggestionOrigin? { didSet { if suggestion != oldValue { onChange?() } } }
     /// Pasted, dropped or mentioned inputs that travel with the first message.
+    /// Host references for a remote composer, never client files to upload.
+    var hostMentions: [WorkspaceFileMatch] = []
     var attachments: [CodexUserInput] = [] { didSet { if attachments != oldValue { onChange?() } } }
     var notice: String?
     var workspaceURL: URL? {

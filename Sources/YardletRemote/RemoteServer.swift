@@ -127,6 +127,7 @@ public protocol RemoteBridge: AnyObject, Sendable {
     func itemDetail(taskID: String, itemID: String) async -> Result<RemoteItemDetail, RemoteError>
     /// What a task started in the project may run on (§15.16).
     func newTaskOptions(projectID: String?, harness: String?, settings: [String: String]) async -> Result<RemoteNewTaskOptions, RemoteError>
+    func newTaskComposerOptions(projectID: String?, harness: String?, settings: [String: String], accountID: String?, readCommands: Bool) async -> Result<RemoteNewTaskOptions, RemoteError>
     /// The accounts a task a plan limit stopped may continue under (§15.17).
     func usageReset(taskID: String, token: String?, confirmed: Bool) async -> Result<RemoteUsageReset, RemoteError>
     func limitAccounts(taskID: String) async -> Result<[RemoteAccount], RemoteError>
@@ -142,6 +143,7 @@ public protocol RemoteBridge: AnyObject, Sendable {
     func taskOutputs(taskID: String) async -> Result<[RemoteOutput], RemoteError>
     /// The task's folders and outputs, which a `readFile` of the task is checked against (§15.22).
     func readReview(taskID: String, query: RemoteReviewQuery) async -> Result<RemoteReviewResult, RemoteError>
+    func projectFileScope(projectID: String) async -> Result<RemoteFileScope, RemoteError>
     func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError>
     /// The controls the task's composer shows for its settings (§15.23); `prepare` reads the choices first, as opening
     /// the Mac's menu does. Told as `.taskSettings` when they change since this read. A bridge that answers this,
@@ -156,6 +158,8 @@ public protocol RemoteBridge: AnyObject, Sendable {
     /// Applies a choice as the Mac's menu does; the controls after it.
     func setTaskSetting(taskID: String, setting: String, value: String, confirmed: Bool) async -> Result<[RemoteSetting], RemoteError>
     /// The slash commands the task's composer offers that may run from another device.
+    func composerState(taskID: String) async -> Result<RemoteComposerState, RemoteError>
+    func composerAction(taskID: String, action: String, itemID: String?, value: String?) async -> Result<RemoteComposerState, RemoteError>
     func composerCommands(taskID: String) async -> Result<[RemoteComposerCommand], RemoteError>
     /// Runs one as the Mac's composer does; the task it started, when it started one.
     func runComposerCommand(taskID: String, command: String, arguments: String?) async -> Result<String?, RemoteError>
@@ -226,6 +230,10 @@ extension RemoteBridge {
         .failure(RemoteError(.unavailable))
     }
 
+    public func newTaskComposerOptions(projectID: String?, harness: String?, settings: [String: String], accountID: String?, readCommands: Bool) async -> Result<RemoteNewTaskOptions, RemoteError> {
+        await newTaskOptions(projectID: projectID, harness: harness, settings: settings)
+    }
+
     public func limitAccounts(taskID: String) async -> Result<[RemoteAccount], RemoteError> {
         .failure(RemoteError(.unavailable))
     }
@@ -243,6 +251,10 @@ extension RemoteBridge {
         .failure(RemoteError(.unavailable))
     }
 
+    public func projectFileScope(projectID: String) async -> Result<RemoteFileScope, RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+
     public func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError> {
         .failure(RemoteError(.unavailable))
     }
@@ -256,6 +268,8 @@ extension RemoteBridge {
         .failure(RemoteError(.unavailable))
     }
 
+    public func composerState(taskID: String) async -> Result<RemoteComposerState, RemoteError> { .failure(RemoteError(.notAllowed)) }
+    public func composerAction(taskID: String, action: String, itemID: String?, value: String?) async -> Result<RemoteComposerState, RemoteError> { .failure(RemoteError(.notAllowed)) }
     public func composerCommands(taskID: String) async -> Result<[RemoteComposerCommand], RemoteError> {
         .failure(RemoteError(.unavailable))
     }
@@ -1351,8 +1365,11 @@ public actor RemoteServer {
             await command(envelope.id, request: request, on: id) {
                 await self.answerLink(requestID, approve: approve) ? nil : RemoteError(.requestNotFound)
             }
-        case let .newTaskOptions(projectID, harness, settings):
-            switch await bridge.newTaskOptions(projectID: projectID, harness: harness, settings: settings) {
+        case let .newTaskOptions(projectID, harness, settings, accountID, composer, readCommands):
+            let result = composer
+                ? await bridge.newTaskComposerOptions(projectID: projectID, harness: harness, settings: settings, accountID: accountID, readCommands: readCommands)
+                : await bridge.newTaskOptions(projectID: projectID, harness: harness, settings: settings)
+            switch result {
             case let .success(options):
                 var response = RemoteResponse(re: envelope.id)
                 response.harness = options.harness.harness
@@ -1360,6 +1377,9 @@ public actor RemoteServer {
                 response.harnesses = options.harnesses
                 response.settings = options.settings
                 response.worktree = options.worktree
+                response.accounts = options.accounts
+                response.accountLine = options.accountLine
+                response.commands = options.commands
                 respond(response, to: id)
             case let .failure(error):
                 respond(.failure(envelope.id, error), to: id)
@@ -1543,6 +1563,21 @@ public actor RemoteServer {
                 }
             case let .failure(error): respond(.failure(envelope.id, error), to: id)
             }
+        case let .projectWorkspaceFiles(projectID):
+            switch await bridge.projectFileScope(projectID: projectID) {
+            case let .success(scope):
+                let result = await RemoteFileReader.perform { RemoteFileReader.index(in: scope) }
+                switch result {
+                case let .success(index):
+                    var response = RemoteResponse(re: envelope.id)
+                    response.workspaceRoot = scope.folder.path(percentEncoded: false)
+                    response.filePaths = index.paths
+                    response.filesLimited = index.isLimited
+                    respond(response, to: id)
+                case let .failure(error): respond(.failure(envelope.id, error), to: id)
+                }
+            case let .failure(error): respond(.failure(envelope.id, error), to: id)
+            }
         case let .workspaceFiles(taskID):
             switch await bridge.fileScope(taskID: taskID) {
             case let .success(scope):
@@ -1617,6 +1652,24 @@ public actor RemoteServer {
                 response.settings = settings
             }
             if settings != nil, connections[id]?.subscriptions[taskID] != nil { connections[id]?.followsSettings.insert(taskID) }
+        case let .composerState(taskID):
+            switch await bridge.composerState(taskID: taskID) {
+            case let .success(state):
+                if connections[id]?.subscriptions[taskID] != nil { connections[id]?.followsSettings.insert(taskID) }
+                var response = RemoteResponse(re: envelope.id)
+                response.composerState = state
+                respond(response, to: id)
+            case let .failure(error): respond(.failure(envelope.id, error), to: id)
+            }
+        case let .composerAction(taskID, action, itemID, value):
+            var state: RemoteComposerState?
+            await command(envelope.id, request: request, on: id) {
+                if action == "edit", let error = Self.validateMessage(value ?? "") { return error }
+                switch await self.bridge.composerAction(taskID: taskID, action: action, itemID: itemID, value: value) {
+                case let .success(result): state = result; return nil
+                case let .failure(error): return error
+                }
+            } answer: { response in response.composerState = state }
         case let .composerCommands(taskID):
             switch await bridge.composerCommands(taskID: taskID) {
             case let .success(commands):
@@ -1702,6 +1755,7 @@ public actor RemoteServer {
             response.taskFiles = published?.taskFiles == true && RemoteFileReader.isSupported ? true : nil
             response.workspaceFiles = response.taskFiles
             response.presence = true
+            response.composerExtensions = published?.composerExtensions == true ? true : nil
             response.taskControls = published?.taskControls == true ? true : nil
             response.conversationBodies = published?.conversationBodies == true ? true : nil
             response.nextSteps = published?.nextSteps == true ? true : nil
