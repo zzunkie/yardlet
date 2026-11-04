@@ -1079,6 +1079,64 @@ final class RemoteHostModelTests: XCTestCase {
         XCTAssertEqual(items.items.map(\.id), ["z1", "a0", "a1", "a2", "a3", "b2"])
         XCTAssertEqual(items.runs.map(\.turnID), ["Z", "A", "B"])
     }
+
+    func testHostSettingsSheetFollowsHostChangesAndUpdatesThroughTheHost() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "remote-host-settings-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteHostModelSettings")))
+        let runtimes = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
+        let host = AppModel(store: SessionStore(repository: InMemorySessionRepository()),
+                            runtimeSelections: runtimes, preferences: defaults, restoresIndexOnLaunch: false)
+        let instructions = YardletInstructionsStore(directory: folder.appending(path: "instructions"), defaults: defaults)
+        instructions.text = "Initial host instructions"
+        host.yardletInstructions = instructions
+        host.routingEvaluation = RoutingEvaluationStore(directory: folder.appending(path: "evaluation"), defaults: defaults)
+
+        let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(model: host))
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                        name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                            hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
+        let paired = try await directory.pair(link: link.absoluteString)
+        let client = try XCTUnwrap(directory.model(for: paired.id))
+        try await waitUntil { client.hasSnapshot }
+        XCTAssertTrue(client.offersHostSettings)
+
+        // Opening the sheet reads host settings read-only until the host grants the settings permission.
+        client.openSettings(section: SettingsSection.instructions.rawValue)
+        XCTAssertTrue(client.showsSettings)
+        try await waitUntil { client.hostSettings != nil }
+        XCTAssertEqual(client.hostSettings?.writable, false)
+        XCTAssertEqual(client.hostSettings?.instructions?.text, "Initial host instructions")
+
+        // Granting the settings permission on the host updates the open sheet live.
+        let devices = await stack.server.devicesForSettings()
+        let deviceID = try XCTUnwrap(devices.first?.id)
+        try await stack.server.setPermission(.settings, allowed: true, for: deviceID)
+        try await waitUntil { client.hostSettings?.writable == true }
+
+        // Changing a setting and saving instructions from the client updates the host.
+        await client.setHostSetting("follow_up_behavior", value: "queue")
+        try await waitUntil { client.hostSettings?.values["follow_up_behavior"] == "queue" }
+        XCTAssertEqual(defaults.string(forKey: FollowUpMode.preferenceKey), "queue")
+
+        await client.saveHostInstructions("Updated from client")
+        try await waitUntil { instructions.text == "Updated from client" }
+        XCTAssertEqual(client.hostSettings?.instructions?.text, "Updated from client")
+
+        // A host-side change while the sheet is open pushes hostSettingsChanged to the client.
+        defaults.set("steer", forKey: FollowUpMode.preferenceKey)
+        try await waitUntil { client.hostSettings?.values["follow_up_behavior"] == "steer" }
+
+        client.closeSettings()
+        XCTAssertFalse(client.showsSettings)
+        directory.close(paired.id)
+        await host.shutdown()
+    }
 }
 
 /// A stand-in for Bonjour: the test says when the host is found and where.

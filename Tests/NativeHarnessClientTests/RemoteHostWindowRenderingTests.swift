@@ -1364,6 +1364,150 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
         await host.shutdown()
     }
 
+    /// The remote window's Settings sheet (§15.36) drawn from the host's values beside the local
+    /// Settings sheet drawn from the same host model, in light and dark, plus the remote sheet
+    /// without the `settings` permission.
+    func testHostSettingsSheetMatchesLocalSettingsOverLoopback() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "remote-settings-render-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteSettingsRender")))
+        defaults.set(true, forKey: LidClosedWorkPreference.key)
+        defaults.set("steer", forKey: FollowUpMode.preferenceKey)
+
+        let runtimes = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
+        runtimes.select(URL(filePath: "/usr/bin/true"), for: .codex)
+        runtimes.select(URL(filePath: "/usr/bin/true"), for: .claudeCode)
+
+        let host = AppModel(
+            store: SessionStore(repository: InMemorySessionRepository()),
+            runtimeSelections: runtimes,
+            preferences: defaults,
+            restoresIndexOnLaunch: false)
+        ShowcaseFixture.Accounts.add(to: host.connections, selections: runtimes)
+
+        let instructions = YardletInstructionsStore(directory: folder.appending(path: "instructions"), defaults: defaults)
+        instructions.text = "Prefer small, focused commits and run only the relevant tests before opening a pull request."
+        host.yardletInstructions = instructions
+        host.routingEvaluation = RoutingEvaluationStore(directory: folder.appending(path: "evaluation"), defaults: defaults)
+
+        let lidHelper = LidSleepHelper(backend: FakeLidSleepHelperBackend(status: .needsApproval))
+        host.lidSleepHelper = lidHelper
+
+        let cliRunner = FakeCLIRunner { command in
+            let version = command.executable.lastPathComponent == "codex" ? "0.157.1" : "2.1.293"
+            return CLICommandResult(exitCode: 0, stdout: version, stderr: "")
+        }
+        let cliUpdates = CLIUpdateCenter(dependencies: .init(
+            runtimes: { [.codex: URL(filePath: "/opt/homebrew/bin/codex"),
+                         .claudeCode: URL(filePath: "/opt/homebrew/bin/claude")] },
+            busyHarnesses: { [] },
+            runner: cliRunner,
+            verifier: FakeVerifier(failing: [], verifiable: [.codex, .claudeCode]),
+            overrides: CLIRuntimeOverrides(defaults: defaults),
+            defaults: defaults,
+            previousVersionsDirectory: folder.appending(path: "cli-previous"),
+            environment: [:]))
+        await cliUpdates.checkAll()
+        host.cliUpdates = cliUpdates
+
+        let now = Date()
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: now)
+        let codexAmount = TokenUsageAmount(
+            freshInput: 420_000, cacheWrite: 0, cacheRead: 180_000, output: 64_000, requests: 18,
+            kindCost: [.freshInput: 1.2, .cacheRead: 0.8, .output: 1.85])
+        let claudeAmount = TokenUsageAmount(
+            freshInput: 310_000, cacheWrite: 40_000, cacheRead: 120_000, output: 52_000, requests: 14,
+            kindCost: [.freshInput: 0.9, .cacheWrite: 1.1, .cacheRead: 1.4, .output: 1.5])
+        var totalToday = codexAmount
+        totalToday.add(claudeAmount)
+        let days = (0..<30).reversed().compactMap { offset -> TokenUsageDay? in
+            guard let start = calendar.date(byAdding: .day, value: -offset, to: today) else { return nil }
+            return TokenUsageDay(start: start, amount: offset == 0 ? totalToday : TokenUsageAmount())
+        }
+        var groups: [TokenUsageRange: [TokenUsageGrouping: [TokenUsageSummary.Key: TokenUsageAmount]]] = [:]
+        for range in TokenUsageRange.allCases {
+            groups[range] = [
+                .model: [
+                    .init(harness: .codex, value: "gpt-5.6-codex"): codexAmount,
+                    .init(harness: .claudeCode, value: "claude-opus-4-6"): claudeAmount
+                ]
+            ]
+        }
+        let usageSummary = TokenUsageSummary(days: days, groups: groups, updatedAt: now)
+        host.tokenUsage = TokenUsageCenter(directory: folder.appending(path: "usage"), summary: usageSummary)
+
+        let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(model: host))
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                        name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                            hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
+        let paired = try await directory.pair(link: link.absoluteString)
+        let client = try XCTUnwrap(directory.model(for: paired.id))
+        try await waitUntil { client.hasSnapshot }
+        XCTAssertTrue(client.offersHostSettings)
+
+        let sheetSize = NSSize(width: SettingsCenterView.preferredSize.width, height: SettingsCenterView.preferredSize.height)
+
+        // First render the remote sheet without the settings permission (read-only).
+        client.openSettings(section: SettingsSection.general.rawValue)
+        try await waitUntil { client.hostSettings != nil }
+        XCTAssertEqual(client.hostSettings?.writable, false)
+        try await render("remote-settings-general-readonly", size: sheetSize, titled: false) {
+            SettingsCenterView(size: SettingsCenterView.preferredSize, initialSection: SettingsSection.general.rawValue,
+                               remoteHost: client)
+        } check: { elements in
+            let text = elements.map { "\($0.label) \($0.value)" }.joined(separator: " ")
+            XCTAssertTrue(text.contains("Paired devices"), text)
+        }
+
+        // Now grant the settings permission and render each section side by side with the local sheet.
+        let devices = await stack.server.devicesForSettings()
+        let deviceID = try XCTUnwrap(devices.first?.id)
+        try await stack.server.setPermission(.settings, allowed: true, for: deviceID)
+        try await waitUntil { client.hostSettings?.writable == true }
+
+        let localUsage = SettingsUsageContext(
+            overview: { [weak host] in
+                host?.tokenUsageOverview() ?? TokenUsageOverview(days: [], limits: [], updatedAt: now, rows: { _, _ in [] })
+            },
+            isCounting: { [weak host] in host?.tokenUsage.isEnabled == true },
+            limitsCheckedAt: { [weak host] in
+                guard let host else { return nil }
+                return MenuBarMenuProjection.limitAccounts(
+                    choices: host.connections.menuBarUsageChoices(for: HarnessCatalog.builtIns.map(\.id))
+                ).compactMap(\.checkedAt).max()
+            })
+
+        for (section, slug) in [
+            (SettingsSection.general, "general"),
+            (SettingsSection.instructions, "instructions"),
+            (SettingsSection.cliUpdates, "cli-updates"),
+            (SettingsSection.usage, "usage")
+        ] {
+            client.requestedSettingsSection = section.rawValue
+            try await render("remote-settings-\(slug)", size: sheetSize, titled: false) {
+                SettingsCenterView(size: SettingsCenterView.preferredSize, initialSection: section.rawValue,
+                                   remoteHost: client)
+            }
+            try await render("local-settings-\(slug)", size: sheetSize, titled: false) {
+                SettingsCenterView(size: SettingsCenterView.preferredSize, initialSection: section.rawValue,
+                                   notificationCenter: MenuBarQuietNotificationCenter(),
+                                   cliUpdates: cliUpdates, instructions: instructions,
+                                   evaluation: host.routingEvaluation, usage: localUsage, lidHelper: lidHelper)
+                    .defaultAppStorage(defaults)
+            }
+        }
+
+        client.closeSettings()
+        directory.close(paired.id)
+        await host.shutdown()
+    }
+
     // MARK: - Helpers
 
     func render(_ name: String, size: NSSize, model: RemoteHostModel, hosts: RemoteHostDirectory,

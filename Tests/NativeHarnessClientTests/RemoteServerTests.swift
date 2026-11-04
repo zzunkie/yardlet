@@ -1531,6 +1531,92 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertEqual(reply.error?.code, .unavailable)
         XCTAssertEqual(code, .unavailable)
     }
+
+    func testHostSettingsReadsWithoutPermissionAndRequiresSettingsPermissionToChange() async throws {
+        let harness = try await ServerHarness()
+        let phone = try await harness.authenticatedPhone()
+        let allDevices = await harness.devices.all()
+        let device = try XCTUnwrap(allDevices.first)
+
+        // Reading is open to any paired device; writable reflects the device's settings permission.
+        await harness.send(#"{"id":"read-1","type":"hostSettings","watching":true}"#, on: phone)
+        let firstRead = try await phone.response("read-1")
+        XCTAssertTrue(firstRead.ok)
+        XCTAssertEqual(firstRead.settingsPage?.writable, false)
+        XCTAssertEqual(firstRead.settingsPage?.values["follow_up_behavior"], "queue")
+        let watches = await harness.bridge.watchesHostSettings
+        XCTAssertTrue(watches)
+
+        // Without the settings permission, every mutation is refused before reaching the bridge.
+        await harness.send(#"{"id":"set-denied","type":"setHostSetting","setting":"follow_up_behavior","value":"steer"}"#, on: phone)
+        let setDenied = try await phone.response("set-denied")
+        XCTAssertFalse(setDenied.ok)
+        XCTAssertEqual(setDenied.error?.code, .notAllowed)
+
+        await harness.send(#"{"id":"inst-denied","type":"saveHostInstructions","text":"Secret rule"}"#, on: phone)
+        let instDenied = try await phone.response("inst-denied")
+        XCTAssertFalse(instDenied.ok)
+        XCTAssertEqual(instDenied.error?.code, .notAllowed)
+
+        await harness.send(#"{"id":"cli-denied","type":"hostCLIUpdate","action":"check","harness":"codex"}"#, on: phone)
+        let cliDenied = try await phone.response("cli-denied")
+        XCTAssertFalse(cliDenied.ok)
+        XCTAssertEqual(cliDenied.error?.code, .notAllowed)
+
+        let bridgeSettings = await harness.bridge.hostSettingsPage.values["follow_up_behavior"]
+        let bridgeInstructions = await harness.bridge.hostSettingsPage.instructions?.text
+        let bridgeCLIActions = await harness.bridge.cliUpdateActions
+        XCTAssertEqual(bridgeSettings, "queue")
+        XCTAssertEqual(bridgeInstructions, "Prefer small changes.")
+        XCTAssertTrue(bridgeCLIActions.isEmpty)
+
+        // Audit log records the setting/action ID, never values or instruction text.
+        let deniedAudit = harness.audit.entries().filter { $0.result == "notAllowed" }
+        XCTAssertEqual(deniedAudit.map(\.type), ["setHostSetting", "saveHostInstructions", "hostCLIUpdate"])
+        XCTAssertEqual(deniedAudit.map(\.setting), ["follow_up_behavior", "yardlet_instructions", "check:codex"])
+        let auditRaw = (try? String(contentsOf: harness.auditURL, encoding: .utf8)) ?? ""
+        XCTAssertFalse(auditRaw.contains("steer"))
+        XCTAssertFalse(auditRaw.contains("Secret rule"))
+
+        // Granting the settings permission notifies watching clients and allows changes.
+        try await harness.server.setPermission(.settings, allowed: true, for: device.id)
+        _ = try await phone.event(.hostSettingsChanged)
+
+        await harness.send(#"{"id":"read-2","type":"hostSettings","watching":true}"#, on: phone)
+        let secondRead = try await phone.response("read-2")
+        XCTAssertEqual(secondRead.settingsPage?.writable, true)
+
+        await harness.send(#"{"id":"set-ok","type":"setHostSetting","setting":"follow_up_behavior","value":"steer"}"#, on: phone)
+        let setOK = try await phone.response("set-ok")
+        XCTAssertTrue(setOK.ok)
+        XCTAssertEqual(setOK.settingsPage?.values["follow_up_behavior"], "steer")
+        XCTAssertEqual(setOK.settingsPage?.writable, true)
+
+        await harness.send(#"{"id":"inst-ok","type":"saveHostInstructions","text":"Keep tests fast."}"#, on: phone)
+        let instOK = try await phone.response("inst-ok")
+        XCTAssertTrue(instOK.ok)
+        XCTAssertEqual(instOK.settingsPage?.instructions?.text, "Keep tests fast.")
+
+        await harness.send(#"{"id":"cli-ok","type":"hostCLIUpdate","action":"check","harness":"codex"}"#, on: phone)
+        let cliOK = try await phone.response("cli-ok")
+        XCTAssertTrue(cliOK.ok)
+        let recordedCLI = await harness.bridge.cliUpdateActions
+        XCTAssertEqual(recordedCLI.map { "\($0.action):\($0.harness ?? "")" }, ["check:codex"])
+
+        let okAudit = harness.audit.entries().filter {
+            ["setHostSetting", "saveHostInstructions", "hostCLIUpdate"].contains($0.type) && $0.result == "ok"
+        }
+        XCTAssertEqual(okAudit.map(\.setting), ["follow_up_behavior", "yardlet_instructions", "check:codex"])
+        let auditRawAfter = (try? String(contentsOf: harness.auditURL, encoding: .utf8)) ?? ""
+        XCTAssertFalse(auditRawAfter.contains("Keep tests fast."))
+
+        // Closing the sheet stops watching.
+        await harness.send(#"{"id":"unwatch","type":"hostSettings","watching":false}"#, on: phone)
+        let unwatched = try await phone.response("unwatch")
+        XCTAssertTrue(unwatched.ok)
+        let stillWatching = await harness.bridge.watchesHostSettings
+        XCTAssertFalse(stillWatching)
+    }
 }
 
 // MARK: - Harness
@@ -1768,6 +1854,35 @@ actor FakeBridge: RemoteBridge {
     }
     func setTabs(_ tabs: [RemoteBrowserTab]) { self.tabs = tabs }
     func setPicture(_ picture: Data) { self.picture = picture }
+
+    private(set) var watchesHostSettings = false
+    private(set) var hostSettingsPage = RemoteHostSettings(
+        writable: false,
+        values: ["follow_up_behavior": "queue"],
+        instructions: .init(text: "Prefer small changes.", hasEvaluation: true))
+    private(set) var cliUpdateActions: [(action: String, harness: String?)] = []
+
+    func hostSettings() -> Result<RemoteHostSettings, RemoteError> {
+        .success(hostSettingsPage)
+    }
+    func setWatchesHostSettings(_ watching: Bool) {
+        watchesHostSettings = watching
+    }
+    func setHostSetting(setting: String, value: String, confirmed: Bool) -> Result<RemoteHostSettings, RemoteError> {
+        if let nextFailure { self.nextFailure = nil; return .failure(nextFailure) }
+        hostSettingsPage.values[setting] = value
+        return .success(hostSettingsPage)
+    }
+    func saveHostInstructions(text: String) -> Result<RemoteHostSettings, RemoteError> {
+        if let nextFailure { self.nextFailure = nil; return .failure(nextFailure) }
+        hostSettingsPage.instructions?.text = text
+        return .success(hostSettingsPage)
+    }
+    func hostCLIUpdate(action: String, harness: String?) -> Result<RemoteHostSettings, RemoteError> {
+        if let nextFailure { self.nextFailure = nil; return .failure(nextFailure) }
+        cliUpdateActions.append((action, harness))
+        return .success(hostSettingsPage)
+    }
 
     func setDetail(_ detail: RemoteItemDetail, task: String, item: String) { details["\(task)/\(item)"] = detail }
     func setFiles(_ scope: RemoteFileScope, outputs: [RemoteOutput], for taskID: String) {

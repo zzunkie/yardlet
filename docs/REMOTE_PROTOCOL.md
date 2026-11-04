@@ -583,6 +583,7 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
 - 2026-11-04: optional `taskActions`, sidebar and title actions, host account selection and paged archived tasks (§15.32).
 
 - 2026-11-04: schedule editing, full detail and Claude Code session schedules (§15.35).
+- 2026-11-04: host Settings (General, Yardlet Instructions, CLI Updates and Usage) in a remote window (§15.36).
 - 2026-11-04: §15.26 adds read-only Review, advertised by optional `reviewReading`; no mutation request is added.
 - 2026-11-04: workspace file listing (§15.27), with the existing bounded `readFile` requests for content.
 
@@ -2242,6 +2243,50 @@ The desktop client draws the local scheduled-task list, editor and detail with h
 including the instructions and grouped run history. Import Schedules from Other Apps stays dimmed: its
 catalog and selection flow belong to the host, and reading the client's app data would import the wrong data.
 
+### 15.36 The host's Settings from another Mac
+
+The optional snapshot flag `hostSettings: true` advertises reading and changing the host's Settings from a
+remote desktop window. With an older host that omits `hostSettings`, `⌘,` in a remote window keeps its
+earlier behavior and opens the client Mac's own Settings in its main window. Phone clients may ignore the
+snapshot flag and the new event.
+
+- `hostSettings` takes optional `watching` (default `true`) and returns `settingsPage`, a `RemoteHostSettings`
+  object with:
+  - `writable`: whether the connected device currently has `RemoteDevicePermission.settings` (§15.28).
+  - `values`: the host's current values keyed by `YardletSetting.id` for the host-side rows of General,
+    Yardlet Instructions (`yardlet_instructions`, `daily_evaluation`), Usage (`token_usage`), and CLI Updates
+    (`cli_automatic_updates`). Rows that configure the client Mac itself (`language`, `check_for_updates`,
+    Appearance, Notifications) are excluded, as are Vault (`Passwords`) and `Remote` (paired devices).
+  - `credentialHidingAllowedBuild`: whether the host's build is team-signed when `hide_keys_and_tokens` is shown.
+  - `lidHelperStatus`: the host's lid helper state (`unavailable`, `off`, `needsApproval`, `ready`) when
+    `keep_working_with_lid_closed` is offered.
+  - `instructions`: `{text, hasEvaluation, lastEvaluationAt}` when the host has a Yardlet instructions store.
+  - `cliUpdates`: `{rows, isChecking, lastCheckedAt, notice}` when the host checks harness CLIs. Each row
+    carries `harness`, `title`, `method`, `versions`, optional `status`, `isWarning`, `working`, and optional
+    `newerVersion` and `newerText` (never executable paths).
+  - `usage`: `{isCounting, limitsCheckedAt, updatedAt, days, limits, rows}` when the host offers token usage,
+    with 30-day token/cost totals, plan limit windows and pace (`runsOutAt`), and range/grouping breakdowns.
+- While a connection watches (`watching: true`), the server pushes `{"event": "hostSettingsChanged"}` when the
+  host's settings, instructions, CLI update rows, usage summary, or the device's `settings` permission change;
+  closing the sheet sends `{"type": "hostSettings", "watching": false}`.
+- Reading (`hostSettings`) is open to any paired device. Changing any host setting requires
+  `RemoteDevicePermission.settings` (§15.28):
+  - `setHostSetting` takes `setting` (a `YardletSetting.id`), `value`, and optional `confirmed` (default
+    `false`), validates and applies the change through `YardletSettingCatalog` (`AppModel.settingsContext`),
+    and returns the updated `settingsPage`. A setting with `asksEveryTime` requires `confirmed: true` after
+    the client's confirmation alert. Changes that require macOS approval on the host itself (turning off
+    `hide_keys_and_tokens`, or turning on `keep_working_with_lid_closed` while the host's helper is not
+    `ready`) are refused with `notAllowed`.
+  - `saveHostInstructions` takes `text`, writes it to the host's `YardletInstructionsStore`, and returns the
+    updated `settingsPage`.
+  - `hostCLIUpdate` takes `action` (`check`, `checkAll`, `useNewest`, `dismissNotice`) and optional `harness`,
+    runs the action on the host's `CLIUpdateCenter` / `RuntimeSelectionStore`, and returns the updated
+    `settingsPage`.
+- Every mutating request is recorded in the host's audit log with its kind, device, result, and `setting`
+  (the setting ID, `"yardlet_instructions"`, or `action[:harness]`), never setting values or instruction text.
+  Without `RemoteDevicePermission.settings`, the remote sheet renders its controls disabled with a notice
+  pointing to the host's `Settings › Remote › Paired devices`.
+
 ## 16. Push notifications
 
 The Mac pushes to a device that registered (§15.6) and **has no open v2 connection**, for these
@@ -2372,8 +2417,10 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   With `taskRail`, the rail reads the host's additional facts and the composer shows its context ring (§15.34).
   Task connector switches, file mentions, extended commands, queue controls and next-message suggestions use
   the shared composer views when the host offers §15.33. New tasks also offer host account choices and confirmed
-  elevated permissions. Connector setup, Settings, importing schedules from other apps and the other
-  side panels stay on the host.
+  elevated permissions. With `hostSettings` (§15.36), `⌘,`, the app menu's `Settings…` and the host footer open
+  the host's Settings sheet in the remote window (`SettingsCenterView` showing General, Yardlet Instructions,
+  CLI Updates and Usage, editable with the device's `settings` permission and read-only otherwise). Connector
+  setup, importing schedules from other apps and the other side panels stay on the host.
 - **Paths:** as §11.4. While a host's window is open it browses Bonjour (§11.3) for the instance with the
   discovery id of the host key it saved, and resolves it to the host's name and port (`Name.local:47616`; the
   system resolves the name when connecting). Those addresses go first, never saved, then the direct addresses the

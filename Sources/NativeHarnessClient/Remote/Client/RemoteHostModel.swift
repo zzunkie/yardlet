@@ -87,6 +87,13 @@ final class RemoteHostModel: Identifiable {
     var accountTask: SessionRecord?
     var deleteTask: SessionRecord?
     var archiveProject: WorkspaceGroup?
+    var offersHostSettings = false
+    var showsSettings = false
+    var requestedSettingsSection: String?
+    var hostSettings: RemoteHostSettings?
+    @ObservationIgnored var readingHostSettings = false
+    @ObservationIgnored var dirtyHostSettings = false
+    @ObservationIgnored var instructionsSaveTask: Task<Void, Never>?
     private(set) var taskActions = false
     private(set) var composerExtensions = false
     private(set) var taskControls = false
@@ -279,6 +286,8 @@ final class RemoteHostModel: Identifiable {
             browser.receive(event)
         case .terminalOutput, .terminalClosed:
             terminals.receive(event)
+        case .hostSettingsChanged:
+            if showsSettings { Task { await readHostSettings(watching: true) } }
         case .revoked, .linked, .linkRefused, .linkRequest, .linkResolved:
             break
         }
@@ -307,6 +316,13 @@ final class RemoteHostModel: Identifiable {
             taskActions = response.taskActions == true
             composerExtensions = response.composerExtensions == true
             taskControls = response.taskControls == true
+            offersHostSettings = response.hostSettings == true
+            if !offersHostSettings {
+                hostSettings = nil
+                showsSettings = false
+            } else if showsSettings {
+                Task { await readHostSettings(watching: true) }
+            }
             let full = response.fullConversation == true
             if full != sendsFullConversation {
                 sendsFullConversation = full

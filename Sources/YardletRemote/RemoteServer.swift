@@ -24,6 +24,8 @@ public enum RemoteBridgeChange: Equatable, Sendable {
     case browserTabs(String)
     /// A watched tab drew its page again (§15.25).
     case tabPainted(taskID: String, tabID: String)
+    /// The host's Settings sheet values changed (§15.36).
+    case hostSettings
 }
 
 /// What a command asks of the Mac.
@@ -188,10 +190,21 @@ public protocol RemoteBridge: AnyObject, Sendable {
     func terminalResize(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit) async -> RemoteError?
     func terminalStatus(taskID: String, terminalID: String, permit: RemoteTerminalPermit) async -> Result<RemoteTerminalStatus, RemoteError>
     func closeTerminal(taskID: String, terminalID: String) async
+    /// The host's Settings sheet values (§15.36). A bridge that answers it says so in its snapshot (`hostSettings`).
+    func hostSettings() async -> Result<RemoteHostSettings, RemoteError>
+    func setWatchesHostSettings(_ watching: Bool) async
+    func setHostSetting(setting: String, value: String, confirmed: Bool) async -> Result<RemoteHostSettings, RemoteError>
+    func saveHostInstructions(text: String) async -> Result<RemoteHostSettings, RemoteError>
+    func hostCLIUpdate(action: String, harness: String?) async -> Result<RemoteHostSettings, RemoteError>
 
 }
 
 extension RemoteBridge {
+    public func hostSettings() async -> Result<RemoteHostSettings, RemoteError> { .failure(RemoteError(.unavailable)) }
+    public func setWatchesHostSettings(_ watching: Bool) async {}
+    public func setHostSetting(setting: String, value: String, confirmed: Bool) async -> Result<RemoteHostSettings, RemoteError> { .failure(RemoteError(.unavailable)) }
+    public func saveHostInstructions(text: String) async -> Result<RemoteHostSettings, RemoteError> { .failure(RemoteError(.unavailable)) }
+    public func hostCLIUpdate(action: String, harness: String?) async -> Result<RemoteHostSettings, RemoteError> { .failure(RemoteError(.unavailable)) }
     public func setWatchedRailTasks(_ taskIDs: Set<String>) async {}
     public func railDraft(taskID: String, confirmed: Bool) async -> Result<String, RemoteError> { .failure(RemoteError(.unavailable)) }
     public func taskRail(taskID: String) async -> Result<RemoteRailFacts, RemoteError> { .failure(RemoteError(.unavailable)) }
@@ -368,6 +381,8 @@ public actor RemoteServer {
         /// Subscribed tasks whose `taskSettings` it read, so it is told when they change (§15.23).
         var followsRail: Set<String> = []
         var followsSettings: Set<String> = []
+        /// It watches `hostSettings`, so it is told when the host's Settings sheet values change (§15.36).
+        var followsHostSettings = false
         /// The file it read last (the path the Mac read) and where its next part starts (§15.22): a read that goes on
         /// from there is not written to the audit log again.
         var fileRead: FileRead?
@@ -438,6 +453,7 @@ public actor RemoteServer {
     private struct PermissionRefusalKey: Hashable {
         var device: String?
         var request: String
+        var setting: String?
         var result: String
     }
     private var auditedPermissionRefusals: [PermissionRefusalKey: Date] = [:]
@@ -986,6 +1002,9 @@ public actor RemoteServer {
         let effective = permissionRequestsEnabled ? permissions : RemoteDevicePermissions()
         if !effective.fileWrites { revokeFileWrites(deviceID: deviceID) }
         if !effective.terminal { endTerminals(deviceID: deviceID, reason: "notAllowed") }
+        for (id, connection) in connections where connection.deviceID == deviceID && connection.followsHostSettings {
+            send(RemoteEvent(.hostSettingsChanged), to: id)
+        }
         for handler in permissionObservers.values { handler(deviceID, effective) }
     }
 
@@ -1081,13 +1100,13 @@ public actor RemoteServer {
             auditedPermissionRefusals = auditedPermissionRefusals.filter { time.timeIntervalSince($0.value) < 60 }
             nextPermissionAuditPrune = time.addingTimeInterval(60)
         }
-        let key = PermissionRefusalKey(device: device, request: request.type, result: "notAllowed")
+        let key = PermissionRefusalKey(device: device, request: request.type, setting: request.settingID, result: "notAllowed")
         if let last = auditedPermissionRefusals[key], time.timeIntervalSince(last) < 60 { return }
         if auditedPermissionRefusals.count >= 1_024, let oldest = auditedPermissionRefusals.min(by: { $0.value < $1.value }) {
             auditedPermissionRefusals[oldest.key] = nil
         }
         auditedPermissionRefusals[key] = time
-        audit?.record(device: device, type: request.type, task: request.taskID, result: key.result, at: time)
+        audit?.record(device: device, type: request.type, task: request.taskID, setting: request.settingID, result: key.result, at: time)
     }
 
     /// Opens a pairing, replacing any open one.
@@ -1728,6 +1747,75 @@ public actor RemoteServer {
             tabControl(envelope.id, request: request, on: id)
         case let .tabInput(taskID, tabID, input):
             tabInput(envelope.id, taskID: taskID, tabID: tabID, input: input, on: id)
+        case let .hostSettings(watching):
+            if !watching {
+                connections[id]?.followsHostSettings = false
+                await updateWatched()
+                respond(RemoteResponse(re: envelope.id), to: id)
+                audit?.record(device: connections[id]?.deviceID, type: request.type, task: nil, result: "ok", at: now())
+                return
+            }
+            connections[id]?.followsHostSettings = true
+            await updateWatched()
+            let result = await bridge.hostSettings()
+            switch result {
+            case var .success(page):
+                page.writable = permissionError(.settings, on: id) == nil
+                var response = RemoteResponse(re: envelope.id)
+                response.settingsPage = page
+                guard let encoded = try? JSONEncoder().encode(response), encoded.count <= RemoteProtocol.maxServerMessageBytes else {
+                    audit?.record(device: connections[id]?.deviceID, type: request.type, task: nil, result: "tooLarge", at: now())
+                    respond(.failure(envelope.id, RemoteError(.tooLarge)), to: id)
+                    return
+                }
+                respond(response, to: id)
+            case let .failure(error):
+                respond(.failure(envelope.id, error), to: id)
+            }
+            audit?.record(device: connections[id]?.deviceID, type: request.type, task: nil,
+                          result: (try? result.get()) == nil ? "failed" : "ok", at: now())
+        case let .setHostSetting(setting, value, confirmed):
+            var settingsPage: RemoteHostSettings?
+            await command(envelope.id, request: request, on: id) {
+                switch await self.bridge.setHostSetting(setting: setting, value: value, confirmed: confirmed) {
+                case let .success(after):
+                    settingsPage = after
+                    return nil
+                case let .failure(error):
+                    return error
+                }
+            } answer: { response in
+                settingsPage?.writable = self.permissionError(.settings, on: id) == nil
+                response.settingsPage = settingsPage
+            }
+        case let .saveHostInstructions(text):
+            var settingsPage: RemoteHostSettings?
+            await command(envelope.id, request: request, on: id) {
+                switch await self.bridge.saveHostInstructions(text: text) {
+                case let .success(after):
+                    settingsPage = after
+                    return nil
+                case let .failure(error):
+                    return error
+                }
+            } answer: { response in
+                settingsPage?.writable = self.permissionError(.settings, on: id) == nil
+                response.settingsPage = settingsPage
+            }
+        case let .hostCLIUpdate(action, harness):
+            var settingsPage: RemoteHostSettings?
+            await command(envelope.id, request: request, on: id) {
+                switch await self.bridge.hostCLIUpdate(action: action, harness: harness) {
+                case let .success(after):
+                    settingsPage = after
+                    return nil
+                case let .failure(error):
+                    return error
+                }
+            } answer: { response in
+                settingsPage?.writable = self.permissionError(.settings, on: id) == nil
+                response.settingsPage = settingsPage
+            }
         case let .uploadFile(part):
             guard let deviceID = connection.deviceID else { return }
             switch uploads.receive(part, from: deviceID, now: now()) {
@@ -1772,6 +1860,7 @@ public actor RemoteServer {
             response.fileRewind = published?.fileRewind == true ? true : nil
             response.taskActions = published?.taskActions == true ? true : nil
             response.tabControls = published?.tabControls == true ? true : nil
+            response.hostSettings = published?.hostSettings == true ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)
             connections[id]?.receivesTaskEvents = true
@@ -1827,6 +1916,7 @@ public actor RemoteServer {
         respond(error.map { .failure(requestID, $0) } ?? response, to: id)
         audit?.record(device: connections[id]?.deviceID, type: request.type, task: request.taskID,
                       schedule: request.scheduleID ?? response.scheduleId, project: request.projectID,
+                      setting: request.settingID,
                       result: error?.code.rawValue ?? "ok", at: now())
         if case let .deleteScheduledTasks(ids, _, _) = request {
             for scheduleID in ids.dropFirst() {
@@ -2091,6 +2181,7 @@ public actor RemoteServer {
     private func updateWatched() async {
         let tasks = Set(connections.values.flatMap(\.subscriptions.keys))
         await bridge.setWatchedRailTasks(Set(connections.values.flatMap(\.followsRail)))
+        await bridge.setWatchesHostSettings(connections.values.contains(where: \.followsHostSettings))
         guard tasks != watched else { return }
         watched = tasks
         await bridge.setWatchedTasks(tasks)
@@ -2148,6 +2239,10 @@ public actor RemoteServer {
             event.taskId = taskID
             for (id, connection) in connections where connection.followsSettings.contains(taskID) {
                 send(event, to: id)
+            }
+        case .hostSettings:
+            for (id, connection) in connections where connection.followsHostSettings {
+                send(RemoteEvent(.hostSettingsChanged), to: id)
             }
         }
     }

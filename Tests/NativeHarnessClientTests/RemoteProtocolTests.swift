@@ -113,7 +113,13 @@ final class RemoteProtocolTests: XCTestCase {
             .tabInput(taskID: "T1", tabID: "K", input: .text("안녕하세요")),
             .openTab(taskID: "T1", tabID: nil, address: "http://localhost:3000"),
             .openTab(taskID: "T1", tabID: "K", address: "https://example.com"),
-            .closeTab(taskID: "T1", tabID: "K")
+            .closeTab(taskID: "T1", tabID: "K"),
+            .hostSettings(watching: true),
+            .hostSettings(watching: false),
+            .setHostSetting(setting: "follow_up_behavior", value: "steer", confirmed: true),
+            .saveHostInstructions(text: "Keep tests fast."),
+            .hostCLIUpdate(action: "check", harness: "codex"),
+            .hostCLIUpdate(action: "checkAll")
         ]
         for (index, request) in requests.enumerated() {
             let envelope = RemoteRequestEnvelope(id: "\(index)", request: request)

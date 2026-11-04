@@ -686,14 +686,11 @@ struct NativeHarnessClientApp: App {
         // Another Mac's Yardlet, one window per host (File › Connect to Mac…).
         WindowGroup(L10n.string("Remote Mac"), id: RemoteHostWindow.sceneID, for: String.self) { $hostID in
             YardletWindowPreferences(usesVisualFixture: model.usesVisualFixture) {
-                RemoteHostWindow(hostID: hostID, directory: remoteHosts)
-                    .imageViewerHost()
-                    // ⌘, shows this Mac's Settings in its main window, as another Mac's window has none of its own.
-                    .focusedSceneValue(\.yardletSettingsPresented, Binding(get: { false }, set: { requested in
-                        guard requested else { return }
-                        model.isSettingsRequested = true
-                        if !TaskResourceUsageWindow.bringMainWindowForward() { TaskResourceUsageWindow.reopenMainWindow?() }
-                    }))
+                RemoteHostWindow(hostID: hostID, directory: remoteHosts) {
+                    model.isSettingsRequested = true
+                    if !TaskResourceUsageWindow.bringMainWindowForward() { TaskResourceUsageWindow.reopenMainWindow?() }
+                }
+                .imageViewerHost()
             }
         }
         .windowStyle(.hiddenTitleBar)

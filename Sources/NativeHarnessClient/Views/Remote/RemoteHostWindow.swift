@@ -12,6 +12,7 @@ struct RemoteHostWindow: View {
 
     let hostID: String?
     let directory: RemoteHostDirectory
+    var onOpenLocalSettings: (() -> Void)? = nil
     @State private var model: RemoteHostModel?
 
     var body: some View {
@@ -35,6 +36,19 @@ struct RemoteHostWindow: View {
             }
         }
         .frame(minWidth: 760, minHeight: 520)
+        // ⌘, opens the host's Settings sheet in this window when the host offers it (§15.36), or this Mac's
+        // Settings in its main window when connected to an older host.
+        .focusedSceneValue(\.yardletSettingsPresented, Binding(get: { model?.showsSettings ?? false }, set: { requested in
+            if requested {
+                if let model, model.offersHostSettings {
+                    model.openSettings()
+                } else {
+                    onOpenLocalSettings?()
+                }
+            } else {
+                model?.closeSettings()
+            }
+        }))
         .task(id: hostID) {
             model = hostID.flatMap(directory.model(for:))
         }
@@ -55,6 +69,7 @@ struct RemoteHostView: View {
     @State private var windowWidth: CGFloat?
     /// How the task list groups its rows, as this Mac's own windows group theirs.
     @AppStorage(SidebarGrouping.defaultsKey, store: .yardlet) private var grouping = SidebarGrouping.project
+    @State private var windowSize: CGSize = .zero
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(model: RemoteHostModel, directory: RemoteHostDirectory, drafts: RemoteComposerDrafts = RemoteComposerDrafts(),
@@ -89,7 +104,10 @@ struct RemoteHostView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(ParityTheme.canvas)
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { windowWidth = $0 }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: {
+            windowSize = $0
+            windowWidth = $0.width
+        }
         // Ordinary controls stay monochrome, as in the local window; status, links and Send opt into the accent.
         .tint(Color.primary)
         .navigationTitle(model.name)
@@ -97,6 +115,13 @@ struct RemoteHostView: View {
         .modifier(RemotePresence(model: model))
         .modifier(RemoteTaskActionAlerts(model: model))
         .modifier(RemoteScheduleSheets(model: model))
+        .sheet(isPresented: Binding(get: { model.showsSettings }, set: { if !$0 { model.closeSettings() } })) {
+            SettingsCenterView(
+                size: SettingsCenterView.fittingSize(in: windowSize),
+                initialSection: model.requestedSettingsSection,
+                remoteHost: model
+            )
+        }
         .focusedSceneValue(\.yardletTaskCommands, taskCommands)
         .focusedSceneValue(\.yardletSplitCommands, splitCommands)
         .onChange(of: windowSelection) { old, new in shell.follow(new, from: old) }
@@ -748,6 +773,9 @@ private struct RemoteHostFooter: View {
         Menu {
             if !model.isConnected {
                 Button(L10n.string("Try Again")) { model.reconnectNow() }
+            }
+            if model.offersHostSettings {
+                Button(L10n.string("Settings…")) { model.openSettings() }
             }
             Button(L10n.string("Connect to Mac…")) { openWindow(id: RemoteConnectWindow.sceneID) }
             Button(L10n.string("Archived tasks")) { model.showsArchive = true }.disabled(!model.taskActions)

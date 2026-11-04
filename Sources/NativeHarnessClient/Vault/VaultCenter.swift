@@ -289,6 +289,7 @@ final class VaultCenter: ObservableObject {
 
     static let enabledKey = "Yardlet.vault.enabled"
     static let walletEnabledKey = "Yardlet.vault.wallet.enabled"
+    static let didChangeNotification = Notification.Name("Yardlet.VaultCenter.didChange")
 
     private var environment: Environment
     @Published private(set) var items: [VaultItem]
@@ -347,6 +348,7 @@ final class VaultCenter: ObservableObject {
             }
         }
         hidesCredentials = hides
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
     }
 
     var isAllowedBuild: Bool { environment.isAllowedBuild }

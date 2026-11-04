@@ -1,4 +1,5 @@
 import SwiftUI
+import YardletRemote
 
 /// Where the window's account and harness entries open. Accounts and harnesses are Settings
 /// sections; adding or connecting an account from a new task keeps its own sheet, which returns to
@@ -70,8 +71,13 @@ struct SettingsCenterView: View {
     /// Yardlet's lid helper; nil where the app has none (tests, fixtures), and General leaves its
     /// switch out.
     let lidHelper: LidSleepHelper?
+    /// Non-nil when this sheet shows a remote Mac's Settings (§15.36).
+    let remoteHost: RemoteHostModel?
+    private let initialSectionRawValue: String?
     @State private var section: SettingsSection
     @State private var focusedSection: SettingsSection?
+    @State private var appliedInitialRemoteSection = false
+    @State private var pendingRemoteConfirmation: RemoteHostSettingsProjection.Confirmation?
     /// The section list takes the keyboard when Settings opens, as the sidebar list it replaced did.
     @FocusState private var isSectionListFocused: Bool
     @State private var notifications: SystemNotificationSettingsModel
@@ -123,7 +129,8 @@ struct SettingsCenterView: View {
         instructions: YardletInstructionsStore? = nil,
         evaluation: RoutingEvaluationStore? = nil,
         usage: SettingsUsageContext? = nil,
-        lidHelper: LidSleepHelper? = nil
+        lidHelper: LidSleepHelper? = nil,
+        remoteHost: RemoteHostModel? = nil
     ) {
         self.size = size
         self.connectors = connectors
@@ -135,15 +142,24 @@ struct SettingsCenterView: View {
         self.evaluation = evaluation
         self.usage = usage
         self.lidHelper = lidHelper
+        self.remoteHost = remoteHost
+        self.initialSectionRawValue = initialSection
         self.notificationCenter = notificationCenter
         _notifications = State(initialValue: SystemNotificationSettingsModel(center: notificationCenter))
-        _section = State(initialValue: SettingsSection.initial(initialSection, available: SettingsSection.available(
-            hasAccounts: accounts != nil, hasConnectors: connectors != nil, hasVault: vault != nil,
-            hasRemote: remote != nil, hasCLIUpdates: cliUpdates != nil, hasInstructions: instructions != nil,
-            hasUsage: usage != nil)))
+        let available = remoteHost.map { RemoteHostSettingsProjection.availableSections($0.hostSettings) }
+            ?? SettingsSection.available(
+                hasAccounts: accounts != nil, hasConnectors: connectors != nil, hasVault: vault != nil,
+                hasRemote: remote != nil, hasCLIUpdates: cliUpdates != nil, hasInstructions: instructions != nil,
+                hasUsage: usage != nil)
+        _section = State(initialValue: SettingsSection.initial(initialSection, available: available))
         _accountCenter = State(initialValue: AccountCenterModel(
             connections: accounts?.connections ?? ProviderConnectionStore(),
             codexEnvironmentManager: accounts?.codexEnvironmentManager))
+    }
+
+    private var isRemoteWritable: Bool {
+        guard let remoteHost else { return true }
+        return remoteHost.hostSettings?.writable == true
     }
 
     var body: some View {
@@ -213,6 +229,18 @@ struct SettingsCenterView: View {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 16) {
                                 detailHeader
+                                if let remoteHost, let hostSettings = remoteHost.hostSettings, !hostSettings.writable {
+                                    Text(RemoteHostSettingsProjection.permissionNote(hostName: remoteHost.name))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                if let error = remoteHost?.commandError {
+                                    Text(error)
+                                        .font(.caption)
+                                        .foregroundStyle(Color.orange)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
                                 detail
                             }
                             .padding(20)
@@ -238,6 +266,34 @@ struct SettingsCenterView: View {
             // Adding an account is a step of the Accounts page; leaving the page ends it.
             if value != .accounts { addingAccount = false; setupExpanded = false }
         }
+        .onChange(of: remoteHost?.hostSettings != nil, initial: true) { _, hasSettings in
+            guard hasSettings, !appliedInitialRemoteSection else { return }
+            appliedInitialRemoteSection = true
+            let requested = remoteHost?.requestedSettingsSection ?? initialSectionRawValue
+            if let requested, let target = SettingsSection(rawValue: requested), sections.contains(target) {
+                section = target
+                focusedSection = target
+            }
+        }
+        .alert(
+            pendingRemoteConfirmation?.title ?? "",
+            isPresented: Binding(
+                get: { pendingRemoteConfirmation != nil },
+                set: { if !$0 { pendingRemoteConfirmation = nil } }
+            ),
+            presenting: pendingRemoteConfirmation
+        ) { confirmation in
+            Button(L10n.string("Cancel"), role: .cancel) {
+                pendingRemoteConfirmation = nil
+            }
+            Button(L10n.string("Change")) {
+                pendingRemoteConfirmation = nil
+                guard let remoteHost else { return }
+                Task { await remoteHost.setHostSetting(confirmation.settingID, value: confirmation.value, confirmed: true) }
+            }
+        } message: { confirmation in
+            Text(confirmation.message)
+        }
         .background {
             // The checks start when a connection section first shows and run while the window is
             // open, whichever section is selected.
@@ -256,9 +312,22 @@ struct SettingsCenterView: View {
     }
 
     private var sections: [SettingsSection] {
-        SettingsSection.available(hasAccounts: accounts != nil, hasConnectors: connectors != nil, hasVault: vault != nil,
-                                  hasRemote: remote != nil, hasCLIUpdates: cliUpdates != nil,
-                                  hasInstructions: instructions != nil, hasUsage: usage != nil)
+        if let remoteHost {
+            return RemoteHostSettingsProjection.availableSections(remoteHost.hostSettings)
+        }
+        return SettingsSection.available(hasAccounts: accounts != nil, hasConnectors: connectors != nil, hasVault: vault != nil,
+                                         hasRemote: remote != nil, hasCLIUpdates: cliUpdates != nil,
+                                         hasInstructions: instructions != nil, hasUsage: usage != nil)
+    }
+
+    private var effectiveUsage: SettingsUsageContext? {
+        if let usage { return usage }
+        guard let remoteHost, let remoteUsage = remoteHost.hostSettings?.usage else { return nil }
+        return SettingsUsageContext(
+            overview: { RemoteHostSettingsProjection.tokenUsageOverview(remoteHost.hostSettings?.usage ?? remoteUsage) },
+            isCounting: { (remoteHost.hostSettings?.usage ?? remoteUsage).isCounting },
+            limitsCheckedAt: { (remoteHost.hostSettings?.usage ?? remoteUsage).limitsCheckedAt.map(RemoteHostSettingsProjection.date) }
+        )
     }
 
     private func connectionContent(_ accounts: SettingsAccountsContext) -> some View {
@@ -306,46 +375,81 @@ struct SettingsCenterView: View {
 
     @ViewBuilder
     private var detail: some View {
-        switch section {
-        case .general:
-            // The rows come from the settings catalog, which the agent's settings tools list too.
-            VStack(spacing: 0) {
-                ForEach(Array(YardletSettingCatalog.rows(in: .general, context: settingsContext).enumerated()),
-                        id: \.element.id) { index, setting in
-                    if index > 0 { Divider().padding(.leading, Self.dividerLeading) }
-                    generalRow(setting)
+        if let remoteHost, remoteHost.hostSettings == nil {
+            ProgressView()
+                .controlSize(.small)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            switch section {
+            case .general:
+                let rows = remoteHost != nil
+                    ? RemoteHostSettingsProjection.generalRows(remoteHost?.hostSettings)
+                    : YardletSettingCatalog.rows(in: .general, context: settingsContext)
+                // The rows come from the settings catalog, which the agent's settings tools list too.
+                VStack(spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, setting in
+                        if index > 0 { Divider().padding(.leading, Self.dividerLeading) }
+                        generalRow(setting)
+                    }
                 }
+                .padding(.horizontal, 12)
+                .parityCard()
+                .disabled(!isRemoteWritable)
+            case .appearance:
+                appearanceDetail
+            case .notifications:
+                notificationDetail
+            case .instructions:
+                if let instructions {
+                    YardletInstructionsSettingsView(store: instructions, evaluation: evaluation)
+                } else if let remoteHost, let remoteInstructions = remoteHost.hostSettings?.instructions {
+                    YardletInstructionsSettingsView(remote: .init(
+                        state: remoteInstructions,
+                        isEnabled: remoteHost.hostSettingValue(.yardletInstructions) == YardletSetting.on,
+                        isEvaluationEnabled: remoteHost.hostSettingValue(.dailyEvaluation) == YardletSetting.on,
+                        onSetEnabled: { requestRemoteSettingChange(.yardletInstructions, to: $0 ? YardletSetting.on : YardletSetting.off) },
+                        onChangeText: { remoteHost.scheduleHostInstructionsSave($0) },
+                        onSetEvaluationEnabled: { requestRemoteSettingChange(.dailyEvaluation, to: $0 ? YardletSetting.on : YardletSetting.off) }
+                    ))
+                    .disabled(!isRemoteWritable)
+                }
+            case .connectors:
+                if let connectors { ConnectorSettingsView(center: connectors) }
+            case .vault:
+                if let vault { VaultSettingsView(vault: vault) }
+            case .remote:
+                if let remote { RemoteSettingsView(service: remote) }
+            case .cliUpdates:
+                if let cliUpdates {
+                    CLIUpdateSettingsView(center: cliUpdates, runtimes: accounts?.runtimeSelections)
+                } else if let remoteHost, let remoteCLI = remoteHost.hostSettings?.cliUpdates {
+                    CLIUpdateSettingsView(remote: .init(
+                        state: remoteCLI,
+                        isAutoUpdateEnabled: remoteHost.hostSettingValue(.cliAutomaticUpdates) == YardletSetting.on,
+                        onSetAutoUpdate: { requestRemoteSettingChange(.cliAutomaticUpdates, to: $0 ? YardletSetting.on : YardletSetting.off) },
+                        onCheck: { harness in Task { await remoteHost.performHostCLIUpdate(action: "check", harness: harness.rawValue) } },
+                        onUseNewest: { harness in Task { await remoteHost.performHostCLIUpdate(action: "useNewest", harness: harness.rawValue) } }
+                    ))
+                    .disabled(!isRemoteWritable)
+                }
+            case .usage:
+                if let usage = effectiveUsage {
+                    let rows = remoteHost != nil
+                        ? RemoteHostSettingsProjection.usageRows(remoteHost?.hostSettings)
+                        : YardletSettingCatalog.rows(in: .usage, context: settingsContext)
+                    // The page's counts, then its switch as the settings catalog draws it.
+                    TokenUsagePage(
+                        overview: usage.overview, isCounting: usage.isCounting, limitsCheckedAt: usage.limitsCheckedAt,
+                        switchRow: AnyView(VStack(spacing: 0) {
+                            Divider()
+                            ForEach(rows) { setting in
+                                preferenceRow(setting)
+                            }
+                        }.disabled(!isRemoteWritable)))
+                }
+            case .accounts, .harnesses:
+                EmptyView()
             }
-            .padding(.horizontal, 12)
-            .parityCard()
-        case .appearance:
-            appearanceDetail
-        case .notifications:
-            notificationDetail
-        case .instructions:
-            if let instructions { YardletInstructionsSettingsView(store: instructions, evaluation: evaluation) }
-        case .connectors:
-            if let connectors { ConnectorSettingsView(center: connectors) }
-        case .vault:
-            if let vault { VaultSettingsView(vault: vault) }
-        case .remote:
-            if let remote { RemoteSettingsView(service: remote) }
-        case .cliUpdates:
-            if let cliUpdates { CLIUpdateSettingsView(center: cliUpdates, runtimes: accounts?.runtimeSelections) }
-        case .usage:
-            if let usage {
-                // The page's counts, then its switch as the settings catalog draws it.
-                TokenUsagePage(
-                    overview: usage.overview, isCounting: usage.isCounting, limitsCheckedAt: usage.limitsCheckedAt,
-                    switchRow: AnyView(VStack(spacing: 0) {
-                        Divider()
-                        ForEach(YardletSettingCatalog.rows(in: .usage, context: settingsContext)) { setting in
-                            SettingsPreferenceRow(setting: setting, icon: settingsControlIcon(setting.symbol))
-                        }
-                    }))
-            }
-        case .accounts, .harnesses:
-            EmptyView()
         }
     }
 
@@ -360,6 +464,32 @@ struct SettingsCenterView: View {
             })
     }
 
+    private func requestRemoteSettingChange(_ setting: YardletSetting, to value: String) {
+        guard let remoteHost, remoteHost.hostSettings?.writable == true else { return }
+        let current = remoteHost.hostSettingValue(setting)
+        guard current != value else { return }
+        remoteHost.commandError = nil
+        if let confirmation = RemoteHostSettingsProjection.confirmation(for: setting, from: current, to: value) {
+            pendingRemoteConfirmation = confirmation
+        } else {
+            Task { await remoteHost.setHostSetting(setting.id, value: value, confirmed: false) }
+        }
+    }
+
+    @ViewBuilder
+    private func preferenceRow(_ setting: YardletSetting) -> some View {
+        if let remoteHost {
+            SettingsPreferenceRow(
+                setting: setting,
+                icon: settingsControlIcon(setting.symbol),
+                remoteValue: remoteHost.hostSettingValue(setting),
+                onSelectRemote: { requestRemoteSettingChange(setting, to: $0) }
+            )
+        } else {
+            SettingsPreferenceRow(setting: setting, icon: settingsControlIcon(setting.symbol))
+        }
+    }
+
     /// One General row: the catalog's row for a setting in Yardlet's defaults, or the row of a setting kept
     /// elsewhere. The Codex app's General rows (`settings.ide.language`, `settings.general.macMenuBar`) come
     /// first and in its order.
@@ -369,15 +499,32 @@ struct SettingsCenterView: View {
         case YardletSetting.language.id:
             languageRow(setting)
         case YardletSetting.hideKeysAndTokens.id:
-            if let vault { CredentialHidingRow(vault: vault, setting: setting, icon: settingsControlIcon(setting.symbol)) }
+            if let vault {
+                CredentialHidingRow(vault: vault, setting: setting, icon: settingsControlIcon(setting.symbol))
+            } else if let remoteHost {
+                let isAllowedBuild = remoteHost.hostSettings?.credentialHidingAllowedBuild ?? false
+                CredentialHidingContentRow(
+                    setting: setting,
+                    icon: settingsControlIcon(setting.symbol),
+                    hidesCredentials: remoteHost.hostSettingValue(setting) == YardletSetting.on,
+                    isAllowedBuild: isAllowedBuild,
+                    onToggle: { hides in
+                        requestRemoteSettingChange(setting, to: hides ? YardletSetting.on : YardletSetting.off)
+                    }
+                )
+            }
         case YardletSetting.keepWorkingWithLidClosed.id:
-            if let lidHelper { lidClosedWorkRow(lidHelper, setting: setting) }
+            if let lidHelper {
+                lidClosedWorkRow(lidHelper, setting: setting)
+            } else if let remoteHost {
+                remoteLidClosedWorkRow(remoteHost, setting: setting)
+            }
         case YardletSetting.memorySaver.id:
             memorySaverRow(setting)
         case YardletSetting.checkForUpdates.id:
             if let sparkle { updateChecksRow(sparkle, setting: setting) }
         default:
-            SettingsPreferenceRow(setting: setting, icon: settingsControlIcon(setting.symbol))
+            preferenceRow(setting)
         }
     }
 
@@ -451,21 +598,40 @@ struct SettingsCenterView: View {
     /// gap, as Connectors' rows divide.
     static let dividerLeading: CGFloat = 30 + 12
 
+    private var savesMemoryBinding: Binding<Bool> {
+        guard let remoteHost else { return $savesMemory }
+        return Binding(
+            get: { remoteHost.hostSettingValue(.memorySaver) == YardletSetting.on },
+            set: { requestRemoteSettingChange(.memorySaver, to: $0 ? YardletSetting.on : YardletSetting.off) }
+        )
+    }
+
+    private var memorySaverLevelBinding: Binding<BrowserMemorySaver.Level> {
+        guard let remoteHost else { return $memorySaverLevel }
+        return Binding(
+            get: {
+                BrowserMemorySaver.Level(rawValue: remoteHost.hostSettingValue(.memorySaverLevel)) ?? .balanced
+            },
+            set: { requestRemoteSettingChange(.memorySaverLevel, to: $0.rawValue) }
+        )
+    }
+
     /// "Memory saver", and while it is on Chrome's levels under it, each with its line, as Chrome's Memory page has them.
     private func memorySaverRow(_ setting: YardletSetting) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let isOn = savesMemoryBinding.wrappedValue
+        return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
                 settingsControlIcon(setting.symbol)
                 SettingsRowText(setting: setting)
                 Spacer(minLength: 8)
-                Toggle(setting.title, isOn: $savesMemory)
+                Toggle(setting.title, isOn: savesMemoryBinding)
                     .labelsHidden()
                     .toggleStyle(.paritySwitch)
                     .controlSize(.small)
             }
             .padding(.vertical, 14)
-            if savesMemory {
-                Picker(YardletSetting.memorySaverLevel.title, selection: $memorySaverLevel) {
+            if isOn {
+                Picker(YardletSetting.memorySaverLevel.title, selection: memorySaverLevelBinding) {
                     ForEach(BrowserMemorySaver.Level.allCases) { level in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(level.title).font(.callout)
@@ -516,6 +682,38 @@ struct SettingsCenterView: View {
                 .labelsHidden()
                 .toggleStyle(.paritySwitch)
                 .controlSize(.small)
+        }
+        .padding(.vertical, 14)
+    }
+
+    private func remoteLidClosedWorkRow(_ remoteHost: RemoteHostModel, setting: YardletSetting) -> some View {
+        let isOn = remoteHost.hostSettingValue(setting) == YardletSetting.on
+        let status = remoteHost.hostSettings?.lidHelperStatus
+        let note: String? = switch (isOn, status) {
+        case (true, "needsApproval"?): L10n.string("Allow Yardlet in the background in System Settings")
+        case (true, "off"?): L10n.string("macOS did not add Yardlet's helper")
+        case (true, "unavailable"?): L10n.string("Not available in this copy of Yardlet")
+        default: nil
+        }
+        return HStack(spacing: 12) {
+            settingsControlIcon(setting.symbol)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(setting.title).font(.callout.weight(.medium))
+                if let note {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            Toggle(setting.title, isOn: Binding(
+                get: { isOn },
+                set: { requestRemoteSettingChange(setting, to: $0 ? YardletSetting.on : YardletSetting.off) }
+            ))
+            .labelsHidden()
+            .toggleStyle(.paritySwitch)
+            .controlSize(.small)
         }
         .padding(.vertical, 14)
     }
@@ -662,6 +860,24 @@ private struct CredentialHidingRow<Icon: View>: View {
     let icon: Icon
 
     var body: some View {
+        CredentialHidingContentRow(
+            setting: setting,
+            icon: icon,
+            hidesCredentials: vault.hidesCredentials,
+            isAllowedBuild: vault.isAllowedBuild,
+            onToggle: { hides in Task { await vault.setHidesCredentials(hides) } }
+        )
+    }
+}
+
+private struct CredentialHidingContentRow<Icon: View>: View {
+    let setting: YardletSetting
+    let icon: Icon
+    let hidesCredentials: Bool
+    let isAllowedBuild: Bool
+    let onToggle: (Bool) -> Void
+
+    var body: some View {
         HStack(spacing: 12) {
             icon
             VStack(alignment: .leading, spacing: 3) {
@@ -670,7 +886,7 @@ private struct CredentialHidingRow<Icon: View>: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if !vault.isAllowedBuild {
+                if !isAllowedBuild {
                     Text(L10n.string("Always on in a build that is not team-signed."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -678,12 +894,11 @@ private struct CredentialHidingRow<Icon: View>: View {
                 }
             }
             Spacer(minLength: 8)
-            Toggle(setting.title, isOn: Binding(
-                get: { vault.hidesCredentials }, set: { hides in Task { await vault.setHidesCredentials(hides) } }))
+            Toggle(setting.title, isOn: Binding(get: { hidesCredentials }, set: onToggle))
                 .labelsHidden()
                 .toggleStyle(.paritySwitch)
                 .controlSize(.small)
-                .disabled(!vault.isAllowedBuild)
+                .disabled(!isAllowedBuild)
         }
         .padding(.vertical, 14)
     }
@@ -713,6 +928,8 @@ struct SettingsRowText: View {
 private struct SettingsPreferenceRow<Icon: View>: View {
     let setting: YardletSetting
     let icon: Icon
+    var remoteValue: String? = nil
+    var onSelectRemote: ((String) -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -725,14 +942,43 @@ private struct SettingsPreferenceRow<Icon: View>: View {
     }
 
     @ViewBuilder private var control: some View {
-        switch setting.storage {
-        case let .flag(key, defaultValue):
-            PreferenceSwitch(setting.controlLabel ?? setting.title, key: key, defaultValue: defaultValue)
-        case let .choice(key, defaultValue):
-            PreferenceSegments(setting.controlLabel ?? setting.title, key: key, defaultValue: defaultValue,
-                               choices: setting.choices)
-        case .app:
-            EmptyView()
+        if let remoteValue, let onSelectRemote {
+            let label = setting.controlLabel ?? setting.title
+            switch setting.storage {
+            case .flag:
+                Toggle(label, isOn: Binding(
+                    get: { remoteValue == YardletSetting.on },
+                    set: { onSelectRemote($0 ? YardletSetting.on : YardletSetting.off) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.paritySwitch)
+                .controlSize(.small)
+            case .choice:
+                Picker(label, selection: Binding(
+                    get: { remoteValue },
+                    set: { onSelectRemote($0) }
+                )) {
+                    ForEach(setting.choices, id: \.value) { choice in
+                        Text(choice.title).tag(choice.value)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .fixedSize()
+                .controlSize(.small)
+            case .app:
+                EmptyView()
+            }
+        } else {
+            switch setting.storage {
+            case let .flag(key, defaultValue):
+                PreferenceSwitch(setting.controlLabel ?? setting.title, key: key, defaultValue: defaultValue)
+            case let .choice(key, defaultValue):
+                PreferenceSegments(setting.controlLabel ?? setting.title, key: key, defaultValue: defaultValue,
+                                   choices: setting.choices)
+            case .app:
+                EmptyView()
+            }
         }
     }
 }

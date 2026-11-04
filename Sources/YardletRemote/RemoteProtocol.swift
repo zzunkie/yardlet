@@ -271,6 +271,7 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var taskNotices: Bool = false
     public var fileRewind: Bool = false
     public var composerExtensions: Bool = false
+    public var hostSettings: Bool = false
 
     public init(projects: [RemoteProject] = [], tasks: [RemoteTask] = [], newestRequestIDs: [String: String] = [:],
                 requestSummaries: [String: String] = [:], newTask: RemoteNewTask? = nil,
@@ -1079,6 +1080,11 @@ public enum RemoteRequest: Equatable, Sendable {
 
     case openTab(taskID: String, tabID: String?, address: String)
     case closeTab(taskID: String, tabID: String)
+    /// The host's Settings sheet (§15.36).
+    case hostSettings(watching: Bool = true)
+    case setHostSetting(setting: String, value: String, confirmed: Bool = false)
+    case saveHostInstructions(text: String)
+    case hostCLIUpdate(action: String, harness: String? = nil)
 
     public var type: String {
         switch self {
@@ -1156,6 +1162,10 @@ public enum RemoteRequest: Equatable, Sendable {
         case .terminalOutputAck: "terminalOutputAck"
         case .openTab: "openTab"
         case .closeTab: "closeTab"
+        case .hostSettings: "hostSettings"
+        case .setHostSetting: "setHostSetting"
+        case .saveHostInstructions: "saveHostInstructions"
+        case .hostCLIUpdate: "hostCLIUpdate"
         }
     }
 
@@ -1173,6 +1183,8 @@ public enum RemoteRequest: Equatable, Sendable {
         case .subtask, .cancelAccountMove: nil
         case .openTerminal, .terminalInput, .terminalResize, .terminalStatus, .terminalOutputAck, .closeTerminal: .terminal
         case .openTab, .closeTab: nil
+        case .hostSettings: nil
+        case .setHostSetting, .saveHostInstructions, .hostCLIUpdate: .settings
         case .snapshot, .subscribeTask, .loadOlder, .unsubscribeTask, .ping, .sendMessage, .answerApproval,
              .stopTurn, .markRead, .answerQuestion, .reviewPlan, .createTask, .newTaskOptions, .limitAccounts,
              .continueWithAccount, .setAutoContinue, .actOnQueued, .answerHandoff, .chooseAnswer, .uploadFile, .registerPush,
@@ -1207,7 +1219,17 @@ public enum RemoteRequest: Equatable, Sendable {
              let .closeTerminal(id, _), let .terminalOutputAck(id, _, _), let .terminalStatus(id, _): id
         case .projectWorkspaceFiles, .snapshot, .ping, .createTask, .newTaskOptions, .registerPush, .unregisterPush, .forgetDevice,
              .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled,
-             .presence: nil
+             .presence, .hostSettings, .setHostSetting, .saveHostInstructions, .hostCLIUpdate: nil
+        }
+    }
+
+    /// The setting or item ID a host-settings command names for the audit log (§4.4, §15.36), never its value or text.
+    public var settingID: String? {
+        switch self {
+        case let .setHostSetting(setting, _, _): setting
+        case .saveHostInstructions: "yardlet_instructions"
+        case let .hostCLIUpdate(action, harness): harness.map { "\(action):\($0)" } ?? action
+        default: nil
         }
     }
 
@@ -1237,6 +1259,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .cancelAccountMove: true
         case .openOriginalConversation, .projectAction, .taskAction: true
         case .saveScheduledTask, .deleteScheduledTasks: true
+        case .setHostSetting, .saveHostInstructions, .hostCLIUpdate: true
         case .sendMessage, .answerApproval, .stopTurn, .markRead, .answerQuestion, .reviewPlan, .createTask,
              .actOnSuggestion, .setPinned, .archiveTask, .answerLink, .continueWithAccount, .setAutoContinue, .actOnQueued,
              .answerHandoff, .chooseAnswer, .runScheduledTask, .setScheduledTaskEnabled, .setTaskSetting, .runComposerCommand,
@@ -1394,7 +1417,8 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             ("value", wire.value, type == "composerAction" && wire.action == "edit" ? RemoteProtocol.maxMessageCharacters * 4 : RemoteProtocol.maxProviderIDBytes),
             ("command", wire.command, RemoteProtocol.maxProviderIDBytes),
             ("turnId", wire.turnId, RemoteProtocol.maxProviderIDBytes),
-            ("tabId", wire.tabId, RemoteProtocol.maxOwnIDBytes), ("terminalId", wire.terminalId, RemoteProtocol.maxOwnIDBytes)
+            ("tabId", wire.tabId, RemoteProtocol.maxOwnIDBytes), ("terminalId", wire.terminalId, RemoteProtocol.maxOwnIDBytes),
+            ("harness", wire.harness, RemoteProtocol.maxOwnIDBytes)
         ]
         if let long = identifiers.first(where: { ($0.value?.utf8.count ?? 0) > $0.limit }) {
             return fail(.badRequest, "\(long.name) is too long")
@@ -1744,6 +1768,29 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 return fail(.badRequest, "Missing taskId, tabId or input")
             }
             request = .tabInput(taskID: taskID, tabID: tabID, input: input)
+        case "hostSettings":
+            request = .hostSettings(watching: wire.watching != false)
+        case "setHostSetting":
+            guard let setting = required(wire.setting), let value = wire.value else {
+                return fail(.badRequest, "Missing setting or value")
+            }
+            request = .setHostSetting(setting: setting, value: value, confirmed: wire.confirmed == true)
+        case "saveHostInstructions":
+            guard let text = wire.text else { return fail(.badRequest, "Missing text") }
+            guard text.count <= RemoteProtocol.maxMessageCharacters else {
+                return fail(.tooLarge, "Instructions are too large")
+            }
+            request = .saveHostInstructions(text: text)
+        case "hostCLIUpdate":
+            guard let action = required(wire.action),
+                  ["check", "checkAll", "useNewest", "dismissNotice"].contains(action) else {
+                return fail(.badRequest, "Invalid CLI update action")
+            }
+            let harness = required(wire.harness)
+            if ["check", "useNewest"].contains(action), harness == nil {
+                return fail(.badRequest, "Missing harness")
+            }
+            request = .hostCLIUpdate(action: action, harness: harness)
         default:
             return fail(.unknownType, "Unknown type \(type)")
         }
@@ -1973,6 +2020,17 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             wire.taskId = taskID
             wire.tabId = tabID
             wire.input = input
+        case let .hostSettings(watching):
+            wire.watching = watching ? nil : false
+        case let .setHostSetting(setting, value, confirmed):
+            wire.setting = setting
+            wire.value = value
+            wire.confirmed = confirmed ? true : nil
+        case let .saveHostInstructions(text):
+            wire.text = text
+        case let .hostCLIUpdate(action, harness):
+            wire.action = action
+            wire.harness = harness
         }
         return (try? RemoteJSON.encoder.encode(wire)) ?? Data()
     }
@@ -2102,6 +2160,9 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var terminals: Bool?
     public var isAtPrompt: Bool?
     public var isRunningProgram: Bool?
+    /// `snapshot` on v2: the Mac answers `hostSettings` (§15.36).
+    public var hostSettings: Bool?
+    public var settingsPage: RemoteHostSettings?
 
     public init(re: String, ok: Bool = true, error: RemoteError? = nil) {
         self.re = re
@@ -2416,6 +2477,8 @@ public struct RemoteEvent: Codable, Equatable, Sendable {
         case browserTabsChanged
         case terminalOutput
         case terminalClosed
+        // §15.36
+        case hostSettingsChanged
     }
 
     public var event: Name

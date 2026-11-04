@@ -531,3 +531,101 @@ final class CLIUpdateCenter {
         url.standardizedFileURL.resolvingSymlinksInPath().path(percentEncoded: false)
     }
 }
+
+/// The words of one harness's row in Settings › CLI Updates.
+struct CLIUpdateRowPresentation: Equatable {
+    var method: String
+    var versions: String
+    var status: String?
+    var isWarning: Bool
+
+    init(row: CLIUpdateCenter.Row, held: CLIRuntimeOverrides.Entry?) {
+        method = Self.methodText(row.method)
+        let installed = row.installed ?? L10n.string("unknown")
+        switch (row.method, row.latest) {
+        case (.appBundled, _), (.manual, _), (_, nil), (_, .unknown?):
+            versions = L10n.format("Installed %@", installed)
+        case let (_, .available(latest)?):
+            versions = L10n.format("Installed %1$@ · Latest %2$@", installed, latest)
+        case (_, .upToDate?):
+            versions = L10n.format("Installed %1$@ · Latest %2$@", installed, installed)
+        case (_, .failed?):
+            versions = L10n.format("Installed %@ · Could not check for a newer version", installed)
+        }
+
+        isWarning = false
+        switch row.phase {
+        case .checking: status = L10n.string("Checking…"); return
+        case .verifying: status = L10n.string("Checking that Yardlet can use it…"); return
+        case .updating: status = L10n.string("Updating…"); return
+        case .waitingForTasks: status = L10n.string("Updates when its tasks finish"); return
+        case .idle: break
+        }
+        if let held {
+            isWarning = true
+            status = L10n.format("%1$@ did not pass Yardlet's check, so Yardlet runs %2$@", held.failedVersion, held.version)
+            return
+        }
+        switch row.outcome {
+        case let .updated(from, to)?:
+            status = L10n.format("Updated from %1$@ to %2$@", from, to)
+            return
+        case let .failedWithoutPrevious(version)?:
+            isWarning = true
+            status = L10n.format("%@ did not pass Yardlet's check", version)
+            return
+        case .couldNotVerifyCurrent?:
+            isWarning = true
+            status = L10n.string("Yardlet could not check the current version, so it did not update it")
+            return
+        case let .updateFailed(reason)?:
+            isWarning = true
+            status = L10n.format("Update failed: %@", reason)
+            return
+        case nil:
+            break
+        }
+        switch row.method {
+        case let .appBundled(app):
+            status = L10n.format("Updated with the %@ app", app)
+            return
+        case .manual:
+            status = L10n.string("Update it yourself")
+            return
+        default:
+            break
+        }
+        switch row.decision {
+        case .skip(.cannotVerify)?, .skip(.cannotKeepPrevious)?:
+            status = L10n.string("Yardlet cannot check or undo an update of this CLI, so it does not update it")
+        case .skip(.failedBefore)?:
+            if case let .available(version)? = row.latest {
+                isWarning = true
+                status = L10n.format("%@ did not pass Yardlet's check", version)
+            } else { status = nil }
+        case .skip(.upToDate)?:
+            status = L10n.string("Up to date")
+        default:
+            if case .available? = row.latest { status = L10n.string("Update available") }
+            else if case .upToDate? = row.latest { status = L10n.string("Up to date") }
+            else { status = nil }
+        }
+    }
+
+    /// A newer install than the runtime the person chose, and where it comes from.
+    static func newerInstallText(_ install: RuntimeSelectionStore.Install, harness: HarnessKind) -> String {
+        L10n.format("Newer version installed: %1$@ · %2$@", install.version,
+                    methodText(CLIInstallDetector.detect(harness: harness, executable: install.url)))
+    }
+
+    static func methodText(_ method: CLIInstallMethod) -> String {
+        switch method {
+        case let .homebrewFormula(name, _): L10n.format("Homebrew formula %@", name)
+        case let .homebrewCask(token, _, _): L10n.format("Homebrew cask %@", token)
+        case let .npmGlobal(package, _, _): L10n.format("npm global package %@", package)
+        case let .selfUpdater(updater): L10n.format("Updates itself (%@)", updater.commandText)
+        case let .appBundled(app): L10n.format("Comes with the %@ app", app)
+        case .manual: L10n.string("Installed by hand")
+        }
+    }
+}

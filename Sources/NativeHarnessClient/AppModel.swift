@@ -400,7 +400,7 @@ final class AppModel {
     /// The app's one mailbox, while Settings › Mailbox has it on.
     @ObservationIgnored let mailbox = MailboxCenter()
     /// Token counts from the harnesses' transcripts, while Settings › Usage counts them.
-    @ObservationIgnored let tokenUsage = TokenUsageCenter(directory: TokenUsageCenter.defaultDirectory)
+    @ObservationIgnored var tokenUsage = TokenUsageCenter(directory: TokenUsageCenter.defaultDirectory)
     @ObservationIgnored var tokenUsagePreferenceObserver: (any NSObjectProtocol)?
     @ObservationIgnored var mailboxPreferenceObserver: (any NSObjectProtocol)?
     /// Whether a change to the connectors will have the mailbox follow them again.

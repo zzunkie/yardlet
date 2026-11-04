@@ -1856,6 +1856,83 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertFalse(AppModel.keepsMacAwake(hasRunningWork: false, phoneCanAnswer: true, sessions: [idle]))
         XCTAssertTrue(AppModel.keepsMacAwake(hasRunningWork: true, phoneCanAnswer: false, sessions: [idle]))
     }
+
+    // MARK: - Host Settings (§15.36)
+
+    func testHostSettingsBridgeValidatesMutationsAndSignalsChanges() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "remote-bridge-settings-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteBridgeSettings")))
+        let runtimes = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
+        let model = AppModel(
+            store: SessionStore(repository: InMemorySessionRepository()),
+            runtimeSelections: runtimes,
+            preferences: defaults,
+            restoresIndexOnLaunch: false)
+        let instructions = YardletInstructionsStore(directory: folder.appending(path: "instructions"), defaults: defaults)
+        instructions.text = "Prefer small diffs."
+        model.yardletInstructions = instructions
+        model.routingEvaluation = RoutingEvaluationStore(directory: folder.appending(path: "evaluation"), defaults: defaults)
+        model.lidSleepHelper = LidSleepHelper(backend: FakeLidSleepHelperBackend(status: .needsApproval))
+        model.tokenUsage = TokenUsageCenter(
+            directory: folder.appending(path: "usage"),
+            summary: TokenUsageSummary(days: [], groups: [:], updatedAt: Date()))
+
+        let bridge = AppModelRemoteBridge(model: model)
+        let signals = SignalRecorder()
+        bridge.setChangeHandler { signals.record($0) }
+
+        let initial = try await bridge.hostSettings().get()
+        XCTAssertNotNil(initial.values["follow_up_behavior"])
+        XCTAssertNotNil(initial.values["memory_saver"])
+        XCTAssertNil(initial.values["language"], "Client-local language is excluded from host Settings")
+        XCTAssertNil(initial.values["check_for_updates"], "Client-local update check is excluded from host Settings")
+        XCTAssertEqual(initial.instructions?.text, "Prefer small diffs.")
+        XCTAssertEqual(initial.instructions?.hasEvaluation, true)
+        XCTAssertEqual(initial.lidHelperStatus, "needsApproval")
+
+        // A client-local setting cannot be changed through setHostSetting.
+        let localRefusal = await bridge.setHostSetting(setting: "language", value: "ko", confirmed: true)
+        guard case let .failure(localError) = localRefusal else { return XCTFail("Expected client-local setting refusal") }
+        XCTAssertEqual(localError.code, .notAllowed)
+
+        // Settings with asksEveryTime require confirmed: true.
+        let unconfirmed = await bridge.setHostSetting(setting: "agent_browser_tools", value: "off", confirmed: false)
+        guard case let .failure(unconfirmedError) = unconfirmed else { return XCTFail("Expected unconfirmed refusal") }
+        XCTAssertEqual(unconfirmedError.code, .notAllowed)
+        let confirmed = try await bridge.setHostSetting(setting: "agent_browser_tools", value: "off", confirmed: true).get()
+        XCTAssertEqual(confirmed.values["agent_browser_tools"], "off")
+
+        // Turning off lid-closed sleep when the helper is not ready on the host is refused.
+        let lidRefusal = await bridge.setHostSetting(setting: "keep_working_with_lid_closed", value: "on", confirmed: true)
+        guard case let .failure(lidError) = lidRefusal else { return XCTFail("Expected lid helper refusal") }
+        XCTAssertEqual(lidError.code, .notAllowed)
+
+        // When the helper is ready on the host, the lid-closed setting can be turned on and off.
+        model.lidSleepHelper = LidSleepHelper(backend: FakeLidSleepHelperBackend(status: .ready))
+        let lidAllowed = try await bridge.setHostSetting(setting: "keep_working_with_lid_closed", value: "on", confirmed: true).get()
+        XCTAssertEqual(lidAllowed.values["keep_working_with_lid_closed"], "on")
+
+        // Ordinary host settings apply immediately and emit .hostSettings while watched.
+        await bridge.setWatchesHostSettings(true)
+        let followUp = try await bridge.setHostSetting(setting: "follow_up_behavior", value: "queue", confirmed: false).get()
+        XCTAssertEqual(followUp.values["follow_up_behavior"], "queue")
+        XCTAssertEqual(defaults.string(forKey: FollowUpMode.preferenceKey), "queue")
+        try await waitUntilAsync { signals.changes.contains(.hostSettings) }
+
+        // Instructions save updates the store and rejects oversized payloads.
+        let savedInstructions = try await bridge.saveHostInstructions(text: "Run focused tests first.").get()
+        XCTAssertEqual(savedInstructions.instructions?.text, "Run focused tests first.")
+        XCTAssertEqual(instructions.text, "Run focused tests first.")
+        let oversized = await bridge.saveHostInstructions(text: String(repeating: "x", count: 70_000))
+        guard case let .failure(oversizedError) = oversized else { return XCTFail("Expected oversized refusal") }
+        XCTAssertEqual(oversizedError.code, .tooLarge)
+
+        await bridge.setWatchesHostSettings(false)
+        await model.shutdown()
+    }
 }
 
 /// A browser host whose tabs answer DevTools as an idle page does: the layout `layout` names, a picture, and an empty

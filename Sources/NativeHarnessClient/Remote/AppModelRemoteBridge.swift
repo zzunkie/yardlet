@@ -56,6 +56,10 @@ final class AppModelRemoteBridge: RemoteBridge {
     var watchesSettings: Set<UUID> = []
     var watchesComposer: Set<UUID> = []
     var answeredComposer: [UUID: RemoteComposerState] = [:]
+    var watchesHostSettings = false
+    var trackingHostSettings = false
+    var hostSettingsObservers: [any NSObjectProtocol] = []
+    var answeredHostSettings: RemoteHostSettings?
     /// A task's browser tabs (§15.25), when this build has a browser engine.
     var resetOffers: [UUID: RemoteResetOffer] = [:]
     let terminals = RemoteTerminalBridge()
@@ -95,6 +99,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.browserTabs = browser.isAvailable
         snapshot.terminals = RemoteTerminalBridge.isAvailable
         snapshot.tabControls = browser.isAvailable
+        snapshot.hostSettings = true
         return snapshot
     }
 
@@ -125,6 +130,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.fileRewind = true
         snapshot.taskNotices = true
         snapshot.subtasks = true
+        snapshot.hostSettings = true
         let listed = Dictionary(model.sidebarSessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for index in snapshot.tasks.indices {
             guard let id = UUID(uuidString: snapshot.tasks[index].id), let session = listed[id] else { continue }

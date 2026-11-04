@@ -79,7 +79,16 @@ final class RemoteControlService {
 
 /// No helper keeps the computer awake.
 @MainActor
-final class LidSleepHelper {}
+final class LidSleepHelper {
+    enum Status: Equatable {
+        case unavailable
+        case off
+        case needsApproval
+        case ready
+    }
+
+    let status: Status = .unavailable
+}
 
 /// No memory pressure warnings here; the memory saver keeps its timed looks.
 enum MemoryPressureWatch {
