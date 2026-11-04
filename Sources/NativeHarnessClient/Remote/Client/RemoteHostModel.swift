@@ -120,7 +120,7 @@ final class RemoteHostModel: Identifiable {
     /// The tasks in the window's mirror that need the person (`TaskAttentionProjection`), updated for the tasks a
     /// snapshot or `tasksChanged` event touches so conversation and terminal events never recount the list.
     private(set) var attentionBadgeCount = 0
-    @ObservationIgnored private var attentionTaskIDs = Set<String>()
+    @ObservationIgnored private(set) var attentionTaskIDs = Set<String>()
     /// Whether this host's window is the key window.
     @ObservationIgnored var isWindowInFront = false
     @ObservationIgnored private let connector: RemoteHostConnection
@@ -209,6 +209,7 @@ final class RemoteHostModel: Identifiable {
         cache?.close()
         Task { await connector.stop() }
         failPending()
+        clearAttentionTasks()
         connection = .stopped
         files.removeAll()
     }
@@ -235,7 +236,10 @@ final class RemoteHostModel: Identifiable {
     private func handle(_ state: RemoteHostConnection.State) {
         switch state {
         case .idle, .connecting:
-            if !isConnected { connection = .connecting }
+            if !isConnected {
+                clearAttentionTasks()
+                connection = .connecting
+            }
         case let .connected(path, reply):
             failPending()
             closingReason = nil
@@ -249,14 +253,17 @@ final class RemoteHostModel: Identifiable {
         case let .waiting(retryAt, _):
             terminals.disconnected()
             failPending()
+            clearAttentionTasks()
             connection = .unreachable(retryAt: retryAt)
         case .revoked:
             terminals.disconnected()
             failPending()
+            clearAttentionTasks()
             connection = .removed
         case .stopped:
             terminals.disconnected()
             failPending()
+            clearAttentionTasks()
             connection = .stopped
         }
     }
@@ -314,7 +321,7 @@ final class RemoteHostModel: Identifiable {
     /// The list again, then each open conversation's latest page: what changed while away.
     private func resync() {
         request(.snapshot) { [weak self] response in
-            guard let self, response.ok else { return }
+            guard let self, isConnected, response.ok else { return }
             projects = response.projects ?? []
             tasks = (response.tasks ?? []).sorted { $0.lastActivityAt > $1.lastActivityAt }
             resetAttentionTasks(from: tasks)
@@ -389,7 +396,7 @@ final class RemoteHostModel: Identifiable {
         if !gone.isEmpty { next.removeAll { gone.contains($0.id) } }
         for task in changed {
             if let index = next.firstIndex(where: { $0.id == task.id }) { next[index] = task } else { next.append(task) }
-            if RemoteSidebarMirror.needsAttention(task) {
+            if isConnected, RemoteSidebarMirror.needsAttention(task) {
                 attentionTaskIDs.insert(task.id)
             } else if attentionTaskIDs.remove(task.id) != nil {
                 onWithdrawTaskNotification?(task.id)
@@ -397,11 +404,16 @@ final class RemoteHostModel: Identifiable {
         }
         next.sort { $0.lastActivityAt > $1.lastActivityAt }
         tasks = next
-        if attentionBadgeCount != attentionTaskIDs.count { attentionBadgeCount = attentionTaskIDs.count }
+        let count = isConnected ? attentionTaskIDs.count : 0
+        if attentionBadgeCount != count { attentionBadgeCount = count }
         if case let .task(id) = selection, gone.contains(id) { selection = .none }
     }
 
     private func resetAttentionTasks(from list: [RemoteTask]) {
+        guard isConnected else {
+            clearAttentionTasks()
+            return
+        }
         let previous = attentionTaskIDs
         var next = Set<String>()
         for task in list where RemoteSidebarMirror.needsAttention(task) {
@@ -410,6 +422,16 @@ final class RemoteHostModel: Identifiable {
         attentionTaskIDs = next
         if attentionBadgeCount != next.count { attentionBadgeCount = next.count }
         for id in previous.subtracting(next) { onWithdrawTaskNotification?(id) }
+    }
+
+    private func clearAttentionTasks() {
+        let withdrawn = Set(tasks.map(\.id)).union(attentionTaskIDs)
+        let hadAttention = !attentionTaskIDs.isEmpty || attentionBadgeCount != 0
+        attentionTaskIDs.removeAll()
+        if attentionBadgeCount != 0 { attentionBadgeCount = 0 }
+        if hadAttention {
+            for id in withdrawn { onWithdrawTaskNotification?(id) }
+        }
     }
 
     func task(_ id: String) -> RemoteTask? {
@@ -421,7 +443,6 @@ final class RemoteHostModel: Identifiable {
         guard !hasSnapshot else { return }
         projects = list.projects
         tasks = list.tasks
-        resetAttentionTasks(from: tasks)
         newTask = list.newTask
         followUp = list.followUp
     }

@@ -491,7 +491,37 @@ final class MenuBarMenuTests: XCTestCase {
         XCTAssertEqual(openedHostWindows, [paired.id])
         XCTAssertEqual(attention.bringForwardCount, 1)
 
-        // Closing the host window removes its tasks from the menu bar menu.
+        // Two hosts with the same display name ("Mac Studio") match their own NSWindow by host ID, not by title.
+        let secondStack = try await LoopbackStack(name: "Mac Studio", bridge: RemoteFixtureBridge(speed: 0.01))
+        defer { secondStack.stop() }
+        let secondTicket = await secondStack.server.openPairing()
+        let secondLink = try XCTUnwrap(RemoteSecurePairingURL(
+            macKey: secondStack.identity.noise.publicKey, secret: secondTicket.secret,
+            name: "Mac Studio", hosts: ["127.0.0.1:\(secondStack.port)"]).url)
+        let secondPaired = try await directory.pair(link: secondLink.absoluteString)
+        let windowOne = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 200),
+                                 styleMask: [.titled], backing: .buffered, defer: true)
+        windowOne.title = "Mac Studio"
+        let windowTwo = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 200),
+                                 styleMask: [.titled], backing: .buffered, defer: true)
+        windowTwo.title = "Mac Studio"
+        RemoteHostWindow.register(window: windowOne, forHostID: paired.id)
+        RemoteHostWindow.register(window: windowTwo, forHostID: secondPaired.id)
+        defer {
+            RemoteHostWindow.unregister(window: windowOne, forHostID: paired.id)
+            RemoteHostWindow.unregister(window: windowTwo, forHostID: secondPaired.id)
+        }
+        XCTAssertTrue(RemoteHostWindow.bringForward(hostID: paired.id) === windowOne)
+        XCTAssertTrue(RemoteHostWindow.bringForward(hostID: secondPaired.id) === windowTwo)
+
+        // Disconnecting a host removes its tasks from the menu bar menu even while its window stays open.
+        stack.stop()
+        try await waitUntil { !host.isConnected }
+        let afterDisconnect = model.menuBarMenu(now: now)
+        XCTAssertNil(afterDisconnect.sections.first { $0.kind == .unread })
+        XCTAssertEqual(afterDisconnect.sections.first { $0.kind == .running }?.rows.map(\.sessionID), [localWorking.id])
+
+        // Closing the host window keeps its tasks out of the menu bar menu.
         directory.close(paired.id)
         let afterClose = model.menuBarMenu(now: now)
         XCTAssertNil(afterClose.sections.first { $0.kind == .unread })

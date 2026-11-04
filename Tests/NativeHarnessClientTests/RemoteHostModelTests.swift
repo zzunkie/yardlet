@@ -586,6 +586,8 @@ final class RemoteHostModelTests: XCTestCase {
         let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
                                             hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"),
                                             cacheRoot: root, discovery: finder.discovery)
+        var withdrawnTaskIDs: [String] = []
+        directory.onWithdrawTaskNotification = { _, taskID in withdrawnTaskIDs.append(taskID) }
         let host = try await directory.pair(link: link.absoluteString)
         let idle = RemoteFixtureBridge.ID.idle
         func prompt(_ conversation: RemoteConversationModel) -> String? {
@@ -628,12 +630,15 @@ final class RemoteHostModelTests: XCTestCase {
         page.items[user].text = "Find the footer links (cached)"
         try JSONEncoder().encode(page).write(to: pageFile)
 
-        // The host can't be reached where it was: the window shows what it last showed, at once.
+        // The host can't be reached where it was: the window shows what it last showed, at once, without
+        // counting cached tasks toward the Dock badge before connecting.
         stack.listener.stop()
         let second = try XCTUnwrap(directory.model(for: host.id))
         try await waitUntil { second.task(idle)?.title == "Fix the footer links (cached)" }
         XCTAssertFalse(second.hasSnapshot)
         XCTAssertFalse(second.isConnected)
+        XCTAssertEqual(second.attentionBadgeCount, 0)
+        XCTAssertEqual(directory.attentionBadgeCount, 0)
         second.select(.task(idle))
         let shown = try XCTUnwrap(second.conversations[idle])
         XCTAssertTrue(shown.isLoaded)
@@ -650,8 +655,8 @@ final class RemoteHostModelTests: XCTestCase {
         XCTAssertNil(cached.details[line.id], "Nothing kept for a read the host never answered")
         second.select(.task(idle))
 
-        // Found on the network on another port: the host's own list and page replace them, and the found
-        // address is not saved as one the host named.
+        // Found on the network on another port: the host's own list and page replace them, the badge counts
+        // the live tasks, and the found address is not saved as one the host named.
         let moved = RemoteSecureListener(server: stack.server, staticKey: stack.identity.noise, port: 0, advertisement: nil,
                                          loopbackOnly: true)
         moved.start()
@@ -660,6 +665,9 @@ final class RemoteHostModelTests: XCTestCase {
         finder.report([address])
         try await waitUntil { second.hasSnapshot && second.task(idle)?.title == "Fix the footer links" }
         XCTAssertEqual(second.connection, .connected(.direct(address)))
+        let connectedBadgeCount = second.attentionBadgeCount
+        XCTAssertGreaterThan(connectedBadgeCount, 0)
+        XCTAssertEqual(directory.attentionBadgeCount, connectedBadgeCount)
         try await waitUntil { prompt(shown) == "Find the footer links that 404" }
         second.select(.task(approval))
         let live = try XCTUnwrap(second.conversations[approval])
@@ -667,6 +675,36 @@ final class RemoteHostModelTests: XCTestCase {
         second.loadDetail(approval, itemID: line.id)
         try await waitUntil { live.details[line.id]?.output != nil || live.details[line.id]?.diffs.isEmpty == false }
         XCTAssertFalse(directory.host(host.id)?.direct.contains(address) ?? true)
+
+        // When the host disconnects (unreachable), its tasks stop counting and its notifications are withdrawn;
+        // reconnecting and resyncing counts them again.
+        withdrawnTaskIDs.removeAll()
+        moved.stop()
+        try await waitUntil {
+            if case .unreachable = second.connection { return true }
+            return false
+        }
+        XCTAssertEqual(second.attentionBadgeCount, 0)
+        XCTAssertEqual(directory.attentionBadgeCount, 0)
+        XCTAssertTrue(withdrawnTaskIDs.contains(approval))
+
+        let reconnected = RemoteSecureListener(server: stack.server, staticKey: stack.identity.noise, port: 0,
+                                               advertisement: nil, loopbackOnly: true)
+        reconnected.start()
+        defer { reconnected.stop() }
+        let reconnectedAddress = "127.0.0.1:\(try await RemoteSecureTests.waitForPort(reconnected))"
+        finder.report([reconnectedAddress])
+        try await waitUntil { second.isConnected && second.attentionBadgeCount == connectedBadgeCount }
+        XCTAssertEqual(directory.attentionBadgeCount, connectedBadgeCount)
+
+        // When the host removes this Mac, its tasks are cleared and its notifications are withdrawn.
+        withdrawnTaskIDs.removeAll()
+        let deviceID = try XCTUnwrap(directory.host(host.id)?.deviceID)
+        try await stack.server.revoke(deviceID)
+        try await waitUntil { second.connection == .removed }
+        XCTAssertEqual(second.attentionBadgeCount, 0)
+        XCTAssertEqual(directory.attentionBadgeCount, 0)
+        XCTAssertTrue(withdrawnTaskIDs.contains(approval))
 
         // Removing the host removes what it showed, and the folder of all hosts with its last one.
         await directory.forget(host.id)

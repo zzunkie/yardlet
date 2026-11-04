@@ -76,9 +76,14 @@ final class RemoteHostDirectory {
         return hosts.compactMap { models[$0.id] }
     }
 
-    /// The tasks that need the person across the host windows that are open now.
+    /// The models of the host windows that are open and connected now, in `hosts` order.
+    var connectedModels: [RemoteHostModel] {
+        openModels.filter(\.isConnected)
+    }
+
+    /// The tasks that need the person across the host windows that are open and connected now.
     var attentionBadgeCount: Int {
-        openModels.reduce(0) { $0 + $1.attentionBadgeCount }
+        connectedModels.reduce(0) { $0 + $1.attentionBadgeCount }
     }
 
     /// The model of a host's window, connecting from now on; nil for a host no longer saved.

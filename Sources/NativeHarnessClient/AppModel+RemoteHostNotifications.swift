@@ -27,26 +27,27 @@ extension AppModel {
         remoteHosts?.attentionBadgeCount ?? 0
     }
 
-    /// Open host windows' tasks for the menu bar menu (`MenuBarMenuProjection`).
+    /// Open, connected host windows' tasks for the menu bar menu (`MenuBarMenuProjection`).
     func remoteMenuBarHostTasks() -> [MenuBarMenuProjection.RemoteHostTasks] {
         guard let remoteHosts else { return [] }
-        return remoteHosts.openModels.map { host in
-            MenuBarMenuProjection.RemoteHostTasks(
+        return remoteHosts.connectedModels.compactMap { host in
+            guard !host.attentionTaskIDs.isEmpty else { return nil }
+            let mirror = host.sidebar
+            return MenuBarMenuProjection.RemoteHostTasks(
                 hostID: host.id,
                 hostName: host.name,
-                sessions: host.sidebar.sessions,
-                details: host.sidebar.details,
-                place: { host.sidebar.place(of: $0) }
+                sessions: mirror.sessions,
+                details: mirror.details,
+                place: { mirror.place(of: $0) }
             )
         }
     }
 
     /// Handles an `.attention` event from an open host window.
     func handleRemoteHostAttention(host: RemoteHostModel, event: RemoteEvent) {
-        if let withdrawn = RemoteAttentionNotice.withdrawn(hostID: host.id, event: event) {
-            systemNotificationCenter.removeNotifications(identifiers: [withdrawn])
+        if RemoteAttentionNotice.withdrawn(hostID: host.id, event: event) != nil {
             if let taskID = event.taskId {
-                dockAttention?.forgetApprovals(in: Self.remoteApprovalSessionID(hostID: host.id, taskID: taskID))
+                withdrawRemoteTaskNotification(hostID: host.id, taskID: taskID)
             }
             return
         }
@@ -57,38 +58,80 @@ extension AppModel {
                 in: Self.remoteApprovalSessionID(hostID: host.id, taskID: taskID)
             )
         }
-        // The task shown in the window in front needs no banner.
-        if isRemoteTaskShownInFront(host: host, taskID: taskID) { return }
+        // The task shown in the window in front needs no banner, and clears any earlier one for it.
+        if isRemoteTaskShownInFront(host: host, taskID: taskID) {
+            withdrawRemoteTaskNotification(hostID: host.id, taskID: taskID, forgetApprovals: event.state != .waiting)
+            return
+        }
         guard let notice = RemoteAttentionNotice.notification(
             hostID: host.id,
             hostName: host.name,
             event: event,
             offersAllowOnce: host.offersAllowOnce(event)
         ) else { return }
-        Task { [weak self, weak host] in
+        let key = Self.remoteNotificationKey(hostID: host.id, taskID: taskID)
+        remoteNotificationTasks.removeValue(forKey: key)?.cancel()
+        let generation = advanceRemoteNotificationGeneration(hostID: host.id, taskID: taskID)
+        remoteNotificationTasks[key] = Task { [weak self, weak host] in
             guard let self else { return }
+            defer {
+                if self.remoteNotificationGenerations[key] == generation {
+                    self.remoteNotificationTasks[key] = nil
+                }
+            }
             guard (await self.systemNotificationCenter.authorization()).isDeliverable else { return }
-            guard let host,
-                  self.remoteHosts?.openHostIDs.contains(host.id) == true,
-                  !self.isRemoteTaskShownInFront(host: host, taskID: taskID) else { return }
-            // An approval answered or an unread turn read while authorization was checked is not announced.
-            if let current = host.task(taskID), !RemoteSidebarMirror.needsAttention(current) { return }
+            guard !Task.isCancelled,
+                  self.shouldKeepRemoteTaskNotification(host: host, taskID: taskID, generation: generation) else { return }
             await self.systemNotificationCenter.post(notice)
+            if Task.isCancelled || !self.shouldKeepRemoteTaskNotification(host: host, taskID: taskID, generation: generation),
+               self.remoteNotificationTasks[key] == nil {
+                self.systemNotificationCenter.removeNotifications(identifiers: [notice.identifier])
+            }
         }
     }
 
     /// Withdraws a remote task's notification once its wait is answered, its unread turn is read, or
     /// the task leaves the host's list.
-    func withdrawRemoteTaskNotification(hostID: String, taskID: String) {
+    func withdrawRemoteTaskNotification(hostID: String, taskID: String, forgetApprovals: Bool = true) {
+        let key = Self.remoteNotificationKey(hostID: hostID, taskID: taskID)
+        remoteNotificationTasks.removeValue(forKey: key)?.cancel()
+        advanceRemoteNotificationGeneration(hostID: hostID, taskID: taskID)
         let identifier = RemoteAttentionNotice.identifier(hostID: hostID, taskID: taskID)
         systemNotificationCenter.removeNotifications(identifiers: [identifier])
-        dockAttention?.forgetApprovals(in: Self.remoteApprovalSessionID(hostID: hostID, taskID: taskID))
+        if forgetApprovals {
+            dockAttention?.forgetApprovals(in: Self.remoteApprovalSessionID(hostID: hostID, taskID: taskID))
+        }
+    }
+
+    @discardableResult
+    private func advanceRemoteNotificationGeneration(hostID: String, taskID: String) -> UInt64 {
+        let key = Self.remoteNotificationKey(hostID: hostID, taskID: taskID)
+        let next = (remoteNotificationGenerations[key] ?? 0) &+ 1
+        remoteNotificationGenerations[key] = next
+        return next
+    }
+
+    private func shouldKeepRemoteTaskNotification(host: RemoteHostModel?, taskID: String, generation: UInt64) -> Bool {
+        guard let host,
+              remoteNotificationGenerations[Self.remoteNotificationKey(hostID: host.id, taskID: taskID)] == generation,
+              remoteHosts?.openHostIDs.contains(host.id) == true,
+              host.isConnected,
+              !isRemoteTaskShownInFront(host: host, taskID: taskID),
+              let current = host.task(taskID),
+              RemoteSidebarMirror.needsAttention(current) else {
+            return false
+        }
+        return true
     }
 
     private func isRemoteTaskShownInFront(host: RemoteHostModel, taskID: String) -> Bool {
         applicationAttention?.isActive == true
             && host.isWindowInFront
             && host.selection == .task(taskID)
+    }
+
+    private static func remoteNotificationKey(hostID: String, taskID: String) -> String {
+        "\(hostID)/\(taskID)"
     }
 
     private static func remoteApprovalSessionID(hostID: String, taskID: String) -> UUID {

@@ -652,23 +652,46 @@ final class NotificationRoutingTests: XCTestCase {
 
         // The same request does not bounce a second time.
         directory.onAttention?(host, waitingEvent)
+        let reposted = try await waitForPost(in: center, count: 2)
+        XCTAssertEqual(reposted.identifier, posted.identifier)
         XCTAssertEqual(attention.attentionRequests, 1)
 
-        // When the task is shown in the window in front, no banner is posted.
+        // When the task is shown in the window in front, no banner is posted and any earlier banner for it is withdrawn.
         attention.isActive = true
         host.isWindowInFront = true
         host.select(.task(ID.approval))
         let postedCountBeforeFront = center.posted.count
+        let removedCountBeforeFront = center.removed.count
         directory.onAttention?(host, waitingEvent)
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertEqual(center.posted.count, postedCountBeforeFront)
+        XCTAssertEqual(center.removed.dropFirst(removedCountBeforeFront), [posted.identifier])
+
+        // A task deleted on the host before authorization completes is not announced.
+        host.isWindowInFront = false
+        var deletedTaskEvent = waitingEvent
+        deletedTaskEvent.taskId = UUID().uuidString
+        directory.onAttention?(host, deletedTaskEvent)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(center.posted.count, postedCountBeforeFront)
+
+        // A withdraw that runs while post() is awaiting removes the notice after post() completes.
+        center.onPost = { [weak model, weak host] _ in
+            guard let host else { return }
+            model?.withdrawRemoteTaskNotification(hostID: host.id, taskID: ID.approval)
+        }
+        directory.onAttention?(host, waitingEvent)
+        _ = try await waitForPost(in: center, count: postedCountBeforeFront + 1)
+        try await waitUntil { center.events.last == "remove:\(posted.identifier)" }
+        center.onPost = nil
 
         // When system notifications are denied on this Mac, no remote notification is posted.
         center.authorizationStatus = .denied
         host.isWindowInFront = false
+        let postedCountBeforeDenied = center.posted.count
         directory.onAttention?(host, waitingEvent)
         try await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(center.posted.count, postedCountBeforeFront)
+        XCTAssertEqual(center.posted.count, postedCountBeforeDenied)
         center.authorizationStatus = .authorized
 
         // Answering via "Allow once" from the notification answers on the host, withdraws the notification,
@@ -813,8 +836,10 @@ final class NotificationRoutingTests: XCTestCase {
 private final class RecordingCenter: SystemNotificationCenter {
     var authorizationStatus: SystemNotificationAuthorization = .authorized
     var badgesAllowed = false
+    var onPost: (@MainActor (SystemNotification) async -> Void)?
     private(set) var posted: [SystemNotification] = []
     private(set) var removed: [String] = []
+    private(set) var events: [String] = []
 
     func authorization() async -> SystemNotificationAuthorization { authorizationStatus }
     func requestAuthorization() async -> Bool { true }
@@ -825,10 +850,13 @@ private final class RecordingCenter: SystemNotificationCenter {
 
     func post(_ notification: SystemNotification) async {
         posted.append(notification)
+        events.append("post:\(notification.identifier)")
+        await onPost?(notification)
     }
 
     func removeNotifications(identifiers: [String]) {
         removed += identifiers
+        events += identifiers.map { "remove:\($0)" }
     }
 
     func allowsBadges() async -> Bool { badgesAllowed }

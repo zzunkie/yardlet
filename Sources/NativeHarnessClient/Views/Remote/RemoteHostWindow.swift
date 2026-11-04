@@ -49,6 +49,7 @@ struct RemoteHostWindow: View {
                 model?.closeSettings()
             }
         }))
+        .background(RemoteHostWindowTag(hostID: hostID))
         .task(id: hostID) {
             model = hostID.flatMap(directory.model(for:))
         }
@@ -56,16 +57,87 @@ struct RemoteHostWindow: View {
         .onDisappear { if let hostID { directory.close(hostID) } }
     }
 
-    /// Brings the host's open window forward, out of the Dock if it was minimized.
     @MainActor
-    static func bringForward(hostName: String?) {
-        let candidates = NSApp.windows.filter {
-            $0.identifier?.rawValue.hasPrefix(Self.sceneID) == true && $0.canBecomeMain
+    private static let windowsByHostID = NSMapTable<NSString, NSWindow>.strongToWeakObjects()
+
+    @MainActor
+    static func register(window: NSWindow?, forHostID hostID: String?) {
+        guard let hostID else { return }
+        if let window {
+            windowsByHostID.setObject(window, forKey: hostID as NSString)
+        } else {
+            windowsByHostID.removeObject(forKey: hostID as NSString)
         }
-        guard let window = candidates.first(where: { $0.title == hostName })
-            ?? (candidates.count == 1 ? candidates.first : nil) else { return }
+    }
+
+    @MainActor
+    static func unregister(window: NSWindow?, forHostID hostID: String?) {
+        guard let hostID else { return }
+        if window == nil || windowsByHostID.object(forKey: hostID as NSString) === window {
+            windowsByHostID.removeObject(forKey: hostID as NSString)
+        }
+    }
+
+    static func windowIdentifier(hostID: String) -> NSUserInterfaceItemIdentifier {
+        NSUserInterfaceItemIdentifier("\(Self.sceneID).\(hostID)")
+    }
+
+    /// Brings the host's open window forward by its host ID, out of the Dock if it was minimized.
+    @MainActor
+    @discardableResult
+    static func bringForward(hostID: String?) -> NSWindow? {
+        guard let hostID else { return nil }
+        let window = windowsByHostID.object(forKey: hostID as NSString)
+            ?? NSApp.windows.first {
+                $0.identifier == windowIdentifier(hostID: hostID) && $0.canBecomeMain
+            }
+        guard let window else { return nil }
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
+        return window
+    }
+}
+
+/// Associates a `RemoteHostWindow` with its `NSWindow` by `hostID`, so two hosts with the same display
+/// name still raise their own window when chosen from the menu bar or a notification.
+private struct RemoteHostWindowTag: NSViewRepresentable {
+    let hostID: String?
+
+    func makeNSView(context: Context) -> TagView {
+        let view = TagView()
+        view.hostID = hostID
+        return view
+    }
+
+    func updateNSView(_ nsView: TagView, context: Context) {
+        nsView.hostID = hostID
+    }
+
+    final class TagView: NSView {
+        var hostID: String? {
+            didSet {
+                if oldValue != hostID, let oldValue {
+                    RemoteHostWindow.unregister(window: window, forHostID: oldValue)
+                }
+                if let hostID, let window {
+                    RemoteHostWindow.register(window: window, forHostID: hostID)
+                }
+            }
+        }
+
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            super.viewWillMove(toWindow: newWindow)
+            if newWindow == nil, let hostID, let window {
+                RemoteHostWindow.unregister(window: window, forHostID: hostID)
+            }
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let hostID, let window {
+                RemoteHostWindow.register(window: window, forHostID: hostID)
+            }
+        }
     }
 }
 
