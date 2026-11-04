@@ -96,3 +96,14 @@ enum AccountChoiceProjection {
         }
     }
 }
+
+/// The account chip's words, projected from the host's current saved readings without starting a check.
+struct ProviderConnectionDisplay {
+    let title: String
+    let accessibilityTitle: String
+
+    init(choice: AccountChoice?, automatic: Bool = false) {
+        title = automatic ? L10n.string("Automatic") : choice?.composerTitle ?? L10n.string("Account unavailable")
+        accessibilityTitle = automatic ? L10n.string("Automatic") : choice?.title ?? L10n.string("Account unavailable")
+    }
+}

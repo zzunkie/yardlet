@@ -69,17 +69,6 @@ struct ProviderConnectionPicker: View {
     }
 }
 
-/// The account chip's words, projected from the host's current saved readings without starting a check.
-struct ProviderConnectionDisplay {
-    let title: String
-    let accessibilityTitle: String
-
-    init(choice: AccountChoice?, automatic: Bool = false) {
-        title = automatic ? L10n.string("Automatic") : choice?.composerTitle ?? L10n.string("Account unavailable")
-        accessibilityTitle = automatic ? L10n.string("Automatic") : choice?.title ?? L10n.string("Account unavailable")
-    }
-}
-
 /// The account chip shared by local and remote composers; its menu supplies only the actions available there.
 struct ProviderConnectionControl: View {
     let title: String
