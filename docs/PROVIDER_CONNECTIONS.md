@@ -420,6 +420,12 @@ reads as "Personal" (`AccountIdentityProjection.organizationTitle`). In a narrow
 the address shortens in the middle. The plan line no longer repeats the organization ("Claude Team plan · Example Team"
 → "Claude Team plan"). The sidebar account menu's "address (organization)" is unchanged.
 
+The address and its organization come before the limits beside them (`AccountRowColumns`): the limits keep the width
+they need while that leaves the address its whole width, and otherwise a limit name longer than six ems, such as
+Antigravity CLI's "Claude and GPT · 7 day limit", shortens to as little as four and a half
+(`AccountLimitWindowList.nameShortening`). A window's own name ("5 hour limit", "Weekly limit") is never cut, so a Claude
+Code or Codex row is drawn as before. The limits popover keeps the full names.
+
 ### Removing an account
 
 Each account row in Settings › Harness Accounts has a menu, opened with a right click or with the "…" button under the row's

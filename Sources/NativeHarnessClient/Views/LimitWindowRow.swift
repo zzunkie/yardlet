@@ -40,10 +40,10 @@ struct LimitWindowRow: View {
     }
 
     var body: some View {
+        // As wide as the grid's label column, which is the widest name's unless the grid shortens it.
         Text(name)
             .foregroundStyle(.secondary)
             .lineLimit(1)
-            .fixedSize()
             .limitWindowCell(.label, row: row)
         LimitWindowBar(percent: remainingPercent, fontSize: fontSize, tint: isNearlySpent ? .orange : nil)
             .limitWindowCell(.bar, row: row)
@@ -128,6 +128,15 @@ struct LimitWindowGrid: Layout {
     var barMinimum: CGFloat = 72
     var columnSpacing: CGFloat = 16
     var rowSpacing: CGFloat = 4
+    /// Set, the grid is never wider than it is given no width, and given less, a widest label longer
+    /// than `longerThan` shortens first, to no less than `to`; given less still, the grid keeps that
+    /// least width.
+    var labelShortening: LabelShortening? = nil
+
+    struct LabelShortening {
+        var longerThan: CGFloat
+        var to: CGFloat
+    }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         arrange(width: proposal.width, subviews: subviews).size
@@ -145,10 +154,19 @@ struct LimitWindowGrid: Layout {
         func widest(_ column: Column) -> CGFloat {
             zip(subviews, columns).filter { $0.1 == column }.map { $0.0.sizeThatFits(.unspecified).width }.max() ?? 0
         }
-        let labelWidth = widest(.label), rateValueWidth = widest(.rateValue)
-        let width = proposed ?? max(labelWidth + columnSpacing + max(widest(.value),
-                                                                     barMinimum + columnSpacing + rateValueWidth),
-                                    widest(.fullRow))
+        let widestLabel = widest(.label), rateValueWidth = widest(.rateValue)
+        let valueWidth = widest(.value), fullRowWidth = widest(.fullRow)
+        func gridWidth(labels: CGFloat) -> CGFloat {
+            max(labels + columnSpacing + max(valueWidth, barMinimum + columnSpacing + rateValueWidth), fullRowWidth)
+        }
+        let fitting = gridWidth(labels: widestLabel)
+        var labelWidth = widestLabel
+        var width = proposed ?? fitting
+        if let labelShortening {
+            let shortest = widestLabel > labelShortening.longerThan ? min(widestLabel, labelShortening.to) : widestLabel
+            width = min(max(width, gridWidth(labels: shortest)), fitting)
+            labelWidth = max(shortest, widestLabel - (fitting - width))
+        }
         let wide = width >= wideWidth
         let rest = max(0, width - labelWidth - columnSpacing)
         let valueX = labelWidth + columnSpacing
@@ -213,9 +231,14 @@ struct AccountLimitWindowList: View {
     var fontSize: CGFloat = 11
     var rowSpacing: CGFloat = 4
 
-    init(metrics: [AccountUsageMetric], reset: Reset = .time, fontSize: CGFloat = 11, rowSpacing: CGFloat = 4) {
+    /// Whether long names shorten when the list is given less than its width (`nameShortening`).
+    var shortensLongNames = false
+
+    init(metrics: [AccountUsageMetric], reset: Reset = .time, fontSize: CGFloat = 11, rowSpacing: CGFloat = 4,
+         shortensLongNames: Bool = false) {
         self.init(windows: metrics.map { (AccountLimitWindow(metric: $0), $0.detail) }, reset: reset,
                   fontSize: fontSize, rowSpacing: rowSpacing)
+        self.shortensLongNames = shortensLongNames
     }
 
     init(windows: [AccountLimitWindow], reset: Reset = .time, fontSize: CGFloat = 11, rowSpacing: CGFloat = 4) {
@@ -232,7 +255,8 @@ struct AccountLimitWindowList: View {
     }
 
     var body: some View {
-        LimitWindowGrid(barMinimum: Self.barMinimum(fontSize: fontSize), columnSpacing: 10, rowSpacing: rowSpacing) {
+        LimitWindowGrid(barMinimum: Self.barMinimum(fontSize: fontSize), columnSpacing: 10, rowSpacing: rowSpacing,
+                        labelShortening: shortensLongNames ? Self.nameShortening(fontSize: fontSize) : nil) {
             ForEach(Array(windows.enumerated()), id: \.offset) { index, entry in
                 LimitWindowRow(entry.window, value: entry.value, reset: resetText(entry.window.resetsAt), row: index,
                                fontSize: fontSize)
@@ -248,6 +272,13 @@ struct AccountLimitWindowList: View {
             .font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .semibold)
         ]).width
         return (glyph * 12).rounded(.up)
+    }
+
+    /// Given less than its width, a name longer than six ems (a model group's window, "Claude and GPT ·
+    /// 7 day limit") shortens to four and a half; a window's own name ("5 hour limit", "Weekly limit")
+    /// is never cut.
+    static func nameShortening(fontSize: CGFloat) -> LimitWindowGrid.LabelShortening {
+        LimitWindowGrid.LabelShortening(longerThan: fontSize * 6, to: fontSize * 4.5)
     }
 
     private func resetText(_ date: Date?) -> String? {

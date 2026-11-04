@@ -386,7 +386,7 @@ struct AccountRow: View {
     var onSignOut: [DefaultLoginAction: () -> Void] = [:]
 
     var body: some View {
-        HStack(spacing: 12) {
+        AccountRowColumns {
             identityButton
             // The row's menu is also on a button, as Settings' other account rows offer theirs. It sits
             // under the limits or status, so it takes no width from the account's name.
@@ -465,15 +465,18 @@ struct AccountRow: View {
                 VStack(alignment: .leading, spacing: 3) {
                     AccountTitleLine(title: title, organization: organization, weight: .medium)
                     Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
-                    if let freshness { AccountFreshnessLine(freshness: freshness) }
+                        .accountDetailLine()
+                    if let freshness { AccountFreshnessLine(freshness: freshness).accountDetailLine() }
                     if isExcludedFromAutomaticAssignment {
                         Text(L10n.string("Excluded from automatic assignment"))
                             .font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1)
+                            .accountDetailLine()
                     }
                     if let taskMoveLine {
                         Text(taskMoveLine).font(.system(size: 10.5))
                             .foregroundStyle(taskMove?.failure == nil ? Color.secondary : Color.orange)
                             .fixedSize(horizontal: false, vertical: true)
+                            .accountDetailLine()
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.contentShape(Rectangle())
@@ -512,12 +515,13 @@ private struct AccountGroupHeader: View {
     private var organization: String? { group.choices.lazy.compactMap(\.organizationTitle).first }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        AccountRowColumns(alignsTop: true) {
             VStack(alignment: .leading, spacing: 3) {
                 AccountTitleLine(title: group.identity.displayLabel, organization: organization, weight: .semibold)
                 Text(AccountListProjection.groupLine(group)).font(.system(size: 11)).foregroundStyle(.secondary)
                     .lineLimit(1)
-                AccountFreshnessLine(freshness: freshness)
+                    .accountDetailLine()
+                AccountFreshnessLine(freshness: freshness).accountDetailLine()
             }.frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(group.identity.displayLabel + (organization.map { ", " + $0 } ?? "") + ", "
@@ -535,6 +539,60 @@ private struct AccountGroupHeader: View {
             }
         }
         .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 4)
+    }
+}
+
+/// An account's row or block header: the account, then its limits or status, then any button. The
+/// limits keep the width they need while that leaves the account room for its whole address;
+/// otherwise their long names shorten (`AccountLimitWindowList.nameShortening`) as far as the address
+/// needs and they can go. The account's other lines take whatever width the column has.
+private struct AccountRowColumns: Layout {
+    var alignsTop = false
+    var spacing: CGFloat = 12
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let frames = arrange(width: proposal.width, subviews: subviews)
+        return CGSize(width: proposal.width ?? frames.map(\.maxX).max() ?? 0, height: frames.map(\.maxY).max() ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (subview, frame) in zip(subviews, arrange(width: bounds.width, subviews: subviews)) {
+            subview.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                          proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    /// The first subview is the account, whose own width is its address's (`accountDetailLine`); the
+    /// next, the limits or status, gives way; any after it (a button) keep their width.
+    private func arrange(width proposed: CGFloat?, subviews: Subviews) -> [CGRect] {
+        guard let account = subviews.first else { return [] }
+        let others = subviews.dropFirst()
+        let own = others.map { $0.sizeThatFits(.unspecified).width }
+        let least = others.enumerated().map { index, subview in
+            index == 0 ? subview.sizeThatFits(ProposedViewSize(width: 0, height: nil)).width : own[index]
+        }
+        let gaps = spacing * CGFloat(others.count)
+        let address = account.sizeThatFits(.unspecified).width
+        let width = proposed ?? address + gaps + own.reduce(0, +)
+        let room = width - gaps - own.reduce(0, +)
+        let accountWidth = max(room, min(address, width - gaps - least.reduce(0, +)))
+        var widths = [accountWidth] + own
+        if widths.count > 1 { widths[1] = max(least[0], own[0] - (accountWidth - room)) }
+        let heights = zip(subviews, widths).map { $0.sizeThatFits(ProposedViewSize(width: $1, height: nil)).height }
+        let height = heights.max() ?? 0
+        var x: CGFloat = 0
+        return zip(widths, heights).map { cellWidth, cellHeight in
+            defer { x += cellWidth + spacing }
+            return CGRect(x: x, y: alignsTop ? 0 : (height - cellHeight) / 2, width: cellWidth, height: cellHeight)
+        }
+    }
+}
+
+private extension View {
+    /// A line under an account's address (its connection, plan or freshness): as wide as the column,
+    /// but no part of the column's own width, which is the address's (`AccountRowColumns`).
+    func accountDetailLine() -> some View {
+        frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -642,15 +700,17 @@ struct AccountUsageBlockView: View {
             }
             Button { showsAllLimits = true } label: {
                 HStack(spacing: 10) {
-                    AccountLimitWindowList(metrics: Array(block.metrics.prefix(2)), reset: .time)
+                    AccountLimitWindowList(metrics: Array(block.metrics.prefix(2)), reset: .time,
+                                           shortensLongNames: true)
                     VStack(spacing: 5) {
                         Image(systemName: "chevron.down")
                         if block.metrics.count > 2 {
                             Text("+\(block.metrics.count - 2)").monospacedDigit()
                         }
-                    }.font(.caption2).foregroundStyle(.secondary)
+                    }.font(.caption2).foregroundStyle(.secondary).fixedSize()
                 }
-                .fixedSize()
+                // As wide as its limits need, or narrower where the account's address needs the room.
+                .fixedSize(horizontal: false, vertical: true)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)

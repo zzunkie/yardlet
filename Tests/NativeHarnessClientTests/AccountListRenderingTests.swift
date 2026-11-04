@@ -443,24 +443,31 @@ import XCTest
             canLogin: false, canLogout: true)
     }
 
-    /// The confirmation an account list's and a limit card's "Use a reset" opens, before the person
-    /// confirms, after a reset was used, and after a use that got no answer.
     /// Settings › Harness Accounts with Antigravity CLI's signed-in email (`AGY_CLI_CDE_AUTH_ACTION=check`)
-    /// and plan limits (`agy --print /usage --output-format json`): a row naming the email and each
-    /// model group's weekly limit.
+    /// and plan limits (`agy --print /usage --output-format json`) among the other harnesses' accounts: a row
+    /// naming the email and each model group's weekly limit, whose long names shorten so the address stays
+    /// whole, beside rows with short limit names and a long address; then Antigravity CLI signed in with a
+    /// long address, which the names give way to as far as they can.
     func testAntigravityPlanLimitsRenderInSettingsAccounts() async throws {
         let directory = try WindowlessRender.directory("account-list-qa")
-        let (_, _) = try fixture()
-        let store = ProviderConnectionStore()
+        let (store, _) = try fixture()
+        let root = try XCTUnwrap(roots.last)
+        let platformHome = root.appending(path: "platform")
+        try FileManager.default.createDirectory(at: platformHome, withIntermediateDirectories: true)
+        let platform = ProviderConnection(id: "platform", name: "Platform", harness: .claudeCode, providerID: nil,
+            homePath: platformHome.path, credentialSelector: nil)
+        try store.save(platform)
+        store.publish(try claude("jordan.lee.platform-infrastructure@example.test", short: 30, weekly: 55, at: Date()),
+            for: platform)
         let refill = ISO8601DateFormatter().string(from: Date().addingTimeInterval(19 * 3_600))
         let usageJSON = #"{"status":"SUCCESS","num_turns":0,"command":{"data":{"groups":[{"name":"Gemini Models","buckets":[{"id":"gemini-weekly","window":"weekly","remaining_fraction":0.75,"reset_time":"\#(refill)"}]},{"name":"Claude and GPT models","buckets":[{"id":"3p-weekly","window":"weekly","remaining_fraction":1,"reset_time":"\#(refill)"}]}]}}}"#
         // Settings lists the harnesses set up on this Mac.
-        let agy = try XCTUnwrap(roots.last).appending(path: "bin/agy")
+        let agy = root.appending(path: "bin/agy")
         try FileManager.default.createDirectory(at: agy.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("""
         #!/bin/sh
         if [ "${AGY_CLI_CDE_AUTH_ACTION:-}" = "check" ] && [ "$#" -eq 0 ]; then
-          echo "Already authenticated as owner@example.test."
+          echo "Already authenticated as owner@example.com."
           exit 0
         fi
         if [ "$*" = "--print /usage --output-format json" ]; then
@@ -475,26 +482,37 @@ import XCTest
         let runtime = RuntimeSelectionStore(defaults: SuggestionVolatileDefaults(), discoversRuntimes: false,
                                             loadsPersistedSelections: false)
         runtime.select(agy, for: .antigravityCLI)
+        store.usesFixtureSnapshots = false
         await store.check(defaultsOf: [.antigravityCLI], savedOf: [], runtimeSelections: runtime)
-        let choice = store.choice(for: .antigravityCLI, connection: nil)
-        XCTAssertEqual(choice.title, "owner@example.test")
-        XCTAssertEqual(AccountListProjection.accountLine(choice), HarnessKind.antigravityCLI.displayName)
-        XCTAssertEqual(choice.snapshot?.usage.count, 2)
         store.usesFixtureSnapshots = true
-        let size = NSSize(width: 629, height: 260)
-        for capture in try WindowlessRender.hostedInBothAppearances("antigravity-limits", in: directory, size: size, content: { appearance in
-            AccountList(mode: .manage, store: store, runtimeSelections: runtime, onChoose: { _ in }, onConnect: { _ in },
-                        onAdd: { _ in }, harnessUsage: AccountHarnessScope.Usage(withTasks: [.antigravityCLI],
-                                                                               chosenForNewTask: .antigravityCLI))
-                .padding(.horizontal, 16).padding(.top, 16)
-                .frame(width: size.width, height: size.height, alignment: .top)
-                .background(ParityTheme.canvas)
-                .environment(\.colorScheme, appearance.colorScheme)
-        }) {
-            XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 4, from: 4, background: (1, 1)))
+        let choice = store.choice(for: .antigravityCLI, connection: nil)
+        XCTAssertEqual(choice.title, "owner@example.com")
+        XCTAssertEqual(AccountListProjection.accountLine(choice), HarnessKind.antigravityCLI.displayName)
+        let snapshot = try XCTUnwrap(choice.snapshot)
+        XCTAssertEqual(snapshot.usage.count, 2)
+        let size = NSSize(width: 629, height: 1_500)
+        func render(_ name: String) throws {
+            for capture in try WindowlessRender.hostedInBothAppearances(name, in: directory, size: size, content: { appearance in
+                AccountList(mode: .manage, store: store, runtimeSelections: runtime, onChoose: { _ in }, onConnect: { _ in },
+                            onAdd: { _ in }, harnessUsage: AccountHarnessScope.Usage(
+                                withTasks: [.antigravityCLI, .codex, .claudeCode, .openCode], chosenForNewTask: .antigravityCLI))
+                    .padding(.horizontal, 16).padding(.top, 16)
+                    .frame(width: size.width, height: size.height, alignment: .top)
+                    .background(ParityTheme.canvas)
+                    .environment(\.colorScheme, appearance.colorScheme)
+            }) {
+                XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 4, from: 4, background: (1, 1)), name)
+            }
         }
+        try render("antigravity-limits")
+        store.publishDefaults([HarnessAccountSnapshot(id: snapshot.id, harness: .antigravityCLI, providerID: nil,
+            state: .signedIn, accountLabel: "alexandra.montgomery-whitfield@example.com", detail: "", credentialOwner: "",
+            checkedAt: snapshot.checkedAt, usage: snapshot.usage, canLogin: false, canLogout: true)])
+        try render("antigravity-long-address")
     }
 
+    /// The confirmation an account list's and a limit card's "Use a reset" opens, before the person
+    /// confirms, after a reset was used, and after a use that got no answer.
     func testUsageResetConfirmationAndItsAnswersRender() async throws {
         let directory = try WindowlessRender.directory("account-list-qa")
         let (store, _) = try fixture()
