@@ -703,6 +703,22 @@ final class TranscriptProseTextView: NSTextView {
     /// controls.
     override var canBecomeKeyView: Bool { false }
 
+    /// The text follows no scroll view's clip view. AppKit's text view follows the clip view of the
+    /// scroll view it is in, as a scroll view's document does, and marks itself for layout each time
+    /// that clip view is resized or scrolled. This text is no document: its container sets its frame
+    /// (`TranscriptProseContainerView.layout()`), and it lays out the lines that come into view
+    /// without that. AppKit chooses the clip view again only when the text view's own superview
+    /// changes, so a kept turn moved to another conversation (`ConversationTurnHosting`) went on
+    /// following the first conversation's, and once that clip view was freed, each view later made at
+    /// its address posted its frame changes to the text ("_superviewClipViewFrameChangedWithNotification:
+    /// called with non-NSClipView!"). Each scroll also marked every text in the conversation for layout.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // AppKit starts observing as the text view joins its container, which is before this.
+        NotificationCenter.default.removeObserver(self, name: NSView.frameDidChangeNotification, object: nil)
+        NotificationCenter.default.removeObserver(self, name: NSView.boundsDidChangeNotification, object: nil)
+    }
+
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
         if resigned, ConversationSelection.spans(self) {

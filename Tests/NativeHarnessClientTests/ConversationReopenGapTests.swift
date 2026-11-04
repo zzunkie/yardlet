@@ -158,6 +158,60 @@ final class ConversationReopenGapTests: XCTestCase {
         XCTAssertFalse(text.isDeferringResize, "A detached hosting is not a visible conversation")
     }
 
+    /// Texts follow no conversation's clip view, as a kept turn moves to another conversation
+    /// (`ConversationTurnHosting`). AppKit's text view follows the clip view of the scroll view it is in,
+    /// marked for layout whenever that clip view is resized or scrolled, and chooses again only when its
+    /// own superview changes. A moved text went on following the first conversation's clip view, and once
+    /// that was freed, logged "_superviewClipViewFrameChangedWithNotification: called with non-NSClipView!"
+    /// for each frame change of a view later made at its address; each scroll marked every text in the
+    /// conversation, in view or not.
+    func testTextsFollowNoConversationsClipView() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 300), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = FlippedView(frame: NSRect(x: 0, y: 0, width: 600, height: 300))
+        window.contentView = root
+        func conversation(at x: CGFloat) -> (scroll: NSScrollView, content: FlippedView) {
+            let scroll = NSScrollView(frame: NSRect(x: x, y: 0, width: 300, height: 300))
+            let content = FlippedView(frame: NSRect(x: 0, y: 0, width: 300, height: 4_000))
+            scroll.documentView = content
+            root.addSubview(scroll)
+            return (scroll, content)
+        }
+        func settle() {
+            for _ in 0..<3 {
+                root.layoutSubtreeIfNeeded()
+                root.displayIfNeeded()
+                RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+            }
+        }
+        func marked(_ texts: [TranscriptProseContainerView]) -> Int { texts.filter(\.textView.needsLayout).count }
+        let first = conversation(at: 0)
+        var top: CGFloat = 0
+        let texts = (0..<6).map { _ in
+            let text = text()
+            text.frame = NSRect(x: 0, y: top, width: 291, height: text.size(forWidth: 291).height)
+            top = text.frame.maxY
+            first.content.addSubview(text)
+            return text
+        }
+        XCTAssertGreaterThan(top, 900, "Texts well below the view")
+        // The clip view's frame changes, as when the window is first laid out.
+        first.scroll.frame.size.height = 299
+        settle()
+        let below = texts.filter { $0.frame.minY > 400 }
+        first.scroll.contentView.scroll(to: NSPoint(x: 0, y: 20))
+        XCTAssertEqual(marked(below), 0, "A scroll marked texts it neither brings into view nor out of it")
+        settle()
+
+        let second = conversation(at: 300)
+        for text in texts { second.content.addSubview(text) }
+        settle()
+        first.scroll.frame.size.height = 290
+        XCTAssertEqual(marked(texts), 0, "Moved texts follow the clip view of the conversation they left")
+    }
+
     private final class FlippedView: NSView {
         override var isFlipped: Bool { true }
     }
