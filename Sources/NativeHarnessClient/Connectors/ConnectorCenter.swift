@@ -33,26 +33,31 @@ struct ConnectorSavedSettings {
     var canRead = true
 }
 
-/// Each save returns false when it kept nothing: the saved settings are there but cannot be read
-/// (`FileConnectorRepository`).
+/// Saves are kept in the order they are made. `FileConnectorRepository` writes them off the main
+/// thread and tells `onKept` afterwards whether they were kept: they are not while the saved
+/// settings are there but cannot be read.
 @MainActor
 protocol ConnectorRepository {
     /// False while the saved settings are there but cannot be read.
     func canRead() -> Bool
     func load() -> [ConnectorRecord]
-    @discardableResult func save(_ records: [ConnectorRecord]) -> Bool
+    func save(_ records: [ConnectorRecord])
     func loadTaskChoices() -> ConnectorTaskChoices
-    @discardableResult func saveTaskChoices(_ choices: ConnectorTaskChoices) -> Bool
+    func saveTaskChoices(_ choices: ConnectorTaskChoices)
     /// The client ID of the Google OAuth app the person saved, which is not a secret (RFC 6749
     /// §2.2): Settings shows it without a keychain read. The app's secret is in the secure store.
     func loadGoogleAppClientID() -> String?
-    @discardableResult func saveGoogleAppClientID(_ clientID: String?) -> Bool
+    func saveGoogleAppClientID(_ clientID: String?)
     /// The Microsoft Entra app the person registered: a public client, so its client ID and
     /// directory are all there is, and none of it is secret.
     func loadMicrosoftApp() -> MicrosoftOAuth.App?
-    @discardableResult func saveMicrosoftApp(_ app: MicrosoftOAuth.App?) -> Bool
+    func saveMicrosoftApp(_ app: MicrosoftOAuth.App?)
     /// All of the above at once.
     func loadSettings() -> ConnectorSavedSettings
+    /// Told on the main actor, after saves are written or left out, whether they were kept.
+    var onKept: (@MainActor (Bool) -> Void)? { get set }
+    /// Returns once every save made so far is written, as Yardlet quits.
+    func finishSaving()
 }
 
 extension ConnectorRepository {
@@ -61,6 +66,8 @@ extension ConnectorRepository {
                                googleAppClientID: loadGoogleAppClientID(), microsoftApp: loadMicrosoftApp(),
                                canRead: canRead())
     }
+
+    func finishSaving() {}
 }
 
 @MainActor
@@ -69,6 +76,8 @@ final class InMemoryConnectorRepository: ConnectorRepository {
     var taskChoices: ConnectorTaskChoices
     var googleAppClientID: String?
     var microsoftApp: MicrosoftOAuth.App?
+    /// Never told: everything is kept.
+    var onKept: (@MainActor (Bool) -> Void)?
 
     init(records: [ConnectorRecord] = [], taskChoices: ConnectorTaskChoices = [:], googleAppClientID: String? = nil,
          microsoftApp: MicrosoftOAuth.App? = nil) {
@@ -80,18 +89,22 @@ final class InMemoryConnectorRepository: ConnectorRepository {
 
     func canRead() -> Bool { true }
     func load() -> [ConnectorRecord] { records }
-    func save(_ records: [ConnectorRecord]) -> Bool { self.records = records; return true }
+    func save(_ records: [ConnectorRecord]) { self.records = records }
     func loadTaskChoices() -> ConnectorTaskChoices { taskChoices }
-    func saveTaskChoices(_ choices: ConnectorTaskChoices) -> Bool { taskChoices = choices; return true }
+    func saveTaskChoices(_ choices: ConnectorTaskChoices) { taskChoices = choices }
     func loadGoogleAppClientID() -> String? { googleAppClientID }
-    func saveGoogleAppClientID(_ clientID: String?) -> Bool { googleAppClientID = clientID; return true }
+    func saveGoogleAppClientID(_ clientID: String?) { googleAppClientID = clientID }
     func loadMicrosoftApp() -> MicrosoftOAuth.App? { microsoftApp }
-    func saveMicrosoftApp(_ app: MicrosoftOAuth.App?) -> Bool { microsoftApp = app; return true }
+    func saveMicrosoftApp(_ app: MicrosoftOAuth.App?) { microsoftApp = app }
 }
 
 /// `~/.yardlet/connectors.json`: names, addresses, status, each server's tool list, the
 /// connectors turned off per task, the Google OAuth app's client ID, and the Microsoft Entra app
 /// the person registered. Secrets are never written here.
+///
+/// The file holds every server's tool list and can run to a megabyte, so saves are written off the
+/// main thread, in order: each write takes every change made since the one before, applies them to
+/// what the file holds and writes it once.
 struct FileConnectorRepository: ConnectorRepository {
     private struct Snapshot: Codable {
         var version = 1
@@ -106,6 +119,12 @@ struct FileConnectorRepository: ConnectorRepository {
     }
 
     let fileURL: URL
+    private let writer: Writer
+
+    nonisolated init(fileURL: URL) {
+        self.fileURL = fileURL
+        writer = Writer(fileURL: fileURL)
+    }
 
     static func live(homeURL: URL = FileManager.default.homeDirectoryForCurrentUser) -> FileConnectorRepository {
         FileConnectorRepository(fileURL: homeURL
@@ -117,13 +136,15 @@ struct FileConnectorRepository: ConnectorRepository {
     /// cannot be read: damaged, kept from this user, or written by a Yardlet that saves something
     /// this one cannot decode.
     nonisolated private func snapshot() throws -> Snapshot? {
-        let data: Data
+        try Self.contents(of: fileURL).map { try JSONDecoder.connectors.decode(Snapshot.self, from: $0) }
+    }
+
+    nonisolated private static func contents(of fileURL: URL) throws -> Data? {
         do {
-            data = try Data(contentsOf: fileURL)
+            return try Data(contentsOf: fileURL)
         } catch CocoaError.fileReadNoSuchFile {
             return nil
         }
-        return try JSONDecoder.connectors.decode(Snapshot.self, from: data)
     }
 
     func canRead() -> Bool {
@@ -134,9 +155,8 @@ struct FileConnectorRepository: ConnectorRepository {
         (try? snapshot())?.connectors ?? []
     }
 
-    @discardableResult
-    func save(_ records: [ConnectorRecord]) -> Bool {
-        update { $0.connectors = records }
+    func save(_ records: [ConnectorRecord]) {
+        writer.update { $0.connectors = records }
     }
 
     func loadTaskChoices() -> ConnectorTaskChoices {
@@ -167,10 +187,9 @@ struct FileConnectorRepository: ConnectorRepository {
         return choices
     }
 
-    @discardableResult
-    func saveTaskChoices(_ choices: ConnectorTaskChoices) -> Bool {
-        let kept = choices.filter { !$0.value.isEmpty }
-        return update {
+    func saveTaskChoices(_ choices: ConnectorTaskChoices) {
+        writer.update {
+            let kept = choices.filter { !$0.value.isEmpty }
             $0.offInTasks = kept.isEmpty ? nil : Dictionary(uniqueKeysWithValues: kept.map { task, connectors in
                 (task.uuidString, connectors.map(\.uuidString).sorted())
             })
@@ -181,38 +200,104 @@ struct FileConnectorRepository: ConnectorRepository {
         (try? snapshot())?.googleOAuthClientID
     }
 
-    @discardableResult
-    func saveGoogleAppClientID(_ clientID: String?) -> Bool {
-        update { $0.googleOAuthClientID = clientID }
+    func saveGoogleAppClientID(_ clientID: String?) {
+        writer.update { $0.googleOAuthClientID = clientID }
     }
 
     func loadMicrosoftApp() -> MicrosoftOAuth.App? {
         (try? snapshot())?.microsoftOAuthApp
     }
 
-    @discardableResult
-    func saveMicrosoftApp(_ app: MicrosoftOAuth.App?) -> Bool {
-        update { $0.microsoftOAuthApp = app }
+    func saveMicrosoftApp(_ app: MicrosoftOAuth.App?) {
+        writer.update { $0.microsoftOAuthApp = app }
     }
 
-    /// Changes one part of the file and keeps the rest. A file that is there but cannot be read
-    /// is left as it is rather than replaced by one made from nothing, which would drop every
-    /// connector and choice it holds; the change then lasts until Yardlet quits.
-    private func update(_ change: (inout Snapshot) -> Void) -> Bool {
-        var next: Snapshot
-        do { next = try snapshot() ?? Snapshot(connectors: []) } catch { return false }
-        change(&next)
-        write(next)
-        return true
+    var onKept: (@MainActor (Bool) -> Void)? {
+        get { writer.onKept }
+        nonmutating set { writer.onKept = newValue }
     }
 
-    private func write(_ snapshot: Snapshot) {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(snapshot) else { return }
-        try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: fileURL, options: .atomic)
+    func finishSaving() {
+        writer.finish()
+    }
+
+    /// Writes the file on a serial queue of its own. A file that is there but cannot be read is left
+    /// as it is rather than replaced by one made from nothing, which would drop every connector and
+    /// choice it holds; the changes then last until Yardlet quits.
+    private final class Writer: @unchecked Sendable {
+        typealias Change = @Sendable (inout Snapshot) -> Void
+
+        private let fileURL: URL
+        private let queue = DispatchQueue(label: "yardlet.connectors.file", qos: .utility)
+        private let lock = NSLock()
+        /// The changes not written yet, oldest first. A write is on its way while there are any.
+        private var changes: [Change] = []
+        private var hook: (@MainActor (Bool) -> Void)?
+        /// What this writer last read or wrote, so a write decodes the file again only when
+        /// something else changed it. Used on the queue only.
+        private var known: (data: Data, snapshot: Snapshot)?
+        private let encoder: JSONEncoder = {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            encoder.dateEncodingStrategy = .iso8601
+            return encoder
+        }()
+
+        init(fileURL: URL) {
+            self.fileURL = fileURL
+        }
+
+        var onKept: (@MainActor (Bool) -> Void)? {
+            get { lock.withLock { hook } }
+            set { lock.withLock { hook = newValue } }
+        }
+
+        func update(_ change: @escaping Change) {
+            let starts = lock.withLock {
+                changes.append(change)
+                return changes.count == 1
+            }
+            if starts { queue.async { self.write() } }
+        }
+
+        func finish() {
+            queue.sync {}
+        }
+
+        private func write() {
+            let (changes, report) = lock.withLock {
+                defer { changes = [] }
+                return (changes, hook)
+            }
+            let saved = write(changes)
+            if let report { Task { @MainActor in report(saved) } }
+        }
+
+        /// False when the file is there but cannot be read, and is left as it is.
+        private func write(_ changes: [Change]) -> Bool {
+            let data: Data?
+            var next: Snapshot
+            do {
+                data = try FileConnectorRepository.contents(of: fileURL)
+                next = if let data, let known, known.data == data {
+                    known.snapshot
+                } else if let data {
+                    try JSONDecoder.connectors.decode(Snapshot.self, from: data)
+                } else {
+                    Snapshot(connectors: [])
+                }
+            } catch {
+                return false
+            }
+            for change in changes { change(&next) }
+            guard let encoded = try? encoder.encode(next) else { return true }
+            if encoded != data {
+                try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? encoded.write(to: fileURL, options: .atomic)
+            }
+            known = (encoded, next)
+            return true
+        }
     }
 }
 
@@ -327,7 +412,7 @@ final class ConnectorCenter: ConnectorToolProviding {
 
     private(set) var connectors: [ConnectorRecord] {
         didSet {
-            kept(environment.repository.save(connectors))
+            environment.repository.save(connectors)
             ConnectorToolLabels.shared.update(connectors)
             onToolsChanged?()
         }
@@ -341,7 +426,7 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// Connectors the user turned off per task (the composer's connector list).
     private(set) var offInTasks: ConnectorTaskChoices {
         didSet {
-            kept(environment.repository.saveTaskChoices(offInTasks))
+            environment.repository.saveTaskChoices(offInTasks)
             onToolsChanged?()
         }
     }
@@ -355,7 +440,7 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// The client ID of the Google OAuth app the person saved for Gmail, Calendar, and Drive; nil
     /// until one is saved. Its secret is in the secure store.
     private(set) var googleAppClientID: String? {
-        didSet { kept(environment.repository.saveGoogleAppClientID(googleAppClientID)) }
+        didSet { environment.repository.saveGoogleAppClientID(googleAppClientID) }
     }
 
     /// The Google OAuth app this build carries, used when the person saved none of their own.
@@ -367,7 +452,7 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// The Microsoft Entra app the person registered for Outlook, OneDrive, and Teams; nil until
     /// one is saved.
     private(set) var microsoftApp: MicrosoftOAuth.App? {
-        didSet { kept(environment.repository.saveMicrosoftApp(microsoftApp)) }
+        didSet { environment.repository.saveMicrosoftApp(microsoftApp) }
     }
 
     /// The Microsoft Entra app this build carries, used when the person saved none of their own.
@@ -437,6 +522,7 @@ final class ConnectorCenter: ConnectorToolProviding {
         googleAppClientID = saved.googleAppClientID
         microsoftApp = saved.microsoftApp
         cannotReadSavedSettings = !saved.canRead
+        self.environment.repository.onKept = { [weak self] in self?.kept($0) }
         ConnectorToolLabels.shared.update(connectors)
         MailDraftReader.shared.set { [weak self] tool, arguments in
             await self?.mailDraftPreview(tool: tool, arguments: arguments)
@@ -478,6 +564,11 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// Notes whether a save was kept, changing what Settings reads only when that changes.
     private func kept(_ saved: Bool) {
         if cannotReadSavedSettings == saved { cannotReadSavedSettings = !saved }
+    }
+
+    /// Returns once every change is written, as Yardlet quits.
+    func finishSaving() {
+        environment.repository.finishSaving()
     }
 
     /// Replaces where harness homes come from, once the app knows its saved accounts.

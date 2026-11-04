@@ -385,6 +385,7 @@ final class ConnectorDirectoryTests: XCTestCase {
                        [URLQueryItem(name: "browserbaseApiKey", value: "bb-key-1")])
         XCTAssertNil(last.value(forHTTPHeaderField: "Authorization"))
         XCTAssertEqual(center.record(record.id)?.serverURL, FakeConnectorServer.mcpURL)
+        center.finishSaving()
         let saved = try String(contentsOf: directory.appending(path: "connectors.json"), encoding: .utf8)
         XCTAssertFalse(saved.contains("bb-key-1"), saved)
         XCTAssertTrue(saved.contains("browserbaseApiKey"), "The parameter's name is not a secret")
@@ -430,13 +431,16 @@ final class ConnectorDirectoryTests: XCTestCase {
         XCTAssertEqual(allowed?.text, "you")
 
         // Kept with the connectors, and read back by the next run.
+        center.finishSaving()
         let reloaded = FileConnectorRepository(fileURL: file)
         XCTAssertEqual(reloaded.loadTaskChoices(), [taskA: [record.id]])
         XCTAssertEqual(reloaded.load().map(\.id), [record.id], "Saving the choice keeps the connectors")
         center.setConnector(record.id, on: true, inTask: taskA)
+        center.finishSaving()
         XCTAssertEqual(reloaded.loadTaskChoices(), [:])
         center.setConnector(record.id, on: false, inTask: taskA)
         center.remove(record.id)
+        center.finishSaving()
         XCTAssertEqual(reloaded.loadTaskChoices(), [:], "Removing a connector forgets its choices")
         XCTAssertFalse(try String(contentsOf: file, encoding: .utf8).contains("offInTasks"))
     }

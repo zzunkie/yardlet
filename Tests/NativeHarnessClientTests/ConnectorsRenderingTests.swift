@@ -92,7 +92,7 @@ final class ConnectorsRenderingTests: XCTestCase {
 
     /// `settings-connectors-unreadable-*`: saved settings Yardlet cannot read show none of their
     /// connectors and say that changes here are not kept; once a save is kept again, the line goes.
-    func testTheSettingsPageSaysWhenSavedConnectorsCannotBeRead() throws {
+    func testTheSettingsPageSaysWhenSavedConnectorsCannotBeRead() async throws {
         let directory = try WindowlessRender.directory("connectors-qa")
         let root = FileManager.default.temporaryDirectory.appending(path: "connectors-unreadable-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -125,7 +125,8 @@ final class ConnectorsRenderingTests: XCTestCase {
 
         try FileManager.default.removeItem(at: file)
         center.setConnector(UUID(), on: false, inTask: UUID())
-        XCTAssertFalse(center.cannotReadSavedSettings, "A kept save takes the line away")
+        try await waitUntil { !center.cannotReadSavedSettings }
+        center.finishSaving()
     }
 
     func testTheAddFormWithARegisteredClientDraws() throws {

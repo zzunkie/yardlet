@@ -587,6 +587,10 @@ What the person does (per service):
 - Ad-hoc builds also have an identifier-based designated requirement, so no keychain permission prompt appears after an
   update. QA bundles have a different bundle ID, so their items do not mix.
 - Keychain calls run off the main thread, so the UI does not freeze while the keychain waits for a system prompt.
+- `connectors.json` holds every tool list and can run to a megabyte, so it is read and written off the main thread: read
+  once at launch, then written after each change, in order, with changes made close together written once. Quitting
+  waits for the last write. A file that is there but cannot be read is left as it is, and Settings says that changes
+  made there are lost when Yardlet quits.
 - Disconnect deletes the token (and keeps your own client). Remove deletes the Keychain item. Yardlet does not ask the
   server to revoke tokens (RFC 7009). Permissions that macOS gave for the three Mac services stay after removal (the
   "Apple" section).

@@ -614,6 +614,7 @@ final class ConnectorTests: XCTestCase {
             tools: [.object(["name": .string("list_issues")])], toolsUpdatedAt: Date(timeIntervalSince1970: 1_800_000_000)
         )
         repository.save([record])
+        repository.finishSaving()
         XCTAssertEqual(repository.load(), [record])
         let text = try String(contentsOf: directory.appending(path: "connectors.json"), encoding: .utf8)
         XCTAssertFalse(text.contains("access"), text)
@@ -628,11 +629,27 @@ final class ConnectorTests: XCTestCase {
             userAgent: nil, sha256: MacOAuthUserAgent.sha256, clientVersion: "9.9"), saved: settings)
         XCTAssertEqual(center.connectors, [record])
         XCTAssertFalse(center.cannotReadSavedSettings)
+
+        // Saves are written off the main thread, together and in order: each part keeps its last
+        // change, and the parts saved in between stay.
+        let task = UUID()
+        var changed = record
+        for index in 0..<100 {
+            changed.status = index.isMultiple(of: 2) ? .signInRequired : .connected
+            changed.tools.append(.object(["name": .string("tool_\(index)")]))
+            repository.save([changed])
+            if index == 50 { repository.saveTaskChoices([task: [record.id]]) }
+            if index == 70 { repository.saveGoogleAppClientID("client") }
+        }
+        repository.finishSaving()
+        XCTAssertEqual(repository.load(), [changed])
+        XCTAssertEqual(repository.loadTaskChoices(), [task: [record.id]])
+        XCTAssertEqual(repository.loadGoogleAppClientID(), "client")
     }
 
     /// A file that is there but cannot be read, such as one holding a connector this Yardlet cannot
     /// decode, keeps everything in it: saving leaves it alone rather than starting from nothing.
-    func testTheRecordFileIsNotReplacedWhileItCannotBeRead() throws {
+    func testTheRecordFileIsNotReplacedWhileItCannotBeRead() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "connectors-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -646,16 +663,27 @@ final class ConnectorTests: XCTestCase {
 
         let record = ConnectorRecord(name: "Notion", slug: "notion", serverURL: URL(string: "https://mcp.notion.com/mcp")!,
                                      authorization: .oauth, status: .connected)
-        XCTAssertFalse(repository.save([record]))
-        XCTAssertFalse(repository.saveTaskChoices([UUID(): [record.id]]))
-        XCTAssertFalse(repository.saveGoogleAppClientID(nil))
+        let kept = KeptSaves()
+        repository.onKept = { kept.values.append($0) }
+        repository.save([record])
+        repository.saveTaskChoices([UUID(): [record.id]])
+        repository.saveGoogleAppClientID(nil)
+        repository.finishSaving()
         XCTAssertEqual(try Data(contentsOf: file), saved)
+        try await waitUntil { !kept.values.isEmpty }
+        XCTAssertFalse(kept.values.contains(true))
 
         // Gone, it starts again from nothing.
         try FileManager.default.removeItem(at: file)
         XCTAssertTrue(repository.canRead())
-        XCTAssertTrue(repository.save([record]))
+        repository.save([record])
+        repository.finishSaving()
         XCTAssertEqual(repository.load(), [record])
+        try await waitUntil { kept.values.last == true }
+    }
+
+    private final class KeptSaves {
+        var values: [Bool] = []
     }
 
     // MARK: - Through the Yardlet MCP server

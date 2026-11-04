@@ -221,6 +221,7 @@ final class MacAgentToolService: NativeSurfaceResource {
     func stop() {}
 
     func terminateForApplicationShutdown() {
+        connectors.finishSaving()
         listener?.stop()
         listener = nil
         try? FileManager.default.removeItem(at: directory)
