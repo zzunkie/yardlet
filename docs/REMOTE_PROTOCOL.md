@@ -2059,7 +2059,8 @@ device, task or project ID and result, never a title or account value. These act
   holds `{task, archivedAt, projectName}`; `task` has the shape of §4.1, without paths. An optional `cursor` names
   the last row; pass it to the next request. No cursor means the end. If that row was restored meanwhile the host
   answers `invalidCursor`, and the client reloads the first page. `taskAction.unarchive`, with `kind: "unarchive"`,
-  restores the host's archived record through its ordinary unarchive operation.
+  restores the host's archived record through its ordinary unarchive operation. Archived tasks in a project the host
+  hides are neither listed nor restorable (`notFound`), as their live tasks are left out of the snapshot.
 - `setProjectPinned`: `projectId` and `pinned`; `archiveProjectChats`: `projectId` and `confirmed: true`, after
   the ordinary project archive confirmation. Partial failures are reported. Edit project, Show in Finder and
   Remove project remain host-only.

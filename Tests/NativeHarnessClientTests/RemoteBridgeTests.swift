@@ -57,7 +57,11 @@ final class RemoteBridgeTests: XCTestCase {
                 runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Archived \(index)",
                 updatedAt: Date(timeIntervalSince1970: Double(index)))
         }
-        let model = try Self.model(sessions: [], transcripts: [:], archived: records)
+        let hidden = SessionRecord(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp/hidden-archive-fixture"),
+            runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Hidden", updatedAt: Date(timeIntervalSince1970: 50.5))
+        let model = try Self.model(sessions: [], transcripts: [:], archived: records + [hidden])
+        let hiddenProject = model.projects.ensureProject(forRoot: hidden.workspaceURL)
+        model.projects.hide(hiddenProject.id)
         let bridge = AppModelRemoteBridge(model: model)
         XCTAssertTrue(bridge.snapshot().tasks.isEmpty)
         let first = try await bridge.archivedTasks(cursor: nil).get()
@@ -67,6 +71,9 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(second.tasks.count, 1)
         XCTAssertNil(second.cursor)
         XCTAssertEqual(Set((first.tasks + second.tasks).map { $0.task.id }).count, 101)
+        let hiddenRestore = await bridge.perform(.taskAction(taskID: hidden.id.uuidString, action: .init(.unarchive)))
+        XCTAssertEqual(hiddenRestore?.code, .notFound, "A hidden project's archived task is neither listed nor restored")
+        XCTAssertTrue(try XCTUnwrap(model.projects.project(id: hiddenProject.id)).isHidden)
         XCTAssertFalse(RemoteJSON.string(first.tasks).contains("/tmp/"))
         let restored = await bridge.perform(.taskAction(taskID: cursor, action: .init(.unarchive)))
         XCTAssertNil(restored)

@@ -7,7 +7,8 @@ extension AppModelRemoteBridge {
         guard let model, let id = UUID(uuidString: taskID) else { return RemoteError(.notFound) }
         if action.kind == .unarchive {
             await model.loadArchivedTasks()
-            guard let record = model.store.archivedSessions?.first(where: { $0.id == id }) else { return RemoteError(.notFound) }
+            guard let record = model.store.archivedSessions?.first(where: { $0.id == id }),
+                  Self.listsArchived(record, model: model) else { return RemoteError(.notFound) }
             await model.unarchive(record)
             return model.store.sessions.contains(where: { $0.id == id }) ? nil : RemoteError(.unavailable)
         }
@@ -63,7 +64,7 @@ extension AppModelRemoteBridge {
         guard let model else { return .failure(RemoteError(.unavailable)) }
         await model.loadArchivedTasks()
         if model.archivedTaskError != nil { return .failure(RemoteError(.unavailable)) }
-        let records = model.store.archivedSessions ?? []
+        let records = (model.store.archivedSessions ?? []).filter { Self.listsArchived($0, model: model) }
         let start: Int
         if let cursor {
             guard let index = records.firstIndex(where: { $0.id.uuidString == cursor }) else {
@@ -81,6 +82,11 @@ extension AppModelRemoteBridge {
         }
         return .success(RemoteArchivePage(tasks: tasks,
             cursor: start + page.count < records.count ? page.last?.id.uuidString : nil))
+    }
+
+    /// A task in a project the person hid stays off other devices, archived or not: restoring it would reveal the project.
+    static func listsArchived(_ record: ArchivedSessionRecord, model: AppModel) -> Bool {
+        model.project(for: record.session)?.isHidden != true
     }
 }
 
