@@ -714,7 +714,12 @@ actor ACPAdapter:
         rawData: Data
     ) async {
         guard let providerSessionID = value["params"]?["sessionId"]?.stringValue,
-              let localSessionID = localSessionIDByProviderID[providerSessionID] else { return }
+              let localSessionID = localSessionIDByProviderID[providerSessionID] else {
+            // Every request gets its answer: one for a session no task holds is cancelled, so the
+            // agent does not wait on it for good.
+            try? await transport.send(ACPProtocol.permissionResponse(id: rpcID, optionID: nil))
+            return
+        }
         let options = value["params"]?["options"]?.arrayValue ?? []
         let actions = permissionActions(from: options)
         // A plain allow or deny takes the narrowest option the provider offered, never the

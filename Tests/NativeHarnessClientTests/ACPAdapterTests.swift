@@ -213,6 +213,24 @@ final class ACPAdapterTests: XCTestCase {
         XCTAssertTrue(sent.contains { message in
             message["result"]?["outcome"]?["optionId"]?.stringValue == "allow-once"
         })
+        // A request for a session no task holds is answered too, so the agent does not wait on it.
+        await transport.emit(.object([
+            "jsonrpc": .string("2.0"),
+            "id": .string("permission-rpc-orphan"),
+            "method": .string("session/request_permission"),
+            "params": .object([
+                "sessionId": .string("acp-session-closed"),
+                "toolCall": .object(["toolCallId": .string("tool-2"), "title": .string("Run command")]),
+                "options": .array([
+                    .object(["optionId": .string("allow-once"), "name": .string("Allow once"), "kind": .string("allow_once")])
+                ])
+            ])
+        ]))
+        try await waitUntil {
+            await transport.sentMessages.contains { $0["id"]?.stringValue == "permission-rpc-orphan" }
+        }
+        let orphanAnswer = await transport.sentMessages.first { $0["id"]?.stringValue == "permission-rpc-orphan" }
+        XCTAssertEqual(orphanAnswer?["result"]?["outcome"]?["outcome"]?.stringValue, "cancelled")
 
         await transport.completePrompt()
         try await waitUntil { await recorder.payloads.contains(.turnCompleted) }
