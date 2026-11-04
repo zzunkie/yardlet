@@ -244,6 +244,9 @@ struct TaskSidebar: View {
     /// The projects' own actions (pin, edit, Show in Finder, archive chats, remove) change this Mac's projects and
     /// folders. Another Mac's window lists its host's, which only the host changes: they show dimmed there.
     var managesProjects = true
+    var onRemoteProjectPin: ((WorkspaceGroup) -> Void)? = nil
+    var canArchiveRemoteProject = false
+    var remoteProjectMoveOptions: ((SessionRecord) -> TaskProjectMove.Options)? = nil
     /// What the sidebar ends with in place of the account button: another Mac's window names its host there.
     var footer: AnyView? = nil
     var splitActions = SidebarSplitActions()
@@ -457,6 +460,8 @@ struct TaskSidebar: View {
             isCollapsed: section.isCollapsed,
             projects: projects,
             managesProject: managesProjects,
+            remotePin: onRemoteProjectPin.map { action in { action(completeGroup) } },
+            canArchiveRemoteProject: canArchiveRemoteProject,
             onToggle: { toggle(section) },
             onNewTask: { onNewTaskInProject(group.workspaceURL) },
             onEditProject: { onEditProject(completeGroup) },
@@ -563,7 +568,7 @@ struct TaskSidebar: View {
                     onRename: onRename,
                     onMarkRead: onMarkRead,
                     onMarkUnread: onMarkUnread,
-                    projectMove: TaskProjectMove.options(
+                    projectMove: remoteProjectMoveOptions?(session) ?? TaskProjectMove.options(
                         for: session, visibleProjects: allGroups.compactMap(\.project),
                         projects: projects.projects, home: projects.chatWorkspaceHome),
                     onMoveToProject: onMoveToProject.map { move in { move(session, $0) } },
@@ -637,7 +642,7 @@ struct TaskSidebar: View {
                 onRename: onRename,
                 onMarkRead: onMarkRead,
                 onMarkUnread: onMarkUnread,
-                projectMove: TaskProjectMove.options(
+                projectMove: remoteProjectMoveOptions?(session) ?? TaskProjectMove.options(
                     for: session, visibleProjects: allGroups.compactMap(\.project),
                     projects: projects.projects, home: projects.chatWorkspaceHome),
                 onMoveToProject: onMoveToProject.map { move in { move(session, $0) } },
@@ -707,6 +712,8 @@ private struct ProjectTaskHeader: View {
     @Bindable var projects: ProjectStore
     /// The project's own actions change this Mac's projects and folders (`TaskSidebar.managesProjects`).
     let managesProject: Bool
+    var remotePin: (() -> Void)? = nil
+    var canArchiveRemoteProject = false
     let onToggle: () -> Void
     let onNewTask: () -> Void
     let onEditProject: () -> Void
@@ -744,6 +751,7 @@ private struct ProjectTaskHeader: View {
     private var isPinned: Bool { completeGroup.project?.isPinned ?? false }
 
     private func togglePinned() {
+        if let remotePin { remotePin(); return }
         guard let id = completeGroup.project?.id else { return }
         projects.togglePinned(id)
     }
@@ -845,7 +853,7 @@ private struct ProjectTaskHeader: View {
     @ViewBuilder
     private var projectOptions: some View {
         Button(isPinned ? L10n.string("Unpin project") : L10n.string("Pin project"), action: togglePinned)
-            .disabled(completeGroup.project == nil || !managesProject)
+            .disabled(completeGroup.project == nil || (!managesProject && remotePin == nil))
         Button(L10n.string("Edit project"), action: onEditProject)
             .disabled(completeGroup.project == nil || !managesProject)
         Divider()
@@ -855,7 +863,7 @@ private struct ProjectTaskHeader: View {
         .disabled(!managesProject)
         Divider()
         Button(L10n.string("Archive chats"), action: onArchiveChats)
-            .disabled(completeGroup.sessions.isEmpty || !managesProject)
+            .disabled(completeGroup.sessions.isEmpty || (!managesProject && !canArchiveRemoteProject))
         Divider()
         Button(L10n.string("Remove project"), role: .destructive, action: onRemoveProject)
             .disabled(completeGroup.project == nil || !managesProject)
@@ -1056,7 +1064,7 @@ private struct ProjectHoverActionButton: View {
 
 /// Equal when it would show the same row: its actions are bound to the same task and window, so a
 /// window redraw that changed nothing the row shows does not redraw it.
-private struct SidebarTaskEntry: View, @MainActor Equatable {
+struct SidebarTaskEntry: View, @MainActor Equatable {
     let session: SessionRecord
     /// The title the row shows; under a project, without the project's name.
     let title: String
@@ -1105,21 +1113,14 @@ private struct SidebarTaskEntry: View, @MainActor Equatable {
             && lhs.projectName == rhs.projectName && lhs.familyPlace == rhs.familyPlace && lhs.familyToggle?.isCollapsed == rhs.familyToggle?.isCollapsed
             && lhs.isSelected == rhs.isSelected && lhs.projectMove == rhs.projectMove
             && lhs.nesting === rhs.nesting
+            && (lhs.onRename != nil) == (rhs.onRename != nil)
+            && (lhs.onDelete != nil) == (rhs.onDelete != nil)
+            && (lhs.onMarkRead != nil) == (rhs.onMarkRead != nil)
+            && (lhs.onMarkUnread != nil) == (rhs.onMarkUnread != nil)
+            && (lhs.onMoveToProject != nil) == (rhs.onMoveToProject != nil)
     }
 
-    var body: some View {
-        TaskRow(
-            session: session,
-            title: title,
-            subtitle: subtitle,
-            projectName: projectName,
-            familyPlace: familyPlace,
-            isSelected: isSelected || isDropTargeted,
-            onSelect: onSelect,
-            onTogglePinned: { onTogglePinned(session) },
-            onArchive: { onArchive(session) }
-        )
-        .contextMenu {
+    @ViewBuilder var menuContents: some View {
             if let openInNewTab {
                 Button(L10n.string("Open in New Tab")) { openInNewTab.open(.session(session.id)) }
             }
@@ -1158,7 +1159,22 @@ private struct SidebarTaskEntry: View, @MainActor Equatable {
             Button(L10n.string("Archive"), role: .destructive) { onArchive(session) }
             Button(L10n.string("Delete task"), role: .destructive) { onDelete?(session) }
                 .disabled(onDelete == nil)
-        }
+
+    }
+
+    var body: some View {
+        TaskRow(
+            session: session,
+            title: title,
+            subtitle: subtitle,
+            projectName: projectName,
+            familyPlace: familyPlace,
+            isSelected: isSelected || isDropTargeted,
+            onSelect: onSelect,
+            onTogglePinned: { onTogglePinned(session) },
+            onArchive: { onArchive(session) }
+        )
+        .contextMenu { menuContents }
         // Dragged onto a task's row in the sidebar's families, a task goes under it or beside it;
         // onto a split view's row or a pane, it joins the split view.
         .draggable(SidebarNesting.dragging(session.id)) {

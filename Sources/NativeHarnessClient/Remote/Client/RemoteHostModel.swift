@@ -76,6 +76,18 @@ final class RemoteHostModel: Identifiable {
     /// The host answers a task's settings, slash commands, edit and fork (§15.23).
     private(set) var nextSteps = false
     private(set) var bankedResets = false
+    var archivedTasks: [ArchivedSessionRecord]?
+    var archiveProjectNames: [UUID: String] = [:]
+    var archiveCursor: String?
+    var readingArchive = false
+    var restoringArchived: Set<UUID> = []
+    var showsArchive = false
+    var renameTask: SessionRecord?
+    var renameTitle = ""
+    var accountTask: SessionRecord?
+    var deleteTask: SessionRecord?
+    var archiveProject: WorkspaceGroup?
+    private(set) var taskActions = false
     private(set) var taskControls = false
     /// Each open task's composer settings as the host last answered them (§15.23).
     var taskSettings: [String: [RemoteSetting]] = [:]
@@ -283,6 +295,7 @@ final class RemoteHostModel: Identifiable {
             offersTerminals = response.terminals == true
             nextSteps = response.nextSteps == true
             bankedResets = response.bankedResets == true
+            taskActions = response.taskActions == true
             taskControls = response.taskControls == true
             let full = response.fullConversation == true
             if full != sendsFullConversation {

@@ -51,6 +51,63 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertTrue(RemoteRequest.useUsageReset(taskID: "task", token: "confirmation", confirmed: true).isCommand)
     }
 
+    func testArchivedTasksArePagedAndRestoredWithoutAttachingAProvider() async throws {
+        let records = (0..<101).map { index in
+            SessionRecord(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp/archive-fixture"),
+                runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Archived \(index)",
+                updatedAt: Date(timeIntervalSince1970: Double(index)))
+        }
+        let model = try Self.model(sessions: [], transcripts: [:], archived: records)
+        let bridge = AppModelRemoteBridge(model: model)
+        XCTAssertTrue(bridge.snapshot().tasks.isEmpty)
+        let first = try await bridge.archivedTasks(cursor: nil).get()
+        XCTAssertEqual(first.tasks.count, 100)
+        let cursor = try XCTUnwrap(first.cursor)
+        let second = try await bridge.archivedTasks(cursor: cursor).get()
+        XCTAssertEqual(second.tasks.count, 1)
+        XCTAssertNil(second.cursor)
+        XCTAssertEqual(Set((first.tasks + second.tasks).map { $0.task.id }).count, 101)
+        XCTAssertFalse(RemoteJSON.string(first.tasks).contains("/tmp/"))
+        let restored = await bridge.perform(.taskAction(taskID: cursor, action: .init(.unarchive)))
+        XCTAssertNil(restored)
+        XCTAssertTrue(model.store.sessions.contains { $0.id.uuidString == cursor })
+        XCTAssertFalse(model.isAttached(try XCTUnwrap(UUID(uuidString: cursor))))
+        guard case let .failure(error) = await bridge.archivedTasks(cursor: cursor) else {
+            return XCTFail("A removed cursor must not silently skip records")
+        }
+        XCTAssertEqual(error.code, .invalidCursor)
+        await model.shutdown()
+    }
+
+    func testSidebarActionsResolveHostRecordsAndRejectUnconfirmedDeletion() async throws {
+        let folder = URL(filePath: "/tmp/remote-actions")
+        let first = SessionRecord(harness: .claudeCode, workspaceURL: folder,
+            runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "First")
+        let second = SessionRecord(harness: .claudeCode, workspaceURL: folder,
+            runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Second")
+        let model = try Self.model(sessions: [first, second], transcripts: [:])
+        let bridge = AppModelRemoteBridge(model: model)
+        XCTAssertTrue(bridge.snapshot().taskActions)
+        let renamed = await bridge.perform(.taskAction(taskID: first.id.uuidString, action: .init(.rename, value: "Renamed")))
+        XCTAssertNil(renamed)
+        XCTAssertEqual(model.store.sessions.first { $0.id == first.id }?.title, "Renamed")
+        let unread = await bridge.perform(.taskAction(taskID: first.id.uuidString, action: .init(.markUnread)))
+        XCTAssertNil(unread)
+        XCTAssertTrue(try XCTUnwrap(model.store.sessions.first { $0.id == first.id }).hasUnreadUpdate)
+        let nested = await bridge.perform(.taskAction(taskID: second.id.uuidString, action: .init(.nest, value: first.id.uuidString)))
+        XCTAssertNil(nested)
+        let cycle = await bridge.perform(.taskAction(taskID: first.id.uuidString, action: .init(.nest, value: second.id.uuidString)))
+        XCTAssertEqual(cycle?.code, .notAllowed)
+        let refused = await bridge.perform(.taskAction(taskID: first.id.uuidString, action: .init(.delete)))
+        XCTAssertEqual(refused?.code, .notAllowed)
+        XCTAssertTrue(model.store.sessions.contains { $0.id == first.id })
+        let removed = await bridge.perform(.taskAction(taskID: first.id.uuidString, action: .init(.delete, confirmed: true)))
+        XCTAssertNil(removed)
+        XCTAssertFalse(model.store.sessions.contains { $0.id == first.id })
+        let stale = await bridge.perform(.taskAction(taskID: first.id.uuidString, action: .init(.rename, value: "Stale")))
+        XCTAssertEqual(stale?.code, .notFound)
+    }
+
     func testHeadlessTerminalBackpressurePreservesOutputBeforeExit() async throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "remote-terminal-tail-\(UUID())")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

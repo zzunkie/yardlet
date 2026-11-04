@@ -111,6 +111,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.newTask = newTaskHarness(in: model).map { RemoteNewTask(harness: $0.rawValue, harnessName: $0.displayName) }
         snapshot.scheduledTasks = true
         snapshot.taskFiles = true
+        Self.decorateProjectActions(&snapshot, model: model)
         snapshot.taskControls = true
         snapshot.conversationBodies = true
         snapshot.nextSteps = true
@@ -125,6 +126,7 @@ final class AppModelRemoteBridge: RemoteBridge {
             snapshot.tasks[index].latestTurnStartedAt = model.latestTurnBySessionID[id]?.startedAt.map(RemoteJSON.milliseconds)
             snapshot.tasks[index].completed = session.status == .completed
             snapshot.tasks[index].notices = Self.taskNotices(session, model: model)
+            Self.decorateTaskActions(&snapshot.tasks[index], session: session, model: model)
             if acceptsImages(session, in: model) { snapshot.tasks[index].acceptsImages = true }
             if inputPolicy(session, in: model).showsMentionControl { snapshot.tasks[index].acceptsFiles = true }
             if FollowUpPolicy(harness: session.harness)?.steers == true { snapshot.tasks[index].steers = true }
@@ -580,6 +582,10 @@ final class AppModelRemoteBridge: RemoteBridge {
             // The sidebar's Pin and Unpin.
             if model.pinnedSidebarSessionIDs.contains(session.id) != pinned { await model.togglePinned(session) }
             return nil
+        case let .projectAction(projectID, pinned, archive):
+            return await performProjectAction(projectID, pinned: pinned, archive: archive)
+        case let .taskAction(taskID, action):
+            return await performTaskAction(taskID, action: action)
         case let .archiveTask(taskID):
             guard let session = session(taskID) else { return RemoteError(.notFound) }
             if session.status == .running || session.status == .waitingForApproval || model.isShellCommandRunning(in: session) {
@@ -1084,15 +1090,8 @@ final class AppModelRemoteBridge: RemoteBridge {
         // As the list does when it opens: limits not confirmed within the last minute are read again.
         await RemoteServer.waitAtMost(15) { @MainActor in await model.refreshUsageLimitAccounts(for: session) }
         let mode = AccountListMode.continueAfterLimit(session)
-        return .success(AccountListProjection.choices(mode, store: model.connections).map { choice in
-            RemoteAccount(
-                id: choice.id, name: choice.title, detail: AccountListProjection.accountLine(choice),
-                usage: choice.quotas.map(AccountLimitWindow.init(metric:)).map { window in
-                    RemoteAccount.Usage(label: window.name, usedPercent: window.remainingPercent.map { Int((100 - $0).rounded()) },
-                                        resetsAt: window.resetsAt.map(RemoteJSON.milliseconds))
-                },
-                current: choice.connection == session.connection ? true : nil,
-                available: AccountListProjection.canChoose(choice, mode: mode) ? true : nil)
+        return .success(AccountListProjection.choices(mode, store: model.connections).map {
+            Self.remoteAccount($0, current: session, mode: mode)
         })
     }
 

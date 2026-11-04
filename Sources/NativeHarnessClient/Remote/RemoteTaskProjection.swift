@@ -5,8 +5,8 @@ import YardletRemote
 /// project groups and Chats, not archived tasks — each with the sidebar's attention state and row
 /// mark, the same definitions the sidebar dots, the menu bar menu and the Dock badge read
 /// (`TaskAttentionProjection`, `SidebarTaskIndicatorProjection`), and under the task the sidebar
-/// draws it under (`SidebarProjection.Layout.nestingParents`). No folder paths, accounts or
-/// settings are sent.
+/// draws it under (`SidebarProjection.Layout.nestingParents`). No folder paths, account homes or
+/// credentials are sent.
 enum RemoteTaskProjection {
     static let chatsProjectID = "chats"
 

@@ -353,6 +353,7 @@ struct AccountRow: View {
     var style: Style = .account
     /// How the row names itself under an account block (`AccountGroup.memberTitle`).
     var memberTitle: String? = nil
+    var accountLine: String? = nil
     let selected: Bool
     var canChoose = true
     /// What the selected mark means to VoiceOver.
@@ -430,7 +431,7 @@ struct AccountRow: View {
     private var title: String { style == .member ? memberTitle ?? choice.connectionTitle : choice.title }
     /// The organization beside an account's address; a member row names its connection instead.
     private var organization: String? { style == .member ? nil : choice.organizationTitle }
-    private var subtitle: String { style == .member ? choice.subtitle : AccountListProjection.accountLine(choice) }
+    private var subtitle: String { accountLine ?? (style == .member ? choice.subtitle : AccountListProjection.accountLine(choice)) }
     /// Said only of an account that could otherwise be used: signed in, and left out.
     private var isExcludedFromAutomaticAssignment: Bool {
         automaticAssignment == false && choice.snapshot?.state == .signedIn

@@ -36,6 +36,8 @@ public enum RemoteCommand: Equatable, Sendable {
     case reviewPlan(taskID: String, requestID: String, decision: RemotePlanDecision, reason: String?)
     case actOnSuggestion(taskID: String, suggestionID: String, action: RemoteSuggestionAction)
     case setPinned(taskID: String, pinned: Bool)
+    case projectAction(projectID: String, pinned: Bool?, archive: Bool)
+    case taskAction(taskID: String, action: RemoteTaskAction)
     case archiveTask(taskID: String)
     case continueWithAccount(taskID: String, accountID: String)
     case nextStep(taskID: String, turnID: String, action: RemoteNextStep, text: String?)
@@ -101,6 +103,9 @@ public enum RemoteHandshakeOutcome: Sendable {
 public protocol RemoteBridge: AnyObject, Sendable {
     /// Told whenever a snapshot or a watched conversation may have changed.
     func setChangeHandler(_ handler: @escaping @Sendable (RemoteBridgeChange) -> Void) async
+    func openOriginalConversation(taskID: String) async -> Result<String, RemoteError>
+    func taskAccounts(taskID: String, refresh: Bool) async -> Result<[RemoteAccount], RemoteError>
+    func archivedTasks(cursor: String?) async -> Result<RemoteArchivePage, RemoteError>
     func snapshot() async -> RemoteSnapshot
     /// A listed task's conversation as loaded now; nil for a task not listed.
     func conversation(of taskID: String) async -> RemoteConversation?
@@ -182,6 +187,9 @@ extension RemoteBridge {
     public func railAction(taskID: String, action: String, targetID: String?, confirmed: Bool) async -> RemoteError? { RemoteError(.unavailable) }
     public func subtask(taskID: String, activityID: String, stop: Bool) async -> Result<RemoteSubtaskTranscript, RemoteError> { .failure(RemoteError(.unavailable)) }
     public func fileRewind(taskID: String, action: RemoteFileRewindAction, pointID: String?, receipt: String?, confirmed: Bool, permit: RemoteFileWritePermit?) async -> Result<RemoteFileRewind, RemoteError> { .failure(RemoteError(.unavailable)) }
+    public func openOriginalConversation(taskID: String) async -> Result<String, RemoteError> { .failure(RemoteError(.unavailable)) }
+    public func taskAccounts(taskID: String, refresh: Bool) async -> Result<[RemoteAccount], RemoteError> { .failure(RemoteError(.unavailable)) }
+    public func archivedTasks(cursor: String?) async -> Result<RemoteArchivePage, RemoteError> { .failure(RemoteError(.unavailable)) }
     public func announcesFinish(of taskID: String) async -> Bool { true }
     public func openTerminal(taskID: String, terminalID: String, columns: Int, rows: Int, permit: RemoteTerminalPermit,
                              output: @escaping @Sendable (RemoteTerminalUpdate) async -> Void) async -> RemoteError? { RemoteError(.unavailable) }
@@ -1289,6 +1297,43 @@ public actor RemoteServer {
             }
         case let .setPinned(taskID, pinned):
             await command(envelope.id, request: request, on: id) { await self.bridge.perform(.setPinned(taskID: taskID, pinned: pinned)) }
+        case let .projectAction(projectID, pinned, archive):
+            await command(envelope.id, request: request, on: id) {
+                await self.bridge.perform(.projectAction(projectID: projectID, pinned: pinned, archive: archive))
+            }
+        case let .openOriginalConversation(taskID):
+            var opened: String?
+            await command(envelope.id, request: request, on: id) {
+                switch await self.bridge.openOriginalConversation(taskID: taskID) {
+                case let .success(id): opened = id; return nil
+                case let .failure(error): return error
+                }
+            } answer: { $0.taskId = opened }
+        case let .taskAccounts(taskID, refresh):
+            var readResult = "ok"
+            switch await bridge.taskAccounts(taskID: taskID, refresh: refresh) {
+            case let .success(accounts):
+                var response = RemoteResponse(re: envelope.id)
+                response.taskAccounts = accounts
+                respond(response, to: id)
+            case let .failure(error): readResult = error.code.rawValue; respond(.failure(envelope.id, error), to: id)
+            }
+            audit?.record(device: connections[id]?.deviceID, type: request.type, task: taskID, result: readResult, at: now())
+        case let .archivedTasks(cursor):
+            var readResult = "ok"
+            switch await bridge.archivedTasks(cursor: cursor) {
+            case let .success(page):
+                var response = RemoteResponse(re: envelope.id)
+                response.archivedTasks = page.tasks
+                response.cursor = page.cursor
+                respond(response, to: id)
+            case let .failure(error): readResult = error.code.rawValue; respond(.failure(envelope.id, error), to: id)
+            }
+            audit?.record(device: connections[id]?.deviceID, type: request.type, task: nil, result: readResult, at: now())
+        case let .taskAction(taskID, action):
+            await command(envelope.id, request: request, on: id) {
+                await self.bridge.perform(.taskAction(taskID: taskID, action: action))
+            }
         case let .archiveTask(taskID):
             await command(envelope.id, request: request, on: id) { await self.bridge.perform(.archiveTask(taskID: taskID)) }
         case let .answerLink(requestID, approve):
@@ -1615,6 +1660,7 @@ public actor RemoteServer {
             response.subtasks = published?.subtasks == true ? true : nil
             response.taskNotices = published?.taskNotices == true ? true : nil
             response.fileRewind = published?.fileRewind == true ? true : nil
+            response.taskActions = published?.taskActions == true ? true : nil
             response.tabControls = published?.tabControls == true ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)
@@ -1670,7 +1716,7 @@ public actor RemoteServer {
         if error == nil, response.taskId != nil { tasksDirty = true; await refreshTasks(force: true) }
         respond(error.map { .failure(requestID, $0) } ?? response, to: id)
         audit?.record(device: connections[id]?.deviceID, type: request.type, task: request.taskID,
-                      schedule: request.scheduleID, result: error?.code.rawValue ?? "ok", at: now())
+                      schedule: request.scheduleID, project: request.projectID, result: error?.code.rawValue ?? "ok", at: now())
     }
 
     /// A part of one of the task's files (§15.22), read off this actor and Swift's threads so a large file or a slow disk

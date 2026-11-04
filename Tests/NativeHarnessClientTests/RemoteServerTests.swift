@@ -71,6 +71,39 @@ final class RemoteServerTests: XCTestCase {
         await harness.server.shutdown(reason: "test")
     }
 
+    func testTaskActionsRoundTripWithoutNewDevicePermissions() throws {
+        let requests: [RemoteRequest] = [
+            .taskAction(taskID: "task", action: .init(.rename, value: "Private title")),
+            .taskAction(taskID: "task", action: .init(.delete, confirmed: true)),
+            .taskAction(taskID: "task", action: .init(.nest)),
+            .taskAction(taskID: "task", action: .init(.move, value: "project")),
+            .taskAccounts(taskID: "task"), .archivedTasks(cursor: "cursor"),
+            .projectAction(projectID: "project", pinned: true, archive: false),
+            .projectAction(projectID: "project", pinned: nil, archive: true)
+        ]
+        for request in requests {
+            let envelope = RemoteRequestEnvelope(id: "test", request: request)
+            guard case let .success(decoded) = RemoteRequestEnvelope.decode(envelope.encoded()) else {
+                return XCTFail("Could not decode \(request.type)")
+            }
+            XCTAssertEqual(decoded, envelope)
+            XCTAssertNil(request.requiredPermission)
+            XCTAssertFalse(request.type.contains("Private title"))
+        }
+        let old = try JSONDecoder().decode(RemoteResponse.self, from: Data(#"{"re":"old","ok":true}"#.utf8))
+        XCTAssertNil(old.taskActions)
+        let future = try JSONDecoder().decode(RemoteAccount.self, from: Data(
+            #"{"id":"account","name":"Work","usage":[],"state":"new-host-state","available":true}"#.utf8))
+        XCTAssertEqual(future.state, .unavailable)
+        let legacy = try JSONDecoder().decode(RemoteAccount.self, from: Data(
+            #"{"id":"account","name":"Work","usage":[]}"#.utf8))
+        XCTAssertNil(legacy.state)
+        XCTAssertNil(legacy.checkedAt)
+        var timed = legacy
+        timed.checkedAt = 2_000_000_000_000
+        XCTAssertEqual(try JSONDecoder().decode(RemoteAccount.self, from: RemoteJSON.encoder.encode(timed)), timed)
+    }
+
     func testTerminalOwnershipFlowAndPermissionRevocation() async throws {
         let harness = try await ServerHarness()
         let key = Data(RemoteRandom.bytes(32))

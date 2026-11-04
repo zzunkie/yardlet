@@ -126,6 +126,8 @@ public struct RemoteProject: Codable, Equatable, Sendable {
     public var id: String
     public var name: String
     public var kind: Kind
+    /// The host project is pinned (§15.32).
+    public var pinned: Bool?
     /// `createTask` may start a task here (v2, §15.1).
     public var canCreateTask: Bool?
 
@@ -197,6 +199,14 @@ public struct RemoteTask: Codable, Equatable, Sendable {
     public var acceptsImages: Bool?
     /// A message sent while its turn runs can go into that turn now (§15.15).
     public var steers: Bool?
+    /// The title and sidebar menus read these optional host presentation values (§15.32).
+    public var pullRequest: RemoteTaskPullRequest?
+    public var canOpenOriginalConversation: Bool?
+    public var originalConversation: Bool?
+    public var canReturnToChats: Bool?
+    public var attached: Bool?
+    public var hasProviderSession: Bool?
+    public var accountName: String?
     /// A message to the task can carry files (§15.20).
     public var notices: RemoteTaskNotices?
     public var acceptsFiles: Bool?
@@ -253,6 +263,7 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var terminals: Bool
     public var taskRail: Bool = false
     public var bankedResets: Bool = false
+    public var taskActions: Bool = false
     public var tabControls: Bool = false
     public var subtasks: Bool = false
     public var taskNotices: Bool = false
@@ -1006,6 +1017,11 @@ public enum RemoteRequest: Equatable, Sendable {
     case itemDetail(taskID: String, itemID: String)
     case actOnSuggestion(taskID: String, suggestionID: String, action: RemoteSuggestionAction)
     case setPinned(taskID: String, pinned: Bool)
+    case projectAction(projectID: String, pinned: Bool?, archive: Bool)
+    case openOriginalConversation(taskID: String)
+    case taskAccounts(taskID: String, refresh: Bool = false)
+    case archivedTasks(cursor: String?)
+    case taskAction(taskID: String, action: RemoteTaskAction)
     case archiveTask(taskID: String)
     case answerLink(requestID: String, approve: Bool)
     /// A link request's first message: the nonce message 1 committed to (§12.1).
@@ -1084,6 +1100,11 @@ public enum RemoteRequest: Equatable, Sendable {
         case .itemDetail: "itemDetail"
         case .actOnSuggestion: "actOnSuggestion"
         case .setPinned: "setPinned"
+        case let .projectAction(_, pinned, _): pinned == nil ? "archiveProjectChats" : "setProjectPinned"
+        case .openOriginalConversation: "openOriginalConversation"
+        case .taskAccounts: "taskAccounts"
+        case .archivedTasks: "archivedTasks"
+        case let .taskAction(_, action): "taskAction." + action.kind.rawValue
         case .archiveTask: "archiveTask"
         case .answerLink: "answerLink"
         case .revealLink: "revealLink"
@@ -1125,6 +1146,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .taskRail, .railAction: nil
         case .nextStep: nil
         case .usageReset, .useUsageReset: nil
+        case .openOriginalConversation, .taskAccounts, .projectAction, .archivedTasks, .taskAction: nil
         case .readReview, .workspaceFiles: nil
         case let .fileRewind(_, action, _, _, _): action == .restore ? .fileWrites : nil
         case .subtask, .cancelAccountMove: nil
@@ -1147,6 +1169,9 @@ public enum RemoteRequest: Equatable, Sendable {
         case let .nextStep(id, _, _, _): id
         case let .usageReset(id), let .useUsageReset(id, _, _): id
         case let .subtask(id, _, _), let .cancelAccountMove(id), let .fileRewind(id, _, _, _, _): id
+        case .projectAction, .archivedTasks: nil
+        case let .openOriginalConversation(id), let .taskAccounts(id, _): id
+        case let .taskAction(id, _): id
         case let .subscribeTask(id, _), let .loadOlder(id, _), let .unsubscribeTask(id), let .sendMessage(id, _, _, _, _),
              let .answerApproval(id, _, _, _), let .stopTurn(id), let .markRead(id), let .answerQuestion(id, _, _),
              let .reviewPlan(id, _, _, _), let .itemDetail(id, _), let .actOnSuggestion(id, _, _), let .setPinned(id, _),
@@ -1162,6 +1187,10 @@ public enum RemoteRequest: Equatable, Sendable {
              .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled,
              .presence: nil
         }
+    }
+
+    public var projectID: String? {
+        if case let .projectAction(id, _, _) = self { return id }; return nil
     }
 
     /// The schedule a request names (§15.21).
@@ -1181,6 +1210,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case let .subtask(_, _, stop): stop
         case let .fileRewind(_, action, _, _, _): action == .restore
         case .cancelAccountMove: true
+        case .openOriginalConversation, .projectAction, .taskAction: true
         case .sendMessage, .answerApproval, .stopTurn, .markRead, .answerQuestion, .reviewPlan, .createTask,
              .actOnSuggestion, .setPinned, .archiveTask, .answerLink, .continueWithAccount, .setAutoContinue, .actOnQueued,
              .answerHandoff, .chooseAnswer, .runScheduledTask, .setScheduledTaskEnabled, .setTaskSetting, .runComposerCommand,
@@ -1264,8 +1294,10 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var data: String?
         var nonce: String?
         var scheduleId: String?
+        var taskAction: RemoteTaskAction?
         var reviewQuery: RemoteReviewQuery?
         var path: String?
+        var refresh: Bool?
         var prepare: Bool?
         var setting: String?
         var value: String?
@@ -1487,6 +1519,24 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 return fail(.badRequest, "Missing taskId or pinned")
             }
             request = .setPinned(taskID: taskID, pinned: pinned)
+        case "setProjectPinned", "archiveProjectChats":
+            guard let id = required(wire.projectId), (wire.type == "setProjectPinned" && wire.pinned != nil && wire.confirmed != true) || (wire.type == "archiveProjectChats" && wire.pinned == nil && wire.confirmed == true) else {
+                return fail(.badRequest, "Choose pin or confirmed archive")
+            }
+            request = .projectAction(projectID: id, pinned: wire.pinned, archive: wire.confirmed == true)
+        case "openOriginalConversation":
+            guard let id = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
+            request = .openOriginalConversation(taskID: id)
+        case "taskAccounts":
+            guard let id = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
+            request = .taskAccounts(taskID: id, refresh: wire.refresh == true)
+        case "archivedTasks":
+            request = .archivedTasks(cursor: wire.cursor)
+        case let type where type.hasPrefix("taskAction."):
+            guard let taskID = required(wire.taskId), let action = wire.taskAction,
+                  type == "taskAction." + action.kind.rawValue,
+                  (action.value?.utf8.count ?? 0) <= 4096 else { return fail(.badRequest, "Invalid task action") }
+            request = .taskAction(taskID: taskID, action: action)
         case "archiveTask":
             guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
             request = .archiveTask(taskID: taskID)
@@ -1746,6 +1796,15 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         case let .setPinned(taskID, pinned):
             wire.taskId = taskID
             wire.pinned = pinned
+        case let .projectAction(id, pinned, archive):
+            wire.projectId = id; wire.pinned = pinned; wire.confirmed = archive
+        case let .openOriginalConversation(id): wire.taskId = id
+        case let .taskAccounts(id, refresh): wire.taskId = id; wire.refresh = refresh ? true : nil
+        case let .archivedTasks(cursor):
+            wire.cursor = cursor
+        case let .taskAction(taskID, action):
+            wire.taskId = taskID
+            wire.taskAction = action
         case let .archiveTask(taskID):
             wire.taskId = taskID
         case let .answerLink(requestID, approve):
@@ -1858,6 +1917,8 @@ public struct RemoteServerInfo: Codable, Equatable, Sendable {
 public struct RemoteResponse: Codable, Equatable, Sendable {
     public var taskRail: Bool?
     public var rail: RemoteRailFacts?
+    public var taskAccounts: [RemoteAccount]?
+    public var archivedTasks: [RemoteArchivedTask]?
     public var re: String
     public var ok: Bool
     public var error: RemoteError?
@@ -1937,6 +1998,7 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var taskNotices: Bool?
     public var fileRewind: Bool?
     public var rewind: RemoteFileRewind?
+    public var taskActions: Bool?
     public var tabControls: Bool?
     public var browserTabs: Bool?
     /// `watchTab` (§15.25): the task's tabs, and the one watched.
@@ -2097,6 +2159,10 @@ public struct RemoteAccount: Codable, Equatable, Sendable {
         }
     }
 
+    /// Optional account-row state (§15.32); older clients ignore it.
+    public var state: State?
+    /// The last successful reading, in milliseconds since the epoch (§15.32).
+    public var checkedAt: Int64?
     public var id: String
     public var name: String
     public var detail: String?

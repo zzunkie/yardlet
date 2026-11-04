@@ -2538,21 +2538,9 @@ struct MainWindow: View {
         .onChange(of: hasManagementAlert) { _, isPresented in
             if !isPresented { finishShellModal() }
         }
-        .alert(L10n.string("Rename task"), isPresented: Binding(
-            get: { sessionToRename != nil },
-            set: { if !$0 { sessionToRename = nil } }
-        )) {
-            TextField(L10n.string("Task title"), text: $renameTitle)
-                .id(taskRenamePresentationID)
-            Button(L10n.string("Cancel"), role: .cancel) { sessionToRename = nil }
-            Button(L10n.string("Rename")) {
-                guard let session = sessionToRename else { return }
-                let title = renameTitle
-                sessionToRename = nil
-                Task { await model.rename(session, to: title) }
-            }
-            .disabled(renameTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        }
+        .modifier(TaskRenameAlert(session: $sessionToRename, title: $renameTitle, presentationID: taskRenamePresentationID) { session, title in
+            Task { await model.rename(session, to: title) }
+        })
         .alert(L10n.string("Delete task?"), isPresented: Binding(
             get: { sessionToDelete != nil },
             set: { if !$0 { sessionToDelete = nil } }

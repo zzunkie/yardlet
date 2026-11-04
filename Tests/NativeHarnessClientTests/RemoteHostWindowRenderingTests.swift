@@ -91,6 +91,127 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
         }
     }
 
+    func testTaskActionSurfacesDrawFromTheSameHost() async throws {
+        let accountFolder = FileManager.default.temporaryDirectory.appending(path: "remote-account-render-\(UUID())")
+        try FileManager.default.createDirectory(at: accountFolder.appending(path: "projects"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: accountFolder) }
+        let connections = (0..<3).map { index in
+            ProviderConnection(id: "account-\(index)", name: ["Primary", "Secondary", "Signed out"][index],
+                harness: .claudeCode, providerID: nil, homePath: accountFolder.path, credentialSelector: nil)
+        }
+        let readings = Dictionary(uniqueKeysWithValues: connections.enumerated().map { index, connection in
+            (connection.id, HarnessAccountSnapshot(id: connection.id, harness: .claudeCode, providerID: nil,
+                state: index == 2 ? .signedOut : .signedIn, accountLabel: ["primary@example.test", "secondary@example.test", "offline@example.test"][index],
+                detail: "", credentialOwner: "", checkedAt: Date(),
+                usage: index == 2 ? [] : [AccountUsageMetric(id: "session", label: "5-hour", usedFraction: index == 0 ? 0.7 : 0.2,
+                    detail: "", resetsAt: Date(timeIntervalSince1970: 2_000_000_000), evidence: .exactQuota)],
+                canLogin: false, canLogout: false))
+        })
+        let accountStore = ProviderConnectionStore(connectionLoader: { connection, _ in readings[connection.id]! })
+        for connection in connections {
+            try accountStore.save(connection)
+            accountStore.publish(readings[connection.id]!, for: connection)
+        }
+        let session = SessionRecord(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp/remote-render/actions"),
+            runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Review the migration", status: .waitingForApproval, connection: connections[0])
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteTaskActionsRender")))
+        let saved = SessionRecord(harness: .claudeCode, workspaceURL: session.workspaceURL,
+            runtimeExecutableURL: session.runtimeExecutableURL, title: "Restore the release notes")
+        let parent = SessionRecord(harness: .claudeCode, workspaceURL: session.workspaceURL,
+            runtimeExecutableURL: session.runtimeExecutableURL, title: "Plan the release")
+        let repository = InMemorySessionRepository(sessions: [session, parent, saved], archived: [saved.id])
+        let host = AppModel(store: SessionStore(sessions: [session, parent], repository: repository),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults), connections: accountStore, initialTranscripts: [session.id: [
+                TranscriptEntry(content: .permission(PermissionRequest(id: "request", title: "Bash", detail: nil, command: "swift test"), state: .pending))
+            ]], preferences: defaults, restoresIndexOnLaunch: false)
+        _ = host.projects.ensureProject(forRoot: session.workspaceURL)
+        _ = host.projects.ensureProject(forRoot: URL(filePath: "/tmp/remote-render/documentation"))
+        let pullRequest = TaskPullRequest(number: 42, url: URL(string: "https://github.com/example/project/pull/42")!,
+            repository: "example/project", state: .open, checks: .passing)
+        host.pullRequests.setPullRequest(pullRequest, for: session.id)
+        let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(model: host))
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+            name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let hosts = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+            hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
+        let paired = try await hosts.pair(link: link.absoluteString)
+        let remote = try XCTUnwrap(hosts.model(for: paired.id))
+        try await waitUntil { remote.hasSnapshot }
+        await host.loadArchivedTasks()
+        await remote.loadArchivedTasks()
+        let accountReply = await remote.response(to: .taskAccounts(taskID: session.id.uuidString))
+        XCTAssertTrue(accountReply.ok)
+        XCTAssertEqual(accountReply.taskAccounts?.count, 3)
+        XCTAssertTrue(accountReply.taskAccounts?.allSatisfy { $0.checkedAt != nil } == true)
+        XCTAssertEqual(accountReply.taskAccounts?.filter { $0.current == true }.count, 1)
+        XCTAssertEqual(accountReply.taskAccounts?.filter { $0.available == true }.count, 1)
+        XCTAssertFalse(RemoteJSON.string(accountReply.taskAccounts ?? []).contains(accountFolder.path))
+        XCTAssertEqual(remote.archivedTasks?.map(\.id), host.store.archivedSessions?.map(\.id))
+        let mirrored = try XCTUnwrap(remote.sidebar.sessions.first { $0.id == session.id })
+        let localActions = TaskHeaderActions(isAttached: { host.isAttached($0.id) },
+            projectMoveOptions: { host.projectMoveOptions(for: $0, visibleProjects: host.projects.projects) }, onChooseAccount: { _ in },
+            pullRequest: { host.pullRequests.pullRequest(for: $0.id) })
+        for (name, record, actions) in [("local", session, localActions), ("remote", mirrored, remote.taskHeaderActions)] {
+            try await render("\(name)-task-actions-header", size: NSSize(width: 700, height: 52), titled: false) {
+                HStack { TaskHeaderIdentity(session: record, actions: actions); Spacer() }.padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(nsColor: .windowBackgroundColor))
+            }
+            try await render("\(name)-task-actions-title-menu", size: NSSize(width: 320, height: 360), titled: false) {
+                VStack(alignment: .leading, spacing: 8) {
+                    TaskTitleMenu(session: record, actions: actions).menuContents
+                }.buttonStyle(.plain).font(.system(size: 13)).foregroundStyle(.primary)
+                    .padding(12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .background(Color(nsColor: .windowBackgroundColor))
+            }
+            let nesting = SidebarNesting()
+            let groups = name == "local" ? host.projects.visibleGroups(sessions: host.sidebarSessions) : remote.sidebar.groups
+            nesting.layout = SidebarProjection.layout(visibleGroups: groups, allGroups: groups, splits: [], isFiltering: false)
+            let row = SidebarTaskEntry(session: record, title: record.title, isSelected: false, onSelect: {},
+                onTogglePinned: { _ in }, onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in },
+                onMarkRead: { _ in }, onMarkUnread: { _ in }, projectMove: actions.projectMoveOptions(record),
+                onMoveToProject: { _ in }, onDropTask: nil, nesting: nesting)
+            try await render("\(name)-task-actions-row-menu", size: NSSize(width: 320, height: 300), titled: false) {
+                VStack(alignment: .leading, spacing: 8) { row.menuContents }
+                    .buttonStyle(.plain).font(.system(size: 13)).foregroundStyle(.primary)
+                    .padding(12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .background(Color(nsColor: .windowBackgroundColor))
+            }
+            let archived = name == "local" ? host.store.archivedSessions : remote.archivedTasks
+            try await render("\(name)-task-actions-archive", size: NSSize(width: 320, height: 280), titled: false) {
+                ArchivedTaskList(archived: archived, errorMessage: nil, restoringIDs: [], searchText: .constant(""),
+                    projectName: { record in name == "local" ? host.projects.displayName(for: record.workspaceURL) : remote.archiveProjectNames[record.id] ?? "" },
+                    onBack: {}, onUnarchive: { _ in }, showsWorkspace: name == "local")
+            }
+        }
+        try await render("local-task-actions-accounts", size: NSSize(width: 660, height: 460), titled: false) {
+            TaskAccountSelectionView(session: session, store: host.connections, runtimeSelections: host.runtimeSelections, onSelect: { _ in })
+                .background(Color(nsColor: .windowBackgroundColor))
+        }
+        try await render("remote-task-actions-accounts", size: NSSize(width: 660, height: 460), titled: false) {
+            RemoteTaskAccounts(model: remote, session: mirrored).background(Color(nsColor: .windowBackgroundColor))
+        }
+        let directory = try WindowlessRender.directory("remote-qa")
+        for surface in ["header", "title-menu", "row-menu", "archive", "accounts"] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let suffix = "task-actions-\(surface)-\(appearance.suffix).png"
+                let left = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: directory.appending(path: "local-" + suffix))))
+                let right = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: directory.appending(path: "remote-" + suffix))))
+                let combined = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+                    pixelsWide: left.pixelsWide + right.pixelsWide, pixelsHigh: max(left.pixelsHigh, right.pixelsHigh),
+                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+                let context = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: combined)).cgContext
+                context.draw(try XCTUnwrap(left.cgImage), in: CGRect(x: 0, y: 0, width: left.pixelsWide, height: left.pixelsHigh))
+                context.draw(try XCTUnwrap(right.cgImage), in: CGRect(x: left.pixelsWide, y: 0, width: right.pixelsWide, height: right.pixelsHigh))
+                try WindowlessRender.writePNG(combined, to: directory.appending(path: "comparison-" + suffix))
+            }
+        }
+        hosts.close(paired.id)
+        await host.shutdown()
+    }
+
     func testTheConnectWindowAndAHostWindowDraw() async throws {
         let directory = try WindowlessRender.directory("remote-qa")
         // At its own pace, so a turn still runs when a message is queued behind it.

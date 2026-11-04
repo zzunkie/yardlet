@@ -132,6 +132,7 @@ public final class RemoteAuditLog: @unchecked Sendable {
         public var task: String?
         /// The schedule a schedule's command named (§15.21).
         public var schedule: String?
+        public var project: String? = nil
         /// The name of the file a `readFile` opened or was refused (§15.22), never its path.
         public var file: String?
         /// The kind of a browser tab's input (§15.25: `click`, `text`, `key` …), never what was typed.
@@ -152,9 +153,9 @@ public final class RemoteAuditLog: @unchecked Sendable {
         self.keptLines = keptLines
     }
 
-    public func record(device: String?, type: String, task: String?, schedule: String? = nil, file: String? = nil,
+    public func record(device: String?, type: String, task: String?, schedule: String? = nil, project: String? = nil, file: String? = nil,
                        input: String? = nil, byteCount: Int? = nil, result: String, at: Date = Date()) {
-        let entry = Entry(at: at, device: device, type: type, task: task, schedule: schedule, file: file, input: input,
+        let entry = Entry(at: at, device: device, type: type, task: task, schedule: schedule, project: project, file: file, input: input,
                           byteCount: byteCount, result: result)
         queue.async { [self, fileURL, keptLines] in
             let encoder = JSONEncoder()

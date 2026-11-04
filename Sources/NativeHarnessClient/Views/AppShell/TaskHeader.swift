@@ -6,6 +6,11 @@ import SwiftUI
 /// screen), and in a split view each pane's header is its task's header, as the Claude app gives each
 /// split pane its own header (`paneIndex`).
 struct TaskHeaderActions {
+    var canManageTask = true
+    var managesWorkspace = true
+    var accountName: ((SessionRecord) -> String?)? = nil
+    var hasOriginalConversation: ((SessionRecord) -> Bool)? = nil
+    var hasProviderSession: ((SessionRecord) -> Bool)? = nil
     var isAttached: (SessionRecord) -> Bool = { _ in false }
     var onResume: (SessionRecord) -> Void = { _ in }
     var onRename: (SessionRecord) -> Void = { _ in }
@@ -59,37 +64,7 @@ struct TaskTitleMenu: View {
     @FocusState private var taskInfoFocused: Bool
 
     var body: some View {
-        Menu {
-            if let connection = session.connection {
-                Text(L10n.format("Account: %@", connection.name))
-            }
-            if TaskAccountSwitch.supports(session.harness), let onChooseAccount = actions.onChooseAccount {
-                Button(L10n.string("Choose account…")) { onChooseAccount(session) }
-                Divider()
-            }
-            Button(L10n.string("Rename task")) { actions.onRename(session) }
-            Button(L10n.string(session.isPinned ? "Unpin" : "Pin")) { actions.onTogglePinned(session) }
-            TaskProjectMoveMenuItems(options: actions.projectMoveOptions(session)) { actions.onMoveToProject(session, $0) }
-            Button(L10n.string("Archive")) { actions.onArchive(session) }
-            if session.harness == .claudeCode, session.inheritedContext?.nativeConversationOrigin != nil,
-               let onOpenOriginalConversation = actions.onOpenOriginalConversation {
-                OriginalConversationMenuItem(canOpen: actions.canOpenOriginalConversation(session),
-                    onOpen: { onOpenOriginalConversation(session) })
-            }
-            Divider()
-            Button(L10n.string("Show in Finder")) {
-                NSWorkspace.shared.activateFileViewerSelecting([session.workspaceURL])
-            }
-            Button(L10n.string("Back to conversation")) {
-                actions.onBackToConversation(session)
-            }
-            if !actions.isAttached(session) && session.status != .running && session.status != .waitingForApproval {
-                Divider()
-                Button(L10n.string(session.providerSessionID == nil ? "Retry" : "Resume")) {
-                    actions.onResume(session)
-                }
-            }
-        } label: {
+        Menu { menuContents } label: {
             Text(session.title)
                 .font(.system(size: size, weight: .medium))
                 .lineLimit(1)
@@ -105,8 +80,43 @@ struct TaskTitleMenu: View {
         .accessibilityLabel(L10n.string("Task actions"))
         .accessibilityValue([session.title, actions.projectName(session),
                              session.status.displayName].joined(separator: ", "))
-        .help("\(session.title)\n\(session.workspaceURL.path(percentEncoded: false))")
+        .help(actions.managesWorkspace ? "\(session.title)\n\(session.workspaceURL.path(percentEncoded: false))" : session.title)
     }
+
+    @ViewBuilder var menuContents: some View {
+        if let name = actions.accountName?(session) ?? session.connection?.name {
+            Text(L10n.format("Account: %@", name))
+        }
+        if TaskAccountSwitch.supports(session.harness), let onChooseAccount = actions.onChooseAccount {
+            Button(L10n.string("Choose account…")) { onChooseAccount(session) }
+            Divider()
+        }
+        Button(L10n.string("Rename task")) { actions.onRename(session) }.disabled(!actions.canManageTask)
+        Button(L10n.string(session.isPinned ? "Unpin" : "Pin")) { actions.onTogglePinned(session) }
+        TaskProjectMoveMenuItems(options: actions.projectMoveOptions(session)) { actions.onMoveToProject(session, $0) }
+            .disabled(!actions.canManageTask)
+        Button(L10n.string("Archive")) { actions.onArchive(session) }
+        if actions.hasOriginalConversation?(session) ?? (session.harness == .claudeCode && session.inheritedContext?.nativeConversationOrigin != nil),
+           let onOpenOriginalConversation = actions.onOpenOriginalConversation {
+            OriginalConversationMenuItem(canOpen: actions.canOpenOriginalConversation(session),
+                onOpen: { onOpenOriginalConversation(session) })
+        }
+        Divider()
+        Button(L10n.string("Show in Finder")) {
+            NSWorkspace.shared.activateFileViewerSelecting([session.workspaceURL])
+        }.disabled(!actions.managesWorkspace)
+        Button(L10n.string("Back to conversation")) {
+            actions.onBackToConversation(session)
+        }
+        if actions.canManageTask && !actions.isAttached(session) && session.status != .running && session.status != .waitingForApproval {
+            Divider()
+            Button(L10n.string((actions.hasProviderSession?(session) ?? (session.providerSessionID != nil)) ? "Resume" : "Retry")) {
+                actions.onResume(session)
+            }
+        }
+
+    }
+
 }
 
 /// What a task's header shows after its title: its harness, its pull request and its state. In the

@@ -93,6 +93,7 @@ struct RemoteHostView: View {
         .navigationTitle(model.name)
         .navigationSubtitle(RemoteConnectionText.line(model.connection))
         .modifier(RemotePresence(model: model))
+        .modifier(RemoteTaskActionAlerts(model: model))
         .focusedSceneValue(\.yardletTaskCommands, taskCommands)
         .focusedSceneValue(\.yardletSplitCommands, splitCommands)
         .onChange(of: windowSelection) { old, new in shell.follow(new, from: old) }
@@ -110,7 +111,23 @@ struct RemoteHostView: View {
 
     // MARK: Sidebar
 
-    private var sidebar: some View {
+    @ViewBuilder private var sidebar: some View {
+        if model.showsArchive && model.taskActions {
+            VStack(spacing: 0) {
+                ArchivedTaskList(archived: model.archivedTasks, errorMessage: model.commandError,
+                    restoringIDs: model.restoringArchived, searchText: $shell.archivedSearchText,
+                    projectName: { model.archiveProjectNames[$0.id] ?? L10n.string("Chats") },
+                    onBack: { model.showsArchive = false },
+                    onUnarchive: { record in Task { await model.restoreTask(record) } }, showsWorkspace: false)
+                if model.archiveCursor != nil {
+                    Button(L10n.string("Load more")) { Task { await model.loadArchivedTasks(reset: false) } }
+                        .disabled(model.readingArchive)
+                }
+            }.task { await model.loadArchivedTasks() }
+        } else { taskSidebar }
+    }
+
+    private var taskSidebar: some View {
         let mirror = model.sidebar
         let layout = sidebarLayout(mirror)
         return TaskSidebar(
@@ -125,17 +142,22 @@ struct RemoteHostView: View {
             onNewTaskInProject: { folder in showNewTaskInProject(mirror.projectIDs[folder.standardizedFileURL]) },
             projects: shell.projects,
             onEditProject: { _ in },
-            onArchiveProjectChats: { _ in },
+            onArchiveProjectChats: { model.archiveProject = $0 },
             onRemoveProject: { _ in },
             onTogglePinned: { session in model.send(.setPinned(taskID: session.id.uuidString, pinned: !session.isPinned)) },
             onArchive: { session in model.send(.archiveTask(taskID: session.id.uuidString)) },
-            onDelete: nil,
-            onRename: nil,
+            onDelete: model.taskActions ? { model.deleteTask = $0 } : nil,
+            onRename: model.taskActions ? { model.renameTitle = $0.title; model.renameTask = $0 } : nil,
             onMarkRead: { session in model.send(.markRead(taskID: session.id.uuidString)) },
-            onMarkUnread: nil,
-            onMoveToProject: nil,
-            onNest: nil,
+            onMarkUnread: model.taskActions ? { model.taskAction($0, .init(.markUnread)) } : nil,
+            onMoveToProject: model.taskActions ? { model.taskAction($0, .init(.move, value: $1?.id.uuidString)) } : nil,
+            onNest: model.taskActions ? { task, parent in model.send(.taskAction(taskID: task.uuidString, action: .init(.nest, value: parent?.uuidString))) } : nil,
             managesProjects: false,
+            onRemoteProjectPin: model.taskActions ? { group in
+                if let project = group.project { model.send(.projectAction(projectID: project.id.uuidString, pinned: !project.isPinned, archive: false)) }
+            } : nil,
+            canArchiveRemoteProject: model.taskActions,
+            remoteProjectMoveOptions: model.projectMoveOptions,
             footer: AnyView(RemoteHostFooter(model: model, directory: directory)),
             disclosure: shell.disclosure,
             activity: activity(mirror)
@@ -377,8 +399,8 @@ struct RemoteHostView: View {
     }
 
     /// The Task and View menus' commands for this window: what they act on read from the host's lists as the local
-    /// window reads its own (`TaskCommandTargets`), carried out through the host. What the host does not take from
-    /// another Mac yet (Mark as unread, the archived list) stays dimmed; the panels are the host's.
+    /// window reads its own (`TaskCommandTargets`), carried out through the host. Actions an older host does not
+    /// advertise stay dimmed; the panels are the host's.
     private var taskCommands: YardletTaskCommandSet {
         let mirror = model.sidebar
         let layout = sidebarLayout(mirror)
@@ -387,7 +409,7 @@ struct RemoteHostView: View {
         var targets = TaskCommandTargets.make(
             layout: activity?.layout ?? layout, selection: activity?.selection ?? windowSelection, shownSession: shown,
             sidebarSessions: mirror.sessions, splits: [], details: mirror.details)
-        targets.markUnread = nil
+        if !model.taskActions { targets.markUnread = nil }
         var commands = YardletTaskCommandSet()
         commands.targets = targets
         commands.isSidebarVisible = shell.isSidebarVisible
@@ -400,7 +422,8 @@ struct RemoteHostView: View {
         commands.archive = { id in model.send(.archiveTask(taskID: id.uuidString)) }
         commands.shownTaskID = shownTaskID
         commands.toggleSessionRail = { shell.showsRail.toggle() }
-        commands.showArchivedTasks = nil
+        commands.markUnread = { id in model.send(.taskAction(taskID: id.uuidString, action: .init(.markUnread))) }
+        commands.showArchivedTasks = model.taskActions ? { model.showsArchive = true } : nil
         if model.newTask != nil { commands.newTask = { showNewTask() } }
         return commands
     }
@@ -415,6 +438,7 @@ final class RemoteHostShell {
     var isSidebarVisible = true
     let sidebarWidth = SidebarWidthState()
     var searchText = ""
+    var archivedSearchText = ""
     let disclosure = SidebarDisclosureStore(defaults: nil)
     var isShowingActivity = false
     var activityPlaces: [UUID: TaskAttentionPlace] = [:]
@@ -717,6 +741,7 @@ private struct RemoteHostFooter: View {
                 Button(L10n.string("Try Again")) { model.reconnectNow() }
             }
             Button(L10n.string("Connect to Mac…")) { openWindow(id: RemoteConnectWindow.sceneID) }
+            Button(L10n.string("Archived tasks")) { model.showsArchive = true }.disabled(!model.taskActions)
             Divider()
             Button(L10n.string("Remove from This Mac"), role: .destructive) { confirmsRemoval = true }
         } label: {
@@ -1156,24 +1181,19 @@ struct RemoteTaskView: View {
         }
     }
 
-    /// What the title bar names for the task: its harness and title, where it runs, and the session rail's button.
+    /// The window owns returning keyboard work to the conversation; the host owns task mutations.
+    private var headerActions: TaskHeaderActions {
+        var actions = model.taskHeaderActions
+        actions.onBackToConversation = { _ in panels = TaskSurfaceNavigationProjection.closingAllPanels(panels) }
+        return actions
+    }
+
     @ViewBuilder
     private var header: some View {
-        if let task {
-            HarnessIdentityIcon(harness: HarnessKind(rawValue: task.harness), size: 15)
-            Text(task.title)
-                .font(.system(size: 13, weight: .semibold))
-                .lineLimit(1)
-            Text(task.harnessName)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+        if let session = model.sidebar.sessions.first(where: { $0.id.uuidString == conversation.taskID }) {
+            TaskHeaderIdentity(session: session, actions: headerActions)
         }
         WindowDragRegion().frame(minWidth: 8, maxWidth: .infinity)
-        Text(L10n.format("On %@", model.name))
-            .font(.system(size: 12))
-            .foregroundStyle(.tertiary)
-            .lineLimit(1)
         TaskSurfaceControls(showsSessionRail: showsRail, onToggleSessionRail: { showsRail.toggle() }, panelState: $panels,
                             unavailableSurfaces: unavailableSurfaces)
     }

@@ -578,6 +578,7 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
 - 2026-11-04: desktop conversation next steps and remaining content (§15.31).
 
 - 2026-11-04: per-task session rail facts and actions, and cached home task lines (§15.34).
+- 2026-11-04: optional `taskActions`, sidebar and title actions, host account selection and paged archived tasks (§15.32).
 
 - 2026-11-04: §15.26 adds read-only Review, advertised by optional `reviewReading`; no mutation request is added.
 - 2026-11-04: workspace file listing (§15.27), with the existing bounded `readFile` requests for content.
@@ -1160,6 +1161,8 @@ that does not know them ignores them.
   value the Mac does not offer now).
 
 ### 15.17 Plan limits
+
+`RemoteAccount` also has optional account-row `state` and `checkedAt` (§15.32); older clients ignore them.
 
 - The `error` item with `errorKind` `usageLimit` (§6.7) of an idle task's latest limit card carries the card's
   actions in `options`: `continueWithAccount` (another saved account shares the task's history) and
@@ -2025,6 +2028,47 @@ a restore already dispatched to the provider cannot be undone by revoking permis
 missing or changed checkpoint, changed files, unknown file list or out-of-scope target cannot be
 restored through this path. Nothing is written to the client's workspace.
 
+### 15.32 Task and project actions
+
+The optional snapshot flag `taskActions: true` advertises these requests. Older hosts omit it; their clients keep
+these controls dimmed. The host resolves task, project and account IDs again at execution and uses the same model
+operations as its own menus. No account home or credential is sent. Each command is audit-logged with its kind,
+device, task or project ID and result, never a title or account value. These actions need no additional device permission.
+
+- `taskAction.rename`: `taskId` and `taskAction: {kind: "rename", value: "New title", confirmed: false}`.
+  The title is nonempty after trimming and the value is bounded to 4,096 UTF-8 bytes.
+- `taskAction.markUnread`: the same envelope with `kind: "markUnread"`; `markRead` remains §4.4.
+- `taskAction.move`: `kind: "move"`, `value` a project ID, or absent for Chats. The host applies its ordinary
+  project-move rules; a task's working folder, native history and account do not move.
+- `taskAction.nest`: `kind: "nest"`, `value` a parent task ID, or absent for the top level. Cycles and missing
+  parents are refused by the host. The sidebar menu and drag use this same operation.
+- `taskAction.delete`: `kind: "delete", confirmed: true`, sent only after the local delete confirmation.
+  Missing confirmation is refused. The host's provider-aware delete path applies.
+- `openOriginalConversation`, with `taskId`, opens the preserved original and returns its `taskId`, without changing
+  the host window selection or starting a model turn.
+- `taskAction.resume`: `kind: "resume"`, the title menu's Resume or Retry for a detached idle task.
+- `taskAccounts`, with `taskId`, reads the host account choices as `taskAccounts: [RemoteAccount]`, using the type from §15.17. `taskAction.chooseAccount`
+  names an available account ID in `value`; it applies Choose account, without sending a continuation prompt.
+  A running task moves when its turn ends, as on the host. Optional `refresh: true` rereads all listed accounts,
+  including the current account, as the local refresh button does. The current and unavailable accounts, detail
+  and usage windows draw with the local account row. Optional `state` is `signedIn`, `signedOut`, `actionRequired`,
+  `unavailable` or `unknown`; an unrecognized state decodes as `unavailable`. Optional `checkedAt` is the last
+  successful usage reading in milliseconds since the epoch, displayed by the shared freshness line. Only an account the host still marks
+  `available` can be chosen. Tokens, credentials, account folders, other paths and routing internals never travel.
+- `archivedTasks` reads at most 100 archived tasks in the host's archived-list order. `archivedTasks` in its response
+  holds `{task, archivedAt, projectName}`; `task` has the shape of §4.1, without paths. An optional `cursor` names
+  the last row; pass it to the next request. No cursor means the end. If that row was restored meanwhile the host
+  answers `invalidCursor`, and the client reloads the first page. `taskAction.unarchive`, with `kind: "unarchive"`,
+  restores the host's archived record through its ordinary unarchive operation.
+- `setProjectPinned`: `projectId` and `pinned`; `archiveProjectChats`: `projectId` and `confirmed: true`, after
+  the ordinary project archive confirmation. Partial failures are reported. Edit project, Show in Finder and
+  Remove project remain host-only.
+
+Task snapshots optionally include `originalConversation`, `canOpenOriginalConversation`, `canReturnToChats`, `attached`, `hasProviderSession`, `accountName` and
+`pullRequest` (`number`, `url`, `repository`, `state`, `checks`, `review`). Projects optionally include `pinned`.
+These are presentation values, read from the host's existing state; reading a snapshot starts no provider or GitHub request.
+The desktop title menu and header draw the shared local views; Finder is disabled for host workspaces.
+
 ### 15.34 Session rail and home task lines
 
 A snapshot may advertise `taskRail: true`. A desktop asks `{type: "taskRail", taskId}` for the task
@@ -2194,9 +2238,9 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   (§15.29), below the conversation or in the side panel as Settings place the terminal, its selection attached to the
   composer. A link in the conversation or the terminal opens as on the host: a file read from the host, a page on the
   host's own address in the host's browser. A panel the host does not serve from another Mac, or does not allow this
-  Mac (§15.28), shows dimmed in the New tab screen and the title bar. What the host does not
-  take from another device yet (rename, mark as unread, move, nest, delete, the projects' own actions, the archived
-  list) shows dimmed.
+  Mac (§15.28), shows dimmed in the New tab screen and the title bar. With `taskActions` (§15.32), the row and title menus rename, mark unread, move, nest, delete and restore host tasks;
+  the Task menu and host footer open the paged archived list. Project pinning and chat archiving act on the host.
+  Edit project, Show in Finder and Remove project remain dimmed. Older hosts keep the new actions dimmed.
 - **What it does:** what a phone does (§4–§6, §15), on a larger screen: the host's sidebar and its marks, a task's
   conversation in Yardlet's own timeline with the host's own cards from its full detail (§15.24: whole answers, a
   message's pictures, subagents, compactions, notices, proposed plans and the limit card with its windows and
@@ -2255,4 +2299,3 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   to a phone while the person watches the terminal. Not a command; a connection's presence ends with it.
 - **Host settings:** Settings › Remote's "Keep this Mac awake on power" (off unless turned on) holds off idle sleep
   while remote connections are allowed and the Mac is on power, so a device elsewhere can reach it.
-

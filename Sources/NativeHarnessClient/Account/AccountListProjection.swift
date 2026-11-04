@@ -134,13 +134,17 @@ enum AccountListProjection {
             return choices.isEmpty ? L10n.string("Connect a harness to use an account.") : nil
         case let .switchTask(session), let .continueAfterLimit(session):
             guard choices.allSatisfy({ $0.connection == session.connection }) else { return nil }
-            return L10n.string(session.harness == .claudeCode
-                ? "No other account shares this task's conversation history."
-                : "No selectable stored accounts in this task's environment.")
+            return noOtherAccountText(for: session.harness)
         case .manage:
             guard choices.isEmpty else { return nil }
             return L10n.string(search.isEmpty ? "Connect a harness to use an account." : "No matching accounts.")
         }
+    }
+
+    static func noOtherAccountText(for harness: HarnessKind) -> String {
+        L10n.string(harness == .claudeCode
+            ? "No other account shares this task's conversation history."
+            : "No selectable stored accounts in this task's environment.")
     }
 
     /// The second line of a row that stands for a whole account: the connection, the provider it

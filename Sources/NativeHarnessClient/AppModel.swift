@@ -3832,7 +3832,7 @@ final class AppModel {
     /// Open the preserved original as an ordinary separate chat. Neither branch is rebound,
     /// resumed or sent a model input merely to read the saved conversation.
     @discardableResult
-    func openOriginalClaudeConversation(from source: SessionRecord) async -> SessionRecord? {
+    func openOriginalClaudeConversation(from source: SessionRecord, selectsSession: Bool = true) async -> SessionRecord? {
         guard let current = matchingSession(source), canOpenOriginalConversation(in: current),
               let origin = current.inheritedContext?.nativeConversationOrigin,
               origin.providerSessionID != current.providerSessionID,
@@ -3840,7 +3840,7 @@ final class AppModel {
         defer { sessionMutations.remove(current.id) }
         let selectedAtStart = store.selectedSessionID
         if let existing = store.sessions.first(where: { $0.id != current.id && origin.matches($0) }) {
-            if store.selectedSessionID == selectedAtStart { store.selectedSessionID = existing.id }
+            if selectsSession && store.selectedSessionID == selectedAtStart { store.selectedSessionID = existing.id }
             return existing
         }
         do {
@@ -3854,7 +3854,7 @@ final class AppModel {
             guard let saved = matchingSession(current), saved.inheritedContext?.nativeConversationOrigin == origin else { return nil }
             // Another read may have opened this identity while the scoped file read was pending.
             if let existing = store.sessions.first(where: { $0.id != current.id && origin.matches($0) }) {
-                if store.selectedSessionID == selectedAtStart { store.selectedSessionID = existing.id }
+                if selectsSession && store.selectedSessionID == selectedAtStart { store.selectedSessionID = existing.id }
                 return existing
             }
             let original = try await store.createSession(harness: .claudeCode, workspaceURL: origin.workspaceURL,
@@ -3869,7 +3869,7 @@ final class AppModel {
             }
             transcriptBuilders[original.id] = TranscriptBuilder(entries: snapshot.entries)
             publishTranscript(for: original.id)
-            if store.selectedSessionID == selectedAtStart { store.selectedSessionID = original.id }
+            if selectsSession && store.selectedSessionID == selectedAtStart { store.selectedSessionID = original.id }
             return original
         } catch {
             if matchingSession(current) != nil { errorBySessionID[current.id] = error.localizedDescription }

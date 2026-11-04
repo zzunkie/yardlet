@@ -29,6 +29,7 @@ struct ArchivedTaskList: View {
     let projectName: (SessionRecord) -> String
     let onBack: () -> Void
     let onUnarchive: (ArchivedSessionRecord) -> Void
+    var showsWorkspace = true
 
     private var shown: [ArchivedSessionRecord] {
         ArchivedTaskFilter.matches(archived ?? [], query: searchText, projectName: projectName)
@@ -83,7 +84,7 @@ struct ArchivedTaskList: View {
                                 record: record,
                                 projectName: projectName(record.session),
                                 isRestoring: restoringIDs.contains(record.id),
-                                onUnarchive: { onUnarchive(record) }
+                                onUnarchive: { onUnarchive(record) }, showsWorkspace: showsWorkspace
                             )
                             .padding(.horizontal, 4)
                         }
@@ -105,6 +106,7 @@ struct ArchivedTaskRow: View {
     let projectName: String
     let isRestoring: Bool
     let onUnarchive: () -> Void
+    let showsWorkspace: Bool
     @State private var isHovering: Bool
     @Environment(\.yardletInterfaceScale) private var interfaceScale
 
@@ -114,12 +116,14 @@ struct ArchivedTaskRow: View {
         projectName: String,
         isRestoring: Bool,
         onUnarchive: @escaping () -> Void,
-        isHovering: Bool = false
+        isHovering: Bool = false,
+        showsWorkspace: Bool = true
     ) {
         self.record = record
         self.projectName = projectName
         self.isRestoring = isRestoring
         self.onUnarchive = onUnarchive
+        self.showsWorkspace = showsWorkspace
         _isHovering = State(initialValue: isHovering)
     }
 
@@ -159,7 +163,7 @@ struct ArchivedTaskRow: View {
         .contentShape(Rectangle())
         .background(isHovering ? ParityTheme.hoverFill : .clear, in: RoundedRectangle(cornerRadius: 6))
         .onHover { isHovering = $0 }
-        .help([session.title, session.harness.displayName, session.workspaceURL.path(percentEncoded: false)]
+        .help(([session.title, session.harness.displayName] + (showsWorkspace ? [session.workspaceURL.path(percentEncoded: false)] : []))
             .joined(separator: "\n"))
         .contextMenu {
             Button(L10n.string("Unarchive"), action: onUnarchive)

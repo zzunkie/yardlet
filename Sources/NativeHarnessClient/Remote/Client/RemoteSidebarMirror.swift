@@ -32,7 +32,7 @@ struct RemoteSidebarMirror: Equatable {
             folders[remote.id] = folder
             projectIDs[folder.standardizedFileURL] = remote.id
             if remote.kind == .project, let id = UUID(uuidString: remote.id) {
-                let project = Project(id: id, name: remote.name, primaryRoot: folder)
+                let project = Project(id: id, name: remote.name, primaryRoot: folder, isPinned: remote.pinned == true)
                 projectsByID[remote.id] = project
                 projects.append(project)
             }

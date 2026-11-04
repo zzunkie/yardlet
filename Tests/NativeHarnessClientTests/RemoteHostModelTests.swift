@@ -899,11 +899,14 @@ final class RemoteHostModelTests: XCTestCase {
         tasks[7].completed = true
         tasks[7].answerLine = "The update is ready."
         tasks[7].latestTurnStartedAt = 900_000
+        var pinnedProject = RemoteProject(id: project, name: "acme-web", kind: .project, canCreateTask: true)
+        pinnedProject.pinned = true
         let mirror = RemoteSidebarMirror(hostID: "host", projects: [
-            RemoteProject(id: project, name: "acme-web", kind: .project, canCreateTask: true),
+            pinnedProject,
             RemoteProject(id: RemoteTaskProjection.chatsProjectID, name: "Chats", kind: .chats, canCreateTask: true),
         ], tasks: tasks)
         XCTAssertEqual(mirror.groups.map(\.displayName), ["acme-web"])
+        XCTAssertEqual(mirror.projects.first?.isPinned, true)
         XCTAssertEqual(mirror.groups.first?.sessions.count, 7)
         XCTAssertEqual(mirror.chats.map(\.title), ["Task 7"])
         XCTAssertEqual(mirror.sessions.first { $0.title == "Task 6" }?.parentTaskID, UUID(uuidString: Self.taskID(1)))

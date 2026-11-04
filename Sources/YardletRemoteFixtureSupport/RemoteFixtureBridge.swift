@@ -338,6 +338,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
             tasks[taskID]?.task.pinned = pinned
             changed(taskID)
             return nil
+        case .projectAction, .taskAction: return RemoteError(.unavailable)
         case let .archiveTask(taskID):
             guard let entry = tasks[taskID] else { return RemoteError(.notFound) }
             guard !entry.task.running else { return RemoteError(.busy, "The task is running") }
