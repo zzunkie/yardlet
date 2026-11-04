@@ -470,12 +470,28 @@ actor HarnessAccountBroker {
     }
 
     private func antigravitySnapshot(descriptor: HarnessDescriptor, executableURL: URL) async -> HarnessAccountSnapshot {
-        let state = Self.antigravityCredentialState()
+        var environment = connection?.environment ?? [:]
+        if let homePath = connection?.homePath, environment["HOME"] == nil {
+            environment["HOME"] = homePath
+        }
+        var checkEnvironment = environment
+        checkEnvironment["AGY_CLI_CDE_AUTH_ACTION"] = "check"
+        let checkResult = try? await AccountCommandRunner.run(
+            executableURL: executableURL,
+            arguments: [],
+            environment: checkEnvironment,
+            timeout: .seconds(5)
+        )
+        let checked = Self.antigravityAccountCheck(
+            checkResult,
+            fallbackState: connection?.homePath == nil ? Self.antigravityCredentialState() : .unknown
+        )
+        let state = checked.state
         // The plan limits, which the CLI reports without a turn; none while signed out or unread.
         var usage: [AccountUsageMetric] = []
         if state == .signedIn,
            let result = try? await AccountCommandRunner.run(executableURL: executableURL, arguments: AntigravityUsage.arguments,
-                                                            environment: connection?.environment ?? [:],
+                                                            environment: environment,
                                                             timeout: .seconds(30)) {
             usage = AntigravityUsage.metrics(fromOutput: result.output) ?? []
         }
@@ -493,7 +509,7 @@ actor HarnessAccountBroker {
             harness: descriptor.id,
             providerID: nil,
             state: state,
-            accountLabel: nil,
+            accountLabel: state == .signedIn ? checked.accountLabel : nil,
             detail: detail,
             credentialOwner: L10n.string("macOS Keychain (Antigravity CLI)"),
             checkedAt: Date(),
@@ -501,6 +517,54 @@ actor HarnessAccountBroker {
             canLogin: state != .signedIn,
             canLogout: state == .signedIn
         )
+    }
+
+    /// Reads the signed-in status and email from `AGY_CLI_CDE_AUTH_ACTION=check agy`, falling back
+    /// to Keychain item presence when the variable is unsupported or the output is unexpected.
+    static func antigravityAccountCheck(
+        _ result: AccountCommandResult?,
+        fallbackState: AccountAuthState = antigravityCredentialState()
+    ) -> (state: AccountAuthState, accountLabel: String?) {
+        guard let result else { return (fallbackState, nil) }
+        let lines = AccountLoginController.stripANSI(result.output)
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if result.exitCode == 0 {
+            for line in lines {
+                if let label = antigravityAccountLabel(fromLine: line) {
+                    return (.signedIn, label)
+                }
+                if line == "Already authenticated."
+                    || line == "Already authenticated via Application Default Credentials (ADC)." {
+                    return (.signedIn, nil)
+                }
+            }
+            return (fallbackState, nil)
+        }
+        if commandAccountState(for: .antigravityCLI, result: result) == .signedOut {
+            return (.signedOut, nil)
+        }
+        if result.exitCode == 1, lines.isEmpty, fallbackState == .unknown {
+            return (.signedOut, nil)
+        }
+        return (fallbackState, nil)
+    }
+
+    static func antigravityAccountLabel(fromLine line: String) -> String? {
+        let prefix = "Already authenticated as "
+        guard line.hasPrefix(prefix) else { return nil }
+        var candidate = Substring(line.dropFirst(prefix.count))
+        if candidate.hasSuffix(".") {
+            candidate = candidate.dropLast()
+        }
+        let label = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !label.isEmpty, label.count <= 200, label.contains("@"),
+              label.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+              label.rangeOfCharacter(from: .controlCharacters) == nil else {
+            return nil
+        }
+        return label
     }
 
     /// Muse's `muse usage --json` reads the Meta account's subscription allowance without a model

@@ -185,7 +185,7 @@ final class AccountBoundaryTests: XCTestCase {
         XCTAssertTrue(snapshot.canLogin)
     }
 
-    func testAntigravityAccountTruthUsesKeychainItemIdentityWithoutCredentialData() {
+    func testAntigravityAccountTruthUsesKeychainItemIdentityWithoutCredentialData() async throws {
         XCTAssertEqual(
             HarnessAccountBroker.antigravityCredentialState(keychainStatus: errSecSuccess),
             .signedIn
@@ -197,6 +197,74 @@ final class AccountBoundaryTests: XCTestCase {
         XCTAssertEqual(
             HarnessAccountBroker.antigravityCredentialState(keychainStatus: errSecInteractionNotAllowed),
             .unknown
+        )
+
+        let signedInWithEmail = HarnessAccountBroker.antigravityAccountCheck(
+            AccountCommandResult(exitCode: 0, output: "Already authenticated as owner@example.test.\n"),
+            fallbackState: .signedOut
+        )
+        XCTAssertEqual(signedInWithEmail.state, .signedIn)
+        XCTAssertEqual(signedInWithEmail.accountLabel, "owner@example.test")
+
+        let signedInWithoutEmail = HarnessAccountBroker.antigravityAccountCheck(
+            AccountCommandResult(exitCode: 0, output: "Already authenticated.\n"),
+            fallbackState: .signedOut
+        )
+        XCTAssertEqual(signedInWithoutEmail.state, .signedIn)
+        XCTAssertNil(signedInWithoutEmail.accountLabel)
+
+        let rejectedTokenLookalike = HarnessAccountBroker.antigravityAccountCheck(
+            AccountCommandResult(exitCode: 0, output: "Already authenticated as ya29.secret-token-value.\n"),
+            fallbackState: .signedIn
+        )
+        XCTAssertEqual(rejectedTokenLookalike.state, .signedIn)
+        XCTAssertNil(rejectedTokenLookalike.accountLabel)
+
+        let unsupportedFallback = HarnessAccountBroker.antigravityAccountCheck(
+            AccountCommandResult(exitCode: 2, output: "Unknown AGY_CLI_CDE_AUTH_ACTION: \"check\"\n"),
+            fallbackState: .signedIn
+        )
+        XCTAssertEqual(unsupportedFallback.state, .signedIn)
+        XCTAssertNil(unsupportedFallback.accountLabel)
+
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "nhc-agy-account-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let isolatedHome = root.appending(path: "isolated-home", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: isolatedHome, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appending(path: "agy")
+        let envRecord = root.appending(path: "env.txt")
+        try Data("""
+        #!/bin/sh
+        if [ "${AGY_CLI_CDE_AUTH_ACTION:-}" = "check" ] && [ "$#" -eq 0 ]; then
+          printf '%s\\n' "${HOME:-}" > "\(envRecord.path(percentEncoded: false))"
+          echo "Already authenticated as isolated@example.test."
+          exit 0
+        fi
+        if [ "$*" = "--print /usage --output-format json" ]; then
+          echo '{"status":"SUCCESS","num_turns":0,"command":{"data":{"groups":[]}}}'
+          exit 0
+        fi
+        exit 1
+        """.utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+        let descriptor = try XCTUnwrap(HarnessCatalog.descriptor(for: .antigravityCLI))
+        let connection = ProviderConnection(
+            id: "agy-isolated",
+            name: "Antigravity Isolated",
+            harness: .antigravityCLI,
+            providerID: nil,
+            homePath: isolatedHome.path(percentEncoded: false),
+            credentialSelector: nil
+        )
+        let snapshot = await HarnessAccountBroker(connection: connection)
+            .snapshot(for: descriptor, executableURL: executable)
+        XCTAssertEqual(snapshot.state, .signedIn)
+        XCTAssertEqual(snapshot.accountLabel, "isolated@example.test")
+        XCTAssertEqual(
+            try String(contentsOf: envRecord, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+            isolatedHome.path(percentEncoded: false)
         )
     }
 

@@ -210,9 +210,14 @@ is deleted at the end. The response's `limits` rows (`session` for 5 hours, `wee
 group is not shown as a limit. `rate_limits_available: false` (API keys and the like) or a failed lookup shows "Claude
 Code did not report plan limits for this login." and is not turned into 0.
 
-## Antigravity plan limit lookup
+## Antigravity account and plan limit lookup
 
-When Antigravity CLI is signed in (its keychain item exists), Yardlet runs `agy --print /usage --output-format json`
+Yardlet checks Antigravity CLI's sign-in by running `AGY_CLI_CDE_AUTH_ACTION=check agy` with a short timeout, in the
+account's environment (`HarnessAccountBroker.antigravitySnapshot`). When signed in, `agy` validates its stored token
+without starting a model turn or opening a browser, prints `Already authenticated as <email>.` (or
+`Already authenticated.`) and exits 0; Yardlet reads only the email address from that line. When the variable is
+unsupported or the output is unexpected, Yardlet falls back to checking whether the `gemini`/`antigravity` Keychain item
+exists, without reading its value. When signed in, Yardlet then runs `agy --print /usage --output-format json`
 (`AntigravityUsage`). The CLI answers this command without a model turn and keeps no conversation for it (`num_turns`
 0, an empty `conversation_id`); like any `agy` run it writes its own log. The models share limits by group ("Gemini
 Models", "Claude and GPT models"), and each group lists buckets with the share left (`remaining_fraction`) and when it
@@ -480,9 +485,9 @@ separate account folder (the keychain items of Antigravity CLI and Cursor Agent,
   fails or is cancelled starts nothing.
 - No file, folder, task binding or saved account changes.
 
-The Antigravity CLI row names no address: `agy` 1.4.12 has no status command and no settings file that names the
-signed-in account (only its interactive header shows it), and Yardlet checks only that the keychain item exists, never
-its value, so the row says "Unknown account".
+The Antigravity CLI row shows the signed-in address that `AGY_CLI_CDE_AUTH_ACTION=check agy` prints
+(`Already authenticated as <email>.`); when `agy` prints only `Already authenticated.` or the check falls back to
+keychain item presence, the row says "Unknown account". Yardlet never reads the keychain item's value.
 
 ### Importing conversations from other folders
 

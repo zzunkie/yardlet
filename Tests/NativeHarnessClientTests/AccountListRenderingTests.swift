@@ -445,26 +445,42 @@ import XCTest
 
     /// The confirmation an account list's and a limit card's "Use a reset" opens, before the person
     /// confirms, after a reset was used, and after a use that got no answer.
-    /// Settings › Harness Accounts with Antigravity CLI's plan limits as `agy --print /usage` reports them:
-    /// a row for each model group's weekly limit.
-    func testAntigravityPlanLimitsRenderInSettingsAccounts() throws {
+    /// Settings › Harness Accounts with Antigravity CLI's signed-in email (`AGY_CLI_CDE_AUTH_ACTION=check`)
+    /// and plan limits (`agy --print /usage --output-format json`): a row naming the email and each
+    /// model group's weekly limit.
+    func testAntigravityPlanLimitsRenderInSettingsAccounts() async throws {
         let directory = try WindowlessRender.directory("account-list-qa")
         let (_, _) = try fixture()
         let store = ProviderConnectionStore()
-        store.usesFixtureSnapshots = true
         let refill = ISO8601DateFormatter().string(from: Date().addingTimeInterval(19 * 3_600))
-        let usage = try XCTUnwrap(AntigravityUsage.metrics(fromOutput: #"{"status":"SUCCESS","num_turns":0,"command":{"data":{"groups":[{"name":"Gemini Models","buckets":[{"id":"gemini-weekly","window":"weekly","remaining_fraction":0.75,"reset_time":"\#(refill)"}]},{"name":"Claude and GPT models","buckets":[{"id":"3p-weekly","window":"weekly","remaining_fraction":1,"reset_time":"\#(refill)"}]}]}}}"#))
-        store.publishDefaults([HarnessAccountSnapshot(id: "antigravity-cli", harness: .antigravityCLI, providerID: nil,
-            state: .signedIn, accountLabel: nil, detail: "", credentialOwner: "", checkedAt: Date(), usage: usage,
-            canLogin: false, canLogout: true)])
+        let usageJSON = #"{"status":"SUCCESS","num_turns":0,"command":{"data":{"groups":[{"name":"Gemini Models","buckets":[{"id":"gemini-weekly","window":"weekly","remaining_fraction":0.75,"reset_time":"\#(refill)"}]},{"name":"Claude and GPT models","buckets":[{"id":"3p-weekly","window":"weekly","remaining_fraction":1,"reset_time":"\#(refill)"}]}]}}}"#
         // Settings lists the harnesses set up on this Mac.
         let agy = try XCTUnwrap(roots.last).appending(path: "bin/agy")
         try FileManager.default.createDirectory(at: agy.deletingLastPathComponent(), withIntermediateDirectories: true)
-        FileManager.default.createFile(atPath: agy.path(percentEncoded: false), contents: Data(),
-                                       attributes: [.posixPermissions: 0o755])
+        try Data("""
+        #!/bin/sh
+        if [ "${AGY_CLI_CDE_AUTH_ACTION:-}" = "check" ] && [ "$#" -eq 0 ]; then
+          echo "Already authenticated as owner@example.test."
+          exit 0
+        fi
+        if [ "$*" = "--print /usage --output-format json" ]; then
+          cat <<'EOF'
+        \(usageJSON)
+        EOF
+          exit 0
+        fi
+        exit 1
+        """.utf8).write(to: agy)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agy.path(percentEncoded: false))
         let runtime = RuntimeSelectionStore(defaults: SuggestionVolatileDefaults(), discoversRuntimes: false,
                                             loadsPersistedSelections: false)
         runtime.select(agy, for: .antigravityCLI)
+        await store.check(defaultsOf: [.antigravityCLI], savedOf: [], runtimeSelections: runtime)
+        let choice = store.choice(for: .antigravityCLI, connection: nil)
+        XCTAssertEqual(choice.title, "owner@example.test")
+        XCTAssertEqual(AccountListProjection.accountLine(choice), HarnessKind.antigravityCLI.displayName)
+        XCTAssertEqual(choice.snapshot?.usage.count, 2)
+        store.usesFixtureSnapshots = true
         let size = NSSize(width: 629, height: 260)
         for capture in try WindowlessRender.hostedInBothAppearances("antigravity-limits", in: directory, size: size, content: { appearance in
             AccountList(mode: .manage, store: store, runtimeSelections: runtime, onChoose: { _ in }, onConnect: { _ in },
