@@ -769,6 +769,10 @@ final class RemoteBridgeTests: XCTestCase {
             destination: ScheduleDestination(harness: .claudeCode, accountID: "host-account", workspacePath: originalPath),
             createdAt: now)
         original.state.runs = [.init(at: now, trigger: .manual, outcome: .failed, failure: "SECRET=value /tmp/account-home")]
+        original.state.runs[0].account = AccountAssignment(
+            choice: AccountChoice(harness: .claudeCode, connection: nil, snapshot: nil, knownLabel: "Work"),
+            origin: .automatic,
+            replacing: AccountChoice(harness: .claudeCode, connection: nil, snapshot: nil, knownLabel: "Personal"))
         let model = try Self.model(sessions: [], transcripts: [:], schedules: [original])
         // Existing schedules keep their harness even if its executable temporarily disappears.
         model.runtimeSelections.select(URL(filePath: "/missing-schedule-runtime"), for: .claudeCode)
@@ -789,6 +793,7 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertFalse(text.contains("private-value") || text.contains(originalPath) || text.contains("account-home"))
         var supplied = try JSONDecoder().decode(ScheduledTask.self, from: data)
         XCTAssertEqual(supplied.state.runs.count, original.state.runs.count)
+        XCTAssertEqual(supplied.state.runs.first?.account?.switchLine, original.state.runs.first?.account?.switchLine)
         XCTAssertNil(supplied.destination.accountID)
         XCTAssertEqual(supplied.destination.workspacePath, "yardlet-host-folder")
         supplied.name = "Edited"

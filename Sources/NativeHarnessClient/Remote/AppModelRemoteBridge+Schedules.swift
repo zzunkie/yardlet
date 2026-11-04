@@ -18,7 +18,16 @@ extension AppModelRemoteBridge {
             copy.destination.projectID = nil
         }
         for index in copy.state.runs.indices {
-            copy.state.runs[index].account = nil
+            if let account = copy.state.runs[index].account {
+                // Keep the history's explanation without exporting routing identifiers or usage data.
+                func displayAccount(_ name: String) -> AccountChoice {
+                    AccountChoice(harness: schedule.destination.harness, connection: nil, snapshot: nil,
+                                  knownLabel: Self.scheduleText(name, root: root))
+                }
+                copy.state.runs[index].account = AccountAssignment(
+                    choice: displayAccount(account.accountName), origin: account.origin,
+                    replacing: account.replacedAccountName.map(displayAccount), at: account.assignedAt)
+            }
             copy.state.runs[index].failure = copy.state.runs[index].failure.map { Self.scheduleText($0, root: root) }
         }
         return try? JSONEncoder().encode(copy)
