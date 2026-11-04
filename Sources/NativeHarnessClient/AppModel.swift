@@ -4507,13 +4507,25 @@ final class AppModel {
     }
 
     /// Whether another app's Claude process holds this detached task's conversation, so Yardlet
-    /// must not continue it as well. Yardlet's own processes do not count.
+    /// must not continue it as well. Yardlet's own processes do not count, nor do those a Yardlet
+    /// that has gone left running (`endLeftoverHolding`).
     func isHeldElsewhere(_ session: SessionRecord) -> Bool {
         guard !isVisualFixture, session.harness == .claudeCode, handlesBySessionID[session.id] == nil,
               let id = session.providerSessionID else { return false }
         let config = ClaudeSubagentTranscriptReader.configDirectory(connection: session.connection,
                                                                    workspaceURL: session.workspaceURL)
         return ClaudeConversationCatalog.runningSessionIDs(configDirectory: config).contains(id.lowercased())
+    }
+
+    /// Ends the Claude process a Yardlet that crashed or was killed left running in this task's
+    /// conversation, before this one continues it, so two processes do not write it.
+    private func endLeftoverHolding(_ session: SessionRecord) async {
+        guard !isVisualFixture, session.harness == .claudeCode, let id = session.providerSessionID else { return }
+        let config = ClaudeSubagentTranscriptReader.configDirectory(connection: session.connection,
+                                                                   workspaceURL: session.workspaceURL)
+        _ = await Task.detached(priority: .userInitiated) {
+            ClaudeConversationCatalog.endYardletLeftovers(holding: id, configDirectory: config)
+        }.value
     }
 
     /// While a detached Claude or Codex task is shown, follows its conversation read-only as another
@@ -6488,8 +6500,11 @@ final class AppModel {
         if let replay = savedConversationReadTasks["acp|\(session.id)"] { await replay.value }
         if handlesBySessionID[session.id] != nil { return }
         // Two processes must not continue one Claude conversation: one another app still holds
-        // is followed read-only until it lets the conversation go.
-        if resumesExistingSession, isHeldElsewhere(session) { throw ConversationHeldElsewhere() }
+        // is followed read-only until it lets the conversation go, and one a gone Yardlet left is ended.
+        if resumesExistingSession {
+            await endLeftoverHolding(session)
+            if isHeldElsewhere(session) { throw ConversationHeldElsewhere() }
+        }
         // A task of a harness Yardlet no longer lists says so, not that its saved account is wrong.
         if HarnessCatalog.retired.contains(session.harness) { throw UnsupportedHarnessAdapter.unavailable(session.harness) }
         // A harness starts in the task's folder; one that is gone is the reason, not the launch's words.

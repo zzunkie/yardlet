@@ -168,6 +168,29 @@ final class OtherAppImportTests: XCTestCase {
         XCTAssertEqual(ClaudeConversationCatalog.runningSessionIDs(configDirectory: config), [])
         XCTAssertEqual(ClaudeConversationCatalog.runningSessionIDs(configDirectory: config, excludingProcessesOf: 999_999),
                        [Self.ids[0]], "Another app's process with the same registration holds it")
+
+        // A Yardlet that crashed leaves its Claude processes to launchd, still registered with
+        // Yardlet's entrypoint: they hold nothing, and continuing the conversation ends them.
+        // Another app's orphan still holds its conversation, as does a process another running
+        // Yardlet started, and a registration whose process ID now names a later process does not.
+        let leftover = try orphan()
+        let otherApps = try orphan()
+        defer { _ = kill(leftover.pid, SIGKILL); _ = kill(otherApps.pid, SIGKILL) }
+        try register(leftover.pid, Self.ids[1], in: config, entrypoint: "native-harness-client", procStart: leftover.start)
+        try register(otherApps.pid, Self.ids[2], in: config, entrypoint: "claude-desktop", procStart: otherApps.start)
+        try register(child.processIdentifier, Self.ids[3], in: config, entrypoint: "native-harness-client")
+        try register(child.processIdentifier, Self.ids[4], in: config, procStart: "Thu Jan  1 00:00:00 1970")
+        XCTAssertEqual(ClaudeConversationCatalog.recordedStart(leftover.start),
+                       ClaudeConversationCatalog.runningProcesses(configDirectory: config)
+                           .first { $0.pid == leftover.pid }?.started, "Read as the CLI writes it")
+        XCTAssertEqual(ClaudeConversationCatalog.runningSessionIDs(configDirectory: config, excludingProcessesOf: 999_999),
+                       [Self.ids[0], Self.ids[2], Self.ids[3]])
+        XCTAssertEqual(ClaudeConversationCatalog.endYardletLeftovers(holding: Self.ids[2], configDirectory: config), [])
+        XCTAssertEqual(ClaudeConversationCatalog.endYardletLeftovers(holding: Self.ids[3], configDirectory: config), [])
+        XCTAssertEqual(ClaudeConversationCatalog.endYardletLeftovers(holding: Self.ids[1].uppercased(),
+                                                                     configDirectory: config), [leftover.pid])
+        XCTAssertEqual(Set(ClaudeConversationCatalog.runningProcesses(configDirectory: config).map(\.pid)),
+                       [child.processIdentifier, otherApps.pid])
     }
 
     // MARK: - Codex threads
@@ -469,7 +492,8 @@ final class OtherAppImportTests: XCTestCase {
 
     /// Another app's process holds the conversation: sending is refused with a notice in the task,
     /// the message stays in the composer, nothing starts and the task does not fail. Once that
-    /// process is gone, sending attaches as for any detached task.
+    /// process is gone, sending attaches as for any detached task; a process a crashed Yardlet
+    /// left in the conversation holds nothing, and is ended first.
     func testSendingAConversationHeldElsewhereIsRefusedAndKeepsTheDraft() async throws {
         let fixture = try makeFixture()
         try transcript(fixture.config, fixture.project, Self.ids[0], lines: [user("Still open", id: Self.ids[0])])
@@ -510,8 +534,13 @@ final class OtherAppImportTests: XCTestCase {
         }, "Nothing was sent")
 
         try FileManager.default.removeItem(at: holder)
+        let leftover = try orphan()
+        defer { _ = kill(leftover.pid, SIGKILL) }
+        try register(leftover.pid, Self.ids[0], in: fixture.config, entrypoint: "native-harness-client",
+                     procStart: leftover.start)
         XCTAssertFalse(fixture.model.isHeldElsewhere(task))
         await fixture.model.send(HarnessUserInput(text: "Keep going"), to: task)
+        XCTAssertEqual(ClaudeConversationCatalog.runningProcesses(configDirectory: fixture.config).map(\.pid), [])
         let calls = await fixture.claude.calls
         XCTAssertEqual(calls, ["resume \(Self.ids[0])", "send Keep going"])
     }
@@ -991,12 +1020,42 @@ final class OtherAppImportTests: XCTestCase {
     /// Registers this test process, as another app's would be, as holding the session.
     @discardableResult
     private func hold(_ id: String, in config: URL) throws -> URL {
+        try register(getpid(), id, in: config)
+    }
+
+    /// Registers a process as Claude Code does, in `sessions/` with the session it runs.
+    @discardableResult
+    private func register(_ pid: pid_t, _ id: String, in config: URL, entrypoint: String? = nil,
+                          procStart: String? = nil) throws -> URL {
         let folder = config.appending(path: "sessions")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let file = folder.appending(path: "\(getpid())-\(id.prefix(8)).json")
-        try JSONEncoder().encode(JSONValue.object(["pid": .integer(Int64(getpid())), "sessionId": .string(id)]))
-            .write(to: file)
+        let file = folder.appending(path: "\(pid)-\(id.prefix(8)).json")
+        var registration: [String: JSONValue] = ["pid": .integer(Int64(pid)), "sessionId": .string(id)]
+        registration["entrypoint"] = entrypoint.map(JSONValue.string)
+        registration["procStart"] = procStart.map(JSONValue.string)
+        try JSONEncoder().encode(JSONValue.object(registration)).write(to: file)
         return file
+    }
+
+    /// A process whose parent has gone, as a Claude process is after its Yardlet crashed: `sleep`
+    /// in the background of a shell that has exited, adopted by launchd. Its start is what the CLI
+    /// records as `procStart`, `ps -o lstart=` in the C locale and UTC.
+    private func orphan() throws -> (pid: pid_t, start: String) {
+        func run(_ path: String, _ arguments: [String], environment: [String: String]? = nil) throws -> String {
+            let process = Process()
+            process.executableURL = URL(filePath: path)
+            process.arguments = arguments
+            process.environment = environment
+            let output = Pipe()
+            process.standardOutput = output
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let pid = try XCTUnwrap(pid_t(try run("/bin/sh", ["-c", "/bin/sleep 30 </dev/null >/dev/null 2>&1 & echo $!"])))
+        let start = try run("/bin/ps", ["-o", "lstart=", "-p", String(pid)], environment: ["LC_ALL": "C", "TZ": "UTC"])
+        return (pid, start)
     }
 
     private func user(_ text: String, id: String, uuid: String = UUID().uuidString, parent: String? = nil)
