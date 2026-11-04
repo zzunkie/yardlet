@@ -891,6 +891,7 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
             "id": .string("provider-thread"),
             "turns": .array([RemoteTaskControlsTests.codexTurn(1), RemoteTaskControlsTests.codexTurn(2)])
         ]), to: &thread))
+        thread.thread?.turns[1].tokenUsage = ComposerUnificationFixtures.codexTokenUsage
         let parser = SessionRecord(harness: .codex, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/codex"),
                                    title: "Tidy the parser", providerSessionID: "provider-thread")
         let guide = SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
@@ -904,6 +905,7 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                             runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
                             registry: HarnessRegistry { kind, _ in kind == .codex ? codexAdapter : claudeAdapter }, modelCatalogs: catalogs,
                             initialTranscripts: [guide.id: guideEntries], initialCodexPresentation: [parser.id: thread],
+                            initialProviderUsage: [guide.id: ComposerUnificationFixtures.providerUsage],
                             preferences: defaults, transcriptRepository: UserDefaultsTranscriptRepository(defaults: defaults),
                             sessionTitleResolver: { _ in nil }, restoresIndexOnLaunch: false)
         host.projects.ensureProject(forRoot: folder)
@@ -930,6 +932,8 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
         model.select(.task(parserID))
         try await waitUntil { model.conversations[parserID]?.isLoaded == true && model.taskSettings[parserID] != nil }
         await model.readTaskSettings(parserID, prepare: true)
+        await model.readTaskRail(parserID)
+        try await waitUntil { model.railComposerOptions(parserID)?.contextUsage != nil }
         try await waitUntil { model.taskSettings[parserID]?.contains { $0.role == "model" && $0.prepare == nil } == true }
         try await render("remote-controls-codex", size: size, titled: true, title: model.name) {
             RemoteHostView(model: model, directory: hosts).environment(\.revealsSentMessageActions, true)
@@ -959,6 +963,8 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
         model.select(.task(guideID))
         try await waitUntil { model.conversations[guideID]?.isLoaded == true && model.taskSettings[guideID] != nil }
         await model.readTaskSettings(guideID, prepare: true)
+        await model.readTaskRail(guideID)
+        try await waitUntil { model.railComposerOptions(guideID)?.contextUsage != nil }
         model.setTaskSetting(guideID, id: ClaudeLaunchOption.permissionMode, value: ClaudePermissionMode.bypassPermissions,
                              confirmed: true)
         try await waitUntil { model.taskSettings[guideID]?.first { $0.role == "permission" }?.elevated == true }
@@ -990,8 +996,8 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
             let newDrafts = RemoteComposerDrafts()
             return RemoteHostView(model: model, directory: hosts, drafts: newDrafts)
         }
-        try await render("remote-composer-new-task", size: size, titled: false, ready: ready) { remoteHome() }
-        try await render("local-composer-new-task", size: size, titled: false, ready: ready) {
+        try await render("remote-composer-new-task", size: size, titled: false, ready: ready, focusedPlaceholder: NewTaskComposerText.placeholder(harnessName: HarnessKind.claudeCode.displayName)) { remoteHome() }
+        try await render("local-composer-new-task", size: size, titled: false, ready: ready, onMounted: { host.revealNewTask() }, focusedPlaceholder: NewTaskComposerText.placeholder(harnessName: HarnessKind.claudeCode.displayName)) {
             MainWindow(model: host)
         }
         hosts.close(paired.id)
@@ -1030,10 +1036,10 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                 && !elements.contains { $0.label.contains(L10n.string("Checking account…")) }
         }
         let size = NSSize(width: 1280, height: 820)
-        try await render("remote-composer-new-task-empty", size: size, titled: false, ready: ready) {
+        try await render("remote-composer-new-task-empty", size: size, titled: false, ready: ready, focusedPlaceholder: NewTaskComposerText.placeholder(harnessName: HarnessKind.claudeCode.displayName)) {
             RemoteHostView(model: model, directory: hosts)
         }
-        try await render("local-composer-new-task-empty", size: size, titled: false, ready: ready) {
+        try await render("local-composer-new-task-empty", size: size, titled: false, ready: ready, onMounted: { host.revealNewTask() }, focusedPlaceholder: NewTaskComposerText.placeholder(harnessName: HarnessKind.claudeCode.displayName)) {
             MainWindow(model: host)
         }
         hosts.close(paired.id)
@@ -1063,8 +1069,12 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
             PromptComposer(
                 harness: session.harness, composerDraft: draft, modes: codex.modes, selectedModeID: codex.selectedModeID,
                 modelCatalog: codex.modelCatalog, runLocation: codex.selectedRunLocation, providerSession: session,
-                providerCapabilities: host.composerProviderCapabilities(for: session), isProviderAttached: host.isAttached(session.id),
-                isRunning: false, codexHasThread: session.providerSessionID != nil, workspaceURL: session.workspaceURL,
+                providerEntries: host.transcriptBySessionID[session.id] ?? [],
+                providerCapabilities: host.composerProviderCapabilities(for: session),
+                providerUsage: host.providerUsageBySessionID[session.id], isProviderAttached: host.isAttached(session.id),
+                isRunning: false, codexHasThread: session.providerSessionID != nil,
+                codexTokenUsage: host.codexPresentationBySessionID[session.id]?.thread?.turns.last(where: { $0.tokenUsage != nil })?.tokenUsage,
+                workspaceURL: session.workspaceURL,
                 actions: ComposerActions(runCodexCommand: session.harness == .codex ? { _ in } : nil))
         }
         .background(ParityTheme.canvas)
@@ -1373,6 +1383,7 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
     func render<Content: View>(_ name: String, size: NSSize, titled: Bool, title: String = "", subtitle: String = "",
                                        opening: ((String) -> Bool)? = nil, press: ((String) -> Bool)? = nil,
                                        ready: (([WindowlessRender.AccessibilityElement]) -> Bool)? = nil,
+                                       onMounted: (() -> Void)? = nil, focusedPlaceholder: String? = nil,
                                        @ViewBuilder content: () -> Content,
                                        check: ([WindowlessRender.AccessibilityElement]) -> Void = { _ in }) async throws {
         let directory = try WindowlessRender.directory("remote-qa")
@@ -1402,6 +1413,27 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                     await Task.yield()
                     try await Task.sleep(for: .milliseconds(15))
                 }
+            }
+            // Navigation sent before mounting cannot reach a view's onChange observer. Deliver the
+            // local New task action now, then compare the same native input-focus state on both sides.
+            onMounted?()
+            if let focusedPlaceholder {
+                func field(in view: NSView) -> NSTextField? {
+                    if let field = view as? NSTextField, field.placeholderString == focusedPlaceholder { return field }
+                    return view.subviews.lazy.compactMap { field(in: $0) }.first
+                }
+                try await waitUntil {
+                    Self.turnRunLoop(hosting)
+                    guard let field = field(in: hosting), let editor = field.currentEditor() else { return false }
+                    return window.firstResponder === editor
+                }
+                let composer = try XCTUnwrap(field(in: hosting))
+                XCTAssertTrue(composer.stringValue.isEmpty)
+                XCTAssertNil(composer.placeholderAttributedString)
+                XCTAssertEqual(composer.textColor, NSColor.controlTextColor)
+                XCTAssertTrue(composer.isEnabled)
+                XCTAssertFalse(window.isKeyWindow)
+                XCTAssertFalse(window.isVisible)
             }
             if let ready {
                 try await waitUntil {
