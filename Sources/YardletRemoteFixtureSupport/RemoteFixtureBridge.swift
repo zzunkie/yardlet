@@ -219,6 +219,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
                               newTask: RemoteNewTask(harness: "claude-code", harnessName: "Claude Code"), followUp: .steer,
                               scheduledTasks: true, taskFiles: true, taskControls: true, browserTabs: true)
         snapshot.scheduleEditing = true
+        snapshot.hostAccounts = true
         return snapshot
     }
 

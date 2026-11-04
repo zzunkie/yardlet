@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import YardletAgentTools
+import YardletRemote
 
 /// The platform half of a sign-in: a loopback listener for the redirect and the user's browser.
 protocol OAuthUserAgent: Sendable {
@@ -394,6 +395,9 @@ final class ConnectorCenter: ConnectorToolProviding {
 
     /// The code GitHub's device page asks for, per connector, while its sign-in waits for it.
     private(set) var deviceCodes: [UUID: String] = [:]
+    /// Remote host hooks when this center backs a remote Settings view (§15.37).
+    var remoteXcodeDescription: String?
+    @ObservationIgnored var onRemoteSetConnectorEnabled: ((UUID, Bool) -> Void)?
 
     /// GitHub signs in with Yardlet's own app instead of a pasted token.
     var canSignInToGitHub: Bool { environment.gitHubClientID != nil }
@@ -1316,6 +1320,7 @@ final class ConnectorCenter: ConnectorToolProviding {
 
     /// The Xcode this Mac has, as "Xcode 27.1"; nil without one.
     var xcodeDescription: String? {
+        if let remoteXcodeDescription { return remoteXcodeDescription }
         guard let bridge = environment.xcodeBridge() else { return nil }
         return XcodeBridge.version(of: bridge).map { "Xcode \($0)" } ?? "Xcode"
     }
@@ -1680,6 +1685,8 @@ final class ConnectorCenter: ConnectorToolProviding {
 
     // MARK: Per task
 
+    static let hostScopeID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+
     /// Whether a connector reaches a task, and if not, why. The scope is what Yardlet knew of
     /// the task's harness when it injected the server; nil (as for a task not started yet) only
     /// applies the user's choice.
@@ -1689,12 +1696,73 @@ final class ConnectorCenter: ConnectorToolProviding {
             if scope.nativeServerURLs.contains(address), !scope.yardletServedURLs.contains(address) { return .harnessHasIt }
             if let key = record.program?.key, scope.nativePrograms.contains(key) { return .harnessHasIt }
         }
+        if !isOn(record.id) { return .off }
         if let taskID, offInTasks[taskID]?.contains(record.id) == true { return .off }
         return .on
     }
 
+    func isOn(_ connectorID: UUID) -> Bool {
+        offInTasks[Self.hostScopeID]?.contains(connectorID) != true
+    }
+
+    func setConnector(_ connectorID: UUID, on: Bool) {
+        if let onRemoteSetConnectorEnabled {
+            onRemoteSetConnectorEnabled(connectorID, on)
+            return
+        }
+        setConnector(connectorID, on: on, inTask: Self.hostScopeID)
+    }
+
     func isOn(_ connectorID: UUID, inTask taskID: UUID) -> Bool {
-        offInTasks[taskID]?.contains(connectorID) != true
+        isOn(connectorID) && offInTasks[taskID]?.contains(connectorID) != true
+    }
+
+    func applyRemoteConnectors(_ remoteConnectors: [RemoteConnectorInfo], cannotRead: Bool, xcodeDescription: String?) {
+        var records: [ConnectorRecord] = []
+        var nextActivity: [UUID: Activity] = [:]
+        var nextFailures: [UUID: String] = [:]
+        var disabled: Set<UUID> = []
+
+        for info in remoteConnectors {
+            guard let id = UUID(uuidString: info.id) else { continue }
+            let localService = info.localService.flatMap(LocalConnectorService.init(rawValue:))
+            let url = info.serverHost.flatMap { URL(string: "https://\($0)") }
+                ?? localService?.address
+                ?? URL(string: "https://connector.invalid")!
+            let tools: [ToolJSON] = (0..<max(0, info.toolCount)).map { index in
+                .object(["name": .string("tool_\(index)")])
+            }
+            let status = ConnectorRecord.Status(rawValue: info.status) ?? .notConnected
+            let record = ConnectorRecord(
+                id: id,
+                name: info.name,
+                slug: info.slug,
+                serverURL: url,
+                authorization: ConnectorRecord.Authorization(rawValue: info.authorization) ?? .unknown,
+                status: status,
+                tools: tools,
+                toolsUpdatedAt: status == .connected || !tools.isEmpty ? Date() : nil,
+                presetID: info.presetId,
+                oauthClientID: info.usesRegisteredClient == true ? "remote" : nil,
+                localService: localService,
+                account: info.account,
+                program: info.programSummary.map {
+                    ConnectorProgram(runtime: .command, program: $0, package: nil, version: nil, origin: "")
+                }
+            )
+            records.append(record)
+            if info.activity == "connecting" { nextActivity[id] = .connecting }
+            else if info.activity == "waitingForBrowser" { nextActivity[id] = .waitingForBrowser }
+            if let failure = info.failure, !failure.isEmpty { nextFailures[id] = failure }
+            if info.enabled == false { disabled.insert(id) }
+        }
+
+        connectors = records
+        cannotReadSavedSettings = cannotRead
+        activity = nextActivity
+        failures = nextFailures
+        offInTasks = disabled.isEmpty ? [:] : [Self.hostScopeID: disabled]
+        remoteXcodeDescription = xcodeDescription
     }
 
     /// Turns a connector on or off for one task. A call to its tools follows at once; the task's

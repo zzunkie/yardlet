@@ -115,7 +115,7 @@ struct AccountSnapshotCache {
 }
 
 /// How current the reading an account row shows is.
-enum AccountReadingStatus: Equatable, Sendable {
+enum AccountReadingStatus: String, Equatable, Sendable {
     /// Read by a check in this run.
     case current
     /// Remembered from an earlier run and not yet checked again.

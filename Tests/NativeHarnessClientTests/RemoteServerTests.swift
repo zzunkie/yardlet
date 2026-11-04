@@ -1617,6 +1617,94 @@ final class RemoteServerTests: XCTestCase {
         let stillWatching = await harness.bridge.watchesHostSettings
         XCTAssertFalse(stillWatching)
     }
+
+    func testHostAccountsRuntimesAndConnectorsRequireSettingsPermissionAndAuditIDsOnly() async throws {
+        let clock = RemoteTestClock()
+        let harness = try await ServerHarness(clock: clock)
+        var snapshot = FakeBridge.snapshot
+        snapshot.hostAccounts = true
+        await harness.bridge.setSnapshot(snapshot)
+        let client = try await harness.authenticatedPhone()
+        let observer = try await harness.authenticatedPhone()
+        let allDevices = await harness.devices.all()
+        let device = try XCTUnwrap(allDevices.first)
+
+        let requests: [RemoteRequest] = [
+            .hostAccounts(watching: true, refreshHarnesses: ["claude-code"]),
+            .setHostAccount(harness: "claude-code", accountID: "acc-1", automaticAssignment: nil, settingID: nil, enabled: nil),
+            .setHostHarnessRuntime(harness: "claude-code", choiceID: "automatic"),
+            .setHostConnector(id: "00000000-0000-4000-8000-000000000001", enabled: false)
+        ]
+        XCTAssertEqual(requests.map(\.requiredPermission), [nil, .settings, .settings, .settings])
+        for (index, item) in requests.enumerated() {
+            let decoded = try RemoteRequestEnvelope.decode(RemoteRequestEnvelope(id: "rt-\(index)", request: item).encoded()).get()
+            XCTAssertEqual(decoded.request, item)
+        }
+
+        var seq = 0
+        func ask(_ request: RemoteRequest, on channel: TestChannel) async throws -> RemoteResponse {
+            seq += 1
+            clock.advance(by: 1)
+            let id = "req-\(seq)"
+            await harness.send(String(decoding: RemoteRequestEnvelope(id: id, request: request).encoded(), as: UTF8.self), on: channel)
+            return try await channel.response(id)
+        }
+
+        let snap = try await ask(.snapshot, on: client)
+        XCTAssertEqual(snap.hostAccounts, true)
+
+        let readOnly = try await ask(.hostAccounts(watching: true, refreshHarnesses: ["claude-code"]), on: client)
+        XCTAssertTrue(readOnly.ok)
+        XCTAssertNil(readOnly.hostAccountsState?.editable)
+        XCTAssertEqual(readOnly.hostAccountsState?.accounts.first?.name, "secret-account@example.com")
+        let watching = await harness.bridge.watchingHostAccounts
+        let refreshes = await harness.bridge.hostAccountsRefreshHarnesses
+        XCTAssertTrue(watching)
+        XCTAssertEqual(refreshes, [["claude-code"]])
+
+        for mutation in requests.dropFirst() {
+            let refused = try await ask(mutation, on: client)
+            XCTAssertEqual(refused.error?.code, .notAllowed)
+        }
+        let accountChangesBefore = await harness.bridge.hostAccountChanges.count
+        let runtimeChangesBefore = await harness.bridge.hostRuntimeChanges.count
+        let connectorChangesBefore = await harness.bridge.hostConnectorChanges.count
+        XCTAssertEqual([accountChangesBefore, runtimeChangesBefore, connectorChangesBefore], [0, 0, 0])
+
+        try await harness.server.setPermission(.settings, allowed: true, for: device.id)
+        _ = try await client.event(.hostAccountsChanged)
+        XCTAssertTrue(observer.events(.hostAccountsChanged).isEmpty)
+
+        let editable = try await ask(.hostAccounts(watching: true), on: client)
+        XCTAssertEqual(editable.hostAccountsState?.editable, true)
+
+        for mutation in requests.dropFirst() {
+            let applied = try await ask(mutation, on: client)
+            XCTAssertTrue(applied.ok)
+            XCTAssertEqual(applied.hostAccountsState?.editable, true)
+        }
+        let accountChangesAfter = await harness.bridge.hostAccountChanges.count
+        let runtimeChangesAfter = await harness.bridge.hostRuntimeChanges.count
+        let connectorChangesAfter = await harness.bridge.hostConnectorChanges.count
+        XCTAssertEqual([accountChangesAfter, runtimeChangesAfter, connectorChangesAfter], [1, 1, 1])
+
+        let eventsBefore = client.events(.hostAccountsChanged).last?.seq ?? 0
+        await harness.bridge.signal(.hostAccounts)
+        _ = try await client.event(.hostAccountsChanged, after: eventsBefore)
+        XCTAssertTrue(observer.events(.hostAccountsChanged).isEmpty)
+
+        _ = try await ask(.hostAccounts(watching: false), on: client)
+        let watchingAfterStop = await harness.bridge.watchingHostAccounts
+        XCTAssertFalse(watchingAfterStop)
+
+        let entries = harness.audit.entries().filter {
+            ["setHostAccount", "setHostHarnessRuntime", "setHostConnector"].contains($0.type)
+        }
+        XCTAssertEqual(entries.map(\.result), ["notAllowed", "notAllowed", "notAllowed", "ok", "ok", "ok"])
+        XCTAssertEqual(entries.suffix(3).map(\.input), ["acc-1", "claude-code:automatic", "00000000-0000-4000-8000-000000000001"])
+        let log = try String(contentsOf: harness.auditURL, encoding: .utf8)
+        XCTAssertFalse(log.contains("secret-account@example.com"))
+    }
 }
 
 // MARK: - Harness
@@ -1896,6 +1984,47 @@ actor FakeBridge: RemoteBridge {
     func setEarlier(_ conversation: RemoteConversation, for taskID: String) { earlier[taskID] = conversation }
     func failNext(_ error: RemoteError) { nextFailure = error }
     func signal(_ change: RemoteBridgeChange) { handler?(change) }
+
+    private(set) var watchingHostAccounts = false
+    private(set) var hostAccountsRefreshHarnesses: [[String]] = []
+    private(set) var hostAccountChanges: [(harness: String?, accountID: String?, automaticAssignment: Bool?, settingID: String?, enabled: Bool?)] = []
+    private(set) var hostRuntimeChanges: [(harness: String, choiceID: String)] = []
+    private(set) var hostConnectorChanges: [(id: String, enabled: Bool)] = []
+    private var accountsState: RemoteAccountsState = {
+        var account = RemoteAccount(id: "acc-1", name: "secret-account@example.com", current: true, available: true)
+        account.state = .signedIn
+        account.harness = "claude-code"
+        return RemoteAccountsState(
+            accounts: [account],
+            harnesses: [RemoteHarnessRuntime(harness: "claude-code", installed: true, label: "Default — 2.1.80")],
+            connectors: [RemoteConnectorInfo(
+                id: "00000000-0000-4000-8000-000000000001", name: "GitHub", slug: "github",
+                status: "connected", authorization: "oauth", toolCount: 12, enabled: true
+            )],
+            picksNewTaskAccount: true,
+            continuesAtUsageLimit: true,
+            movesTasksToAccountWithRoom: false,
+            claudeAIConnectors: true
+        )
+    }()
+
+    func setWatchingHostAccounts(_ watching: Bool) { watchingHostAccounts = watching }
+    func hostAccounts(refreshHarnesses: [String]) async -> Result<RemoteAccountsState, RemoteError> {
+        hostAccountsRefreshHarnesses.append(refreshHarnesses)
+        return .success(accountsState)
+    }
+    func setHostAccount(harness: String?, accountID: String?, automaticAssignment: Bool?, settingID: String?, enabled: Bool?) -> Result<RemoteAccountsState, RemoteError> {
+        hostAccountChanges.append((harness, accountID, automaticAssignment, settingID, enabled))
+        return .success(accountsState)
+    }
+    func setHostHarnessRuntime(harness: String, choiceID: String) -> Result<RemoteAccountsState, RemoteError> {
+        hostRuntimeChanges.append((harness, choiceID))
+        return .success(accountsState)
+    }
+    func setHostConnector(id: String, enabled: Bool) -> Result<RemoteAccountsState, RemoteError> {
+        hostConnectorChanges.append((id, enabled))
+        return .success(accountsState)
+    }
 }
 
 /// A task's folders on disk (§15.22): `project` is its folder, `other` the project's other folder and

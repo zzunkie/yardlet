@@ -174,6 +174,8 @@ private struct UsageLimitHostAccountMenu: View {
 /// Settings › Accounts' switch for continuing a Claude Code task once the limit that stopped it
 /// resets (`UsageLimitAutoContinuePreference`), named as Claude Code names its own.
 struct UsageLimitAutoContinueSettingRow: View {
+    var isOn: Binding<Bool>? = nil
+    var isEnabled: Bool = true
     @AppStorage(UsageLimitAutoContinuePreference.key, store: .yardlet) private var continuesAtLimit = true
 
     var body: some View {
@@ -186,10 +188,11 @@ struct UsageLimitAutoContinueSettingRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
-            Toggle(YardletSetting.continueAtUsageLimit.title, isOn: $continuesAtLimit)
+            Toggle(YardletSetting.continueAtUsageLimit.title, isOn: isOn ?? $continuesAtLimit)
                 .labelsHidden()
                 .toggleStyle(.paritySwitch)
                 .controlSize(.small)
+                .disabled(!isEnabled)
         }
     }
 }

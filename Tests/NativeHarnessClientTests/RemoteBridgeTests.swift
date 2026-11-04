@@ -1815,6 +1815,196 @@ final class RemoteBridgeTests: XCTestCase {
         await model.shutdown()
     }
 
+    func testHostAccountsHarnessesAndConnectorsActOnTheHostAndKeepNoPaths() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "remote-bridge-accounts-\(UUID().uuidString)")
+        let binDir = root.appending(path: "private-host-bin")
+        try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstExec = binDir.appending(path: "claude")
+        let secondExec = binDir.appending(path: "claude-beta")
+        for url in [firstExec, secondExec] {
+            try Data("#!/bin/sh\necho 2.1.80\n".utf8).write(to: url)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path(percentEncoded: false))
+        }
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteBridgeAccounts")))
+        let runtimeSelections = RuntimeSelectionStore(
+            defaults: defaults,
+            candidates: { $0 == .claudeCode ? [firstExec, secondExec] : [] }
+        )
+        let connections = ProviderConnectionStore(fileURL: nil, snapshotCacheURL: nil, defaults: defaults)
+        let work = try connections.add(name: "Work", harness: .claudeCode, home: root.appending(path: "private-account-home/work"))
+        let backup = try connections.add(name: "Backup", harness: .claudeCode, home: root.appending(path: "private-account-home/backup"))
+        let now = Date(timeIntervalSince1970: 1_792_158_000)
+        connections.publishDefaults([
+            HarnessAccountSnapshot(
+                id: AccountSnapshotCache.defaultKey(for: .claudeCode),
+                harness: .claudeCode,
+                providerID: "anthropic",
+                state: .signedIn,
+                accountLabel: "default@example.com",
+                accountOrganization: "Acme",
+                accountPlan: "Claude Max",
+                detail: "Default account",
+                credentialOwner: "Claude Code credential store",
+                checkedAt: now,
+                usage: [AccountUsageMetric(id: "five_hour", label: "5h", usedFraction: 0.2, detail: "80% left", resetsAt: now.addingTimeInterval(3600), evidence: .exactQuota)],
+                canLogin: true,
+                canLogout: true
+            )
+        ])
+        connections.publish(
+            HarnessAccountSnapshot(
+                id: work.id,
+                harness: .claudeCode,
+                providerID: "anthropic",
+                state: .signedIn,
+                accountLabel: "work@example.com",
+                accountOrganization: "Acme",
+                accountPlan: "Claude Max",
+                detail: "Work account",
+                credentialOwner: "Claude Code credential store",
+                checkedAt: now,
+                usage: [AccountUsageMetric(id: "five_hour", label: "5h", usedFraction: 0.4, detail: "60% left", resetsAt: now.addingTimeInterval(3600), evidence: .exactQuota)],
+                canLogin: true,
+                canLogout: true
+            ),
+            for: work
+        )
+        connections.publish(
+            HarnessAccountSnapshot(
+                id: backup.id,
+                harness: .claudeCode,
+                providerID: "anthropic",
+                state: .signedIn,
+                accountLabel: "backup@example.com",
+                accountOrganization: "Acme",
+                accountPlan: "Claude Max",
+                detail: "Backup account",
+                credentialOwner: "Claude Code credential store",
+                checkedAt: now,
+                usage: [],
+                canLogin: true,
+                canLogout: true
+            ),
+            for: backup
+        )
+
+        let githubID = UUID()
+        let linearID = UUID()
+        let connectorCenter = ConnectorCenter(environment: .init(
+            repository: InMemoryConnectorRepository(records: [
+                ConnectorRecord(
+                    id: githubID, name: "GitHub", slug: "github",
+                    serverURL: URL(string: "https://api.githubcopilot.com/mcp/")!,
+                    authorization: .oauth, status: .connected,
+                    tools: [.object(["name": .string("get_me")]), .object(["name": .string("list_issues")])],
+                    toolsUpdatedAt: now, presetID: "github"
+                ),
+                ConnectorRecord(
+                    id: linearID, name: "Linear", slug: "linear",
+                    serverURL: URL(string: "https://mcp.linear.app/mcp")!,
+                    authorization: .oauth, status: .notConnected, presetID: "linear"
+                ),
+                // A program on the host names its path; only a masked summary may travel.
+                ConnectorRecord(
+                    name: "Local server", slug: "local-server", serverURL: URL(string: "stdio://local-server")!,
+                    status: .connected,
+                    program: ConnectorProgram(runtime: .command, program: binDir.appending(path: "server").path(percentEncoded: false),
+                                              origin: "Claude")
+                )
+            ]),
+            credentials: InMemoryConnectorCredentialStore(),
+            http: URLSessionConnectorTransport(),
+            userAgent: nil,
+            sha256: { $0 },
+            clientVersion: "test"
+        ))
+
+        let model = AppModel(
+            store: SessionStore(repository: InMemorySessionRepository()),
+            runtimeSelections: runtimeSelections,
+            connections: connections,
+            preferences: defaults,
+            restoresIndexOnLaunch: false
+        )
+        model.connectorCenter = connectorCenter
+        let bridge = AppModelRemoteBridge(model: model)
+        let signals = SignalRecorder()
+        bridge.setChangeHandler { signals.record($0) }
+        await bridge.setWatchingHostAccounts(true)
+        XCTAssertTrue(bridge.snapshot().hostAccounts)
+
+        let initial = try await bridge.hostAccounts(refreshHarnesses: []).get()
+        let wire = RemoteJSON.string(initial)
+        XCTAssertFalse(wire.contains("private-host-bin") || wire.contains("private-account-home") || wire.contains("homePath"))
+        XCTAssertEqual(initial.accounts.filter { $0.harness == "claude-code" }.map(\.id), [AccountChoice.nativeID(for: .claudeCode), work.id, backup.id])
+        XCTAssertEqual(initial.connectors.map(\.name), ["GitHub", "Linear", "Local server"])
+        XCTAssertEqual(initial.connectors.first?.toolCount, 2)
+        XCTAssertEqual(initial.connectors.first?.enabled, true)
+
+        _ = try await bridge.setHostAccount(
+            harness: "claude-code", accountID: work.id, automaticAssignment: true, settingID: nil, enabled: nil
+        ).get()
+        let workChoice = try XCTUnwrap(AppModelRemoteBridge.allHostAccountChoices(for: .claudeCode, in: connections).first { $0.id == work.id })
+        XCTAssertTrue(connections.isInAutomaticAssignment(workChoice))
+        XCTAssertTrue(connections.offersAutomaticNewTaskAccount(for: .claudeCode))
+
+        let chosen = try await bridge.setHostAccount(
+            harness: "claude-code", accountID: work.id, automaticAssignment: nil, settingID: nil, enabled: nil
+        ).get()
+        XCTAssertEqual(connections.selection[.claudeCode], work.id)
+        XCTAssertFalse(connections.startsNewTasksAutomatically(for: .claudeCode))
+        XCTAssertEqual(chosen.accounts.first { $0.id == work.id }?.current, true)
+
+        let autoAccount = try await bridge.setHostAccount(
+            harness: "claude-code", accountID: AppModelRemoteBridge.automaticAccountID, automaticAssignment: nil, settingID: nil, enabled: nil
+        ).get()
+        XCTAssertTrue(connections.startsNewTasksAutomatically(for: .claudeCode))
+        XCTAssertTrue(autoAccount.picksNewTaskAccount)
+        XCTAssertTrue(autoAccount.accounts.filter { $0.harness == "claude-code" }.allSatisfy { $0.current != true })
+
+        let backupChoice = try XCTUnwrap(AppModelRemoteBridge.allHostAccountChoices(for: .claudeCode, in: connections).first { $0.id == backup.id })
+        _ = try await bridge.setHostAccount(
+            harness: "claude-code", accountID: backup.id, automaticAssignment: false, settingID: nil, enabled: nil
+        ).get()
+        XCTAssertFalse(connections.isInAutomaticAssignment(backupChoice))
+
+        let updatedSetting = try await bridge.setHostAccount(
+            harness: nil, accountID: nil, automaticAssignment: nil, settingID: YardletSetting.continueAtUsageLimit.id, enabled: false
+        ).get()
+        XCTAssertFalse(UsageLimitAutoContinuePreference.isOn(in: defaults))
+        XCTAssertFalse(updatedSetting.continuesAtUsageLimit)
+
+        let disallowedSetting = await bridge.setHostAccount(
+            harness: nil, accountID: nil, automaticAssignment: nil, settingID: "unrelated_setting", enabled: true
+        )
+        guard case let .failure(settingError) = disallowedSetting else { return XCTFail("Unlisted setting accepted") }
+        XCTAssertEqual(settingError.code, RemoteErrorCode.notAllowed)
+
+        _ = try await bridge.setHostHarnessRuntime(harness: "claude-code", choiceID: "install:1").get()
+        XCTAssertEqual(runtimeSelections.selectedURL(for: .claudeCode), secondExec.standardizedFileURL)
+        XCTAssertTrue(runtimeSelections.isChosen(.claudeCode))
+
+        _ = try await bridge.setHostHarnessRuntime(harness: "claude-code", choiceID: AppModelRemoteBridge.automaticRuntimeChoiceID).get()
+        XCTAssertFalse(runtimeSelections.isChosen(.claudeCode))
+
+        let connectorOff = try await bridge.setHostConnector(id: githubID.uuidString, enabled: false).get()
+        XCTAssertFalse(connectorCenter.isOn(githubID))
+        XCTAssertEqual(connectorOff.connectors.first { $0.id == githubID.uuidString }?.enabled, false)
+
+        let disconnectedToggle = await bridge.setHostConnector(id: linearID.uuidString, enabled: false)
+        guard case let .failure(connectorError) = disconnectedToggle else { return XCTFail("Disconnected connector toggled") }
+        XCTAssertEqual(connectorError.code, RemoteErrorCode.notAllowed)
+
+        let claudeAIOff = try await bridge.setHostConnector(id: YardletSetting.claudeAIConnectors.id, enabled: false).get()
+        XCTAssertFalse(ClaudeAIConnectorPreference.isEnabled(in: defaults))
+        XCTAssertFalse(claudeAIOff.claudeAIConnectors)
+
+        await bridge.setWatchingHostAccounts(false)
+        await model.shutdown()
+    }
+
     // MARK: - Helpers
 
     private static func model(sessions: [SessionRecord], transcripts: [UUID: [TranscriptEntry]],

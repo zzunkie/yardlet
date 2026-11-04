@@ -1508,6 +1508,325 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
         await host.shutdown()
     }
 
+    /// The host's Accounts, Harnesses and Connectors sections (§15.37) drawn from the same host model
+    /// locally and over the remote loopback, with and without the `settings` permission.
+    func testHostAccountsHarnessesAndConnectorsSectionsMatchLocalSettings() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "remote-accounts-render-\(UUID().uuidString)")
+        let binDir = root.appending(path: "bin")
+        try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let claudeExec = binDir.appending(path: "claude")
+        let claudeAltExec = binDir.appending(path: "claude-alt")
+        let codexExec = binDir.appending(path: "codex")
+        for url in [claudeExec, claudeAltExec, codexExec] {
+            try Data("#!/bin/sh\necho 2.1.80\n".utf8).write(to: url)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path(percentEncoded: false))
+        }
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteAccountsRender")))
+        let runtimeSelections = RuntimeSelectionStore(
+            defaults: defaults,
+            candidates: { kind in
+                switch kind {
+                case .claudeCode: [claudeExec, claudeAltExec]
+                case .codex: [codexExec]
+                default: []
+                }
+            }
+        )
+        let connections = ProviderConnectionStore(fileURL: nil, snapshotCacheURL: nil, defaults: defaults)
+        connections.usesFixtureSnapshots = true
+        let work = try connections.add(name: "Work", harness: .claudeCode, home: root.appending(path: "work"))
+        let studio = try connections.add(name: "Studio", harness: .claudeCode, home: root.appending(path: "studio"))
+        let now = Date()
+        let claudeDefaultSnapshot = HarnessAccountSnapshot(
+            id: AccountSnapshotCache.defaultKey(for: .claudeCode),
+            harness: .claudeCode,
+            providerID: "anthropic",
+            state: .signedIn,
+            accountLabel: "alex@acme.example",
+            accountOrganization: "Acme",
+            accountPlan: "Claude Max",
+            detail: "The selected runtime reports usable authentication.",
+            credentialOwner: "Claude Code credential store",
+            checkedAt: now.addingTimeInterval(-45),
+            usage: [
+                AccountUsageMetric(id: "claude:session", label: "5 hour limit", usedFraction: 0.28, detail: "72% left", resetsAt: now.addingTimeInterval(7200), evidence: .exactQuota),
+                AccountUsageMetric(id: "claude:week", label: "7 day limit", usedFraction: 0.14, detail: "86% left", resetsAt: now.addingTimeInterval(345600), evidence: .exactQuota)
+            ],
+            canLogin: true,
+            canLogout: true
+        )
+        let codexDefaultSnapshot = HarnessAccountSnapshot(
+            id: AccountSnapshotCache.defaultKey(for: .codex),
+            harness: .codex,
+            providerID: "openai",
+            state: .signedIn,
+            accountLabel: "alex@acme.example",
+            accountOrganization: nil,
+            accountPlan: "ChatGPT Pro",
+            detail: "The selected runtime reports usable authentication.",
+            credentialOwner: "Codex CLI",
+            checkedAt: now.addingTimeInterval(-45),
+            usage: [
+                AccountUsageMetric(id: "codex:five_hour", label: "5 hour limit", usedFraction: 0.12, detail: "88% left", resetsAt: now.addingTimeInterval(10800), evidence: .exactQuota)
+            ],
+            canLogin: true,
+            canLogout: true
+        )
+        let workSnapshot = HarnessAccountSnapshot(
+            id: work.id,
+            harness: .claudeCode,
+            providerID: "anthropic",
+            state: .signedIn,
+            accountLabel: "work@acme.example",
+            accountOrganization: "Acme",
+            accountPlan: "Claude Max",
+            detail: "The selected runtime reports usable authentication.",
+            credentialOwner: "Claude Code credential store",
+            checkedAt: now.addingTimeInterval(-45),
+            usage: [
+                AccountUsageMetric(id: "claude:session", label: "5 hour limit", usedFraction: 0.42, detail: "58% left", resetsAt: now.addingTimeInterval(5400), evidence: .exactQuota),
+                AccountUsageMetric(id: "claude:week", label: "7 day limit", usedFraction: 0.31, detail: "69% left", resetsAt: now.addingTimeInterval(300000), evidence: .exactQuota)
+            ],
+            canLogin: true,
+            canLogout: true
+        )
+        let studioSnapshot = HarnessAccountSnapshot(
+            id: studio.id,
+            harness: .claudeCode,
+            providerID: "anthropic",
+            state: .signedIn,
+            accountLabel: "studio@acme.example",
+            accountOrganization: "Acme",
+            accountPlan: "Claude Max",
+            detail: "The selected runtime reports usable authentication.",
+            credentialOwner: "Claude Code credential store",
+            checkedAt: now.addingTimeInterval(-45),
+            usage: [
+                AccountUsageMetric(id: "claude:session", label: "5 hour limit", usedFraction: 0.08, detail: "92% left", resetsAt: now.addingTimeInterval(14400), evidence: .exactQuota)
+            ],
+            canLogin: true,
+            canLogout: true
+        )
+        connections.publishDefaults([claudeDefaultSnapshot, codexDefaultSnapshot])
+        connections.publish(workSnapshot, for: work)
+        connections.publish(studioSnapshot, for: studio)
+
+        let connectorCenter = ConnectorCenter(environment: .init(
+            repository: InMemoryConnectorRepository(records: Array(ConnectorsRenderingTests.records.prefix(3))),
+            credentials: InMemoryConnectorCredentialStore(),
+            http: FakeConnectorServer(),
+            userAgent: FakeUserAgent(),
+            sha256: MacOAuthUserAgent.sha256,
+            clientVersion: "test"
+        ))
+        let session = SessionRecord(
+            harness: .claudeCode,
+            workspaceURL: root,
+            runtimeExecutableURL: claudeExec,
+            title: "Build remote settings",
+            connection: work
+        )
+        let host = AppModel(
+            store: SessionStore(sessions: [session], repository: InMemorySessionRepository()),
+            runtimeSelections: runtimeSelections,
+            connections: connections,
+            preferences: defaults,
+            restoresIndexOnLaunch: false
+        )
+        host.connectorCenter = connectorCenter
+
+        let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(model: host))
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(
+            macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+            name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]
+        ).url)
+        let hosts = RemoteHostDirectory(
+            store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+            hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test")
+        )
+        let paired = try await hosts.pair(link: link.absoluteString)
+        let model = try XCTUnwrap(hosts.model(for: paired.id))
+        try await waitUntil { model.hasSnapshot && model.offersHostAccounts }
+        await model.watchHostAccounts()
+        try await waitUntil { model.hostAccountsState != nil }
+
+        let localAccountModel = AccountCenterModel(connections: connections)
+        let localUsage = AccountHarnessScope.Usage(withTasks: [.claudeCode], chosenForNewTask: .claudeCode, withSubagents: [])
+        let size = NSSize(width: 680, height: 660)
+
+        func sectionHeader(_ section: SettingsSection) -> some View {
+            HStack(spacing: 10) {
+                Image(systemName: section.systemName)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(ParityTheme.accent)
+                Text(section.title)
+                    .font(.system(size: 18, weight: .semibold))
+                Spacer()
+            }
+        }
+
+        // 1. Without the `settings` permission (read-only).
+        XCTAssertFalse(model.canEditHostSettings)
+        try await render("remote-accounts-readonly", size: size, titled: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                sectionHeader(.accounts).padding(.horizontal, 20).padding(.top, 20)
+                model.accountsSettingsSectionView()
+            }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .background(ParityTheme.canvas)
+        }
+        try await render("remote-harnesses-readonly", size: size, titled: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                sectionHeader(.harnesses).padding(.horizontal, 20).padding(.top, 20)
+                model.harnessesSettingsSectionView()
+            }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .background(ParityTheme.canvas)
+        }
+        try await render("remote-harnesses-detail-readonly", size: size, titled: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                sectionHeader(.harnesses).padding(.horizontal, 20).padding(.top, 20)
+                model.harnessesSettingsSectionView(initialSelectedHarness: .claudeCode, showsInitialConnectionDetails: true)
+            }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .background(ParityTheme.canvas)
+        }
+        try await render("remote-connectors-readonly", size: size, titled: false) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    sectionHeader(.connectors)
+                    model.connectorsSettingsSectionView()
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .background(ParityTheme.canvas)
+        }
+
+        // 2. Grant `settings` permission and render local vs. remote side by side.
+        try await stack.server.setPermission(.settings, allowed: true, for: try XCTUnwrap(model.host.deviceID))
+        try await waitUntil { model.canEditHostSettings }
+
+        try await render("local-accounts", size: size, titled: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                sectionHeader(.accounts).padding(.horizontal, 20).padding(.top, 20)
+                ConnectionCenterContent(
+                    tab: .accounts,
+                    model: localAccountModel,
+                    runtimeSelections: runtimeSelections,
+                    connections: connections,
+                    harnessUsage: localUsage,
+                    initialHarness: nil,
+                    addingAccount: .constant(false),
+                    setupExpanded: .constant(false),
+                    isFixture: false,
+                    onFinish: {}
+                )
+            }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .background(ParityTheme.canvas)
+        }
+        try await render("remote-accounts", size: size, titled: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                sectionHeader(.accounts).padding(.horizontal, 20).padding(.top, 20)
+                model.accountsSettingsSectionView()
+            }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .background(ParityTheme.canvas)
+        }
+
+        try await render("local-harnesses", size: size, titled: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                sectionHeader(.harnesses).padding(.horizontal, 20).padding(.top, 20)
+                ConnectionCenterContent(
+                    tab: .harnesses,
+                    model: localAccountModel,
+                    runtimeSelections: runtimeSelections,
+                    connections: connections,
+                    harnessUsage: localUsage,
+                    initialHarness: nil,
+                    addingAccount: .constant(false),
+                    setupExpanded: .constant(false),
+                    isFixture: false,
+                    onFinish: {}
+                )
+            }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .background(ParityTheme.canvas)
+        }
+        try await render("remote-harnesses", size: size, titled: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                sectionHeader(.harnesses).padding(.horizontal, 20).padding(.top, 20)
+                model.harnessesSettingsSectionView()
+            }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .background(ParityTheme.canvas)
+        }
+        try await render("local-harnesses-detail", size: size, titled: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                sectionHeader(.harnesses).padding(.horizontal, 20).padding(.top, 20)
+                ConnectionCenterContent(
+                    tab: .harnesses,
+                    model: localAccountModel,
+                    runtimeSelections: runtimeSelections,
+                    connections: connections,
+                    harnessUsage: localUsage,
+                    initialHarness: nil,
+                    addingAccount: .constant(false),
+                    setupExpanded: .constant(false),
+                    isFixture: false,
+                    initialSelectedHarness: .claudeCode,
+                    showsInitialConnectionDetails: true,
+                    onFinish: {}
+                )
+            }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .background(ParityTheme.canvas)
+        }
+        try await render("remote-harnesses-detail", size: size, titled: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                sectionHeader(.harnesses).padding(.horizontal, 20).padding(.top, 20)
+                model.harnessesSettingsSectionView(initialSelectedHarness: .claudeCode, showsInitialConnectionDetails: true)
+            }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .background(ParityTheme.canvas)
+        }
+
+        try await render("local-connectors", size: size, titled: false) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    sectionHeader(.connectors)
+                    ConnectorSettingsView(center: connectorCenter)
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .background(ParityTheme.canvas)
+        }
+        try await render("remote-connectors", size: size, titled: false) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    sectionHeader(.connectors)
+                    model.connectorsSettingsSectionView()
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .background(ParityTheme.canvas)
+        }
+
+        model.unwatchHostAccounts()
+        hosts.close(paired.id)
+        await host.shutdown()
+    }
+
     // MARK: - Helpers
 
     func render(_ name: String, size: NSSize, model: RemoteHostModel, hosts: RemoteHostDirectory,

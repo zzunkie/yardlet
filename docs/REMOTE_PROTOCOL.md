@@ -575,6 +575,7 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
 
 Every revision of protocol 2 only adds optional fields or states a rule, except where it says otherwise.
 
+- 2026-11-04: host accounts, harness runtimes and connectors in Settings (§15.37).
 - 2026-11-04: desktop conversation next steps and remaining content (§15.31).
 - 2026-11-04: optional composer extensions, scoped file mentions, task connectors, queue controls, suggestions and new-task choices (§15.33).
 - 2026-11-04: per-task session rail facts and actions, and cached home task lines (§15.34).
@@ -2287,6 +2288,62 @@ snapshot flag and the new event.
   Without `RemoteDevicePermission.settings`, the remote sheet renders its controls disabled with a notice
   pointing to the host's `Settings › Remote › Paired devices`.
 
+### 15.37 Host accounts, harness runtimes and connectors
+
+The optional snapshot flag `hostAccounts: true` advertises the requests, event and fields below for
+the remote window's Settings › Accounts, Harnesses and Connectors sections. Without it, the client
+leaves those sections out of a remote host's Settings. Phones may ignore the flag and the event.
+
+- `hostAccounts` (`watching?: bool`, `refreshHarnesses?: [string]`): reads the host's Account Center
+  and connector state (`hostAccountsState` on the response). With `watching: true` (the default), the
+  connection receives `hostAccountsChanged` events while the section is open on the client;
+  `watching: false` stops the watch. When `refreshHarnesses` is non-empty (`["*"]` for all built-in
+  harnesses, or specific harness identifiers), the host re-reads those harnesses' default and saved
+  account snapshots before answering, as Refresh in the local Account Center does.
+- `hostAccountsState` carries:
+  - `accounts`: `[RemoteAccount]`, reusing §15.17 / §15.32's `RemoteAccount` shape with optional
+    fields for the Account Center row (`harness`, `connectionName`, `providerId`, `organization`,
+    `plan`, `credentialOwner`, `readingStatus`, `checking`, `automaticAssignment`, `defaultSelected`,
+    and optional `detail`/`evidence` on each `RemoteAccount.Usage` window). Account home paths,
+    tokens, credentials and environment values never travel.
+  - `harnesses`: `[RemoteHarnessRuntime]`, one per built-in harness, with `harness`, `installed`,
+    `label` (executable name, install source and version, never a filesystem path), optional
+    `versionNote` and `versionVerified`, optional `checkingDefault`, and `choices` (`id` `"automatic"`
+    or `"install:<index>"`, `label`, `selected`).
+  - `connectors`: `[RemoteConnectorInfo]`, one per connector configured on the host, with `id`,
+    `name`, `slug`, `status` (`connected`, `signInRequired`, `notConnected`), `authorization`
+    (`oauth`, `token`, `none`, `unknown`), `enabled` (whether the connector is turned on for the
+    host), `toolCount`, and optional display metadata (`subtitle`, `source`, `presetId`,
+    `localService`, `account`, `serverHost`, `programSummary`, `usesRegisteredClient`, `activity`,
+    `failure`). Full server URLs, OAuth client secrets, tokens and program environment variables
+    never travel.
+  - `picksNewTaskAccount`, `continuesAtUsageLimit`, `movesTasksToAccountWithRoom`,
+    `claudeAIConnectors`, optional `cannotReadConnectors`, optional `xcodeDescription`, optional
+    `harnessesWithTasks`, optional `harnessesWithSubagents`, optional `newTaskHarness`, and optional
+    `editable` (`true` when the requesting device currently has the `settings` permission, §15.28).
+- `setHostAccount` (`harness?: string`, `accountId?: string`, `automaticAssignment?: bool`,
+  `settingId?: string`, `enabled?: bool`): requires the device's `settings` permission (§15.28).
+  Chooses the account new tasks use for `harness` (`accountId` naming a selectable account or
+  `"automatic"`), toggles whether `accountId` is included in automatic assignment
+  (`automaticAssignment`), or updates one of the Account Center's switches (`settingId`:
+  `new_task_account_automatically`, `continue_at_usage_limit`, `move_tasks_to_accounts_with_room`)
+  through the host's settings catalog. Signing in, adding, removing and sharing accounts are not
+  offered over the wire and stay on the host.
+- `setHostHarnessRuntime` (`harness: string`, `choiceId: string`): requires the device's `settings`
+  permission. Selects `"automatic"` or a discovered install (`"install:<index>"`) on the host's
+  `RuntimeSelectionStore` and refreshes that harness's account readings. Choosing an arbitrary
+  filesystem path stays on the host.
+- `setHostConnector` (`id: string`, `enabled: bool`): requires the device's `settings` permission.
+  Turns a connected host connector on or off for the host, or toggles `claude_ai_connectors` through
+  the host's settings catalog. Connecting, OAuth sign-in, token entry, registered OAuth app setup,
+  adding and removing connectors stay on the host.
+- `setHostAccount`, `setHostHarnessRuntime` and `setHostConnector` are commands and return the
+  updated `hostAccountsState`. The audit log records their kind, device, result and target identifier
+  (`settingId` or `accountId`, `<harness>=<choiceId>`, or connector `id`), never account labels,
+  emails or credentials.
+- `hostAccountsChanged`: sent to connections watching `hostAccounts` when the host's accounts,
+  runtime selections, connectors, related preferences or the device's `settings` permission change.
+
 ## 16. Push notifications
 
 The Mac pushes to a device that registered (§15.6) and **has no open v2 connection**, for these
@@ -2419,8 +2476,14 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   the shared composer views when the host offers §15.33. New tasks also offer host account choices and confirmed
   elevated permissions. With `hostSettings` (§15.36), `⌘,`, the app menu's `Settings…` and the host footer open
   the host's Settings sheet in the remote window (`SettingsCenterView` showing General, Yardlet Instructions,
-  CLI Updates and Usage, editable with the device's `settings` permission and read-only otherwise). Connector
-  setup, importing schedules from other apps and the other side panels stay on the host.
+  CLI Updates and Usage, editable with the device's `settings` permission and read-only otherwise).
+  With `hostAccounts` (§15.37), the remote window's Settings draws the local Accounts, Harnesses and Connectors sections from the host's values: Refresh re-reads the host's accounts, and with the
+  device's `settings` permission (§15.28) choosing the account for new tasks, changing automatic assignment or
+  usage-limit switches, picking a discovered harness runtime, and turning a connected connector on or off act on
+  the host. Without the `settings` permission those controls show disabled with a note naming the host's
+  Settings › Remote › Paired devices. Signing in, adding, removing or sharing accounts, choosing a custom
+  runtime file, and connecting or editing connectors stay on the host. Importing schedules from other apps and
+  the other side panels also stay on the host.
 - **Paths:** as §11.4. While a host's window is open it browses Bonjour (§11.3) for the instance with the
   discovery id of the host key it saved, and resolves it to the host's name and port (`Name.local:47616`; the
   system resolves the name when connecting). Those addresses go first, never saved, then the direct addresses the

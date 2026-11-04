@@ -10,6 +10,10 @@ import SwiftUI
 /// heading, and an empty state that says what to do. Adding happens in `ConnectorAddSheet`.
 struct ConnectorSettingsView: View {
     let center: ConnectorCenter
+    var isRemote = false
+    var canEditSettings = true
+    var remoteNote: String? = nil
+    var claudeAIConnectorsOverride: Binding<Bool>? = nil
     @State private var adding: ConnectorAddSheet.Start?
     @AppStorage(ClaudeAIConnectorPreference.key) private var claudeAIConnectors = false
     @AppStorage(Self.importDismissedKey) private var importDismissed = false
@@ -18,10 +22,18 @@ struct ConnectorSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            Text(L10n.string("Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account."))
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L10n.string("Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account."))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let remoteNote {
+                    Text(remoteNote)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
 
             if center.cannotReadSavedSettings {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
@@ -41,7 +53,7 @@ struct ConnectorSettingsView: View {
                         .font(.headline)
                     Spacer(minLength: 8)
                     // With none yet, the empty state holds the one "Add connector".
-                    if !center.connectors.isEmpty {
+                    if !isRemote, !center.connectors.isEmpty {
                         Button {
                             adding = .directory
                         } label: {
@@ -57,7 +69,13 @@ struct ConnectorSettingsView: View {
                     VStack(spacing: 0) {
                         ForEach(Array(ConnectorSettingsState.ordered(center).enumerated()), id: \.element.id) { index, record in
                             if index > 0 { Divider().padding(.leading, 42) }
-                            ConnectorRow(center: center, record: record, onSetUp: { adding = .preset($0) })
+                            ConnectorRow(
+                                center: center,
+                                record: record,
+                                isRemote: isRemote,
+                                canEditSettings: canEditSettings,
+                                onSetUp: { adding = .preset($0) }
+                            )
                         }
                     }
                     .padding(.horizontal, 12)
@@ -68,21 +86,26 @@ struct ConnectorSettingsView: View {
                 }
             }
 
-            let suggestions = center.importSuggestions
-            if !importDismissed, !suggestions.isEmpty {
-                ConnectorImportList(suggestions: suggestions, center: center,
-                                    onSetUp: { preset in adding = .preset(preset) },
-                                    onReview: { draft in adding = .program(draft) },
-                                    onDismiss: { importDismissed = true })
-            }
+            if !isRemote {
+                let suggestions = center.importSuggestions
+                if !importDismissed, !suggestions.isEmpty {
+                    ConnectorImportList(suggestions: suggestions, center: center,
+                                        onSetUp: { preset in adding = .preset(preset) },
+                                        onReview: { draft in adding = .program(draft) },
+                                        onDismiss: { importDismissed = true })
+                }
 
-            ConnectorSetupTiles(center: center) { preset in adding = .preset(preset) }
+                ConnectorSetupTiles(center: center) { preset in adding = .preset(preset) }
+            }
 
             claudeAIRow
                 .padding(.horizontal, 12)
                 .parityCard()
         }
-        .task { await center.loadNativeInventory() }
+        .task {
+            guard !isRemote else { return }
+            await center.loadNativeInventory()
+        }
         .sheet(item: $adding) { start in
             ConnectorAddSheet(center: center, start: start) { adding = nil }
         }
@@ -101,10 +124,12 @@ struct ConnectorSettingsView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-            Button(L10n.string("Add connector")) { adding = .directory }
-                .parityProminentButton()
-                .controlSize(.small)
-                .padding(.top, 2)
+            if !isRemote {
+                Button(L10n.string("Add connector")) { adding = .directory }
+                    .parityProminentButton()
+                    .controlSize(.small)
+                    .padding(.top, 2)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 24)
@@ -121,10 +146,11 @@ struct ConnectorSettingsView: View {
                 .background(ParityTheme.canvas, in: RoundedRectangle(cornerRadius: 8))
             SettingsRowText(setting: .claudeAIConnectors)
             Spacer(minLength: 8)
-            Toggle(YardletSetting.claudeAIConnectors.title, isOn: $claudeAIConnectors)
+            Toggle(YardletSetting.claudeAIConnectors.title, isOn: claudeAIConnectorsOverride ?? $claudeAIConnectors)
                 .labelsHidden()
                 .toggleStyle(.paritySwitch)
                 .controlSize(.small)
+                .disabled(!canEditSettings)
         }
         .padding(.vertical, 12)
     }
@@ -335,6 +361,8 @@ struct RedirectURIField: View {
 private struct ConnectorRow: View {
     let center: ConnectorCenter
     let record: ConnectorRecord
+    var isRemote = false
+    var canEditSettings = true
     /// Opens Add connector at a service's page (Gmail's Google OAuth app).
     var onSetUp: (ConnectorPreset) -> Void = { _ in }
     @State private var entering: Entry?
@@ -383,8 +411,20 @@ private struct ConnectorRow: View {
             }
             Spacer(minLength: 8)
             statusLabel
-            primaryAction
-            moreMenu
+            if record.status == .connected || !center.isOn(record.id) {
+                Toggle(record.name, isOn: Binding(
+                    get: { center.isOn(record.id) },
+                    set: { center.setConnector(record.id, on: $0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.paritySwitch)
+                .controlSize(.small)
+                .disabled(!canEditSettings)
+            }
+            if !isRemote {
+                primaryAction
+                moreMenu
+            }
         }
         .padding(.vertical, 12)
         .accessibilityElement(children: .contain)

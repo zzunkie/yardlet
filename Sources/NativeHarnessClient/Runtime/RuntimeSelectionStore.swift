@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import YardletRemote
 
 /// The runtime each harness's new tasks start with. One the person chose (Settings › Harnesses ›
 /// Choose…) stays until they choose another. Any other harness uses the newest version among the
@@ -19,6 +20,10 @@ final class RuntimeSelectionStore {
     /// For a harness whose runtime the person chose, a newer install found elsewhere; Settings ›
     /// CLI Updates offers it. Filled by `findNewest()`.
     private(set) var newerInstalls: [HarnessKind: Install] = [:]
+    /// Host runtime statuses and choices when backing a remote Settings view (§15.37).
+    var remoteRuntimes: [HarnessKind: RemoteHarnessRuntime]?
+    var canSelectRemoteRuntime = true
+    @ObservationIgnored var onSelectRemoteRuntime: ((HarnessKind, String) -> Void)?
     /// The harnesses whose runtime the person chose.
     @ObservationIgnored private var chosen: Set<HarnessKind>
     private let defaults: UserDefaults
@@ -76,12 +81,43 @@ final class RuntimeSelectionStore {
     }
 
     func selectedURL(for harness: HarnessKind) -> URL? {
+        if let remoteRuntimes {
+            guard let runtime = remoteRuntimes[harness], runtime.installed else { return nil }
+            let name = HarnessCatalog.descriptor(for: harness)?.executableName ?? harness.rawValue
+            return URL(filePath: name)
+        }
         guard let url = selectedURLs[harness], Self.isCompatibleRuntime(url, for: harness) else { return nil }
         if FileManager.default.isExecutableFile(atPath: url.path(percentEncoded: false)) { return url }
         // A desktop app replaced the runtime it bundles while Yardlet ran (Claude Desktop deletes the
         // previous version on update): the choice follows it, as on the next launch.
         guard let moved = RuntimeRelocation.successor(of: url, for: harness), Self.isCompatibleRuntime(moved, for: harness) else { return nil }
         return moved
+    }
+
+    func isChosen(_ harness: HarnessKind) -> Bool {
+        chosen.contains(harness)
+    }
+
+    func cachedVersion(of url: URL) -> String? {
+        versions.cachedVersion(of: url)
+    }
+
+    func discoveredInstalls(for harness: HarnessKind) -> [URL] {
+        let current = selectedURL(for: harness).map { [$0] } ?? []
+        return Self.installs(current + candidates(harness), for: harness)
+    }
+
+    func automaticURL(for harness: HarnessKind) -> URL? {
+        Self.newest(of: Self.installs(candidates(harness), for: harness), version: versions.cachedVersion(of:))
+    }
+
+    func selectAutomatic(for harness: HarnessKind) {
+        chosen.remove(harness)
+        defaults.removeObject(forKey: Self.key(for: harness))
+        newerInstalls[harness] = nil
+        if let newest = automaticURL(for: harness) {
+            selectedURLs[harness] = newest
+        }
     }
 
     var connectedDescriptors: [HarnessDescriptor] {

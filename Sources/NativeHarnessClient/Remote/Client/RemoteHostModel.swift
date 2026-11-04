@@ -104,6 +104,14 @@ final class RemoteHostModel: Identifiable {
     private(set) var offersBrowser = false
     /// The browser panel's task, tabs and picture.
     let browser = RemoteBrowserModel()
+    /// The host's Account Center, harness runtimes and connectors (§15.37).
+    private(set) var offersHostAccounts = false
+    var hostAccountsState: RemoteAccountsState?
+    @ObservationIgnored var watchingHostAccountsCount = 0
+    @ObservationIgnored lazy var remoteConnections: ProviderConnectionStore = makeRemoteConnectionsStore()
+    @ObservationIgnored lazy var remoteRuntimeSelections: RuntimeSelectionStore = makeRemoteRuntimeSelectionsStore()
+    @ObservationIgnored lazy var remoteConnectorCenter: ConnectorCenter = makeRemoteConnectorCenter()
+    @ObservationIgnored lazy var remoteAccountCenterModel: AccountCenterModel = AccountCenterModel(connections: remoteConnections)
 
     /// Called for each `attention` event, for a notification of the host's task.
     @ObservationIgnored var onAttention: ((RemoteEvent) -> Void)?
@@ -282,6 +290,8 @@ final class RemoteHostModel: Identifiable {
             closingReason = event.reason
         case .schedulesChanged:
             if schedules.isFollowing { schedules.load() }
+        case .hostAccountsChanged:
+            if watchingHostAccountsCount > 0 { Task { await loadHostAccounts() } }
         case .tabFrame, .browserTabsChanged:
             browser.receive(event)
         case .terminalOutput, .terminalClosed:
@@ -331,6 +341,7 @@ final class RemoteHostModel: Identifiable {
             }
             offersBrowser = response.browserTabs == true
             browser.canControlTabs = response.tabControls == true
+            offersHostAccounts = response.hostAccounts == true
             hasSnapshot = true
             hostTakesPresence = response.presence == true
             toldPresence = nil
@@ -339,6 +350,7 @@ final class RemoteHostModel: Identifiable {
             if case let .task(id) = selection, !tasks.contains(where: { $0.id == id }) { selection = .none }
             // The host sends `schedulesChanged` to a connection that asked since it connected.
             if offersSchedules, schedules.isFollowing { schedules.load() }
+            if offersHostAccounts, watchingHostAccountsCount > 0 { Task { await loadHostAccounts() } }
         }
         for taskID in subscribed { subscribe(taskID) }
     }

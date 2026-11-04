@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import YardletRemote
 
 /// A model access route is a capability of a harness, not a classification of its vendor.
 enum ModelAccessKind: String, Codable, Sendable {
@@ -262,10 +263,12 @@ final class ProviderConnectionStore {
     private(set) var readingStatus: [String: AccountReadingStatus] = [:]
     /// Accounts this store is checking now, keyed like `AccountChoice.id`.
     private(set) var checkingKeys: Set<String> = []
+    private var remoteKnownLabels: [String: String] = [:]
     /// The account each choice last reported signed in, from the remembered readings, so a choice
     /// names its account while it is being checked again. Display only: it binds nothing.
     var knownAccountLabels: [String: String] {
-        cache.entries.compactMapValues { entry in
+        if isRemoteStore { return remoteKnownLabels }
+        return cache.entries.compactMapValues { entry in
             guard entry.state == .signedIn,
                   let label = entry.accountLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty
             else { return nil }
@@ -289,6 +292,13 @@ final class ProviderConnectionStore {
     /// Every change to a reading, for the moves that follow which accounts have room
     /// (`AppModel.accountReadingsChanged`).
     @ObservationIgnored var onReadingsChange: (() -> Void)?
+    /// Remote host hooks when this store backs a remote Settings view (§15.37).
+    @ObservationIgnored var isRemoteStore = false
+    @ObservationIgnored var onRemoteChoose: ((AccountChoice) -> Void)?
+    @ObservationIgnored var onRemoteChooseAutomatic: ((HarnessKind) -> Void)?
+    @ObservationIgnored var onRemoteSetPicksNewTaskAccount: ((Bool) -> Void)?
+    @ObservationIgnored var onRemoteSetAutomaticAssignment: ((AccountChoice, Bool) -> Void)?
+    @ObservationIgnored var onRemoteCheck: ((Set<HarnessKind>, AccountCheckPolicy) async -> Void)?
     /// The environment Codex's default login is read in, the one the app's Codex tasks run in.
     @ObservationIgnored var codexEnvironmentManager: CodexEnvironmentManager?
     /// Replace the runtime reads of default logins and saved accounts; nil reads the runtimes.
@@ -774,13 +784,18 @@ final class ProviderConnectionStore {
 
     /// Whether an account keeps its conversations where the harness's default login does.
     func sharesConversationsWithDefaultLogin(_ choice: AccountChoice) -> Bool {
-        TaskAccountSwitch.sharesConversations(choice.connection, nil, harness: choice.harness,
-                                              environment: defaultLoginEnvironment)
+        if isRemoteStore { return automaticAssignment[choice.id] ?? (choice.connection == nil) }
+        return TaskAccountSwitch.sharesConversations(choice.connection, nil, harness: choice.harness,
+                                                     environment: defaultLoginEnvironment)
     }
 
     /// The person includes an account in automatic assignment or leaves it out. An answer the same as
     /// the default is forgotten, so the default applies again.
     func setInAutomaticAssignment(_ included: Bool, for choice: AccountChoice) {
+        if let onRemoteSetAutomaticAssignment {
+            onRemoteSetAutomaticAssignment(choice, included)
+            return
+        }
         automaticAssignment[choice.id] = included == isInAutomaticAssignmentByDefault(choice) ? nil : included
         if automaticAssignment.isEmpty {
             defaults?.removeObject(forKey: Self.automaticAssignmentKey)
@@ -806,12 +821,20 @@ final class ProviderConnectionStore {
 
     /// Automatic, chosen from the new-task account menu.
     func chooseAutomaticNewTaskAccount(for harness: HarnessKind) {
+        if let onRemoteChooseAutomatic {
+            onRemoteChooseAutomatic(harness)
+            return
+        }
         setChosenNewTaskAccount(false, for: harness)
     }
 
     /// Turns Automatic for new tasks on or off. Off forgets the accounts chosen instead of it, so only
     /// the setting itself is kept, and the menu is as it was without Automatic.
     func setPicksNewTaskAccount(_ picks: Bool) {
+        if let onRemoteSetPicksNewTaskAccount {
+            onRemoteSetPicksNewTaskAccount(picks)
+            return
+        }
         picksNewTaskAccount = picks
         if picks {
             defaults?.removeObject(forKey: Self.picksNewTaskAccountKey)
@@ -903,8 +926,101 @@ final class ProviderConnectionStore {
     /// offered, it stands instead of Automatic until the person chooses Automatic again.
     func choose(_ choice: AccountChoice) {
         guard choice.canSelect, !(choice.connection.map(isMovingAway) ?? false) else { return }
+        if let onRemoteChoose {
+            onRemoteChoose(choice)
+            return
+        }
         if offersAutomaticNewTaskAccount(for: choice.harness) { setChosenNewTaskAccount(true, for: choice.harness) }
         selection[choice.harness] = choice.connection?.id
+    }
+
+    func applyRemoteAccounts(_ remoteAccounts: [RemoteAccount], picksNewTaskAccount: Bool) {
+        isRemoteStore = true
+        var savedConnections: [ProviderConnection] = []
+        var defaultsByHarness: [HarnessKind: HarnessAccountSnapshot] = [:]
+        var savedSnapshots: [String: HarnessAccountSnapshot] = [:]
+        var statuses: [String: AccountReadingStatus] = [:]
+        var checking: Set<String> = []
+        var assignment: [String: Bool] = [:]
+        var selectedByHarness: [HarnessKind: String] = [:]
+        var concreteChosenHarnesses: Set<HarnessKind> = []
+        var knownLabels: [String: String] = [:]
+
+        for remote in remoteAccounts {
+            guard let harnessRaw = remote.harness,
+                  let harness = HarnessCatalog.descriptor(for: HarnessKind(rawValue: harnessRaw))?.id else { continue }
+            let defaultKey = AccountSnapshotCache.defaultKey(for: harness)
+            let isDefault = remote.id == defaultKey && remote.connectionName == nil
+            let snapshot: HarnessAccountSnapshot?
+            if let remoteState = remote.state, let state = AccountAuthState(rawValue: remoteState.rawValue) {
+                let usage = remote.usage.enumerated().map { index, window in
+                    AccountUsageMetric(
+                        id: String(index),
+                        label: window.label,
+                        usedFraction: window.usedPercent.map { Double($0) / 100 },
+                        detail: window.detail ?? "",
+                        resetsAt: window.resetsAt.map { Date(timeIntervalSince1970: Double($0) / 1000) },
+                        evidence: window.evidence.flatMap(UsageEvidenceKind.init(rawValue:)) ?? .exactQuota
+                    )
+                }
+                snapshot = HarnessAccountSnapshot(
+                    id: remote.id,
+                    harness: harness,
+                    providerID: remote.providerId,
+                    state: state,
+                    accountLabel: state == .signedIn ? remote.name : nil,
+                    accountOrganization: remote.organization,
+                    accountPlan: remote.plan,
+                    detail: remote.detail ?? "",
+                    credentialOwner: remote.credentialOwner ?? "",
+                    checkedAt: remote.checkedAt.map { Date(timeIntervalSince1970: Double($0) / 1000) } ?? .distantPast,
+                    usage: usage,
+                    canLogin: false,
+                    canLogout: false
+                )
+            } else {
+                snapshot = nil
+                if !remote.name.isEmpty { knownLabels[remote.id] = remote.name }
+            }
+            if isDefault {
+                if let snapshot { defaultsByHarness[harness] = snapshot }
+            } else {
+                let connection = ProviderConnection(
+                    id: remote.id,
+                    name: remote.connectionName ?? remote.name,
+                    harness: harness,
+                    providerID: remote.providerId,
+                    homePath: nil,
+                    credentialSelector: nil
+                )
+                savedConnections.append(connection)
+                if let snapshot { savedSnapshots[remote.id] = snapshot }
+                if remote.defaultSelected == true || (remote.defaultSelected == nil && remote.current == true) {
+                    selectedByHarness[harness] = remote.id
+                }
+            }
+            if remote.current == true {
+                concreteChosenHarnesses.insert(harness)
+            }
+            if let statusRaw = remote.readingStatus, let status = AccountReadingStatus(rawValue: statusRaw) {
+                statuses[remote.id] = status
+            } else if snapshot != nil {
+                statuses[remote.id] = .current
+            }
+            if remote.checking == true { checking.insert(remote.id) }
+            assignment[remote.id] = remote.automaticAssignment ?? isDefault
+        }
+
+        remoteKnownLabels = knownLabels
+        connections = savedConnections
+        defaultSnapshots = defaultsByHarness
+        snapshots = savedSnapshots
+        readingStatus = statuses
+        checkingKeys = checking
+        automaticAssignment = assignment
+        self.picksNewTaskAccount = picksNewTaskAccount
+        selection = selectedByHarness
+        chosenNewTaskAccounts = concreteChosenHarnesses
     }
 
     /// Checks the accounts a new task can start on with `harness`, as the new-task screen's
@@ -932,6 +1048,12 @@ final class ProviderConnectionStore {
     func check(defaultsOf defaultHarnesses: [HarnessKind]? = nil, savedOf savedHarnesses: [HarnessKind]? = nil,
                connectionIDs: Set<String>? = nil, policy: AccountCheckPolicy = .ifStale,
                runtimeSelections: RuntimeSelectionStore) async {
+        if let onRemoteCheck {
+            let catalog = HarnessCatalog.builtIns.map(\.id)
+            let harnesses = Set(defaultHarnesses ?? catalog).union(savedHarnesses ?? catalog)
+            await onRemoteCheck(harnesses, policy)
+            return
+        }
         #if DEBUG
         guard !usesFixtureSnapshots else { return }
         #endif

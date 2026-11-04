@@ -60,6 +60,13 @@ final class AppModelRemoteBridge: RemoteBridge {
     var trackingHostSettings = false
     var hostSettingsObservers: [any NSObjectProtocol] = []
     var answeredHostSettings: RemoteHostSettings?
+    var watchesHostAccounts = false
+    var isObservingHostAccounts = false
+    var answeredHostAccounts: RemoteAccountsState?
+    var hostAccountsDefaultsObserver: NSObjectProtocol?
+    var runtimeVersionNotes: [URL: (note: String, verified: Bool)] = [:]
+    /// When a paired device last made the host reread each harness's accounts (§15.37).
+    var hostAccountsRefreshedAt: [HarnessKind: Date] = [:]
     /// A task's browser tabs (§15.25), when this build has a browser engine.
     var resetOffers: [UUID: RemoteResetOffer] = [:]
     let terminals = RemoteTerminalBridge()
@@ -100,6 +107,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.terminals = RemoteTerminalBridge.isAvailable
         snapshot.tabControls = browser.isAvailable
         snapshot.hostSettings = true
+        snapshot.hostAccounts = true
         return snapshot
     }
 
@@ -131,6 +139,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.taskNotices = true
         snapshot.subtasks = true
         snapshot.hostSettings = true
+        snapshot.hostAccounts = true
         let listed = Dictionary(model.sidebarSessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for index in snapshot.tasks.indices {
             guard let id = UUID(uuidString: snapshot.tasks[index].id), let session = listed[id] else { continue }

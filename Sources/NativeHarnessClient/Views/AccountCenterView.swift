@@ -35,6 +35,9 @@ struct ConnectionCenterLifecycle: ViewModifier {
                     connections.publishDefaults(fixtureSnapshots)
                     await connections.check(defaultsOf: [], savedOf: initialHarness.map { [$0] },
                         runtimeSelections: runtimeSelections)
+                } else if connections.isRemoteStore {
+                    await connections.check(defaultsOf: nil, savedOf: initialHarness.map { [$0] },
+                        runtimeSelections: runtimeSelections)
                 } else {
                     // Folders with a login that are not saved accounts, read from their names only.
                     await connections.findUnsavedAccountHomes()
@@ -177,6 +180,11 @@ struct ConnectionCenterContent: View {
     var tasksUsingAccount: ((ProviderConnection) -> AccountTaskCount)? = nil
     /// Moves an account's tasks to another folder of the same account, then removes it.
     var moveTasks: ((ProviderConnection, ProviderConnection) -> Void)? = nil
+    var allowsAccountManagement: Bool
+    var canChooseAccounts: Bool
+    var remoteNote: String?
+    var continuesAtUsageLimit: Binding<Bool>?
+    var movesTasksToAccountWithRoom: Binding<Bool>?
     @State private var pendingLogout: PendingSignOut?
     @State private var shareRequest: AccountHomeShareSheet.Request?
     @State private var pendingRemoval: (connection: ProviderConnection, kind: AccountRemoval)?
@@ -208,6 +216,13 @@ struct ConnectionCenterContent: View {
         localSessionUsage: LocalSessionUsageOverview? = nil,
         tasksUsingAccount: ((ProviderConnection) -> AccountTaskCount)? = nil,
         moveTasks: ((ProviderConnection, ProviderConnection) -> Void)? = nil,
+        allowsAccountManagement: Bool = true,
+        canChooseAccounts: Bool = true,
+        remoteNote: String? = nil,
+        continuesAtUsageLimit: Binding<Bool>? = nil,
+        movesTasksToAccountWithRoom: Binding<Bool>? = nil,
+        initialSelectedHarness: HarnessKind? = nil,
+        showsInitialConnectionDetails: Bool = false,
         onFinish: @escaping () -> Void
     ) {
         self.tab = tab
@@ -223,8 +238,15 @@ struct ConnectionCenterContent: View {
         self.localSessionUsage = localSessionUsage
         self.tasksUsingAccount = tasksUsingAccount
         self.moveTasks = moveTasks
+        self.allowsAccountManagement = allowsAccountManagement
+        self.canChooseAccounts = canChooseAccounts
+        self.remoteNote = remoteNote
+        self.continuesAtUsageLimit = continuesAtUsageLimit
+        self.movesTasksToAccountWithRoom = movesTasksToAccountWithRoom
         self.onFinish = onFinish
         _accountFilter = State(initialValue: initialHarness)
+        _selectedHarness = State(initialValue: initialSelectedHarness)
+        _showsConnectionDetails = State(initialValue: showsInitialConnectionDetails)
     }
 
     var body: some View {
@@ -241,18 +263,7 @@ struct ConnectionCenterContent: View {
                         else { addingAccount = false; connectChoice = nil; setupExpanded = false }
                     }, onLogin: startAccountLogin)
             } else if tab == .accounts {
-                AccountList(mode: .manage, store: connections, runtimeSelections: runtimeSelections,
-                    onChoose: { connections.choose($0) }, onConnect: connectAccount,
-                    onAdd: { accountFilter = $0; connectChoice = nil; addingAccount = true },
-                    onShare: share, onRemove: tasksUsingAccount == nil ? nil : { confirmRemoval($0, $1) },
-                    onAddFound: addFound,
-                    // The default login signs out as the Harnesses page signs it out.
-                    onSignOut: { harness, action in
-                        guard let descriptor = HarnessCatalog.descriptor(for: harness) else { return }
-                        pendingLogout = PendingSignOut(descriptor: descriptor,
-                            signsInAfter: action == .signInWithAnotherAccount)
-                    },
-                    harnessFilter: $accountFilter, harnessUsage: harnessUsage)
+                accountsList
                     .padding(.horizontal, 16).padding(.top, 16)
             } else if let selectedHarness,
                       let descriptor = HarnessCatalog.descriptor(for: selectedHarness) {
@@ -325,6 +336,46 @@ struct ConnectionCenterContent: View {
         } message: {
             Text(accountNote ?? "")
         }
+    }
+
+    private var accountsList: some View {
+        let onConnect: ((AccountChoice) -> Void)? = allowsAccountManagement ? { connectAccount($0) } : nil
+        let onAdd: ((HarnessKind?) -> Void)? = allowsAccountManagement ? {
+            accountFilter = $0
+            connectChoice = nil
+            addingAccount = true
+        } : nil
+        let onShare: ((ProviderConnection) -> Void)? = allowsAccountManagement ? { share($0) } : nil
+        let onRemove: ((ProviderConnection, AccountRemoval) -> Void)? = (!allowsAccountManagement || tasksUsingAccount == nil)
+            ? nil
+            : { confirmRemoval($0, $1) }
+        let onAddFound: ((DiscoveredAccountHome) -> Void)? = allowsAccountManagement ? { addFound($0) } : nil
+        // The default login signs out as the Harnesses page signs it out.
+        let onSignOut: ((HarnessKind, DefaultLoginAction) -> Void)? = allowsAccountManagement ? { harness, action in
+            guard let descriptor = HarnessCatalog.descriptor(for: harness) else { return }
+            pendingLogout = PendingSignOut(
+                descriptor: descriptor,
+                signsInAfter: action == .signInWithAnotherAccount
+            )
+        } : nil
+        return AccountList(
+            mode: .manage,
+            store: connections,
+            runtimeSelections: runtimeSelections,
+            onChoose: { connections.choose($0) },
+            onConnect: onConnect,
+            onAdd: onAdd,
+            onShare: onShare,
+            onRemove: onRemove,
+            onAddFound: onAddFound,
+            onSignOut: onSignOut,
+            harnessFilter: $accountFilter,
+            harnessUsage: harnessUsage,
+            canChooseAccounts: canChooseAccounts,
+            remoteNote: remoteNote,
+            continuesAtUsageLimit: continuesAtUsageLimit,
+            movesTasksToAccountWithRoom: movesTasksToAccountWithRoom
+        )
     }
 
     // MARK: Account folders
@@ -485,6 +536,9 @@ struct ConnectionCenterContent: View {
                         .parityPointer()
                     }
                 }
+                if let remoteNote {
+                    Text(remoteNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
             }
             .padding(16)
             Divider()
@@ -569,6 +623,9 @@ struct ConnectionCenterContent: View {
                     .controlSize(.small)
                     .parityPointer()
                     Spacer()
+                }
+                if let remoteNote {
+                    Text(remoteNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
 
                 HStack(alignment: .top, spacing: 12) {
@@ -715,7 +772,8 @@ struct ConnectionCenterContent: View {
                     .font(.system(size: 10.5))
                     .foregroundStyle(stateColor(snapshot.state))
                     .accessibilityHidden(true)
-                if !AccountConnectionPresentation.usesProviderLanguage(descriptor.id),
+                if allowsAccountManagement,
+                   !AccountConnectionPresentation.usesProviderLanguage(descriptor.id),
                    snapshot.canLogin {
                     Button(AccountConnectionPresentation.connectAction(for: descriptor.id)) {
                         Task { await model.login(
@@ -725,7 +783,8 @@ struct ConnectionCenterContent: View {
                     }
                     .controlSize(.small)
                     .parityPointer()
-                } else if !AccountConnectionPresentation.usesProviderLanguage(descriptor.id),
+                } else if allowsAccountManagement,
+                          !AccountConnectionPresentation.usesProviderLanguage(descriptor.id),
                           snapshot.canLogout {
                     Button(AccountConnectionPresentation.disconnectAction(for: descriptor.id)) {
                         pendingLogout = PendingSignOut(descriptor: descriptor)
@@ -754,13 +813,13 @@ struct ConnectionCenterContent: View {
     /// Signing the default login in or out, beside its line when the harness also has saved accounts.
     @ViewBuilder
     private func defaultLoginButton(descriptor: HarnessDescriptor, snapshot: HarnessAccountSnapshot) -> some View {
-        if !AccountConnectionPresentation.usesProviderLanguage(descriptor.id), snapshot.canLogin {
+        if allowsAccountManagement, !AccountConnectionPresentation.usesProviderLanguage(descriptor.id), snapshot.canLogin {
             Button(AccountConnectionPresentation.connectAction(for: descriptor.id)) {
                 Task { await model.login(descriptor: descriptor, runtimeSelections: runtimeSelections) }
             }
             .controlSize(.mini)
             .parityPointer()
-        } else if !AccountConnectionPresentation.usesProviderLanguage(descriptor.id), snapshot.canLogout {
+        } else if allowsAccountManagement, !AccountConnectionPresentation.usesProviderLanguage(descriptor.id), snapshot.canLogout {
             Button(AccountConnectionPresentation.disconnectAction(for: descriptor.id)) {
                 pendingLogout = PendingSignOut(descriptor: descriptor)
             }
@@ -796,40 +855,41 @@ struct ConnectionCenterContent: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(spacing: 8) {
-                if snapshot?.canLogin == true {
-                    if descriptor.id == .pi {
-                        PiConnectionProviderPicker(selection: $piProviderID)
-                            .frame(maxWidth: 260)
+            if allowsAccountManagement {
+                HStack(spacing: 8) {
+                    if snapshot?.canLogin == true {
+                        if descriptor.id == .pi {
+                            PiConnectionProviderPicker(selection: $piProviderID)
+                                .frame(maxWidth: 260)
+                        }
+                        Button(AccountConnectionPresentation.connectAction(for: descriptor.id)) {
+                            Task { await model.login(
+                                descriptor: descriptor,
+                                connection: descriptor.id == .pi ? ProviderConnection(id: "pi-configured", name: "Pi",
+                                    harness: .pi, providerID: piProviderID, homePath: nil, credentialSelector: nil) : nil,
+                                runtimeSelections: runtimeSelections
+                            ) }
+                        }
+                        .disabled(descriptor.id == .pi && piProviderID.isEmpty)
+                        .controlSize(.small)
+                        .parityPointer()
                     }
-                    Button(AccountConnectionPresentation.connectAction(for: descriptor.id)) {
-                        Task { await model.login(
-                            descriptor: descriptor,
-                            connection: descriptor.id == .pi ? ProviderConnection(id: "pi-configured", name: "Pi",
-                                harness: .pi, providerID: piProviderID, homePath: nil, credentialSelector: nil) : nil,
-                            runtimeSelections: runtimeSelections
-                        ) }
+                    if snapshot?.canLogout == true {
+                        Button(AccountConnectionPresentation.disconnectAction(for: descriptor.id)) {
+                            pendingLogout = PendingSignOut(descriptor: descriptor)
+                        }
+                        .controlSize(.small)
+                        .parityPointer()
                     }
-                    .disabled(descriptor.id == .pi && piProviderID.isEmpty)
-                    .controlSize(.small)
-                    .parityPointer()
-                }
-                if snapshot?.canLogout == true {
-                    Button(AccountConnectionPresentation.disconnectAction(for: descriptor.id)) {
-                        pendingLogout = PendingSignOut(descriptor: descriptor)
-                    }
-                    .controlSize(.small)
-                    .parityPointer()
                 }
             }
-
-
         }
         .accessibilityElement(children: .contain)
     }
 
     private func runtimeSection(_ descriptor: HarnessDescriptor) -> some View {
         let runtime = runtimeSelections.selectedURL(for: descriptor.id)
+        let remote = runtimeSelections.remoteRuntimes?[descriptor.id]
         let compatibility = HarnessRuntimeVersionNote.compatibility(for: descriptor.id)
         return VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 8) {
@@ -838,14 +898,56 @@ struct ConnectionCenterContent: View {
                 Text(L10n.string("Runtime"))
                     .font(.system(size: 12, weight: .semibold))
                 Spacer()
-                Button(L10n.string("Choose…")) {
-                    chooseRuntime(for: descriptor.id)
+                if let remote {
+                    Menu(L10n.string("Choose…")) {
+                        ForEach(remote.choices, id: \.id) { choice in
+                            Button {
+                                runtimeSelections.onSelectRemoteRuntime?(descriptor.id, choice.id)
+                            } label: {
+                                if choice.selected {
+                                    Label(choice.label, systemImage: "checkmark")
+                                } else {
+                                    Text(choice.label)
+                                }
+                            }
+                        }
+                    }
+                    .controlSize(.small)
+                    .disabled(!runtimeSelections.canSelectRemoteRuntime || remote.choices.isEmpty)
+                    .parityPointer()
+                } else {
+                    Button(L10n.string("Choose…")) {
+                        chooseRuntime(for: descriptor.id)
+                    }
+                    .controlSize(.small)
+                    .parityPointer()
                 }
-                .controlSize(.small)
-                .parityPointer()
             }
 
-            if let runtime {
+            if let remote {
+                if remote.installed {
+                    Label(L10n.string("Available"), systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.green)
+                    if let label = remote.label {
+                        Text(label)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .textSelection(.enabled)
+                    }
+                    if let note = remote.versionNote {
+                        Text(note)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(remote.versionVerified == false ? Color.orange : Color.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else {
+                    Label(L10n.string("Not installed"), systemImage: "exclamationmark.circle")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.orange)
+                }
+            } else if let runtime {
                 Label(L10n.string("Available"), systemImage: "checkmark.circle.fill")
                     .font(.system(size: 10.5))
                     .foregroundStyle(.green)
@@ -870,7 +972,7 @@ struct ConnectionCenterContent: View {
             // A note belongs to the harness it was read from, so the previous one never
             // survives a harness or runtime change.
             runtimeVersionNote = nil
-            guard let compatibility, let runtime else { return }
+            guard runtimeSelections.remoteRuntimes == nil, let compatibility, let runtime else { return }
             // `<runtime> --version` only; no home, account, or thread is touched.
             let note = await Task.detached(priority: .utility) {
                 HarnessRuntimeVersionNote.read(

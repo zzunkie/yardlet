@@ -26,6 +26,8 @@ public enum RemoteBridgeChange: Equatable, Sendable {
     case tabPainted(taskID: String, tabID: String)
     /// The host's Settings sheet values changed (§15.36).
     case hostSettings
+    /// The host's Account Center, harness runtimes or connectors changed (§15.37).
+    case hostAccounts
 }
 
 /// What a command asks of the Mac.
@@ -196,6 +198,12 @@ public protocol RemoteBridge: AnyObject, Sendable {
     func setHostSetting(setting: String, value: String, confirmed: Bool) async -> Result<RemoteHostSettings, RemoteError>
     func saveHostInstructions(text: String) async -> Result<RemoteHostSettings, RemoteError>
     func hostCLIUpdate(action: String, harness: String?) async -> Result<RemoteHostSettings, RemoteError>
+    func setWatchingHostAccounts(_ watching: Bool) async
+    func hostAccounts(refreshHarnesses: [String]) async -> Result<RemoteAccountsState, RemoteError>
+    func setHostAccount(harness: String?, accountID: String?, automaticAssignment: Bool?, settingID: String?,
+                        enabled: Bool?) async -> Result<RemoteAccountsState, RemoteError>
+    func setHostHarnessRuntime(harness: String, choiceID: String) async -> Result<RemoteAccountsState, RemoteError>
+    func setHostConnector(id: String, enabled: Bool) async -> Result<RemoteAccountsState, RemoteError>
 
 }
 
@@ -205,6 +213,20 @@ extension RemoteBridge {
     public func setHostSetting(setting: String, value: String, confirmed: Bool) async -> Result<RemoteHostSettings, RemoteError> { .failure(RemoteError(.unavailable)) }
     public func saveHostInstructions(text: String) async -> Result<RemoteHostSettings, RemoteError> { .failure(RemoteError(.unavailable)) }
     public func hostCLIUpdate(action: String, harness: String?) async -> Result<RemoteHostSettings, RemoteError> { .failure(RemoteError(.unavailable)) }
+    public func setWatchingHostAccounts(_ watching: Bool) async {}
+    public func hostAccounts(refreshHarnesses: [String]) async -> Result<RemoteAccountsState, RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+    public func setHostAccount(harness: String?, accountID: String?, automaticAssignment: Bool?, settingID: String?,
+                               enabled: Bool?) async -> Result<RemoteAccountsState, RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+    public func setHostHarnessRuntime(harness: String, choiceID: String) async -> Result<RemoteAccountsState, RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+    public func setHostConnector(id: String, enabled: Bool) async -> Result<RemoteAccountsState, RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
     public func setWatchedRailTasks(_ taskIDs: Set<String>) async {}
     public func railDraft(taskID: String, confirmed: Bool) async -> Result<String, RemoteError> { .failure(RemoteError(.unavailable)) }
     public func taskRail(taskID: String) async -> Result<RemoteRailFacts, RemoteError> { .failure(RemoteError(.unavailable)) }
@@ -383,6 +405,7 @@ public actor RemoteServer {
         var followsSettings: Set<String> = []
         /// It watches `hostSettings`, so it is told when the host's Settings sheet values change (§15.36).
         var followsHostSettings = false
+        var followsHostAccounts = false
         /// The file it read last (the path the Mac read) and where its next part starts (§15.22): a read that goes on
         /// from there is not written to the audit log again.
         var fileRead: FileRead?
@@ -1005,6 +1028,10 @@ public actor RemoteServer {
         for (id, connection) in connections where connection.deviceID == deviceID && connection.followsHostSettings {
             send(RemoteEvent(.hostSettingsChanged), to: id)
         }
+        let accountsEvent = RemoteEvent(.hostAccountsChanged)
+        for (id, connection) in connections where connection.deviceID == deviceID && connection.followsHostAccounts {
+            send(accountsEvent, to: id)
+        }
         for handler in permissionObservers.values { handler(deviceID, effective) }
     }
 
@@ -1106,7 +1133,7 @@ public actor RemoteServer {
             auditedPermissionRefusals[oldest.key] = nil
         }
         auditedPermissionRefusals[key] = time
-        audit?.record(device: device, type: request.type, task: request.taskID, setting: request.settingID, result: key.result, at: time)
+        audit?.record(device: device, type: request.type, task: request.taskID, setting: request.settingID, input: request.auditTarget, result: key.result, at: time)
     }
 
     /// Opens a pairing, replacing any open one.
@@ -1816,6 +1843,61 @@ public actor RemoteServer {
                 settingsPage?.writable = self.permissionError(.settings, on: id) == nil
                 response.settingsPage = settingsPage
             }
+        case let .hostAccounts(watching, refreshHarnesses):
+            connections[id]?.followsHostAccounts = watching
+            await updateWatched()
+            if !watching {
+                respond(RemoteResponse(re: envelope.id), to: id)
+                audit?.record(device: connections[id]?.deviceID, type: request.type, task: nil, result: "ok", at: now())
+                return
+            }
+            var readResult = "ok"
+            switch await bridge.hostAccounts(refreshHarnesses: refreshHarnesses) {
+            case var .success(state):
+                state.editable = permissionError(.settings, on: id) == nil ? true : nil
+                var response = RemoteResponse(re: envelope.id)
+                response.hostAccountsState = state
+                respond(response, to: id)
+            case let .failure(error):
+                readResult = error.code.rawValue
+                respond(.failure(envelope.id, error), to: id)
+            }
+            audit?.record(device: connections[id]?.deviceID, type: request.type, task: nil, result: readResult, at: now())
+        case let .setHostAccount(harness, accountID, automaticAssignment, settingID, enabled):
+            var state: RemoteAccountsState?
+            await command(envelope.id, request: request, on: id) {
+                switch await self.bridge.setHostAccount(harness: harness, accountID: accountID,
+                                                        automaticAssignment: automaticAssignment,
+                                                        settingID: settingID, enabled: enabled) {
+                case var .success(after):
+                    after.editable = true
+                    state = after
+                    return nil
+                case let .failure(error): return error
+                }
+            } answer: { $0.hostAccountsState = state }
+        case let .setHostHarnessRuntime(harness, choiceID):
+            var state: RemoteAccountsState?
+            await command(envelope.id, request: request, on: id) {
+                switch await self.bridge.setHostHarnessRuntime(harness: harness, choiceID: choiceID) {
+                case var .success(after):
+                    after.editable = true
+                    state = after
+                    return nil
+                case let .failure(error): return error
+                }
+            } answer: { $0.hostAccountsState = state }
+        case let .setHostConnector(connectorID, enabled):
+            var state: RemoteAccountsState?
+            await command(envelope.id, request: request, on: id) {
+                switch await self.bridge.setHostConnector(id: connectorID, enabled: enabled) {
+                case var .success(after):
+                    after.editable = true
+                    state = after
+                    return nil
+                case let .failure(error): return error
+                }
+            } answer: { $0.hostAccountsState = state }
         case let .uploadFile(part):
             guard let deviceID = connection.deviceID else { return }
             switch uploads.receive(part, from: deviceID, now: now()) {
@@ -1861,6 +1943,7 @@ public actor RemoteServer {
             response.taskActions = published?.taskActions == true ? true : nil
             response.tabControls = published?.tabControls == true ? true : nil
             response.hostSettings = published?.hostSettings == true ? true : nil
+            response.hostAccounts = published?.hostAccounts == true ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)
             connections[id]?.receivesTaskEvents = true
@@ -1916,7 +1999,7 @@ public actor RemoteServer {
         respond(error.map { .failure(requestID, $0) } ?? response, to: id)
         audit?.record(device: connections[id]?.deviceID, type: request.type, task: request.taskID,
                       schedule: request.scheduleID ?? response.scheduleId, project: request.projectID,
-                      setting: request.settingID,
+                      setting: request.settingID, input: request.auditTarget,
                       result: error?.code.rawValue ?? "ok", at: now())
         if case let .deleteScheduledTasks(ids, _, _) = request {
             for scheduleID in ids.dropFirst() {
@@ -2182,6 +2265,7 @@ public actor RemoteServer {
         let tasks = Set(connections.values.flatMap(\.subscriptions.keys))
         await bridge.setWatchedRailTasks(Set(connections.values.flatMap(\.followsRail)))
         await bridge.setWatchesHostSettings(connections.values.contains(where: \.followsHostSettings))
+        await bridge.setWatchingHostAccounts(connections.values.contains(where: \.followsHostAccounts))
         guard tasks != watched else { return }
         watched = tasks
         await bridge.setWatchedTasks(tasks)
@@ -2243,6 +2327,11 @@ public actor RemoteServer {
         case .hostSettings:
             for (id, connection) in connections where connection.followsHostSettings {
                 send(RemoteEvent(.hostSettingsChanged), to: id)
+            }
+        case .hostAccounts:
+            let event = RemoteEvent(.hostAccountsChanged)
+            for (id, connection) in connections where connection.followsHostAccounts {
+                send(event, to: id)
             }
         }
     }

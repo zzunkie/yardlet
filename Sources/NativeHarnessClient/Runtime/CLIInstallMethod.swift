@@ -24,6 +24,17 @@ enum CLIInstallMethod: Equatable, Sendable {
         case .appBundled, .manual: false
         }
     }
+
+    var displayText: String {
+        switch self {
+        case let .homebrewFormula(name, _): L10n.format("Homebrew formula %@", name)
+        case let .homebrewCask(token, _, _): L10n.format("Homebrew cask %@", token)
+        case let .npmGlobal(package, _, _): L10n.format("npm global package %@", package)
+        case let .selfUpdater(updater): L10n.format("Updates itself (%@)", updater.commandText)
+        case let .appBundled(app): L10n.format("Comes with the %@ app", app)
+        case .manual: L10n.string("Installed by hand")
+        }
+    }
 }
 
 /// A CLI that updates itself, and what its installer leaves behind.

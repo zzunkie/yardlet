@@ -272,6 +272,7 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var fileRewind: Bool = false
     public var composerExtensions: Bool = false
     public var hostSettings: Bool = false
+    public var hostAccounts: Bool = false
 
     public init(projects: [RemoteProject] = [], tasks: [RemoteTask] = [], newestRequestIDs: [String: String] = [:],
                 requestSummaries: [String: String] = [:], newTask: RemoteNewTask? = nil,
@@ -1085,9 +1086,19 @@ public enum RemoteRequest: Equatable, Sendable {
     case setHostSetting(setting: String, value: String, confirmed: Bool = false)
     case saveHostInstructions(text: String)
     case hostCLIUpdate(action: String, harness: String? = nil)
+    // §15.37
+    case hostAccounts(watching: Bool = true, refreshHarnesses: [String] = [])
+    case setHostAccount(harness: String? = nil, accountID: String? = nil, automaticAssignment: Bool? = nil,
+                        settingID: String? = nil, enabled: Bool? = nil)
+    case setHostHarnessRuntime(harness: String, choiceID: String)
+    case setHostConnector(id: String, enabled: Bool)
 
     public var type: String {
         switch self {
+        case .hostAccounts: "hostAccounts"
+        case .setHostAccount: "setHostAccount"
+        case .setHostHarnessRuntime: "setHostHarnessRuntime"
+        case .setHostConnector: "setHostConnector"
         case .subtask: "subtask"
         case .cancelAccountMove: "cancelAccountMove"
         case .fileRewind: "fileRewind"
@@ -1173,6 +1184,8 @@ public enum RemoteRequest: Equatable, Sendable {
     /// this exhaustive switch; task-specific controls retain their established paired-device access.
     public var requiredPermission: RemoteDevicePermission? {
         switch self {
+        case .hostAccounts: nil
+        case .setHostAccount, .setHostHarnessRuntime, .setHostConnector: .settings
         case .taskRail, .railAction: nil
         case .nextStep: nil
         case .usageReset, .useUsageReset: nil
@@ -1219,7 +1232,8 @@ public enum RemoteRequest: Equatable, Sendable {
              let .closeTerminal(id, _), let .terminalOutputAck(id, _, _), let .terminalStatus(id, _): id
         case .projectWorkspaceFiles, .snapshot, .ping, .createTask, .newTaskOptions, .registerPush, .unregisterPush, .forgetDevice,
              .answerLink, .uploadFile, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled,
-             .presence, .hostSettings, .setHostSetting, .saveHostInstructions, .hostCLIUpdate: nil
+             .presence, .hostSettings, .setHostSetting, .saveHostInstructions, .hostCLIUpdate,
+             .hostAccounts, .setHostAccount, .setHostHarnessRuntime, .setHostConnector: nil
         }
     }
 
@@ -1229,6 +1243,15 @@ public enum RemoteRequest: Equatable, Sendable {
         case let .setHostSetting(setting, _, _): setting
         case .saveHostInstructions: "yardlet_instructions"
         case let .hostCLIUpdate(action, harness): harness.map { "\(action):\($0)" } ?? action
+        default: nil
+        }
+    }
+
+    public var auditTarget: String? {
+        switch self {
+        case let .setHostAccount(harness, accountID, _, settingID, _): settingID ?? accountID ?? harness
+        case let .setHostHarnessRuntime(harness, choiceID): "\(harness):\(choiceID)"
+        case let .setHostConnector(id, _): id
         default: nil
         }
     }
@@ -1252,6 +1275,7 @@ public enum RemoteRequest: Equatable, Sendable {
     /// it is written to the audit log.
     public var isCommand: Bool {
         switch self {
+        case .setHostAccount, .setHostHarnessRuntime, .setHostConnector: true
         case .nextStep: true
         case .useUsageReset: true
         case let .subtask(_, _, stop): stop
@@ -1371,6 +1395,8 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var rows: Int?
         var sequence: Int?
         var address: String?
+        var harnesses: [String]?
+        var automaticAssignment: Bool?
     }
 
     private struct WireImage: Codable {
@@ -1418,7 +1444,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             ("command", wire.command, RemoteProtocol.maxProviderIDBytes),
             ("turnId", wire.turnId, RemoteProtocol.maxProviderIDBytes),
             ("tabId", wire.tabId, RemoteProtocol.maxOwnIDBytes), ("terminalId", wire.terminalId, RemoteProtocol.maxOwnIDBytes),
-            ("harness", wire.harness, RemoteProtocol.maxOwnIDBytes)
+            ("harness", wire.harness, RemoteProtocol.maxOwnIDBytes), ("targetId", wire.targetId, RemoteProtocol.maxProviderIDBytes)
         ]
         if let long = identifiers.first(where: { ($0.value?.utf8.count ?? 0) > $0.limit }) {
             return fail(.badRequest, "\(long.name) is too long")
@@ -1791,6 +1817,33 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
                 return fail(.badRequest, "Missing harness")
             }
             request = .hostCLIUpdate(action: action, harness: harness)
+        case "hostAccounts":
+            let harnesses = (wire.harnesses ?? []).filter { !$0.isEmpty }
+            guard harnesses.count <= 16, harnesses.allSatisfy({ $0.utf8.count <= RemoteProtocol.maxOwnIDBytes }) else {
+                return fail(.badRequest, "Invalid harnesses")
+            }
+            request = .hostAccounts(watching: wire.watching != false, refreshHarnesses: harnesses)
+        case "setHostAccount":
+            let harness = required(wire.harness)
+            let accountID = required(wire.accountId)
+            let settingID = required(wire.setting)
+            guard (settingID != nil && wire.enabled != nil && harness == nil && accountID == nil && wire.automaticAssignment == nil)
+                    || (settingID == nil && wire.enabled == nil && harness != nil) else {
+                return fail(.badRequest, "Invalid account change")
+            }
+            request = .setHostAccount(harness: harness, accountID: accountID,
+                                      automaticAssignment: wire.automaticAssignment,
+                                      settingID: settingID, enabled: wire.enabled)
+        case "setHostHarnessRuntime":
+            guard let harness = required(wire.harness), let choiceID = required(wire.choice) else {
+                return fail(.badRequest, "Missing harness or choice")
+            }
+            request = .setHostHarnessRuntime(harness: harness, choiceID: choiceID)
+        case "setHostConnector":
+            guard let connectorID = required(wire.targetId), let enabled = wire.enabled else {
+                return fail(.badRequest, "Missing targetId or enabled")
+            }
+            request = .setHostConnector(id: connectorID, enabled: enabled)
         default:
             return fail(.unknownType, "Unknown type \(type)")
         }
@@ -2031,6 +2084,21 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         case let .hostCLIUpdate(action, harness):
             wire.action = action
             wire.harness = harness
+        case let .hostAccounts(watching, refreshHarnesses):
+            wire.watching = watching ? nil : false
+            wire.harnesses = refreshHarnesses.isEmpty ? nil : refreshHarnesses
+        case let .setHostAccount(harness, accountID, automaticAssignment, settingID, enabled):
+            wire.harness = harness
+            wire.accountId = accountID
+            wire.automaticAssignment = automaticAssignment
+            wire.setting = settingID
+            wire.enabled = enabled
+        case let .setHostHarnessRuntime(harness, choiceID):
+            wire.harness = harness
+            wire.choice = choiceID
+        case let .setHostConnector(connectorID, enabled):
+            wire.targetId = connectorID
+            wire.enabled = enabled
         }
         return (try? RemoteJSON.encoder.encode(wire)) ?? Data()
     }
@@ -2163,6 +2231,8 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     /// `snapshot` on v2: the Mac answers `hostSettings` (§15.36).
     public var hostSettings: Bool?
     public var settingsPage: RemoteHostSettings?
+    public var hostAccounts: Bool?
+    public var hostAccountsState: RemoteAccountsState?
 
     public init(re: String, ok: Bool = true, error: RemoteError? = nil) {
         self.re = re
@@ -2312,11 +2382,16 @@ public struct RemoteAccount: Codable, Equatable, Sendable {
         public var label: String
         public var usedPercent: Int?
         public var resetsAt: Int64?
+        public var detail: String?
+        public var evidence: String?
 
-        public init(label: String, usedPercent: Int? = nil, resetsAt: Int64? = nil) {
+        public init(label: String, usedPercent: Int? = nil, resetsAt: Int64? = nil, detail: String? = nil,
+                    evidence: String? = nil) {
             self.label = label
             self.usedPercent = usedPercent
             self.resetsAt = resetsAt
+            self.detail = detail
+            self.evidence = evidence
         }
     }
 
@@ -2324,6 +2399,17 @@ public struct RemoteAccount: Codable, Equatable, Sendable {
     public var state: State?
     /// The last successful reading, in milliseconds since the epoch (§15.32).
     public var checkedAt: Int64?
+    /// Optional Account Center fields (§15.37); older clients ignore them.
+    public var harness: String?
+    public var connectionName: String?
+    public var providerId: String?
+    public var organization: String?
+    public var plan: String?
+    public var credentialOwner: String?
+    public var readingStatus: String?
+    public var checking: Bool?
+    public var automaticAssignment: Bool?
+    public var defaultSelected: Bool?
     public var id: String
     public var name: String
     public var detail: String?
@@ -2479,6 +2565,8 @@ public struct RemoteEvent: Codable, Equatable, Sendable {
         case terminalClosed
         // §15.36
         case hostSettingsChanged
+        // §15.37
+        case hostAccountsChanged
     }
 
     public var event: Name

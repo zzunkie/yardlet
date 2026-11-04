@@ -1135,6 +1135,140 @@ final class RemoteHostModelTests: XCTestCase {
         client.closeSettings()
         XCTAssertFalse(client.showsSettings)
         directory.close(paired.id)
+    }
+
+    func testRemoteHostModelFollowsAndMutatesHostAccountsHarnessesAndConnectorsWithSettingsPermission() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "remote-host-accounts-\(UUID().uuidString)")
+        let binDir = root.appending(path: "bin")
+        try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstExec = binDir.appending(path: "claude")
+        let secondExec = binDir.appending(path: "claude-alt")
+        for url in [firstExec, secondExec] {
+            try Data("#!/bin/sh\necho 2.1.80\n".utf8).write(to: url)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path(percentEncoded: false))
+        }
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteHostAccounts")))
+        let runtimeSelections = RuntimeSelectionStore(
+            defaults: defaults,
+            candidates: { $0 == .claudeCode ? [firstExec, secondExec] : [] }
+        )
+        let connections = ProviderConnectionStore(fileURL: nil, snapshotCacheURL: nil, defaults: defaults)
+        let work = try connections.add(name: "Work", harness: .claudeCode, home: root.appending(path: "work"))
+        let now = Date(timeIntervalSince1970: 1_792_158_000)
+        connections.publishDefaults([
+            HarnessAccountSnapshot(
+                id: AccountSnapshotCache.defaultKey(for: .claudeCode),
+                harness: .claudeCode,
+                providerID: "anthropic",
+                state: .signedIn,
+                accountLabel: "default@example.com",
+                accountOrganization: "Acme",
+                accountPlan: "Claude Max",
+                detail: "Default account",
+                credentialOwner: "Claude Code credential store",
+                checkedAt: now,
+                usage: [],
+                canLogin: true,
+                canLogout: true
+            )
+        ])
+        connections.publish(
+            HarnessAccountSnapshot(
+                id: work.id,
+                harness: .claudeCode,
+                providerID: "anthropic",
+                state: .signedIn,
+                accountLabel: "work@example.com",
+                accountOrganization: "Acme",
+                accountPlan: "Claude Max",
+                detail: "Work account",
+                credentialOwner: "Claude Code credential store",
+                checkedAt: now,
+                usage: [],
+                canLogin: true,
+                canLogout: true
+            ),
+            for: work
+        )
+        let githubID = UUID()
+        let hostConnectors = ConnectorCenter(environment: .init(
+            repository: InMemoryConnectorRepository(records: [
+                ConnectorRecord(
+                    id: githubID, name: "GitHub", slug: "github",
+                    serverURL: URL(string: "https://api.githubcopilot.com/mcp/")!,
+                    authorization: .oauth, status: .connected,
+                    tools: [.object(["name": .string("get_me")])],
+                    toolsUpdatedAt: now, presetID: "github"
+                )
+            ]),
+            credentials: InMemoryConnectorCredentialStore(),
+            http: URLSessionConnectorTransport(),
+            userAgent: nil,
+            sha256: { $0 },
+            clientVersion: "test"
+        ))
+
+        let host = AppModel(
+            store: SessionStore(repository: InMemorySessionRepository()),
+            runtimeSelections: runtimeSelections,
+            connections: connections,
+            preferences: defaults,
+            restoresIndexOnLaunch: false
+        )
+        host.connectorCenter = hostConnectors
+        let bridge = AppModelRemoteBridge(model: host)
+        let stack = try await LoopbackStack(bridge: bridge, port: 47879)
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(
+            macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+            name: "Studio", hosts: ["127.0.0.1:\(stack.port)"]
+        ).url)
+        let directory = RemoteHostDirectory(
+            store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+            hello: RemoteHandshakeHello(name: "Client", platform: "macos", appVersion: "test")
+        )
+        let paired = try await directory.pair(link: link.absoluteString)
+        let client = try XCTUnwrap(directory.model(for: paired.id))
+        defer { directory.close(paired.id) }
+        try await waitUntil { client.hasSnapshot }
+        XCTAssertTrue(client.offersHostAccounts)
+
+        await client.watchHostAccounts()
+        XCTAssertFalse(client.canEditHostSettings)
+        let connectionNames = client.remoteConnections.connections.map { $0.name }
+        let connectorNames = client.remoteConnectorCenter.connectors.map { $0.name }
+        let claudeInstalled = client.remoteRuntimeSelections.remoteRuntimes?[.claudeCode]?.installed
+        XCTAssertEqual(connectionNames, ["Work"])
+        XCTAssertEqual(connectorNames, ["GitHub"])
+        XCTAssertEqual(claudeInstalled, true)
+
+        let denied = await client.performHostAccountMutation(.setHostAccount(harness: "claude-code", accountID: work.id))
+        XCTAssertFalse(denied)
+        XCTAssertNotNil(client.commandError)
+        let hostSelectionBefore = connections.selection[.claudeCode]
+        XCTAssertNil(hostSelectionBefore)
+
+        try await stack.server.setPermission(.settings, allowed: true, for: try XCTUnwrap(client.host.deviceID))
+        try await waitUntil { client.canEditHostSettings }
+
+        let workChoice = try XCTUnwrap(client.remoteConnections.choices(for: [.claudeCode]).first { $0.id == work.id })
+        client.remoteConnections.choose(workChoice)
+        try await waitUntil {
+            let hostSelection = connections.selection[.claudeCode]
+            let clientSelection = client.remoteConnections.selection[.claudeCode]
+            return hostSelection == work.id && clientSelection == work.id
+        }
+
+        client.remoteRuntimeSelections.onSelectRemoteRuntime?(.claudeCode, "install:1")
+        try await waitUntil { runtimeSelections.isChosen(.claudeCode) }
+
+        client.remoteConnectorCenter.setConnector(githubID, on: false)
+        try await waitUntil { !hostConnectors.isOn(githubID) && !client.remoteConnectorCenter.isOn(githubID) }
+
+        client.unwatchHostAccounts()
         await host.shutdown()
     }
 }

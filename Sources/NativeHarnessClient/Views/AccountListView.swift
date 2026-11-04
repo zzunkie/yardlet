@@ -35,6 +35,10 @@ struct AccountList: View {
     var harnessUsage: AccountHarnessScope.Usage? = nil
     /// The scrolling list's largest height inside a popover or sheet; nil fills the space.
     var maxListHeight: CGFloat? = nil
+    var canChooseAccounts = true
+    var remoteNote: String? = nil
+    var continuesAtUsageLimit: Binding<Bool>? = nil
+    var movesTasksToAccountWithRoom: Binding<Bool>? = nil
     @State private var search = ""
     @State private var showsAllHarnesses = false
 
@@ -46,6 +50,9 @@ struct AccountList: View {
         let choices = choices
         VStack(alignment: .leading, spacing: 12) {
             header(choices: choices)
+            if let remoteNote {
+                Text(remoteNote).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             if let error = store.errorMessage {
                 Text(error).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
@@ -130,16 +137,17 @@ struct AccountList: View {
                 Toggle(YardletSetting.newTaskAccountAutomatically.title, isOn: Binding(
                     get: { store.picksNewTaskAccount }, set: { store.setPicksNewTaskAccount($0) }))
                     .labelsHidden().toggleStyle(.paritySwitch).controlSize(.small)
+                    .disabled(!canChooseAccounts)
             }
             .padding(.bottom, showsClaudeCodeSettings ? 0 : 12)
             if showsClaudeCodeSettings {
                 Divider()
-                UsageLimitAutoContinueSettingRow()
+                UsageLimitAutoContinueSettingRow(isOn: continuesAtUsageLimit, isEnabled: canChooseAccounts)
                     .padding(.bottom, showsAccountMoveSetting ? 0 : 12)
             }
             if showsAccountMoveSetting {
                 Divider()
-                AccountMoveSettingRow()
+                AccountMoveSettingRow(isOn: movesTasksToAccountWithRoom, isEnabled: canChooseAccounts)
             }
         }
     }
@@ -168,7 +176,7 @@ struct AccountList: View {
                 }
                 ForEach(groups) { group in
                     AccountListSection(group: group, mode: mode, store: store,
-                        showsHarness: mode == .manage, onChoose: onChoose,
+                        showsHarness: mode == .manage, canChooseAccounts: canChooseAccounts, onChoose: onChoose,
                         onConnect: onConnect, onShare: onShare, onRemove: onRemove, onSignOut: onSignOut)
                 }
                 if let onAddFound, !found.isEmpty {
@@ -270,6 +278,7 @@ struct AccountListSection: View {
     let mode: AccountListMode
     let store: ProviderConnectionStore
     var showsHarness = false
+    var canChooseAccounts = true
     let onChoose: (AccountChoice) -> Void
     var onConnect: ((AccountChoice) -> Void)? = nil
     var onShare: ((ProviderConnection) -> Void)? = nil
@@ -296,7 +305,7 @@ struct AccountListSection: View {
     }
 
     private func row(_ choice: AccountChoice, style: AccountRow.Style) -> some View {
-        let canChoose = AccountListProjection.canChoose(choice, mode: mode)
+        let canChoose = canChooseAccounts && AccountListProjection.canChoose(choice, mode: mode)
         return AccountRow(choice: choice, style: style, memberTitle: group.memberTitle(choice),
             selected: AccountListProjection.isSelected(choice, mode: mode, store: store),
             canChoose: canChoose,
@@ -310,7 +319,7 @@ struct AccountListSection: View {
             onConnect: onConnect.flatMap { connect in
                 AccountListProjection.offersConnect(choice, mode: mode) ? { connect(choice) } : nil
             },
-            onSetAutomaticAssignment: mode == .manage ? { store.setInAutomaticAssignment($0, for: choice) } : nil,
+            onSetAutomaticAssignment: mode == .manage && canChooseAccounts ? { store.setInAutomaticAssignment($0, for: choice) } : nil,
             onShare: sharing(choice),
             onRemove: removals(choice),
             onSignOut: signOuts(choice))
@@ -688,6 +697,8 @@ struct AccountLimitsView: View {
 /// Settings › Accounts' switch for moving Claude Code tasks to an account with room
 /// (`AccountMovePreference`), shown once there is another Claude Code account to move to.
 struct AccountMoveSettingRow: View {
+    var isOn: Binding<Bool>? = nil
+    var isEnabled: Bool = true
     @AppStorage(AccountMovePreference.key, store: .yardlet) private var movesTasks = true
 
     var body: some View {
@@ -700,10 +711,11 @@ struct AccountMoveSettingRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
-            Toggle(YardletSetting.moveTasksToAccountsWithRoom.title, isOn: $movesTasks)
+            Toggle(YardletSetting.moveTasksToAccountsWithRoom.title, isOn: isOn ?? $movesTasks)
                 .labelsHidden()
                 .toggleStyle(.paritySwitch)
                 .controlSize(.small)
+                .disabled(!isEnabled)
         }
         .padding(.bottom, 12)
     }
