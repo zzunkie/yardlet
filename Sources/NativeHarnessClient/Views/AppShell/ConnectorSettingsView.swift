@@ -18,7 +18,7 @@ struct ConnectorSettingsView: View {
     @AppStorage(ClaudeAIConnectorPreference.key) private var claudeAIConnectors = false
     @AppStorage(Self.importDismissedKey) private var importDismissed = false
 
-    static let importDismissedKey = "Yardlet.connectorImportDismissed"
+    static let importDismissedKey = "YardletConnectorImportDismissed"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {

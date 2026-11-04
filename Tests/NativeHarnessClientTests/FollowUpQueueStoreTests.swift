@@ -159,10 +159,10 @@ final class FollowUpQueueStoreTests: XCTestCase {
         XCTAssertTrue(relaunched.isPaused(task))
         XCTAssertEqual(relaunched.savedShellDeliveries(for: task).map(\.text), ["<bash-input>ls</bash-input>"])
 
-        // The follow-up setting keeps its key too, and Claude Code reads the same value.
-        XCTAssertEqual(FollowUpMode.preferenceKey, "Yardlet.codexFollowUpMode")
+        // The follow-up setting saved under its earlier key is carried over, and Claude Code reads the same value.
         XCTAssertEqual(FollowUpMode.current(in: defaults), .steer)
         defaults.set("queue", forKey: "Yardlet.codexFollowUpMode")
+        PreferenceKeyCarryOver.run(in: defaults)
         XCTAssertEqual(FollowUpMode.current(in: defaults), .queue)
     }
 

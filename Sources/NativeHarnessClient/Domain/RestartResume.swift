@@ -4,7 +4,7 @@ import Foundation
 /// do it without a setting: the Claude app after any quit, the Codex app after an update. Yardlet
 /// continues both after any quit (decision of 2026-10-16: always, as the Claude app does).
 enum RestartResumePreference {
-    static let key = "Yardlet.continueWorkAfterRestart"
+    static let key = "YardletContinueWorkAfterRestart"
 
     static func isOn(in defaults: UserDefaults = .yardlet) -> Bool {
         defaults.object(forKey: key) as? Bool ?? true

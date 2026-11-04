@@ -38,14 +38,14 @@ enum YardletInterfaceSizePreference: String, CaseIterable, Identifiable {
 }
 
 enum YardletPreferenceKeys {
-    static let appearance = "Yardlet.appearance"
-    static let interfaceSize = "Yardlet.interfaceSize"
+    static let appearance = "YardletAppearance"
+    static let interfaceSize = "YardletInterfaceSize"
 }
 
 /// Settings › General › "Keep the screen unlocked while tasks work". Off by default: a Mac left alone
 /// stays unlocked while it is on (docs/REMOTE_V2_DESIGN.md §6.5).
 enum KeepScreenAwakePreference {
-    static let key = "Yardlet.keepScreenAwakeWhileWorking"
+    static let key = "YardletKeepScreenAwakeWhileWorking"
 
     static func isOn(in defaults: UserDefaults = .yardlet) -> Bool {
         defaults.bool(forKey: key)
@@ -56,7 +56,7 @@ enum KeepScreenAwakePreference {
 /// macOS to allow Yardlet's lid helper, a launch daemon in the bundle; turning it off removes the
 /// helper (docs/REMOTE_V2_DESIGN.md §6.5).
 enum LidClosedWorkPreference {
-    static let key = "Yardlet.keepWorkingWithLidClosed"
+    static let key = "YardletKeepWorkingWithLidClosed"
 
     static func isOn(in defaults: UserDefaults = .yardlet) -> Bool {
         defaults.bool(forKey: key)

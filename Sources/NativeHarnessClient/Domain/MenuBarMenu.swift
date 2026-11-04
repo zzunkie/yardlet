@@ -397,7 +397,7 @@ enum MenuBarMenuProjection {
 
 /// Settings › General › "Show in menu bar" (Codex `macMenuBarEnabled`): on unless turned off.
 enum MenuBarPreference {
-    static let key = "Yardlet.showInMenuBar"
+    static let key = "YardletShowInMenuBar"
 
     static func isShown(in defaults: UserDefaults = .yardlet) -> Bool {
         defaults.object(forKey: key) as? Bool ?? true

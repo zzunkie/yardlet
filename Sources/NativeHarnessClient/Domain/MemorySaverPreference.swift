@@ -5,8 +5,8 @@ import Foundation
 /// person turned it off; turning it off brings the discarded tabs back and ends nothing more. The level, Chrome's
 /// Moderate, Balanced or Maximum, sets how soon tabs go; Balanced unless the person chose another.
 enum MemorySaverPreference {
-    static let key = "Yardlet.memorySaver"
-    static let levelKey = "Yardlet.memorySaverLevel"
+    static let key = "YardletMemorySaver"
+    static let levelKey = "YardletMemorySaverLevel"
 
     static func isOn(in defaults: UserDefaults = .yardlet) -> Bool {
         defaults.object(forKey: key) as? Bool ?? true

@@ -24,7 +24,7 @@ struct BrowserVisitedPage: Codable, Equatable, Sendable {
 /// (`TaskBrowserTabs.visited`), and the launcher and a new tab's start page offer them with the sites visited most.
 /// Off, nothing is kept or offered, and each task's saved pages go the next time the task is saved.
 enum BrowserPageSuggestionPreference {
-    static let key = "Yardlet.browser.pageSuggestions"
+    static let key = "YardletBrowserPageSuggestions"
 
     static func isOn(in defaults: UserDefaults = .yardlet) -> Bool {
         defaults.object(forKey: key) as? Bool ?? true

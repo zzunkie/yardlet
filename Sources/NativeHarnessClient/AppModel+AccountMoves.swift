@@ -3,7 +3,7 @@ import Foundation
 /// Settings › Harness Accounts: whether Claude Code tasks move to an account with room on their own
 /// (docs/PROVIDER_CONNECTIONS.md, "Moving tasks to an account with room"). On unless turned off.
 enum AccountMovePreference {
-    static let key = "Yardlet.movesTasksToAccountsWithRoom"
+    static let key = "YardletMovesTasksToAccountsWithRoom"
 
     static func isOn(in defaults: UserDefaults = .yardlet) -> Bool {
         defaults.object(forKey: key) as? Bool ?? true

@@ -3,7 +3,7 @@ import Observation
 
 /// Settings › Notifications › "Personal agent messages", on by default, and the account it follows.
 enum PersonalAgentNotificationPreference {
-    static let key = "Yardlet.personalAgentNotifications"
+    static let key = "YardletPersonalAgentNotifications"
     /// The account choice whose dots a window last opened. Kept only while the setting is on.
     static let accountKey = "Yardlet.personalAgentsAccount"
 

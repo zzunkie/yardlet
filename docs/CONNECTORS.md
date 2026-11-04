@@ -442,7 +442,7 @@ not kept.
 
 ### claude.ai account connectors
 
-- Settings → Connectors "Use claude.ai account connectors" (`Yardlet.claudeAIConnectors`, off by default). When it is
+- Settings → Connectors "Use claude.ai account connectors" (`YardletClaudeAIConnectors`, off by default). When it is
   off, Yardlet puts `ENABLE_CLAUDEAI_MCP_SERVERS=false` in the environment of the Claude Code processes it starts
   (`ClaudeProcessTransport.environment`). When it is on, Yardlet leaves it out, so the CLI default applies (a
   subscription account loads its claude.ai connectors). Nothing is written to the account settings file. Project and
@@ -480,7 +480,7 @@ not kept.
 - Each row has "Connect in Yardlet": a service that connects in one step is added and connected, a Google service opens
   the Google page, Slack opens the Slack page, and one that needs a key opens that field. A program's row has
   "Review…", which opens its page. "Hide"
-  (`Yardlet.connectorImportDismissed`) folds the section.
+  (`YardletConnectorImportDismissed`) folds the section.
 
 ### Antigravity
 
@@ -527,7 +527,7 @@ tasks run without them.
   console page button and copy buttons. Fields in the client step are checked as you type (a red reason line, or a green
   check when valid). A console step is done once its page has been opened or it has been marked by hand; saving the app
   marks every step done, and connecting an account completes the last step. Opened steps are kept in
-  `Yardlet.connectorSetup.opened` (step names only).
+  `YardletConnectorSetupOpened` (step names only).
   - Field checks: Google client ID `<digits>-<alphanumerics>.apps.googleusercontent.com` (entering the secret shows
     "That is the client secret"); the secret is at least 16 characters, has no spaces and is not a client ID; Slack
     client ID `digits.digits`; Slack secret (optional) is 32 hex digits.

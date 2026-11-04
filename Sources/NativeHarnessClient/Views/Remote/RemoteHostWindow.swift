@@ -12,7 +12,7 @@ struct RemoteHostWindow: View {
 
     let hostID: String?
     let directory: RemoteHostDirectory
-    var onOpenLocalSettings: (() -> Void)? = nil
+    var onOpenLocalSettings: RemoteLocalSettingsAction? = nil
     @State private var model: RemoteHostModel?
 
     var body: some View {
@@ -131,6 +131,18 @@ struct RemoteHostWindow: View {
         window.makeKeyAndOrderFront(nil)
         return window
     }
+}
+
+/// Opens this Mac's own Settings in its main window, for ⌘, in a window whose host offers no Settings of its own. One
+/// action from the app, always equal: the scene makes it again each time its body runs, and as a closure it was not
+/// always found equal to the last one, so the window was evaluated again and published its Settings command again,
+/// as the main window did with Install Update… (`YardletInstallUpdateAction`).
+struct RemoteLocalSettingsAction: Equatable {
+    let open: @MainActor () -> Void
+
+    @MainActor func callAsFunction() { open() }
+
+    static func == (lhs: Self, rhs: Self) -> Bool { true }
 }
 
 /// Associates a `RemoteHostWindow` with its `NSWindow` by `hostID`, so two hosts with the same display

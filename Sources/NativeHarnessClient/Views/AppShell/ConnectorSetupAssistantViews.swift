@@ -4,7 +4,7 @@ import SwiftUI
 /// The steps the person has opened or ticked in a setup assistant, kept across launches so the
 /// checks stay while they work in the console (`ConnectorSetupAssistant`).
 struct ConnectorSetupProgress {
-    static let key = "Yardlet.connectorSetup.opened"
+    static let key = "YardletConnectorSetupOpened"
 
     static func decode(_ text: String) -> Set<ConnectorSetupAssistant.StepID> {
         Set(text.split(separator: ",").compactMap { ConnectorSetupAssistant.StepID(rawValue: String($0)) })
