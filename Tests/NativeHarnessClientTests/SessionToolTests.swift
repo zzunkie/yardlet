@@ -447,6 +447,36 @@ final class SessionToolTests: XCTestCase {
         XCTAssertLessThanOrEqual(page.text.count, SessionToolPolicy.readCharacterLimit + 80)
         XCTAssertTrue(page.text.hasSuffix("characters]"), String(page.text.suffix(80)))
         await model.shutdown()
+
+        // A task with a long history costs a read what the read shows: the turns a page holds, and the
+        // latest turn for its answer. Only those turns are projected.
+        var long = TranscriptBuilder(limit: 10_000)
+        for index in 0..<1_000 {
+            long.appendUser("Request \(index)")
+            long.apply(.activityStarted(HarnessActivity(id: "run-\(index)", kind: "Bash", title: "Run", input: "swift test")))
+            long.apply(.activityCompleted(HarnessActivity(id: "run-\(index)", kind: "Bash", title: "Run", input: "swift test",
+                                                          output: "ok")))
+            long.apply(.assistantMessageCompleted("Answer \(index)."))
+            long.apply(.turnCompleted)
+        }
+        let history = try Fixture(callerTranscript: long.entries)
+        defer { history.tearDown() }
+        try await history.model.store.updateSession(id: history.caller.id, completionState: .completed)
+        let session = try XCTUnwrap(history.model.store.sessions.first { $0.id == history.caller.id })
+        let projected = history.model.sessionToolPresentation(of: session) { $0.indices.suffix(1) }
+        XCTAssertEqual(projected.turns.count, 1_000)
+        XCTAssertEqual(projected.turns.filter { !$0.prompt.isEmpty }.count, 1, "The other turns are their IDs alone")
+        XCTAssertEqual(history.model.sessionToolOutcome(of: session.id).answer, "Answer 999.")
+        let newest = await call(history.model, "read_task", ["task_id": "self", "turns": 2], from: history.caller)
+        XCTAssertTrue(newest.text.contains("Showing 2 of 1000 loaded turns."), newest.text)
+        XCTAssertTrue(newest.text.contains("Answer 998.") && newest.text.contains("Answer 999."), newest.text)
+        XCTAssertFalse(newest.text.contains("Answer 997."), newest.text)
+        let before = try XCTUnwrap(newest.text.range(of: #"before:[^"]+"#, options: .regularExpression)
+            .map { String(newest.text[$0]) })
+        let older = await call(history.model, "read_task", ["task_id": "self", "turns": 2, "cursor": before], from: history.caller)
+        XCTAssertTrue(older.text.contains("Answer 996.") && older.text.contains("Answer 997."), older.text)
+        XCTAssertFalse(older.text.contains("Answer 998."), older.text)
+        await history.model.shutdown()
     }
 
     // MARK: - send_message_to_task

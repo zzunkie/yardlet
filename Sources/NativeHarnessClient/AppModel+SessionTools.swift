@@ -233,9 +233,7 @@ extension AppModel: SessionToolHandling {
         }
         let turns = Self.integer(arguments["turns"]) ?? SessionToolPolicy.readDefaultTurns
         let cursor = arguments["cursor"]?.stringValue
-        guard let conversation = SessionToolText.conversation(
-            sessionToolPresentation(of: session), workspaceURL: session.workspaceURL, turns: turns, cursor: cursor)
-        else {
+        guard let conversation = sessionToolConversation(of: session, turns: turns, cursor: cursor) else {
             let what = cursor?.hasPrefix(SessionToolText.listCursorPrefix) == true ? "is list_tasks' cursor, not read_task's"
                 : "names no turn of this task: it is another task's, or its turn is no longer loaded"
             return .failure("Not read: that cursor \(what). Read task \(session.id.uuidString) again without cursor.",
@@ -282,17 +280,41 @@ extension AppModel: SessionToolHandling {
         }
     }
 
+    /// The page of the task's conversation `read_task` reads (`SessionToolText.conversation`), with
+    /// only the turns on it projected.
+    func sessionToolConversation(of session: SessionRecord, turns: Int, cursor: String?) -> SessionToolText.Conversation? {
+        let presentation = sessionToolPresentation(of: session) { ids in
+            SessionToolText.shownTurns(ids: ids, turns: turns, cursor: cursor) ?? 0..<0
+        }
+        return SessionToolText.conversation(presentation, workspaceURL: session.workspaceURL, turns: turns, cursor: cursor)
+    }
+
     /// The conversation the task's timeline draws: the Codex thread once it has turns, else the
-    /// shared transcript, as the phone remote reads it.
-    func sessionToolPresentation(of session: SessionRecord) -> ConversationPresentation {
+    /// shared transcript, as the phone remote reads it. Only the turns `reading` picks from all the
+    /// turns' IDs are projected; the others are their IDs alone. A tool that reads the end of a long
+    /// conversation then costs the turns it reads, not the whole history with every file change's
+    /// diff.
+    func sessionToolPresentation(of session: SessionRecord,
+                                 reading: ([String]) -> Range<Int> = { $0.indices }) -> ConversationPresentation {
+        func project<Input>(_ inputs: [Input], ids: [String], _ turn: (Input) -> ConversationTurn) -> [ConversationTurn] {
+            let read = reading(ids).clamped(to: ids.indices)
+            return ids.indices.map { index in
+                read.contains(index) ? turn(inputs[index])
+                    : ConversationTurn(id: ids[index], status: .unknown(nil), timing: ConversationTurnTiming())
+            }
+        }
         if HarnessPresentationPolicy(harness: session.harness).usesCodexTimeline,
            let state = codexPresentationBySessionID[session.id], state.thread?.turns.isEmpty == false {
             return CodexConversationProjection.presentation(state, workspaceURL: session.workspaceURL,
-                                                            historySelection: nil)
+                                                            historySelection: nil) { inputs in
+                project(inputs, ids: inputs.map(\.turn.id)) { CodexConversationProjection.turn($0) }
+            }
         }
         return TranscriptConversationProjection.presentation(
-            from: transcriptBySessionID[session.id] ?? [], harness: session.harness, status: session.status,
-            latestTurnIsComplete: session.completionState == .completed)
+            from: TranscriptTurns(transcriptBySessionID[session.id] ?? []), harness: session.harness,
+            status: session.status, latestTurnIsComplete: session.completionState == .completed) { inputs in
+            project(inputs, ids: inputs.map(\.id), TranscriptConversationProjection.turn)
+        }
     }
 
     // MARK: - send_message_to_task
@@ -504,7 +526,7 @@ extension AppModel: SessionToolHandling {
         }
         let state = TaskAttentionProjection.state(of: session, detail: taskAttentionDetails[id],
                                                   isShellBusy: shellBusySessionIDs.contains(id))
-        let presentation = sessionToolPresentation(of: session)
+        let presentation = sessionToolPresentation(of: session) { $0.indices.suffix(1) }
         return SessionToolOutcome(
             id: id.uuidString, kind: "task", title: session.title,
             link: SessionToolText.link(title: session.title, taskID: id), state: SessionToolText.stateWord(state),
