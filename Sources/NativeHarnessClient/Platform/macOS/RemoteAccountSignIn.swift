@@ -11,7 +11,8 @@ final class RemoteAccountSignIn: NSObject, ASWebAuthenticationPresentationContex
 
     func signIn(at url: URL, callbackScheme: String) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
-            let session = ASWebAuthenticationSession(url: url, callback: .customScheme(callbackScheme)) { callback, error in
+            // The session calls back on its own XPC queue, not the main actor this class runs on.
+            let session = ASWebAuthenticationSession(url: url, callback: .customScheme(callbackScheme)) { @Sendable callback, error in
                 if let callback {
                     continuation.resume(returning: callback)
                 } else {
