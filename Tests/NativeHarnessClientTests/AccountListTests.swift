@@ -153,6 +153,16 @@ import XCTest
         XCTAssertTrue(AccountListProjection.accountLine(antigravity).contains(L10n.string("Unknown account")))
         XCTAssertEqual(AccountListProjection.defaultLoginActions(antigravity, mode: .manage),
                        [.signInWithAnotherAccount, .signOut])
+        store.publishDefaults([
+            HarnessAccountSnapshot(id: "antigravity-cli", harness: .antigravityCLI, providerID: nil, state: .signedIn,
+                accountLabel: "owner@example.test", detail: "", credentialOwner: "", checkedAt: Date(), usage: [],
+                canLogin: false, canLogout: true)
+        ])
+        let identifiedAntigravity = store.choice(for: .antigravityCLI, connection: nil)
+        XCTAssertEqual(identifiedAntigravity.title, "owner@example.test")
+        XCTAssertEqual(AccountListProjection.accountLine(identifiedAntigravity), HarnessKind.antigravityCLI.displayName)
+        XCTAssertEqual(AccountListProjection.defaultLoginActions(identifiedAntigravity, mode: .manage),
+                       [.signInWithAnotherAccount, .signOut])
         XCTAssertEqual(AccountListProjection.defaultLoginActions(store.choice(for: .openCode, connection: nil),
             mode: .manage), [.signOut])
     }

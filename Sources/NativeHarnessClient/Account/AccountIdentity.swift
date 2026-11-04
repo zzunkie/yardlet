@@ -112,9 +112,9 @@ enum AccountIdentityProjection {
             ?? normalizedProvider(snapshot?.providerID)
             ?? defaultProvider(for: harness)
         let label = snapshot?.accountLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let provider, let accountKey = accountKey(snapshot: snapshot) {
+        if let accountKey = accountKey(snapshot: snapshot) {
             return AccountIdentity(
-                provider: provider,
+                provider: provider ?? harnessScopePrefix + harness.rawValue,
                 accountKey: accountKey,
                 displayLabel: label.flatMap { $0.isEmpty ? nil : $0 }
                     ?? connection?.name
