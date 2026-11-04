@@ -110,6 +110,29 @@ final class SessionRailAgentsTests: XCTestCase {
         XCTAssertEqual(Set(after.agents.map(\.id)), Set(before.agents.map(\.id)))
         XCTAssertEqual(after.agents.filter { $0.status == .running }.count, 1)
         XCTAssertEqual(after.agents.filter { $0.status == .completed }.count, 1)
+
+        // A rail draws on every publication of a task that handed out thousands of calls: each draw
+        // reads only the calls that changed, and draws what reading them all would.
+        var long = TranscriptBuilder(limit: 10_000)
+        long.appendUser("Hand the work out")
+        for index in 0..<2_000 {
+            long.apply(.activityStarted(HarnessActivity(
+                id: "call-\(index)", kind: "mcp__yardlet__run_agent", title: "run_agent",
+                input: #"{"harness":"codex","model":"gpt-5.5","prompt":"Part \#(index)"}"#)))
+        }
+        let calls = SessionRailAgents.Calls()
+        let first = SessionRailAgents.make(harness: .claudeCode, entries: long.entries, codexState: nil, calls: calls)
+        XCTAssertEqual(calls.inputsRead, 2_000)
+        XCTAssertEqual(first?.agents.count, 2_000)
+        XCTAssertEqual(first?.agents.first?.harnessLabel, "Codex · gpt-5.5")
+        _ = SessionRailAgents.make(harness: .claudeCode, entries: long.entries, codexState: nil, calls: calls)
+        XCTAssertEqual(calls.inputsRead, 2_000, "An unchanged transcript is not read again")
+        long.apply(.activityCompleted(HarnessActivity(
+            id: "call-7", kind: "mcp__yardlet__run_agent", title: "run_agent",
+            input: #"{"harness":"codex","model":"gpt-5.5","prompt":"Part 7"}"#, output: "Done")))
+        let changed = SessionRailAgents.make(harness: .claudeCode, entries: long.entries, codexState: nil, calls: calls)
+        XCTAssertEqual(calls.inputsRead, 2_001, "Only the call that changed is read again")
+        XCTAssertEqual(changed, SessionRailAgents.make(harness: .claudeCode, entries: long.entries, codexState: nil))
     }
 
     /// Codex child threads come from the thread's own calls, with the state they last reported; once

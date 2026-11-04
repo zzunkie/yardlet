@@ -9,6 +9,7 @@ extension AppModelRemoteBridge {
         for id in Set(railCache.keys).union(railTimers.keys) where !watchedRails.contains(id) {
             railTimers.removeValue(forKey: id)?.cancel()
             railCache[id] = nil
+            railAgentCalls[id] = nil
             railHasTerminals.remove(id)
             railWatches.remove(id)
             model?.pullRequestDetails.hideRemote(taskID: id)
@@ -40,10 +41,13 @@ extension AppModelRemoteBridge {
         if watchedRails.contains(current.id), let pr = model.pullRequests.pullRequest(for: current.id) {
             model.pullRequestDetails.showRemote(taskID: current.id, pullRequest: pr, folder: current.workspaceURL)
         } else { model.pullRequestDetails.hideRemote(taskID: current.id) }
+        let agentCalls = railAgentCalls[current.id] ?? SessionRailAgents.Calls()
+        if watchedRails.contains(current.id) { railAgentCalls[current.id] = agentCalls }
         let read = { [self] in
             guard let latest = self.session(taskID) else { return RemoteRailFacts() }
             return Self.railFacts(session: latest, model: model, git: railCache[latest.id]?.git,
-                                  terminals: terminals, instructionSources: railCache[latest.id]?.sources)
+                                  terminals: terminals, instructionSources: railCache[latest.id]?.sources,
+                                  agentCalls: agentCalls)
         }
         let facts: RemoteRailFacts
         if railWatches.insert(current.id).inserted {
@@ -59,7 +63,8 @@ extension AppModelRemoteBridge {
     }
 
     static func railFacts(session: SessionRecord, model: AppModel, git: SessionRailGitInfo?,
-                          terminals: [CodexBackgroundTerminal] = [], instructionSources: TaskInstructionSources? = nil) -> RemoteRailFacts {
+                          terminals: [CodexBackgroundTerminal] = [], instructionSources: TaskInstructionSources? = nil,
+                          agentCalls: SessionRailAgents.Calls = SessionRailAgents.Calls()) -> RemoteRailFacts {
         let entries = model.transcript(for: session.id).railEntries
         let codex = model.codexRailStateBySessionID[session.id]
         let tokenUsage = codex?.thread?.turns.last(where: { $0.tokenUsage != nil })?.tokenUsage
@@ -85,7 +90,8 @@ extension AppModelRemoteBridge {
             pullRequestState: model.pullRequestDetails.state(for: session.id),
             autoFix: model.pullRequestDetails.autoFix.record(for: session.id),
             autoFixPrompt: .current(), codexState: codex,
-            agentRuns: model.railAgentRuns(hostedBy: session.id), childTasks: model.railChildTasks(of: session.id),
+            agentRuns: model.railAgentRuns(hostedBy: session.id), agentCalls: agentCalls,
+            childTasks: model.railChildTasks(of: session.id),
             backgroundTerminals: terminals)
         var result = RemoteRailFacts()
         result.compactOffered = options.compact != nil

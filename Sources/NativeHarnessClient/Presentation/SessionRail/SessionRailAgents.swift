@@ -195,13 +195,14 @@ struct SessionRailAgents: Equatable {
     ///     another harness is named in full.
     ///   - codexState: a Codex task's thread.
     ///   - runs: the `run_agent` subagents the app holds for the task.
+    ///   - calls: the `run_agent` calls read before, which a rail keeps between its draws.
     ///   - children: the child tasks `create_task` made for it.
     /// - Returns: nil when the task has no agents.
     static func make(harness: HarnessKind, entries: [TranscriptEntry], codexState: CodexTaskState?,
-                     runs: [Run] = [], children: [Child] = []) -> SessionRailAgents? {
+                     runs: [Run] = [], calls: Calls = Calls(), children: [Child] = []) -> SessionRailAgents? {
         var agents = subtasks(in: entries, harness: harness)
         agents += codexThreads(in: codexState)
-        agents += yardletAgents(harness: harness, entries: entries, codexState: codexState, runs: runs)
+        agents += yardletAgents(harness: harness, entries: entries, codexState: codexState, runs: runs, read: calls)
         agents += children.map { child in
             Agent(id: "task:\(child.id.uuidString)", kind: .childTask(child.id), title: child.title,
                   harnessLabel: child.harness == harness ? nil : child.harness.displayName,
@@ -359,8 +360,64 @@ struct SessionRailAgents: Equatable {
 
     // MARK: - run_agent
 
+    /// The `run_agent` calls a task's rail has read, by transcript entry. The rail is drawn on each
+    /// publication of the task's transcript, and a task that hands its work out holds hundreds of these
+    /// calls, each with a long prompt: a call's input is read once, and again only when its entry
+    /// changes. The calls the latest read no longer found are let go.
+    final class Calls {
+        /// What a call asked for and the subagent its answer names.
+        struct Call: Equatable {
+            var agentID: UUID?
+            var prompt: String
+            var harness: HarnessKind?
+            var model: String?
+        }
+
+        private var kept: [UUID: (input: String?, output: String?, call: Call?)] = [:]
+        /// Inputs read since it was made, for tests that count them.
+        private(set) var inputsRead = 0
+
+        init() {}
+
+        /// Each `run_agent` call among `entries` that asked something, in order, with its entry.
+        func calls(in entries: [TranscriptEntry]) -> [(entry: TranscriptEntry, activity: HarnessActivity,
+                                                         state: TranscriptActivityState, call: Call)] {
+            var found: [(entry: TranscriptEntry, activity: HarnessActivity, state: TranscriptActivityState, call: Call)] = []
+            var seen = 0
+            for entry in entries {
+                guard case let .activity(activity, state) = entry.content,
+                      ConversationAgentRunProjection.isRunAgentCall(activity) else { continue }
+                seen += 1
+                if let call = call(activity, in: entry.id) { found.append((entry, activity, state, call)) }
+            }
+            if kept.count > seen {
+                let ids = Set(entries.lazy.map(\.id))
+                kept = kept.filter { ids.contains($0.key) }
+            }
+            return found
+        }
+
+        private func call(_ activity: HarnessActivity, in entryID: UUID) -> Call? {
+            // An entry the transcript kept holds the very strings it held before, which compare at once.
+            if let known = kept[entryID], known.input == activity.input, known.output == activity.output {
+                return known.call
+            }
+            inputsRead += 1
+            let arguments = ConversationAgentRunProjection.arguments(in: activity.input)
+            var call: Call?
+            if let prompt = arguments?["prompt"]?.stringValue, !prompt.isEmpty {
+                call = Call(agentID: ConversationAgentRunProjection.agentID(inResult: activity.output).flatMap(UUID.init(uuidString:)),
+                            prompt: prompt,
+                            harness: arguments?["harness"]?.stringValue.map(ConversationAgentRunProjection.harness(named:)),
+                            model: arguments?["model"]?.stringValue)
+            }
+            kept[entryID] = (activity.input, activity.output, call)
+            return call
+        }
+    }
+
     private static func yardletAgents(harness: HarnessKind, entries: [TranscriptEntry], codexState: CodexTaskState?,
-                                      runs: [Run]) -> [Agent] {
+                                      runs: [Run], read: Calls) -> [Agent] {
         struct Call {
             var id: String
             var agentID: UUID?
@@ -371,20 +428,15 @@ struct SessionRailAgents: Equatable {
             var startedAt: Date?
         }
         var calls: [Call] = []
-        for entry in entries {
-            guard case let .activity(activity, state) = entry.content,
-                  let subagent = ConversationAgentRunProjection.subagent(from: activity, phase: .running, isApproved: false),
-                  case let .yardletAgent(agentID, prompt)? = subagent.routes.first else { continue }
-            let arguments = ConversationAgentRunProjection.arguments(in: activity.input)
+        for (entry, activity, state, asked) in read.calls(in: entries) {
             let status: Agent.Status = switch state {
             case .running: .running
             case .completed: .completed
             case .failed: .failed
             case .stopped: .stopped
             }
-            let call = Call(id: activity.id, agentID: agentID.flatMap(UUID.init(uuidString:)), prompt: prompt,
-                            harness: arguments?["harness"]?.stringValue.map(ConversationAgentRunProjection.harness(named:)),
-                            model: arguments?["model"]?.stringValue, phase: status, startedAt: entry.createdAt)
+            let call = Call(id: activity.id, agentID: asked.agentID, prompt: asked.prompt, harness: asked.harness,
+                            model: asked.model, phase: status, startedAt: entry.createdAt)
             // The same call reported again (its result) replaces what it said while it ran.
             if let index = calls.lastIndex(where: { $0.id == call.id }),
                calls[index].phase == .running {
