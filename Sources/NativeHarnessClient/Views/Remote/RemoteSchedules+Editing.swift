@@ -93,6 +93,7 @@ struct RemoteScheduleEditor: View {
     @State private var confirmation: RemoteSetting.Confirmation?
     @State private var saving = false
     @State private var validatedOptions: RemoteScheduleOptionsKey?
+    @State private var consentedOptions: RemoteScheduleOptionsKey?
     @State private var editorError: String?
 
     init(model: RemoteHostModel, request: ScheduledTasksWindowState.EditorRequest, initialOptions: RemoteResponse? = nil, loadsOptions: Bool = true) {
@@ -109,7 +110,7 @@ struct RemoteScheduleEditor: View {
             draft: request.draft, existing: request.existing, projects: model.sidebar.projects,
             tasks: model.sidebar.sessions.sorted { $0.updatedAt > $1.updatedAt },
             destinationChoices: { draft in AnyView(RemoteScheduleDestination(model: model, draft: draft, options: $options, settings: $settings,
-                    validatedOptions: $validatedOptions, editorError: $editorError,
+                    validatedOptions: $validatedOptions, consentedOptions: $consentedOptions, editorError: $editorError,
                     existing: request.existing.flatMap { model.schedules.schedule($0.id.uuidString) }, loadsOptions: loadsOptions)) },
             calendar: model.schedules.calendar,
             projectName: { task in model.projects.first { $0.id == task.projectID?.uuidString }?.name ?? L10n.string("Chats") },
@@ -137,6 +138,10 @@ struct RemoteScheduleEditor: View {
             for setting in options.settings ?? [] {
                 let value = settings[setting.id] ?? setting.value
                 if let question = setting.choices.first(where: { $0.value == value })?.confirm {
+                    if let consentedOptions, consentedOptions == validatedOptions {
+                        send(schedule, confirmed: true)
+                        return
+                    }
                     pending = schedule
                     confirmation = question
                     return
@@ -175,6 +180,7 @@ private struct RemoteScheduleDestination: View {
     @Binding var options: RemoteResponse?
     @Binding var settings: [String: String]
     @Binding var validatedOptions: RemoteScheduleOptionsKey?
+    @Binding var consentedOptions: RemoteScheduleOptionsKey?
     @Binding var editorError: String?
     let existing: RemoteSchedule?
     let loadsOptions: Bool
@@ -303,7 +309,14 @@ private struct RemoteScheduleDestination: View {
         }
     }
     private func choose(_ choice: ComposerSessionChoice) {
-        if case let .providerOption(id, value) = choice { settings[id] = value }
+        if case let .providerOption(id, value) = choice {
+            settings[id] = value
+            // The shared permission control calls back only after its confirmation was accepted.
+            // Reuse that consent only for the same destination, account and validated settings.
+            if options?.settings?.first(where: { $0.id == id })?.choices.first(where: { $0.value == value })?.confirm != nil {
+                consentedOptions = RemoteScheduleOptionsKey(draft, settings: settings, connected: model.isConnected)
+            }
+        }
     }
     private func label(_ text: String) -> some View {
         Text(text).font(.callout).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
