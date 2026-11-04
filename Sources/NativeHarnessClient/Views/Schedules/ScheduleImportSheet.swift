@@ -1,23 +1,5 @@
 import SwiftUI
 
-/// What the import sheet lists: each app's schedules, each one's Yardlet task where it goes on with
-/// one, and which are already here.
-struct ScheduleImportListing: Equatable {
-    var claude: [ImportableSchedule] = []
-    var codex: [ImportableSchedule] = []
-    var linkedTasks: [String: UUID] = [:]
-    var imported: Set<String> = []
-
-    var all: [ImportableSchedule] { claude + codex }
-
-    func isImported(_ item: ImportableSchedule) -> Bool { imported.contains(item.id) }
-
-    /// The rows checked when the sheet opens: on in their app, still ahead, and not here yet.
-    func preselected(now: Date) -> Set<String> {
-        Set(all.filter { $0.canImport && !isImported($0) && $0.isUpcoming(now: now) }.map(\.id))
-    }
-}
-
 /// Imports the schedules the Claude app and the Codex app keep, styled as the other-app conversation
 /// import (`OtherAppImportSheet`). It lists what it found per app, checks the ones on and still ahead,
 /// and copies the chosen ones into Yardlet. The originals stay in their apps, untouched; after the

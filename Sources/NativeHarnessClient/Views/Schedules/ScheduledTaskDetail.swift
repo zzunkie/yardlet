@@ -1,13 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// What the detail reads beside the schedule: its tasks, places and accounts by name.
-struct ScheduledTaskContext {
-    var task: (UUID) -> SessionRecord? = { _ in nil }
-    var projectName: (ScheduledTask) -> String = { _ in "" }
-    var accountName: (ScheduledTask) -> String? = { _ in nil }
-}
-
 /// A run's line in the history: when, how it came about, how its task stands now (the Codex
 /// app's run states: running now, completed, failed, needs you), and the account it went to when its
 /// own was nearly spent.
