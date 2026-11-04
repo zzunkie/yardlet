@@ -214,7 +214,8 @@ account shows that person's Macs and lets them add a new phone. End-to-end encry
   the account server (even when they pass the relay, they are ciphertext). As with linked devices in Signal and
   WhatsApp, the server knows only the device list, and existing devices approve new ones.
 - **Flow:**
-  1. Mac: Settings › Remote › "Sign in with an account" (a browser sign-in window), then this Mac is registered to the
+  1. Mac: Settings › Yardlet Account › "Sign in with …" (a browser sign-in window, with remote connections on or
+     off), then this Mac is registered to the
      account (name, room ID, the Mac's two public keys). The Mac proves it owns the room with a relay key signature.
   2. New phone: "Sign in with an account" → the account's list of Macs → picking a Mac runs a Noise handshake with that
      Mac and sends a link request (`link`).
@@ -806,8 +807,8 @@ the store shows it as "processed ephemerally".
   the natural way, and testers without a Mac use demo mode, so they need no account. Accounts are a convenience for
   adding a new phone when the person is not at the Mac.
 - **How to turn them off:** do not put the OAuth secrets in the relay. Then the relay's `GET /v1/auth/providers` returns
-  an empty list, and the Mac's settings and the phone (the before-connecting screen, the Mac sheet) show no account row
-  (a sign-out row stays only while signed in). The relay address (the Mac build's default, Android's `yardlet.relayUrl`)
+  an empty list: Settings › Yardlet Account on the Mac says the server offers no sign-in, and the phone (the
+  before-connecting screen, the Mac sheet) shows no account row (a sign-out row stays only while signed in). The relay address (the Mac build's default, Android's `yardlet.relayUrl`)
   stays, so connecting from outside (the relay route) keeps working. Both apps ask for the providers again each time the
   settings screen opens, so the account row appears once the secrets are added later.
 - **What to do when turning them on later:** an account delete button in the Mac and Android apps (calling

@@ -58,7 +58,8 @@ struct SettingsCenterView: View {
     let vault: VaultCenter?
     /// Nil where the window has no account stores; Accounts and Harnesses are then left out.
     let accounts: SettingsAccountsContext?
-    /// Nil where the app has no phone remote; Remote is then left out.
+    /// Nil where the app has no phone remote; Remote is then left out, and so is the Yardlet account, which
+    /// also needs a Yardlet server to sign in to.
     let remote: RemoteControlService?
     /// Nil where the app does not check harness CLIs (tests, fixtures); CLI Updates is then left out.
     let cliUpdates: CLIUpdateCenter?
@@ -149,8 +150,8 @@ struct SettingsCenterView: View {
         let available = remoteHost.map { RemoteHostSettingsProjection.availableSections($0.hostSettings, offersAccounts: $0.offersHostAccounts) }
             ?? SettingsSection.available(
                 hasAccounts: accounts != nil, hasConnectors: connectors != nil, hasVault: vault != nil,
-                hasRemote: remote != nil, hasCLIUpdates: cliUpdates != nil, hasInstructions: instructions != nil,
-                hasUsage: usage != nil)
+                hasRemote: remote != nil, hasYardletAccount: remote?.relayURL != nil, hasCLIUpdates: cliUpdates != nil,
+                hasInstructions: instructions != nil, hasUsage: usage != nil)
         _section = State(initialValue: SettingsSection.initial(initialSection, available: available))
         _accountCenter = State(initialValue: AccountCenterModel(
             connections: accounts?.connections ?? ProviderConnectionStore(),
@@ -191,8 +192,27 @@ struct SettingsCenterView: View {
                 // black bar the words disappeared into (2026-10-22).
                 ScrollView {
                     VStack(alignment: .leading, spacing: 2) {
-                        ForEach(sections) { item in
-                            SettingsSectionRow(item: item, isSelected: item == section) { section = item }
+                        // The Yardlet account above the headings, as both apps put the account first; then
+                        // each heading over its sections, as the ChatGPT app's Personal, Integrations, Coding.
+                        let sections = sections
+                        if sections.contains(.yardletAccount), let remote {
+                            SettingsAccountSectionRow(summary: YardletAccountSettingsView.summary(remote),
+                                                      isSelected: section == .yardletAccount) { section = .yardletAccount }
+                        }
+                        ForEach(SettingsSection.Group.allCases, id: \.self) { group in
+                            let members = sections.filter { $0.group == group }
+                            if !members.isEmpty {
+                                Text(group.title)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.top, 10)
+                                    .padding(.bottom, 2)
+                                    .accessibilityAddTraits(.isHeader)
+                                ForEach(members) { item in
+                                    SettingsSectionRow(item: item, isSelected: item == section) { section = item }
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal, 10)
@@ -326,8 +346,9 @@ struct SettingsCenterView: View {
             return RemoteHostSettingsProjection.availableSections(remoteHost.hostSettings, offersAccounts: remoteHost.offersHostAccounts)
         }
         return SettingsSection.available(hasAccounts: accounts != nil, hasConnectors: connectors != nil, hasVault: vault != nil,
-                                         hasRemote: remote != nil, hasCLIUpdates: cliUpdates != nil,
-                                         hasInstructions: instructions != nil, hasUsage: usage != nil)
+                                         hasRemote: remote != nil, hasYardletAccount: remote?.relayURL != nil,
+                                         hasCLIUpdates: cliUpdates != nil, hasInstructions: instructions != nil,
+                                         hasUsage: usage != nil)
     }
 
     private var effectiveUsage: SettingsUsageContext? {
@@ -391,19 +412,34 @@ struct SettingsCenterView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             switch section {
+            case .yardletAccount:
+                if let remote { YardletAccountSettingsView(service: remote) }
             case .general:
                 let rows = remoteHost != nil
                     ? RemoteHostSettingsProjection.generalRows(remoteHost?.hostSettings)
                     : YardletSettingCatalog.rows(in: .general, context: settingsContext)
-                // The rows come from the settings catalog, which the agent's settings tools list too.
-                VStack(spacing: 0) {
-                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, setting in
-                        if index > 0 { Divider().padding(.leading, Self.dividerLeading) }
-                        generalRow(setting)
+                // The rows come from the settings catalog, which the agent's settings tools list too, under
+                // their headings.
+                VStack(alignment: .leading, spacing: 18) {
+                    ForEach(GeneralSettingsGroup.allCases, id: \.self) { group in
+                        let members = rows.filter { $0.generalGroup == group }
+                        if !members.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(group.title)
+                                    .font(.callout.weight(.semibold))
+                                    .accessibilityAddTraits(.isHeader)
+                                VStack(spacing: 0) {
+                                    ForEach(Array(members.enumerated()), id: \.element.id) { index, setting in
+                                        if index > 0 { Divider().padding(.leading, Self.dividerLeading) }
+                                        generalRow(setting)
+                                    }
+                                }
+                                .padding(.horizontal, 12)
+                                .parityCard()
+                            }
+                        }
                     }
                 }
-                .padding(.horizontal, 12)
-                .parityCard()
                 .disabled(!isRemoteWritable)
             case .appearance:
                 appearanceDetail
@@ -863,6 +899,50 @@ private struct SettingsSectionRow: View {
         .onHover { isHovering = $0 }
         .accessibilityLabel(item.title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+/// The Yardlet account above the section list's headings, as macOS System Settings puts the Apple Account at
+/// the top of its list: a person symbol, the section's name and the account or that nobody is signed in.
+private struct SettingsAccountSectionRow: View {
+    let summary: String
+    let isSelected: Bool
+    let onSelect: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 9) {
+                Image(systemName: "person.crop.circle.fill")
+                    .font(.system(size: 26, weight: .regular))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(SettingsSection.yardletAccount.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(summary)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 6)
+            .frame(height: 46)
+            .background(isSelected ? ParityTheme.selectedFill : (isHovering ? ParityTheme.hoverFill : .clear),
+                        in: RoundedRectangle(cornerRadius: 7))
+            .contentShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .parityPointer()
+        .onHover { isHovering = $0 }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(SettingsSection.yardletAccount.title)
+        .accessibilityValue(summary)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }
 

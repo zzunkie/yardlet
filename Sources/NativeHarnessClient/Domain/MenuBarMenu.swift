@@ -215,7 +215,7 @@ enum MenuBarMenuProjection {
 
     // MARK: - Usage
 
-    /// The Usage lines, one per account as Settings › Accounts groups accounts (an account two
+    /// The Usage lines, one per account as Settings › Harness Accounts groups accounts (an account two
     /// harnesses use is one line), from each account's latest reading; an account without a limit is
     /// left out. Nothing here checks an account: these are the readings Yardlet already has
     /// (`account-snapshots.json` and the checks it runs), and the menus that show them check them as
@@ -369,7 +369,7 @@ enum MenuBarMenuProjection {
 
     /// Codex `settings.usage.limits.trayCompactLabel` "{window} {remaining}", with
     /// `trayCompactLabelWithReset` "{label} · {reset}" when the window has a reset time. The window
-    /// is named as Settings › Accounts names it; the share left is rounded, "–" when unknown.
+    /// is named as Settings › Harness Accounts names it; the share left is rounded, "–" when unknown.
     static func limitLine(_ window: AccountLimitWindow, now: Date = Date(),
                           locale: Locale = .current, timeZone: TimeZone = .current) -> String {
         let label = "\(window.name) \(remainingText(window))"

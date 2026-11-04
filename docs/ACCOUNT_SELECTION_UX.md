@@ -6,7 +6,7 @@ storage. Different CLI sign-ins are not merged because they share an email or a 
 
 ## Decisions
 
-- **Connections** in the sidebar opens the **Accounts** section of Settings (2026-10-08; before, a separate connections
+- **Connections** in the sidebar opens the **Harness Accounts** section of Settings (2026-10-08; before, a separate connections
   sheet). Existing sign-ins and additional accounts show in the same list. No registration file or credential is copied
   to show an existing sign-in.
 - The **Harnesses** section of Settings covers install state and executable settings. Whether an account is signed in
@@ -24,7 +24,7 @@ storage. Different CLI sign-ins are not merged because they share an email or a 
 - There is one account list (`AccountList`), and it shows in four places with the same rows, limits, update wording and
   refresh position (2026-10-08, B5): the popover of the new task's account chip (that harness's default sign-in and
   saved accounts), a task's **Choose account** sheet (only accounts that share that task's history, most remaining limit
-  first), the limit card's **Continue with another account** popover (the same list) and Settings › Accounts (harness
+  first), the limit card's **Continue with another account** popover (the same list) and Settings › Harness Accounts (harness
   filter and search, grouped by account). An account with only one connection is one row, and when several connections
   are the same account, their connection rows sit under an account header. In the list for moving a task, the current
   account is only shown, accounts that came out signed out at the last check cannot be chosen, and there is no sign-in

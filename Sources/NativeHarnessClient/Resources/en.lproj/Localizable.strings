@@ -3819,3 +3819,11 @@
 "Sign in or connect providers on %@. To choose runtimes from here, allow Change settings for this device in Settings › Remote › Paired devices on %@." = "Sign in or connect providers on %@. To choose runtimes from here, allow Change settings for this device in Settings › Remote › Paired devices on %@.";
 "Connect services, sign in, or edit connectors on %@." = "Connect services, sign in, or edit connectors on %@.";
 "Connect services, sign in, or edit connectors on %@. To turn connectors on or off from here, allow Change settings for this device in Settings › Remote › Paired devices on %@." = "Connect services, sign in, or edit connectors on %@. To turn connectors on or off from here, allow Change settings for this device in Settings › Remote › Paired devices on %@.";
+
+/* Settings' list (2026-11-04): the Yardlet account above three headings, as the ChatGPT app's Personal, Integrations and Coding. */
+"Yardlet Account" = "Yardlet Account";
+"Harness Accounts" = "Harness Accounts";
+"Integrations" = "Integrations";
+"Not signed in" = "Not signed in";
+"Turn on remote connections so a new phone can find this Mac." = "Turn on remote connections so a new phone can find this Mac.";
+"This Yardlet server doesn't offer sign-in." = "This Yardlet server doesn't offer sign-in.";

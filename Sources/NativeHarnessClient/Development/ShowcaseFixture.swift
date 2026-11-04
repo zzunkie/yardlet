@@ -275,7 +275,7 @@ enum ShowcaseFixture {
     // MARK: Accounts and connectors
 
     /// The person's accounts. Codex and Claude Code each have their own home's login (work,
-    /// jordan@example.com), which Settings › Accounts lists first, and a saved personal account;
+    /// jordan@example.com), which Settings › Harness Accounts lists first, and a saved personal account;
     /// OpenCode has the provider it is set up with. Each shows the usage its harness reports: the
     /// work Codex login has 6% of its five-hour limit left, the personal one 88%.
     enum Accounts {

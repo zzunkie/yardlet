@@ -1,7 +1,7 @@
 import Foundation
 
 /// A Claude or Codex folder with a login or conversations that Yardlet has not saved as an account.
-/// It is offered in Settings › Accounts and in the import sheets; adding it saves `connection`,
+/// It is offered in Settings › Harness Accounts and in the import sheets; adding it saves `connection`,
 /// which names the folder as it is. Nothing in the folder is read but its identity.
 struct DiscoveredAccountHome: Identifiable, Equatable, Sendable {
     enum Source: Equatable, Sendable {

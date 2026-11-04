@@ -298,6 +298,60 @@ final class RemoteSettingsRenderingTests: XCTestCase {
         XCTAssertEqual(audit.entries().filter { $0.type == "revoke" }.map(\.result), ["failed", "failed", "ok"])
     }
 
+    /// Settings › Yardlet Account into `.build/remote-qa/yardlet-account-*.png`: before signing in with remote
+    /// connections off (the providers read as the page opens, and the line that the account finds this Mac
+    /// once they are on) and on, then signed in with them on and off. The relay is `StubRelay`.
+    func testTheYardletAccountSectionDrawsBeforeAndAfterSigningIn() async throws {
+        StubRelay.reset()
+        StubRelay.providers = ["github", "google"]
+        URLProtocol.registerClass(StubRelay.self)
+        defer { URLProtocol.unregisterClass(StubRelay.self) }
+        let directory = try WindowlessRender.directory("remote-qa")
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteSettingsRenderingTests.account")))
+        defaults.set("wss://relay.example.test", forKey: RemoteControlService.relayURLKey)
+        let service = RemoteControlService(
+            bridge: FakeBridge(), deviceStore: RemoteDeviceStore(fileURL: nil), audit: nil,
+            identityStore: RemoteMemoryIdentityStore(RemoteIdentity.generate()), accountToken: RemoteMemorySecret(),
+            webSignIn: { url, _ in
+                let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                StubRelay.challenge = items.first { $0.name == "code_challenge" }?.value
+                let state = items.first { $0.name == "state" }?.value ?? ""
+                return URL(string: "yardlet-remote://auth?code=C1&state=\(state)")!
+            },
+            defaults: defaults, environment: [:], interfaces: { [] }, resolveName: { _ in nil }, listens: false,
+            isOnPower: { true }, macName: "MacBook Pro", appVersion: "test")
+        await service.start()
+        let offLine = L10n.string("Turn on remote connections so a new phone can find this Mac.")
+
+        for (name, enabled, signedIn) in [("yardlet-account-remote-off", false, false), ("yardlet-account-signed-out", true, false),
+                                          ("yardlet-account-signed-in", true, true),
+                                          ("yardlet-account-signed-in-remote-off", false, true)] {
+            service.setEnabled(enabled)
+            if signedIn, service.account == nil { await service.signIn(with: "github") }
+            for appearance in WindowlessRender.Appearance.allCases {
+                let host = WindowlessRender.Host(SettingsCenterView(initialSection: SettingsSection.yardletAccount.rawValue,
+                    notificationCenter: MenuBarQuietNotificationCenter(), remote: service)
+                    .environment(\.colorScheme, appearance.colorScheme), size: NSSize(width: 820, height: 620),
+                    appearance: appearance)
+                defer { host.close() }
+                await host.settle { service.accountProvidersRead == true }
+                host.settle()
+                try WindowlessRender.writePNG(try host.capture().bitmap,
+                                              to: directory.appending(path: "\(name)-\(appearance.suffix).png"))
+                guard appearance == .light else { continue }
+                let labels = host.accessibilityElements().map(\.label)
+                let texts = host.accessibilityElements().map { "\($0.label) \($0.value)" }
+                XCTAssertEqual(texts.contains { $0.contains(offLine) }, !enabled, "\(name): \(texts)")
+                XCTAssertEqual(labels.contains(L10n.format("Sign in with %@", "Google")), !signedIn, name)
+                XCTAssertEqual(labels.contains(L10n.string("Sign out")), signedIn, name)
+                XCTAssertTrue(host.accessibilityElements().contains { $0.label == SettingsSection.yardletAccount.title
+                    && $0.value == (signedIn ? "GitHub · octocat" : L10n.string("Not signed in")) }, name)
+            }
+        }
+        XCTAssertFalse(service.isEnabled)
+        await service.shutdown()
+    }
+
     // MARK: - Helpers
 
     private func makeService(store supplied: RemoteDeviceStore? = nil, audit: RemoteAuditLog? = nil) async throws -> (RemoteControlService, RemoteIdentity) {

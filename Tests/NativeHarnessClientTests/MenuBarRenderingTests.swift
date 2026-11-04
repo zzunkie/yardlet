@@ -105,7 +105,8 @@ final class MenuBarRenderingTests: XCTestCase {
         defer { updates.close() }
         updates.settle()
         let updateSwitches = updates.accessibilityElements().filter { $0.role == NSAccessibility.Role.checkBox.rawValue }
-        XCTAssertEqual(updateSwitches.last?.label, L10n.string("Automatically check for updates"))
+        XCTAssertEqual(updateSwitches.prefix(3).map(\.label), [L10n.string("Show Yardlet in the menu bar"), L10n.string("Mailbox"),
+            L10n.string("Automatically check for updates")], "Sparkle's switch closes the App heading's rows")
     }
 
     func testTheLidSettingAndItsMenuLinesDraw() throws {
@@ -119,8 +120,8 @@ final class MenuBarRenderingTests: XCTestCase {
                 .defaultAppStorage(defaults)
                 .environment(\.colorScheme, appearance.colorScheme)
         }
-        // General lists the lid row after its browser and restart settings, below the sheet's first
-        // screen: each drawing is scrolled to the end of the page, as the person scrolls to the row.
+        // General lists the lid row last under its Tasks heading, below the sheet's first screen: each
+        // drawing is scrolled down until the row and its line are in view, as the person scrolls to it.
         for appearance in WindowlessRender.Appearance.allCases {
             let host = WindowlessRender.Host(settings(appearance), size: size, appearance: appearance)
             defer { host.close() }
@@ -129,9 +130,19 @@ final class MenuBarRenderingTests: XCTestCase {
                 ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0)
             })
             let document = try XCTUnwrap(page.documentView)
-            document.scrollToVisible(NSRect(x: 0, y: document.isFlipped ? document.bounds.maxY - 1 : document.bounds.minY,
-                                            width: 1, height: 1))
-            host.settle()
+            let line = L10n.string("Allow Yardlet in the background in System Settings")
+            var offset = page.contentView.bounds.height
+            func scrollDown() {
+                offset = min(offset + 160, document.bounds.height)
+                let y = offset - 1
+                document.scrollToVisible(NSRect(x: 0, y: document.isFlipped ? y : document.bounds.height - y, width: 1, height: 1))
+                host.settle()
+            }
+            while !host.accessibilityElements(visibleOnly: true).contains(where: { "\($0.label) \($0.value)".contains(line) }),
+                  offset < document.bounds.height {
+                scrollDown()
+            }
+            scrollDown() // the whole row, not only its first line
             try WindowlessRender.writePNG(host.capture().bitmap,
                                           to: directory.appending(path: "settings-general-lid-\(appearance.suffix).png"))
             guard appearance == .light else { continue }

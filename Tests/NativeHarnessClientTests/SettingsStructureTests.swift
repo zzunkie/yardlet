@@ -4,24 +4,40 @@ import XCTest
 /// One Settings structure: each section is a sidebar entry with its own page, and the window's
 /// account and harness entries open their sections.
 final class SettingsStructureTests: XCTestCase {
+    @MainActor
     func testEverySectionIsOneSidebarEntryInOrder() {
-        let all = SettingsSection.available(hasAccounts: true, hasConnectors: true, hasVault: true, hasRemote: true, hasCLIUpdates: true,
-                                            hasInstructions: true, hasUsage: true)
+        let all = SettingsSection.available(hasAccounts: true, hasConnectors: true, hasVault: true, hasRemote: true,
+                                            hasYardletAccount: true, hasCLIUpdates: true, hasInstructions: true, hasUsage: true)
         XCTAssertEqual(all, SettingsSection.allCases)
+        XCTAssertEqual(all.first, .yardletAccount, "The Yardlet account comes first, as both apps put the account first")
+        XCTAssertNil(SettingsSection.yardletAccount.group)
+        XCTAssertEqual(SettingsSection.Group.allCases.map { group in all.filter { $0.group == group } }, [
+            [.general, .appearance, .notifications, .instructions],
+            [.connectors, .vault, .remote],
+            [.harnesses, .accounts, .usage, .cliUpdates],
+        ])
+        XCTAssertEqual(all.dropFirst().compactMap(\.group), SettingsSection.Group.allCases.flatMap { group in
+            all.filter { $0.group == group }.map { _ in group } }, "Each heading's sections follow one another")
         XCTAssertEqual(SettingsSection.available(hasAccounts: true, hasConnectors: true),
-            all.filter { $0 != .remote && $0 != .cliUpdates && $0 != .instructions && $0 != .vault && $0 != .usage })
+            all.filter { ![.yardletAccount, .remote, .cliUpdates, .instructions, .vault, .usage].contains($0) })
         XCTAssertEqual(all[all.firstIndex(of: .accounts)! + 1], .usage, "Usage follows the accounts whose limits it shows")
-        XCTAssertEqual(all.suffix(2), [.harnesses, .cliUpdates], "CLI Updates follows the harnesses it updates")
-        XCTAssertEqual(Array(all.prefix(5)), [.general, .appearance, .notifications, .instructions, .accounts],
-            "Yardlet Instructions is a personal setting, as the Codex app's custom instructions are, before the account")
+        XCTAssertEqual(all.last, .cliUpdates, "CLI Updates follows the harnesses it updates")
         XCTAssertEqual(Set(all.map(\.title)).count, all.count, "No two entries share a name")
-        XCTAssertEqual(SettingsSection.available(hasAccounts: false, hasConnectors: true, hasVault: true, hasRemote: true, hasCLIUpdates: true,
-                                                 hasInstructions: true, hasUsage: true),
+        XCTAssertEqual(SettingsSection.available(hasAccounts: false, hasConnectors: true, hasVault: true, hasRemote: true,
+                                                 hasYardletAccount: true, hasCLIUpdates: true, hasInstructions: true, hasUsage: true),
             all.filter { !$0.isConnectionSection })
-        XCTAssertEqual(SettingsSection.available(hasAccounts: true, hasConnectors: false, hasVault: true, hasRemote: true, hasCLIUpdates: true,
-                                                 hasInstructions: true, hasUsage: true),
+        XCTAssertEqual(SettingsSection.available(hasAccounts: true, hasConnectors: false, hasVault: true, hasRemote: true,
+                                                 hasYardletAccount: true, hasCLIUpdates: true, hasInstructions: true, hasUsage: true),
             all.filter { $0 != .connectors })
-        XCTAssertEqual(all.filter(\.isConnectionSection), [.accounts, .harnesses])
+        XCTAssertEqual(all.filter(\.isConnectionSection), [.harnesses, .accounts])
+
+        // Every General row sits under one of its headings, and the catalog lists them heading by heading,
+        // so a row without one is never left out of the page.
+        let general = YardletSettingCatalog.all.filter { $0.section == .general }
+        XCTAssertEqual(general.compactMap(\.generalGroup).count, general.count)
+        XCTAssertEqual(general.compactMap(\.generalGroup), GeneralSettingsGroup.allCases.flatMap { group in
+            general.filter { $0.generalGroup == group }.map { _ in group } })
+        XCTAssertTrue(YardletSettingCatalog.all.filter { $0.section != .general }.allSatisfy { $0.generalGroup == nil })
     }
 
     func testEachSectionIsReachableFromTheKeyboardAndByName() {
@@ -43,9 +59,9 @@ final class SettingsStructureTests: XCTestCase {
 
     func testTheWindowsAccountEntriesOpenTheirSettingsSections() {
         XCTAssertEqual(ConnectionEntryRoute.accounts(), .settings(.accounts, harness: nil),
-            "The sidebar's Connections entry opens Accounts")
+            "The sidebar's Connections entry opens Harness Accounts")
         XCTAssertEqual(ConnectionEntryRoute.accounts(harness: .claudeCode), .settings(.accounts, harness: .claudeCode),
-            "Manage accounts opens Accounts filtered to the task's harness")
+            "Manage accounts opens Harness Accounts filtered to the task's harness")
         XCTAssertEqual(ConnectionEntryRoute.harnesses, .settings(.harnesses, harness: nil))
         XCTAssertEqual(ConnectionEntryRoute.accounts(harness: .claudeCode, adds: true), .accountSheet,
             "Adding an account from a new task keeps its sheet, which returns to the draft")

@@ -9,7 +9,7 @@ The latest screen flow and design decisions follow [ACCOUNT_SELECTION_UX.md](ACC
 
 ## What the user does
 
-- In **Settings › Accounts → Add account** (the sidebar's **Connections** opens this section), the user connects a
+- In **Settings › Harness Accounts → Add account** (the sidebar's **Connections** opens this section), the user connects a
   separate account, or points to an existing CLI account folder in the advanced settings. Existing sign-ins appear in
   the same list, and the name and folder are optional. A new folder is created and the harness's official sign-in and
   provider setup opens. A new Claude folder keeps only the sign-in's own files and links the rest to the default folder
@@ -23,7 +23,7 @@ The latest screen flow and design decisions follow [ACCOUNT_SELECTION_UX.md](ACC
   account and why ("work@example.com · Chosen automatically · 5 hour limit 12% used · Resets 3:00 PM"), before sending
   and while the task starts. The task's hover card keeps the reason. An account the person chooses stands until they
   choose Automatic again. A task started from the phone follows the same choice. **Choose the account for new tasks
-  automatically** in Settings › Accounts turns Automatic off; the menu is then as it was without it, and only that
+  automatically** in Settings › Harness Accounts turns Automatic off; the menu is then as it was without it, and only that
   setting is kept.
 - Resuming, forking and side chats of a task use the saved account environment together with the native session ID.
   Changing the default account for new tasks does not change the account of existing tasks.
@@ -225,7 +225,7 @@ not read.
 
 ## Continuing after a usage limit
 
-A Claude Code task a plan limit stopped ends its turn on a limit card. Settings › Accounts' **Continue automatically at
+A Claude Code task a plan limit stopped ends its turn on a limit card. Settings › Harness Accounts' **Continue automatically at
 usage limit**, on unless turned off as Claude Code 2.1.291's own setting of that name is, arms the card's
 "Auto-continue when limits reset" as the limit stops the turn, when the limit resets within a day. One that resets
 later, such as a weekly limit days out, waits for the person to turn it on on its card, as Claude Code does not wait past
@@ -250,7 +250,7 @@ A Codex limit card names no reset and the Codex app offers no continue on it, so
 A Codex account can hold banked resets of its plan limits. The App Server reports them in the
 `account/rateLimits/read` answer Yardlet already reads for the limits (`rateLimitResetCredits`: `availableCount` and,
 for each available reset, an opaque `id`, a `title` and `expiresAt`), so counting them takes no extra request.
-Settings › Accounts shows "N resets available" under the account's limits, the sidebar account menu and the menu bar
+Settings › Harness Accounts shows "N resets available" under the account's limits, the sidebar account menu and the menu bar
 item add the count to the account's Usage line, and a Codex task's limit card offers "Use a reset (N left)" for the
 account the task runs under. Each place opens the same confirmation: the limits a reset restores (the general `codex`
 limit, not a model's own), the reset it takes (the one that expires first) and how many are left after it.
@@ -270,7 +270,7 @@ Claude Code reports them.
 
 ## Moving tasks to an account with room
 
-**Settings › Accounts → Move tasks to an account with room** (`AccountMovePreference`, on by default, shown once a
+**Settings › Harness Accounts → Move tasks to an account with room** (`AccountMovePreference`, on by default, shown once a
 Claude Code account is saved besides the default login) lets Claude Code tasks leave an account that is nearly out of
 its limit on their own. Only Claude Code tasks move, to the accounts Continue with another account offers them
 (`TaskAccountSwitch`) that automatic assignment may use and that are signed in, and only when `AccountRouting.pick`
@@ -319,7 +319,7 @@ Tests: `AccountRoutingTests.testATaskMovesOnlyWhenItsCacheIsLostAnywayOrALimitSt
 off), `testAnIdleTaskLeavesANearlySpentAccountOnceItsCacheHasExpired`,
 `ScheduledTaskTests.testAContinuingRunMovesItsTaskOffANearlySpentAccountFirst`, and the renders
 `ClaudeProviderNoticeRenderingTests.testAnAutomaticMoveWaitsForTheResetOrSaysWhereTheTaskGoes`
-(`.build/claude-provider-notices-qa/automatic-move-*.png`) and Settings › Accounts in
+(`.build/claude-provider-notices-qa/automatic-move-*.png`) and Settings › Harness Accounts in
 `AccountListRenderingTests.testEachModeDrawsTheSameRows` (`.build/account-list-qa/manage-*.png`).
 
 ## Account folder shape, finding sign-ins and removing accounts (2026-10-27)
@@ -330,7 +330,7 @@ than the default (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`) be recognized; and asked wh
 
 ### Claude account folders: what stays per account and what is shared
 
-A Claude folder that **Settings › Accounts → Add another account → Continue to sign in** makes
+A Claude folder that **Settings › Harness Accounts → Add another account → Continue to sign in** makes
 (`~/.yardlet/connections/<UUID>/claude-code`) has the shape of a Session Switch account folder. Every entry of the
 default folder (the config folder of Yardlet's default sign-in: `CLAUDE_CONFIG_DIR`, else `~/.claude`) that is not
 per-account below becomes a link to it, and Claude Code makes the per-account entries inside the folder. The new
@@ -376,7 +376,7 @@ the account.
 
 ### Finding sign-ins that are not saved
 
-When Settings › Accounts or either import sheet opens, Yardlet looks only in the places below
+When Settings › Harness Accounts or either import sheet opens, Yardlet looks only in the places below
 (`Account/AccountHomeDiscovery.swift`); it does not search the disk. Walking all of `~/Library/Application Support`
 would reach protected folders such as Contacts and could raise permission prompts, so it is not done.
 
@@ -416,7 +416,7 @@ the address shortens in the middle. The plan line no longer repeats the organiza
 
 ### Removing an account
 
-Each account row in Settings › Accounts has a menu, opened with a right click or with the "…" button under the row's
+Each account row in Settings › Harness Accounts has a menu, opened with a right click or with the "…" button under the row's
 limits or status (under them, so it takes no width from the account's name). A saved account's menu has two removal
 items. The default sign-in (`~/.claude`, `~/.codex`)
 is not removed; its row signs it out instead ("Signing the default sign-in out" below). That sign-out applies only to
@@ -463,7 +463,7 @@ account's folder.
 
 ### Signing the default sign-in out
 
-While the default sign-in's last reading says its CLI can sign out, its row's menu in Settings › Accounts offers what
+While the default sign-in's last reading says its CLI can sign out, its row's menu in Settings › Harness Accounts offers what
 the Harnesses page offers beside it (`AccountListProjection.defaultLoginActions`): **Sign Out…** (**Disconnect
 Provider…** for OpenCode and Pi, which connect model providers, where connecting another needs no sign-out) and, for an
 account sign-in, **Sign In With Another Account…**. A harness that keeps its sign-in in one place and cannot have a
@@ -527,7 +527,7 @@ started without a sign-in, both read the same thread with `thread/list` and `thr
 `AccountHomeTests` (the new folder shape, sharing an existing folder, the finding rules, importing another folder's
 conversations, Remove from List and Sign Out and Delete; a fake that removes instead of using the Trash, and a fake CLI
 for the sign-out), `AccountIdentityTests` (the organization), and
-`AccountListRenderingTests.testSettingsNamesOrganizationsAndOffersFoldersFound` (Settings › Accounts and the sheet, light
+`AccountListRenderingTests.testSettingsNamesOrganizationsAndOffersFoldersFound` (Settings › Harness Accounts and the sheet, light
 and dark, `.build/account-list-qa/manage-found-*` and `share-sheet-*`). The confirmations are AppKit alerts that a
 windowless render cannot draw, so only their text is given above.
 

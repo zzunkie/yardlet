@@ -52,7 +52,7 @@ final class ClaudeAccountSelectionRenderingTests: XCTestCase {
 
     /// With the default login and two accounts sharing its history, the new task's account menu has
     /// Automatic above the accounts, chosen; the composer names the account Automatic picks and why; and
-    /// Settings › Accounts has the switch that turns it off. Both appearances, rendered without a window.
+    /// Settings › Harness Accounts has the switch that turns it off. Both appearances, rendered without a window.
     func testNewTaskAccountMenuOffersAutomaticAndTheComposerNamesItsPick() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "claude-automatic-render-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }

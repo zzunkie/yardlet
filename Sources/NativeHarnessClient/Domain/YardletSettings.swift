@@ -1,34 +1,53 @@
 import Foundation
 
-/// The Settings sections in sidebar order, following the Codex and Claude apps: personal settings
-/// (Yardlet Instructions where the Codex app has Personalization's custom instructions) with the
-/// account right after them, then integrations (Connectors, and the Vault agents fill sign-ins
-/// from), then the coding tools
-/// (Harnesses, where Claude has its Claude Code section, then CLI Updates for their runtimes).
-/// Remote, the phone remote, sits with the integrations. Each section owns its page; General holds
-/// only its own controls rather than links to the others.
+/// The Settings sections in sidebar order, following the Claude app and the ChatGPT app (which holds
+/// Codex): the Yardlet account first, as both put the account at the top of their list, then three
+/// groups under a heading each, as the ChatGPT app's Personal, Integrations and Coding. Personal holds
+/// Yardlet's own settings (Yardlet Instructions where the Codex app has Personalization's custom
+/// instructions); Integrations what agents reach outside Yardlet (Connectors, the Vault agents fill
+/// sign-ins from, and Remote, the phone remote, as the ChatGPT app keeps passwords and connections
+/// there); Harnesses the coding tools with their accounts, the limits those accounts show, and the
+/// CLI updates for their runtimes. Each section owns its page; General holds only its own controls
+/// rather than links to the others.
 enum SettingsSection: String, CaseIterable, Identifiable {
+    case yardletAccount
     case general
     case appearance
     case notifications
     case instructions
-    case accounts
-    case usage
     case connectors
     case vault
     case remote
     case harnesses
+    case accounts
+    case usage
     case cliUpdates
+
+    /// The headings the sections sit under; the Yardlet account sits above them.
+    enum Group: CaseIterable {
+        case personal
+        case integrations
+        case harnesses
+
+        var title: String {
+            switch self {
+            case .personal: L10n.string("Personal")
+            case .integrations: L10n.string("Integrations")
+            case .harnesses: L10n.string("Harnesses")
+            }
+        }
+    }
 
     var id: Self { self }
 
     var title: String {
         switch self {
+        case .yardletAccount: L10n.string("Yardlet Account")
         case .general: L10n.string("General")
         case .appearance: L10n.string("Appearance")
         case .notifications: L10n.string("Notifications")
         case .instructions: L10n.string("Yardlet Instructions")
-        case .accounts: L10n.string("Accounts")
+        case .accounts: L10n.string("Harness Accounts")
         case .usage: L10n.string("Usage")
         case .harnesses: L10n.string("Harnesses")
         case .connectors: L10n.string("Connectors")
@@ -40,11 +59,12 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 
     var systemName: String {
         switch self {
+        case .yardletAccount: "person.crop.circle"
         case .general: "gearshape"
         case .appearance: "circle.lefthalf.filled"
         case .notifications: "bell"
         case .instructions: "text.quote"
-        case .accounts: "person.crop.circle"
+        case .accounts: "person.2"
         case .usage: "chart.bar.xaxis"
         case .harnesses: "square.stack.3d.up"
         case .connectors: "powerplug"
@@ -54,18 +74,29 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         }
     }
 
+    /// The heading it sits under; nil for the Yardlet account above the headings.
+    var group: Group? {
+        switch self {
+        case .yardletAccount: nil
+        case .general, .appearance, .notifications, .instructions: .personal
+        case .connectors, .vault, .remote: .integrations
+        case .harnesses, .accounts, .usage, .cliUpdates: .harnesses
+        }
+    }
+
     /// Accounts and Harnesses share one Account Center and fill the page with their own lists.
     var isConnectionSection: Bool { self == .accounts || self == .harnesses }
 
     /// The sections a window offers: Accounts and Harnesses need the app's account stores,
-    /// Connectors needs a build with connectors, Vault the app's vault, Remote the app's remote,
-    /// CLI Updates the app's CLI update center, Yardlet Instructions the app's instruction store, and
-    /// Usage the app's token counts.
+    /// Connectors needs a build with connectors, Vault the app's vault, Remote the app's remote, the
+    /// Yardlet account a remote with a Yardlet server to sign in to, CLI Updates the app's CLI update
+    /// center, Yardlet Instructions the app's instruction store, and Usage the app's token counts.
     static func available(hasAccounts: Bool, hasConnectors: Bool, hasVault: Bool = false, hasRemote: Bool = false,
-                          hasCLIUpdates: Bool = false, hasInstructions: Bool = false,
+                          hasYardletAccount: Bool = false, hasCLIUpdates: Bool = false, hasInstructions: Bool = false,
                           hasUsage: Bool = false) -> [SettingsSection] {
         allCases.filter { section in
             switch section {
+            case .yardletAccount: hasYardletAccount
             case .accounts, .harnesses: hasAccounts
             case .usage: hasUsage
             case .connectors: hasConnectors
@@ -84,6 +115,24 @@ enum SettingsSection: String, CaseIterable, Identifiable {
             return .general
         }
         return section
+    }
+}
+
+/// The headings General's rows sit under, in order: the app itself, how tasks run and reply, the
+/// browser agents use, and the terminal.
+enum GeneralSettingsGroup: CaseIterable {
+    case app
+    case tasks
+    case browser
+    case terminal
+
+    var title: String {
+        switch self {
+        case .app: L10n.string("App")
+        case .tasks: L10n.string("Tasks")
+        case .browser: L10n.string("Browser")
+        case .terminal: L10n.string("Terminal")
+        }
     }
 }
 
@@ -148,6 +197,8 @@ struct YardletSetting: Identifiable {
 
     let id: String
     let section: SettingsSection
+    /// The heading a General row sits under; nil in the other sections.
+    var generalGroup: GeneralSettingsGroup?
     /// The row's symbol.
     var symbol = ""
     let title: String
@@ -240,7 +291,7 @@ struct YardletSetting: Identifiable {
 
 extension YardletSetting {
     static let language = YardletSetting(
-        id: "language", section: .general, symbol: "character.bubble", title: L10n.string("Language"),
+        id: "language", section: .general, generalGroup: .app, symbol: "character.bubble", title: L10n.string("Language"),
         detail: L10n.string("Applies the next time you open Yardlet"),
         values: choices(AppLanguagePreference.self, title: \.title),
         storage: .app(read: { AppLanguagePreference.stored(in: $0.defaults).rawValue },
@@ -252,28 +303,28 @@ extension YardletSetting {
                       }))
 
     static let showInMenuBar = YardletSetting(
-        id: "show_in_menu_bar", section: .general, symbol: "menubar.rectangle", title: L10n.string("Show in menu bar"),
+        id: "show_in_menu_bar", section: .general, generalGroup: .app, symbol: "menubar.rectangle", title: L10n.string("Show in menu bar"),
         detail: L10n.string("Keep Yardlet in the macOS menu bar when the main window is closed"),
         controlLabel: L10n.string("Show Yardlet in the menu bar"),
         values: .onOff, storage: .flag(key: MenuBarPreference.key, defaultValue: true))
 
     static let mailbox = YardletSetting(
-        id: "mailbox", section: .general, symbol: "envelope", title: L10n.string("Mailbox"),
+        id: "mailbox", section: .general, generalGroup: .app, symbol: "envelope", title: L10n.string("Mailbox"),
         detail: L10n.string("Show the inboxes of the mail accounts connected in Connectors (Gmail, Outlook and accounts over IMAP) beside your tasks. Mail is read from the service and kept in memory only."),
         values: .onOff, storage: .flag(key: MailboxPreference.key, defaultValue: false))
 
     static let agentBrowserTools = YardletSetting(
-        id: "agent_browser_tools", section: .general, symbol: "globe", title: L10n.string("Agent browser tools"),
+        id: "agent_browser_tools", section: .general, generalGroup: .browser, symbol: "globe", title: L10n.string("Agent browser tools"),
         values: .onOff, storage: .flag(key: AgentToolPreference.browserToolsKey, defaultValue: true),
         asksEveryTime: true)
 
     static let shareTerminal = YardletSetting(
-        id: "share_terminal", section: .general, symbol: "terminal", title: L10n.string("Share the terminal with agents"),
+        id: "share_terminal", section: .general, generalGroup: .terminal, symbol: "terminal", title: L10n.string("Share the terminal with agents"),
         detail: L10n.string("A task's agent can read the task's terminal tabs, without typing in them, and a selection in the terminal can be attached to your message (⌘⇧L)."),
         values: .onOff, storage: .flag(key: TerminalSharingPreference.key, defaultValue: true), asksEveryTime: true)
 
     static let terminalLocation = YardletSetting(
-        id: "terminal_location", section: .general, symbol: "rectangle.split.2x1", title: L10n.string("Terminal location"),
+        id: "terminal_location", section: .general, generalGroup: .terminal, symbol: "rectangle.split.2x1", title: L10n.string("Terminal location"),
         detail: L10n.string("Where the terminal opens: below the conversation, or as a tab of the side panel."),
         values: .choices([Choice(value: TerminalLocation.bottom.rawValue, title: L10n.string("Bottom")),
                           Choice(value: TerminalLocation.right.rawValue, title: L10n.string("Right"))]),
@@ -281,7 +332,7 @@ extension YardletSetting {
 
     /// Turning it off asks Touch ID or the login password as well (`VaultCenter.setHidesCredentials`).
     static let hideKeysAndTokens = YardletSetting(
-        id: "hide_keys_and_tokens", section: .general, symbol: "eye.slash", title: L10n.string("Hide keys and tokens"),
+        id: "hide_keys_and_tokens", section: .general, generalGroup: .browser, symbol: "eye.slash", title: L10n.string("Hide keys and tokens"),
         detail: L10n.string("Hides values that look like API keys, access tokens or private keys in what agents read in the browser. Turned off, agents read them as the page shows them, and they stay in the task's history."),
         values: .onOff,
         storage: appSwitch({ $0.vault?.hidesCredentials }, { context, hides in
@@ -294,81 +345,81 @@ extension YardletSetting {
         asksEveryTime: true)
 
     static let showTaskServers = YardletSetting(
-        id: "show_task_servers", section: .general, symbol: "server.rack", title: L10n.string("Show servers tasks start"),
+        id: "show_task_servers", section: .general, generalGroup: .tasks, symbol: "server.rack", title: L10n.string("Show servers tasks start"),
         detail: L10n.string("Show the localhost address of a server a task's harness or terminal starts beside the task's title"),
         values: .onOff, storage: .flag(key: TaskServersPreference.key, defaultValue: true))
 
     static let keepCookies = YardletSetting(
-        id: "keep_cookies", section: .general, symbol: "person.2.badge.key", title: L10n.string("Keep cookies"),
+        id: "keep_cookies", section: .general, generalGroup: .browser, symbol: "person.2.badge.key", title: L10n.string("Keep cookies"),
         hint: L10n.string("Tasks share your sign-ins. A task whose agent signs in to a site itself keeps that sign-in to itself. Sign-ins saved in the password manager work in every task"),
         values: choices(BrowserTaskProfiles.Storage.self, title: \.title),
         storage: .choice(key: BrowserTaskProfiles.storageKey, defaultValue: BrowserTaskProfiles.Storage.perTask.rawValue),
         asksEveryTime: true)
 
     static let searchSuggestions = YardletSetting(
-        id: "search_suggestions", section: .general, symbol: "magnifyingglass",
+        id: "search_suggestions", section: .general, generalGroup: .browser, symbol: "magnifyingglass",
         title: L10n.string("Autocomplete searches and URLs"),
         detail: L10n.string("Sends what you type in the address field to Google to suggest searches. Pages from your browsing history are suggested either way."),
         values: .onOff, storage: .flag(key: SearchSuggestionPreference.key, defaultValue: true))
 
     /// Turned off, each task's saved pages go.
     static let pageSuggestions = YardletSetting(
-        id: "page_suggestions", section: .general, symbol: "clock.arrow.circlepath",
+        id: "page_suggestions", section: .general, generalGroup: .browser, symbol: "clock.arrow.circlepath",
         title: L10n.string("Suggest pages on new tabs"),
         detail: L10n.string("Shows the pages this task opened and the sites you visit most on a new tab and in the side panel. Turned off, tasks keep no list of the pages they opened."),
         values: .onOff, storage: .flag(key: BrowserPageSuggestionPreference.key, defaultValue: true), asksEveryTime: true)
 
     static let continueAfterRestart = YardletSetting(
-        id: "continue_after_restart", section: .general, symbol: "arrow.clockwise",
+        id: "continue_after_restart", section: .general, generalGroup: .tasks, symbol: "arrow.clockwise",
         title: L10n.string("Continue running work after a restart"),
         hint: L10n.string("Claude Code and Codex tasks continue where they left off after Yardlet quits or updates"),
         values: .onOff, storage: .flag(key: RestartResumePreference.key, defaultValue: true))
 
     static let keepScreenUnlocked = YardletSetting(
-        id: "keep_screen_unlocked", section: .general, symbol: "lock.open.display",
+        id: "keep_screen_unlocked", section: .general, generalGroup: .tasks, symbol: "lock.open.display",
         title: L10n.string("Keep the screen unlocked while tasks work"),
         values: .onOff, storage: .flag(key: KeepScreenAwakePreference.key, defaultValue: false), asksEveryTime: true)
 
     /// Turning it on asks macOS to allow a helper of Yardlet's that keeps the Mac awake.
     static let keepWorkingWithLidClosed = YardletSetting(
-        id: "keep_working_with_lid_closed", section: .general, symbol: "laptopcomputer",
+        id: "keep_working_with_lid_closed", section: .general, generalGroup: .tasks, symbol: "laptopcomputer",
         title: L10n.string("Keep tasks working with the lid closed"),
         values: .onOff, storage: .flag(key: LidClosedWorkPreference.key, defaultValue: false), asksEveryTime: true,
         offered: { $0.lidHelper != nil })
 
     static let memorySaver = YardletSetting(
-        id: "memory_saver", section: .general, symbol: "memorychip", title: L10n.string("Memory saver"),
+        id: "memory_saver", section: .general, generalGroup: .browser, symbol: "memorychip", title: L10n.string("Memory saver"),
         detail: L10n.string("Frees memory from tasks you haven't used in a while and brings them back when you return."),
         values: .onOff, storage: .flag(key: MemorySaverPreference.key, defaultValue: true))
 
     static let memorySaverLevel = YardletSetting(
-        id: "memory_saver_level", section: .general, title: L10n.string("Memory saver level"),
+        id: "memory_saver_level", section: .general, generalGroup: .browser, title: L10n.string("Memory saver level"),
         values: choices(BrowserMemorySaver.Level.self, title: \.title, detail: { $0.detail }),
         storage: .choice(key: MemorySaverPreference.levelKey, defaultValue: BrowserMemorySaver.Level.balanced.rawValue),
         shownWhileOn: memorySaver.id)
 
     static let followUpBehavior = YardletSetting(
-        id: "follow_up_behavior", section: .general, symbol: "text.append", title: L10n.string("Follow-up behavior"),
+        id: "follow_up_behavior", section: .general, generalGroup: .tasks, symbol: "text.append", title: L10n.string("Follow-up behavior"),
         hint: L10n.string("While a turn runs, Return sends this way and Command-Return the other way"),
         values: choices(FollowUpMode.self, title: \.title),
         storage: .choice(key: FollowUpMode.preferenceKey, defaultValue: FollowUpMode.steer.rawValue))
 
     static let nextMessageSuggestions = YardletSetting(
-        id: "next_message_suggestions", section: .general, symbol: "text.bubble",
+        id: "next_message_suggestions", section: .general, generalGroup: .tasks, symbol: "text.bubble",
         title: L10n.string("Next message suggestions"),
         detail: L10n.string("After a reply, show a suggested next message as faint text in the empty message box. Claude Code and Codex make each one with one more model request, which adds a little to your usage."),
         hint: L10n.string("Codex tasks follow it from their next reply, Claude Code tasks from their next start or resume"),
         values: .onOff, storage: .flag(key: NextMessageSuggestionPreference.key, defaultValue: true))
 
     static let autoFixFailingCI = YardletSetting(
-        id: "auto_fix_failing_ci", section: .general, symbol: "wrench.and.screwdriver",
+        id: "auto_fix_failing_ci", section: .general, generalGroup: .tasks, symbol: "wrench.and.screwdriver",
         title: L10n.string("Auto-fix failing CI"),
         detail: L10n.string("When a task first has a pull request, ask whether to send it failing checks to fix. Auto-fix stays off until you turn it on for that task."),
         values: choices(PullRequestAutoFixPrompt.self, title: \.title),
         storage: .choice(key: PullRequestAutoFixPrompt.preferenceKey, defaultValue: PullRequestAutoFixPrompt.ask.rawValue))
 
     static let checkForUpdates = YardletSetting(
-        id: "check_for_updates", section: .general, symbol: "arrow.down.circle",
+        id: "check_for_updates", section: .general, generalGroup: .app, symbol: "arrow.down.circle",
         title: L10n.string("Automatically check for updates"),
         values: .onOff,
         storage: appSwitch({ $0.updateChecks?.get() }, { context, checks in
@@ -552,18 +603,20 @@ extension YardletSetting {
 @MainActor
 enum YardletSettingCatalog {
     static let all: [YardletSetting] = [
-        .language, .showInMenuBar, .mailbox, .agentBrowserTools, .shareTerminal, .terminalLocation, .hideKeysAndTokens,
-        .showTaskServers, .keepCookies, .searchSuggestions, .pageSuggestions, .continueAfterRestart, .keepScreenUnlocked,
-        .keepWorkingWithLidClosed, .memorySaver, .memorySaverLevel, .followUpBehavior, .nextMessageSuggestions,
-        .autoFixFailingCI, .checkForUpdates,
+        .language, .showInMenuBar, .mailbox, .checkForUpdates,
+        .followUpBehavior, .nextMessageSuggestions, .autoFixFailingCI, .showTaskServers, .continueAfterRestart,
+        .keepScreenUnlocked, .keepWorkingWithLidClosed,
+        .agentBrowserTools, .keepCookies, .searchSuggestions, .pageSuggestions, .memorySaver, .memorySaverLevel,
+        .hideKeysAndTokens,
+        .shareTerminal, .terminalLocation,
         .theme, .interfaceSize,
         .personalAgentMessages, .newMail,
         .yardletInstructions, .dailyEvaluation,
-        .newTaskAccountAutomatically, .continueAtUsageLimit, .moveTasksToAccountsWithRoom,
-        .tokenUsage,
         .claudeAIConnectors,
         .passwordManager, .addressesAndCards,
         .remoteConnections, .connectFromOutside, .keepAwakeOnPower,
+        .newTaskAccountAutomatically, .continueAtUsageLimit, .moveTasksToAccountsWithRoom,
+        .tokenUsage,
         .cliAutomaticUpdates
     ]
 

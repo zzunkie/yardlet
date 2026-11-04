@@ -13,7 +13,7 @@ extension AppModelRemoteBridge {
         switch setting.section {
         case .general, .instructions, .usage, .cliUpdates:
             !excludedRemoteSettingIDs.contains(setting.id)
-        case .appearance, .notifications, .accounts, .harnesses, .connectors, .vault, .remote:
+        case .yardletAccount, .appearance, .notifications, .accounts, .harnesses, .connectors, .vault, .remote:
             false
         }
     }

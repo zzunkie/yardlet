@@ -231,7 +231,7 @@ extension AppModel {
             CreateHarnessSessionRequest(localSessionID: run.id, workspaceURL: run.workspaceURL, initialPrompt: nil))
         run.adapter = adapter
         run.handle = handle
-        // A harness an agent runs subagents on is in use for Settings › Accounts; a judge is Yardlet's own.
+        // A harness an agent runs subagents on is in use for Settings › Harness Accounts; a judge is Yardlet's own.
         if !run.isEvaluationJudge { AccountHarnessScope.SubagentUse.note(run.harness, in: preferences) }
         if run.harness == .codex, run.permission == .readOnly {
             guard let provider = adapter as? any CodexCapabilityProviding else {

@@ -67,7 +67,7 @@ final class SidebarShellTests: XCTestCase {
             .taskResourceUsage, .importConversation, .importFromOtherApps, .refreshFromOtherApps, .installUpdate,
         ])
         XCTAssertEqual(menu.items.map(\.title), [
-            L10n.string("Settings…"), L10n.string("Accounts"), L10n.string("Connectors"), L10n.string("Remote"),
+            L10n.string("Settings…"), L10n.string("Harness Accounts"), L10n.string("Connectors"), L10n.string("Remote"),
             L10n.string("Harnesses"), Self.usage[0].line, Self.usage[1].line, L10n.string("Archived tasks"),
             L10n.string("Task Resource Usage"), L10n.string("Import conversation…"),
             L10n.string("Import Conversations from Other Apps…"), L10n.string("Refresh from the Claude App and Codex"),

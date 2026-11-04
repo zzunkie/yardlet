@@ -5,7 +5,7 @@ import XCTest
 
 /// The one account list in each of its four modes, drawn in an unshown window in both appearances
 /// into `.build/account-list-qa`: the new-task chip's popover, a task's account sheet, a limit
-/// card's "Continue with another account" and Settings › Accounts.
+/// card's "Continue with another account" and Settings › Harness Accounts.
 @MainActor final class AccountListRenderingTests: XCTestCase {
     private var roots: [URL] = []
 
@@ -39,7 +39,7 @@ import XCTest
         XCTAssertTrue(store.checkingKeys.isEmpty, "Drawing the lists checked nothing")
     }
 
-    /// Settings › Accounts with one address signed in to a personal and a team organization, and
+    /// Settings › Harness Accounts with one address signed in to a personal and a team organization, and
     /// the folders found with a login that are not saved yet; then the sheet that shows what linking
     /// a found Claude folder with its own history would change.
     func testSettingsNamesOrganizationsAndOffersFoldersFound() async throws {
@@ -193,7 +193,7 @@ import XCTest
         }
     }
 
-    /// Settings › Accounts' default Antigravity login, which the CLI keeps in one keychain item, so
+    /// Settings › Harness Accounts' default Antigravity login, which the CLI keeps in one keychain item, so
     /// another account means signing out and in again. Its row's menu offers both, as the Harnesses
     /// page does. The CLI signs out in its own terminal and stays open, so the console finishes when
     /// the probe reads the login signed out; signing in with another account then opens the CLI's
@@ -445,7 +445,7 @@ import XCTest
 
     /// The confirmation an account list's and a limit card's "Use a reset" opens, before the person
     /// confirms, after a reset was used, and after a use that got no answer.
-    /// Settings › Accounts with Antigravity CLI's plan limits as `agy --print /usage` reports them:
+    /// Settings › Harness Accounts with Antigravity CLI's plan limits as `agy --print /usage` reports them:
     /// a row for each model group's weekly limit.
     func testAntigravityPlanLimitsRenderInSettingsAccounts() throws {
         let directory = try WindowlessRender.directory("account-list-qa")

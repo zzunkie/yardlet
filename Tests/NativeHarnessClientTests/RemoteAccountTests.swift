@@ -5,8 +5,9 @@ import XCTest
 @testable import YardletRemote
 
 /// The Mac's side of the relay's accounts (docs/REMOTE_PROTOCOL.md §14.4, §12.1): signing in with PKCE
-/// in the browser sheet, putting this Mac on the account with a signature the relay can check, taking
-/// link requests only while signed in, and signing out. The relay is a stub on `relay.example.test`.
+/// in the browser sheet, with remote connections on or off, putting this Mac on the account with a
+/// signature the relay can check, taking link requests only while signed in, and signing out. The relay
+/// is a stub on `relay.example.test`.
 @MainActor
 final class RemoteAccountTests: XCTestCase {
     override func setUp() {
@@ -105,17 +106,20 @@ final class RemoteAccountTests: XCTestCase {
             defaults: defaults, environment: [:], interfaces: { [] }, resolveName: { _ in nil }, listens: false,
             macName: "MacBook Pro", appVersion: "test")
         await service.start()
-        service.setEnabled(true)
+        // Remote connections off: Settings › Yardlet Account reads the providers as it opens, and nothing
+        // else reaches the relay until the person signs in.
         StubRelay.providers = []
-        await service.refreshAccount()
-        XCTAssertFalse(service.showsAccount, "A relay without sign-in providers has no account row")
+        await service.refreshAccountPage()
+        XCTAssertEqual(service.accountProvidersRead, true)
+        XCTAssertEqual(service.accountProviders, [], "A relay without sign-in providers offers no sign-in")
         StubRelay.providers = ["github"]
-        await service.refreshAccount()
+        await service.refreshAccountPage()
         XCTAssertEqual(service.accountProviders, ["github"])
-        XCTAssertTrue(service.showsAccount)
         XCTAssertNil(service.account)
+        XCTAssertEqual(StubRelay.calls, ["GET /v1/auth/providers", "GET /v1/auth/providers"])
 
         await service.signIn(with: "github")
+        XCTAssertFalse(service.isEnabled, "Signing in leaves remote connections as they were")
         XCTAssertEqual(sheet?.path(), "/v1/auth/github/start")
         XCTAssertEqual(service.account?.name, "octocat")
         XCTAssertEqual(token.load(), "ACC.secret")
@@ -124,7 +128,16 @@ final class RemoteAccountTests: XCTestCase {
         XCTAssertTrue(registered.signatureValid, "The relay can check the Mac holds the room's key")
         XCTAssertEqual(registered.name, "MacBook Pro")
 
-        // Signed in: a phone of the account may ask to link.
+        // The next launch names the account before anything reaches the Keychain or the relay.
+        let relaunched = RemoteControlService(
+            bridge: FakeBridge(), deviceStore: RemoteDeviceStore(fileURL: nil), audit: nil, defaults: defaults,
+            environment: [:], interfaces: { [] }, resolveName: { _ in nil }, listens: false)
+        XCTAssertEqual(relaunched.account?.name, "octocat")
+        XCTAssertEqual(YardletAccountSettingsView.summary(relaunched), "GitHub · octocat")
+
+        // Signed in with remote connections on: a phone of the account may ask to link.
+        service.setEnabled(true)
+        await service.refreshAccount()
         let asking = try await PipePhone.link(server: service.server, macStatic: identity.noise, name: "Pixel 10")
         XCTAssertEqual(asking.reveal?.ok, true)
         await service.answerLink(approve: false)
@@ -132,6 +145,8 @@ final class RemoteAccountTests: XCTestCase {
         await service.signOut()
         XCTAssertNil(service.account)
         XCTAssertNil(token.load())
+        XCTAssertNil(defaults.data(forKey: RemoteControlService.accountKey), "Signing out leaves no account behind")
+        XCTAssertEqual(YardletAccountSettingsView.summary(service), L10n.string("Not signed in"))
         XCTAssertEqual(StubRelay.calls.suffix(2), ["DELETE /v1/account/macs/\(identity.room)", "POST /v1/auth/logout"])
         let refused = try await PipePhone.connect(server: service.server, macStatic: identity.noise, phoneKey: .generate(),
                                                   hello: RemoteHandshakeHello(name: "Pixel 11", link: true),

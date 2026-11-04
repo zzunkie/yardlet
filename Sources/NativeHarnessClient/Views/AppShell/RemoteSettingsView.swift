@@ -7,8 +7,9 @@ import YardletRemote
 /// Settings › Remote: the switch that lets a phone or Yardlet on another computer follow and drive this
 /// Mac's tasks, the switch for connecting from outside through the Yardlet relay, keeping the Mac awake on
 /// power, the paths a device can take now, pairing a device (a QR code or its link, once, for five
-/// minutes), a phone asking to link through the account, and the paired devices with how each is
-/// connected and a way to remove each (docs/REMOTE_PROTOCOL.md §11–§14). Rows follow Settings › General.
+/// minutes), a phone asking to link through the account (signed in to in Settings › Yardlet Account),
+/// and the paired devices with how each is connected and a way to remove each
+/// (docs/REMOTE_PROTOCOL.md §11–§14). Rows follow Settings › General.
 struct RemoteSettingsView: View {
     let service: RemoteControlService
     @State private var deviceToRemove: RemoteDevice?
@@ -47,10 +48,6 @@ struct RemoteSettingsView: View {
                     divider
                     row(icon: "network", title: L10n.string("Connections"), detail: reachText,
                         detailColor: canPair ? .secondary : .orange) { EmptyView() }
-                    if service.showsAccount {
-                        divider
-                        accountRow
-                    }
                 }
             }
             .padding(.horizontal, 12)
@@ -62,11 +59,7 @@ struct RemoteSettingsView: View {
             }
             devicesCard
         }
-        .task {
-            await service.reloadDevices()
-            // The relay may have gained or lost sign-in providers since the remote started.
-            await service.refreshAccount()
-        }
+        .task { await service.reloadDevices() }
     }
 
     private var divider: some View {
@@ -97,41 +90,6 @@ struct RemoteSettingsView: View {
     /// A switch's row, in the words the settings catalog gives it.
     private func row<Accessory: View>(setting: YardletSetting, @ViewBuilder accessory: () -> Accessory) -> some View {
         row(icon: setting.symbol, title: setting.title, detail: setting.detail ?? "", accessory: accessory)
-    }
-
-    /// Signed in: the account and Sign out. Signed out: a button per provider the relay offers.
-    private var accountRow: some View {
-        row(icon: "person.crop.circle", title: L10n.string("Account"), detail: accountText,
-            detailColor: service.accountError == nil ? .secondary : .orange) {
-            if service.account != nil {
-                Button(L10n.string("Sign out")) { Task { await service.signOut() } }
-                    .controlSize(.small)
-            } else {
-                HStack(spacing: 6) {
-                    ForEach(service.accountProviders, id: \.self) { provider in
-                        Button(L10n.format("Sign in with %@", Self.providerName(provider))) {
-                            Task { await service.signIn(with: provider) }
-                        }
-                        .controlSize(.small)
-                        .disabled(service.isSigningIn)
-                    }
-                }
-            }
-        }
-    }
-
-    private var accountText: String {
-        if let error = service.accountError { return error }
-        guard let account = service.account else { return L10n.string("Find this Mac from a new phone without the QR code.") }
-        return [Self.providerName(account.provider), account.name].compactMap { $0 }.joined(separator: " · ")
-    }
-
-    static func providerName(_ provider: String) -> String {
-        switch provider {
-        case "github": "GitHub"
-        case "google": "Google"
-        default: provider
-        }
     }
 
     /// A phone can reach this Mac some way now.
@@ -394,7 +352,7 @@ struct RemoteSettingsView: View {
     }
 }
 
-private struct RemoteSettingsIcon: View {
+struct RemoteSettingsIcon: View {
     let systemName: String
 
     var body: some View {
