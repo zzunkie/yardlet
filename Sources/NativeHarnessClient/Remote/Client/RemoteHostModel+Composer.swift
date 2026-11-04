@@ -48,7 +48,7 @@ final class RemoteComposerMentionIndex {
                       let path = response.workspaceRoot, path.hasPrefix("/") else { return nil }
                 let root = URL(filePath: path)
                 let safePaths = paths.filter {
-                    !$0.hasPrefix("/") && !$0.split(separator: "/").contains("..")
+                    !$0.isEmpty && !$0.hasPrefix("/") && !$0.split(separator: "/").contains { $0 == ".." || $0 == "." }
                 }
                 let entries = await Task.detached(priority: .userInitiated) {
                     WorkspaceFileRanking.entries(forFiles: safePaths)
@@ -73,10 +73,11 @@ final class RemoteComposerMentionIndex {
         return ComposerMentionEdit(caret: edit.caret)
     }
 
-    /// The ordinary host text path accepts quoted references without resolving client URLs.
+    /// The ordinary host text path accepts quoted references without resolving client URLs. They are relative to
+    /// the task's folder, so no host path lands in this Mac's drafts and a task in a new worktree reads its own copy.
     static func message(_ text: String, mentions: [WorkspaceFileMatch]) -> String {
         let references = mentions.map { match in
-            let path = match.url.path(percentEncoded: false)
+            let path = match.isDirectory && !match.relativePath.hasSuffix("/") ? match.relativePath + "/" : match.relativePath
             return "@\"" + path.replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "\"", with: "\\\"") + "\""
         }

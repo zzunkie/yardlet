@@ -2103,7 +2103,8 @@ composer with hosts that omit it. Existing requests and optional fields remain r
   it locally with the app's file picker. A new task uses `projectWorkspaceFiles` with `projectId`, returning
   the same `workspaceRoot`, `filePaths` and `filesLimited`. Only a visible project's existing primary folder
   can be listed; Chats and unknown projects are refused. Neither request grants general host filesystem browsing.
-  Host paths draw in the local mention chip and are sent as quoted references in the message; they never
+  Host paths draw in the local mention chip and are sent as quoted references relative to the listed folder, so
+  a task started in a new worktree reads its own copy; paths with `.` or `..` components are dropped. They never
   enter the client's local-file upload path (§15.20).
 - `newTaskOptions` accepts optional `composer: true` and `accountId` for the desktop's composer catalog.
   Optional `readCommands: true` reads user commands when the slash menu opens, not on every options refresh.
@@ -2111,7 +2112,8 @@ composer with hosts that omit it. Existing requests and optional fields remain r
   check before projecting the choices; it starts neither a sign-in nor a model turn.
   Its optional account choices contain display data only; `accountLine` is the host's automatic-account
   explanation for the selected model, drawn with the local explanation view. `createTask` takes optional `accountId` and
-  `confirmed`; an elevated permission choice requires confirmation, using the local control's wording.
+  `confirmed`; an elevated permission choice requires confirmation, using the local control's wording. The client
+  sends `confirmed: true` only after the person accepted every choice that asks.
   Choices apply to the created task and leave the host's home draft and selected account unchanged.
 
 The desktop shares the local file picker, command rows, connector menu, queue rows, permission and model

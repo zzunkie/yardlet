@@ -430,9 +430,11 @@ struct RemoteNewTaskView: View {
         let selectedWorktree = worktree
         let acceptsImages = chosenHarness?.acceptsImages == true
         let acceptsFiles = chosenHarness?.acceptsFiles == true
-        let confirmed = options?.settings?.filter { setting in
+        // Confirmed only when a choice that asks was actually shown and accepted; the host checks again.
+        let asking = (options?.settings ?? []).filter { setting in
             setting.choices.first { $0.value == settings[setting.id] }?.confirm != nil
-        }.allSatisfy { confirmedChoices[$0.id] == settings[$0.id] } == true
+        }
+        let confirmed = !asking.isEmpty && asking.allSatisfy { confirmedChoices[$0.id] == settings[$0.id] }
         isStarting = true
         Task {
             defer { isStarting = false }

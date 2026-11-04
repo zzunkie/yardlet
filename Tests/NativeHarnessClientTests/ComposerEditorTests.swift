@@ -63,7 +63,7 @@ final class ComposerEditorTests: XCTestCase {
             reads += 1
             var response = RemoteResponse(re: "mention", ok: true)
             response.workspaceRoot = "/host-only/project"
-            response.filePaths = ["Sources/Reader.swift", "../outside.txt", "/absolute.txt"]
+            response.filePaths = ["Sources/Reader.swift", "../outside.txt", "/absolute.txt", "./outside/dot.txt"]
             return response
         }
         let first = await index.search("Reader", key: "task-one", load: load)
@@ -72,6 +72,8 @@ final class ComposerEditorTests: XCTestCase {
         XCTAssertEqual(first.matches.first?.url.path, "/host-only/project/Sources/Reader.swift")
         XCTAssertFalse(second.matches.isEmpty)
         let outside = await index.search("outside", key: "task-one", load: load)
+        let dotted = await index.search("dot", key: "task-one", load: load)
+        XCTAssertTrue(dotted.matches.isEmpty)
         XCTAssertTrue(outside.matches.isEmpty)
         _ = await index.search("Reader", key: "task-two", load: load)
         XCTAssertEqual(reads, 2, "Each task owns its listing")
@@ -82,7 +84,7 @@ final class ComposerEditorTests: XCTestCase {
             XCTAssertEqual(draft.text, "Read")
             XCTAssertEqual(draft.hostMentions, first.matches)
             XCTAssertEqual(RemoteComposerMentionIndex.message(draft.text, mentions: draft.hostMentions),
-                           "Read\n@\"/host-only/project/Sources/Reader.swift\"")
+                           "Read\n@\"Sources/Reader.swift\"", "Mentions stay relative to the task's folder")
             XCTAssertTrue(draft.attachments.isEmpty, "Host paths must never enter the local upload path")
         }
     }
