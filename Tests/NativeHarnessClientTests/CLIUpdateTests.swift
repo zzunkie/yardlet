@@ -391,7 +391,8 @@ final class CLIUpdateTests: XCTestCase {
                        "The installer kept it, so Yardlet copied nothing")
     }
 
-    /// `agy` replaced itself between checks: Yardlet goes back to the copy it made before its last update.
+    /// `agy` replaced itself between checks: Yardlet goes back to the copy it made before its last
+    /// update, but only for a failure that copy does not share. A signed-out CLI fails every version.
     func testASelfUpdateBetweenChecksGoesBackToYardletsCopy() async throws {
         let agy = try executable("home/.local/bin/agy", version: "1.4.0")
         let runner = FakeCLIRunner { command in
@@ -399,7 +400,8 @@ final class CLIUpdateTests: XCTestCase {
                 ? Self.ok(Self.version(of: command.executable) ?? "?")
                 : Self.ok("Already on the latest version")
         }
-        let made = makeCenter(runtimes: [.antigravityCLI: agy], runner: runner, verifier: FakeVerifier(failing: ["1.5.0"]))
+        let verifier = FakeVerifier(failing: ["1.5.0"])
+        let made = makeCenter(runtimes: [.antigravityCLI: agy], runner: runner, verifier: verifier)
 
         await made.center.checkAll()
         XCTAssertEqual(runner.commands.map(\.arguments), [["--version"], ["update"], ["--version"]],
@@ -409,13 +411,52 @@ final class CLIUpdateTests: XCTestCase {
         XCTAssertTrue(copy.executable.hasSuffix("cli-previous/antigravity-cli/1.4.0/agy"), copy.executable)
         XCTAssertNil(made.center.notice)
 
+        // It replaced itself while signed out: Yardlet's copy fails the same way, so 1.4.12 is not blamed.
+        verifier.signedOut = true
+        try Self.writeExecutable(agy, version: "1.4.12")
+        await made.center.checkAll()
+        XCTAssertEqual(verifier.checkedVersions, ["1.4.0", "1.4.12", "1.4.0", "1.4.12"])
+        XCTAssertEqual(runner.commands.dropFirst(3).map(\.arguments), [["--version"]], "Nothing is updated meanwhile")
+        XCTAssertNil(made.overrides.entry(for: .antigravityCLI))
+        XCTAssertNil(made.center.record(for: .antigravityCLI)?.failedVersion)
+        XCTAssertEqual(made.center.record(for: .antigravityCLI)?.previous, copy)
+        XCTAssertNil(made.center.notice)
+        let unchecked = try XCTUnwrap(made.center.row(for: .antigravityCLI))
+        XCTAssertEqual(CLIUpdateRowPresentation(row: unchecked, held: nil).status, L10n.format(
+            "Yardlet could not check the current version, so it did not update it: %@", FakeVerifier.signInReason))
+
+        // Signed in again, 1.4.12 passes, and the copy to go back to is of 1.4.12.
+        verifier.signedOut = false
+        await made.center.checkAll()
+        XCTAssertEqual(made.center.record(for: .antigravityCLI)?.verifiedVersion, "1.4.12")
+        let working = try XCTUnwrap(made.center.record(for: .antigravityCLI)?.previous)
+        XCTAssertEqual(version(atPath: working.executable), "1.4.12")
+        XCTAssertNil(made.center.row(for: .antigravityCLI)?.outcome)
+
         try Self.writeExecutable(agy, version: "1.5.0")
         await made.center.checkAll()
         let held = try XCTUnwrap(made.overrides.entry(for: .antigravityCLI))
         XCTAssertEqual(held.failedVersion, "1.5.0")
-        XCTAssertEqual(held.target, copy.executable)
+        XCTAssertEqual(held.target, working.executable)
         XCTAssertEqual(URL(filePath: held.target).lastPathComponent, "agy", "Yardlet still recognizes the runtime")
-        XCTAssertEqual(made.center.notice, CLIUpdateNotice(harness: .antigravityCLI, failedVersion: "1.5.0", restoredVersion: "1.4.0"))
+        XCTAssertEqual(made.center.notice, CLIUpdateNotice(harness: .antigravityCLI, failedVersion: "1.5.0", restoredVersion: "1.4.12"))
+
+        // What an earlier Yardlet left after a signed-out check: 1.5.0 marked failed though it passed
+        // later, with nothing held and a copy of 1.5.0 kept. When it passes, the record says so.
+        let copyOf150 = try executable("cli-previous/antigravity-cli/1.5.0/agy", version: "1.5.0")
+        let left = CLIUpdateRecord(verifiedVersion: "1.4.12", verifiedExecutable: path(agy), failedVersion: "1.5.0",
+            previous: CLIPreviousVersion(version: "1.5.0", executable: path(copyOf150), isCopy: true))
+        made.overrides.set(nil, for: .antigravityCLI)
+        made.defaults.set(try JSONEncoder().encode([HarnessKind.antigravityCLI.rawValue: left]), forKey: CLIUpdateCenter.recordsKey)
+        let relaunched = makeCenter(runtimes: [.antigravityCLI: agy], runner: runner, verifier: FakeVerifier(),
+                                    defaults: made.defaults)
+        await relaunched.center.checkAll()
+        let healed = try XCTUnwrap(relaunched.center.record(for: .antigravityCLI))
+        XCTAssertEqual(healed.verifiedVersion, "1.5.0")
+        XCTAssertNil(healed.failedVersion)
+        XCTAssertEqual(healed.previous?.version, "1.5.0")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: url("cli-previous/antigravity-cli").path(percentEncoded: false)),
+                       ["1.5.0"], "Copies of versions no longer kept to go back to are removed")
 
         // In the app the copies live under `~/.yardlet/cli-previous`; a copy never updates itself.
         let kept = URL(filePath: "/Users/someone/.yardlet/cli-previous/antigravity-cli/1.4.0/agy")
@@ -523,8 +564,10 @@ final class CLIUpdateTests: XCTestCase {
         result = await quick.verify(.claudeCode, executable: silent)
         XCTAssertEqual(result, .failed(L10n.string("Timed out")))
 
+        // agy's own updater stays off while it is checked: it would replace the version under check.
         let agy = try script("agy", #"""
             [ "$1" = models ] || exit 2
+            [ "$AGY_CLI_DISABLE_AUTO_UPDATE" = true ] || exit 6
             printf 'gemini-3.8-flash-low\tGemini 3.8 Flash (low)\n'
             """#)
         result = await probe.verify(.antigravityCLI, executable: agy)
@@ -535,6 +578,7 @@ final class CLIUpdateTests: XCTestCase {
         // From the version Yardlet runs over ACP, `agy acp` has to answer `initialize` too.
         let agyACP = try script("agy-acp", #"""
             if [ "$1" = --version ]; then echo 1.4.12; exit 0; fi
+            [ "$AGY_CLI_DISABLE_AUTO_UPDATE" = true ] || exit 6
             if [ "$1" = models ]; then printf 'gemini-3.8-flash-low\tGemini 3.8 Flash (low)\n'; exit 0; fi
             [ "$1" = acp ] || exit 2
             read -r line; case "$line" in *'"method":"initialize"'*) ;; *) exit 3;; esac
@@ -621,10 +665,10 @@ final class CLIUpdateTests: XCTestCase {
         runner: FakeCLIRunner,
         verifier: FakeVerifier,
         busy: Box<Set<HarnessKind>> = Box([]),
-        sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { _ in throw CancellationError() }
+        sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { _ in throw CancellationError() },
+        defaults existing: UserDefaults? = nil
     ) -> (center: CLIUpdateCenter, overrides: CLIRuntimeOverrides, changed: Box<[HarnessKind]>, defaults: UserDefaults) {
-        let suite = testDefaultsSuite("CLIUpdateTests")
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = existing ?? UserDefaults(suiteName: testDefaultsSuite("CLIUpdateTests"))!
         let overrides = CLIRuntimeOverrides(defaults: defaults)
         let changed = Box<[HarnessKind]>([])
         let center = CLIUpdateCenter(dependencies: .init(
@@ -722,10 +766,14 @@ final class FakeCLIRunner: CLICommandRunning, @unchecked Sendable {
     }
 }
 
-/// Passes unless the executable it checks is one of the `failing` versions.
+/// Passes unless the executable it checks is one of the `failing` versions, or, while `signedOut`
+/// is set, fails every version the way a signed-out `agy models` does.
 final class FakeVerifier: CLIVerifying, @unchecked Sendable {
+    static let signInReason = "Error: Please sign in to view available models. Launch the CLI without arguments to sign in."
+
     private let lock = NSLock()
     private var log: [String] = []
+    private var isSignedOut = false
     private let failing: Set<String>
     private let verifiable: Set<HarnessKind>
 
@@ -736,12 +784,18 @@ final class FakeVerifier: CLIVerifying, @unchecked Sendable {
 
     var checkedVersions: [String] { lock.withLock { log } }
 
+    var signedOut: Bool {
+        get { lock.withLock { isSignedOut } }
+        set { lock.withLock { isSignedOut = newValue } }
+    }
+
     func canVerify(_ harness: HarnessKind) -> Bool { verifiable.contains(harness) }
 
     func verify(_ harness: HarnessKind, executable: URL) async -> CLIVerification {
         let text = (try? String(contentsOf: executable.resolvingSymlinksInPath(), encoding: .utf8)) ?? ""
         let version = text.range(of: #"(?<=# version )\S+"#, options: .regularExpression).map { String(text[$0]) } ?? "?"
         lock.withLock { log.append(version) }
+        if signedOut { return .failed(Self.signInReason) }
         return failing.contains(version) ? .failed("refused") : .passed
     }
 }

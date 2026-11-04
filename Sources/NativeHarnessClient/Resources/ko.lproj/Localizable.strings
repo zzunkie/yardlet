@@ -2120,7 +2120,7 @@
 "%1$@ did not pass Yardlet's check, so Yardlet runs %2$@" = "%1$@ 버전이 Yardlet 확인을 통과하지 못해 %2$@ 버전을 씁니다";
 "Updated from %1$@ to %2$@" = "%1$@에서 %2$@ 버전으로 업데이트했습니다";
 "%@ did not pass Yardlet's check" = "%@ 버전이 Yardlet 확인을 통과하지 못했습니다";
-"Yardlet could not check the current version, so it did not update it" = "Yardlet이 지금 버전을 확인하지 못해 업데이트하지 않았습니다";
+"Yardlet could not check the current version, so it did not update it: %@" = "Yardlet이 지금 버전을 확인하지 못해 업데이트하지 않았습니다: %@";
 "Update failed: %@" = "업데이트하지 못했습니다: %@";
 "Updated with the %@ app" = "%@ 앱과 함께 업데이트됩니다";
 "Update it yourself" = "직접 업데이트하세요";

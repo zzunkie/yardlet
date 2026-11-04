@@ -2120,7 +2120,7 @@
 "%1$@ did not pass Yardlet's check, so Yardlet runs %2$@" = "%1$@ did not pass Yardlet's check, so Yardlet runs %2$@";
 "Updated from %1$@ to %2$@" = "Updated from %1$@ to %2$@";
 "%@ did not pass Yardlet's check" = "%@ did not pass Yardlet's check";
-"Yardlet could not check the current version, so it did not update it" = "Yardlet could not check the current version, so it did not update it";
+"Yardlet could not check the current version, so it did not update it: %@" = "Yardlet could not check the current version, so it did not update it: %@";
 "Update failed: %@" = "Update failed: %@";
 "Updated with the %@ app" = "Updated with the %@ app";
 "Update it yourself" = "Update it yourself";
