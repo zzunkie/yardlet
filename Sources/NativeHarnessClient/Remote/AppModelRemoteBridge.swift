@@ -50,6 +50,8 @@ final class AppModelRemoteBridge: RemoteBridge {
     var watchedRails: Set<UUID> = []
     var railWatches: Set<UUID> = []
     var railCache: [UUID: (key: String, git: SessionRailGitInfo, sources: TaskInstructionSources)] = [:]
+    /// The `run_agent` calls each watched rail read, so a read reads only the calls that changed.
+    var railAgentCalls: [UUID: SessionRailAgents.Calls] = [:]
     var railTimers: [UUID: Task<Void, Never>] = [:]
     var remoteFilePreviews: [String: FileRewindPreview] = [:]
     var answeredSettings: [UUID: [RemoteSetting]] = [:]

@@ -13,9 +13,14 @@ enum ConversationAgentRunProjection {
     /// A shared-transcript call (Claude Code, ACP, Antigravity) to `run_agent`.
     static func subagent(from activity: HarnessActivity, phase: ConversationItemPhase,
                          isApproved: Bool) -> ConversationSubagent? {
-        guard activity.subtask == nil, activity.diff == nil,
-              isRunAgent(activity.kind) || isRunAgent(activity.title) else { return nil }
+        guard isRunAgentCall(activity) else { return nil }
         return subagent(arguments: arguments(in: activity.input), result: activity.output, isApproved: isApproved)
+    }
+
+    /// Whether a shared-transcript call is to `run_agent`, told by its name alone: its input, which
+    /// holds the prompt, is not read.
+    static func isRunAgentCall(_ activity: HarnessActivity) -> Bool {
+        activity.subtask == nil && activity.diff == nil && (isRunAgent(activity.kind) || isRunAgent(activity.title))
     }
 
     /// A Codex MCP call to the `yardlet` server's `run_agent`.

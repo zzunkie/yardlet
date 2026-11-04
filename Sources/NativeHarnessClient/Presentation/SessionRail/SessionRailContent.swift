@@ -174,6 +174,7 @@ struct SessionRailContent: Equatable {
     ///   - codexPlan: a Codex task's latest plan (`turn/plan/updated`).
     ///   - suggestionResolution: what became of each of the task's suggestions, as its chips read it;
     ///     nil where nothing can start one (the rail then lists none).
+    ///   - agentCalls: the `run_agent` calls this rail read before, kept between its draws.
     static func make(
         session: SessionRecord,
         projectName: String,
@@ -191,6 +192,7 @@ struct SessionRailContent: Equatable {
         codexChanges: [CodexChangeHandoff] = [],
         codexState: CodexTaskState? = nil,
         agentRuns: [SessionRailAgents.Run] = [],
+        agentCalls: SessionRailAgents.Calls = SessionRailAgents.Calls(),
         childTasks: [SessionRailAgents.Child] = [],
         backgroundTerminals: [CodexBackgroundTerminal] = [],
         sessionJobs: [ClaudeSessionJob] = [],
@@ -234,7 +236,7 @@ struct SessionRailContent: Equatable {
             progress: plan.flatMap { $0.steps.isEmpty ? nil : Progress(plan: $0) },
             changes: hasChanges ? changes : nil,
             agents: SessionRailAgents.make(harness: session.harness, entries: entries, codexState: codexState,
-                                           runs: agentRuns, children: childTasks),
+                                           runs: agentRuns, calls: agentCalls, children: childTasks),
             suggestions: suggestionResolution.map { resolution in
                 ConversationTaskSuggestionProjection.suggestions(in: entries, codexState: codexState)
                     .filter { resolution($0.id) == nil }
@@ -250,14 +252,15 @@ struct SessionRailContent: Equatable {
     /// request that waits, and the calls that are a provider's subtasks and agents, Yardlet's
     /// subagents, task suggestions or files written whole. Whatever `make` and the composer read of a
     /// transcript is among these, so a long conversation gives them its few such entries
-    /// (`TranscriptTurns.railEntries`) instead of all of them.
+    /// (`TranscriptTurns.railEntries`) instead of all of them. A running turn is read again on each of
+    /// its publications, so a `run_agent` call is told by its name, without reading its prompt.
     static func reads(_ entry: TranscriptEntry) -> Bool {
         switch entry.content {
         case .plan, .permission(_, .pending):
             return true
         case let .activity(activity, state):
             if activity.subtask != nil || SessionRailAgents.claudeAgentTools.contains(activity.kind)
-                || ConversationAgentRunProjection.subagent(from: activity, phase: .running, isApproved: false) != nil {
+                || ConversationAgentRunProjection.isRunAgentCall(activity) {
                 return true
             }
             guard state == .completed else { return false }

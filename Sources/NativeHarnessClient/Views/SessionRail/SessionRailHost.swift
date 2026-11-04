@@ -106,6 +106,8 @@ struct SessionRailHost: View {
     @State private var backgroundTerminals: [CodexBackgroundTerminal] = []
     @State private var instructionSources: TaskInstructionSources?
     @State private var account: SessionRailAccount?
+    /// The `run_agent` calls the rail read, so a draw reads only the calls that changed.
+    @State private var agentCalls = SessionRailAgents.Calls()
     /// The task's chips' actions: the rail lists the suggestions they have not resolved, and acts as they do.
     @Environment(\.taskSuggestionActions) private var suggestionActions
     @AppStorage(PullRequestAutoFixPrompt.preferenceKey) private var autoFixPrompt = PullRequestAutoFixPrompt.ask.rawValue
@@ -124,6 +126,7 @@ struct SessionRailHost: View {
             codexChanges: codexChanges,
             codexState: codexState,
             agentRuns: services.agents.agentRuns(),
+            agentCalls: agentCalls,
             childTasks: services.agents.childTasks(),
             backgroundTerminals: backgroundTerminals,
             sessionJobs: services.agents.sessionJobs(),
