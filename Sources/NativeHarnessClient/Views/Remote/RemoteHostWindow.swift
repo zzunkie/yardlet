@@ -55,6 +55,18 @@ struct RemoteHostWindow: View {
         // A closed window ends its connection; reopening it connects again.
         .onDisappear { if let hostID { directory.close(hostID) } }
     }
+
+    /// Brings the host's open window forward, out of the Dock if it was minimized.
+    @MainActor
+    static func bringForward(hostName: String?) {
+        let candidates = NSApp.windows.filter {
+            $0.identifier?.rawValue.hasPrefix(Self.sceneID) == true && $0.canBecomeMain
+        }
+        guard let window = candidates.first(where: { $0.title == hostName })
+            ?? (candidates.count == 1 ? candidates.first : nil) else { return }
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil)
+    }
 }
 
 /// The window's content once its host is known, in this Mac's own window shell: the sidebar column with the title bar's
@@ -235,8 +247,7 @@ struct RemoteHostView: View {
     }
 
     private var needsAttention: Bool {
-        let mirror = model.sidebar
-        return TaskAttentionProjection.count(in: mirror.sessions, details: mirror.details) > 0
+        model.attentionBadgeCount > 0
     }
 
     // MARK: Detail
@@ -563,12 +574,16 @@ private struct RemotePresence: ViewModifier {
     func body(content: Content) -> some View {
         content
             .task(id: activeState == .key) {
+                model.isWindowInFront = activeState == .key
                 while !Task.isCancelled {
                     model.setPresence(activeState == .key && UserIdleTime.seconds < Self.idleLimit)
                     try? await Task.sleep(for: Self.checkInterval)
                 }
             }
-            .onDisappear { model.setPresence(false) }
+            .onDisappear {
+                model.isWindowInFront = false
+                model.setPresence(false)
+            }
     }
 }
 

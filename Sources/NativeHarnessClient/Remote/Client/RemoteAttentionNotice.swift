@@ -13,9 +13,11 @@ enum RemoteAttentionNotice {
         "yardlet.remote.\(hostID).\(taskID)"
     }
 
-    /// The notification to take back: the task's own, once it no longer waits and nothing replaces it.
+    /// The notification to take back: the task's own, once it no longer waits or stays unread and nothing replaces it.
     static func withdrawn(hostID: String, event: RemoteEvent) -> String? {
-        guard let taskID = event.taskId, event.previousState == .waiting, event.state != .waiting,
+        guard let taskID = event.taskId,
+              event.previousState == .waiting || event.previousState == .unread,
+              event.state != .waiting,
               notification(hostID: hostID, hostName: "", event: event) == nil else { return nil }
         return identifier(hostID: hostID, taskID: taskID)
     }

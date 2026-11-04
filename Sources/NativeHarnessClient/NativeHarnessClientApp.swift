@@ -494,23 +494,7 @@ struct NativeHarnessClientApp: App {
                     appDelegate.model = model
                     if !model.usesVisualFixture {
                         appDelegate.remoteHosts = remoteHosts
-                        model.openRemoteTask = { [remoteHosts] hostID, taskID in remoteHosts.reveal(hostID: hostID, taskID: taskID) }
-                        model.allowRemoteOnce = { [remoteHosts] hostID, taskID, requestID in
-                            await remoteHosts.allowOnce(hostID: hostID, taskID: taskID, requestID: requestID)
-                        }
-                        remoteHosts.onAttention = { [weak model] host, event in
-                            if let model, let withdrawn = RemoteAttentionNotice.withdrawn(hostID: host.id, event: event) {
-                                model.systemNotificationCenter.removeNotifications(identifiers: [withdrawn])
-                                return
-                            }
-                            // The task shown in the window in front needs no notification.
-                            if NSApp.isActive, NSApp.keyWindow?.identifier?.rawValue.hasPrefix(RemoteHostWindow.sceneID) == true,
-                               host.selection == .task(event.taskId ?? "") { return }
-                            guard let model, let notice = RemoteAttentionNotice.notification(
-                                hostID: host.id, hostName: host.name, event: event,
-                                offersAllowOnce: host.offersAllowOnce(event)) else { return }
-                            Task { await model.systemNotificationCenter.post(notice) }
-                        }
+                        model.followRemoteHosts(remoteHosts)
                     }
                     if !model.usesVisualFixture, appDelegate.workActivity.lidHelper == nil {
                         let lidHelper = LidSleepHelper.live()

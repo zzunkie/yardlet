@@ -17,6 +17,7 @@ extension RemoteHostModel {
             showBrowser(taskID: taskID, tabID: String(action.id.dropFirst(RemoteTurnProjection.Route.showTab.count)))
         case let .providerAction(action):
             send(answer(action, taskID: taskID, requestID: requestID))
+            onWithdrawTaskNotification?(taskID)
         case let .decision(decision):
             if item.requestKind == "planReview" {
                 send(.reviewPlan(taskID: taskID, requestID: requestID, decision: decision == .deny ? .keepPlanning : .approve,
@@ -24,10 +25,13 @@ extension RemoteHostModel {
             } else {
                 send(.answerApproval(taskID: taskID, requestID: requestID, answer: decision == .deny ? .deny : .allowOnce))
             }
+            onWithdrawTaskNotification?(taskID)
         case let .answer(.denial(reason)):
             send(.reviewPlan(taskID: taskID, requestID: requestID, decision: .keepPlanning, reason: reason))
+            onWithdrawTaskNotification?(taskID)
         case let .answer(.questions(answers)):
             send(.answerQuestion(taskID: taskID, requestID: requestID, answers: Self.answers(answers, steps: item.questionSteps ?? [])))
+            onWithdrawTaskNotification?(taskID)
         case let .codex(.toolUserInput(answers)):
             let steps = item.questionSteps ?? []
             send(.answerQuestion(taskID: taskID, requestID: requestID, answers: steps.map { step in
@@ -36,11 +40,13 @@ extension RemoteHostModel {
                     ? RemoteQuestionAnswer(questionId: step.id, options: [value])
                     : RemoteQuestionAnswer(questionId: step.id, text: value)
             }))
+            onWithdrawTaskNotification?(taskID)
         case let .codex(.mcpElicitation(.accept, content?, _)) where RemoteTurnProjection.submitChoice(item) != nil:
             // The form's Submit: the host's own Submit, with the values the card checked.
             let submit = RemoteTurnProjection.submitChoice(item)?.id ?? ""
             send(.chooseAnswer(taskID: taskID, requestID: requestID, choice: submit,
                                values: RemoteTurnProjection.formValues(content)))
+            onWithdrawTaskNotification?(taskID)
         case .codex, .structured:
             commandError = L10n.format("Answer this on %@.", name)
         }
@@ -52,7 +58,7 @@ extension RemoteHostModel {
     func offersAllowOnce(_ event: RemoteEvent) -> Bool {
         guard event.state == .waiting, event.pendingRequest == .approval, let taskID = event.taskId,
               let requestID = event.requestId else { return false }
-        if let kind = task(taskID)?.pendingKind, kind != "approval" { return false }
+        if let kind = event.pendingKind ?? task(taskID)?.pendingKind, kind != "approval" { return false }
         if let item = conversations[taskID]?.pendingRequest(requestID) {
             return (item.options ?? []).contains(RemoteApprovalAnswer.allowOnce.rawValue)
         }
@@ -68,6 +74,7 @@ extension RemoteHostModel {
         if let item = conversations[taskID]?.pendingRequest(requestID),
            !(item.options ?? []).contains(RemoteApprovalAnswer.allowOnce.rawValue) { return false }
         let response = await response(to: .answerApproval(taskID: taskID, requestID: requestID, answer: .allowOnce))
+        if response.ok { onWithdrawTaskNotification?(taskID) }
         return response.ok
     }
 

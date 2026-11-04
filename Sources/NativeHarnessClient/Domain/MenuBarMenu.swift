@@ -28,11 +28,14 @@ struct MenuBarMenu: Equatable, Sendable {
         let sessionID: UUID
         /// The task's title, cut as the Codex menu cuts it (`MenuBarMenuProjection.menuTitle`).
         let title: String
-        /// Its project, or "Chats" for a chat (Codex `sublabel`: the project or `projectlessThreads`).
+        /// Its project, or "Chats" for a chat (Codex `sublabel`: the project or `projectlessThreads`),
+        /// with the host's name before it for a task on another Mac.
         let subtitle: String
         /// The mark the task's sidebar row ends with (`SidebarTaskIndicatorProjection.status`); nil for
         /// a task with nothing to show.
         var status: SidebarTaskStatus? = nil
+        /// Another Mac's ID and task ID when the row comes from an open host window.
+        var remoteTask: RemoteTaskReveal? = nil
     }
 
     struct Section: Equatable, Sendable {
@@ -113,6 +116,16 @@ enum MenuBarMenuProjection {
     /// The longest title shown whole (Codex `DXe`); a longer one keeps 34 characters and "…".
     static let titleLimit = 35
 
+    /// An open host window's mirrored tasks for the menu bar: its tasks that need the person (`waiting`
+    /// and `unread`) are listed under Running and Unread with the host's name in their subtitle.
+    struct RemoteHostTasks {
+        let hostID: String
+        let hostName: String
+        let sessions: [SessionRecord]
+        let details: [UUID: TaskAttentionDetail]
+        let place: (SessionRecord) -> String
+    }
+
     /// The menu for the tasks the sidebar lists. Attention follows the one definition the sidebar,
     /// `⌥⌘A`, the activity view and the Dock badge read (`TaskAttentionProjection`), in its order:
     ///
@@ -129,6 +142,7 @@ enum MenuBarMenuProjection {
         details: [UUID: TaskAttentionDetail] = [:],
         shellBusy: Set<UUID> = [],
         place: (SessionRecord) -> String,
+        remoteHosts: [RemoteHostTasks] = [],
         usage: [MenuBarMenu.UsageAccount] = []
     ) -> MenuBarMenu {
         func row(_ session: SessionRecord) -> MenuBarMenu.TaskRow {
@@ -137,27 +151,54 @@ enum MenuBarMenuProjection {
                 status: SidebarTaskIndicatorProjection.status(
                     of: session, detail: details[session.id], isShellBusy: shellBusy.contains(session.id)))
         }
+        func remoteRow(_ session: SessionRecord, in host: RemoteHostTasks) -> MenuBarMenu.TaskRow {
+            let subtitle = [host.hostName, host.place(session)].filter { !$0.isEmpty }.joined(separator: " · ")
+            return MenuBarMenu.TaskRow(
+                sessionID: session.id, title: menuTitle(session.title), subtitle: subtitle,
+                status: SidebarTaskIndicatorProjection.status(of: session, detail: host.details[session.id]),
+                remoteTask: RemoteTaskReveal(hostID: host.hostID, taskID: session.id.uuidString))
+        }
         let listed = TaskAttentionProjection.activityList(in: sessions, details: details, shellBusy: shellBusy)
         func state(_ session: SessionRecord) -> TaskAttentionState {
             TaskAttentionProjection.state(of: session, detail: details[session.id],
                                           isShellBusy: shellBusy.contains(session.id))
         }
-        let running = listed.filter { state($0) != .unread }
-        let unread = listed.filter { state($0) == .unread }
-        let unreadIDs = Set(unread.map(\.id))
+        func order(_ lhs: (SessionRecord, MenuBarMenu.TaskRow), _ rhs: (SessionRecord, MenuBarMenu.TaskRow)) -> Bool {
+            if lhs.0.updatedAt != rhs.0.updatedAt { return lhs.0.updatedAt > rhs.0.updatedAt }
+            return lhs.0.id.uuidString < rhs.0.id.uuidString
+        }
+        var waitingEntries = listed.filter { state($0) == .waiting }.map { ($0, row($0)) }
+        var unreadEntries = listed.filter { state($0) == .unread }.map { ($0, row($0)) }
+        for host in remoteHosts {
+            for session in host.sessions {
+                switch TaskAttentionProjection.state(of: session, detail: host.details[session.id]) {
+                case .waiting:
+                    waitingEntries.append((session, remoteRow(session, in: host)))
+                case .unread:
+                    unreadEntries.append((session, remoteRow(session, in: host)))
+                case .active, .idle:
+                    break
+                }
+            }
+        }
+        waitingEntries.sort(by: order)
+        unreadEntries.sort(by: order)
+        let activeRows = listed.filter { state($0) == .active }.map(row)
+        let runningRows = waitingEntries.map(\.1) + activeRows
+        let unreadRows = unreadEntries.map(\.1)
+        let unreadIDs = Set(listed.filter { state($0) == .unread }.map(\.id))
         let byRecency = sessions.sorted { lhs, rhs in
             if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
             return lhs.id.uuidString < rhs.id.uuidString
         }
-        let pinned = byRecency.filter { pinnedIDs.contains($0.id) }
-        let recent = byRecency.filter { !pinnedIDs.contains($0.id) && !unreadIDs.contains($0.id) }
+        let pinned = byRecency.filter { pinnedIDs.contains($0.id) }.map(row)
+        let recent = byRecency.filter { !pinnedIDs.contains($0.id) && !unreadIDs.contains($0.id) }.map(row)
 
-        let lists: [(MenuBarMenu.SectionKind, [SessionRecord])] = [
-            (.running, running), (.unread, unread), (.pinned, pinned), (.recent, recent),
+        let lists: [(MenuBarMenu.SectionKind, [MenuBarMenu.TaskRow])] = [
+            (.running, runningRows), (.unread, unreadRows), (.pinned, pinned), (.recent, recent),
         ]
-        let sections = lists.compactMap { kind, sessions -> MenuBarMenu.Section? in
-            guard !sessions.isEmpty else { return nil }
-            let rows = sessions.map(row)
+        let sections = lists.compactMap { kind, rows -> MenuBarMenu.Section? in
+            guard !rows.isEmpty else { return nil }
             return MenuBarMenu.Section(kind: kind, rows: Array(rows.prefix(rowsPerSection)),
                                        more: Array(rows.dropFirst(rowsPerSection)))
         }

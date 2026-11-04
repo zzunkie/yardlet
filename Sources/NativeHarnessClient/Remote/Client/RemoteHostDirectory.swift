@@ -30,6 +30,8 @@ final class RemoteHostDirectory {
     }
 
     private(set) var hosts: [RemoteSavedHost]
+    /// The host IDs whose windows are open now.
+    private(set) var openHostIDs: Set<String> = []
     /// A connection link opened with Yardlet, for the connect window's field; nothing pairs until the person
     /// chooses Connect there.
     var openedLink: String?
@@ -47,6 +49,8 @@ final class RemoteHostDirectory {
     @ObservationIgnored private let discovery: RemoteHostDiscovery?
     /// Each host's `attention` events, for notifications.
     @ObservationIgnored var onAttention: ((RemoteHostModel, RemoteEvent) -> Void)?
+    /// Each host's withdrawn task notifications (hostID, taskID).
+    @ObservationIgnored var onWithdrawTaskNotification: ((String, String) -> Void)?
 
     init(store: RemoteHostStore, keys: any RemoteClientKeyStoring, hello: RemoteHandshakeHello,
          session: URLSession = .shared, timing: RemoteHostConnection.Timing = .init(), cacheRoot: URL? = nil,
@@ -66,6 +70,17 @@ final class RemoteHostDirectory {
         hosts.first { $0.id == id }
     }
 
+    /// The models of the host windows that are open now, in `hosts` order.
+    var openModels: [RemoteHostModel] {
+        _ = openHostIDs
+        return hosts.compactMap { models[$0.id] }
+    }
+
+    /// The tasks that need the person across the host windows that are open now.
+    var attentionBadgeCount: Int {
+        openModels.reduce(0) { $0 + $1.attentionBadgeCount }
+    }
+
     /// The model of a host's window, connecting from now on; nil for a host no longer saved.
     func model(for hostID: String) -> RemoteHostModel? {
         if let model = models[hostID] { return model }
@@ -77,7 +92,11 @@ final class RemoteHostDirectory {
             guard let self, let model else { return }
             onAttention?(model, event)
         }
+        model.onWithdrawTaskNotification = { [weak self] taskID in
+            self?.onWithdrawTaskNotification?(hostID, taskID)
+        }
         models[hostID] = model
+        openHostIDs.insert(hostID)
         model.start()
         return model
     }
@@ -103,7 +122,11 @@ final class RemoteHostDirectory {
 
     /// The host's window closed: its connection ends.
     func close(_ hostID: String) {
-        models.removeValue(forKey: hostID)?.stop()
+        if let model = models.removeValue(forKey: hostID) {
+            for task in model.tasks { onWithdrawTaskNotification?(hostID, task.id) }
+            model.stop()
+        }
+        openHostIDs.remove(hostID)
         hosts = store.all()
     }
 
@@ -146,7 +169,11 @@ final class RemoteHostDirectory {
         } else if models[hostID] == nil, let target = store.host(hostID)?.target, let key = keys.load(hostID: hostID) {
             await Self.askToForget(target: target, key: key, hello: hello, session: session, timing: timing)
         }
-        models.removeValue(forKey: hostID)?.stop()
+        if let model = models.removeValue(forKey: hostID) {
+            for task in model.tasks { onWithdrawTaskNotification?(hostID, task.id) }
+            model.stop()
+        }
+        openHostIDs.remove(hostID)
         if let folder = cacheRoot.flatMap({ RemoteHostCache.folder(in: $0, hostID: hostID) }) { RemoteHostCache.remove(folder) }
         keys.delete(hostID: hostID)
         store.remove(hostID)

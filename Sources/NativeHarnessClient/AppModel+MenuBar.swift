@@ -12,6 +12,7 @@ extension AppModel {
             details: taskAttentionDetails,
             shellBusy: shellBusySessionIDs,
             place: taskPlaceNames(),
+            remoteHosts: remoteMenuBarHostTasks(),
             usage: connections.usageLines(now: now)
         )
         menu.usageToday = tokenUsage.todayLine
@@ -27,6 +28,13 @@ extension AppModel {
     func openTaskFromMenuBar(_ sessionID: UUID) async {
         await handleNotificationResponse(SystemNotificationResponse(
             target: SystemNotificationTarget(sessionID: sessionID), action: .open))
+    }
+
+    /// A task of another Mac chosen in the menu: that Mac's window comes forward on the task, as its
+    /// notification click does.
+    func openRemoteTaskFromMenuBar(_ remote: RemoteTaskReveal) async {
+        await handleNotificationResponse(SystemNotificationResponse(
+            target: SystemNotificationTarget(remoteTask: remote), action: .open))
     }
 
     /// Checks the accounts the Usage lines show, for a menu or screen that shows them as it opens.

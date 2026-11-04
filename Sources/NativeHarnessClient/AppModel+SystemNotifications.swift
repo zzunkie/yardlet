@@ -29,7 +29,11 @@ extension AppModel {
         // And a task of another Mac, which opens in that Mac's window; "Allow once" answers there first.
         if let remote = response.target.remoteTask {
             if response.action == .allowOnce, let requestID = response.target.requestID,
-               await allowRemoteOnce?(remote.hostID, remote.taskID, requestID) == true { return }
+               await allowRemoteOnce?(remote.hostID, remote.taskID, requestID) == true {
+                withdrawRemoteTaskNotification(hostID: remote.hostID, taskID: remote.taskID)
+                return
+            }
+            withdrawRemoteTaskNotification(hostID: remote.hostID, taskID: remote.taskID)
             applicationAttention?.bringForward()
             return openRemoteTask?(remote.hostID, remote.taskID) ?? ()
         }
@@ -181,6 +185,7 @@ extension AppModel {
     /// How many tasks need the person, the Dock badge's number.
     var attentionBadgeCount: Int {
         TaskAttentionProjection.count(in: sidebarSessions, details: taskAttentionDetails, shellBusy: shellBusySessionIDs)
+            + remoteAttentionBadgeCount
     }
 
     /// Keeps the Dock badge on `attentionBadgeCount` as tasks change.

@@ -2505,11 +2505,17 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   when it changed. Nothing listens and nothing runs while no host window is open. Removing a host sends
   `forgetDevice` (§15.6) when the host can be reached and deletes all three; a cache folder whose host is no longer
   saved is removed when Yardlet starts.
-- **Notifications:** while a host's window is open, a task that starts waiting, finishes or fails posts a notification
-  named after the host, which opens the task there. A finish with `announces: false` (§5.2) posts none, and a task
-  that stops waiting takes its notification back, as the host's own notifications do. An approval's offers "Allow once", sent as `answerApproval`
+- **Notifications, Dock badge and menu bar:** while a host's window is open, its tasks that need the person count in
+  this Mac's Dock badge alongside this Mac's own tasks and appear in this Mac's menu bar item under Running (while
+  waiting) and Unread, labeled with the host's name; choosing one brings that host's window forward with the task
+  selected. A task that starts waiting, finishes or fails posts a notification named after the host (unless it is the
+  task shown in the window in front), following this Mac's notification authorization, and a new approval while Yardlet
+  is behind other apps bounces the Dock icon once. A finish with `announces: false` (§5.2) posts none, and a task that
+  stops waiting, is answered, is read, or leaves the host's list takes its notification back, as the host's own
+  notifications do. An approval's offers "Allow once", sent as `answerApproval`
   `allowOnce` (§4.4): the host answers with its card's narrowest allow, as its own notification does, and where it
-  does not take it the notification opens the task.
+  does not take it the notification opens the task. Closing the host window ends its connection and removes its tasks
+  from this Mac's Dock badge and menu bar.
 - **In use:** a host whose snapshot carries `presence: true` takes `{"type": "presence", "active": true}` (or `false`);
   the answer is `ok`. The client says `true` while the host's window is in front and the person typed, clicked or
   moved the pointer in the last two minutes, and `false` once not, telling only a change and again after each new

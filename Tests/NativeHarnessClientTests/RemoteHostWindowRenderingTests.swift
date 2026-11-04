@@ -23,6 +23,8 @@ import XCTest
 ///   and pull-request checks on the shared rail; `comparison-rail-facts-*.png` puts them side by side.
 /// - `remote-home-facts-*.png` and `local-home-facts-*.png`: the same answer line and finished-today count;
 ///   `comparison-home-facts-*.png` puts the local home on the left and the remote home on the right.
+/// - `remote-attention-menu-*.png` and `local-attention-menu-*.png`: the Dock badge count, activity toggle and menu
+///   bar menu with the host's waiting and unread tasks; `comparison-attention-menu-*.png` puts them side by side.
 /// - `remote-form-*.png` and `local-form-*.png`: a Codex MCP form's card, the remote one read from what the host
 ///   sends for it.
 /// - In full detail (§15.24), `remote-full-*.png` and `local-full-*.png`: `answer`, an answer past the phone's 32,000
@@ -1832,6 +1834,133 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
 
         model.unwatchHostAccounts()
         hosts.close(paired.id)
+        await host.shutdown()
+    }
+
+    func testDockBadgeAndMenuBarItemsDrawFromTheSameHost() async throws {
+        let now = Date(timeIntervalSince1970: 1_792_158_000)
+        let folder = URL(filePath: "/tmp/remote-attention-render/yardlet", directoryHint: .isDirectory)
+        let approval = SessionRecord(
+            harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+            title: "Approve the index migration", titleOrigin: .provider, status: .waitingForApproval,
+            updatedAt: now.addingTimeInterval(-60), hasUnreadUpdate: true
+        )
+        let unread = SessionRecord(
+            harness: .codex, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/codex"),
+            title: "Summarize the crash reports", titleOrigin: .provider, status: .completed,
+            updatedAt: now.addingTimeInterval(-120), hasUnreadUpdate: true, completionState: .completed
+        )
+        let failed = SessionRecord(
+            harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+            title: "Fix the flaky sampler test", titleOrigin: .provider, status: .failed,
+            updatedAt: now.addingTimeInterval(-180), hasUnreadUpdate: true, completionState: .failed
+        )
+        let hostDefaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteAttentionHost")))
+        let host = AppModel(
+            store: SessionStore(sessions: [approval, unread, failed],
+                                repository: InMemorySessionRepository(sessions: [approval, unread, failed])),
+            runtimeSelections: RuntimeSelectionStore(defaults: hostDefaults, discoversRuntimes: false, loadsPersistedSelections: false),
+            initialTranscripts: [
+                approval.id: [
+                    TranscriptEntry(content: .permission(
+                        PermissionRequest(id: "bash-1", title: "Bash", detail: nil, command: "swift test"),
+                        state: .pending
+                    ))
+                ]
+            ],
+            preferences: hostDefaults,
+            restoresIndexOnLaunch: false
+        )
+        host.projects.rename(host.projects.ensureProject(forRoot: folder).id, to: "Yardlet")
+
+        let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(model: host))
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                        name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let clientDefaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteAttentionClient")))
+        let client = AppModel(
+            store: SessionStore(sessions: [], repository: InMemorySessionRepository(sessions: [])),
+            runtimeSelections: RuntimeSelectionStore(defaults: clientDefaults, discoversRuntimes: false, loadsPersistedSelections: false),
+            preferences: clientDefaults,
+            restoresIndexOnLaunch: false
+        )
+        let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                            hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
+        client.followRemoteHosts(directory)
+        let paired = try await directory.pair(link: link.absoluteString)
+        let remoteModel = try XCTUnwrap(directory.model(for: paired.id))
+        try await waitUntil { remoteModel.hasSnapshot && remoteModel.attentionBadgeCount == 3 }
+
+        XCTAssertEqual(host.attentionBadgeCount, 3)
+        XCTAssertEqual(client.attentionBadgeCount, 3)
+
+        let localController = MenuBarMenuController(content: { host.menuBarMenu(now: now) }, actions: .init())
+        localController.rebuild()
+        let localLines = MenuLine.lines(localController.menu.items)
+
+        let remoteController = MenuBarMenuController(content: { client.menuBarMenu(now: now) }, actions: .init())
+        remoteController.rebuild()
+        let remoteLines = MenuLine.lines(remoteController.menu.items)
+
+        let size = NSSize(width: 420, height: max(MenuPanel.height(localLines), MenuPanel.height(remoteLines)) + 100)
+        @ViewBuilder
+        func card(badgeCount: Int, needsAttention: Bool, lines: [MenuLine]) -> some View {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    TitleBarSidebarPart(
+                        isSidebarVisible: true,
+                        width: 220,
+                        onToggleSidebar: {},
+                        onNewTask: {},
+                        activityToggle: ActivityViewToggle(isOn: false, needsAttention: needsAttention, toggle: {})
+                    )
+                    Spacer()
+                    HStack(spacing: 6) {
+                        Text(verbatim: "Dock")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        Text(verbatim: "\(badgeCount)")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(Color.red, in: Capsule())
+                    }
+                    .padding(.trailing, 12)
+                }
+                .background(ParityTheme.sidebar, in: RoundedRectangle(cornerRadius: 8))
+                MenuPanel(lines: lines, width: 380)
+            }
+            .padding(20)
+            .frame(width: size.width, height: size.height, alignment: .topLeading)
+            .background(ParityTheme.canvas)
+        }
+
+        try await render("local-attention-menu", size: size, titled: false) {
+            card(badgeCount: host.attentionBadgeCount, needsAttention: host.attentionBadgeCount > 0, lines: localLines)
+        }
+        try await render("remote-attention-menu", size: size, titled: false) {
+            card(badgeCount: client.attentionBadgeCount, needsAttention: remoteModel.attentionBadgeCount > 0, lines: remoteLines)
+        }
+
+        let qaDirectory = try WindowlessRender.directory("remote-qa")
+        for appearance in WindowlessRender.Appearance.allCases {
+            let suffix = "attention-menu-\(appearance.suffix).png"
+            let left = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: qaDirectory.appending(path: "local-" + suffix))))
+            let right = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: qaDirectory.appending(path: "remote-" + suffix))))
+            let combined = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+                pixelsWide: left.pixelsWide + right.pixelsWide, pixelsHigh: max(left.pixelsHigh, right.pixelsHigh),
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            let context = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: combined)).cgContext
+            context.draw(try XCTUnwrap(left.cgImage), in: CGRect(x: 0, y: 0, width: left.pixelsWide, height: left.pixelsHigh))
+            context.draw(try XCTUnwrap(right.cgImage), in: CGRect(x: left.pixelsWide, y: 0, width: right.pixelsWide, height: right.pixelsHigh))
+            try WindowlessRender.writePNG(combined, to: qaDirectory.appending(path: "comparison-" + suffix))
+        }
+
+        directory.close(paired.id)
+        await client.shutdown()
         await host.shutdown()
     }
 

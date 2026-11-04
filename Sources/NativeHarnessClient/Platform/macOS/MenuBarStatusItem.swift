@@ -14,6 +14,7 @@ import SwiftUI
 final class MenuBarMenuController: NSObject, NSMenuDelegate {
     struct Actions {
         var openTask: @MainActor (UUID) -> Void = { _ in }
+        var openRemoteTask: @MainActor (RemoteTaskReveal) -> Void = { _ in }
         var newTask: @MainActor () -> Void = {}
         var openApp: @MainActor () -> Void = {}
         var quit: @MainActor () -> Void = {}
@@ -24,6 +25,7 @@ final class MenuBarMenuController: NSObject, NSMenuDelegate {
         static func routing(to model: AppModel) -> Actions {
             Actions(
                 openTask: { [weak model] id in Task { await model?.openTaskFromMenuBar(id) } },
+                openRemoteTask: { [weak model] remote in Task { await model?.openRemoteTaskFromMenuBar(remote) } },
                 newTask: { [weak model] in model?.showNewTaskFromMenuBar() },
                 openApp: { [weak model] in model?.bringForwardFromMenuBar() },
                 // As Quit in the app menu: from the run loop, so quitting can wait for the tasks to stop.
@@ -121,7 +123,7 @@ final class MenuBarMenuController: NSObject, NSMenuDelegate {
     /// AppKit's own ("title, project") with the state after it.
     private func taskItem(_ row: MenuBarMenu.TaskRow) -> NSMenuItem {
         let item = actionItem(row.title, #selector(chooseTask(_:)))
-        item.representedObject = row.sessionID
+        item.representedObject = row.remoteTask ?? (row.sessionID as Any)
         if !row.subtitle.isEmpty { item.subtitle = row.subtitle }
         item.image = MenuBarItemMarks.status(row.status)
         if let status = row.status {
@@ -154,8 +156,11 @@ final class MenuBarMenuController: NSObject, NSMenuDelegate {
     }
 
     @objc func chooseTask(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? UUID else { return }
-        actions.openTask(id)
+        if let remote = sender.representedObject as? RemoteTaskReveal {
+            actions.openRemoteTask(remote)
+        } else if let id = sender.representedObject as? UUID {
+            actions.openTask(id)
+        }
     }
 
     @objc func chooseNewTask(_ sender: NSMenuItem) { actions.newTask() }

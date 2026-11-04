@@ -115,6 +115,14 @@ final class RemoteHostModel: Identifiable {
 
     /// Called for each `attention` event, for a notification of the host's task.
     @ObservationIgnored var onAttention: ((RemoteEvent) -> Void)?
+    /// Called when a task's notification should be withdrawn (answered, read, or no longer waiting).
+    @ObservationIgnored var onWithdrawTaskNotification: ((String) -> Void)?
+    /// The tasks in the window's mirror that need the person (`TaskAttentionProjection`), updated for the tasks a
+    /// snapshot or `tasksChanged` event touches so conversation and terminal events never recount the list.
+    private(set) var attentionBadgeCount = 0
+    @ObservationIgnored private var attentionTaskIDs = Set<String>()
+    /// Whether this host's window is the key window.
+    @ObservationIgnored var isWindowInFront = false
     @ObservationIgnored private let connector: RemoteHostConnection
     @ObservationIgnored private let store: RemoteHostStore?
     @ObservationIgnored private let cache: RemoteHostCache?
@@ -309,6 +317,7 @@ final class RemoteHostModel: Identifiable {
             guard let self, response.ok else { return }
             projects = response.projects ?? []
             tasks = (response.tasks ?? []).sorted { $0.lastActivityAt > $1.lastActivityAt }
+            resetAttentionTasks(from: tasks)
             newTask = response.newTask
             followUp = response.followUp
             offersSubtasks = response.subtasks == true
@@ -373,14 +382,34 @@ final class RemoteHostModel: Identifiable {
         guard !changed.isEmpty || !removed.isEmpty else { return }
         var next = tasks
         let gone = Set(removed)
-        for id in gone { browser.forgetTask(id) }
+        for id in gone {
+            browser.forgetTask(id)
+            if attentionTaskIDs.remove(id) != nil { onWithdrawTaskNotification?(id) }
+        }
         if !gone.isEmpty { next.removeAll { gone.contains($0.id) } }
         for task in changed {
             if let index = next.firstIndex(where: { $0.id == task.id }) { next[index] = task } else { next.append(task) }
+            if RemoteSidebarMirror.needsAttention(task) {
+                attentionTaskIDs.insert(task.id)
+            } else if attentionTaskIDs.remove(task.id) != nil {
+                onWithdrawTaskNotification?(task.id)
+            }
         }
         next.sort { $0.lastActivityAt > $1.lastActivityAt }
         tasks = next
+        if attentionBadgeCount != attentionTaskIDs.count { attentionBadgeCount = attentionTaskIDs.count }
         if case let .task(id) = selection, gone.contains(id) { selection = .none }
+    }
+
+    private func resetAttentionTasks(from list: [RemoteTask]) {
+        let previous = attentionTaskIDs
+        var next = Set<String>()
+        for task in list where RemoteSidebarMirror.needsAttention(task) {
+            next.insert(task.id)
+        }
+        attentionTaskIDs = next
+        if attentionBadgeCount != next.count { attentionBadgeCount = next.count }
+        for id in previous.subtracting(next) { onWithdrawTaskNotification?(id) }
     }
 
     func task(_ id: String) -> RemoteTask? {
@@ -392,6 +421,7 @@ final class RemoteHostModel: Identifiable {
         guard !hasSnapshot else { return }
         projects = list.projects
         tasks = list.tasks
+        resetAttentionTasks(from: tasks)
         newTask = list.newTask
         followUp = list.followUp
     }
@@ -413,6 +443,7 @@ final class RemoteHostModel: Identifiable {
         Task { await readTaskRail(taskID) }
         // A task opened from a schedule, a chip or a notification shows among the tasks.
         showsSchedules = false
+        showsArchive = false
         if conversations[taskID] == nil {
             let harness = HarnessKind(rawValue: task(taskID)?.harness ?? HarnessKind.claudeCode.rawValue)
             let conversation = RemoteConversationModel(taskID: taskID, harness: harness, hostName: host.name)
@@ -424,7 +455,10 @@ final class RemoteHostModel: Identifiable {
             subscribed.append(taskID)
         }
         // A task shown before the host is reached (from the cache, or while it is away) stays unread there.
-        if isConnected, task(taskID)?.unread == true { send(.markRead(taskID: taskID)) }
+        if isConnected, task(taskID)?.unread == true {
+            send(.markRead(taskID: taskID))
+            onWithdrawTaskNotification?(taskID)
+        }
     }
 
     private func subscribe(_ taskID: String) {

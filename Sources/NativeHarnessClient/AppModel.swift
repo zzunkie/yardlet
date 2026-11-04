@@ -426,6 +426,9 @@ final class AppModel {
     /// The phone remote (Settings › Remote, docs/REMOTE_PROTOCOL.md). The app sets it after restoring
     /// the index; nil in tests and fixtures.
     var remoteControl: RemoteControlService?
+    /// Other Macs this one pairs with (`RemoteHostDirectory`), for the Dock badge, menu bar and
+    /// notifications while their windows are open (`AppModel+RemoteHostNotifications`).
+    var remoteHosts: RemoteHostDirectory?
     /// Opens a task of another Mac this one follows (`RemoteHostDirectory`), for a click on its notification:
     /// the host's ID and the task's. Nil in tests and fixtures.
     @ObservationIgnored var openRemoteTask: ((String, String) -> Void)?

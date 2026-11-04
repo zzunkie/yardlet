@@ -2,6 +2,8 @@ import AppKit
 import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
+@testable import YardletRemote
+@testable import YardletRemoteFixtureSupport
 
 /// The menu bar item's menu (Codex tray menu: Running, Unread, Pinned, Recent, Usage, then New
 /// task, Open and Quit), what choosing its items does, its setting, and `⌥⌘U`. Nothing here shows
@@ -432,6 +434,68 @@ final class MenuBarMenuTests: XCTestCase {
         controller.chooseNewTask(try XCTUnwrap(items.first { $0.title == newTask }))
         XCTAssertEqual(attention.bringForwardCount, 2)
         XCTAssertEqual(model.splits.selection, .home)
+    }
+
+    func testOpenRemoteHostTasksNeedingThePersonShowInTheMenuBarAndBringTheirHostWindowForward() async throws {
+        typealias ID = RemoteFixtureBridge.ID
+        let localWorking = task("Local build", status: .running, minutesAgo: 1)
+        let (model, attention) = makeModel(sessions: [localWorking])
+        model.projects.rename(model.projects.ensureProject(forRoot: yardlet).id, to: "Yardlet")
+
+        let stack = try await LoopbackStack(name: "Mac Studio", bridge: RemoteFixtureBridge(speed: 0.01))
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                        name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                            hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
+        var openedHostWindows: [String] = []
+        directory.openHostWindow = { openedHostWindows.append($0) }
+        model.followRemoteHosts(directory)
+        let paired = try await directory.pair(link: link.absoluteString)
+        let host = try XCTUnwrap(directory.model(for: paired.id))
+        try await waitUntil { host.hasSnapshot }
+
+        let controller = MenuBarMenuController(content: { model.menuBarMenu(now: self.now) }, actions: .routing(to: model))
+        controller.rebuild()
+        let menu = model.menuBarMenu(now: now)
+        let running = try XCTUnwrap(menu.sections.first { $0.kind == .running })
+        let unread = try XCTUnwrap(menu.sections.first { $0.kind == .unread })
+        let runningRows = running.rows + running.more
+        let unreadRows = unread.rows + unread.more
+
+        // Waiting remote tasks appear in Running before local working tasks, labeled with the host's name.
+        XCTAssertTrue(runningRows.contains {
+            $0.remoteTask == RemoteTaskReveal(hostID: paired.id, taskID: ID.approval)
+                && $0.subtitle == "Mac Studio · Yardlet"
+                && $0.status == .awaitingApproval
+        }, runningRows.description)
+        XCTAssertTrue(runningRows.contains { $0.sessionID == localWorking.id && $0.subtitle == "Yardlet" })
+        // Remote working (not waiting) tasks do not clutter Running.
+        XCTAssertFalse(runningRows.contains { $0.remoteTask?.taskID == ID.streaming })
+
+        // Unread remote tasks appear in Unread, labeled with the host's name.
+        XCTAssertTrue(unreadRows.contains {
+            $0.remoteTask == RemoteTaskReveal(hostID: paired.id, taskID: ID.history)
+                && $0.subtitle == "Mac Studio · Website"
+                && $0.status == .unread
+        }, unreadRows.description)
+
+        // Choosing a remote task brings Yardlet forward, opens that host's window, and selects the task.
+        let allItems = controller.menu.items.flatMap { [$0] + ($0.submenu?.items ?? []) }
+        let approvalItem = try XCTUnwrap(allItems.first {
+            ($0.representedObject as? RemoteTaskReveal) == RemoteTaskReveal(hostID: paired.id, taskID: ID.approval)
+        })
+        controller.chooseTask(approvalItem)
+        try await waitUntil { host.selection == .task(ID.approval) }
+        XCTAssertEqual(openedHostWindows, [paired.id])
+        XCTAssertEqual(attention.bringForwardCount, 1)
+
+        // Closing the host window removes its tasks from the menu bar menu.
+        directory.close(paired.id)
+        let afterClose = model.menuBarMenu(now: now)
+        XCTAssertNil(afterClose.sections.first { $0.kind == .unread })
+        XCTAssertEqual(afterClose.sections.first { $0.kind == .running }?.rows.map(\.sessionID), [localWorking.id])
     }
 
     // MARK: - Setting and shortcut

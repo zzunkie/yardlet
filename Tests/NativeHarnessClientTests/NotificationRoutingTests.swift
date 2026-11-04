@@ -1,7 +1,10 @@
 import Foundation
+import Observation
 import UserNotifications
 import XCTest
 @testable import NativeHarnessClient
+@testable import YardletRemote
+@testable import YardletRemoteFixtureSupport
 
 /// Notifications that lead back to their task, "Allow once" from an approval notification, and the
 /// Dock badge and bounce. Every test uses a recording notification center and a recording Dock, so
@@ -575,6 +578,112 @@ final class NotificationRoutingTests: XCTestCase {
         await model.shutdown()
     }
 
+    // MARK: - Open remote host windows
+
+    func testOpenRemoteHostWindowsCountInTheDockBadgeFollowChangesAndWithdrawAnsweredNotifications() async throws {
+        typealias ID = RemoteFixtureBridge.ID
+        let localWaiting = task("Local approval", status: .waitingForApproval)
+        let (model, center, attention) = makeModel(sessions: [localWaiting])
+        center.badgesAllowed = true
+        await model.refreshNotificationPermission()
+        XCTAssertEqual(attention.badges.last, "1")
+
+        let stack = try await LoopbackStack(name: "Mac Studio", bridge: RemoteFixtureBridge(speed: 0.01))
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                        name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                            hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
+        model.followRemoteHosts(directory)
+        let paired = try await directory.pair(link: link.absoluteString)
+
+        // Pairing alone does not open a window or add to the Dock badge.
+        XCTAssertEqual(model.attentionBadgeCount, 1)
+
+        // Opening the host window adds its waiting and unread tasks to this Mac's Dock badge.
+        let host = try XCTUnwrap(directory.model(for: paired.id))
+        try await waitUntil { host.hasSnapshot && host.attentionBadgeCount > 0 }
+        let initialRemoteCount = host.attentionBadgeCount
+        XCTAssertEqual(model.attentionBadgeCount, 1 + initialRemoteCount)
+        try await waitUntil { attention.badges.last == String(1 + initialRemoteCount) }
+
+        // Streaming conversation items does not recount tasks or republish attentionBadgeCount.
+        final class Count: @unchecked Sendable { var value = 0 }
+        let badgePublications = Count()
+        withObservationTracking { _ = model.attentionBadgeCount } onChange: { badgePublications.value += 1 }
+        host.select(.task(ID.idle))
+        let idleConversation = try XCTUnwrap(host.conversations[ID.idle])
+        try await waitUntil { idleConversation.isLoaded }
+        for index in 0..<25 {
+            var item = RemoteItem(id: "stream-\(index)", turnId: "t-stream", kind: .assistant)
+            item.role = "answer"
+            item.text = "Chunk \(index)"
+            item.streaming = true
+            _ = idleConversation.apply([.upsert(item, after: nil)])
+        }
+        XCTAssertEqual(badgePublications.value, 0, "Conversation streaming must not republish attentionBadgeCount")
+
+        // Selecting an unread task on the host marks it read, decrements the badge, and withdraws its notification.
+        let unreadTaskID = ID.history
+        XCTAssertEqual(host.task(unreadTaskID)?.unread, true)
+        host.select(.task(unreadTaskID))
+        try await waitUntil { host.attentionBadgeCount == initialRemoteCount - 1 }
+        XCTAssertEqual(model.attentionBadgeCount, 1 + initialRemoteCount - 1)
+        XCTAssertTrue(center.removed.contains(RemoteAttentionNotice.identifier(hostID: host.id, taskID: unreadTaskID)))
+
+        // A new remote approval while Yardlet is behind other apps bounces the Dock once and posts a notification.
+        attention.isActive = false
+        host.isWindowInFront = true
+        host.select(.task(ID.approval))
+        let approvalConversation = try XCTUnwrap(host.conversations[ID.approval])
+        try await waitUntil { approvalConversation.isLoaded }
+        var waitingEvent = RemoteEvent(.attention)
+        waitingEvent.taskId = ID.approval
+        waitingEvent.title = "Approve the index migration"
+        waitingEvent.state = .waiting
+        waitingEvent.pendingRequest = .approval
+        waitingEvent.requestId = "toolu_fixture_1"
+        directory.onAttention?(host, waitingEvent)
+        let posted = try await waitForPost(in: center)
+        XCTAssertEqual(posted.title, "Mac Studio · Approve the index migration")
+        XCTAssertTrue(posted.offersAllowOnce)
+        XCTAssertEqual(attention.attentionRequests, 1)
+
+        // The same request does not bounce a second time.
+        directory.onAttention?(host, waitingEvent)
+        XCTAssertEqual(attention.attentionRequests, 1)
+
+        // When the task is shown in the window in front, no banner is posted.
+        attention.isActive = true
+        host.isWindowInFront = true
+        host.select(.task(ID.approval))
+        let postedCountBeforeFront = center.posted.count
+        directory.onAttention?(host, waitingEvent)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(center.posted.count, postedCountBeforeFront)
+
+        // When system notifications are denied on this Mac, no remote notification is posted.
+        center.authorizationStatus = .denied
+        host.isWindowInFront = false
+        directory.onAttention?(host, waitingEvent)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(center.posted.count, postedCountBeforeFront)
+        center.authorizationStatus = .authorized
+
+        // Answering via "Allow once" from the notification answers on the host, withdraws the notification,
+        // and decrements the Dock badge.
+        let countBeforeAnswer = host.attentionBadgeCount
+        await model.handleNotificationResponse(.init(target: posted.target, action: .allowOnce))
+        try await waitUntil { host.attentionBadgeCount == countBeforeAnswer - 1 }
+        XCTAssertTrue(center.removed.contains(posted.identifier))
+
+        // Closing the host window removes its tasks from the Dock badge at once.
+        directory.close(paired.id)
+        XCTAssertEqual(model.attentionBadgeCount, 1)
+        try await waitUntil { attention.badges.last == "1" }
+    }
+
     // MARK: - Helpers
 
     private static let bashRule: JSONValue = .object([
@@ -702,11 +811,12 @@ final class NotificationRoutingTests: XCTestCase {
 /// Records what Yardlet would post and withdraw; never reaches Notification Center.
 @MainActor
 private final class RecordingCenter: SystemNotificationCenter {
+    var authorizationStatus: SystemNotificationAuthorization = .authorized
     var badgesAllowed = false
     private(set) var posted: [SystemNotification] = []
     private(set) var removed: [String] = []
 
-    func authorization() async -> SystemNotificationAuthorization { .authorized }
+    func authorization() async -> SystemNotificationAuthorization { authorizationStatus }
     func requestAuthorization() async -> Bool { true }
 
     func post(title: String, body: String, identifier: String) async {
