@@ -2083,6 +2083,9 @@ composer with hosts that omit it. Existing requests and optional fields remain r
   `queuePaused`, and optional `connectors` with their display names, state, tool count, source and opaque IDs.
   Connector credentials, server configuration and environment values never travel. The desktop draws the local
   connector menu and accepts the next-message suggestion with Tab.
+  A meaningful state change emits `taskSettingsChanged` with optional `composerChanged: true`; that flag
+  invalidates only `composerState`. Ordinary settings invalidations omit it. The host compares the projected
+  state before notifying, so model preparation does not repeatedly reload unchanged composer data.
 - `composerAction` takes `taskId`, `action`, optional `itemId` and optional `value`. Actions are `connector`
   (`itemId` is the offered connector ID, `value` is `on` or `off`), `pause`, `resume`, `moveUp`, `moveDown`,
   `retry` and `edit` (a queued item ID; `value` is replacement text). The host revalidates each action against

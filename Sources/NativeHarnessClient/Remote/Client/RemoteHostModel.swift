@@ -265,8 +265,11 @@ final class RemoteHostModel: Identifiable {
         case .taskSettingsChanged:
             guard let taskID = event.taskId, conversations[taskID] != nil else { return }
             Task {
-                await readTaskSettings(taskID)
-                _ = await readComposerState(taskID)
+                if event.composerChanged == true {
+                    _ = await readComposerState(taskID)
+                } else {
+                    await readTaskSettings(taskID)
+                }
             }
         case .closing:
             closingReason = event.reason

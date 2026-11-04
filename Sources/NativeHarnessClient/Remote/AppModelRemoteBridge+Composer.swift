@@ -4,19 +4,41 @@ import YardletRemote
 
 extension AppModelRemoteBridge {
     func composerState(taskID: String) async -> Result<RemoteComposerState, RemoteError> {
-        guard let model, let session = session(taskID) else { return .failure(RemoteError(.notFound)) }
-        if watchesComposer.insert(session.id).inserted {
-            let state = withObservationTracking {
-                Self.readComposerState(session: session, model: model)
-            } onChange: { [weak self] in
-                Task { @MainActor in
-                    self?.watchesComposer.remove(session.id)
-                    self?.changeHandler?(.taskSettings(taskID))
-                }
-            }
-            return .success(state)
+        guard let session = session(taskID), let state = watchComposer(of: session.id) else {
+            return .failure(RemoteError(.notFound))
         }
-        return .success(Self.readComposerState(session: session, model: model))
+        return .success(state)
+    }
+
+    /// Dependencies may invalidate together (for example, a provider's capability dictionary),
+    /// but only a changed composer projection asks its clients to read again.
+    func watchComposer(of id: UUID) -> RemoteComposerState? {
+        guard let model else { return nil }
+        let read = { [weak self] in
+            self?.listedSession(id).map { Self.readComposerState(session: $0, model: model) }
+        }
+        let state: RemoteComposerState?
+        if watchesComposer.contains(id) {
+            state = read()
+        } else {
+            watchesComposer.insert(id)
+            state = withObservationTracking(read) { [weak self] in
+                Task { @MainActor in self?.composerMayHaveChanged(id) }
+            }
+        }
+        answeredComposer[id] = state
+        return state
+    }
+
+    private func composerMayHaveChanged(_ id: UUID) {
+        watchesComposer.remove(id)
+        guard let answered = answeredComposer[id] else { return }
+        guard watched.contains(id) else {
+            answeredComposer[id] = nil
+            return
+        }
+        // Rearm even when the projection stayed equal, so a later meaningful change is observed.
+        if watchComposer(of: id) != answered { changeHandler?(.composerState(id.uuidString)) }
     }
 
     private static func readComposerState(session: SessionRecord, model: AppModel) -> RemoteComposerState {
@@ -31,9 +53,12 @@ extension AppModelRemoteBridge {
                 toolCount: row.toolCount, source: row.source == .yardlet ? "yardlet" : "session",
                 connectorID: row.connectorID?.uuidString, presetID: row.presetID)
         }
+        // As mounting the host composer does, retain the empty draft so a suggestion arriving
+        // later can invalidate this observation even when no host window has opened the task.
+        let draft = model.composerDrafts.tasks.draft(for: session.id)
         let enabled = NextMessageSuggestionPreference.isOn()
         let suggestion = enabled && session.status != .running && session.status != .waitingForApproval
-            ? model.composerDrafts.tasks.existingDraft(for: session.id)?.nextMessageSuggestion : nil
+            ? draft.nextMessageSuggestion : nil
         return RemoteComposerState(nextMessageSuggestion: RemoteText.short(suggestion, RemoteText.userLimit),
             queuePaused: model.followUps.isPaused(session.id), connectors: rows,
             toolListFollowsNextTurn: list?.toolListFollowsNextTurn ?? false)

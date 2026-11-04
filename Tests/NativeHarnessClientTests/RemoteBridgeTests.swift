@@ -1763,6 +1763,36 @@ final class RemoteBridgeTests: XCTestCase {
         await model.shutdown()
     }
 
+    func testTheFirstRemoteComposerObservesASuggestionArrivingAfterItsRead() async throws {
+        let preferences = UserDefaults.yardlet
+        let previous = preferences.object(forKey: NextMessageSuggestionPreference.key)
+        preferences.set(true, forKey: NextMessageSuggestionPreference.key)
+        defer {
+            if let previous { preferences.set(previous, forKey: NextMessageSuggestionPreference.key) }
+            else { preferences.removeObject(forKey: NextMessageSuggestionPreference.key) }
+        }
+        let session = SessionRecord(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp/composer-suggestion"),
+            runtimeExecutableURL: URL(filePath: "/tmp/claude"), title: "Next message", status: .completed)
+        let model = try Self.model(sessions: [session], transcripts: [:])
+        XCTAssertNil(model.composerDrafts.tasks.existingDraft(for: session.id))
+        let bridge = AppModelRemoteBridge(model: model)
+        let signals = SignalRecorder()
+        bridge.setChangeHandler { signals.record($0) }
+        bridge.setWatchedTasks([session.id.uuidString])
+        let first = try await bridge.composerState(taskID: session.id.uuidString).get()
+        XCTAssertNil(first.nextMessageSuggestion)
+        model.composerDrafts.tasks.draft(for: session.id).nextMessageSuggestion = "Run the parser tests"
+        try await waitUntil {
+            signals.changes.contains { change in
+                if case let .composerState(id) = change { return id == session.id.uuidString }
+                return false
+            }
+        }
+        let updated = try await bridge.composerState(taskID: session.id.uuidString).get()
+        XCTAssertEqual(updated.nextMessageSuggestion, "Run the parser tests")
+        await model.shutdown()
+    }
+
     func testComposerEditsKeepHostAttachmentsAndDraftAndRejectProviderHeldMessages() async throws {
         let session = SessionRecord(harness: .codex, workspaceURL: URL(filePath: "/tmp/composer-queue"),
             runtimeExecutableURL: URL(filePath: "/tmp/codex"), title: "Queue")

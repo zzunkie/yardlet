@@ -18,6 +18,8 @@ public enum RemoteBridgeChange: Equatable, Sendable {
     case taskRail(String)
     /// A task's composer controls changed since `taskSettings` last read them (§15.23).
     case taskSettings(String)
+    /// The task's queue, connectors or next-message suggestion changed (§15.33).
+    case composerState(String)
     /// What a task's browser tabs list may have changed: a tab opened or closed, or a tab's page, title or wait (§15.25).
     case browserTabs(String)
     /// A watched tab drew its page again (§15.25).
@@ -2139,9 +2141,10 @@ public actor RemoteServer {
             for (id, connection) in connections where connection.followsRail.contains(taskID) {
                 send(event, to: id)
             }
-        case let .taskSettings(taskID):
-            // The bridge tells only of a change since the last read; the phone reads them again.
+        case let .taskSettings(taskID), let .composerState(taskID):
+            // One event name remains compatible with old clients; new clients read only the projection that changed.
             var event = RemoteEvent(.taskSettingsChanged)
+            if case .composerState = change { event.composerChanged = true }
             event.taskId = taskID
             for (id, connection) in connections where connection.followsSettings.contains(taskID) {
                 send(event, to: id)

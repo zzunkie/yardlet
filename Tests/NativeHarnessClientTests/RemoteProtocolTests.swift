@@ -392,6 +392,12 @@ final class RemoteProtocolTests: XCTestCase {
         XCTAssertEqual(RemoteJSON.string(RemoteResponse(re: "17")), #"{"ok":true,"re":"17"}"#)
         XCTAssertEqual(RemoteJSON.string(RemoteResponse.failure("18", RemoteError(.notFound, "No task"))),
                        #"{"error":{"code":"notFound","message":"No task"},"ok":false,"re":"18"}"#)
+        var settingsEvent = RemoteEvent(.taskSettingsChanged)
+        settingsEvent.taskId = "T"
+        XCTAssertEqual(RemoteJSON.string(settingsEvent), #"{"event":"taskSettingsChanged","taskId":"T"}"#)
+        settingsEvent.composerChanged = true
+        XCTAssertEqual(RemoteJSON.string(settingsEvent), #"{"composerChanged":true,"event":"taskSettingsChanged","taskId":"T"}"#)
+        XCTAssertEqual(try JSONDecoder().decode(RemoteEvent.self, from: RemoteJSON.encoder.encode(settingsEvent)), settingsEvent)
         var event = RemoteEvent(.conversation)
         event.seq = 5
         event.taskId = "T"

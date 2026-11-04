@@ -2420,6 +2420,8 @@ public struct RemoteEvent: Codable, Equatable, Sendable {
 
     public var event: Name
     public var seq: Int?
+    /// On taskSettingsChanged, true invalidates composerState only; absent invalidates taskSettings.
+    public var composerChanged: Bool?
 
     // tasksChanged
     public var tasks: [RemoteTask]?

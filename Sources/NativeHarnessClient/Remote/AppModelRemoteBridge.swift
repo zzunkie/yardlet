@@ -55,6 +55,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     var answeredSettings: [UUID: [RemoteSetting]] = [:]
     var watchesSettings: Set<UUID> = []
     var watchesComposer: Set<UUID> = []
+    var answeredComposer: [UUID: RemoteComposerState] = [:]
     /// A task's browser tabs (§15.25), when this build has a browser engine.
     var resetOffers: [UUID: RemoteResetOffer] = [:]
     let terminals = RemoteTerminalBridge()
@@ -426,6 +427,7 @@ final class AppModelRemoteBridge: RemoteBridge {
             }
         }
         for id in Array(answeredSettings.keys) where !watched.contains(id) { answeredSettings[id] = nil }
+        for id in Array(answeredComposer.keys) where !watched.contains(id) { answeredComposer[id] = nil }
         if watched.isEmpty { previews?.removeAll() }
     }
 
