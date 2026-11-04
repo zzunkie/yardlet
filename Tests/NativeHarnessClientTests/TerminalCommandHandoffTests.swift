@@ -79,8 +79,13 @@ final class TerminalCommandHandoffTests: XCTestCase {
                 _ = Darwin.kill(pid, SIGKILL)
             }
         }
-        try await waitUntil { FileManager.default.fileExists(atPath: marker.path) && hosting.process?.running == false }
-        let child = try XCTUnwrap(Int32(String(contentsOf: marker, encoding: .utf8)))
+        // The job creates its PID file before it writes the PID, so wait for the PID itself.
+        var written: Int32?
+        try await waitUntil {
+            written = (try? String(contentsOf: marker, encoding: .utf8)).flatMap { Int32($0) }
+            return written != nil && hosting.process?.running == false
+        }
+        let child = try XCTUnwrap(written)
         XCTAssertEqual(getsid(child), leader)
         XCTAssertEqual(getpgid(child), child, "The job is no longer in the dead shell's process group")
         XCTAssertEqual(Darwin.kill(child, 0), 0)
