@@ -160,7 +160,7 @@ struct TaskServerFinder {
 
 /// Settings › General's "Show servers tasks start": on by default. Off, nothing is read and nothing shows.
 enum TaskServersPreference {
-    static let key = "Yardlet.showsTaskServers"
+    static let key = "YardletShowsTaskServers"
 
     static func isOn(in defaults: UserDefaults = .yardlet) -> Bool {
         defaults.object(forKey: key) as? Bool ?? true

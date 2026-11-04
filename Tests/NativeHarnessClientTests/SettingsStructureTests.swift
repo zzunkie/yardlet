@@ -121,4 +121,35 @@ final class SettingsStructureTests: XCTestCase {
         XCTAssertLessThanOrEqual(smallest.height, 560 - 48)
         XCTAssertEqual(SettingsCenterView.fittingSize(in: .zero), SettingsCenterView.preferredSize, "Before the window is measured")
     }
+
+    /// Settings' rows read the settings kept in Yardlet's defaults with `@AppStorage`, which follows every
+    /// write to the store for a key with a dot in it (`PreferenceKeyCarryOver`). A value saved under a key's
+    /// earlier name is copied to its name now once, one saved there already stays, and the earlier name keeps
+    /// its value for a build from before the change.
+    @MainActor
+    func testSettingsKeptInDefaultsHaveKeysWithoutDotsAndKeepTheirSavedValues() throws {
+        let keys = YardletSettingCatalog.all.compactMap { setting -> String? in
+            switch setting.storage {
+            case let .flag(key, _), let .choice(key, _): key
+            case .app: nil
+            }
+        }
+        XCTAssertFalse(keys.isEmpty)
+        for key in keys { XCTAssertFalse(key.contains("."), key) }
+
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("PreferenceKeyCarryOver")))
+        defaults.set(false, forKey: "Yardlet.nextMessageSuggestions")
+        defaults.set("right", forKey: "Yardlet.terminalLocation")
+        defaults.set("compact", forKey: "Yardlet.interfaceSize")
+        defaults.set("large", forKey: YardletPreferenceKeys.interfaceSize)
+        PreferenceKeyCarryOver.run(in: defaults)
+        XCTAssertFalse(NextMessageSuggestionPreference.isOn(in: defaults))
+        XCTAssertEqual(defaults.string(forKey: TerminalLocation.key), "right")
+        XCTAssertEqual(defaults.string(forKey: YardletPreferenceKeys.interfaceSize), "large", "Saved under its name now")
+        XCTAssertEqual(defaults.object(forKey: "Yardlet.nextMessageSuggestions") as? Bool, false)
+
+        defaults.set(true, forKey: NextMessageSuggestionPreference.key)
+        PreferenceKeyCarryOver.run(in: defaults)
+        XCTAssertTrue(NextMessageSuggestionPreference.isOn(in: defaults), "Copied once")
+    }
 }

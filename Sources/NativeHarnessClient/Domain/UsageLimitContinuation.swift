@@ -56,7 +56,7 @@ struct UsageLimitAutoContinue: Codable, Equatable, Sendable {
 /// `horizon` arms its card's automatic continue as it comes. Off, each card waits for the person to
 /// arm it, and the continues the setting armed are disarmed.
 enum UsageLimitAutoContinuePreference {
-    static let key = "Yardlet.continueAtUsageLimit"
+    static let key = "YardletContinueAtUsageLimit"
     /// Claude Code waits only for a reset within a day ("the usage limit now resets more than 24
     /// hours out, so this task will not resume on its own"); a weekly limit days out waits for the
     /// person.

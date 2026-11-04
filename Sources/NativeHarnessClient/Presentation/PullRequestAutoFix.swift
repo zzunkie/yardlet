@@ -9,7 +9,7 @@ enum PullRequestAutoFixPrompt: String, CaseIterable, Sendable {
     case ask
     case never
 
-    static let preferenceKey = "Yardlet.pullRequestAutoFix.prompt"
+    static let preferenceKey = "YardletPullRequestAutoFixPrompt"
 
     static func current(in defaults: UserDefaults = .yardlet) -> PullRequestAutoFixPrompt {
         defaults.string(forKey: preferenceKey).flatMap(Self.init(rawValue:)) ?? .ask

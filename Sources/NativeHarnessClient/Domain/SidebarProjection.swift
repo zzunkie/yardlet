@@ -128,7 +128,7 @@ enum SidebarGrouping: String, CaseIterable, Sendable {
     case project
     case state
 
-    static let defaultsKey = "Yardlet.sidebar.grouping"
+    static let defaultsKey = "YardletSidebarGrouping"
 }
 
 /// One state of a list grouped by state, with the rows under it, after the Claude app's state

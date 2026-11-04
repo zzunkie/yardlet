@@ -157,7 +157,7 @@ extension AgentToolLaunchProviding {
 /// The one setting: agent browser tools, on unless the user turns them off. A change applies to
 /// sessions started or resumed afterwards.
 enum AgentToolPreference {
-    static let browserToolsKey = "Yardlet.agentBrowserTools"
+    static let browserToolsKey = "YardletAgentBrowserTools"
 
     static func isEnabled(in defaults: UserDefaults = .yardlet) -> Bool {
         defaults.object(forKey: browserToolsKey) as? Bool ?? true
@@ -170,7 +170,7 @@ enum AgentToolPreference {
 /// per-process switch, `ENABLE_CLAUDEAI_MCP_SERVERS=false` (2.1.29x: `[claudeai-mcp] Disabled via
 /// env var`); nothing is written to the account's settings.
 enum ClaudeAIConnectorPreference {
-    static let key = "Yardlet.claudeAIConnectors"
+    static let key = "YardletClaudeAIConnectors"
     static let environmentVariable = "ENABLE_CLAUDEAI_MCP_SERVERS"
 
     static func isEnabled(in defaults: UserDefaults = .yardlet) -> Bool {

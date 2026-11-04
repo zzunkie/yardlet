@@ -463,8 +463,10 @@ struct NativeHarnessClientApp: App {
     @State private var remoteHosts = RemoteHostDirectory.live()
 
     /// The app's model, once what Yardlet kept of addresses that carried a vault password is gone: before the task
-    /// workspaces and the browser host read it (`BrowserFilledValueCleanup`).
+    /// workspaces and the browser host read it (`BrowserFilledValueCleanup`). Preferences saved under their earlier
+    /// keys are copied to their keys now first (`PreferenceKeyCarryOver`).
     private static func liveModel() -> AppModel {
+        PreferenceKeyCarryOver.run()
         MacAgentToolService.startPreparing()
         BrowserFilledValueCleanup.runAtLaunch()
         return AppModel.live()
@@ -686,10 +688,10 @@ struct NativeHarnessClientApp: App {
         // Another Mac's Yardlet, one window per host (File › Connect to Mac…).
         WindowGroup(L10n.string("Remote Mac"), id: RemoteHostWindow.sceneID, for: String.self) { $hostID in
             YardletWindowPreferences(usesVisualFixture: model.usesVisualFixture) {
-                RemoteHostWindow(hostID: hostID, directory: remoteHosts) {
+                RemoteHostWindow(hostID: hostID, directory: remoteHosts, onOpenLocalSettings: RemoteLocalSettingsAction {
                     model.isSettingsRequested = true
                     if !TaskResourceUsageWindow.bringMainWindowForward() { TaskResourceUsageWindow.reopenMainWindow?() }
-                }
+                })
                 .imageViewerHost()
             }
         }
@@ -741,10 +743,8 @@ struct NativeHarnessClientApp: App {
 }
 
 /// A window's content in the appearance and interface size Settings chose. They are read here, not
-/// in the app's scene: `@AppStorage` re-reads on every UserDefaults write, even of another key or of
-/// a key that is not there, and a scene holding it was rebuilt, with its windows' roots and the menu
-/// bar's commands, whenever Yardlet saved any state there. Here such a write re-applies the same
-/// values to the same content, which leaves the content alone.
+/// in the app's scene: a scene holding them is rebuilt, with its windows' roots and the menu bar's
+/// commands, whenever they change. Here a change applies new values to the same content.
 private struct YardletWindowPreferences<Content: View>: View {
     let usesVisualFixture: Bool
     var appliesInterfaceSize = true

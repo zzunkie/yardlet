@@ -230,7 +230,6 @@ final class NextMessageSuggestionTests: XCTestCase {
         XCTAssertFalse(NextMessageSuggestionPreference.isOn(in: defaults))
         defaults.set(true, forKey: NextMessageSuggestionPreference.key)
         XCTAssertTrue(NextMessageSuggestionPreference.isOn(in: defaults))
-        XCTAssertEqual(NextMessageSuggestionPreference.key, "Yardlet.nextMessageSuggestions")
     }
 
     func testTheSettingReadsInBothLanguages() {

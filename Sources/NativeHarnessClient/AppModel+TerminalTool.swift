@@ -7,7 +7,7 @@ import YardletAgentTools
 /// leaves every task's tool list at once (`AgentToolBroker.toolsMayHaveChanged`) and the terminal has no
 /// attach action, with nothing kept in a harness's settings or files.
 enum TerminalSharingPreference {
-    static let key = "Yardlet.terminalSharing"
+    static let key = "YardletTerminalSharing"
 
     static func isOn(in defaults: UserDefaults = .yardlet) -> Bool {
         defaults.object(forKey: key) as? Bool ?? true

@@ -7,7 +7,7 @@ enum TerminalLocation: String, CaseIterable, Sendable {
     case bottom
     case right
 
-    static let key = "Yardlet.terminalLocation"
+    static let key = "YardletTerminalLocation"
 
     static func current(in defaults: UserDefaults = .yardlet) -> Self {
         defaults.string(forKey: key).flatMap(Self.init(rawValue:)) ?? .bottom

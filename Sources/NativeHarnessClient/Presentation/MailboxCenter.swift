@@ -3,9 +3,9 @@ import Observation
 
 /// Settings › Mailbox: off until the person turns it on.
 enum MailboxPreference {
-    static let key = "Yardlet.mailbox"
+    static let key = "YardletMailbox"
     /// Settings › Notifications › New mail, on by default while the mailbox is on.
-    static let notificationsKey = "Yardlet.mailNotifications"
+    static let notificationsKey = "YardletMailNotifications"
     /// Where each account's history was last read up to (`MailChanges.cursor`), so mail that came while
     /// Yardlet was closed is told once it opens. No message is kept; turning the mailbox off removes it.
     static let cursorsKey = "Yardlet.mailboxCursors"

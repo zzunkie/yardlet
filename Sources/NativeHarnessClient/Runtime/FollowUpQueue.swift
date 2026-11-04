@@ -18,8 +18,8 @@ enum FollowUpMode: String, CaseIterable, Identifiable, Sendable {
     case queue
     case steer
 
-    /// Named for Codex, where the setting began. Claude Code tasks read the same value (plan A8).
-    static let preferenceKey = "Yardlet.codexFollowUpMode"
+    /// Codex tasks, where the setting began, and Claude Code tasks read the same value.
+    static let preferenceKey = "YardletFollowUpMode"
 
     static func current(in defaults: UserDefaults = .yardlet) -> Self {
         defaults.string(forKey: preferenceKey).flatMap(Self.init(rawValue:)) ?? .steer

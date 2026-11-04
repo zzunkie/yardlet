@@ -54,16 +54,21 @@ final class StreamingWindowRedrawTests: XCTestCase {
         XCTAssertLessThanOrEqual(samples[.sidebarRow], 11, "A sample redrew rows whose CPU did not change")
         XCTAssertEqual(samples[.mainWindow], 0)
 
-        // UserDefaults writes of state the window does not show, as saving app state makes them.
+        // UserDefaults writes of state the window does not show, as saving app state makes them. A view that
+        // reads a key with a dot in it with `@AppStorage` was evaluated again on each (`PreferenceKeyCarryOver`).
+        // The views that name no store read the standard one, which is `.yardlet` in the app and not in a test.
         let writes = await window.measure("10 unrelated UserDefaults writes") {
             for index in 0..<10 {
-                UserDefaults.yardlet.set(index, forKey: "StreamingWindowRedraw.unrelated")
+                for store in [UserDefaults.yardlet, .standard] { store.set(index, forKey: "StreamingWindowRedraw.unrelated") }
                 window.host.settle(passes: 1, interval: 0.02)
             }
-            UserDefaults.yardlet.removeObject(forKey: "StreamingWindowRedraw.unrelated")
+            for store in [UserDefaults.yardlet, .standard] { store.removeObject(forKey: "StreamingWindowRedraw.unrelated") }
         }
         XCTAssertEqual(writes[.mainWindow], 0)
         XCTAssertEqual(writes[.sidebarRow], 0)
+        XCTAssertEqual(writes[.taskSurface], 0)
+        XCTAssertEqual(writes[.sessionRail], 0)
+        XCTAssertEqual(writes[.composer], 0)
 
         // The scene's body runs again, as the app's does whenever something it reads changes. After the first
         // such run, which draws the window once more as a new value, the window is handed the same app-wide
@@ -304,7 +309,8 @@ final class StreamingWindowRedrawTests: XCTestCase {
             host.settle(passes: 20, interval: 0.01)
             let counts = Counts(values: ViewBodyCensus.counts)
             print("[redraw] \(name): window \(counts[.mainWindow]), rows \(counts[.sidebarRow]), "
-                  + "composer \(counts[.composer]), main thread \(MainThreadClock.since(start))")
+                  + "composer \(counts[.composer]), surface \(counts[.taskSurface]), rail \(counts[.sessionRail]), "
+                  + "main thread \(MainThreadClock.since(start))")
             return counts
         }
 

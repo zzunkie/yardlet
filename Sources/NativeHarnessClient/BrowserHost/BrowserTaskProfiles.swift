@@ -24,7 +24,7 @@ final class BrowserTaskProfiles {
         }
     }
 
-    static let storageKey = "Yardlet.browser.cookieStorage"
+    static let storageKey = "YardletBrowserCookieStorage"
 
     /// The browser's root cache, where Chromium keeps the default profile and its own folders too.
     let root: URL

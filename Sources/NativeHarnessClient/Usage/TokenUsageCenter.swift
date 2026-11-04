@@ -3,7 +3,7 @@ import Observation
 
 /// Settings › Usage › Count token usage, on by default. Off, nothing is read and the counts are deleted.
 enum TokenUsagePreference {
-    static let key = "Yardlet.tokenUsage"
+    static let key = "YardletTokenUsage"
 
     static func isOn(in defaults: UserDefaults = .yardlet) -> Bool {
         defaults.object(forKey: key) as? Bool ?? true

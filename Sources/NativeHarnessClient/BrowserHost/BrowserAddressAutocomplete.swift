@@ -8,7 +8,7 @@ import Observation
 /// in Chrome: what the person types in the address field goes to Google for suggested searches. Off, no request is
 /// sent (Chrome's `CanSendSuggestRequest`); suggestions from the browser's history stay, as they do in Chrome.
 enum SearchSuggestionPreference {
-    static let key = "Yardlet.browser.searchSuggestions"
+    static let key = "YardletBrowserSearchSuggestions"
 
     static func isOn(in defaults: UserDefaults = .yardlet) -> Bool {
         defaults.object(forKey: key) as? Bool ?? true

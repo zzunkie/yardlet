@@ -12,7 +12,7 @@ import Foundation
 /// moment. Nothing is written to the person's settings. The composer reads the setting live, so
 /// turning it off hides a suggestion at once.
 enum NextMessageSuggestionPreference {
-    static let key = "Yardlet.nextMessageSuggestions"
+    static let key = "YardletNextMessageSuggestions"
 
     static func isOn(in defaults: UserDefaults = .yardlet) -> Bool {
         defaults.object(forKey: key) as? Bool ?? true
