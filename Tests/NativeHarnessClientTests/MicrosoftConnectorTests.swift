@@ -192,18 +192,51 @@ final class MicrosoftConnectorTests: XCTestCase {
         XCTAssertEqual(microsoft.posted.suffix(3).map(\.path),
                        ["/v1.0/me/messages", "/v1.0/me/messages/d1/attachments", "/v1.0/me/messages/d1/send"])
 
-        // A file over the 3 MB one request carries, or from outside the folders, is refused before anything is made.
-        let posts = microsoft.posted.count
+        // A file from 3 MB goes through an upload session: its ranges in order, each under 4 MB, to the
+        // session's own address without the account's token; then the draft is sent.
         let large = folder.appending(path: "video.mov")
-        FileManager.default.createFile(atPath: large.path(percentEncoded: false), contents: nil)
-        let handle = try FileHandle(forWritingTo: large)
-        try handle.truncate(atOffset: UInt64(OutlookMailTransport.attachmentLimit + 1))
-        try handle.close()
-        for (path, reason) in [(large.path(percentEncoded: false), "at most 3 MB"), ("/etc/hosts", "files come from")] {
-            let refused = try await call(center, "outlook_send_message", ["to": .string("bo@contoso.test"),
-                                                                          "attachments": .string(path)], folders: [folder])
-            XCTAssertTrue(refused.isError && refused.text.contains(reason), "\(path): \(refused.text)")
+        let range = OutlookMailTransport.uploadRange
+        let largeBytes = Data((0..<(range * 2 + 1_000)).map { UInt8(truncatingIfNeeded: $0 % 251) })
+        try largeBytes.write(to: large)
+        _ = try json(try await call(center, "outlook_send_message", [
+            "to": .string("bo@contoso.test"), "attachments": .string(large.path(percentEncoded: false))
+        ], folders: [folder]))
+        XCTAssertEqual(microsoft.posted.suffix(3).map(\.path),
+                       ["/v1.0/me/messages", "/v1.0/me/messages/d1/attachments/createUploadSession", "/v1.0/me/messages/d1/send"])
+        let item = microsoft.posted.dropLast().last?.body["AttachmentItem"]
+        XCTAssertEqual(item?["attachmentType"], .string("file"))
+        XCTAssertEqual(item?["name"], .string("video.mov"))
+        XCTAssertEqual(item?["size"], .integer(Int64(largeBytes.count)))
+        let ranges = microsoft.requests.filter { $0.url?.host() == "outlook.microsoft.test" }
+        let total = largeBytes.count
+        XCTAssertEqual(ranges.map { $0.value(forHTTPHeaderField: "Content-Range") },
+                       ["bytes 0-\(range - 1)/\(total)", "bytes \(range)-\(2 * range - 1)/\(total)", "bytes \(2 * range)-\(total - 1)/\(total)"])
+        for request in ranges {
+            XCTAssertEqual(request.httpMethod, "PUT")
+            XCTAssertEqual(request.url?.absoluteString, FakeMicrosoft.uploadURL, "The session's address is used as Graph gave it")
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"), "The session's address carries its own authorization")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/octet-stream")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Length"), request.httpBody.map { String($0.count) })
+            XCTAssertLessThan(request.httpBody?.count ?? .max, 4 * 1024 * 1024)
         }
+        XCTAssertEqual(microsoft.uploaded, largeBytes)
+
+        // An upload Graph refuses is cancelled and the draft made for it deleted, with Graph's own message.
+        microsoft.uploadsFail = true
+        let failed = try await call(center, "outlook_send_message", ["to": .string("bo@contoso.test"),
+                                                                     "attachments": .string(large.path(percentEncoded: false))], folders: [folder])
+        XCTAssertTrue(failed.isError && failed.text.hasSuffix("The upload session expired. (HTTP 404)"), failed.text)
+        let ending = microsoft.requests.suffix(3)
+        XCTAssertEqual(ending.map(\.httpMethod), ["PUT", "DELETE", "DELETE"])
+        XCTAssertEqual(ending.map { $0.url?.absoluteString },
+                       [FakeMicrosoft.uploadURL, FakeMicrosoft.uploadURL, "https://graph.microsoft.test/v1.0/me/messages/d1"])
+        XCTAssertEqual(microsoft.posted.last?.path, "/v1.0/me/messages/d1/attachments/createUploadSession", "Nothing is sent")
+
+        // A file from outside the folders is refused before anything is made.
+        let posts = microsoft.posted.count
+        let outside = try await call(center, "outlook_send_message", ["to": .string("bo@contoso.test"),
+                                                                      "attachments": .string("/etc/hosts")], folders: [folder])
+        XCTAssertTrue(outside.isError && outside.text.contains("files come from"), outside.text)
         XCTAssertEqual(microsoft.posted.count, posts)
 
         // The cards name the files: a send's from the disk, a draft's as Outlook keeps it.
@@ -293,6 +326,8 @@ final class FakeMicrosoft: ConnectorHTTPTransport, @unchecked Sendable {
     static let endpoints = MicrosoftOAuth.Endpoints(login: URL(string: "https://login.microsoft.test/")!,
                                                     graph: URL(string: "https://graph.microsoft.test/v1.0/")!)
     static let clientID = "11111111-2222-3333-4444-555555555555"
+    /// An upload session's address, on another host, as Graph gives it.
+    static let uploadURL = "https://outlook.microsoft.test/api/v2.0/Users('u1@t1')/Messages('d1')/AttachmentSessions('s1')?authtoken=session-1"
 
     struct Post: Equatable {
         var path: String
@@ -307,6 +342,9 @@ final class FakeMicrosoft: ConnectorHTTPTransport, @unchecked Sendable {
     private var liveRefresh: String?
     private var issued = 0
     private var noSchedule = false
+    private var sessionSize = 0
+    private var received = Data()
+    private var refuseUploads = false
 
     var requests: [URLRequest] { lock.withLock { recorded } }
     var graphRequests: [URLRequest] { requests.filter { $0.url?.host() == "graph.microsoft.test" } }
@@ -318,6 +356,14 @@ final class FakeMicrosoft: ConnectorHTTPTransport, @unchecked Sendable {
         set { lock.withLock { noSchedule = newValue } }
     }
 
+    /// The bytes the last upload session took, in the order of its ranges.
+    var uploaded: Data { lock.withLock { received } }
+    /// Upload sessions answer that they expired.
+    var uploadsFail: Bool {
+        get { lock.withLock { refuseUploads } }
+        set { lock.withLock { refuseUploads = newValue } }
+    }
+
     func forgetAccessTokens() { lock.withLock { accessTokens.removeAll() } }
     func revokeRefreshTokens() { lock.withLock { liveRefresh = nil } }
 
@@ -326,6 +372,7 @@ final class FakeMicrosoft: ConnectorHTTPTransport, @unchecked Sendable {
         guard let url = request.url else { throw URLError(.badURL) }
         if url.host() == "login.microsoft.test", url.path().hasSuffix("/oauth2/v2.0/token") { return token(request) }
         if url.host() == "download.microsoft.test" { return (Data("hello".utf8), Self.ok(url)) }
+        if url.host() == "outlook.microsoft.test" { return upload(request) }
         guard url.host() == "graph.microsoft.test" else { return Self.reply(url, 404, [:]) }
         let token = request.value(forHTTPHeaderField: "Authorization")?.replacingOccurrences(of: "Bearer ", with: "")
         guard let token, lock.withLock({ accessTokens.contains(token) }) else {
@@ -372,6 +419,32 @@ final class FakeMicrosoft: ConnectorHTTPTransport, @unchecked Sendable {
         }
     }
 
+    /// An upload session takes the file's ranges in order, each with its length and place, and makes the
+    /// attachment with the last; `DELETE` cancels it.
+    private func upload(_ request: URLRequest) -> (Data, HTTPURLResponse) {
+        let url = request.url!
+        if request.httpMethod == "DELETE" { return (Data(), Self.ok(url, status: 204)) }
+        let content = request.httpBody ?? Data()
+        return lock.withLock {
+            if refuseUploads {
+                return Self.reply(url, 404, ["error": .object(["code": .string("ErrorItemNotFound"),
+                                                               "message": .string("The upload session expired.")])])
+            }
+            guard request.httpMethod == "PUT", request.value(forHTTPHeaderField: "Content-Length") == String(content.count),
+                  request.value(forHTTPHeaderField: "Content-Range")
+                    == "bytes \(received.count)-\(received.count + content.count - 1)/\(sessionSize)" else {
+                return Self.reply(url, 400, ["error": .object(["code": .string("ErrorInvalidRequest"), "message": .string("Bad range.")])])
+            }
+            received += content
+            guard received.count == sessionSize else {
+                return Self.reply(url, 200, ["nextExpectedRanges": .array([.string(String(received.count))])])
+            }
+            return (Data(), HTTPURLResponse(url: url, statusCode: 201, httpVersion: "HTTP/1.1", headerFields: [
+                "Location": "https://outlook.microsoft.test/api/v2.0/Users('u1@t1')/Messages('d1')/Attachments('a3')"
+            ])!)
+        }
+    }
+
     private func graph(_ url: URL, method: String, body: ToolJSON) -> (Data, HTTPURLResponse) {
         let path = url.path(percentEncoded: true).replacingOccurrences(of: "/v1.0/", with: "")
         switch (method, path) {
@@ -393,6 +466,15 @@ final class FakeMicrosoft: ConnectorHTTPTransport, @unchecked Sendable {
                                          "toRecipients": body["toRecipients"] ?? .array([]), "isDraft": .bool(true)])
         case ("POST", "me/messages/d1/attachments"):
             return Self.reply(url, 201, ["id": .string("a1"), "name": body["name"] ?? .null])
+        case ("POST", "me/messages/d1/attachments/createUploadSession"):
+            lock.withLock {
+                sessionSize = OutlookMailTransport.integer(body["AttachmentItem"]?["size"]) ?? 0
+                received = Data()
+            }
+            return Self.reply(url, 201, ["uploadUrl": .string(Self.uploadURL), "expirationDateTime": .string("2026-10-27T10:00:00Z"),
+                                         "nextExpectedRanges": .array([.string("0-")])])
+        case ("DELETE", "me/messages/d1"):
+            return (Data(), Self.ok(url, status: 204))
         case ("GET", "me/messages/d1"):
             func file(_ id: String, _ name: String, _ size: Int64, inline: Bool) -> ToolJSON {
                 .object(["id": .string(id), "name": .string(name), "size": .integer(size), "isInline": .bool(inline)])

@@ -6,9 +6,9 @@ import YardletAgentTools
 
 /// Microsoft Graph v1.0 for one Microsoft account, through the account's `OAuthAPISession`: JSON in
 /// and out, the headers some Graph requests need (`Prefer`, `ConsistencyLevel`), the raw bytes an
-/// upload sends, and the next page Graph links to. Nothing here logs or keeps what a mailbox,
-/// calendar, drive, or chat holds; a failure carries Graph's own error message, never a request or
-/// response body (learn.microsoft.com/graph/errors).
+/// upload sends, an upload session's ranges, and the next page Graph links to. Nothing here logs or
+/// keeps what a mailbox, calendar, drive, or chat holds; a failure carries Graph's own error message,
+/// never a request or response body (learn.microsoft.com/graph/errors).
 struct GraphAPI: Sendable {
     let base: URL
     let session: OAuthAPISession
@@ -76,6 +76,23 @@ struct GraphAPI: Sendable {
         return try Self.decode(data, response)
     }
 
+    /// Sends one range of a file's bytes to an upload session's address (`uploadUrl`), which carries
+    /// its own authorization, so the account's token is not sent there
+    /// (learn.microsoft.com/graph/outlook-large-attachments).
+    func upload(_ content: Data, at offset: Int, of total: Int, to uploadURL: URL) async throws -> ToolJSON {
+        let (data, response) = try await session.http.send(Self.request("PUT", uploadURL, body: content, headers: [
+            "Content-Type": "application/octet-stream",
+            "Content-Length": String(content.count),
+            "Content-Range": "bytes \(offset)-\(offset + content.count - 1)/\(total)",
+        ]))
+        return try Self.decode(data, response)
+    }
+
+    /// Ends an upload session that will not be finished, also without the token.
+    func cancelUpload(_ uploadURL: URL) async {
+        _ = try? await session.http.send(Self.request("DELETE", uploadURL, body: nil, headers: [:]))
+    }
+
     // MARK: Requests
 
     private func json(_ method: String, _ url: URL, body: ToolJSON?, headers: [String: String]) async throws -> ToolJSON {
@@ -101,13 +118,15 @@ struct GraphAPI: Sendable {
     }
 
     private func send(_ method: String, _ url: URL, body: Data?, headers: [String: String]) async throws -> (Data, HTTPURLResponse) {
-        try await session.send {
-            var request = URLRequest(url: url, timeoutInterval: 60)
-            request.httpMethod = method
-            for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
-            request.httpBody = body
-            return request
-        }
+        try await session.send { Self.request(method, url, body: body, headers: headers) }
+    }
+
+    private static func request(_ method: String, _ url: URL, body: Data?, headers: [String: String]) -> URLRequest {
+        var request = URLRequest(url: url, timeoutInterval: 60)
+        request.httpMethod = method
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+        request.httpBody = body
+        return request
     }
 
     private static func decode(_ data: Data, _ response: HTTPURLResponse) throws -> ToolJSON {

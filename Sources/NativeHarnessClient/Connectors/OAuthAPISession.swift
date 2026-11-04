@@ -15,7 +15,8 @@ actor OAuthAPISession {
 
     private let id: UUID
     private let credentials: any ConnectorCredentialStoring
-    private let http: any ConnectorHTTPTransport
+    /// The transport without the token, for an address that carries its own authorization.
+    nonisolated let http: any ConnectorHTTPTransport
     private let now: @Sendable () -> Date
     private var credential: ConnectorCredential?
     private var loaded = false

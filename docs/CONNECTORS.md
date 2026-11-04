@@ -1401,15 +1401,17 @@ Outlook Mail (`OutlookMailToolCatalog`, `OutlookMailToolRunner`):
 | `search_messages` | `GET me/messages` or `me/mailFolders/{id}/messages` | `query` as `$search` (KQL; Graph sorts by date and takes no `$orderby` with it), otherwise newest first; `folderId` (an ID or `inbox`, `archive`…), `unreadOnly`, 1–50 per page. No body |
 | `get_message` | `GET me/messages/{id}` with attachments' names | `format` text (default, `Prefer: outlook.body-content-type="text"`) or html, 40,000 characters |
 | `list_folders` | `GET me/mailFolders` or `…/childFolders` | |
-| `create_draft` | `POST me/messages`, or `createReply`/`createReplyAll`; then `POST …/attachments` for each file | to, cc, bcc, subject, body or htmlBody, `replyToMessageId`, `replyAll`, `attachments` |
+| `create_draft` | `POST me/messages`, or `createReply`/`createReplyAll`; then each file by `POST …/attachments`, or from 3 MB through `POST …/attachments/createUploadSession` | to, cc, bcc, subject, body or htmlBody, `replyToMessageId`, `replyAll`, `attachments` |
 | `send_draft` | `POST me/messages/{id}/send` | |
 | `send_message` | `POST me/sendMail` (kept in Sent Items), or `reply`/`replyAll`; with attachments, a draft as for `create_draft`, then `POST …/send` | A reply's text goes as `comment`, which keeps the quoted original. A draft whose files could not all be added is deleted |
 | `update_message` | `PATCH me/messages/{id}`, `POST …/move` | `isRead`, `flag`, `categories`, `moveToFolderId`; moving gives a new ID |
 
 Addresses with a comma, a line break or no `@` are refused before the request. Attachments follow Gmail's rules
-(`GmailAttachmentFiles`, above) and are checked before any request; Graph takes a file in one request only up to 3 MB
-(`OutlookMailTransport.attachmentLimit`, larger ones need an upload session), so a larger file is refused. The result
-lists each attached file's name and size.
+(`GmailAttachmentFiles`, above) and are checked before any request. Graph takes a file under 3 MB in one request
+(`OutlookMailTransport.attachmentLimit`); a larger one goes through an upload session, its bytes sent in order in ranges
+of 3,200 KiB (`OutlookMailTransport.uploadRange`, under the 4 MB Graph asks for) to the session's own address, which
+carries its own authorization, so the account's token is not sent there. An upload that fails is cancelled. The
+result lists each attached file's name and size.
 
 Outlook Calendar (`OutlookCalendarToolCatalog`, `OutlookCalendarToolRunner`):
 

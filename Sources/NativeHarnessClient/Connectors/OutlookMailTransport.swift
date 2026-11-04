@@ -235,8 +235,8 @@ struct OutlookMailTransport: MailAccountTransport {
 
     /// A new message is a draft in Drafts; a reply, reply to all or forward starts from Graph's own
     /// (`createReply`, `createReplyAll`, `createForward`), which threads it and carries a forward's files.
-    /// Then what the person wrote replaces its fields, and chosen files are added once each, up to the 3 MB
-    /// a single request carries.
+    /// Then what the person wrote replaces its fields, and chosen files are added once each, a large one
+    /// through an upload session.
     func saveDraft(_ composition: MailComposition) async throws -> String {
         var fields: [String: ToolJSON] = [
             "subject": .string(composition.subject),
@@ -272,21 +272,53 @@ struct OutlookMailTransport: MailAccountTransport {
         return draftID
     }
 
-    /// The most one request attaches; larger files need an upload session.
+    /// Graph takes a file under 3 MB in one request; a file this size or larger goes through an
+    /// upload session.
     static let attachmentLimit = 3 * 1024 * 1024
+    /// The bytes each request of an upload session carries, under the 4 MB Graph asks for.
+    static let uploadRange = 10 * 320 * 1024
 
-    /// Adds the files to a saved message, one request each, as the mailbox and Outlook's tools both do.
+    /// Adds the files to a saved message, as the mailbox and Outlook's tools both do: a small file in
+    /// one request, a larger one through an upload session (`createUploadSession`, then its bytes in
+    /// order, a range at a time, to the session's own address). An upload that fails is cancelled.
     static func attach(_ files: [URL], to messageID: String, api: GraphAPI) async throws {
+        let attachments = ["me", "messages", try GraphAPI.segment(messageID), "attachments"]
         for url in files {
             let name = GmailAttachmentFiles.displayName(url.path)
-            let data = try Data(contentsOf: url)
-            guard data.count <= attachmentLimit else { throw GraphAPI.Failure.tooLarge(bytes: data.count, limit: attachmentLimit) }
-            _ = try await api.post(["me", "messages", try GraphAPI.segment(messageID), "attachments"], .object([
-                "@odata.type": .string("#microsoft.graph.fileAttachment"),
-                "name": .string(name),
-                "contentType": .string(FileTypes.mimeType(forExtension: url.pathExtension) ?? "application/octet-stream"),
-                "contentBytes": .string(data.base64EncodedString()),
-            ]))
+            let type = FileTypes.mimeType(forExtension: url.pathExtension) ?? "application/octet-stream"
+            let file = try FileHandle(forReadingFrom: url)
+            defer { try? file.close() }
+            let size = Int(try file.seekToEnd())
+            try file.seek(toOffset: 0)
+            guard size >= attachmentLimit else {
+                _ = try await api.post(attachments, .object([
+                    "@odata.type": .string("#microsoft.graph.fileAttachment"),
+                    "name": .string(name),
+                    "contentType": .string(type),
+                    "contentBytes": .string((try file.readToEnd() ?? Data()).base64EncodedString()),
+                ]))
+                continue
+            }
+            let session = try await api.post(attachments + ["createUploadSession"], .object(["AttachmentItem": .object([
+                "attachmentType": .string("file"), "name": .string(name), "size": .integer(Int64(size)), "contentType": .string(type),
+            ])]))
+            guard let link = session["uploadUrl"]?.stringValue, let upload = URL(string: link), upload.scheme == "https" else {
+                throw GraphAPI.Failure.unreadableAnswer
+            }
+            do {
+                var offset = 0
+                while offset < size {
+                    // A file that got shorter since it was checked ends the upload rather than leaving it unfinished.
+                    guard let range = try file.read(upToCount: min(uploadRange, size - offset)), !range.isEmpty else {
+                        throw CocoaError(.fileReadUnknown, userInfo: [NSURLErrorKey: url])
+                    }
+                    _ = try await api.upload(range, at: offset, of: size, to: upload)
+                    offset += range.count
+                }
+            } catch {
+                await api.cancelUpload(upload)
+                throw error
+            }
         }
     }
 
