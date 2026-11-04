@@ -4,6 +4,19 @@ import YardletRemote
 
 /// Desktop dialogs and opening actions for a host task; its facts remain portable.
 extension RemoteHostModel {
+    /// Uses the host's existing compact command and its availability, in both context surfaces.
+    func railCompact(_ taskID: String) -> ComposerContextUsageDetails.Compact? {
+        guard taskControls, let facts = taskRailFacts[taskID], facts.compactOffered else { return nil }
+        let running = task(taskID)?.running == true
+        return ComposerContextUsageDetails.Compact(
+            isAvailable: isConnected && facts.compactAvailable && !running,
+            unavailableReason: running
+                ? L10n.format("Available when %@ finishes this turn", task(taskID)?.harnessName ?? name)
+                : L10n.string("Available when reconnected"),
+            run: { [weak self] in Task { _ = await self?.runComposerCommand(taskID, name: "compact", arguments: nil) } })
+    }
+
+
     private func confirmRailWrite(title: String, message: String) -> Bool {
         let alert = NSAlert()
         alert.messageText = title

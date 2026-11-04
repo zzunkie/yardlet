@@ -52,10 +52,7 @@ struct RemoteTaskRail: View {
 
     /// The host's outputs as the card's rows: each at its path on the host, which the card shows as its help.
     nonisolated static func rows(_ outputs: [RemoteOutput]) -> [SessionRailContent.Output] {
-        outputs.map { output in
-            SessionRailContent.Output(url: URL(filePath: output.path),
-                                      writtenAt: output.writtenAt.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) })
-        }
+        RemoteRailProjection.outputRows(outputs)
     }
 }
 

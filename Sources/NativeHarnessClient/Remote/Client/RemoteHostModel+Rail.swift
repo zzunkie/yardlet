@@ -39,23 +39,18 @@ extension RemoteHostModel {
         }
     }
 
-    /// Uses the host's existing compact command and its availability, in both context surfaces.
-    func railCompact(_ taskID: String) -> ComposerContextUsageDetails.Compact? {
-        guard taskControls, let facts = taskRailFacts[taskID], facts.compactOffered else { return nil }
-        let running = task(taskID)?.running == true
-        return ComposerContextUsageDetails.Compact(
-            isAvailable: isConnected && facts.compactAvailable && !running,
-            unavailableReason: running
-                ? L10n.format("Available when %@ finishes this turn", task(taskID)?.harnessName ?? name)
-                : L10n.string("Available when reconnected"),
-            run: { [weak self] in Task { _ = await self?.runComposerCommand(taskID, name: "compact", arguments: nil) } })
-    }
 
 
 }
 
 /// Host facts enter the same local projections; no disk or provider reads happen here.
 enum RemoteRailProjection {
+    static func outputRows(_ outputs: [RemoteOutput]) -> [SessionRailContent.Output] {
+        outputs.map { output in
+            SessionRailContent.Output(url: URL(filePath: output.path), writtenAt: output.writtenAt.map(date))
+        }
+    }
+
     static func stopAction(_ kind: String) -> String {
         switch kind {
         case "childTask": "stopChild"
@@ -196,7 +191,7 @@ enum RemoteRailProjection {
         content.environment.worktreeName = facts?.worktreeName
         content.environment.folderName = facts?.folderName ?? projectName
         content.environment.additionalRoots = facts?.additionalRoots ?? []
-        content.outputs = RemoteTaskRail.rows(outputs)
+        content.outputs = outputRows(outputs)
         if let facts, !facts.agents.isEmpty {
             content.agents = SessionRailAgents(agents: facts.agents.compactMap(agent))
         }
