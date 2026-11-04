@@ -297,6 +297,16 @@ final class LocalizationTests: XCTestCase {
             L10n.string("Attachment could not be read: %@", languageCode: "ko"),
             "첨부 파일을 읽지 못했습니다: %@"
         )
+        XCTAssertEqual(
+            String(
+                format: L10n.string(
+                    "To change settings here, allow it in %@'s Settings › Remote › Paired devices.",
+                    languageCode: "ko"
+                ),
+                "Mac Studio"
+            ),
+            "여기서 설정을 바꾸려면 Mac Studio의 설정 › 원격 연결 › 연결된 기기에서 허용하세요."
+        )
     }
 
     func testEnglishAndKoreanCatalogsHaveTheSameNonEmptyKeys() throws {

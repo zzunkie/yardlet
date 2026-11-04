@@ -1462,7 +1462,7 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                                remoteHost: client)
         } check: { elements in
             let text = elements.map { "\($0.label) \($0.value)" }.joined(separator: " ")
-            XCTAssertTrue(text.contains("Paired devices"), text)
+            XCTAssertTrue(text.contains(RemoteHostSettingsProjection.permissionNote(hostName: "Mac Studio")), text)
         }
 
         // Now grant the settings permission and render each section side by side with the local sheet.

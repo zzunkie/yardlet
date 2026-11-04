@@ -3806,3 +3806,10 @@
 "Update Yardlet on %@ to open addresses in its browser." = "Update Yardlet on %@ to open addresses in its browser.";
 
 "The host did not answer. Try again." = "The host did not answer. Try again.";
+
+"To change settings here, allow it in %@'s Settings › Remote › Paired devices." = "To change settings here, allow it in %@'s Settings › Remote › Paired devices.";
+
+"Turn off “Hide keys and tokens” on the Mac itself." = "Turn off “Hide keys and tokens” on the Mac itself.";
+
+"Allow Yardlet in the background in System Settings on the Mac itself." = "Allow Yardlet in the background in System Settings on the Mac itself.";
+

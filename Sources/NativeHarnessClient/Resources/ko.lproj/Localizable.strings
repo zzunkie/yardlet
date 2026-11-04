@@ -3806,3 +3806,10 @@
 "Search or enter address" = "검색어 또는 주소 입력";
 
 "The host did not answer. Try again." = "호스트에서 응답이 오지 않았습니다. 다시 시도하세요.";
+
+"To change settings here, allow it in %@'s Settings › Remote › Paired devices." = "여기서 설정을 바꾸려면 %@의 설정 › 원격 연결 › 연결된 기기에서 허용하세요.";
+
+"Turn off “Hide keys and tokens” on the Mac itself." = "“키와 토큰 가리기”는 그 Mac에서 직접 꺼 주세요.";
+
+"Allow Yardlet in the background in System Settings on the Mac itself." = "그 Mac의 시스템 설정에서 Yardlet의 백그라운드 실행을 허용하세요.";
+
