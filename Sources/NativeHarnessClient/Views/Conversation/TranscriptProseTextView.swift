@@ -724,24 +724,53 @@ final class TranscriptProseTextView: NSTextView {
 
     /// A press here selects in the conversation (`ConversationSelection`): a drag runs on into the
     /// other messages, a double or triple click takes a word or a paragraph and a drag from it goes on
-    /// by words or paragraphs, and a shift-click extends the selection. A click on a link and a press
-    /// with Command, Option or Control are the text's own.
+    /// by words or paragraphs, and a shift-click extends the selection. A click on a link opens it
+    /// (`follow(_:onLink:)`). A press with Command, Option or Control is the text's own.
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         let modifiers = event.modifierFlags.intersection([.shift, .command, .option, .control])
-        let onLink = event.clickCount == 1 && modifiers.isEmpty && linkRects().contains { $0.contains(point) }
+        let link = event.clickCount == 1 && modifiers.isEmpty
+            ? links().first { $0.rects.contains { $0.contains(point) } } : nil
         let inScrollView = enclosingScrollView != nil
-        guard modifiers.isEmpty || modifiers == .shift, !onLink, inScrollView else {
+        guard modifiers.isEmpty || modifiers == .shift, inScrollView else {
             ConversationSelection.log.debug("""
                 press in a text left to the text: modifiers \(modifiers.rawValue, privacy: .public), \
-                link \(onLink, privacy: .public), in a scroll view \(inScrollView, privacy: .public)
+                link \(link != nil, privacy: .public), in a scroll view \(inScrollView, privacy: .public)
                 """)
             // A control-click opens the menu, whose Copy copies the selection, as a right click does.
             if !modifiers.contains(.control) { ConversationSelection.clear() }
             super.mouseDown(with: event)
             return
         }
-        ConversationSelection.track(from: self, with: event)
+        if let link {
+            follow(event, onLink: link)
+        } else {
+            ConversationSelection.track(from: self, with: event)
+        }
+    }
+
+    /// Follows a click on a link without the text system's own tracking, which takes the keyboard
+    /// focus and sets the text's selection again for every event of the press, running AppKit's text
+    /// checking over it each time (2026-11-04: a click on a link in an answer being written held the
+    /// main thread until the app was quit). The release opens the link pressed, even when the answer
+    /// moved under a still pointer; a drag of more than a few points selects from the press, as a drag
+    /// from any other word does.
+    private func follow(_ down: NSEvent, onLink link: (value: Any, range: NSRange, rects: [CGRect])) {
+        ConversationSelection.clear()
+        guard let window else { return }
+        while let event = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if event.type == .leftMouseUp {
+                clicked(onLink: link.value, at: link.range.location)
+                return
+            }
+            let moved = hypot(event.locationInWindow.x - down.locationInWindow.x,
+                              event.locationInWindow.y - down.locationInWindow.y)
+            if moved > 3 {
+                NSApp.postEvent(event, atStart: true)
+                ConversationSelection.track(from: self, with: down)
+                return
+            }
+        }
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -814,22 +843,27 @@ final class TranscriptProseTextView: NSTextView {
     }
 
     /// Where the text's links are drawn, in this view: a rect per line a link spans.
-    func linkRects() -> [CGRect] {
+    func linkRects() -> [CGRect] { links().flatMap(\.rects) }
+
+    /// The text's links, each with where it is drawn in this view.
+    private func links() -> [(value: Any, range: NSRange, rects: [CGRect])] {
         guard let storage = textStorage, storage.length > 0, let layout = textLayoutManager,
               let content = textContentStorage else { return [] }
         let origin = textContainerOrigin
-        var rects: [CGRect] = []
+        var links: [(value: Any, range: NSRange, rects: [CGRect])] = []
         storage.enumerateAttribute(.link, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
-            guard value != nil, let start = content.location(content.documentRange.location, offsetBy: range.location),
+            guard let value, let start = content.location(content.documentRange.location, offsetBy: range.location),
                   let end = content.location(start, offsetBy: range.length),
                   let textRange = NSTextRange(location: start, end: end) else { return }
             layout.ensureLayout(for: textRange)
+            var rects: [CGRect] = []
             layout.enumerateTextSegments(in: textRange, type: .standard, options: []) { _, frame, _, _ in
                 if !frame.isEmpty { rects.append(frame.offsetBy(dx: origin.x, dy: origin.y)) }
                 return true
             }
+            links.append((value, range, rects))
         }
-        return rects
+        return links
     }
 }
 

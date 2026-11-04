@@ -368,6 +368,61 @@ final class ConversationSelectionTests: XCTestCase {
         XCTAssertNil(Self.painted(secondAnswer))
     }
 
+    /// A click on a link opens it and selects nothing, also while the answer it is in goes on being
+    /// written under the button; a drag from a link selects from there, as a drag from any other word
+    /// does. 2026-11-04: the text system's own tracking of such a click, which sets the text's selection
+    /// again for every event of the press, held the main thread until the app was quit, and a fragment
+    /// arriving during a click opened nothing.
+    func testAClickOnALinkOpensItAndADragFromItSelects() throws {
+        var opened: [URL] = []
+        let words = "It is [the forum thread](https://forums.swift.org/t/1) for now."
+        let box = StreamingBox(entries: [
+            TranscriptEntry(content: .user(text: "Where is the thread?")),
+            TranscriptEntry(content: .assistant(text: words, isStreaming: true))
+        ])
+        let host = WindowlessRender.Host(
+            StreamingConversation(box: box)
+                .environment(\.openURL, OpenURLAction { url in
+                    opened.append(url)
+                    return .handled
+                })
+                .frame(width: 760, height: 600).background(ParityTheme.canvas),
+            size: NSSize(width: 760, height: 600), appearance: .light)
+        defer { host.close() }
+        show(host)
+        let answer = try text("It is", in: host)
+        let link = try point("forum", in: answer)
+
+        press(at: link, in: host.window)
+        XCTAssertEqual(opened.map(\.absoluteString), ["https://forums.swift.org/t/1"])
+        XCTAssertFalse(Self.isSelected(answer))
+
+        // The button comes up once a fragment arrived while it was down.
+        let up = event(.leftMouseUp, at: link, in: host.window)
+        let deadline = Date().addingTimeInterval(testWaitLimitSeconds)
+        func releaseOnceWritten() {
+            if answer.string.contains("Another sentence") || Date() > deadline {
+                NSApp.postEvent(up, atStart: false)
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { releaseOnceWritten() }
+            }
+        }
+        DispatchQueue.main.async {
+            box.entries[1] = TranscriptEntry(id: box.entries[1].id, createdAt: box.entries[1].createdAt, content: .assistant(
+                text: words + "\n\nAnother sentence written while the button is down.", isStreaming: true))
+            releaseOnceWritten()
+        }
+        NSApp.sendEvent(event(.leftMouseDown, at: link, in: host.window))
+        XCTAssertTrue(answer.string.contains("Another sentence"), "No fragment arrived during the press")
+        XCTAssertEqual(opened.count, 2, "A fragment during the click kept the link from opening")
+        XCTAssertFalse(Self.isSelected(answer))
+
+        press(at: link, dragTo: try point("now", in: answer, atEnd: true), in: host.window)
+        XCTAssertEqual(opened.count, 2, "A drag opens nothing")
+        let painted = try XCTUnwrap(Self.painted(answer))
+        XCTAssertEqual((answer.string as NSString).substring(with: painted), "forum thread for now")
+    }
+
     // MARK: - While it is there
 
     /// The selection stays through scrolling and through the answer it covers growing, as a page's
