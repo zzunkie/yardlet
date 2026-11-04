@@ -385,7 +385,10 @@ actor ACPAdapter:
     }
 
     func events(for session: HarnessSessionHandle) async -> AsyncStream<HarnessEventEnvelope> {
-        eventChannel.subscribe(to: session.localSessionID)
+        let stream = eventChannel.subscribe(to: session.localSessionID)
+        // A session that ended with its process before anyone listened ends at once, after its events.
+        if handles[session.localSessionID] != session { eventChannel.finish(session.localSessionID) }
+        return stream
     }
 
     func providerCapabilities(for session: HarnessSessionHandle) async throws
@@ -509,6 +512,17 @@ actor ACPAdapter:
     }
 
     func close(_ session: HarnessSessionHandle) async {
+        let wasOpen = forget(session)
+        eventChannel.close(session.localSessionID)
+        // Closing the last open session ends the process; closing a session again, or one whose
+        // process already ended, leaves alone a process started since.
+        if wasOpen, handles.isEmpty {
+            await stopTransport()
+        }
+    }
+
+    /// Drops what the adapter holds for `session`, and returns whether it was open.
+    private func forget(_ session: HarnessSessionHandle) -> Bool {
         let wasOpen = handles.removeValue(forKey: session.localSessionID) != nil
         localSessionIDByProviderID.removeValue(forKey: session.providerSessionID)
         replayingProviderSessionIDs.remove(session.providerSessionID)
@@ -526,12 +540,7 @@ actor ACPAdapter:
         yardletInstructionsByLocalSessionID.removeValue(forKey: session.localSessionID)
         antigravityPermissionModeByLocalSessionID.removeValue(forKey: session.localSessionID)
         antigravityModelsByLocalSessionID.removeValue(forKey: session.localSessionID)
-        eventChannel.close(session.localSessionID)
-        // Closing the last open session ends the process; closing a session again leaves alone a
-        // process started since.
-        if wasOpen, handles.isEmpty {
-            await stopTransport()
-        }
+        return wasOpen
     }
 
     /// The catalog's arguments, plus the extra-root flag when this CLI documents one. A task with
@@ -564,6 +573,9 @@ actor ACPAdapter:
                         guard !Task.isCancelled else { break }
                         await self?.accept(frame)
                     }
+                    // Stopping cancels this first; otherwise the process ended on its own.
+                    guard !Task.isCancelled else { return }
+                    await self?.transportEnded(transport)
                 }
             }
             let id = takeRequestID()
@@ -786,7 +798,10 @@ actor ACPAdapter:
         }
     }
 
+    /// Called from the prompt's own task. One cancelled by closing its session or by its process
+    /// ending has been accounted for there, and reports nothing more.
     private func finishPrompt(for localSessionID: UUID) {
+        guard !Task.isCancelled else { return }
         promptTasks.removeValue(forKey: localSessionID)
         completeAssistantIfNeeded(for: localSessionID)
         emit(.turnCompleted, for: localSessionID)
@@ -794,6 +809,9 @@ actor ACPAdapter:
     }
 
     private func failPrompt(_ error: Error, for localSessionID: UUID) {
+        guard !Task.isCancelled else { return }
+        // The process ended under the turn; its end, which follows, reports the turn with the session.
+        if case HarnessAdapterError.processExited = error { return }
         promptTasks.removeValue(forKey: localSessionID)
         completeAssistantIfNeeded(for: localSessionID)
         emit(.error(message: error.localizedDescription, recoverable: true), for: localSessionID)
@@ -806,6 +824,26 @@ actor ACPAdapter:
                 L10n.string("ACP session is not attached")
             )
         }
+    }
+
+    /// The shared process ended on its own: it exited or was killed. Its sessions end with it, a
+    /// turn in progress with an error, as a crashed runtime's do, and the next session or prompt
+    /// starts a new process instead of reaching the one that ended.
+    private func transportEnded(_ ended: any ACPTransport) async {
+        guard ended === transport else { return }
+        let message = L10n.format("Connection to %@ ended.", kind.displayName)
+        for session in handles.values {
+            let id = session.localSessionID
+            if let prompt = promptTasks.removeValue(forKey: id) {
+                prompt.cancel()
+                completeAssistantIfNeeded(for: id)
+                emit(.error(message: message, recoverable: true), for: id)
+                emit(.sessionStatusChanged(.failed), for: id)
+            }
+            _ = forget(session)
+            eventChannel.finish(id)
+        }
+        await stopTransport()
     }
 
     /// After a failed session request, ends the process if no session uses it. `used` is the
