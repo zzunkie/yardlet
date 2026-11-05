@@ -66,11 +66,9 @@ public static class ServeBonjour {
         public IntPtr Context;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    struct Cancel { public IntPtr Reserved; }
-
-    [DllImport("dnsapi.dll")] static extern int DnsServiceBrowse(ref BrowseRequest request, ref Cancel cancel);
-    [DllImport("dnsapi.dll")] static extern int DnsServiceBrowseCancel(ref Cancel cancel);
+    // The cancel handle Windows fills, which must stay where it is until the browse is cancelled.
+    [DllImport("dnsapi.dll")] static extern int DnsServiceBrowse(ref BrowseRequest request, IntPtr cancel);
+    [DllImport("dnsapi.dll")] static extern int DnsServiceBrowseCancel(IntPtr cancel);
     [DllImport("dnsapi.dll")] static extern void DnsRecordListFree(IntPtr records, int type);
 
     static readonly System.Collections.Generic.List<string> found = new System.Collections.Generic.List<string>();
@@ -87,11 +85,12 @@ public static class ServeBonjour {
             if (records != IntPtr.Zero) DnsRecordListFree(records, 1);
         };
         var request = new BrowseRequest { Version = 1, QueryName = Marshal.StringToHGlobalUni(service), Callback = kept };
-        var cancel = new Cancel();
-        int started = DnsServiceBrowse(ref request, ref cancel);
+        IntPtr cancel = Marshal.AllocHGlobal(IntPtr.Size);
+        Marshal.WriteIntPtr(cancel, IntPtr.Zero);
+        int started = DnsServiceBrowse(ref request, cancel);
         if (started != 9506) return new[] { "DnsServiceBrowse returned " + started };
         Thread.Sleep(milliseconds);
-        DnsServiceBrowseCancel(ref cancel);
+        DnsServiceBrowseCancel(cancel);
         lock (found) { return found.ToArray(); }
     }
 }
@@ -326,8 +325,11 @@ if (-not (Wait-For { (Read-Events) -contains 'remote host: on' } 10)) { Finish '
 $reach = Wait-For { Read-Events | Where-Object { $_ -like 'remote host reach: *Same Wi-Fi*' -and $_ -like '*Yardlet server' } } 60
 $summary.reach = "$(Read-Events | Where-Object { $_ -like 'remote host reach: *' } | Select-Object -Last 1)"
 if (-not $reach) { Finish 'the remote did not listen and reach the relay' }
-$summary.firewallRules = @(Get-NetFirewallApplicationFilter -Program $Executable -ErrorAction SilentlyContinue | Get-NetFirewallRule |
-    ForEach-Object { "$($_.DisplayName): $($_.Direction) $($_.Action) $($_.Profile)" }) -join '; '
+# The rules Windows' firewall holds for the app, such as those its prompt on the first listen makes.
+$filters = @(Get-NetFirewallApplicationFilter -Program $Executable -ErrorAction SilentlyContinue)
+$summary.firewallRules = if ($filters.Count -gt 0) {
+    @($filters | Get-NetFirewallRule | ForEach-Object { "$($_.DisplayName): $($_.Direction) $($_.Action) $($_.Profile)" }) -join '; '
+} else { 'none' }
 
 # The first phone, from the link without its relay: paired and answered over a direct address.
 $link = Copy-PairingLink '' -showing
