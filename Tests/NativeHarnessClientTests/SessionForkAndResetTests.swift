@@ -91,10 +91,16 @@ final class SessionForkAndResetTests: XCTestCase {
         context.nativeConversationOrigin = NativeConversationOrigin(session: fixture.parent)
         context.isDelivered = true
         edited.inheritedContext = context
+        // The edited chat was moved to Chats since: the original, nested under it, is listed there too.
+        edited.assignProject(nil, additionalRoots: [])
         let adapter = ForkRecordingAdapter(), model = try fixture.model(adapter, sessions: [edited])
         let result = await model.openOriginalClaudeConversation(from: edited)
         let original = try XCTUnwrap(result)
         XCTAssertEqual(model.transcriptBySessionID[original.id]?.map(\.content), [.user(text: "Original request")])
+        XCTAssertTrue(original.isMovedToChats)
+        XCTAssertNil(original.projectID)
+        XCTAssertEqual(original.additionalRoots, [])
+        XCTAssertEqual(original.workspaceURL, fixture.parent.workspaceURL)
         let probes = await adapter.probes; XCTAssertEqual(probes, 0)
         await model.shutdown()
     }

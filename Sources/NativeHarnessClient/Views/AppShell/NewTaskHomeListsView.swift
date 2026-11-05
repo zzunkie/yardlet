@@ -37,7 +37,7 @@ struct NewTaskHomeLists: View {
     /// The task the composer answers now, whose line stays marked.
     var replyTaskID: UUID?
     var recentSessions: [SessionRecord] = []
-    var projectName: (URL) -> String = { $0.lastPathComponent }
+    var projectName: (SessionRecord) -> String = { $0.workspaceURL.lastPathComponent }
     var onImportConversation: (() -> Void)? = nil
     var onImportFromOtherApps: (() -> Void)? = nil
     var onSelectSession: (SessionRecord) -> Void = { _ in }
@@ -701,7 +701,7 @@ struct NewTaskHomeLists: View {
             .padding(.horizontal, 10)
             .padding(.bottom, 6)
             ForEach(recentSessions) { session in
-                RecentTaskButton(session: session, projectName: projectName(session.workspaceURL)) {
+                RecentTaskButton(session: session, projectName: projectName(session)) {
                     onSelectSession(session)
                 }
             }

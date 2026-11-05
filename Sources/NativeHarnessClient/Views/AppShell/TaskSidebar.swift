@@ -640,7 +640,7 @@ struct TaskSidebar: View {
                     onMarkUnread: onMarkUnread,
                     projectMove: remoteProjectMoveOptions?(session) ?? TaskProjectMove.options(
                         for: session, visibleProjects: allGroups.compactMap(\.project),
-                        projects: projects.projects, home: projects.chatWorkspaceHome),
+                        projects: projects.projects),
                     onMoveToProject: onMoveToProject.map { move in { move(session, $0) } },
                     onDropTask: splitActions.combine.map { combine in { dropped in combine(dropped, session.id) } },
                     // A task moves among the families of its project's list, which the states mix.
@@ -738,7 +738,7 @@ struct TaskSidebar: View {
                 onMarkUnread: onMarkUnread,
                 projectMove: remoteProjectMoveOptions?(session) ?? TaskProjectMove.options(
                     for: session, visibleProjects: allGroups.compactMap(\.project),
-                    projects: projects.projects, home: projects.chatWorkspaceHome),
+                    projects: projects.projects),
                 onMoveToProject: onMoveToProject.map { move in { move(session, $0) } },
                 onDropTask: splitActions.combine.map { combine in { dropped in combine(dropped, session.id) } }
             )
@@ -1381,9 +1381,10 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
             sessionID: session.id, rowHeight: SidebarMetrics.rowHeight * interfaceScale, nesting: nesting,
             nestDrop: $nestDrop, isDropTargeted: $isDropTargeted, onDropTask: onDropTask))
         // AppKit can retain the previous context menu when a row moves between sections (pinning,
-        // or moving to another project) or its family is hidden or shown. Refresh its host while the
-        // outer scroll target keeps the task's stable identity.
-        .id("\(session.id):\(session.isPinned):\(session.projectID?.uuidString ?? "-"):"
+        // or moving to another project or to Chats) or its family is hidden or shown. Refresh its
+        // host while the outer scroll target keeps the task's stable identity.
+        .id("\(session.id):\(session.isPinned):"
+            + "\(session.projectID?.uuidString ?? (session.isMovedToChats ? "chats" : "-")):"
             + "\(session.parentTaskID?.uuidString ?? "-"):"
             + (familyToggle.map { $0.isCollapsed ? "hidden" : "shown" } ?? "-"))
     }

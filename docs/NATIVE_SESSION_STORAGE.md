@@ -543,20 +543,33 @@ skipped. It writes or moves nothing, and does not change the task's provider ID,
 
 ## Moving a task to another project
 
-The storage contract is as follows.
+A task row's context menu, the task actions menu and the command palette offer "Move to project" (the other visible
+projects, in the sidebar's order) and, for any task in a project, "Move to Chats" (`TaskProjectMove`); another Mac's
+window offers the same through `taskAction.move` (docs/REMOTE_PROTOCOL.md §15.32). The storage contract is as
+follows.
 
-- **Only two columns of the index row change:** `project_id` (the project moved to, NULL when moved back to chats) and
+- **Only three columns of the index row change:** `project_id` (the project moved to, NULL for Chats),
   `additional_roots` (`TaskProjectMove.additionalRoots`: the project's roots minus the task folder and, for a worktree,
-  its origin root, or empty for chats). `SessionStore.moveSession` writes them with the existing upsert. There is no
-  schema change. `workspace_path` (cwd), the provider session ID, storage scope, account binding, runtime, title,
-  status, pin, unread, recent activity (`updated_at`) and the worktree origin columns stay as they are. Native history,
-  homes and authentication, drafts (keyed by task ID) and read state are not touched, no file on disk is copied or
-  moved, and nothing is written to the provider (no Codex `thread/metadata/update`).
-- **A relaunch does not undo it:** a task's project comes from the stored ID first
-  (`ProjectProjection.project(for:in:)`). A moved task belongs to its project by ID, so
-  `ProjectStore.ensureProjects(forTasks:)` and the folder settings conversion do not create a project from its folder,
-  and a task moved back to chats is in a chat folder, so none is created for it either. Importing again only opens the
-  existing task with the same provider ID and does not change the row.
+  its origin root, or empty for Chats) and `moved_to_chats` (`INTEGER NOT NULL DEFAULT 0`,
+  `SessionRecord.isMovedToChats`: 1 after a move to Chats, 0 after a move to a project). `SessionStore.moveSession`
+  writes them with the existing upsert. `workspace_path` (cwd), the provider session ID, storage scope, account binding,
+  runtime, title, status, pin, unread, recent activity (`updated_at`) and the worktree origin columns stay as they are.
+  Native history, homes and authentication, drafts (keyed by task ID) and read state are not touched, no file on disk
+  is copied or moved, and nothing is written to the provider (no Codex `thread/metadata/update`).
+- **Where a task is listed:** a task's project is, in order, the one its stored ID names, none when `moved_to_chats`
+  is 1, the one holding its folder, and the one holding its worktree's origin (`ProjectProjection.project(for:in:)`).
+  A task in no project is listed under Chats when `moved_to_chats` is 1 or its folder is a chat's (`ChatWorkspaces`),
+  and otherwise as its folder's group (`ProjectProjection.isChat`). The sidebar, the menu bar, `list_tasks`, the place
+  a title bar or menu names (`ProjectStore.displayName(for:)`), the phone's snapshot and another Mac's window all
+  follow this one rule. A task moved to Chats from a project's folder keeps working in that folder, without the
+  project's other roots, as a chat has none; a task made from it (a fork, a new chat, a subagent, the original of an
+  edited conversation, or `create_task` in its own place) is listed in Chats too.
+- **A relaunch does not undo it:** a moved task belongs to its project by ID, and a task moved to Chats keeps
+  `moved_to_chats`, so `ProjectStore.ensureProjects(forTasks:)` and the folder settings conversion do not create a
+  project from its folder or show a hidden project of its folder again. Rows written before the column read as 0 and
+  stay where their folder puts them. An earlier build ignores the column and its saves leave it as it is; a move to a
+  project there sets `project_id`, which is read first. Importing again only opens the existing task with the same
+  provider ID and does not change the row.
 - **When the additional roots reach the harness:** on attach (`runtimeWorkspaceRoots` of `thread/start` and
   `thread/resume`, `--add-dir` when launching Claude). An attached task keeps its running turn and session, and the new
   roots are passed the next time it starts or attaches again (relaunch, resume after a lost connection).
@@ -605,8 +618,8 @@ Sidebar nesting records the task a task was started from in that task's index ro
 - **Reusing a child task:** reusing an existing child task and linking the parent the provider reports (including
   import and thread reads) compare not only the harness and provider ID but also the stored `environmentScope` and the
   whole account binding. The default account's null binding is told apart from separate accounts, and even with the same
-  account ID, a task is not reused if its storage home differs. A new child task keeps the parent's `projectID` and
-  `additionalRoots`. These values are used for resume's `runtimeWorkspaceRoots`, the MCP task folder scope and project
+  account ID, a task is not reused if its storage home differs. A new child task keeps the parent's `projectID`,
+  `additionalRoots` and `isMovedToChats`. These values are used for resume's `runtimeWorkspaceRoots`, the MCP task folder scope and project
   instructions (including when they are turned off for the project). Before opening a subagent conversation, and after
   creating or resuming a new child task, Yardlet checks that the parent's stored session identifiers are still the same,
   and if they changed, discards only the child task it just created. History, drafts and reading positions in other

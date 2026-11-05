@@ -1135,6 +1135,19 @@ final class SessionToolTests: XCTestCase {
         await model.respond(to: request.id, decision: .deny, in: fixture.caller)
         let refused = await elsewhere.value
         XCTAssertTrue(refused.text.contains("did not approve"), refused.text)
+
+        // From a task the person moved to Chats, the child starts beside it there, in its folder.
+        let movedCaller = await model.moveTask(fixture.caller, to: nil)
+        let inChats = try XCTUnwrap(movedCaller)
+        XCTAssertTrue(inChats.isMovedToChats)
+        let fromChats = await call(model, "create_task", ["prompt": "Tidy the notes"], from: inChats)
+        let chatChild = try XCTUnwrap(model.store.sessions.first {
+            $0.parentTaskID == inChats.id && fromChats.text.contains($0.id.uuidString)
+        }, fromChats.text)
+        XCTAssertTrue(chatChild.isMovedToChats)
+        XCTAssertNil(chatChild.projectID)
+        XCTAssertEqual(chatChild.workspaceURL, inChats.workspaceURL)
+        XCTAssertTrue(model.projects.chats(sessions: model.store.sessions).contains { $0.id == chatChild.id })
         await model.shutdown()
     }
 

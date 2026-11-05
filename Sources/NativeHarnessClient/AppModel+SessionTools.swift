@@ -648,13 +648,16 @@ extension AppModel: SessionToolHandling {
                 return .failure("Not created: the person did not approve a task in another project.", .refused, retry: .no)
             }
         }
+        // In the caller's own place, a task the person moved to Chats starts its child there too.
+        let besideMovedChat = !chat && place.project == nil && place.folder == caller.workspaceURL
+            && store.sessions.first { $0.id == caller.hostTaskID }?.isMovedToChats == true
         // The task is made with its first message held, so it can wait for room in the sidebar.
         let child = await createSession(
             harness: harness, workspaceURL: place.folder, runtimeExecutableURL: runtime,
             title: SessionTitleProjection.provisionalTitle(from: prompt), initialPrompt: prompt,
             connection: account.connection, projectID: place.project?.id,
             providerOptions: options, selectsSession: false, parentTaskID: parentTaskID,
-            holdsInitialPrompt: true)
+            holdsInitialPrompt: true, isMovedToChats: besideMovedChat)
         guard let child else {
             // A chat that never came to exist takes its still empty folder with it, as New Task's does.
             if chat, (try? FileManager.default.contentsOfDirectory(atPath: place.folder.path(percentEncoded: false)))?

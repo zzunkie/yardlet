@@ -192,7 +192,7 @@ struct RemoteNewTaskView: View {
             activity: activity, rowLimit: NewTaskHomeListsProjection.rowLimit(windowHeight: viewport.size.height),
             columns: columns, selectedProjectID: isChat ? nil : projectID.flatMap(UUID.init(uuidString:)),
             recentSessions: mirror.sessions.sorted { $0.updatedAt > $1.updatedAt },
-            projectName: { names[$0.standardizedFileURL] ?? $0.lastPathComponent },
+            projectName: { names[$0.workspaceURL.standardizedFileURL] ?? $0.workspaceURL.lastPathComponent },
             onSelectSession: { model.select(.task($0.id.uuidString)) },
             onAction: perform,
             keyboard: $listKeyboard, focus: $listFocus,

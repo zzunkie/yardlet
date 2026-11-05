@@ -1723,10 +1723,10 @@
 "CPU %lld%%" = "CPU %lld%%";
 "Processes are using %lld%% CPU (10-second average)" = "Processes are using %lld%% CPU (10-second average)";
 
-/* Moving a task to another project, or back to Chats (the Codex app's words). */
+/* Moving a task to another project (the Codex app's words), or out of its project to Chats. */
 "Move to project" = "Move to project";
 "Move to project: %@" = "Move to project: %@";
-"Remove from %@" = "Remove from %@";
+"Move to Chats" = "Move to Chats";
 /* Codex app directives drawn in a message: file citations, review comments, a suggested task, a visualization (the Codex app's own words). */
 "line %lld" = "line %lld";
 "lines %lld-%lld" = "lines %lld-%lld";

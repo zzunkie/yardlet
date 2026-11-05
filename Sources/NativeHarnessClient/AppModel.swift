@@ -645,11 +645,12 @@ final class AppModel {
     /// one-folder projects. The conversion is idempotent and only reads the old settings.
     private func importFolderPreferencesIfNeeded(_ preferences: LegacyProjectFolderPreferences? = nil) {
         // A task a project already shows (by its ID, its folder or its worktree's origin) needs no
-        // project of its own folder, and a chat's folder never becomes one.
+        // project of its own folder, and a chat's never becomes one: its folder is a chat's or the
+        // person moved it to Chats.
         projects.importFolderPreferences(
             preferences ?? legacyFolderPreferences,
             sessionWorkspaceURLs: store.sessions
-                .filter { projects.project(for: $0) == nil && !ChatWorkspaces.isChat($0.workspaceURL) }
+                .filter { projects.project(for: $0) == nil && !projects.isChat($0) }
                 .map(\.workspaceURL)
         )
     }
@@ -822,7 +823,8 @@ final class AppModel {
         selectsSession: Bool = true,
         parentTaskID: UUID? = nil,
         takesDraftWorkspace: Bool = false,
-        holdsInitialPrompt: Bool = false
+        holdsInitialPrompt: Bool = false,
+        isMovedToChats: Bool = false
     ) async -> SessionRecord? {
         // The task records its runtime; the harness's runtime stays the person's choice or the
         // newest install (`RuntimeSelectionStore`), not whichever runtime the last task started with.
@@ -830,8 +832,9 @@ final class AppModel {
         // make a one-folder project for it. The chosen folder stays the task's cwd. A folder
         // that is a worktree of a repository a project already owns joins that project instead
         // of becoming a second one; the task still runs in the worktree. A chat's folder gets no
-        // project, and its task no other roots.
-        let project = projectForNewTask(workspaceURL: workspaceURL, projectID: projectID)
+        // project, and its task no other roots; so does a task started beside one the person moved to
+        // Chats (`isMovedToChats`), which stays there with it.
+        let project = isMovedToChats ? nil : projectForNewTask(workspaceURL: workspaceURL, projectID: projectID)
         let primaryFolder = sourceFolder ?? workspaceURL
         let additionalRoots = project.map { project in
             project.contains(root: primaryFolder)
@@ -858,6 +861,7 @@ final class AppModel {
                 connection: connection,
                 projectID: project?.id,
                 additionalRoots: additionalRoots,
+                isMovedToChats: isMovedToChats,
                 parentTaskID: parentTaskID
             )
             createdSessionID = session.id
@@ -2930,10 +2934,9 @@ final class AppModel {
     }
 
     /// The moves a task's menus offer (`TaskProjectMove`): the projects in `visibleProjects`, the
-    /// sidebar's in its order, and Chats when the task's folder is a chat's.
+    /// sidebar's in its order, and Chats when the task is in a project.
     func projectMoveOptions(for session: SessionRecord, visibleProjects: [Project]) -> TaskProjectMove.Options {
-        TaskProjectMove.options(for: session, visibleProjects: visibleProjects, projects: projects.projects,
-                                home: projects.chatWorkspaceHome)
+        TaskProjectMove.options(for: session, visibleProjects: visibleProjects, projects: projects.projects)
     }
 
     /// Moves a task to `project`, or out of its project to Chats (nil), as the Codex app's sidebar
@@ -3400,6 +3403,7 @@ final class AppModel {
                 environmentScope: current.environmentScope, selectsSession: false,
                 inheritedContext: context, providerOptions: current.providerOptions, connection: current.connection,
                 projectID: current.projectID, additionalRoots: current.additionalRoots,
+                isMovedToChats: current.isMovedToChats,
                 // A fork nests under its task in the sidebar; a side chat lives in its side panel.
                 parentTaskID: selectsSession ? current.id : nil, isTemporary: !selectsSession
             )
@@ -3444,7 +3448,8 @@ final class AppModel {
             let next = try await store.createSession(harness: source.harness, workspaceURL: source.workspaceURL,
                 runtimeExecutableURL: source.runtimeExecutableURL, title: L10n.string("New task"), titleOrigin: .automatic,
                 environmentScope: source.environmentScope, selectsSession: false, providerOptions: source.providerOptions,
-                connection: source.connection, projectID: source.projectID, additionalRoots: source.additionalRoots)
+                connection: source.connection, projectID: source.projectID, additionalRoots: source.additionalRoots,
+                isMovedToChats: source.isMovedToChats)
             guard matchingSession(source) != nil else {
                 try? await store.discardSession(id: next.id)
                 return nil
@@ -3906,12 +3911,15 @@ final class AppModel {
                 if selectsSession && store.selectedSessionID == selectedAtStart { store.selectedSessionID = existing.id }
                 return existing
             }
+            // It nests under the edited chat, so it is listed where that one is: in Chats once the person moved it there.
             let original = try await store.createSession(harness: .claudeCode, workspaceURL: origin.workspaceURL,
                 runtimeExecutableURL: origin.runtimeExecutableURL, title: L10n.format("Original of %@", origin.title),
                 titleOrigin: .automatic, providerSessionID: origin.providerSessionID,
                 environmentScope: origin.environmentScope, selectsSession: false,
                 providerOptions: origin.providerOptions, connection: origin.connection,
-                projectID: origin.projectID, additionalRoots: origin.additionalRoots, parentTaskID: current.id)
+                projectID: current.isMovedToChats ? nil : origin.projectID,
+                additionalRoots: current.isMovedToChats ? [] : origin.additionalRoots,
+                isMovedToChats: current.isMovedToChats, parentTaskID: current.id)
             guard matchingSession(current)?.inheritedContext?.nativeConversationOrigin == origin else {
                 try? await store.discardSession(id: original.id)
                 return nil
@@ -3961,6 +3969,7 @@ final class AppModel {
                 connection: session.connection,
                 projectID: session.projectID,
                 additionalRoots: session.additionalRoots,
+                isMovedToChats: session.isMovedToChats,
                 parentTaskID: selectsSession ? session.id : nil, isTemporary: !selectsSession
             )
             do {
@@ -4757,7 +4766,7 @@ final class AppModel {
                     providerSessionID: threadID,
                     environmentScope: sourceSession.environmentScope, connection: sourceSession.connection,
                     projectID: sourceSession.projectID, additionalRoots: sourceSession.additionalRoots,
-                    parentTaskID: sourceSession.id
+                    isMovedToChats: sourceSession.isMovedToChats, parentTaskID: sourceSession.id
                 )
                 guard matchingSession(sourceSession) != nil else {
                     try? await store.discardSession(id: child.id)
@@ -4811,7 +4820,7 @@ final class AppModel {
                 providerSessionID: threadID,
                 environmentScope: sourceSession.environmentScope, connection: sourceSession.connection,
                 projectID: sourceSession.projectID, additionalRoots: sourceSession.additionalRoots,
-                parentTaskID: sourceSession.id
+                isMovedToChats: sourceSession.isMovedToChats, parentTaskID: sourceSession.id
             )
             do {
                 guard matchingSession(sourceSession) != nil else {

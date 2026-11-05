@@ -60,7 +60,7 @@ final class SidebarProjectionPerformanceTests: XCTestCase {
         for session in sessions {
             let visible = store.visibleGroups(sessions: sessions).compactMap(\.project)
             work += TaskProjectMove.options(for: session, visibleProjects: visible,
-                                            projects: store.projects, home: sidebarHome).destinations.count
+                                            projects: store.projects).destinations.count
         }
         return work
     }

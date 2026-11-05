@@ -1,11 +1,13 @@
 import AppKit
+import SQLite3
 import SwiftUI
 import XCTest
 @testable import NativeHarnessClient
 
-/// Moving a task to another project, or out of its project back to Chats, as the Codex app's
-/// sidebar does. Only the task's project and the roots that come along change; its folder,
-/// provider session, storage scope, account, draft and pin stay, and relaunch keeps the move.
+/// Moving a task to another project, or out of its project to Chats, as the Codex app's sidebar
+/// moves a thread. Only the task's project, the roots that come along and whether the person moved
+/// it to Chats change; its folder, provider session, storage scope, account, draft and pin stay,
+/// and relaunch keeps the move.
 @MainActor
 final class TaskProjectMoveTests: XCTestCase {
     private var root: URL!
@@ -98,7 +100,7 @@ final class TaskProjectMoveTests: XCTestCase {
 
         let options = model.projectMoveOptions(for: session, visibleProjects: visibleProjects(model))
         XCTAssertEqual(options.destinations.map(\.name), ["Beta"], "Every visible project but the task's own")
-        XCTAssertNil(options.removableFrom, "A task outside a chat's folder cannot leave for Chats")
+        XCTAssertEqual(options.removableFrom?.id, alphaProject.id, "Any task in a project can go to Chats")
 
         let moved = try await move(session, to: betaProject, in: model)
         XCTAssertEqual(moved.projectID, betaProject.id)
@@ -155,7 +157,7 @@ final class TaskProjectMoveTests: XCTestCase {
         XCTAssertEqual(inProject.destinations.map(\.id), [other.id])
         XCTAssertEqual(inProject.removableFrom?.id, thirteenProject.id)
         XCTAssertEqual(TaskProjectMove.commands(inProject).map(\.title), [
-            L10n.format("Move to project: %@", "Website"), L10n.format("Remove from %@", "13 Weeks")
+            L10n.format("Move to project: %@", "Website"), L10n.string("Move to Chats")
         ])
         XCTAssertEqual(TaskProjectMove.commands(inProject).map(\.destination?.id), [other.id, nil])
 
@@ -171,37 +173,108 @@ final class TaskProjectMoveTests: XCTestCase {
         XCTAssertEqual(model.projects.projects.count, projectCount)
     }
 
-    func testOnlyATaskInAChatFolderCanLeaveForChats() async throws {
-        let alphaProject = Project(name: "Alpha", primaryRoot: alpha)
+    /// A task in its project's own folder moves to Chats too, from the same menus: Yardlet's index
+    /// records the person's choice (`isMovedToChats`), so the folder does not put it back. It keeps
+    /// working in its folder without the project's other roots, and every list of tasks shows it
+    /// under Chats: the sidebar, the menu bar's lists, `list_tasks`, the phone's snapshot and
+    /// another Mac's window. A later move to a project clears the choice.
+    func testATaskInItsProjectsFolderMovesToChatsAndEveryListShowsItThere() async throws {
+        let alphaProject = Project(name: "Alpha", primaryRoot: alpha, additionalRoots: [alphaDocs])
         let betaProject = Project(name: "Beta", primaryRoot: beta)
-        // Its folder is the project's: without the project ID the folder rule would put it back.
+        // Its folder is the project's: without the project ID the folder rule puts it there.
         let byFolder = try task("By folder", in: alpha)
-        let withID = try task("With ID", in: alpha, projectID: alphaProject.id)
-        // A chat's folder the person added as a project stays one.
+        let withID = try task("With ID", in: alpha, projectID: alphaProject.id,
+                              additionalRoots: [alphaDocs.path(percentEncoded: false)])
+        // A chat's folder the person added as a project.
         let addedChatFolder = home.appending(path: "Documents/Yardlet/2026-10-12/new-chat", directoryHint: .isDirectory)
         let notes = Project(name: "Notes", primaryRoot: addedChatFolder)
         let inAddedChatFolder = try task("Notes", in: addedChatFolder, projectID: notes.id)
         let model = try makeModel(sessions: [byFolder, withID, inAddedChatFolder],
-                              projects: [alphaProject, betaProject, notes])
+                                  projects: [alphaProject, betaProject, notes])
+        model.composerDrafts.tasks.draft(for: withID.id).text = "Keep this unsent draft"
 
-        for session in [byFolder, withID, inAddedChatFolder] {
+        for (session, project) in [(byFolder, alphaProject), (withID, alphaProject), (inAddedChatFolder, notes)] {
             let options = model.projectMoveOptions(for: session, visibleProjects: visibleProjects(model))
-            XCTAssertNil(options.removableFrom, session.title)
-            XCTAssertFalse(options.allows(nil), session.title)
-            let refused = await model.moveTask(session, to: nil)
-            XCTAssertNil(refused, session.title)
-            XCTAssertEqual(model.store.sessions.first { $0.id == session.id }, session, session.title)
+            XCTAssertEqual(options.removableFrom?.id, project.id, session.title)
+            XCTAssertTrue(options.allows(nil), session.title)
+            XCTAssertEqual(TaskProjectMove.commands(options).last.map { [$0.id, $0.title] },
+                           ["move-to-chats", L10n.string("Move to Chats")], session.title)
         }
+        let snapshotBefore = AppModelRemoteBridge.snapshot(of: model)
+        XCTAssertEqual(snapshotBefore.tasks.first { $0.id == withID.id.uuidString }?.canReturnToChats, true,
+                       "Another Mac's window offers the move too")
+
+        let moved = try await move(withID, to: nil, in: model)
+        XCTAssertNil(moved.projectID)
+        XCTAssertTrue(moved.isMovedToChats, "The index records the person's choice")
+        XCTAssertEqual(moved.workspaceURL, alpha.standardizedFileURL, "The task keeps working in its own folder")
+        XCTAssertEqual(moved.additionalRoots, [], "It loses the project's other roots, as a chat has none")
+        XCTAssertEqual(unchangedFields(moved), unchangedFields(withID),
+                       "Provider ID, scope, account, title, status, pin, unread and recency stay")
+        XCTAssertEqual(model.composerDrafts.tasks.draft(for: withID.id).text, "Keep this unsent draft")
+        XCTAssertEqual(model.projects.project(id: alphaProject.id)?.roots, [alpha, alphaDocs].map(Project.canonical),
+                       "The project's roots stay")
+        XCTAssertNil(model.project(for: moved))
+        XCTAssertEqual(model.projects.displayName(for: moved), L10n.string("Chats"), "The title bar and menus say Chats")
+
+        // Every list of tasks shows it under Chats, and the project keeps its other task.
+        let sessions = model.store.sessions
+        XCTAssertEqual(model.projects.chats(sessions: sessions).map(\.id), [moved.id])
+        XCTAssertEqual(model.projects.visibleGroups(sessions: sessions)
+            .first { $0.project?.id == alphaProject.id }?.sessions.map(\.id), [byFolder.id])
+        XCTAssertEqual(model.sidebarLists.chats?.allRows.flatMap(\.familySessions).map(\.id), [moved.id])
+        XCTAssertEqual(model.taskPlaceNames()(moved), L10n.string("Chats"))
+        struct Listing: Decodable {
+            struct Entry: Decodable { let taskId: String; let project: String? }
+            let tasks: [Entry]
+        }
+        let listing = await model.callSessionTool(named: "list_tasks",
+                                                  arguments: .object(["scope": .string("all")]), callerID: byFolder.id)
+        let entries = try JSONDecoder().decode(Listing.self, from: Data(listing.text.utf8)).tasks
+        XCTAssertNil(try XCTUnwrap(entries.first { $0.taskId == moved.id.uuidString }).project, "list_tasks names no project")
+        XCTAssertEqual(entries.first { $0.taskId == byFolder.id.uuidString }?.project, "Alpha")
+        let snapshot = AppModelRemoteBridge.snapshot(of: model)
+        XCTAssertEqual(snapshot.tasks.first { $0.id == moved.id.uuidString }?.projectId,
+                       RemoteTaskProjection.chatsProjectID, "The phone lists it under Chats")
+        let mirror = RemoteSidebarMirror(hostID: "host", projects: snapshot.projects, tasks: snapshot.tasks)
+        XCTAssertEqual(mirror.chats.map(\.id), [moved.id], "Another Mac's window lists it under Chats")
+        XCTAssertEqual(mirror.groups.first { $0.project?.id == alphaProject.id }?.sessions.map(\.id), [byFolder.id])
+
+        // The window gives each task in no project a project of its folder: none for this one, and
+        // the hidden project of its folder stays hidden.
+        model.projects.hide(alphaProject.id)
+        let projectCount = model.projects.projects.count
+        model.projects.ensureProjects(forTasks: model.store.sessions)
+        XCTAssertEqual(model.projects.projects.count, projectCount)
+        XCTAssertEqual(model.projects.project(id: alphaProject.id)?.isHidden, true)
+        model.projects.reveal(alphaProject.id)
+
+        // In Chats it is in no project to leave, and its folder's project is a destination again.
+        let asChat = model.projectMoveOptions(for: moved, visibleProjects: visibleProjects(model))
+        XCTAssertNil(asChat.removableFrom)
+        XCTAssertEqual(Set(asChat.destinations.map(\.name)), ["Alpha", "Beta", "Notes"])
+        let back = try await move(moved, to: alphaProject, in: model)
+        XCTAssertFalse(back.isMovedToChats, "A move to a project clears the choice")
+        XCTAssertEqual(back, withID, "Back where it was, with the project's roots")
+        // From Chats to another project, the same.
+        let byFolderInChats = try await move(byFolder, to: nil, in: model)
+        XCTAssertTrue(model.projects.isChat(byFolderInChats))
+        let inBeta = try await move(byFolderInChats, to: betaProject, in: model)
+        XCTAssertEqual(inBeta.projectID, betaProject.id)
+        XCTAssertFalse(inBeta.isMovedToChats)
+        XCTAssertEqual(inBeta.additionalRoots, [ProjectSidebarPresentation.normalizedPath(for: beta)])
+        XCTAssertTrue(model.projects.chats(sessions: model.store.sessions).isEmpty)
+
         // A project the task is already in, or one that is hidden, is not a destination.
         model.projects.hide(betaProject.id)
         let hidden = try XCTUnwrap(model.projects.project(id: betaProject.id))
-        let options = model.projectMoveOptions(for: withID, visibleProjects: visibleProjects(model))
+        let options = model.projectMoveOptions(for: back, visibleProjects: visibleProjects(model))
         XCTAssertEqual(options.destinations.map(\.name), ["Notes"])
-        let refusedHidden = await model.moveTask(withID, to: hidden)
+        let refusedHidden = await model.moveTask(back, to: hidden)
         XCTAssertNil(refusedHidden)
-        let refusedSame = await model.moveTask(withID, to: alphaProject)
+        let refusedSame = await model.moveTask(back, to: alphaProject)
         XCTAssertNil(refusedSame)
-        XCTAssertEqual(model.store.sessions.first { $0.id == withID.id }?.projectID, alphaProject.id)
+        XCTAssertEqual(model.store.sessions.first { $0.id == withID.id }, back)
     }
 
     /// The submenu lists the projects in the sidebar's order: pinned projects first, then recency.
@@ -216,7 +289,7 @@ final class TaskProjectMoveTests: XCTestCase {
         olderTask.updatedAt = Date(timeIntervalSince1970: 1_000)
         let newerTask = try task("Newer task", in: beta, projectID: newer.id)
         let order = projects.visibleGroups(sessions: [chat, olderTask, newerTask]).compactMap(\.project)
-        let options = TaskProjectMove.options(for: chat, visibleProjects: order, projects: projects.projects, home: home)
+        let options = TaskProjectMove.options(for: chat, visibleProjects: order, projects: projects.projects)
         XCTAssertEqual(options.destinations.map(\.name), ["Pinned", "Newer", "Older"])
         XCTAssertEqual(TaskProjectMove.commands(options).map(\.id),
                        [pinned, newer, older].map { "move-to-project-\($0.id.uuidString)" })
@@ -240,6 +313,8 @@ final class TaskProjectMoveTests: XCTestCase {
 
     // MARK: - Relaunch
 
+    /// A relaunch keeps every move, a move to Chats of a task in its project's folder too; an index
+    /// from before that was recorded gains its column, with its rows where their folders put them.
     func testRelaunchKeepsTheMove() async throws {
         let database = root.appending(path: "sessions.sqlite3")
         let projectFile = FileProjectRepository(fileURL: root.appending(path: "projects.json"))
@@ -253,16 +328,36 @@ final class TaskProjectMoveTests: XCTestCase {
             path: "Documents/Codex/2026-08-26/new-chat", directoryHint: .isDirectory))
         let legacy = try task("Legacy task", in: alpha)
         XCTAssertNil(legacy.projectID, "Written before projects: its folder puts it in Alpha")
+        let inAlpha = try task("Organize the notes", in: alpha)
+        // An index the build before wrote, with no `moved_to_chats`.
+        let older = UUID()
+        let runtimePath = try runtime().path(percentEncoded: false)
+        var handle: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(database.path(percentEncoded: false), &handle), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(handle, """
+            CREATE TABLE sessions (id TEXT PRIMARY KEY NOT NULL, harness TEXT NOT NULL, workspace_path TEXT NOT NULL,
+                runtime_path TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL, created_at REAL NOT NULL,
+                updated_at REAL NOT NULL, provider_session_id TEXT, archived INTEGER NOT NULL DEFAULT 0,
+                project_id TEXT, additional_roots TEXT, lineage_detached INTEGER NOT NULL DEFAULT 0);
+            INSERT INTO sessions (id, harness, workspace_path, runtime_path, title, status, created_at, updated_at)
+                VALUES ('\(older.uuidString)', 'codex', '\(alpha.path(percentEncoded: false))',
+                '\(runtimePath)', 'Written before the column', 'completed', 1, 2);
+            """, nil, nil, nil), SQLITE_OK)
+        sqlite3_close(handle)
         let index = try SQLiteSessionRepository(databaseURL: database)
-        for session in [chat, returned, legacy] { try await index.upsert(session) }
+        let olderRows = try await index.loadSessions()
+        XCTAssertEqual(olderRows.map(\.id), [older])
+        XCTAssertEqual(olderRows.first?.isMovedToChats, false, "An older row is not moved: its folder places it")
+        for session in [chat, returned, legacy, inAlpha] { try await index.upsert(session) }
         let first = try makeModel(repository: index, projectRepository: projectFile, restores: true)
         await first.restoreIndex()
-        XCTAssertEqual(first.store.sessions.count, 3)
+        XCTAssertEqual(first.store.sessions.count, 5)
 
         let movedChat = try await move(chat, to: thirteenProject, in: first)
         let movedLegacy = try await move(legacy, to: betaProject, in: first)
         let intoProject = try await move(returned, to: alphaProject, in: first)
         let backToChats = try await move(intoProject, to: nil, in: first)
+        let toChats = try await move(inAlpha, to: nil, in: first)
         first.projects.persistNow()
         let projectCount = first.projects.projects.count
         await first.shutdown()
@@ -280,14 +375,24 @@ final class TaskProjectMoveTests: XCTestCase {
         XCTAssertEqual(try restored(chat), movedChat)
         XCTAssertEqual(try restored(legacy), movedLegacy)
         XCTAssertEqual(try restored(returned), backToChats)
+        XCTAssertEqual(try restored(inAlpha), toChats)
+        XCTAssertTrue(try restored(inAlpha).isMovedToChats)
         XCTAssertEqual(second.project(for: try restored(chat))?.id, thirteenProject.id)
         XCTAssertEqual(second.project(for: try restored(legacy))?.id, betaProject.id,
                        "The project ID wins over the folder's project")
-        XCTAssertEqual(second.projects.chats(sessions: second.store.sessions).map(\.id), [returned.id])
+        XCTAssertNil(second.project(for: try restored(inAlpha)), "Its folder does not put it back in Alpha")
+        XCTAssertEqual(Set(second.projects.chats(sessions: second.store.sessions).map(\.id)), [returned.id, inAlpha.id])
         let groups = second.projects.visibleGroups(sessions: second.store.sessions)
         XCTAssertEqual(groups.first { $0.project?.id == thirteenProject.id }?.sessions.map(\.id), [chat.id])
         XCTAssertEqual(groups.first { $0.project?.id == betaProject.id }?.sessions.map(\.id), [legacy.id])
-        XCTAssertEqual(groups.first { $0.project?.id == alphaProject.id }?.sessions.map(\.id), [])
+        XCTAssertEqual(groups.first { $0.project?.id == alphaProject.id }?.sessions.map(\.id), [older])
+
+        // A later move to a project clears the choice in the index too.
+        _ = try await move(try restored(inAlpha), to: betaProject, in: second)
+        let reread = try await SQLiteSessionRepository(databaseURL: database).loadSessions()
+        let inBeta = try XCTUnwrap(reread.first { $0.id == inAlpha.id })
+        XCTAssertEqual(inBeta.projectID, betaProject.id)
+        XCTAssertFalse(inBeta.isMovedToChats)
     }
 
     // MARK: - Running task
@@ -340,8 +445,8 @@ final class TaskProjectMoveTests: XCTestCase {
     func testTheNewStringsAreLocalized() {
         XCTAssertEqual(L10n.string("Move to project", languageCode: "en"), "Move to project")
         XCTAssertEqual(L10n.string("Move to project", languageCode: "ko"), "프로젝트로 이동")
-        XCTAssertEqual(L10n.string("Remove from %@", languageCode: "en"), "Remove from %@")
-        XCTAssertEqual(L10n.string("Remove from %@", languageCode: "ko"), "%@에서 제거")
+        XCTAssertEqual(L10n.string("Move to Chats", languageCode: "en"), "Move to Chats")
+        XCTAssertEqual(L10n.string("Move to Chats", languageCode: "ko"), "채팅으로 이동")
         XCTAssertEqual(L10n.string("Move to project: %@", languageCode: "ko"), "프로젝트로 이동: %@")
     }
 

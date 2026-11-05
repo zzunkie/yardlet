@@ -1,9 +1,9 @@
 import Foundation
 
-/// Moving a task to another project, or out of its project back to Chats, as the Codex app's
-/// sidebar does ("Move to project", "Remove from <project>"). The move is Yardlet's: only the
-/// task's project and the roots that come with it change. Its folder stays its cwd, and its
-/// provider session, storage scope, account, history, draft, pin and status stay as they are.
+/// Moving a task to another project, or out of its project to Chats, as the Codex app's sidebar
+/// moves a thread ("Move to project"). The move is Yardlet's: only the task's project, the roots
+/// that come with it and whether the person moved it to Chats change. Its folder stays its cwd, and
+/// its provider session, storage scope, account, history, draft, pin and status stay as they are.
 /// Nothing on disk is copied or moved, and nothing is written to the provider.
 enum TaskProjectMove {
     /// What a task's menus offer.
@@ -11,9 +11,9 @@ enum TaskProjectMove {
         /// The projects the task can move to: the sidebar's visible projects, in its order, but
         /// the one the task is in.
         var destinations: [Project] = []
-        /// The project the task can leave for Chats. Only a task whose folder is a chat's
-        /// (`ChatWorkspaces`) can: any other folder would put it right back in that folder's
-        /// project, and the Codex app keeps such a task's folder as it is too.
+        /// The project the task can leave for Chats: any task's project. A task whose folder a
+        /// project holds stays in Chats because the move records it (`SessionRecord.isMovedToChats`),
+        /// and keeps working in its folder.
         var removableFrom: Project?
 
         static let none = Options()
@@ -34,39 +34,29 @@ enum TaskProjectMove {
         let title: String
 
         var id: String {
-            destination.map { "move-to-project-\($0.id.uuidString)" } ?? "remove-from-project"
+            destination.map { "move-to-project-\($0.id.uuidString)" } ?? "move-to-chats"
         }
     }
 
     /// - Parameters:
     ///   - visibleProjects: the projects the sidebar lists, in its order.
     ///   - projects: every project, hidden ones too, which is what a task's project resolves among.
-    ///   - home: the home whose chat folders hold chats.
-    static func options(
-        for session: SessionRecord,
-        visibleProjects: [Project],
-        projects: [Project],
-        home: URL = FileManager.default.homeDirectoryForCurrentUser
-    ) -> Options {
+    static func options(for session: SessionRecord, visibleProjects: [Project], projects: [Project]) -> Options {
         let current = ProjectProjection.project(for: session, in: projects)
         let destinations = visibleProjects.filter { !$0.isHidden && $0.id != current?.id }
-        let leavesForChats = current != nil
-            && ProjectProjection.isChat(moved(session, to: nil), in: projects, home: home)
-        return Options(destinations: destinations, removableFrom: leavesForChats ? current : nil)
+        return Options(destinations: destinations, removableFrom: current)
     }
 
     /// The submenu's title, the Codex app's ("Move to project").
     static var moveTitle: String { L10n.string("Move to project") }
 
-    /// The Codex app's "Remove from <project>", which returns the task to Chats.
-    static func removeTitle(_ project: Project) -> String {
-        L10n.format("Remove from %@", project.name)
-    }
+    /// The move out of the task's project to Chats, named for where it goes as "Move to project" is.
+    static var chatsTitle: String { L10n.string("Move to Chats") }
 
-    /// The moves as commands: one per destination, then the way back to Chats.
+    /// The moves as commands: one per destination, then the move to Chats.
     static func commands(_ options: Options) -> [Command] {
         options.destinations.map { Command(destination: $0, title: L10n.format("Move to project: %@", $0.name)) }
-            + (options.removableFrom.map { [Command(destination: nil, title: removeTitle($0))] } ?? [])
+            + (options.removableFrom == nil ? [] : [Command(destination: nil, title: chatsTitle)])
     }
 
     /// The roots a task in `project` hands its harness besides its own folder: the project's roots,

@@ -95,6 +95,8 @@ struct NewTaskHome: View {
     var onImportConversation: (() -> Void)? = nil
     var onImportFromOtherApps: (() -> Void)? = nil
     var projectName: (URL) -> String = { $0.lastPathComponent }
+    /// Where a recent task is listed, as the sidebar lists it.
+    var taskProjectName: (SessionRecord) -> String = { $0.workspaceURL.lastPathComponent }
     var activity = NewTaskHomeActivity()
     /// Answers a task in the composer's place; nil where the window offers none, and a task's line
     /// opens it.
@@ -233,7 +235,7 @@ struct NewTaskHome: View {
             rowLimit: NewTaskHomeListsProjection.rowLimit(windowHeight: activity.windowHeight ?? viewport.size.height),
             columns: columns, selectedProjectID: draft.startsChat ? nil : selectedProject?.id,
             replyTaskID: replyingSession?.id,
-            recentSessions: recentSessions, projectName: projectName,
+            recentSessions: recentSessions, projectName: taskProjectName,
             onImportConversation: onImportConversation, onImportFromOtherApps: onImportFromOtherApps,
             onSelectSession: onSelectSession, onAction: perform,
             keyboard: $listKeyboard, focus: $listFocus,

@@ -1723,10 +1723,10 @@
 "CPU %lld%%" = "CPU %lld%%";
 "Processes are using %lld%% CPU (10-second average)" = "프로세스 CPU 사용 %lld%% (최근 10초 평균)";
 
-/* Moving a task to another project, or back to Chats (the Codex app's words). */
+/* Moving a task to another project (the Codex app's words), or out of its project to Chats. */
 "Move to project" = "프로젝트로 이동";
 "Move to project: %@" = "프로젝트로 이동: %@";
-"Remove from %@" = "%@에서 제거";
+"Move to Chats" = "채팅으로 이동";
 /* Codex app directives drawn in a message: file citations, review comments, a suggested task, a visualization (the Codex app's own words). */
 "line %lld" = "%lld번째 줄";
 "lines %lld-%lld" = "%lld-%lld줄";

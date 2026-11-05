@@ -460,27 +460,33 @@ final class TaskDetachTests: XCTestCase {
         XCTAssertNil(try JSONDecoder().decode(SessionRecord.self, from: JSONSerialization.data(withJSONObject: flatObject))
             .placedStartedFromTaskID)
 
-        // An index that gained either of the two latest columns first gains the other, keeping what the first holds.
-        for (column, value) in [("previous_titles", #"["Draft"]"#), ("placed_started_from_task_id", child.id.uuidString)] {
-            let partial = directory.appending(path: "partial-\(column).sqlite3")
+        // An index missing any one of the latest columns, whichever arrived first there, gains it and keeps what the
+        // others hold.
+        let latest = [(name: "previous_titles", definition: "TEXT", value: #"'["Draft"]'"#),
+                      (name: "placed_started_from_task_id", definition: "TEXT", value: "'\(child.id.uuidString)'"),
+                      (name: "moved_to_chats", definition: "INTEGER NOT NULL DEFAULT 0", value: "1")]
+        for missing in latest.map(\.name) {
+            let present = latest.filter { $0.name != missing }
+            let partial = directory.appending(path: "without-\(missing).sqlite3")
             XCTAssertEqual(sqlite3_open(partial.path(percentEncoded: false), &handle), SQLITE_OK)
             XCTAssertEqual(sqlite3_exec(handle, """
                 CREATE TABLE sessions (id TEXT PRIMARY KEY NOT NULL, harness TEXT NOT NULL, workspace_path TEXT NOT NULL,
                     runtime_path TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL, created_at REAL NOT NULL,
                     updated_at REAL NOT NULL, provider_session_id TEXT, archived INTEGER NOT NULL DEFAULT 0,
-                    parent_task_id TEXT, lineage_detached INTEGER NOT NULL DEFAULT 0, \(column) TEXT);
+                    parent_task_id TEXT, lineage_detached INTEGER NOT NULL DEFAULT 0,
+                    \(present.map { "\($0.name) \($0.definition)" }.joined(separator: ", ")));
                 INSERT INTO sessions (id, harness, workspace_path, runtime_path, title, status, created_at, updated_at,
-                    parent_task_id, lineage_detached, \(column)) VALUES ('\(flat.id.uuidString)', 'claude-code',
-                    '/tmp/detach-qa/project', '/tmp/agent', 'Placed flat', 'ready', 1, 2, '\(parent.id.uuidString)', 1,
-                    '\(value)');
+                    parent_task_id, lineage_detached, \(present.map(\.name).joined(separator: ", ")))
+                    VALUES ('\(flat.id.uuidString)', 'claude-code', '/tmp/detach-qa/project', '/tmp/agent', 'Placed flat',
+                    'ready', 1, 2, '\(parent.id.uuidString)', 1, \(present.map(\.value).joined(separator: ", ")));
                 """, nil, nil, nil), SQLITE_OK)
             sqlite3_close(handle)
             let upgraded = try await SQLiteSessionRepository(databaseURL: partial).loadSessions()
             let row = try XCTUnwrap(upgraded.first)
-            XCTAssertEqual(row.previousTitles, column == "previous_titles" ? ["Draft"] : [], column)
-            XCTAssertEqual(row.startedFromTaskID, column == "previous_titles" ? nil : child.id, column)
-            XCTAssertEqual(Set(try columns(of: partial)).intersection(["previous_titles", "placed_started_from_task_id"]),
-                           ["previous_titles", "placed_started_from_task_id"], column)
+            XCTAssertEqual(row.previousTitles, missing == "previous_titles" ? [] : ["Draft"], missing)
+            XCTAssertEqual(row.startedFromTaskID, missing == "placed_started_from_task_id" ? nil : child.id, missing)
+            XCTAssertEqual(row.isMovedToChats, missing != "moved_to_chats", missing)
+            XCTAssertEqual(Set(try columns(of: partial)).intersection(latest.map(\.name)), Set(latest.map(\.name)), missing)
         }
     }
 

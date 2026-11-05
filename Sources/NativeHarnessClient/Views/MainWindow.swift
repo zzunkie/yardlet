@@ -793,7 +793,7 @@ struct MainWindow: View {
             onTogglePinned: { session in Task { await model.togglePinned(session) } },
             onArchive: { session in Task { await model.archive(session) } },
             onBackToConversation: returnToConversation,
-            projectName: { model.project(for: $0)?.name ?? projects.displayName(for: $0.workspaceURL) },
+            projectName: { projects.displayName(for: $0) },
             projectMoveOptions: projectMoveOptions(for:),
             onMoveToProject: moveTask,
             onChooseAccount: { session in rememberShellFocus(); accountSwitchSession = session },
@@ -1495,7 +1495,7 @@ struct MainWindow: View {
         SidePanelTaskServices(
             record: { id in id == owner.id ? nil : sessionRecord(id) },
             choices: { model.sidebarSessions.filter { $0.id != owner.id }.sorted { $0.updatedAt > $1.updatedAt } },
-            projectName: { model.project(for: $0)?.name ?? projects.displayName(for: $0.workspaceURL) },
+            projectName: { projects.displayName(for: $0) },
             tab: { session, onClose in AnyView(sidePanelTaskTab(session, ownerID: owner.id, onClose: onClose)) }
         )
     }
@@ -1505,7 +1505,7 @@ struct MainWindow: View {
         SidePanelTaskServices(
             record: { sessionRecord($0) },
             choices: { model.sidebarSessions.sorted { $0.updatedAt > $1.updatedAt } },
-            projectName: { model.project(for: $0)?.name ?? projects.displayName(for: $0.workspaceURL) },
+            projectName: { projects.displayName(for: $0) },
             tab: { session, onClose in
                 AnyView(sidePanelTaskTab(session, ownerID: TaskWorkspaceStore.draftID, onClose: onClose))
             }
@@ -1521,7 +1521,7 @@ struct MainWindow: View {
         let otherPane = model.splits.activeSplit?.pane(hosting: session.id)
         return SidePanelTaskTab(
             session: session,
-            projectName: model.project(for: session)?.name ?? projects.displayName(for: session.workspaceURL),
+            projectName: projects.displayName(for: session),
             showOtherPane: otherPane.map { pane in { focusPane(pane) } },
             parentFocus: model.taskWorkspaces.state(for: ownerID).keyboardFocus,
             childFocus: model.taskWorkspaces.state(for: session.id).keyboardFocus,
@@ -1751,6 +1751,7 @@ struct MainWindow: View {
             onImportConversation: { rememberShellFocus(); isPresentingImport = true },
             onImportFromOtherApps: { rememberShellFocus(); isPresentingOtherAppImport = true },
             projectName: { projects.displayName(for: $0) },
+            taskProjectName: { projects.displayName(for: $0) },
             activity: NewTaskHomeActivity(
                 sessions: sidebarSessions, details: model.taskAttentionDetails,
                 shellBusy: model.shellBusySessionIDs, placeName: model.taskPlaceNames(),
@@ -1934,7 +1935,7 @@ struct MainWindow: View {
                         errorMessage: model.archivedTaskError,
                         restoringIDs: model.unarchivingSessionIDs,
                         searchText: $archivedSearchText,
-                        projectName: { model.project(for: $0)?.name ?? projects.displayName(for: $0.workspaceURL) },
+                        projectName: { projects.displayName(for: $0) },
                         onBack: closeArchivedTasks,
                         onUnarchive: { record in Task { await model.unarchive(record) } },
                         shownID: archivedReading?.record.id,
@@ -2069,7 +2070,7 @@ struct MainWindow: View {
                         VStack(spacing: 0) {
                             titleBar(for: nil)
                             ScheduledTasksMain(model: model, state: schedulesWindow, actions: scheduleActions,
-                                               projectName: { model.project(for: $0)?.name ?? projects.displayName(for: $0.workspaceURL) })
+                                               projectName: { projects.displayName(for: $0) })
                         }
                     } else {
                         windowItemContent
@@ -2243,7 +2244,7 @@ struct MainWindow: View {
             onTogglePinned: { session in Task { await model.togglePinned(session) } },
             onArchive: { session in Task { await model.archive(session) } },
             onBackToConversation: returnToConversation,
-            projectName: { model.project(for: $0)?.name ?? projects.displayName(for: $0.workspaceURL) },
+            projectName: { projects.displayName(for: $0) },
             projectMoveOptions: projectMoveOptions(for:),
             onMoveToProject: moveTask,
             onChooseAccount: { session in rememberShellFocus(); accountSwitchSession = session },
@@ -2334,7 +2335,7 @@ struct MainWindow: View {
         SessionRailServices(
             window: sessionRail,
             preferences: model.sessionRailPreferences,
-            projectName: model.project(for: session)?.name ?? projects.displayName(for: session.workspaceURL),
+            projectName: projects.displayName(for: session),
             instructionSources: { model.instructionSources(for: session) },
             account: { [connections = model.connections] in
                 connections.choices(for: [session.harness], includingMoving: true)
@@ -2867,7 +2868,7 @@ struct MainWindow: View {
                 CommandPaletteItem(
                     id: "task-\(session.id)",
                     title: session.title,
-                    subtitle: model.project(for: session)?.name ?? projects.displayName(for: session.workspaceURL),
+                    subtitle: projects.displayName(for: session),
                     systemName: "text.bubble",
                     isTask: true,
                     action: { activateTask(session.id) }
@@ -3052,7 +3053,7 @@ struct MainWindow: View {
                         id: "\(command.id)-\(session.id)",
                         title: command.title,
                         subtitle: session.title,
-                        systemName: command.destination == nil ? "folder.badge.minus" : "folder",
+                        systemName: command.destination == nil ? "bubble.left" : "folder",
                         action: { moveTask(session, to: command.destination) }
                     )
                 )

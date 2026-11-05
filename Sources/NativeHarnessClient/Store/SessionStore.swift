@@ -105,6 +105,8 @@ final class SessionStore {
         connection: ProviderConnection? = nil,
         projectID: UUID? = nil,
         additionalRoots: [String] = [],
+        // A task made from another (a fork, a new chat, a subagent) goes where that one is listed.
+        isMovedToChats: Bool = false,
         workspaceOrigin knownOrigin: WorkspaceGitOrigin? = nil,
         lastActivityAt: Date? = nil,
         parentTaskID: UUID? = nil,
@@ -136,7 +138,8 @@ final class SessionStore {
             originWorkspacePath: origin.originWorkspacePath,
             worktreeName: origin.worktreeName,
             branch: origin.branch,
-            parentTaskID: parentTaskID
+            parentTaskID: parentTaskID,
+            isMovedToChats: isMovedToChats
         )
 
         if isTemporary { temporaryIDs.insert(session.id) }

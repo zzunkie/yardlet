@@ -159,13 +159,15 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
 /// project ID; they are matched to a project at display time by their cwd, and the stored row is
 /// never rewritten for that.
 enum ProjectProjection {
-    /// A task's project, in order: the ID it stored, the project that owns its cwd, and — for a
-    /// task made in a linked worktree — the project that owns the repository the worktree came
-    /// from. A task that matches none of these keeps showing as a plain folder group.
+    /// A task's project, in order: the ID it stored; none for a task the person moved to Chats
+    /// (`SessionRecord.isMovedToChats`); the project that owns its cwd; and — for a task made in a
+    /// linked worktree — the project that owns the repository the worktree came from. A task that
+    /// matches none of these keeps showing as a plain folder group, or under Chats when it is a chat.
     static func project(for session: SessionRecord, in projects: [Project]) -> Project? {
         if let id = session.projectID, let match = projects.first(where: { $0.id == id }) {
             return match
         }
+        if session.isMovedToChats { return nil }
         let index = RootIndex.of(projects)
         if let match = index.project(containing: session.workspaceURL) {
             return match
@@ -214,12 +216,19 @@ enum ProjectProjection {
         }
     }
 
-    /// Whether the task is a chat: its folder is one a harness app makes for a conversation with no
-    /// project (`ChatWorkspaces`), and no project holds it. The folder decides, not a missing
-    /// project ID: tasks written before projects existed carry none and still belong to theirs.
+    /// Whether the task is a chat: it is in no project, and the person moved it to Chats or its
+    /// folder is one a harness app makes for a conversation with no project (`ChatWorkspaces`). A
+    /// missing project ID alone does not make one: tasks written before projects existed carry none
+    /// and still belong to their folder's project.
     static func isChat(_ session: SessionRecord, in projects: [Project],
                        home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
-        project(for: session, in: projects) == nil && ChatWorkspaces.isChat(session.workspaceURL, home: home)
+        project(for: session, in: projects) == nil && listsInChats(session, home: home)
+    }
+
+    /// Where a task in no project is listed: under Chats when the person moved it there or its
+    /// folder is a chat's, else as its folder's group.
+    private static func listsInChats(_ session: SessionRecord, home: URL) -> Bool {
+        session.isMovedToChats || ChatWorkspaces.isChat(session.workspaceURL, home: home)
     }
 
     /// The chats, most recent first: the Chats section's tasks.
@@ -244,7 +253,7 @@ enum ProjectProjection {
 
         for session in sessions {
             let project = project(for: session, in: projects)
-            if project == nil, ChatWorkspaces.isChat(session.workspaceURL, home: home) { continue }
+            if project == nil, listsInChats(session, home: home) { continue }
             let groupURL = project?.primaryRoot ?? session.workspaceURL.standardizedFileURL
             let key = ProjectSidebarPresentation.normalizedPath(for: groupURL)
             urlByKey[key] = groupURL

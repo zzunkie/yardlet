@@ -72,7 +72,7 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
     var connection: ProviderConnection?
     /// The Yardlet project this task belongs to. Tasks written before projects existed keep this
     /// nil and are matched to a project by their cwd at display time. Moving the task to another
-    /// project (`assignProject`) is the one change after creation.
+    /// project or to Chats (`assignProject`) is the one change after creation.
     private(set) var projectID: UUID?
     /// The project's other roots as they stood when the task was created or moved into it. These
     /// reach the harness through its own multi-root mechanism; the cwd stays `workspaceURL`.
@@ -101,6 +101,10 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
     /// it is drawn under, and this still names the task it was started from. Nil for a task the
     /// person moved itself, and for one no move placed.
     var placedStartedFromTaskID: UUID?
+    /// The person moved the task to Chats ("Move to Chats", `TaskProjectMove`): the sidebar lists it
+    /// there whatever its folder, even one a project holds, until it is moved to a project again.
+    /// Its folder stays its cwd.
+    private(set) var isMovedToChats: Bool
 
     /// The task this one was started from, as far as Yardlet knows: its parent, unless the person
     /// placed it (`isLineageDetached`), where only a task placed to keep the sidebar's levels still
@@ -144,7 +148,8 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         branch: String? = nil,
         parentTaskID: UUID? = nil,
         isLineageDetached: Bool = false,
-        placedStartedFromTaskID: UUID? = nil
+        placedStartedFromTaskID: UUID? = nil,
+        isMovedToChats: Bool = false
     ) {
         self.id = id
         self.harness = harness
@@ -175,6 +180,7 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         self.parentTaskID = parentTaskID == id ? nil : parentTaskID
         self.isLineageDetached = isLineageDetached
         self.placedStartedFromTaskID = placedStartedFromTaskID == id ? nil : placedStartedFromTaskID
+        self.isMovedToChats = isMovedToChats
     }
 
     /// How many replaced names the task keeps.
@@ -188,10 +194,11 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         self.title = title
     }
 
-    /// Puts the task in another project, or in none, with the roots that come along
+    /// Puts the task in another project, or in Chats (nil), with the roots that come along
     /// (`TaskProjectMove`). The folder stays the cwd and is never among the roots.
     mutating func assignProject(_ id: UUID?, additionalRoots roots: [String]) {
         projectID = id
+        isMovedToChats = id == nil
         additionalRoots = SessionRecord.normalizedRoots(roots, excluding: workspaceURL)
     }
 
@@ -251,6 +258,7 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         case parentTaskID
         case isLineageDetached
         case placedStartedFromTaskID
+        case isMovedToChats
     }
 
     init(from decoder: any Decoder) throws {
@@ -302,6 +310,7 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         isLineageDetached = try container.decodeIfPresent(Bool.self, forKey: .isLineageDetached) ?? false
         let starter = try container.decodeIfPresent(UUID.self, forKey: .placedStartedFromTaskID)
         placedStartedFromTaskID = starter == id ? nil : starter
+        isMovedToChats = try container.decodeIfPresent(Bool.self, forKey: .isMovedToChats) ?? false
     }
 }
 

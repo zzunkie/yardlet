@@ -78,7 +78,7 @@ extension AppModelRemoteBridge {
                 projectID: model.project(for: record.session)?.id.uuidString,
                 detail: nil, isShellBusy: false, isPinned: record.session.isPinned, nestedUnder: nil),
                 archivedAt: RemoteJSON.milliseconds(record.archivedAt ?? record.session.updatedAt),
-                projectName: model.project(for: record.session)?.name ?? model.projects.displayName(for: record.session.workspaceURL))
+                projectName: model.projects.displayName(for: record.session))
         }
         return .success(RemoteArchivePage(tasks: tasks,
             cursor: start + page.count < records.count ? page.last?.id.uuidString : nil))

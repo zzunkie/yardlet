@@ -186,12 +186,24 @@ final class ProjectStore {
         ProjectProjection.project(for: session, in: projects)
     }
 
-    /// Where a task works, as the title bar, the rail and the menus name it: its project, "Chats" for a
-    /// chat's own folder (`new-chat-3` is only where Yardlet keeps it), else the folder's name.
+    /// Where a folder belongs, as the new-task screen names it: its project, "Chats" for a chat's own
+    /// folder (`new-chat-3` is only where Yardlet keeps it), else the folder's name.
     func displayName(for workspaceURL: URL) -> String {
         if let project = project(containingRoot: workspaceURL) { return project.name }
         if ChatWorkspaces.isChat(workspaceURL, home: chatWorkspaceHome) { return L10n.string("Chats") }
         return workspaceURL.lastPathComponent
+    }
+
+    /// Where a task is listed, as the title bar, the rail and the menus name it: its project, "Chats"
+    /// for a chat (`isChat`), else its folder's name.
+    func displayName(for session: SessionRecord) -> String {
+        if let project = project(for: session) { return project.name }
+        return isChat(session) ? L10n.string("Chats") : session.workspaceURL.lastPathComponent
+    }
+
+    /// Whether the sidebar lists the task under Chats (`ProjectProjection.isChat`).
+    func isChat(_ session: SessionRecord) -> Bool {
+        ProjectProjection.isChat(session, in: projects, home: chatWorkspaceHome)
     }
 
     /// The main window, its title bar, the task menus and the Dock badge each read the sidebar's
@@ -288,7 +300,9 @@ final class ProjectStore {
     /// by its project ID, its folder, or its worktree's repository, adds none, so a worktree or a
     /// subfolder imported into a project does not become a project of its own; a chat adds none.
     func ensureProjects(forTasks sessions: [SessionRecord]) {
-        for session in sessions where project(for: session) == nil {
+        // A task the person moved to Chats keeps its folder, which makes no project and shows no
+        // hidden one again.
+        for session in sessions where project(for: session) == nil && !session.isMovedToChats {
             ensureProject(forTaskIn: session.workspaceURL)
         }
     }
