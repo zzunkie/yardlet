@@ -42,81 +42,116 @@ enum TranscriptConversationProjection {
         var id: String { entries[0].id.uuidString }
     }
 
-    static func presentation(
-        from entries: [TranscriptEntry],
-        harness: HarnessKind,
-        status: SessionStatus,
-        latestTurnIsComplete: Bool
-    ) -> ConversationPresentation {
-        presentation(from: TranscriptTurns(entries), harness: harness, status: status,
-                     latestTurnIsComplete: latestTurnIsComplete) {
-            $0.map(turn)
-        }
-    }
+    /// One update's turn inputs: what the turns read across one another, read once, and each turn's
+    /// input read from it only when asked (`input(at:)`). `keeps(_:at:)` tells whether an input read
+    /// for a turn before is its input now by comparing only the turn's own parts, so a cache tells a
+    /// turn the transcript kept (`TranscriptTurns`) by its storage.
+    struct TurnInputs: ConversationTurnInputs {
+        let turns: [TranscriptTurn]
+        let harness: HarnessKind
+        let status: SessionStatus
+        let latestTurnIsComplete: Bool
+        /// The turn that holds the latest message, for Claude.
+        let latestMessageTurn: Int?
+        /// The transcript's requests and tool calls, counted over its turns.
+        let requests: TranscriptRequestIndex
+        /// The tool calls whose approval changed since the update before (`TranscriptRequestIndex.update(to:)`).
+        let changedApprovals: Set<String>
 
-    /// The presentation with its turns projected by `projectTurns`, which a cache uses to keep
-    /// unchanged turns.
-    static func presentation(
-        from transcript: TranscriptTurns,
-        harness: HarnessKind,
-        status: SessionStatus,
-        latestTurnIsComplete: Bool,
-        projectTurns: ([TurnInput]) -> [ConversationTurn]
-    ) -> ConversationPresentation {
-        ConversationPresentation(
-            harness: harness,
-            turns: projectTurns(turnInputs(
-                transcript, harness: harness, status: status, latestTurnIsComplete: latestTurnIsComplete
-            )),
-            earlier: .none,
-            pendingRequestIDs: transcript.turns.reduce(into: []) { $0.formUnion($1.pendingRequestIDs) },
-            tokenUsage: nil
-        )
-    }
+        var count: Int { turns.count }
+        var shared: HarnessKind { harness }
 
-    static func turnInputs(
-        _ entries: [TranscriptEntry],
-        harness: HarnessKind,
-        status: SessionStatus,
-        latestTurnIsComplete: Bool
-    ) -> [TurnInput] {
-        turnInputs(TranscriptTurns(entries), harness: harness, status: status, latestTurnIsComplete: latestTurnIsComplete)
-    }
+        func id(at index: Int) -> UUID { turns[index].id }
 
-    /// Each turn's input. A turn's entries are the turn's own storage (`TranscriptTurns`), so a cache
-    /// tells a turn the transcript kept from the one before by its storage; what is read across turns
-    /// (approvals, the latest message) is read from what each turn worked out once.
-    static func turnInputs(
-        _ transcript: TranscriptTurns,
-        harness: HarnessKind,
-        status: SessionStatus,
-        latestTurnIsComplete: Bool
-    ) -> [TurnInput] {
-        let turns = transcript.turns
-        let approved = approvedToolCallIDs(in: turns)
-        // The latest message is in the latest turn that holds one, almost always the last.
-        let latestMessageTurn = harness == .claudeCode ? turns.lastIndex { $0.entries.contains(where: isMessage) } : nil
-        return turns.indices.map { index in
+        func input(at index: Int) -> TurnInput {
             let turn = turns[index]
             let isLast = index == turns.index(before: turns.endIndex)
             return TurnInput(
                 entries: turn.entries,
-                approvedToolCallIDs: approved.isEmpty ? [] : approved.intersection(turn.toolCallIDs),
+                approvedToolCallIDs: requests.approvedToolCallIDs(in: turn),
                 harness: harness,
-                isHead: index == turns.startIndex && !isRequest(turn.entries[0]),
+                isHead: isHead(index),
                 isLast: isLast,
                 isComplete: !isLast || latestTurnIsComplete,
                 status: isLast ? status : nil,
                 isLatestMessage: index == latestMessageTurn
             )
         }
+
+        /// The turn's approved calls are read again only when the approval of one of its calls changed
+        /// since the update before.
+        func keeps(_ previous: TurnInput, at index: Int) -> Bool {
+            let turn = turns[index]
+            let isLast = index == turns.index(before: turns.endIndex)
+            return previous.isLast == isLast
+                && previous.isComplete == (!isLast || latestTurnIsComplete)
+                && previous.status == (isLast ? status : nil)
+                && previous.isLatestMessage == (index == latestMessageTurn)
+                && previous.isHead == isHead(index)
+                && previous.entries == turn.entries
+                && (changedApprovals.isEmpty || turn.toolCallIDs.isDisjoint(with: changedApprovals))
+        }
+
+        private func isHead(_ index: Int) -> Bool {
+            index == turns.startIndex && !isRequest(turns[index].entries[0])
+        }
     }
 
-    /// `approvedToolCallIDs(in:)` read from each turn's own calls and allowed requests.
-    static func approvedToolCallIDs(in turns: [TranscriptTurn]) -> Set<String> {
-        let allowed = turns.reduce(into: Set<String>()) { $0.formUnion($1.allowedToolCallIDs) }
-        guard !allowed.isEmpty else { return [] }
-        return allowed.filter { id in turns.contains { $0.activityIDs.contains(id) } }
+    static func presentation(
+        from entries: [TranscriptEntry],
+        harness: HarnessKind,
+        status: SessionStatus,
+        latestTurnIsComplete: Bool
+    ) -> ConversationPresentation {
+        var requests = TranscriptRequestIndex()
+        return presentation(from: TranscriptTurns(entries), harness: harness, status: status,
+                            latestTurnIsComplete: latestTurnIsComplete, requests: &requests) { inputs in
+            (0..<inputs.count).map { turn(inputs.input(at: $0)) }
+        }
+    }
+
+    /// The presentation with its turns projected by `projectTurns`, which a cache uses to keep
+    /// unchanged turns. `requests` is moved to the transcript's turns: a cache keeps it between updates,
+    /// so only the turns that came and went are counted again.
+    static func presentation(
+        from transcript: TranscriptTurns,
+        harness: HarnessKind,
+        status: SessionStatus,
+        latestTurnIsComplete: Bool,
+        requests: inout TranscriptRequestIndex,
+        projectTurns: (TurnInputs) -> [ConversationTurn]
+    ) -> ConversationPresentation {
+        let inputs = turnInputs(transcript, harness: harness, status: status,
+                                latestTurnIsComplete: latestTurnIsComplete, requests: &requests)
+        return ConversationPresentation(
+            harness: harness,
+            turns: projectTurns(inputs),
+            earlier: .none,
+            pendingRequestIDs: requests.pendingRequestIDs,
+            tokenUsage: nil
+        )
+    }
+
+    /// The transcript's turn inputs, with `requests` moved to its turns.
+    static func turnInputs(
+        _ transcript: TranscriptTurns,
+        harness: HarnessKind,
+        status: SessionStatus,
+        latestTurnIsComplete: Bool,
+        requests: inout TranscriptRequestIndex
+    ) -> TurnInputs {
+        let turns = transcript.turns
+        let changedApprovals = requests.update(to: turns)
+        return TurnInputs(
+            turns: turns,
+            harness: harness,
+            status: status,
+            latestTurnIsComplete: latestTurnIsComplete,
+            // The latest message is in the latest turn that holds one, almost always the last.
+            latestMessageTurn: harness == .claudeCode ? turns.lastIndex { $0.entries.contains(where: isMessage) } : nil,
+            requests: requests,
+            changedApprovals: changedApprovals
+        )
     }
 
     /// Tool calls whose allowed request reads as a mark on the call's own card instead of a
@@ -571,9 +606,10 @@ extension ConversationProjectionCache {
             return keptWhole(last.presentation)
         }
         let presentation = TranscriptConversationProjection.presentation(
-            from: transcript, harness: harness, status: status, latestTurnIsComplete: latestTurnIsComplete
+            from: transcript, harness: harness, status: status, latestTurnIsComplete: latestTurnIsComplete,
+            requests: &transcriptRequests
         ) { inputs in
-            turns(inputs.map { (id: $0.id, input: $0) }, project: TranscriptConversationProjection.turn)
+            turns(of: inputs, project: TranscriptConversationProjection.turn)
         }
         lastTranscript = (transcript, harness, status, latestTurnIsComplete, presentation)
         return presentation

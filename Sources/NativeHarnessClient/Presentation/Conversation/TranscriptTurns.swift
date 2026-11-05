@@ -43,7 +43,7 @@ struct TranscriptTurns: Equatable {
         var keptStarts: [Int] = []
         var splitStart = 0
         var keeping = true
-        var earlier: [String: (turn: TranscriptTurn, start: Int)] = [:]
+        var earlier: [UUID: (turn: TranscriptTurn, start: Int)] = [:]
         for (index, turn) in turns.enumerated() {
             let start = starts[index] - dropped
             let end = start + turn.entries.count
@@ -58,7 +58,7 @@ struct TranscriptTurns: Equatable {
                 splitStart = end
             } else {
                 keeping = false
-                if start >= 0 { earlier[turn.entries[0].id.uuidString] = (turn, start) }
+                if start >= 0 { earlier[turn.id] = (turn, start) }
             }
         }
         var start = splitStart
@@ -74,8 +74,8 @@ struct TranscriptTurns: Equatable {
     /// The turn of `entries`: the earlier turn that starts where they do with the same entries, told by
     /// comparing only those after the first `known` of the transcript, which stayed the same.
     private static func turn(_ entries: ArraySlice<TranscriptEntry>,
-                             reusing earlier: [String: (turn: TranscriptTurn, start: Int)], known: Int) -> TranscriptTurn {
-        if let first = entries.first, let match = earlier[first.id.uuidString], match.start == entries.startIndex,
+                             reusing earlier: [UUID: (turn: TranscriptTurn, start: Int)], known: Int) -> TranscriptTurn {
+        if let first = entries.first, let match = earlier[first.id], match.start == entries.startIndex,
            match.turn.entries.count == entries.count {
             let compared = min(max(known - entries.startIndex, 0), entries.count)
             if match.turn.entries[compared...].elementsEqual(entries[(entries.startIndex + compared)...]) {
@@ -86,12 +86,13 @@ struct TranscriptTurns: Equatable {
     }
 
     /// The same entries, or the same turns of entries of the same length: a transcript updated from
-    /// another keeps its turns. Entries that were never split are not compared.
+    /// another keeps its turns. Entries that were never split are not compared. The turns are compared
+    /// from the last, the one a streaming answer changes.
     static func == (lhs: TranscriptTurns, rhs: TranscriptTurns) -> Bool {
         if lhs.entries.sharesStorage(with: rhs.entries) { return true }
         guard lhs.entries.count == rhs.entries.count, let left = lhs.split.made, let right = rhs.split.made,
               left.count == right.count else { return false }
-        return zip(left, right).allSatisfy { $0 === $1 }
+        return left.indices.reversed().allSatisfy { left[$0] === right[$0] }
     }
 
     /// The entries the session rail, the composer and its line of background tasks read
@@ -136,9 +137,12 @@ struct TranscriptTurns: Equatable {
 /// One turn of a transcript (`TranscriptTurns`), with what the conversation and the rail read of it.
 final class TranscriptTurn {
     let entries: [TranscriptEntry]
+    /// The ID of its first entry, which names the turn.
+    let id: UUID
 
     init(entries: [TranscriptEntry]) {
         self.entries = entries
+        id = entries[0].id
     }
 
     /// The entries the rail and the composer read (`SessionRailContent.reads`).

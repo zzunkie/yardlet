@@ -7,7 +7,7 @@ import XCTest
 /// How long a long Claude task's transcript takes to draw (plan M9, D11): the first layout of the
 /// conversation in an unshown window, a streamed answer growing, and a new request arriving, each the
 /// main thread's time for one update. The renderer is measured with its 40-turn window and drawing
-/// every turn. Runs only with `NHC_PERF_BENCH=1` (`NHC_PERF_BENCH_TURNS`, default 400 turns of five
+/// every turn. Runs only with `NHC_PERF_BENCH=1` (`NHC_PERF_BENCH_TURNS`, default 400 turns of six
 /// entries; a Claude conversation read to its start keeps every entry its transcript holds) and
 /// prints `[perf]` lines; `NHC_PERF_BENCH_VARIANTS` (`all,window`) picks the variants. Nothing is asserted about the times, which depend on the machine and its load.
 @MainActor
@@ -44,7 +44,7 @@ final class LongTranscriptRenderPerformanceTests: XCTestCase {
         try XCTSkipUnless(environment["NHC_PERF_BENCH"] == "1", "Set NHC_PERF_BENCH=1 to run the benchmark")
         let turns = Int(environment["NHC_PERF_BENCH_TURNS"] ?? "") ?? 400
         let entries = Self.transcript(turns: turns)
-        XCTAssertEqual(entries.count, turns * 5)
+        XCTAssertEqual(entries.count, turns * 6)
         let rounds = Int(environment["NHC_PERF_BENCH_ROUNDS"] ?? "") ?? 3
         let names = environment["NHC_PERF_BENCH_VARIANTS"].map { Set($0.split(separator: ",").map(String.init)) }
         let variants = Variant.all.filter { names?.contains($0.name) ?? true }
@@ -64,33 +64,41 @@ final class LongTranscriptRenderPerformanceTests: XCTestCase {
         for variant in variants {
             let mount = mounts[variant] ?? Samples(), stream = streams[variant] ?? Samples()
             let request = requests[variant] ?? Samples()
-            print("[perf] transcript-\(turns)x5 \(variant.name) (\(rounds) rounds): first layout median "
+            print("[perf] transcript-\(turns)x6 \(variant.name) (\(rounds) rounds): first layout median "
                   + "\(Self.ms(mount.median)) ms, stream update median \(Self.ms(stream.median)) ms "
                   + "(p90 \(Self.ms(stream.p90))), new request median \(Self.ms(request.median)) ms "
                   + "(p90 \(Self.ms(request.p90)))")
-            PerfBenchRecord.write("claude-transcript-\(turns)x5-\(variant.name)", [
+            PerfBenchRecord.write("claude-transcript-\(turns)x6-\(variant.name)", [
                 "firstLayoutMs": mount.median * 1000, "streamUpdateMs": stream.median * 1000,
                 "streamUpdateP90Ms": stream.p90 * 1000, "newRequestMs": request.median * 1000
             ])
         }
 
-        // The projection's share of an update: projecting the transcript again through the renderer's
-        // cache (one turn changes; the rest are kept).
+        // The projection's share of an update, as a task publishes a streamed answer: the turns updated
+        // with what the builder says changed (`TranscriptTurns.updated(to:change:)`), projected again
+        // through the renderer's cache (one turn changes; the rest are kept).
         let cache = ConversationProjectionCache()
-        var growing = entries
-        _ = cache.transcript(growing, harness: .claudeCode, status: .running, latestTurnIsComplete: false)
+        var builder = TranscriptBuilder(entries: entries, limit: entries.count + 100)
+        builder.appendUser("Keep going")
+        builder.apply(.assistantDelta("Working"))
+        var transcript = TranscriptTurns(builder.entries)
+        _ = builder.takeChange()
+        _ = cache.transcript(transcript, harness: .claudeCode, status: .running, latestTurnIsComplete: false)
+        let before = cache.counts
         var projection = Samples()
         for step in 0..<30 {
-            let last = growing.count - 1
-            guard case let .assistant(text, _) = growing[last].content else { break }
-            growing[last].content = .assistant(text: text + " \(step)", isStreaming: true)
+            builder.apply(.assistantDelta(" \(step)"))
             let begin = Date()
-            _ = cache.transcript(growing, harness: .claudeCode, status: .running, latestTurnIsComplete: false)
+            transcript = transcript.updated(to: builder.entries, change: builder.takeChange())
+            _ = cache.transcript(transcript, harness: .claudeCode, status: .running, latestTurnIsComplete: false)
             projection.values.append(Date().timeIntervalSince(begin))
         }
-        print("[perf] transcript-\(turns)x5 projection per stream update: median \(Self.ms(projection.median)) ms "
-              + "(p90 \(Self.ms(projection.p90))), turns reused \(cache.counts.reused), projected \(cache.counts.projected)")
-        PerfBenchRecord.write("claude-transcript-\(turns)x5-projection", [
+        let updates = Double(projection.values.count)
+        print("[perf] transcript-\(turns)x6 projection per stream update: median \(Self.ms(projection.median)) ms "
+              + "(p90 \(Self.ms(projection.p90))), turns per update projected "
+              + String(format: "%.1f, reused %.1f", Double(cache.counts.projected - before.projected) / updates,
+                       Double(cache.counts.reused - before.reused) / updates))
+        PerfBenchRecord.write("claude-transcript-\(turns)x6-projection", [
             "streamUpdateMs": projection.median * 1000, "streamUpdateP90Ms": projection.p90 * 1000
         ])
     }
@@ -139,8 +147,8 @@ final class LongTranscriptRenderPerformanceTests: XCTestCase {
         return (mount, stream, request)
     }
 
-    /// `turns` Claude turns of five entries: a request, commentary, a tool call, thinking and an
-    /// answer, the last turn still streaming its answer.
+    /// `turns` Claude turns of six entries: a request, commentary, a tool call and the request that
+    /// allowed it, thinking and an answer, the last turn still streaming its answer.
     private static func transcript(turns: Int) -> [TranscriptEntry] {
         var entries: [TranscriptEntry] = []
         for index in 1...turns {
@@ -152,6 +160,10 @@ final class LongTranscriptRenderPerformanceTests: XCTestCase {
                     id: "tool-\(index)", kind: "Bash", title: "Bash", input: "swift test --filter Case\(index)",
                     output: "Test Suite passed\n" + String(repeating: "line\n", count: 8)
                 ), state: .completed)),
+                TranscriptEntry(content: .permission(PermissionRequest(
+                    id: "request-\(index)", title: "Bash", detail: nil, command: "swift test --filter Case\(index)",
+                    toolCallID: "tool-\(index)"
+                ), state: .allowed)),
                 TranscriptEntry(content: .reasoning(text: "The failure in \(index) is the stale cache.", isStreaming: false)),
                 TranscriptEntry(content: .assistant(
                     text: "## Result \(index)\n\nThe build passes after clearing the cache. `swift test` ran cleanly.",

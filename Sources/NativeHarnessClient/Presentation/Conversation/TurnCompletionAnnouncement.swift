@@ -22,8 +22,9 @@ import Foundation
 ///   initiator becomes "user". A run a Yardlet schedule started as a new task opens with the
 ///   schedule's words as its message and is announced, as both apps announce a scheduled run.
 enum TurnCompletionAnnouncement {
-    /// Whether the latest of `turns` answers the person. With no turn to read, it does.
-    static func answersPerson(_ turns: [ConversationTurn]) -> Bool {
+    /// Whether the latest of `turns` answers the person. With no turn to read, it does. The turns are
+    /// read from the latest, only as far as a turn that decides it.
+    static func answersPerson(_ turns: some BidirectionalCollection<ConversationTurn>) -> Bool {
         for turn in turns.reversed() {
             switch opener(of: turn) {
             case .person: return true

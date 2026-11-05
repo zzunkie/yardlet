@@ -1401,8 +1401,10 @@ final class AppModelRemoteBridge: RemoteBridge {
         if let state = Self.codexState(of: session, in: model) {
             return cache.codex(state, workspaceURL: session.workspaceURL, historySelection: nil)
         }
+        // The task's turns as the Mac's views read them, which a publication changes only where it changed
+        // (`TranscriptTurns`).
         return cache.transcript(
-            model.transcriptBySessionID[session.id] ?? [], harness: session.harness, status: session.status,
+            model.transcript(for: session.id), harness: session.harness, status: session.status,
             latestTurnIsComplete: session.completionState == .completed)
     }
 

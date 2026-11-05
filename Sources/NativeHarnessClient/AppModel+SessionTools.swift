@@ -296,10 +296,10 @@ extension AppModel: SessionToolHandling {
     /// diff.
     func sessionToolPresentation(of session: SessionRecord,
                                  reading: ([String]) -> Range<Int> = { $0.indices }) -> ConversationPresentation {
-        func project<Input>(_ inputs: [Input], ids: [String], _ turn: (Input) -> ConversationTurn) -> [ConversationTurn] {
+        func project(ids: [String], _ turn: (Int) -> ConversationTurn) -> [ConversationTurn] {
             let read = reading(ids).clamped(to: ids.indices)
             return ids.indices.map { index in
-                read.contains(index) ? turn(inputs[index])
+                read.contains(index) ? turn(index)
                     : ConversationTurn(id: ids[index], status: .unknown(nil), timing: ConversationTurnTiming())
             }
         }
@@ -307,14 +307,35 @@ extension AppModel: SessionToolHandling {
            let state = codexPresentationBySessionID[session.id], state.thread?.turns.isEmpty == false {
             return CodexConversationProjection.presentation(state, workspaceURL: session.workspaceURL,
                                                             historySelection: nil) { inputs in
-                project(inputs, ids: inputs.map(\.turn.id)) { CodexConversationProjection.turn($0) }
+                project(ids: (0..<inputs.count).map(inputs.id(at:))) { CodexConversationProjection.turn(inputs.input(at: $0)) }
             }
         }
+        var requests = TranscriptRequestIndex()
         return TranscriptConversationProjection.presentation(
             from: TranscriptTurns(transcriptBySessionID[session.id] ?? []), harness: session.harness,
-            status: session.status, latestTurnIsComplete: session.completionState == .completed) { inputs in
-            project(inputs, ids: inputs.map(\.id), TranscriptConversationProjection.turn)
+            status: session.status, latestTurnIsComplete: session.completionState == .completed,
+            requests: &requests) { inputs in
+            project(ids: (0..<inputs.count).map { inputs.id(at: $0).uuidString }) {
+                TranscriptConversationProjection.turn(inputs.input(at: $0))
+            }
         }
+    }
+
+    /// The turns the task's timeline draws, as `sessionToolPresentation(of:reading:)` reads them, each
+    /// projected when it is read: a rule that reads the latest turns of a long conversation costs those
+    /// turns, not the whole history.
+    func conversationTurns(of session: SessionRecord) -> LazyMapCollection<Range<Int>, ConversationTurn> {
+        if HarnessPresentationPolicy(harness: session.harness).usesCodexTimeline,
+           let state = codexPresentationBySessionID[session.id], let thread = state.thread, !thread.turns.isEmpty {
+            let inputs = CodexConversationProjection.turnInputs(state, thread: thread, workspaceURL: session.workspaceURL,
+                                                                historySelection: nil)
+            return (0..<inputs.count).lazy.map { CodexConversationProjection.turn(inputs.input(at: $0)) }
+        }
+        var requests = TranscriptRequestIndex()
+        let inputs = TranscriptConversationProjection.turnInputs(
+            transcript(for: session.id), harness: session.harness, status: session.status,
+            latestTurnIsComplete: session.completionState == .completed, requests: &requests)
+        return (0..<inputs.count).lazy.map { TranscriptConversationProjection.turn(inputs.input(at: $0)) }
     }
 
     // MARK: - send_message_to_task

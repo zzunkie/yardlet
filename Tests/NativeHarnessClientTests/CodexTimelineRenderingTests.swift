@@ -161,17 +161,24 @@ final class CodexTimelineRenderingTests: XCTestCase {
 
         // A reply Yardlet sent before it wrote the Codex app's reads back too; any other message is no
         // answer, and the questions no longer wait.
-        let legacy = CodexConversationProjection.presentation(thread([
+        let legacyState = thread([
             turn("turn-1", status: "completed", items: [user("u1", "Then let's download it here"), message]),
             turn("turn-2", status: "completed", items: [user("u2", "Download sign-in done")])
-        ]), workspaceURL: URL(filePath: "/Users/me/yardlet"), historySelection: nil)
+        ])
+        let legacy = CodexConversationProjection.presentation(
+            legacyState, workspaceURL: URL(filePath: "/Users/me/yardlet"), historySelection: nil)
         XCTAssertEqual(legacy.turns.first?.actions.answeredQuestions?.answers.values.map(\.options), [["Download sign-in done"]])
-        let movedOn = CodexConversationProjection.presentation(thread([
+        let movedOnState = thread([
             turn("turn-1", status: "completed", items: [user("u1", "Then let's download it here"), message]),
             turn("turn-2", status: "completed", items: [user("u2", "Wait, let's do something else first")])
-        ]), workspaceURL: URL(filePath: "/Users/me/yardlet"), historySelection: nil)
+        ])
+        let movedOn = CodexConversationProjection.presentation(
+            movedOnState, workspaceURL: URL(filePath: "/Users/me/yardlet"), historySelection: nil)
         XCTAssertNil(movedOn.turns.first?.actions.answeredQuestions)
         XCTAssertTrue(movedOn.turns.allSatisfy { $0.actions.questionsToAnswer.isEmpty })
+        // Through the renderer's cache, the question turn is read again whenever what follows it changes.
+        CodexReducerSteps.assertCacheFollows([("asked", state), ("answered", answered), ("legacy reply", legacyState),
+                                              ("moved on", movedOnState), ("asked again", state)])
     }
 
     // MARK: - Fixtures

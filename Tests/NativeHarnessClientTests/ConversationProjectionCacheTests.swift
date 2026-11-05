@@ -157,6 +157,16 @@ final class ConversationProjectionCacheTests: XCTestCase {
         XCTAssertEqual(presentation.turns.last?.work.count, 1, "The allowed request folds into the tool")
         status = .ready
         expectProjected(1, "the task stops")
+        // A later turn allows a call an earlier turn shows: approval is decided across turns, so the
+        // earlier turn is read again with the turn that changed, and no other.
+        entries.append(TranscriptEntry(content: .activity(HarnessActivity(id: "late", kind: "Bash", title: "Deploy"),
+                                                          state: .completed)))
+        expectProjected(1, "a call nothing allowed yet")
+        entries.append(TranscriptEntry(content: .user(text: "Allow the deploy")))
+        expectProjected(2, "the next request")
+        entries.append(TranscriptEntry(content: .permission(PermissionRequest(id: "late-request", title: "Deploy",
+            detail: nil, command: nil, toolCallID: "late"), state: .allowed)))
+        expectProjected(2, "a later turn allows an earlier turn's call")
 
         print(String(format: "[perf] transcript projection: 300 turns %.2f ms, one changed turn %.2f ms",
                      first.milliseconds, update.milliseconds))

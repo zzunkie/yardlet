@@ -113,7 +113,8 @@ extension AppModel {
         if TurnCompletionAnnouncement.leavesBackgroundAgentRunning(transcriptBySessionID[session.id] ?? []) {
             return false
         }
-        return TurnCompletionAnnouncement.answersPerson(sessionToolPresentation(of: session).turns)
+        // Read from the latest turn back, only as far as the rule reads.
+        return TurnCompletionAnnouncement.answersPerson(conversationTurns(of: session))
     }
 
     // MARK: - Requests a task waits on

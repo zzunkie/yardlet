@@ -31,6 +31,8 @@ enum CodexConversationProjection {
         let approvals: [CodexApprovalState]
         let serverRequests: [CodexServerRequestState]
         let history: HistoryMatch
+        /// The turn ended on questions (`askedQuestions`), so the message after it is read.
+        var asksQuestions = false
         /// What the person sent first after a turn that ended on questions: the next turn's first
         /// message, which may be the reply to them. Nil for any other turn.
         var nextMessage: String? = nil
@@ -45,13 +47,81 @@ enum CodexConversationProjection {
         case query(String)
     }
 
+    /// One update's turn inputs: what every turn reads alike, read once, and each turn's input read
+    /// from it only when asked (`input(at:)`). `keeps(_:at:)` tells whether an input read for a turn
+    /// before is its input now by comparing only the turn's own parts, so a cache tells a turn the
+    /// update left alone by its `CodexTurnState`, which it shares with the state before.
+    struct TurnInputs: ConversationTurnInputs {
+        /// What every turn reads alike.
+        struct Shared: Equatable {
+            let workspaceURL: URL
+            let showsTurnLabel: Bool
+            let history: HistoryMatch
+        }
+
+        let turns: [CodexTurnState]
+        let shared: Shared
+        let latestTurnID: String?
+        let editableTurnID: String?
+        let retryableTurnID: String?
+        /// Each turn's approvals and server requests (`requestsByTurn`).
+        let approvals: [String: [CodexApprovalState]]
+        let serverRequests: [String: [CodexServerRequestState]]
+
+        var count: Int { turns.count }
+
+        func id(at index: Int) -> String { turns[index].id }
+
+        func input(at index: Int) -> TurnInput {
+            let turn = turns[index]
+            let asksQuestions = !askedQuestions(in: turn).questions.isEmpty
+            return TurnInput(
+                turn: turn,
+                workspaceURL: shared.workspaceURL,
+                showsTurnLabel: shared.showsTurnLabel,
+                isLatest: turn.id == latestTurnID,
+                isEditable: turn.id == editableTurnID,
+                canRetry: turn.id == retryableTurnID,
+                approvals: approvals(of: turn),
+                serverRequests: serverRequests(of: turn),
+                history: shared.history,
+                asksQuestions: asksQuestions,
+                nextMessage: asksQuestions ? nextMessage(after: index) : nil
+            )
+        }
+
+        /// An equal turn asks the same questions, so they are not read again.
+        func keeps(_ previous: TurnInput, at index: Int) -> Bool {
+            let turn = turns[index]
+            return previous.turn == turn
+                && previous.isLatest == (turn.id == latestTurnID)
+                && previous.isEditable == (turn.id == editableTurnID)
+                && previous.canRetry == (turn.id == retryableTurnID)
+                && previous.approvals == approvals(of: turn)
+                && previous.serverRequests == serverRequests(of: turn)
+                && previous.nextMessage == (previous.asksQuestions ? nextMessage(after: index) : nil)
+        }
+
+        private func approvals(of turn: CodexTurnState) -> [CodexApprovalState] {
+            approvals.isEmpty ? [] : approvals[turn.id] ?? []
+        }
+
+        private func serverRequests(of turn: CodexTurnState) -> [CodexServerRequestState] {
+            serverRequests.isEmpty ? [] : serverRequests[turn.id] ?? []
+        }
+
+        private func nextMessage(after index: Int) -> String? {
+            turns.indices.contains(index + 1) ? firstMessage(in: turns[index + 1]) : nil
+        }
+    }
+
     static func presentation(
         _ state: CodexTaskState,
         workspaceURL: URL,
         historySelection: CodexHistorySearchSelection?
     ) -> ConversationPresentation {
         presentation(state, workspaceURL: workspaceURL, historySelection: historySelection) { inputs in
-            inputs.map { turn($0) }
+            (0..<inputs.count).map { turn(inputs.input(at: $0)) }
         }
     }
 
@@ -61,12 +131,13 @@ enum CodexConversationProjection {
         _ state: CodexTaskState,
         workspaceURL: URL,
         historySelection: CodexHistorySearchSelection?,
-        projectTurns: ([TurnInput]) -> [ConversationTurn]
+        projectTurns: (TurnInputs) -> [ConversationTurn]
     ) -> ConversationPresentation {
         guard let thread = state.thread else { return ConversationPresentation(harness: .codex, turns: []) }
         return ConversationPresentation(
             harness: .codex,
-            turns: projectTurns(turnInputs(state, workspaceURL: workspaceURL, historySelection: historySelection)),
+            turns: projectTurns(turnInputs(state, thread: thread, workspaceURL: workspaceURL,
+                                           historySelection: historySelection)),
             earlier: thread.turnsNextCursor.map { .provider(cursor: $0) } ?? .none,
             pendingRequestIDs: pendingRequestIDs(in: state),
             tokenUsage: thread.turns.last?.tokenUsage
@@ -75,32 +146,25 @@ enum CodexConversationProjection {
 
     static func turnInputs(
         _ state: CodexTaskState,
+        thread: CodexThreadState,
         workspaceURL: URL,
         historySelection: CodexHistorySearchSelection?
-    ) -> [TurnInput] {
-        guard let thread = state.thread else { return [] }
-        let editableTurnID = CodexTurnLayout.editableTurnID(in: thread)
+    ) -> TurnInputs {
         let latestTurnID = thread.turns.last?.id
-        let retryableTurnID = latestTurnID.flatMap {
-            CodexTurnRecoveryProjection.canRetry($0, in: state) ? $0 : nil
-        }
         let (approvals, serverRequests) = requestsByTurn(state)
-        let history = historyMatch(in: thread, selection: historySelection)
-        return thread.turns.enumerated().map { index, turn in
-            let next = thread.turns.indices.contains(index + 1) ? thread.turns[index + 1] : nil
-            return TurnInput(
-                turn: turn,
+        return TurnInputs(
+            turns: thread.turns,
+            shared: TurnInputs.Shared(
                 workspaceURL: workspaceURL,
                 showsTurnLabel: thread.turns.count > 1,
-                isLatest: turn.id == latestTurnID,
-                isEditable: turn.id == editableTurnID,
-                canRetry: turn.id == retryableTurnID,
-                approvals: approvals[turn.id] ?? [],
-                serverRequests: serverRequests[turn.id] ?? [],
-                history: history,
-                nextMessage: askedQuestions(in: turn).questions.isEmpty ? nil : next.flatMap { firstMessage(in: $0) }
-            )
-        }
+                history: historyMatch(in: thread, selection: historySelection)
+            ),
+            latestTurnID: latestTurnID,
+            editableTurnID: CodexTurnLayout.editableTurnID(in: thread),
+            retryableTurnID: latestTurnID.flatMap { CodexTurnRecoveryProjection.canRetry($0, in: state) ? $0 : nil },
+            approvals: approvals,
+            serverRequests: serverRequests
+        )
     }
 
     /// The requests waiting for an answer, as the timeline counts them.
@@ -785,13 +849,19 @@ extension ConversationProjectionCache {
         workspaceURL: URL,
         historySelection: CodexHistorySearchSelection?
     ) -> ConversationPresentation {
+        // The same state shown again, as the view draws again when it scrolls: its turns are the very
+        // same, which tells it without comparing them.
+        if let last = lastCodex, last.workspaceURL == workspaceURL, last.historySelection == historySelection,
+           (last.state.thread?.turns ?? []).sharesStorage(with: state.thread?.turns ?? []), last.state == state {
+            return keptWhole(last.presentation)
+        }
         let items = codexItems
         let presentation = CodexConversationProjection.presentation(
             state, workspaceURL: workspaceURL, historySelection: historySelection
         ) { inputs in
-            turns(inputs.map { (id: $0.turn.id, input: $0) }) { CodexConversationProjection.turn($0, items: items) }
+            turns(of: inputs, project: { CodexConversationProjection.turn($0, items: items) }, forgotten: items.forget)
         }
-        items.forget(turnsOtherThan: Set(presentation.turns.map(\.id)))
+        lastCodex = (state, workspaceURL, historySelection, presentation)
         return presentation
     }
 }
@@ -818,7 +888,8 @@ final class CodexItemMemo {
         turns[turnID] = items
     }
 
-    func forget(turnsOtherThan ids: Set<String>) {
-        if turns.keys.contains(where: { !ids.contains($0) }) { turns = turns.filter { ids.contains($0.key) } }
+    /// Forgets the items of turns the conversation no longer has.
+    func forget(_ turnIDs: [String]) {
+        for id in turnIDs { turns[id] = nil }
     }
 }

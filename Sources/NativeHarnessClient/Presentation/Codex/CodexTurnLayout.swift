@@ -68,9 +68,10 @@ struct CodexTurnLayout: Equatable, Sendable {
     }
 
     /// The one turn whose request can be edited: the latest turn the person sent a message in,
-    /// once every turn has finished.
+    /// once every turn has finished. A turn that runs is looked for from the end, where it is while
+    /// the thread streams.
     static func editableTurnID(in thread: CodexThreadState) -> String? {
-        guard thread.turns.allSatisfy({ $0.status.isTerminal }) else { return nil }
+        guard thread.turns.lastIndex(where: { !$0.status.isTerminal }) == nil else { return nil }
         return thread.turns.last(where: \.hasNativeUserMessage)?.id
     }
 
