@@ -283,9 +283,11 @@ package enum AgentToolCatalog {
             name: handleDialog,
             title: "Handle dialog",
             description: "Answer the page's open JavaScript dialog (alert, confirm, prompt, or leave-page). The page "
-                + "is paused until it is answered, and the other tools say when one is open.",
+                + "is paused until it is answered, and the other tools say when one is open. With accept false it also "
+                + "closes a permission request the page waits on (notifications, location and the like) when the task "
+                + "does not need it; only the person can allow one.",
             inputSchema: pageInput([
-                "accept": property("boolean", "Accept (OK) or dismiss (Cancel)."),
+                "accept": property("boolean", "Accept (OK) or dismiss (Cancel). A permission request can only be dismissed."),
                 "promptText": property("string", "Text to enter in a prompt dialog before accepting.")
             ], required: ["accept"]),
             readOnly: false

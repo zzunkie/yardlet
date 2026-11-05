@@ -336,7 +336,9 @@ final class BrowserHostClient {
         if let window = chromiumWindows.first(where: { $0.tab == tab.id && $0.kind != .print }) {
             return BrowserPersonWait(kind: window.kind == .signIn ? .signIn : .passkey, id: "window-\(window.id)")
         }
-        if let prompt = tab.permissionPrompt { return BrowserPersonWait(kind: .permission, id: "permission-\(prompt.id)") }
+        if let prompt = tab.permissionPrompt {
+            return BrowserPersonWait(kind: .permission, id: "permission-\(prompt.id)", agentLed: tab.permissionByAgent)
+        }
         if let question = tab.externalAppQuestion {
             return BrowserPersonWait(kind: .externalApp, id: "app-\(question.url)")
         }
@@ -1360,8 +1362,11 @@ final class BrowserTab {
     private(set) var openedTabs: Set<BrowserTabID> = []
     /// The passwords and codes the vault filled into the tab's documents, for the agent and for the person.
     let vaultFills = BrowserVaultFills()
-    /// What the page asks permission for and waits on, until the person answers or the page moves on.
+    /// What the page asks permission for and waits on, until the person answers it, the agent closes it or the page
+    /// moves on.
     private(set) var permissionPrompt: BrowserPermissionPrompt?
+    /// The agent's input led to `permissionPrompt` (`isDrivenByAgent` when it came).
+    private(set) var permissionByAgent = false
     /// Another app's address the page asked to open, waiting for the person (the panel's bar), until the page
     /// moves on.
     fileprivate(set) var externalAppQuestion: BrowserExternalAppQuestion?
@@ -1581,7 +1586,7 @@ final class BrowserTab {
 
     func send(_ command: BrowserHostCommand) {
         guard !isClosed else { return }
-        var answered: Int?
+        var answered: BrowserHostEvent?
         switch command {
         case .resize(_, let viewport):
             self.viewport = viewport
@@ -1613,18 +1618,21 @@ final class BrowserTab {
             }
             if dialog == javaScriptDialog?.id {
                 javaScriptDialog = nil
-                answered = dialog
+                answered = .dialogClosed(tab: id, dialog: dialog)
             }
         case .fileDialogResult(_, let dialog, _) where dialog == fileDialog?.id:
             fileDialog = nil
-            answered = dialog
+            answered = .dialogClosed(tab: id, dialog: dialog)
+        case .permissionResult(_, let prompt, _) where prompt == permissionPrompt?.id:
+            permissionPrompt = nil
+            answered = .permissionPromptDismissed(tab: id, prompt: prompt)
         default:
             break
         }
         client?.send(command)
         // Whoever answered, the other (the panel, the agent's tools) hears that it no longer waits.
         if let answered {
-            deliver(.dialogClosed(tab: id, dialog: answered))
+            deliver(answered)
             client?.personWaitChanged(self)
         }
     }
@@ -1772,9 +1780,7 @@ final class BrowserTab {
     /// Answers the page's permission prompt.
     func answerPermission(_ result: BrowserPermissionResult) {
         guard let prompt = permissionPrompt else { return }
-        permissionPrompt = nil
         send(.permissionResult(tab: id, prompt: prompt.id, result: result))
-        client?.personWaitChanged(self)
     }
 
     /// Reports agent use of this tab to the lifetime manager.
@@ -2142,6 +2148,7 @@ final class BrowserTab {
             fileDialogByAgent = isDrivenByAgent
         case .permissionPrompt(_, let prompt):
             permissionPrompt = prompt
+            permissionByAgent = isDrivenByAgent
         case .permissionPromptDismissed(_, let prompt):
             if permissionPrompt?.id == prompt { permissionPrompt = nil }
         case .terminated, .closed:
@@ -2201,7 +2208,8 @@ struct BrowserPersonWait: Equatable, Hashable, Sendable {
     var kind: Kind
     /// Tells one wait from the next on the tab.
     var id: String
-    /// The agent's own input led to it, and the agent can answer it too: a JavaScript dialog, a file chooser.
+    /// The agent's own input led to it, and the agent can answer it too: a JavaScript dialog, a file chooser, a
+    /// permission request (which the agent can only close).
     var agentLed = false
 }
 

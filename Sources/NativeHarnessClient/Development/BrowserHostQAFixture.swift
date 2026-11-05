@@ -2664,6 +2664,8 @@ private final class BrowserHostQARunner {
         controller.eventObserver = nil
         controller.fileDialogOverride = false
 
+        let agentPermission = await exerciseAgentPermission(controller, view, outcome: outcome)
+
         // Permission requests the bar blocks: the page's request settles as refused.
         var refused: [String] = []
         for (kind, expected) in [("notification", "resolved denied"), ("geolocation", "GeolocationPositionError: 1"),
@@ -2676,6 +2678,14 @@ private final class BrowserHostQARunner {
         }
         check("compat: a permission request is asked in the panel and a block settles it", refused.isEmpty,
               refused.isEmpty ? "notifications, location and a clipboard read blocked from the bar" : refused.joined(separator: "; "))
+        // The agent's Close kept nothing for the site: the person's requests just above were asked in the bar again.
+        let notAskedAgain = ["notification": "notifications", "geolocation": "geolocation"].filter { kind, name in
+            results[kind]?.stringValue?.hasPrefix("bar \(name) →") != true
+        }.keys.sorted()
+        results["agentPermission"] = .string(agentPermission.steps.joined(separator: "; "))
+        let agentFailures = agentPermission.failures + notAskedAgain.map { "\($0) was not asked again after the agent closed it" }
+        check("compat: the agent's tools work while a permission request waits, and it closes the request without allowing it",
+              agentFailures.isEmpty, (agentFailures.isEmpty ? agentPermission.steps : agentFailures).joined(separator: "; "))
 
         // Camera and microphone, asked in the bar as Chrome asks; each is blocked there, before a grant could
         // reach macOS's own prompt, and a site blocked once is refused without asking again. Before 2026-10-25
@@ -2856,6 +2866,113 @@ private final class BrowserHostQARunner {
         record["compat"] = .object(results)
         let lines = results.keys.sorted().map { "\($0): \(results[$0]?.stringValue ?? results[$0]?.readableText ?? "")" }
         check("compat observed", true, lines.joined(separator: " | "))
+    }
+
+    /// The agent and a permission request its page makes (2026-11-05, BROWSER_HOST section 3, "Permission requests"): while
+    /// the request waits in the panel's bar, the agent's tools read the page, click and type as before; the agent cannot
+    /// allow it, and closing it (`browser_handle_dialog` with accept false) ends the page's request as the person's ✕
+    /// does. Asked after the agent's own click, it is not the person's wait while the agent works. A notification and a
+    /// location request; then, on another site, the same request closed again and again shows whether Chromium keeps
+    /// closes for the site (observed). The bar is captured light and dark. The page ends back on the compat page.
+    private func exerciseAgentPermission(_ controller: BrowserHostPaneController, _ view: BrowserHostView,
+                                         outcome: (String, Int) async -> String) async -> (steps: [String], failures: [String]) {
+        let agentTools = BrowserAgentTools(usesMacEditingCommands: true, tabs: BrowserAgentTabs { MacBrowserHost.shared.client })
+        var steps: [String] = [], failures: [String] = []
+        func step(_ name: String, _ ok: Bool, _ detail: String) {
+            steps.append("\(name): \(detail)")
+            if !ok { failures.append("\(name): \(detail)") }
+        }
+        func agent(_ tool: String, _ arguments: [String: JSONValue] = [:]) async -> (text: String, isError: Bool) {
+            let result = await agentTools.run(tool: tool, arguments: .object(arguments), sessionID: session)
+            return (result.content.compactMap { if case .text(let text) = $0 { text } else { nil } }.joined(separator: " "),
+                    result.isError)
+        }
+        func ref(_ snapshot: String, _ role: String, _ name: String) -> String {
+            let line = snapshot.split(separator: "\n").first { $0.contains("- \(role)") && $0.contains("\"\(name)\"") }
+            return line.flatMap { line in
+                line.range(of: #"\[ref=(@e\d+)\]"#, options: .regularExpression).map { String(line[$0].dropFirst(5).dropLast()) }
+            } ?? "@e0"
+        }
+        /// What the agent's result says of the request, from its sentence on.
+        func heard(_ text: String) -> String {
+            text.range(of: "The page (").map { String(text[$0.lowerBound...].prefix(420)) } ?? "nothing of the request"
+        }
+        func bar() async -> String? {
+            guard await waitUntil(.seconds(5), { controller.permissionPrompt != nil }) else { return nil }
+            return controller.permissionPrompt?.permissions.joined(separator: ",")
+        }
+        func gone() async -> Bool { await waitUntil(.seconds(3)) { controller.permissionPrompt == nil } }
+        func personWait() -> BrowserPersonWait? { controller.tab.flatMap { client.personWait(of: $0) } }
+
+        _ = try? await evaluate(controller, """
+            (() => { const ask = document.createElement('button'); ask.textContent = 'Ask for notifications';
+                     ask.onclick = () => window.compat('notification');
+                     const count = document.createElement('button'); count.textContent = 'Count';
+                     window.qa.agentClicks = 0; count.onclick = () => window.qa.agentClicks++;
+                     const field = document.createElement('input'); field.setAttribute('aria-label', 'Agent field');
+                     const holder = document.createElement('p'); holder.append(ask, count, field);
+                     document.body.append(holder); return 'ok' })()
+            """)
+        let snapshot = await agent(AgentToolCatalog.snapshot).text
+        _ = await agent(AgentToolCatalog.click, ["ref": .string(ref(snapshot, "button", "Ask for notifications"))])
+        let asked = await bar()
+        let wait = personWait()
+        step("the agent's click asks for notifications", asked == "notifications" && wait?.kind == .permission && wait?.agentLed == true,
+             "bar \(asked ?? "none"), the person's wait \(wait.map { "\($0.kind.rawValue), agent-led \($0.agentLed)" } ?? "none")")
+        if let window = view.window {
+            let appearance = window.appearance
+            for (name, suffix) in [(NSAppearance.Name.aqua, "light"), (.darkAqua, "dark")] {
+                window.appearance = NSAppearance(named: name)
+                try? await Task.sleep(for: .milliseconds(400))
+                capturePanel(view, named: "compat-permission-agent-\(suffix).png")
+            }
+            window.appearance = appearance
+        }
+
+        let read = await agent(AgentToolCatalog.snapshot)
+        step("a snapshot while it waits", !read.isError && read.text.contains("\"Count\""), heard(read.text))
+        let clicked = await agent(AgentToolCatalog.click, ["ref": .string(ref(read.text, "button", "Count"))])
+        let clicks = (try? await evaluate(controller, "String(window.qa.agentClicks)")) ?? "?"
+        step("a click while it waits", !clicked.isError && clicks == "1", "clicks \(clicks), error \(clicked.isError)")
+        let typed = await agent(AgentToolCatalog.type, ["ref": .string(ref(read.text, "textbox", "Agent field")),
+                                                        "text": .string("typed while asked")])
+        let field = (try? await evaluate(controller, "document.querySelector('[aria-label=\"Agent field\"]').value")) ?? "?"
+        step("typing while it waits", !typed.isError && field == "typed while asked", "field “\(field)”, error \(typed.isError)")
+        let allow = await agent(AgentToolCatalog.handleDialog, ["accept": .bool(true)])
+        let state = (try? await evaluate(controller, "Notification.permission")) ?? "?"
+        step("the agent cannot allow it", allow.isError && controller.permissionPrompt != nil && state == "default",
+             "error \(allow.isError), bar \(controller.permissionPrompt != nil), Notification.permission \(state): \(allow.text.prefix(300))")
+        let close = await agent(AgentToolCatalog.handleDialog, ["accept": .bool(false)])
+        let closedBar = await gone()
+        let settled = await outcome("notification", 4)
+        step("the agent closes it", !close.isError && closedBar && settled == "resolved default" && personWait() == nil,
+             "bar gone \(closedBar), page \(settled), the person's wait \(personWait()?.kind.rawValue ?? "none"): \(close.text.prefix(300))")
+
+        _ = await agent(AgentToolCatalog.evaluate, ["function": .string("() => window.compat('geolocation')")])
+        let location = await bar()
+        let closeLocation = await agent(AgentToolCatalog.handleDialog, ["accept": .bool(false)])
+        let locationGone = await gone()
+        let located = await outcome("geolocation", 4)
+        step("the agent closes a location request", location == "geolocation" && !closeLocation.isError && locationGone
+                && located.hasPrefix("GeolocationPositionError: 1"),
+             "bar \(location ?? "none") → gone \(locationGone), page \(located)")
+
+        // Another site, so the closes counted here do not touch the requests asked above.
+        let compat = controller.addressInput
+        let other = ((try? await evaluate(controller, "window.qa.frameOrigin")) ?? "") + "/compat"
+        _ = await agent(AgentToolCatalog.navigate, ["url": .string(other)])
+        var closes: [String] = []
+        for round in 1...4 {
+            _ = await agent(AgentToolCatalog.evaluate, ["function": .string("() => window.compat('notification')")])
+            let shown = await bar()
+            if shown != nil { _ = await agent(AgentToolCatalog.handleDialog, ["accept": .bool(false)]); _ = await gone() }
+            let settled = await outcome("notification", 4)
+            closes.append("\(round): bar \(shown ?? "none") → \(settled)")
+        }
+        steps.append("closed again and again on \(other) (observed): \(closes.joined(separator: ", "))")
+        _ = await agent(AgentToolCatalog.navigate, ["url": .string(compat)])
+        _ = await waitUntil(.seconds(5)) { controller.title == "Compat" && !controller.isLoading }
+        return (steps, failures)
     }
 
     /// Chromium's windows belong to their tab (BROWSER_HOST section 3, "Chromium's windows and tabs"), shown with HTTP

@@ -304,6 +304,23 @@ final class BrowserAgentToolsTests: XCTestCase {
         page.receive(.javaScriptDialogReset(tab: 4))
         let afterReset = await run(AgentToolCatalog.consoleMessages)
         XCTAssertFalse(afterReset.text.contains("dialog"), afterReset.text)
+
+        // A permission request pauses nothing; the agent can close it but never allow it.
+        let commands = hostCommands.count
+        page.receive(.permissionPrompt(tab: 4, prompt: BrowserPermissionPrompt(
+            id: 12, origin: "https://example.com", permissions: ["notifications"]
+        )))
+        let clicked = await run(AgentToolCatalog.click, ["x": .number(1), "y": .number(1)])
+        XCTAssertFalse(clicked.isError, clicked.text)
+        XCTAssertTrue(clicked.text.contains("asks permission for notifications"), clicked.text)
+        let allowed = await run(AgentToolCatalog.handleDialog, ["accept": .bool(true)])
+        XCTAssertTrue(allowed.isError, allowed.text)
+        XCTAssertEqual(hostCommands.count, commands, "The agent's accept answers nothing")
+        let closed = await run(AgentToolCatalog.handleDialog, ["accept": .bool(false)])
+        XCTAssertFalse(closed.isError, closed.text)
+        XCTAssertEqual(hostCommands.last, .permissionResult(tab: 4, prompt: 12, result: .dismiss))
+        let afterClose = await run(AgentToolCatalog.consoleMessages)
+        XCTAssertFalse(afterClose.text.contains("asks permission"), afterClose.text)
     }
 
     func testABatchStopsWithoutErrorWhenADialogOpens() async throws {

@@ -17,9 +17,9 @@ struct BrowserTaskWait: Equatable, Sendable {
 /// tab, so the person finds it there. Yardlet never moves the person's screen to it: the person goes when they choose,
 /// as the Codex app keeps a browser request for the conversation it belongs to.
 ///
-/// A dialog or file chooser the agent's own input opened is the agent's to answer while its turn runs
-/// (`BrowserPersonWait.agentLed`): its tool results say so. Once the turn ends with it still open, it waits on the
-/// person like the others.
+/// A dialog, file chooser or permission request the agent's own input led to is the agent's to answer while its turn
+/// runs (`BrowserPersonWait.agentLed`; a permission request it can only close): its tool results say so. Once the turn
+/// ends with it still open, it waits on the person like the others.
 extension AppModel {
     func followBrowserWaits(of client: BrowserHostClient) {
         browserWaitSource = client

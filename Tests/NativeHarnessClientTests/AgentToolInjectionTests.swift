@@ -511,6 +511,16 @@ final class AgentToolInjectionTests: XCTestCase {
         XCTAssertEqual(first.answerDialog(accept: true, text: nil)?.id, 7)
         XCTAssertEqual(connections[0].sent.last, .javaScriptDialogResult(tab: tab.id, dialog: 7, accepted: true, text: nil))
 
+        // A permission request on the agent's page is the agent's to close while it works; closing it ends the tab's wait.
+        connections[0].eventHandler?(.permissionPrompt(tab: tab.id, prompt: BrowserPermissionPrompt(
+            id: 12, origin: "https://example.com", permissions: ["notifications"]
+        )))
+        XCTAssertEqual(client.personWait(of: tab), BrowserPersonWait(kind: .permission, id: "permission-12", agentLed: true))
+        XCTAssertEqual(first.closePermission()?.id, 12)
+        XCTAssertEqual(connections[0].sent.last, .permissionResult(tab: tab.id, prompt: 12, result: .dismiss))
+        XCTAssertNil(tab.permissionPrompt, "The panel's bar goes with the agent's answer")
+        XCTAssertNil(client.personWait(of: tab))
+
         connections[0].eventHandler?(.terminated(reason: "signal 9"))
         let reopened = try tabs.page(for: taskA, tabID: nil)
         XCTAssertFalse(reopened === first, "After the host ended, the next call opens a fresh tab")
