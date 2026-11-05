@@ -250,6 +250,8 @@ final class AppModel {
     private(set) var bootstrapError: String?
     /// Archived tasks being restored, and the last restore or listing failure, for the archived list.
     private(set) var unarchivingSessionIDs = Set<UUID>()
+    /// Tasks being renamed from their recent conversation, which their row shows at work.
+    private(set) var renamingFromConversationIDs = Set<UUID>()
     private(set) var archivedTaskError: String?
     /// What archiving or unarchiving did with a task's worktree when it is worth saying: a
     /// worktree kept because work in it would be lost, or one that could not be put back.
@@ -3098,6 +3100,34 @@ final class AppModel {
         } catch {
             guard store.sessions.contains(where: { $0.id == session.id }) else { return }
             bootstrapError = error.localizedDescription
+        }
+    }
+
+    /// "Rename from Recent Conversation" (`RecentConversationTitle`): the task's harness names it from
+    /// what its conversation is about now, and the name is applied as the person's own rename. The
+    /// conversation is read the way opening the task reads it, and no turn starts in the task. A
+    /// failure leaves the name as it was and says why.
+    func renameFromRecentConversation(_ session: SessionRecord) async {
+        guard !isVisualFixture, RecentConversationTitle.isOffered(for: session.harness),
+              let before = store.sessions.first(where: { $0.id == session.id }),
+              renamingFromConversationIDs.insert(session.id).inserted else { return }
+        defer { renamingFromConversationIDs.remove(session.id) }
+        bootstrapError = nil
+        guard let excerpt = await recentConversationExcerpt(of: before) else {
+            guard store.sessions.contains(where: { $0.id == session.id }) else { return }
+            bootstrapError = L10n.string("This task has no conversation to name it from yet.")
+            return
+        }
+        do {
+            let title = try await recentConversationTitle(for: before, excerpt: excerpt)
+            // A name the person gave the task meanwhile stays.
+            guard let current = store.sessions.first(where: { $0.id == session.id }),
+                  current.title == before.title || current.titleOrigin != .manual else { return }
+            await rename(current, to: title)
+        } catch {
+            guard store.sessions.contains(where: { $0.id == session.id }) else { return }
+            bootstrapError = L10n.format("The task could not be renamed from its recent conversation: %@",
+                                         error.localizedDescription)
         }
     }
 

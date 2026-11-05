@@ -978,19 +978,46 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
     private func generateThreadTitle(from request: String, workspaceURL: URL) async -> String? {
         let offersPreferredModel = (try? await loadModelOptions())?
             .contains { $0.model == CodexThreadTitle.preferredModel } == true
-        guard !Task.isCancelled,
-              let response = try? await transport.request(CodexThreadTitle.startThread(
-                id: takeRequestID(),
-                workspaceURL: workspaceURL,
-                model: offersPreferredModel ? CodexThreadTitle.preferredModel : nil
-              )),
+        guard !Task.isCancelled else { return nil }
+        return await runTitleTurn(CodexThreadTitle.startThread(
+            id: takeRequestID(),
+            workspaceURL: workspaceURL,
+            model: offersPreferredModel ? CodexThreadTitle.preferredModel : nil
+        ), prompt: CodexThreadTitle.prompt(for: request), timeout: CodexThreadTitle.timeout)
+    }
+
+    /// A name for a task from its recent conversation, when the person asks (`RecentConversationTitle`):
+    /// one turn of the account's newest luna model on an ephemeral, read-only side thread in an empty
+    /// folder, as a new thread is named. It needs no attached task, and the task's thread is not
+    /// touched.
+    func suggestTaskTitle(fromRecentConversation excerpt: String) async throws -> String {
+        try await ensureInitialized()
+        let folder = try RecentConversationTitle.makeFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let model = RecentConversationTitle.codexModel(from: (try? await loadModelOptions()) ?? [])
+        let config = try? await transport.request(CodexThreadTitle.readConfig(id: takeRequestID(), folder: folder))
+        let start = CodexThreadTitle.startRecentConversationThread(
+            id: takeRequestID(), folder: folder, model: model,
+            mcpServers: CodexThreadTitle.mcpServerNames(fromConfig: config?.result))
+        guard let title = await runTitleTurn(start, prompt: RecentConversationTitle.prompt(for: excerpt, structured: true),
+                                             timeout: RecentConversationTitle.timeout) else {
+            throw HarnessAdapterError.capabilityUnavailable(
+                L10n.format("%@ did not suggest a name.", HarnessKind.codex.displayName))
+        }
+        return title
+    }
+
+    /// One title turn on the side thread `start` opens, which is then let go. Nil when the turn
+    /// fails, runs out of time or answers outside the schema.
+    private func runTitleTurn(_ start: CodexRPCRequest, prompt: String, timeout: Duration) async -> String? {
+        guard let response = try? await transport.request(start),
               let sideThreadID = try? threadID(from: response) else { return nil }
         titleTurns[sideThreadID] = TitleTurn()
         var finalMessage: String?
         if (try? await transport.request(CodexThreadTitle.startTurn(
-            id: takeRequestID(), threadID: sideThreadID, request: request
+            id: takeRequestID(), threadID: sideThreadID, prompt: prompt
         ))) != nil {
-            finalMessage = await titleTurnResult(sideThreadID)
+            finalMessage = await titleTurnResult(sideThreadID, timeout: timeout)
         }
         finishTitleTurn(sideThreadID, result: nil)
         titleTurns.removeValue(forKey: sideThreadID)
@@ -998,7 +1025,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         return CodexThreadTitle.title(fromFinalMessage: finalMessage)
     }
 
-    private func titleTurnResult(_ threadID: String) async -> String? {
+    private func titleTurnResult(_ threadID: String, timeout: Duration) async -> String? {
         if let result = titleTurns[threadID]?.result { return result }
         return await withCheckedContinuation { continuation in
             guard titleTurns[threadID] != nil else {
@@ -1007,7 +1034,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
             }
             titleTurns[threadID]?.continuation = continuation
             titleTurns[threadID]?.timeoutTask = Task { [weak self] in
-                try? await Task.sleep(for: CodexThreadTitle.timeout)
+                try? await Task.sleep(for: timeout)
                 guard !Task.isCancelled else { return }
                 await self?.finishTitleTurn(threadID, result: nil)
             }
@@ -2241,6 +2268,8 @@ extension CodexAdapter: HarnessSessionLifecycleProviding {
         try await setThreadName(title, for: session)
     }
 }
+
+extension CodexAdapter: HarnessTaskTitleSuggesting {}
 
 private extension CodexRPCID {
     var externalValue: String {

@@ -438,6 +438,15 @@ struct HarnessProtocolCodexThreadRenameParams: Codable, Equatable, Sendable {
     let name: String
 }
 
+/// A name for a task from its recent conversation (`HarnessTaskTitleSuggesting`); no session is needed.
+struct HarnessProtocolCodexTaskTitleSuggestParams: Codable, Equatable, Sendable {
+    let excerpt: String
+}
+
+struct HarnessProtocolCodexTaskTitleSuggestResult: Codable, Equatable, Sendable {
+    let title: String
+}
+
 enum HarnessProtocolCodexServerResponseKind: String, Codable, Equatable, Sendable {
     case command
     case fileChange = "file_change"

@@ -633,6 +633,45 @@ final class AppModelTests: XCTestCase {
         let resolved = try XCTUnwrap(model.store.sessions.first(where: { $0.id == created.id }))
         XCTAssertEqual(resolved.title, "Codex Generated Title")
         XCTAssertEqual(resolved.titleOrigin, .provider)
+
+        // Renamed from its recent conversation, the task is named as the person names it: the thread
+        // too, and the provider's name stays searchable. Nothing is sent to the task.
+        XCTAssertTrue(CodexTaskReducer().applySnapshot(.object([
+            "id": .string(created.providerSessionID ?? "provider-thread"),
+            "name": .string("Codex Generated Title"),
+            "turns": .array([.object([
+                "id": .string("turn-1"), "status": .string("completed"), "itemsView": .string("full"),
+                "items": .array([
+                    .object(["id": .string("user-1"), "type": .string("userMessage"),
+                             "content": .array([.object(["type": .string("text"),
+                                                         "text": .string("Now add the rename menu item")])])]),
+                    .object(["id": .string("assistant-1"), "type": .string("agentMessage"),
+                             "text": .string("Added it to the sidebar row."), "phase": .string("final_answer")])
+                ])
+            ])])
+        ]), to: &state))
+        await adapter.emitPresentation(state, for: created.id)
+        try await waitUntil { model.codexPresentationBySessionID[created.id]?.thread?.turns.isEmpty == false }
+        await adapter.setSuggestedTitle("Add the rename menu item")
+        let sentBefore = await adapter.sentPrompts
+        let submittedBefore = await adapter.codexSubmissions.count
+        await model.renameFromRecentConversation(resolved)
+
+        let renamed = try XCTUnwrap(model.store.sessions.first(where: { $0.id == created.id }))
+        XCTAssertNil(model.bootstrapError)
+        XCTAssertEqual(renamed.title, "Add the rename menu item")
+        XCTAssertEqual(renamed.titleOrigin, .manual)
+        XCTAssertEqual(renamed.previousTitles, ["Codex Generated Title"])
+        XCTAssertEqual(TaskNavigationProjection.filteredSessions(model.store.sessions, query: "generated").map(\.id), [created.id])
+        let excerpts = await adapter.titleExcerpts
+        XCTAssertEqual(excerpts, ["Person: Now add the rename menu item\nAnswer: Added it to the sidebar row."])
+        let threadNames = await adapter.threadNames
+        XCTAssertEqual(threadNames, ["Add the rename menu item"])
+        let sentAfter = await adapter.sentPrompts
+        let submittedAfter = await adapter.codexSubmissions.count
+        XCTAssertEqual(sentAfter, sentBefore)
+        XCTAssertEqual(submittedAfter, submittedBefore)
+        XCTAssertTrue(model.renamingFromConversationIDs.isEmpty)
         await model.shutdown()
     }
 
@@ -3841,6 +3880,10 @@ actor FakeHarnessAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresent
     private var backgroundTerminalList: [CodexBackgroundTerminal] = []
     func setBackgroundTerminals(_ terminals: [CodexBackgroundTerminal]) { backgroundTerminalList = terminals }
     private(set) var sentPrompts: [String] = []
+    private(set) var threadNames: [String] = []
+    private(set) var titleExcerpts: [String] = []
+    private(set) var suggestedTitle = "Suggested title"
+    func setSuggestedTitle(_ title: String) { suggestedTitle = title }
     private(set) var forkedFromSessionIDs: [UUID] = []
     private(set) var forkedThroughTurnIDs: [String?] = []
     private(set) var compactedSessionIDs: [UUID] = []
@@ -4299,6 +4342,7 @@ actor FakeHarnessAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresent
         )
     }
     func setThreadName(_ name: String, for session: HarnessSessionHandle) async throws {
+        threadNames.append(name)
         if suspendNextThreadNameLoad {
             suspendNextThreadNameLoad = false
             isThreadNameBlocked = true
@@ -4601,6 +4645,14 @@ extension FakeHarnessAdapter: CodexConversationEditing {
 /// and every other kind has no native fork, so its side chat starts from a reading snapshot.
 extension FakeHarnessAdapter: HarnessSessionBranching {
     nonisolated var sessionBranchMethod: HarnessSessionBranchMethod? { kind == .codex ? .attachedSession : nil }
+}
+
+/// The double names a task from its recent conversation with the title it was given, keeping what it was asked.
+extension FakeHarnessAdapter: HarnessTaskTitleSuggesting {
+    func suggestTaskTitle(fromRecentConversation excerpt: String) async throws -> String {
+        titleExcerpts.append(excerpt)
+        return suggestedTitle
+    }
 }
 
 extension FakeHarnessAdapter: HarnessSessionLifecycleProviding {

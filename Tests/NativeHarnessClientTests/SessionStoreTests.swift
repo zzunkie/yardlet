@@ -108,6 +108,20 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(store.sessions.first?.titleOrigin, .provider)
         let persisted = try await repository.loadSessions()
         XCTAssertEqual(persisted.first?.title, "After")
+        XCTAssertEqual(persisted.first?.previousTitles, [], "A provider's next title replaces its last")
+
+        // The person's renames keep the names they replace, which the sidebar search still finds.
+        try await store.renameSession(id: session.id, title: "Mine", titleOrigin: .manual)
+        try await store.renameSession(id: session.id, title: "Mine again", titleOrigin: .manual)
+        try await store.renameSession(id: session.id, title: "After", titleOrigin: .manual)
+        let renamed = try await repository.loadSessions()
+        XCTAssertEqual(renamed.first?.previousTitles, ["Mine", "Mine again"])
+        let found = TaskNavigationProjection.filteredSessions(store.sessions, query: "again")
+        XCTAssertEqual(found.map(\.id), [session.id])
+        for name in ["1", "2", "3", "4", "5", "6"] {
+            try await store.renameSession(id: session.id, title: name, titleOrigin: .manual)
+        }
+        XCTAssertEqual(store.sessions.first?.previousTitles, ["1", "2", "3", "4", "5"], "Only the last five stay")
     }
 
     func testTogglePinnedPersistsWithoutChangingTaskRecency() async throws {

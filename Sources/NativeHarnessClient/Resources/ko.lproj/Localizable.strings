@@ -257,6 +257,12 @@
 "Rename" = "이름 변경";
 "Rename task" = "작업 이름 변경";
 "Rename…" = "이름 변경…";
+"Rename from Recent Conversation" = "최근 대화로 이름 다시 짓기";
+"Renaming…" = "이름 짓는 중…";
+"This task has no conversation to name it from yet." = "아직 이름을 지을 대화가 없습니다.";
+"The task could not be renamed from its recent conversation: %@" = "최근 대화로 작업 이름을 짓지 못했습니다: %@";
+"%@ did not suggest a name." = "%@에서 이름을 받지 못했습니다.";
+"%@ did not answer in time." = "%@에서 제때 답이 오지 않았습니다.";
 "Queue" = "대기열";
 "Queue or steer" = "대기열에 넣기 또는 조정";
 "Restart" = "다시 시작";

@@ -56,6 +56,9 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
     var runtimeExecutableURL: URL
     var title: String
     var titleOrigin: SessionTitleOrigin
+    /// Names the person replaced, newest last, which the sidebar search still finds the task by
+    /// (`renamed(to:)`).
+    private(set) var previousTitles: [String]
     var status: SessionStatus
     let createdAt: Date
     var updatedAt: Date
@@ -116,6 +119,7 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         runtimeExecutableURL: URL,
         title: String,
         titleOrigin: SessionTitleOrigin = .legacy,
+        previousTitles: [String] = [],
         status: SessionStatus = .ready,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -141,6 +145,7 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         self.runtimeExecutableURL = runtimeExecutableURL.standardizedFileURL
         self.title = title
         self.titleOrigin = titleOrigin
+        self.previousTitles = previousTitles
         self.status = status
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -162,6 +167,17 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         self.branch = SessionRecord.normalizedLabel(branch)
         self.parentTaskID = parentTaskID == id ? nil : parentTaskID
         self.isLineageDetached = isLineageDetached
+    }
+
+    /// How many replaced names the task keeps.
+    static let previousTitleLimit = 5
+
+    /// The person names the task `title`. The name it had stays findable, unless it is the new one.
+    mutating func renamed(to title: String) {
+        guard title != self.title else { return }
+        previousTitles = Array((previousTitles.filter { $0 != title && $0 != self.title } + [self.title])
+            .suffix(Self.previousTitleLimit))
+        self.title = title
     }
 
     /// Puts the task in another project, or in none, with the roots that come along
@@ -207,6 +223,7 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         case runtimeExecutableURL
         case title
         case titleOrigin
+        case previousTitles
         case status
         case createdAt
         case updatedAt
@@ -240,6 +257,7 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
             SessionTitleOrigin.self,
             forKey: .titleOrigin
         ) ?? .legacy
+        previousTitles = try container.decodeIfPresent([String].self, forKey: .previousTitles) ?? []
         status = try container.decode(SessionStatus.self, forKey: .status)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)

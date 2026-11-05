@@ -79,6 +79,7 @@ struct IntegratedTitleBar: View {
     let onNewTask: () -> Void
     let onResume: (SessionRecord) -> Void
     let onRename: (SessionRecord) -> Void
+    var onRenameFromConversation: ((SessionRecord) -> Void)? = nil
     let onTogglePinned: (SessionRecord) -> Void
     let onArchive: (SessionRecord) -> Void
     let onBackToConversation: (SessionRecord) -> Void
@@ -117,7 +118,7 @@ struct IntegratedTitleBar: View {
     private var headerActions: TaskHeaderActions {
         TaskHeaderActions(
             isAttached: { [isAttached] _ in isAttached }, onResume: onResume, onRename: onRename,
-            onTogglePinned: onTogglePinned, onArchive: onArchive, onBackToConversation: onBackToConversation,
+            onRenameFromConversation: onRenameFromConversation, onTogglePinned: onTogglePinned, onArchive: onArchive, onBackToConversation: onBackToConversation,
             projectName: projectName, projectMoveOptions: projectMoveOptions, onMoveToProject: onMoveToProject,
             onChooseAccount: onChooseAccount, canOpenOriginalConversation: canOpenOriginalConversation,
             onOpenOriginalConversation: onOpenOriginalConversation,

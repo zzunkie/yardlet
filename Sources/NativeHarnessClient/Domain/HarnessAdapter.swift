@@ -116,6 +116,12 @@ protocol HarnessSessionLifecycleProviding: Actor {
     func renameProviderSession(_ session: HarnessSessionHandle, to title: String) async throws
 }
 
+/// Adapters whose runtime names a task from its recent conversation with a side call of its own,
+/// attached or not (`RecentConversationTitle`).
+protocol HarnessTaskTitleSuggesting: Actor {
+    func suggestTaskTitle(fromRecentConversation excerpt: String) async throws -> String
+}
+
 enum HarnessAdapterError: Error, Equatable, Sendable {
     case runtimeNotFound(URL?)
     case unsupportedRuntime(version: String)

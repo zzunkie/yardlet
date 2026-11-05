@@ -56,6 +56,7 @@ struct HarnessProtocolMethodID: RawRepresentable, Codable, Hashable, Sendable {
     static let codexThreadRead = Self(rawValue: "yardlet.codex.thread.read")
     static let codexThreadTurnsRead = Self(rawValue: "yardlet.codex.thread.turns.read")
     static let codexThreadRename = Self(rawValue: "yardlet.codex.thread.rename")
+    static let codexTaskTitleSuggest = Self(rawValue: "yardlet.codex.task.title.suggest")
     static let codexThreadArchive = Self(rawValue: "yardlet.codex.thread.archive")
     static let codexThreadUnarchive = Self(rawValue: "yardlet.codex.thread.unarchive")
     static let codexThreadDelete = Self(rawValue: "yardlet.codex.thread.delete")

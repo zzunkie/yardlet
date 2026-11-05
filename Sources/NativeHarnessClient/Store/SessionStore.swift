@@ -231,7 +231,8 @@ final class SessionStore {
         guard sessions[index].title != title || sessions[index].titleOrigin != titleOrigin else { return }
         let now = Date()
         try await modify(id) {
-            $0.title = title
+            // A name the person replaces stays searchable; a provider's next title replaces its last.
+            if titleOrigin == .manual { $0.renamed(to: title) } else { $0.title = title }
             $0.titleOrigin = titleOrigin
             if updatesRecency { $0.updatedAt = now }
         }

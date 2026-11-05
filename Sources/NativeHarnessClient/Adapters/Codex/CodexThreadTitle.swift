@@ -33,13 +33,56 @@ enum CodexThreadTitle {
         return CodexRPCRequest(id: id, method: "thread/start", params: .object(params))
     }
 
+    /// The side thread that names a task from its recent conversation (`RecentConversationTitle`):
+    /// the first-request thread in an empty folder, with a one-line system prompt in place of
+    /// Codex's own instructions, without the skills list, memories and the context Codex adds about
+    /// permissions, apps and the environment, and with the account's MCP servers turned off by name,
+    /// since an empty `mcp_servers` table leaves them on. A name with a dot cannot be written as a key
+    /// and stays. Codex 0.166 still sends the account's own AGENTS.md and its built-in tools, as on
+    /// its first-request title thread; no setting leaves them out.
+    static func startRecentConversationThread(id: Int64, folder: URL, model: String?,
+                                              mcpServers: [String]) -> CodexRPCRequest {
+        let thread = startThread(id: id, workspaceURL: folder, model: model)
+        guard case var .object(params) = thread.params, case var .object(config) = params["config"] else { return thread }
+        params["baseInstructions"] = .string(RecentConversationTitle.systemPrompt)
+        for key in ["include_permissions_instructions", "include_apps_instructions",
+                    "include_collaboration_mode_instructions", "include_environment_context"] {
+            config[key] = .bool(false)
+        }
+        config["project_doc_max_bytes"] = .integer(0)
+        config["skills.include_instructions"] = .bool(false)
+        config["features.memories"] = .bool(false)
+        for name in mcpServers where !name.contains(".") {
+            config["mcp_servers.\(name).enabled"] = .bool(false)
+        }
+        params["config"] = .object(config)
+        return CodexRPCRequest(id: id, method: "thread/start", params: .object(params))
+    }
+
+    /// The configuration a thread in `folder` would load, which names the MCP servers it would start.
+    static func readConfig(id: Int64, folder: URL) -> CodexRPCRequest {
+        CodexRPCRequest(id: id, method: "config/read", params: .object([
+            "cwd": .string(folder.standardizedFileURL.path(percentEncoded: false))
+        ]))
+    }
+
+    /// The MCP servers `config/read` reports as on.
+    static func mcpServerNames(fromConfig result: JSONValue?) -> [String] {
+        guard case let .object(servers)? = result?["config"]?["mcp_servers"] else { return [] }
+        return servers.filter { $0.value["enabled"]?.boolValue != false }.map(\.key).sorted()
+    }
+
     static func startTurn(id: Int64, threadID: String, request: String) -> CodexRPCRequest {
+        startTurn(id: id, threadID: threadID, prompt: prompt(for: request))
+    }
+
+    static func startTurn(id: Int64, threadID: String, prompt: String) -> CodexRPCRequest {
         CodexRPCRequest(
             id: id,
             method: "turn/start",
             params: .object([
                 "threadId": .string(threadID),
-                "input": .array([CodexUserInput.text(prompt(for: request)).jsonValue]),
+                "input": .array([CodexUserInput.text(prompt).jsonValue]),
                 "outputSchema": .object([
                     "type": .string("object"),
                     "properties": .object(["title": .object(["type": .string("string")])]),
