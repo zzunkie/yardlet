@@ -129,11 +129,12 @@ $shown = Wait-For { $process.Refresh(); $process.HasExited -or $process.MainWind
 if ($process.HasExited -or -not $shown) { Finish 'no window' }
 if (-not (Wait-For { (Read-Events) -contains 'ready' } 30)) { Finish 'not ready' }
 $main = $UIA::FromHandle($process.MainWindowHandle)
+[void][RemoteDesktop]::BringForward($process.MainWindowHandle)
 
 # Connect to a Mac, the link pasted, Connect.
-$connect = Wait-For { Find-Item $main 'Connect to a Mac' } 10
+# A list redrawn meanwhile leaves an item that no longer takes a pattern, so finding and choosing go together.
+$connect = Wait-For { $found = Find-Item $main 'Connect to a Mac'; if ($found) { Select-Item $found; $true } } 10
 if (-not $connect) { Finish 'no Connect to a Mac item' }
-Select-Item $connect
 $field = Wait-For { Find-Typed $main ([System.Windows.Automation.ControlType]::Edit) } 10
 if (-not $field) { Finish 'no link field' }
 $field.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Link)
@@ -164,9 +165,8 @@ if (-not $tasks) { Finish 'no tasks' }
 Save-Screen 'host'
 
 # The task, a message and its answer streaming in.
-$item = Wait-For { Find-Item $hostWindow $Task } 10
+$item = Wait-For { $found = Find-Item $hostWindow $Task; if ($found) { Select-Item $found; $true } } 20
 if (-not $item) { Finish "no task named $Task" }
-Select-Item $item
 if (-not (Wait-For { (Read-Events) -contains "remote showing: $Task" } 20)) { Finish 'task not shown' }
 Start-Sleep -Seconds 2
 Save-Screen 'task'
