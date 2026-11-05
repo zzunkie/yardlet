@@ -107,6 +107,29 @@ final class BrowserHostViewTextInputTests: XCTestCase {
         XCTAssertEqual(sent.count, count, "nothing is sent when no composition is open")
     }
 
+    /// A press moves the page's focus while the view stays first responder, so the view finishes the shown
+    /// text before the press reaches the page; otherwise the input method carried the word into the next field.
+    func testAPressWhileComposingFinishesTheShownTextFirst() throws {
+        let view = makeView()
+        func press(_ type: NSEvent.EventType) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: 10, y: 10), modifierFlags: [], timestamp: 0,
+                                             windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        for (type, down) in [(NSEvent.EventType.leftMouseDown, view.mouseDown), (.rightMouseDown, view.rightMouseDown),
+                             (.otherMouseDown, view.otherMouseDown)] {
+            view.setMarkedText("안녕", selectedRange: NSRange(location: 2, length: 0), replacementRange: noRange)
+            sent = []
+            down(try press(type))
+            XCTAssertEqual(sent.first, .composition(tab: 7, composition: .finish(keepSelection: false)), "\(type)")
+            XCTAssertEqual(sent.count, 2, "the finish, then the press (\(type))")
+            XCTAssertFalse(view.hasMarkedText())
+        }
+
+        sent = []
+        view.mouseDown(with: try press(.leftMouseDown))
+        XCTAssertEqual(sent.count, 1, "only the press when nothing is composed")
+    }
+
     func testClauseSegmentsBecomeUnderlinesWithTheSelectedClauseThick() {
         let text = NSMutableAttributedString(string: "今日は天気")
         text.addAttribute(.markedClauseSegment, value: 0, range: NSRange(location: 0, length: 3))

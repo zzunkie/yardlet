@@ -425,6 +425,7 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        finishComposition()
         sendMouse(.down, .left, event)
     }
     override func mouseUp(with event: NSEvent) { sendMouse(.up, .left, event) }
@@ -433,6 +434,7 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
     override func mouseExited(with event: NSEvent) { sendMouse(.leave, nil, event) }
     override func rightMouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        finishComposition()
         sendMouse(.down, .right, event)
     }
     override func rightMouseUp(with event: NSEvent) { sendMouse(.up, .right, event) }
@@ -440,6 +442,7 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
     /// Chromium's mouse input knows left, middle and right only; the back and forward buttons go to the
     /// page's history on release instead of reaching the page as a middle click.
     override func otherMouseDown(with event: NSEvent) {
+        finishComposition()
         guard MouseNavigationButton(event) == nil else { return }
         sendMouse(.down, .middle, event)
     }
@@ -503,6 +506,18 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
         sendCommand?(.mouse(tab: tabID, input: BrowserMouseInput(
             kind: kind, x: point.x, y: point.y, button: button, clickCount: max(1, clickCount), modifiers: modifiers
         )))
+    }
+
+    /// A press while the input method composes keeps the shown text where it was typed and starts the input
+    /// method afresh, as Chrome's `finishComposingText` does. The view stays first responder when the press
+    /// moves the page's focus to another field, so the input method would otherwise go on composing the same
+    /// word there. An input method may finish the text itself when asked to discard it.
+    private func finishComposition() {
+        guard hasMarkedText() else { return }
+        inputContext?.discardMarkedText()
+        guard hasMarkedText() else { return }
+        markedText = ""
+        if let tabID { sendCommand?(.composition(tab: tabID, composition: .finish(keepSelection: false))) }
     }
 
     // MARK: Drag and drop (files from Finder onto the page)

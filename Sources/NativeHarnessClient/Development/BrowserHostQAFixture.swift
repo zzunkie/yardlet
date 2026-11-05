@@ -1788,6 +1788,28 @@ private final class BrowserHostQARunner {
             // The caret sits between A and b after ArrowLeft.
             check("Korean composition commits at the caret", composed == "A한글b", "value \"\(composed)\"")
 
+            // A press while composing, on another field and then elsewhere in the same field, keeps the shown text
+            // where it was typed. The input method hears of the press only through the view: one the view left
+            // composing goes on with the same word, as it did in the next field before.
+            func compose(_ word: String, _ syllables: [String], pressing point: NSPoint) {
+                for marked in syllables {
+                    view.setMarkedText(marked, selectedRange: NSRange(location: marked.utf16.count, length: 0), replacementRange: noRange)
+                }
+                click(view, at: point)
+                let carried = view.hasMarkedText() ? syllables.last ?? "" : ""
+                for marked in [carried + "ㅎ", carried + word] {
+                    view.setMarkedText(marked, selectedRange: NSRange(location: marked.utf16.count, length: 0), replacementRange: noRange)
+                }
+                view.insertText(carried + word, replacementRange: noRange)
+            }
+            let nickname = try await center(controller, "#nickname")
+            compose("하", ["ㅇ", "안", "안ㄴ", "안녀", "안녕"], pressing: nickname)
+            let left = try await evaluate(controller, "String(document.querySelector('#nickname').getBoundingClientRect().x + 2)")
+            compose("한", ["ㄱ", "그", "글"], pressing: NSPoint(x: Double(left) ?? 0, y: nickname.y))
+            try? await Task.sleep(for: .milliseconds(300))
+            let fields = try await evaluate(controller, "document.querySelector('#name').value + '|' + document.querySelector('#nickname').value")
+            check("a press while composing keeps the shown text in its place", fields == "A한글안녕b|한하글", "values \"\(fields)\"")
+
             // Zoom through the panel's shortcuts.
             view.window?.makeFirstResponder(view)
             let ratio = try await evaluate(controller, "String(window.devicePixelRatio)")

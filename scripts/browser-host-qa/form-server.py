@@ -149,6 +149,7 @@ input{font:inherit;padding:8px;width:70%}button{font:inherit;padding:6px 12px}
 </style>
 <h1>Browser QA</h1>
 <p><label for="name">Name</label> <input id="name" placeholder="Enter your name" autocomplete="off"></p>
+<p><label for="nickname">Nickname</label> <input id="nickname" autocomplete="off"></p>
 <p>needle one, needle two, <span id="tip" title="Tooltip text">needle three (hover for a tooltip)</span></p>
 <p><button id="arm-unload" type="button">Ask before leaving</button>
 <a id="download" href="/download">Download a file</a> <a href="/second">Second page</a>
