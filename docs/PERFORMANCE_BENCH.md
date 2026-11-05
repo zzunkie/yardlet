@@ -144,6 +144,9 @@ them under `budgets`, and the command exits with status 1.
   and the same phase grew by 550 MiB.
 - An idle window, with or without running tasks, stays under 1% and 3% of a core; scrolling the long
   sidebar keeps its 95th percentile pass under a 60 Hz frame and no pass over 50 ms.
+- Neither a Codex task streaming nor the sidebar scrolling evaluates the window (`bodies.mainWindowCount`
+  0 in `stream-codex/streaming`, `sidebar/scroll` and `sidebar/scroll-streaming`): the window lists every task,
+  and one evaluation of it with the long sidebar held the main thread for over 50 ms.
 - The limits are for a debug build on an Apple silicon Mac at the load a working day leaves (load
   average up to about 25 on 12 cores). Change a limit only with a reason in the commit that changes it:
   a scene that does more, or a cost that was found and accepted.
