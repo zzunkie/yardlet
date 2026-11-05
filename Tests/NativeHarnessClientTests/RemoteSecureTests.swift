@@ -80,6 +80,78 @@ final class RemoteSecureTests: XCTestCase {
         XCTAssertThrowsError(try joiner.add(forged[0], with: &phone.receive))
     }
 
+    /// Foundation outside Apple's platforms hands a WebSocket frame over in the pieces libcurl reads it in
+    /// (`RemoteFramePieces`); the sockets join them back into the frame before it is decrypted. The Mac never
+    /// gets pieces, so nothing else would show this breaking.
+    func testAFrameHandedOverInPiecesIsReadWhole() throws {
+        var (phone, mac) = try Self.handshakePair()
+        var joiner = RemoteNoiseFraming.Joiner(limit: RemoteProtocol.maxServerMessageBytes)
+        var message: Data?
+        // As the client socket reads: the cipher moves only for a frame that decrypts.
+        func read(_ frame: Data) throws -> Bool {
+            var receiver = phone.receive
+            do {
+                message = try joiner.add(frame, with: &receiver)
+            } catch let failure as RemoteNoise.Failure where failure == .undecryptable {
+                return false
+            }
+            phone.receive = receiver
+            return true
+        }
+
+        // A 5,724-byte frame cut after the 4,092 bytes of a 4,096-byte read, as on the Windows runner.
+        let snapshot = Data(String(repeating: "t", count: 5_724 - RemoteNoise.tagLength - 1).utf8)
+        let frame = try XCTUnwrap(RemoteNoiseFraming.seal(snapshot, with: &mac.send).first)
+        XCTAssertEqual(frame.count, 5_724)
+        var pieces = RemoteFramePieces(limit: RemoteNoise.maxMessageLength, joinsPieces: true)
+        XCTAssertEqual(try pieces.add(frame.prefix(4_092), read: read), .held)
+        XCTAssertEqual(try pieces.add(frame.dropFirst(4_092), read: read), .read)
+        XCTAssertEqual(message, snapshot)
+
+        // A frame at the limit in four pieces, and the next frame whole after it.
+        let large = Data(repeating: 7, count: RemoteNoise.maxChunkLength)
+        // The sealed frame is a slice of the cipher's output; its own copy reads from index 0.
+        let full = Data(try XCTUnwrap(RemoteNoiseFraming.seal(large, with: &mac.send).first))
+        XCTAssertEqual(full.count, RemoteNoise.maxMessageLength)
+        let cuts = [0, 4_092, 20_000, 40_000, full.count]
+        for (index, (start, end)) in zip(cuts, cuts.dropFirst()).enumerated() {
+            XCTAssertEqual(try pieces.add(full.subdata(in: start..<end), read: read), index == 3 ? .read : .held)
+        }
+        XCTAssertEqual(message, large)
+        let next = try RemoteNoiseFraming.seal(Data("{}".utf8), with: &mac.send)[0]
+        XCTAssertEqual(try pieces.add(next, read: read), .read)
+        XCTAssertEqual(message, Data("{}".utf8))
+
+        // On the relay a phone's frame is led by its stream's number, which the later pieces lack: the bytes are
+        // joined first and the number read from them again.
+        var routed: [UInt32: Data] = [:]
+        var relayPieces = RemoteFramePieces(limit: 4 + RemoteNoise.maxMessageLength, joinsPieces: true)
+        func readRelay(_ bytes: Data) throws -> Bool {
+            guard bytes.count >= 4 else { return false }
+            let id = bytes.prefix(4).reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+            guard try read(Data(bytes.dropFirst(4))) else { return false }
+            routed[id] = message
+            return true
+        }
+        let reply = Data(String(repeating: "r", count: 9_000).utf8)
+        let relayed = Data([0, 0, 0, 3]) + (try RemoteNoiseFraming.seal(reply, with: &mac.send)[0])
+        XCTAssertEqual(try relayPieces.add(relayed.prefix(4_096), read: readRelay), .held)
+        XCTAssertEqual(try relayPieces.add(relayed.subdata(in: 4_096..<8_192), read: readRelay), .held)
+        XCTAssertEqual(try relayPieces.add(relayed.dropFirst(8_192), read: readRelay), .read)
+        XCTAssertEqual(routed, [3: reply])
+
+        // Pieces that pass the frame's limit without reading are refused, and none are held after.
+        let forged = Data(repeating: 1, count: 40_000)
+        XCTAssertEqual(try pieces.add(forged, read: read), .held)
+        XCTAssertThrowsError(try pieces.add(forged, read: read)) { XCTAssertTrue($0 is RemoteFramePieces.TooLong) }
+        XCTAssertEqual(try pieces.add(try RemoteNoiseFraming.seal(Data("[]".utf8), with: &mac.send)[0], read: read), .read)
+
+        // Where Foundation hands over whole frames, a frame that does not decrypt is refused at once.
+        var whole = RemoteFramePieces(limit: RemoteNoise.maxMessageLength, joinsPieces: false)
+        let cut = try RemoteNoiseFraming.seal(snapshot, with: &mac.send)[0]
+        XCTAssertEqual(try whole.add(cut.prefix(4_092), read: read), .unreadable)
+    }
+
     func testTheV2PairingURLReadsBack() throws {
         let identity = RemoteIdentity.generate()
         let pairing = RemoteSecurePairingURL(macKey: identity.noise.publicKey, secret: Data(repeating: 7, count: 32),
@@ -580,6 +652,34 @@ final class RemoteSecureTests: XCTestCase {
         XCTAssertEqual(current.counts.auths, 0)
     }
 
+    /// Where Foundation hands a relay message over in pieces, each socket of the race joins its own: a socket that
+    /// brought only part of the challenge does not win against one whose challenge came whole, nor is its piece joined
+    /// to that challenge; and a challenge that came in two pieces on one socket is joined and answered.
+    func testTheRelayRaceJoinsEachSocketsPiecesOnItsOwn() async throws {
+        let cut = try FakeRelayHost(challenge: [#"{"nonce":"n","t":"chal"#])
+        let whole = try FakeRelayHost(challengeDelay: 0.5)
+        defer { cut.stop(); whole.stop() }
+        try await waitUntil { cut.url != nil && whole.url != nil }
+        let harness = try await SecureHarness()
+        let racing = RemoteRelayClient(server: harness.server, identity: harness.identity, baseURL: try XCTUnwrap(cut.url),
+                                       alternateURL: try XCTUnwrap(whole.url), joinsPieces: true)
+        racing.start()
+        try await waitUntil { racing.currentState == .connected }
+        XCTAssertEqual(whole.counts.auths, 1)
+        XCTAssertEqual(cut.counts.auths, 0)
+        racing.stop()
+
+        let split = try FakeRelayHost(challenge: [#"{"nonce":"n","t":"chal"#, #"lenge"}"#], pieceDelay: 0.3)
+        defer { split.stop() }
+        try await waitUntil { split.url != nil }
+        let single = RemoteRelayClient(server: harness.server, identity: harness.identity, baseURL: try XCTUnwrap(split.url),
+                                       joinsPieces: true)
+        single.start()
+        defer { single.stop() }
+        try await waitUntil { single.currentState == .connected }
+        XCTAssertEqual(split.counts.auths, 1)
+    }
+
     /// The current address keeps the room when the second one is refused or never answers, and without a second one
     /// the client opens one socket as before.
     func testTheRelayClientKeepsTheCurrentAddressWhenTheAlternateFails() async throws {
@@ -1002,20 +1102,27 @@ final class SocketPhone: @unchecked Sendable {
 
 /// The relay's side of the Mac's socket on loopback (§14.2), without its checks: it sends the challenge
 /// `challengeDelay` after a socket opens, answers any `auth` with `ready` and `ping` with `pong`, and counts both.
+/// `challenge` sends it as those messages, `pieceDelay` apart, as Foundation outside Apple's platforms would hand
+/// over one message's pieces.
 final class FakeRelayHost: @unchecked Sendable {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "yardlet.test.fake-relay")
     private let challengeDelay: TimeInterval
+    private let challenge: [String]
+    private let pieceDelay: TimeInterval
     private var connections: [NWConnection] = []
     private var sockets = 0
     private var auths = 0
 
-    init(challengeDelay: TimeInterval = 0) throws {
+    init(challengeDelay: TimeInterval = 0, challenge: [String] = [#"{"nonce":"n","t":"challenge"}"#],
+         pieceDelay: TimeInterval = 0) throws {
         let parameters = NWParameters.tcp
         parameters.defaultProtocolStack.applicationProtocols.insert(NWProtocolWebSocket.Options(), at: 0)
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         listener = try NWListener(using: parameters)
         self.challengeDelay = challengeDelay
+        self.challenge = challenge
+        self.pieceDelay = pieceDelay
         listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
         listener.start(queue: queue)
     }
@@ -1044,8 +1151,10 @@ final class FakeRelayHost: @unchecked Sendable {
         connections.append(connection)
         sockets += 1
         connection.start(queue: queue)
-        queue.asyncAfter(deadline: .now() + challengeDelay) { [weak self] in
-            self?.send(#"{"nonce":"n","t":"challenge"}"#, on: connection)
+        for (index, piece) in challenge.enumerated() {
+            queue.asyncAfter(deadline: .now() + challengeDelay + pieceDelay * Double(index)) { [weak self] in
+                self?.send(piece, on: connection)
+            }
         }
         receive(on: connection)
     }

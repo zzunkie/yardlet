@@ -21,6 +21,9 @@ public enum RemoteNoise {
     public struct Failure: Error, Equatable, Sendable {
         public var reason: String
         public init(_ reason: String) { self.reason = reason }
+
+        /// A frame that does not decrypt, which leaves the cipher as it was.
+        public static let undecryptable = Failure("Decryption failed")
     }
 }
 
@@ -88,7 +91,7 @@ public struct RemoteNoiseCipher: @unchecked Sendable {
             nonce += 1
             return plaintext
         } catch {
-            throw RemoteNoise.Failure("Decryption failed")
+            throw RemoteNoise.Failure.undecryptable
         }
     }
 }

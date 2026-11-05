@@ -30,8 +30,13 @@ public final class RemoteSecureConnection: RemoteChannel, @unchecked Sendable {
     private var joiner = RemoteNoiseFraming.Joiner(limit: RemoteProtocol.maxSecureClientMessageBytes)
     /// What the server sent before message 2 went out (it should not, but order is kept if it does).
     private var held: [String] = []
-    /// Frames are handled one at a time, in order; at most `maxInboxFrames` and `maxInboxBytes` wait (§7).
-    private var inbox: [Data] = []
+    /// Message 1, then the messages decrypted from the phone's frames, handled one at a time, in order; at most
+    /// `maxInboxFrames` and `maxInboxBytes` wait (§7).
+    private enum Inbound {
+        case hello(Data)
+        case message(Data, UUID)
+    }
+    private var inbox: [Inbound] = []
     private var inboxBytes = 0
     static let maxInboxFrames = 512
     static let maxInboxBytes = 16 * 1024 * 1024
@@ -51,30 +56,64 @@ public final class RemoteSecureConnection: RemoteChannel, @unchecked Sendable {
         }
     }
 
-    /// A frame the transport received.
-    public func receive(_ frame: Data) {
-        let start = lock.withLock { () -> Bool? in
+    /// A frame the transport received. False for a frame of the open connection that does not decrypt, which changes
+    /// nothing: the transport joins the next piece to it (`RemoteFramePieces`) or calls `refuse()`.
+    @discardableResult
+    public func receive(_ frame: Data) -> Bool {
+        enum Next { case drain, wait, undecryptable, refuse(RemoteCloseCode) }
+        let next = lock.withLock { () -> Next in
+            let item: Inbound
             switch state {
             case .closed:
-                return false
+                return .wait
             case .deciding:
-                return nil
+                // A phone sends nothing but message 1 before message 2.
+                return .refuse(.unauthenticated)
             case .awaitingHello where isDraining || !inbox.isEmpty:
-                return nil
-            case .awaitingHello, .open:
-                break
+                return .refuse(.unauthenticated)
+            case .awaitingHello:
+                item = .hello(frame)
+            case let .open(id):
+                // Decrypted as it comes, so the next frame is read against the cipher as it then is.
+                guard var receiver else { return .wait }
+                let message: Data?
+                do {
+                    message = try joiner.add(frame, with: &receiver)
+                } catch let failure as RemoteNoise.Failure where failure == .undecryptable {
+                    return .undecryptable
+                } catch is RemoteNoiseFraming.Joiner.TooLarge {
+                    return .refuse(.messageTooBig)
+                } catch {
+                    return .refuse(.unauthenticated)
+                }
+                self.receiver = receiver
+                guard let message else { return .wait }
+                item = .message(message, id)
             }
-            // A phone that sends faster than its frames are handled is closed rather than held without end.
-            guard inbox.count < Self.maxInboxFrames, inboxBytes + frame.count <= Self.maxInboxBytes else { return nil }
-            inbox.append(frame)
-            inboxBytes += frame.count
-            guard !isDraining else { return false }
+            // A phone that sends faster than its messages are handled is closed rather than held without end.
+            let bytes: Int
+            switch item {
+            case let .hello(data), let .message(data, _): bytes = data.count
+            }
+            guard inbox.count < Self.maxInboxFrames, inboxBytes + bytes <= Self.maxInboxBytes else { return .refuse(.rateLimited) }
+            inbox.append(item)
+            inboxBytes += bytes
+            guard !isDraining else { return .wait }
             isDraining = true
-            return true
+            return .drain
         }
-        // A phone sends nothing but message 1 before message 2, and never more than the inbox holds.
-        guard let start else { return fail(isHandshaking ? .unauthenticated : .rateLimited) }
-        if start { Task { await drain() } }
+        switch next {
+        case .drain: Task { await drain() }
+        case .wait: break
+        case .undecryptable: return false
+        case let .refuse(code): fail(code)
+        }
+        return true
+    }
+
+    /// Closes the connection over a frame that does not decrypt, or that grew past the limit in pieces.
+    public func refuse(_ code: RemoteCloseCode = .unauthenticated) {
+        fail(code)
     }
 
     /// Message 2 has not gone out, nor has the connection closed.
@@ -100,40 +139,24 @@ public final class RemoteSecureConnection: RemoteChannel, @unchecked Sendable {
 
     private func drain() async {
         while true {
-            let next = lock.withLock { () -> (Data, State)? in
+            let next = lock.withLock { () -> Inbound? in
                 guard !inbox.isEmpty else {
                     isDraining = false
                     return nil
                 }
-                let frame = inbox.removeFirst()
-                inboxBytes -= frame.count
-                return (frame, state)
-            }
-            guard let (frame, current) = next else { return }
-            switch current {
-            case .awaitingHello:
-                await handshake(frame)
-            case .deciding:
-                // A phone sends nothing before message 2.
-                fail(.unauthenticated)
-            case let .open(id):
-                let message: Data?
-                do {
-                    message = try lock.withLock { () throws -> Data? in
-                        guard var receiver else { return nil }
-                        defer { self.receiver = receiver }
-                        return try joiner.add(frame, with: &receiver)
-                    }
-                } catch is RemoteNoiseFraming.Joiner.TooLarge {
-                    fail(.messageTooBig)
-                    return
-                } catch {
-                    fail(.unauthenticated)
-                    return
+                let item = inbox.removeFirst()
+                switch item {
+                case let .hello(data), let .message(data, _): inboxBytes -= data.count
                 }
-                if let message { await server.receive(message, on: id) }
-            case .closed:
+                return item
+            }
+            switch next {
+            case nil:
                 return
+            case let .hello(frame):
+                await handshake(frame)
+            case let .message(message, id):
+                await server.receive(message, on: id)
             }
         }
     }
