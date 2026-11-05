@@ -179,7 +179,9 @@ try {
     $automation = [System.Windows.Automation.AutomationElement]::FromHandle($window)
     $listItem = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::ListItem)
-    $sessionItems = $automation.FindAll([System.Windows.Automation.TreeScope]::Descendants, $listItem)
+    # The tasks' items, not New task and Connect to a Mac around them.
+    $sessionItems = @($automation.FindAll([System.Windows.Automation.TreeScope]::Descendants, $listItem) |
+        Where-Object { $_.Current.Name -notin @('New task', 'Connect to a Mac') })
     $summary.sidebarItems = $sessionItems.Count
     if ($sessionItems.Count -ge 2) {
         $sessionItems[1].GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()

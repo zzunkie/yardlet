@@ -82,6 +82,14 @@ jobs:
       - name: Start a harness installed with npm
         shell: pwsh
         run: Windows/scripts/check-harness.ps1 -Executable "$env:APP_BIN\NativeHarnessClient.exe" -OutDirectory window-check
+      # The stand-in the step before installed, in a task of its own: started from New task, its request
+      # allowed from its card, its answer streamed in and kept when the app opens again.
+      - name: Start a task with the stand-in harness
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File Windows/scripts/check-local.ps1 `
+            -Executable "$env:APP_BIN\NativeHarnessClient.exe" -OutDirectory window-check
+          exit $LASTEXITCODE
       # The app with the Swift runtime beside it, to run on a PC that has the Windows App Runtime 1.7 but no
       # Swift: its executables and libraries and its resource folder, as report.ps1 counts them.
       - name: Gather the app
