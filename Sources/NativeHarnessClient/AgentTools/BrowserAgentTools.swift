@@ -533,8 +533,9 @@ final class BrowserAgentTools {
             waits.append("\(Self.describe(dialog)) Answer it with browser_handle_dialog.")
         }
         if let prompt = page.permissionPrompt {
-            waits.append("The page (\(prompt.origin)) asks permission for \(prompt.permissions.joined(separator: ", ")) and "
-                + "waits: only the person can answer, in the browser panel's bar (Allow or Block).")
+            waits.append(Self.describe(prompt) + " It waits for an answer; the rest of the page works, and your tools reach "
+                + "it as before. If the task does not need it, browser_handle_dialog with accept false closes it as the bar's "
+                + "Close does, and nothing is allowed; if the task needs it, browser_handoff asks the person.")
         }
         if let chooser = page.fileDialog, tool != AgentToolCatalog.fileUpload {
             let title = chooser.title.isEmpty ? "" : " “\(chooser.title)”"
@@ -586,6 +587,12 @@ final class BrowserAgentTools {
         let names = kinds(of: windows).map { name(of: $0, in: windows) }.joined(separator: " and ")
         return names.prefix(1).uppercased() + names.dropFirst() + " is open in the browser, and which tab opened it is not known, "
             + "so it may be another task's. It waits for the person at this Mac, who alone can close it."
+    }
+
+    /// "The page (https://example.com) asks permission for notifications. Only the person can allow it, …"
+    static func describe(_ prompt: BrowserPermissionPrompt) -> String {
+        "The page (\(prompt.origin)) asks permission for \(prompt.permissions.joined(separator: ", ")). Only the person can "
+            + "allow it, in the bar above the page in the browser panel."
     }
 
     /// What closing those windows does to the page.
@@ -1497,6 +1504,17 @@ final class BrowserAgentTools {
             let names = Self.kinds(of: windows).map { Self.name(of: $0, in: windows) }.joined(separator: " and ")
             let passkey = windows.contains { $0.kind == .passkey } ? " The site can then offer another way to sign in." : ""
             return .text("Closed \(names); " + Self.closeOutcome(windows) + "." + passkey)
+        }
+        if page.dialog == nil, let prompt = page.permissionPrompt {
+            // A permission is the person's to allow; the agent can only let the request go, as the bar's Close does.
+            guard !accept else {
+                throw BrowserAgentToolError(Self.describe(prompt) + " browser_handoff asks the person; browser_handle_dialog "
+                    + "with accept false closes the request.", AgentToolFailure(.refused, retry: .withChanges))
+            }
+            _ = page.closePermission()
+            return .text("Closed the request of the page (\(prompt.origin)) for \(prompt.permissions.joined(separator: ", ")) "
+                + "as the bar's Close does: the page's request ends refused, and nothing is allowed. As in Chrome, a site whose "
+                + "requests are closed three times in a row is refused for a while without asking.")
         }
         guard let dialog = page.answerDialog(accept: accept, text: arguments["promptText"]?.stringValue) else {
             // Another task's window, or one whose tab is not known, is not this task's to close.

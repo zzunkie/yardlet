@@ -122,7 +122,8 @@ final class BrowserAgentPage {
     private(set) var dialog: BrowserJavaScriptDialog?
     /// A file chooser waiting for files.
     private(set) var fileDialog: BrowserFileDialog?
-    /// A permission the page asks for, which only the person answers (the panel's bar).
+    /// A permission the page asks for and waits on: the person answers it in the panel's bar, and the agent can only
+    /// close it (`closePermission`).
     private(set) var permissionPrompt: BrowserPermissionPrompt?
     /// Addresses the host's policy refused that no tool result has named yet, oldest first. A
     /// refusal can arrive just after the tool that caused it answered, so the next result names it.
@@ -336,6 +337,16 @@ final class BrowserAgentPage {
     /// Draws the tab at another size (the full-page screenshot, for the moment it captures).
     func resize(to viewport: BrowserViewport) {
         sendCommand(.resize(tab: tabID, viewport: viewport))
+    }
+
+    /// Closes the page's permission request as the bar's Close does (dismiss): the page's request ends refused, and nothing
+    /// is allowed. Chromium counts it as the person's Close (three in a row refuse the site's requests for a while). The
+    /// agent never allows one, nor blocks one, which Chromium would keep for the site in a profile the tasks share.
+    func closePermission() -> BrowserPermissionPrompt? {
+        guard let permissionPrompt else { return nil }
+        self.permissionPrompt = nil
+        sendCommand(.permissionResult(tab: tabID, prompt: permissionPrompt.id, result: .dismiss))
+        return permissionPrompt
     }
 
     func answerFileDialog(paths: [String]?) -> BrowserFileDialog? {
