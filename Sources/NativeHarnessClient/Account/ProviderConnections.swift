@@ -934,6 +934,9 @@ final class ProviderConnectionStore {
         selection[choice.harness] = choice.connection?.id
     }
 
+    // Swift 6.4.1's optimizer on Windows stops on this function in a release build (SimplifyCFG: "Erasing block
+    // argument that has uses"); it runs only when a host's accounts arrive, so it is left unoptimized.
+    @_optimize(none)
     func applyRemoteAccounts(_ remoteAccounts: [RemoteAccount], picksNewTaskAccount: Bool) {
         isRemoteStore = true
         var savedConnections: [ProviderConnection] = []
