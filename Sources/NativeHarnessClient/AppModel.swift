@@ -7685,7 +7685,8 @@ final class AppModel {
               let firstUserMessage = firstUserMessage(for: sessionID) else { return }
         let fallback = SessionTitleProjection.fallbackTitle(
             firstUserMessage: firstUserMessage,
-            workspaceURL: current.workspaceURL
+            workspaceURL: current.workspaceURL,
+            home: projects.chatWorkspaceHome
         )
         try? await store.renameSession(
             id: sessionID,
