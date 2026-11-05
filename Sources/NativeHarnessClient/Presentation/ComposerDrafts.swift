@@ -2,7 +2,8 @@ import Foundation
 import Observation
 
 /// One owner across windows prevents a stale window from overwriting another task's draft.
-/// Writes are coalesced while typing and flushed synchronously before shutdown awaits work.
+/// Writes are coalesced while typing and handed to the repository, which writes them off the main
+/// thread; quitting waits for them (`StateFileWriter.flush`).
 @MainActor
 @Observable
 final class ComposerDrafts {
@@ -61,12 +62,12 @@ final class ComposerDrafts {
         pendingSave?.cancel()
         pendingSave = nil
         guard !loadFailed, isDirty else { return }
-        do {
-            try repository.save(ComposerDraftSnapshot(home: home.snapshot, tasks: tasks.snapshot))
-            isDirty = false
-            storageFailure = nil
-        } catch {
-            storageFailure = .save
+        isDirty = false
+        repository.save(ComposerDraftSnapshot(home: home.snapshot, tasks: tasks.snapshot)) { [weak self] saved in
+            guard let self else { return }
+            // A failed save leaves the drafts to be written again by the next one.
+            if !saved { isDirty = true }
+            storageFailure = saved ? nil : .save
         }
     }
 

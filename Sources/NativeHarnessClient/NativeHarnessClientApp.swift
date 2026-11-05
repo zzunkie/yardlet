@@ -276,6 +276,8 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
         model?.composerDrafts.persistNow()
         model?.taskWorkspaces.persistNow()
         model?.splits.persistNow()
+        // The process ends when this returns: the state files handed over are written first.
+        StateFileWriter.shared.flush()
         // Keep the native-surface boundary intact even when AppKit terminates without running
         // the asynchronous confirmed-Quit reply path (for example, a normal system shutdown).
         NativeSurfaceResourceRegistry.shared.stopAll()

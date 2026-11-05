@@ -64,6 +64,7 @@ import XCTest
         XCTAssertEqual(pruned.connections, [connection])
         XCTAssertNil(pruned.errorMessage)
         XCTAssertFalse(try String(contentsOf: url, encoding: .utf8).contains("gajae-code"))
+        StateFileWriter.shared.flush()
         XCTAssertFalse(try String(contentsOf: readings, encoding: .utf8).contains("oh-my-pi"))
         let corrupt = Data("not valid json".utf8)
         try corrupt.write(to: url)

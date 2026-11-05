@@ -5,7 +5,8 @@ import Foundation
 /// login was signed in, the account name the runtime reported, its organization (which separates
 /// two accounts that share an address), the plan line, the limit rows, how many resets of them it
 /// holds and when they expire, and when they were read. No credential, token, config path, reset ID
-/// or CLI output is stored.
+/// or CLI output is stored. The file is encoded and written on `StateFileWriter`'s queue: a Claude
+/// session's limit report changes a reading many times an hour.
 struct AccountSnapshotCache {
     struct Entry: Codable, Equatable, Sendable {
         let harness: HarnessKind
@@ -70,7 +71,9 @@ struct AccountSnapshotCache {
     /// A missing or unreadable file starts empty; the next successful check writes a new one.
     init(fileURL: URL?) {
         self.fileURL = fileURL
-        guard let fileURL, let data = try? Data(contentsOf: fileURL) else { return }
+        guard let fileURL else { return }
+        StateFileWriter.shared.flush()
+        guard let data = try? Data(contentsOf: fileURL) else { return }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let file = try? decoder.decode(File.self, from: data), file.version == 1 else { return }
@@ -98,18 +101,18 @@ struct AccountSnapshotCache {
         write()
     }
 
+    /// A reading that cannot be remembered is still shown; the next launch checks again.
     private func write() {
         guard let fileURL else { return }
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.sortedKeys]
-        do {
+        let file = File(entries: entries)
+        StateFileWriter.shared.write(fileURL) {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.sortedKeys]
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
                 withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            try encoder.encode(File(entries: entries)).write(to: fileURL, options: .atomic)
+            try encoder.encode(file).write(to: fileURL, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
-        } catch {
-            // A reading that cannot be remembered is still shown; the next launch checks again.
         }
     }
 }

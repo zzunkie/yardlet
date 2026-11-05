@@ -149,22 +149,30 @@ struct ComposerDraftSnapshot: Codable, Equatable {
 
 @MainActor
 protocol ComposerDraftRepository {
+    /// Sees every save handed over before it.
     func load() throws -> ComposerDraftSnapshot
-    func save(_ snapshot: ComposerDraftSnapshot) throws
+    /// Saves `snapshot`, at once or in the background; `saved` hears whether it was saved, in the order
+    /// the saves were handed over.
+    func save(_ snapshot: ComposerDraftSnapshot, saved: @escaping StateFileWriter.Done)
 }
 
 @MainActor
 final class InMemoryComposerDraftRepository: ComposerDraftRepository {
     var snapshot = ComposerDraftSnapshot()
     func load() -> ComposerDraftSnapshot { snapshot }
-    func save(_ snapshot: ComposerDraftSnapshot) { self.snapshot = snapshot }
+    func save(_ snapshot: ComposerDraftSnapshot, saved: @escaping StateFileWriter.Done) {
+        self.snapshot = snapshot
+        saved(true)
+    }
 }
 
+/// Encodes and writes the drafts on `StateFileWriter`'s queue.
 struct FileComposerDraftRepository: ComposerDraftRepository {
     let directoryURL: URL
     var fileURL: URL { directoryURL.appending(path: "drafts.json") }
 
     func load() throws -> ComposerDraftSnapshot {
+        StateFileWriter.shared.flush()
         let data: Data
         do {
             data = try Data(contentsOf: fileURL)
@@ -178,14 +186,17 @@ struct FileComposerDraftRepository: ComposerDraftRepository {
         return try JSONDecoder().decode(ComposerDraftSnapshot.self, from: data)
     }
 
-    func save(_ snapshot: ComposerDraftSnapshot) throws {
-        let manager = FileManager.default
-        // A private directory also protects the temporary file used for atomic replacement.
-        try manager.createDirectory(at: directoryURL, withIntermediateDirectories: true,
-                                    attributes: [.posixPermissions: 0o700])
-        try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directoryURL.path)
-        let data = try JSONEncoder().encode(snapshot)
-        try data.write(to: fileURL, options: .atomic)
-        try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+    func save(_ snapshot: ComposerDraftSnapshot, saved: @escaping StateFileWriter.Done) {
+        let directoryURL = directoryURL, fileURL = fileURL
+        StateFileWriter.shared.write(fileURL, done: saved) {
+            let manager = FileManager.default
+            // A private directory also protects the temporary file used for atomic replacement.
+            try manager.createDirectory(at: directoryURL, withIntermediateDirectories: true,
+                                        attributes: [.posixPermissions: 0o700])
+            try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directoryURL.path)
+            let data = try JSONEncoder().encode(snapshot)
+            try data.write(to: fileURL, options: .atomic)
+            try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        }
     }
 }
