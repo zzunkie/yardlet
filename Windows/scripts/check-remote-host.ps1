@@ -77,7 +77,7 @@ public static class ServeBonjour {
     static BrowseCallback kept;
 
     public static string[] Browse(string service, int milliseconds) {
-        kept = (status, context, records) => {
+        kept = (reported, context, records) => {
             // DNS_RECORDW on x64: pNext at 0, wType at 16, and a PTR record's pNameHost at 32.
             for (IntPtr record = records; record != IntPtr.Zero; record = Marshal.ReadIntPtr(record)) {
                 if (Marshal.ReadInt16(record, 16) == 12) {
@@ -88,8 +88,8 @@ public static class ServeBonjour {
         };
         var request = new BrowseRequest { Version = 1, QueryName = Marshal.StringToHGlobalUni(service), Callback = kept };
         var cancel = new Cancel();
-        int status = DnsServiceBrowse(ref request, ref cancel);
-        if (status != 9506) return new[] { "DnsServiceBrowse returned " + status };
+        int started = DnsServiceBrowse(ref request, ref cancel);
+        if (started != 9506) return new[] { "DnsServiceBrowse returned " + started };
         Thread.Sleep(milliseconds);
         DnsServiceBrowseCancel(ref cancel);
         lock (found) { return found.ToArray(); }
