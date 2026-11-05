@@ -145,9 +145,9 @@ actor SQLiteSessionRepository: SessionRepository {
         created_at, updated_at, provider_session_id, unread, completion_state,
         environment_scope, pinned, title_origin, provider_options, inherited_context, connection_binding,
         project_id, additional_roots, origin_workspace_path, worktree_name, branch, parent_task_id,
-        lineage_detached, previous_titles
+        lineage_detached, previous_titles, placed_started_from_task_id
         """
-    private static let recordColumnCount: Int32 = 25
+    private static let recordColumnCount: Int32 = 26
 
     private func record(from statement: OpaquePointer) throws -> SessionRecord {
         let harnessValue = text(statement, column: 1)
@@ -198,7 +198,8 @@ actor SQLiteSessionRepository: SessionRepository {
             worktreeName: optionalText(statement, column: 20),
             branch: optionalText(statement, column: 21),
             parentTaskID: optionalText(statement, column: 22).flatMap(UUID.init(uuidString:)),
-            isLineageDetached: sqlite3_column_int(statement, 23) != 0
+            isLineageDetached: sqlite3_column_int(statement, 23) != 0,
+            placedStartedFromTaskID: optionalText(statement, column: 25).flatMap(UUID.init(uuidString:))
         )
     }
 
@@ -210,8 +211,8 @@ actor SQLiteSessionRepository: SessionRepository {
                 created_at, updated_at, provider_session_id, unread, completion_state,
                 environment_scope, pinned, title_origin, provider_options, inherited_context, connection_binding,
                 project_id, additional_roots, origin_workspace_path, worktree_name, branch, parent_task_id,
-                lineage_detached, previous_titles, archived
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                lineage_detached, previous_titles, placed_started_from_task_id, archived
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             ON CONFLICT(id) DO UPDATE SET
                 harness = excluded.harness,
                 workspace_path = excluded.workspace_path,
@@ -235,7 +236,8 @@ actor SQLiteSessionRepository: SessionRepository {
                 branch = excluded.branch,
                 parent_task_id = excluded.parent_task_id,
                 lineage_detached = excluded.lineage_detached,
-                previous_titles = excluded.previous_titles;
+                previous_titles = excluded.previous_titles,
+                placed_started_from_task_id = excluded.placed_started_from_task_id;
             """
         let statement = try prepare(sql)
         defer { sqlite3_finalize(statement) }
@@ -279,6 +281,7 @@ actor SQLiteSessionRepository: SessionRepository {
         sqlite3_bind_int(statement, 24, session.isLineageDetached ? 1 : 0)
         bindOptional(session.previousTitles.isEmpty ? nil : encodeStringList(session.previousTitles),
                      to: 25, in: statement)
+        bindOptional(session.placedStartedFromTaskID?.uuidString, to: 26, in: statement)
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw SessionRepositoryError.statementFailed(errorMessage())
         }
@@ -457,6 +460,9 @@ actor SQLiteSessionRepository: SessionRepository {
         // Names the person replaced arrived with renaming from the recent conversation. Existing rows
         // keep none; an earlier build ignores the column and its saves leave it as it is.
         try addColumnIfMissing(name: "previous_titles", definition: "TEXT")
+        // Who started a task a move placed to keep the sidebar's levels arrived later. Existing rows
+        // keep it null; an earlier build ignores the column and its saves leave it as it is.
+        try addColumnIfMissing(name: "placed_started_from_task_id", definition: "TEXT")
     }
 
     private func addColumnIfMissing(name: String, definition: String) throws {

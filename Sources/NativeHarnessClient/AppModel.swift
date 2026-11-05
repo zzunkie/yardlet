@@ -2917,10 +2917,13 @@ final class AppModel {
 
     /// Moves a task in the sidebar's families, under `parent` or to the top level (nil), from a row's
     /// menu or a drop (`TaskNesting`). Only Yardlet's index changes (`SessionStore.nest`); the
-    /// provider's history, other apps' files and what the task runs with stay as they are.
+    /// provider's history, other apps' files and what the task runs with stay as they are. The tasks
+    /// under it that would sit deeper than the sidebar draws go flat under the task they are drawn
+    /// under, and a move under a task at the deepest level is refused (`TaskNesting.flattening`).
     func nest(_ taskID: UUID, under parent: UUID?) async {
+        guard let flattening = TaskNesting.flattening(moving: taskID, under: parent, in: sidebarLists) else { return }
         do {
-            try await store.nest(id: taskID, under: parent)
+            try await store.nest(id: taskID, under: parent, flattening: flattening)
         } catch {
             bootstrapError = error.localizedDescription
         }

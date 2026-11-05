@@ -307,17 +307,38 @@ final class SessionStore {
     /// started from is no longer known (`SessionRecord.startedFromTaskID`). The tasks under it go
     /// with it, and a move is not activity, so it keeps its place in recency order. A parent that is
     /// not listed, or is the task itself or a task under it, archived ones included, is refused (nil).
+    ///
+    /// `flattening` names the tasks under it the move would leave deeper than the sidebar draws, each
+    /// with the task it is drawn under (`TaskNesting.flattening`). Each goes under that task, so the
+    /// index holds what the sidebar shows; it is placed as well, and still knows who started it
+    /// (`SessionRecord.placedStartedFromTaskID`).
     @discardableResult
-    func nest(id: UUID, under parent: UUID?) async throws -> SessionRecord? {
+    func nest(id: UUID, under parent: UUID?, flattening: [UUID: UUID] = [:]) async throws -> SessionRecord? {
         if let parent {
             guard sessions.contains(where: { $0.id == parent }),
                   !TaskLineage.isAncestor(id, of: parent, in: sessions, archivedParents: archivedParentIDs)
             else { return nil }
         }
-        return try await modify(id) {
+        let moved = try await modify(id) {
             $0.parentTaskID = parent
             $0.isLineageDetached = true
+            $0.placedStartedFromTaskID = nil
         }
+        guard moved != nil else { return nil }
+        // Only tasks under the moved one, each under a task it is under now, checked before any of them moves.
+        let placed = flattening.filter { task, drawnUnder in
+            task != id && TaskLineage.isAncestor(id, of: task, in: sessions, archivedParents: archivedParentIDs)
+                && TaskLineage.isAncestor(drawnUnder, of: task, in: sessions, archivedParents: archivedParentIDs)
+        }
+        for (task, drawnUnder) in placed.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+            try await modify(task) {
+                let starter = $0.startedFromTaskID
+                $0.parentTaskID = drawnUnder
+                $0.isLineageDetached = true
+                $0.placedStartedFromTaskID = starter
+            }
+        }
+        return sessions.first { $0.id == id }
     }
 
     /// Keeps a setting the task runs with (its model, effort, mode). A setting is not activity:

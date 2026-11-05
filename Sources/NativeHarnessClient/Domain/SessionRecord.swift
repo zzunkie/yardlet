@@ -96,12 +96,18 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
     /// app are not recorded for it, and its parent is no longer the task it was started from
     /// (`startedFromTaskID`).
     var isLineageDetached: Bool
+    /// Who started a task the person's move placed only as a task under the one it moved, to keep
+    /// it within the levels the sidebar draws (`TaskNesting.flattening`): its parent is then the task
+    /// it is drawn under, and this still names the task it was started from. Nil for a task the
+    /// person moved itself, and for one no move placed.
+    var placedStartedFromTaskID: UUID?
 
     /// The task this one was started from, as far as Yardlet knows: its parent, unless the person
-    /// placed it (`isLineageDetached`). What follows from who started a task reads this rather than
-    /// where the sidebar lists it: the sender a message names, the child tasks an agent's own
+    /// placed it (`isLineageDetached`), where only a task placed to keep the sidebar's levels still
+    /// knows it (`placedStartedFromTaskID`). What follows from who started a task reads this rather
+    /// than where the sidebar lists it: the sender a message names, the child tasks an agent's own
     /// archive takes along, the browser profile a new task starts from.
-    var startedFromTaskID: UUID? { isLineageDetached ? nil : parentTaskID }
+    var startedFromTaskID: UUID? { isLineageDetached ? placedStartedFromTaskID : parentTaskID }
 
     var additionalRootURLs: [URL] {
         additionalRoots.map { URL(filePath: $0, directoryHint: .isDirectory).standardizedFileURL }
@@ -137,7 +143,8 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         worktreeName: String? = nil,
         branch: String? = nil,
         parentTaskID: UUID? = nil,
-        isLineageDetached: Bool = false
+        isLineageDetached: Bool = false,
+        placedStartedFromTaskID: UUID? = nil
     ) {
         self.id = id
         self.harness = harness
@@ -167,6 +174,7 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         self.branch = SessionRecord.normalizedLabel(branch)
         self.parentTaskID = parentTaskID == id ? nil : parentTaskID
         self.isLineageDetached = isLineageDetached
+        self.placedStartedFromTaskID = placedStartedFromTaskID == id ? nil : placedStartedFromTaskID
     }
 
     /// How many replaced names the task keeps.
@@ -242,6 +250,7 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         case branch
         case parentTaskID
         case isLineageDetached
+        case placedStartedFromTaskID
     }
 
     init(from decoder: any Decoder) throws {
@@ -291,6 +300,8 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
         let parent = try container.decodeIfPresent(UUID.self, forKey: .parentTaskID)
         parentTaskID = parent == id ? nil : parent
         isLineageDetached = try container.decodeIfPresent(Bool.self, forKey: .isLineageDetached) ?? false
+        let starter = try container.decodeIfPresent(UUID.self, forKey: .placedStartedFromTaskID)
+        placedStartedFromTaskID = starter == id ? nil : starter
     }
 }
 

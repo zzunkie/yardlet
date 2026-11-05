@@ -368,8 +368,8 @@ final class SidebarDotsRenderingTests: XCTestCase {
         let items = try XCTUnwrap(menu).items
         let under = try XCTUnwrap(items.first { $0.title == L10n.string("Move under task") }?.submenu)
         XCTAssertNotNil(items.first { $0.title == L10n.string("Detach to top level") })
-        XCTAssertEqual(under.items.map(\.title), ["Plan the release", "Write the notes", "Update the docs"],
-                       "Not itself, the task it is under, or a task under it")
+        XCTAssertEqual(under.items.map(\.title), ["Plan the release", "Update the docs"],
+                       "Not itself, the task it is under, a task under it, or one at the deepest level")
         let lines = MenuLine.lines(items), underLines = MenuLine.lines(under.items)
         let menuSize = NSSize(width: ParityTheme.sidebarWidth + 470, height: 400)
         try WindowlessRender.hostedInBothAppearances("nest-menu", in: directory, size: menuSize) { appearance in
