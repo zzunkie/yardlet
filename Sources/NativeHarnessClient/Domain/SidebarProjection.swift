@@ -592,8 +592,9 @@ enum SidebarProjection {
         )
     }
 
-    /// The title a row shows under Chats. A Yardlet fallback title repeats the chat's folder name
-    /// (`new-chat`), which says nothing there.
+    /// The title a row shows under Chats. A chat's fallback title leaves out its generated folder
+    /// name (`new-chat`) wherever it shows (`SessionTitleProjection.storedTitle`); here a task
+    /// moved to Chats from another folder also loses that folder's name from its fallback title.
     static func chatRowTitle(for row: SidebarRow) -> String {
         switch row.content {
         case let .session(session):

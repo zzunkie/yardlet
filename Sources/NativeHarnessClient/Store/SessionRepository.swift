@@ -76,6 +76,9 @@ enum SessionRepositoryError: Error, Equatable, Sendable {
 
 actor SQLiteSessionRepository: SessionRepository {
     private let databaseURL: URL
+    /// The home whose chat folders (`ChatWorkspaces`) a stored title is read against
+    /// (`SessionTitleProjection.storedTitle`).
+    private let chatWorkspaceHome: URL
     private let connection = SQLiteConnection()
 
     private var database: OpaquePointer? {
@@ -83,8 +86,9 @@ actor SQLiteSessionRepository: SessionRepository {
         set { connection.pointer = newValue }
     }
 
-    init(databaseURL: URL) throws {
+    init(databaseURL: URL, chatWorkspaceHome: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
         self.databaseURL = databaseURL.standardizedFileURL
+        self.chatWorkspaceHome = chatWorkspaceHome
         try FileManager.default.createDirectory(
             at: self.databaseURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -168,12 +172,14 @@ actor SQLiteSessionRepository: SessionRepository {
         let providerOptions = decodeProviderOptions(text(statement, column: 14))
         let inheritedContext = sqlite3_column_type(statement, 15) == SQLITE_NULL ? nil
             : try JSONDecoder().decode(SideChatContext.self, from: Data(text(statement, column: 15).utf8))
+        let workspaceURL = URL(filePath: text(statement, column: 2))
         return SessionRecord(
             id: id,
             harness: harness,
-            workspaceURL: URL(filePath: text(statement, column: 2)),
+            workspaceURL: workspaceURL,
             runtimeExecutableURL: URL(filePath: text(statement, column: 3)),
-            title: text(statement, column: 4),
+            title: SessionTitleProjection.storedTitle(text(statement, column: 4), origin: titleOrigin,
+                                                      workspaceURL: workspaceURL, home: chatWorkspaceHome),
             titleOrigin: titleOrigin,
             previousTitles: decodeStringList(optionalText(statement, column: 24) ?? ""),
             status: status,

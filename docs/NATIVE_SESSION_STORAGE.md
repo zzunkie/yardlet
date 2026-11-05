@@ -284,6 +284,21 @@ sources use the same rules for applying a title.
   sidebar and archived-task searches still find the task by it. A provider's next title replaces its last without
   keeping it.
 
+When no provider title has arrived about ten seconds into the first turn, the task takes a local fallback title made
+from its first request without a model call (`SessionTitleProjection.fallbackTitle`, origin `automatic`), and a
+provider title that arrives later still replaces it. Claude Code names a session only when its first request is at least
+ten characters long, so a task opened with a shorter request keeps the fallback, as Claude Code's own session list shows
+such a session by its first prompt.
+
+- **Folder name:** a request the fallback cannot shorten is prefixed with its folder's name (`<folder> · <request>`), and a
+  row under its project leaves the project's name out (`titleUnderProject`). A chat's folder (`ChatWorkspaces`) is a
+  generated name such as `new-chat-4`, so a chat's fallback is the request alone.
+- **Stored titles:** a chat title an earlier version stored with its folder's name, with origin `automatic` or
+  `provisional` only, is read from the index without it (`SessionTitleProjection.storedTitle`), so the sidebar, the
+  window title, the task tools and the remote windows show it the same way. The index keeps the old text until the
+  task's row is next written. A provider's title, the person's name and a name from **Rename from Recent Conversation**
+  are never changed.
+
 A provider title is given once, from the first request (Claude Code writes its `ai-title` in the first turn; Yardlet
 names a new Codex thread the way the Codex app does, `CodexThreadTitle`), so a long task's name stops saying what it is
 about. **Rename from Recent Conversation**, in the row's menu and the task title's menu beside Rename, names it again

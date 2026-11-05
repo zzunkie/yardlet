@@ -117,10 +117,37 @@ final class ChatSidebarTests: XCTestCase {
         XCTAssertEqual(withSplit.chats?.rows.map(\.id), [.split(split.id)], "The split's tasks are not listed again")
     }
 
-    func testAChatRowDropsTheFolderNameFromAFallbackTitle() {
+    /// A chat's folder name (`new-chat-4`) is generated and says nothing about the task, so a chat's
+    /// fallback title leaves it out, and a title Yardlet stored with it before reads without it from
+    /// the index, for every place that shows the task's title.
+    func testAChatsTitleLeavesOutItsFolderName() async throws {
+        XCTAssertEqual(SessionTitleProjection.fallbackTitle(firstUserMessage: "디스크 좀 비우자",
+                                                            workspaceURL: yardletChat, home: home), "디스크 좀 비우자")
+        XCTAssertEqual(SessionTitleProjection.fallbackTitle(firstUserMessage: "앱이 잘 작동하니?",
+                                                            workspaceURL: yardletChat, home: home), "앱이 잘 작동하니")
+        XCTAssertEqual(SessionTitleProjection.fallbackTitle(firstUserMessage: "디스크 좀 비우자",
+                                                            workspaceURL: alpha, home: home), "alpha · 디스크 좀 비우자")
+
+        let root = FileManager.default.temporaryDirectory.appending(path: "chat-titles-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
         let fallback = task("new-chat · Ask about the weather", in: yardletChat, minutesAgo: 0, titleOrigin: .automatic)
-        XCTAssertEqual(SidebarProjection.chatRowTitle(for: SidebarRow(content: .session(fallback))), "Ask about the weather")
+        let korean = task("new-chat 작동 상태 확인", in: yardletChat, minutesAgo: 0, titleOrigin: .automatic)
         let provider = task("new-chat · kept", in: yardletChat, minutesAgo: 0, titleOrigin: .provider)
+        let manual = task("new-chat · kept", in: yardletChat, minutesAgo: 0, titleOrigin: .manual)
+        let inProject = task("alpha · Fix tests", in: alpha, minutesAgo: 0, titleOrigin: .automatic)
+        let writer = try SQLiteSessionRepository(databaseURL: root.appending(path: "sessions.sqlite3"),
+                                                 chatWorkspaceHome: home)
+        for session in [fallback, korean, provider, manual, inProject] { try await writer.upsert(session) }
+        let read = try await SQLiteSessionRepository(databaseURL: root.appending(path: "sessions.sqlite3"),
+                                                     chatWorkspaceHome: home).loadSessions()
+        let titles = Dictionary(uniqueKeysWithValues: read.map { ($0.id, $0.title) })
+        XCTAssertEqual(titles[fallback.id], "Ask about the weather")
+        XCTAssertEqual(titles[korean.id], "작동 상태 확인")
+        XCTAssertEqual(titles[provider.id], "new-chat · kept", "A provider's title shows as it gave it")
+        XCTAssertEqual(titles[manual.id], "new-chat · kept", "A name the person gave shows as given")
+        XCTAssertEqual(titles[inProject.id], "alpha · Fix tests", "A project's folder name stays in its stored title")
+
+        XCTAssertEqual(SidebarProjection.chatRowTitle(for: SidebarRow(content: .session(fallback))), "Ask about the weather")
         XCTAssertEqual(SidebarProjection.chatRowTitle(for: SidebarRow(content: .session(provider))), "new-chat · kept")
     }
 

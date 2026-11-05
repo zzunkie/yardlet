@@ -27,9 +27,13 @@ enum SessionTitleProjection {
 
     /// Providers without title metadata still receive a stable, local title after the first turn.
     /// This is deliberately deterministic: title generation must not consume a hidden model turn.
-    static func fallbackTitle(firstUserMessage: String, workspaceURL: URL) -> String {
+    /// A chat's folder (`ChatWorkspaces`) is a generated name such as `new-chat-4` that says nothing
+    /// about the task, so a chat's title is made from its request alone.
+    static func fallbackTitle(firstUserMessage: String, workspaceURL: URL,
+                              home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
         let provisional = provisionalTitle(from: firstUserMessage)
-        let workspace = collapsedWhitespace(workspaceURL.lastPathComponent)
+        let workspace = ChatWorkspaces.isChat(workspaceURL, home: home)
+            ? "" : collapsedWhitespace(workspaceURL.lastPathComponent)
         let cleaned = cleanedRequest(provisional)
 
         if containsKoreanOperationQuestion(cleaned), !workspace.isEmpty {
@@ -52,22 +56,40 @@ enum SessionTitleProjection {
         guard session.titleOrigin == .automatic || session.titleOrigin == .provisional else {
             return session.title
         }
-        let title = session.title
         var seen = Set<String>()
         let names = projectNames.map(collapsedWhitespace)
             .filter { !$0.isEmpty && seen.insert($0).inserted }
             .sorted { $0.count > $1.count }
         for name in names {
-            if title.hasPrefix(name + " · ") {
-                let rest = title.dropFirst(name.count + 3).trimmingCharacters(in: .whitespaces)
-                if !rest.isEmpty { return rest }
-            }
-            if title == "\(name) \(koreanOperationCheck)" { return koreanOperationCheck }
+            if let rest = removingLeadingName(name, from: session.title) { return rest }
         }
-        return title
+        return session.title
+    }
+
+    /// The title a task in the index reads with. A title Yardlet made for a chat (`automatic` or
+    /// `provisional`) before `fallbackTitle` left a chat's folder out, `new-chat-4 · …`, reads
+    /// without the folder's name, so the sidebar, the window title, the task tools and the remote
+    /// windows all show it the way a new chat's title is made. Any other title reads as stored.
+    static func storedTitle(_ title: String, origin: SessionTitleOrigin, workspaceURL: URL,
+                            home: URL = FileManager.default.homeDirectoryForCurrentUser) -> String {
+        guard origin == .automatic || origin == .provisional,
+              let rest = removingLeadingName(collapsedWhitespace(workspaceURL.lastPathComponent), from: title),
+              ChatWorkspaces.isChat(workspaceURL, home: home) else { return title }
+        return rest
     }
 
     private static let koreanOperationCheck = "작동 상태 확인"
+
+    /// `title` without the folder or project `name` that `fallbackTitle` put before it, or nil
+    /// when the title does not start with it or nothing would be left.
+    private static func removingLeadingName(_ name: String, from title: String) -> String? {
+        guard !name.isEmpty else { return nil }
+        if title.hasPrefix(name + " · ") {
+            let rest = title.dropFirst(name.count + 3).trimmingCharacters(in: .whitespaces)
+            return rest.isEmpty ? nil : rest
+        }
+        return title == "\(name) \(koreanOperationCheck)" ? koreanOperationCheck : nil
+    }
 
     private static func collapsedWhitespace(_ value: String) -> String {
         value.split(whereSeparator: \Character.isWhitespace).joined(separator: " ")
