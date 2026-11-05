@@ -71,7 +71,7 @@ extension RemoteHostPlatform {
     static var current: RemoteHostPlatform {
         RemoteHostPlatform(makeListener: { _, _ in nil }, watchNetwork: { _ in nil }, interfaces: { [] },
                            resolveName: { _ in nil }, isOnPower: { false }, holdAwake: { _ in nil },
-                           computerName: ProcessInfo.processInfo.hostName)
+                           computerName: { ProcessInfo.processInfo.hostName })
     }
 }
 

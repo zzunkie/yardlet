@@ -125,7 +125,7 @@ final class RemoteControlService {
         macName: String? = nil,
         appVersion: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
     ) {
-        let macName = macName ?? platform.computerName
+        let macName = macName ?? platform.computerName()
         self.platform = platform
         self.defaults = defaults
         self.environment = environment
@@ -688,8 +688,9 @@ struct RemoteHostPlatform {
     /// Keeps the computer from sleeping on its own, for the reason given, until the returned release is
     /// called; nil where it cannot.
     var holdAwake: (String) -> (() -> Void)?
-    /// The name phones and other computers see.
-    var computerName: String
+    /// The name phones and other computers see, asked only when the remote is given none: the Mac's can wait on
+    /// a name lookup.
+    var computerName: () -> String
 }
 
 /// A secret the remote keeps in the platform's secure store: the relay account's token (§14.4).
