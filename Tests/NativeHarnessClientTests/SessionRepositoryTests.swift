@@ -37,6 +37,7 @@ final class SessionRepositoryTests: XCTestCase {
             runtimeExecutableURL: URL(filePath: "/tmp/codex"),
             title: "Codex task",
             titleOrigin: .provider,
+            previousTitles: ["Fix the failing calc tests", "Calculator"],
             createdAt: timestamp,
             updatedAt: timestamp,
             providerSessionID: "codex-thread-1",

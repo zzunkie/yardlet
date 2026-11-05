@@ -260,6 +260,12 @@
 "Rename" = "Rename";
 "Rename task" = "Rename task";
 "Rename…" = "Rename…";
+"Rename from Recent Conversation" = "Rename from Recent Conversation";
+"Renaming…" = "Renaming…";
+"This task has no conversation to name it from yet." = "This task has no conversation to name it from yet.";
+"The task could not be renamed from its recent conversation: %@" = "The task could not be renamed from its recent conversation: %@";
+"%@ did not suggest a name." = "%@ did not suggest a name.";
+"%@ did not answer in time." = "%@ did not answer in time.";
 "Queue" = "Queue";
 "Queue or steer" = "Queue or steer";
 "Restart" = "Restart";

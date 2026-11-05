@@ -145,9 +145,9 @@ actor SQLiteSessionRepository: SessionRepository {
         created_at, updated_at, provider_session_id, unread, completion_state,
         environment_scope, pinned, title_origin, provider_options, inherited_context, connection_binding,
         project_id, additional_roots, origin_workspace_path, worktree_name, branch, parent_task_id,
-        lineage_detached
+        lineage_detached, previous_titles
         """
-    private static let recordColumnCount: Int32 = 24
+    private static let recordColumnCount: Int32 = 25
 
     private func record(from statement: OpaquePointer) throws -> SessionRecord {
         let harnessValue = text(statement, column: 1)
@@ -175,6 +175,7 @@ actor SQLiteSessionRepository: SessionRepository {
             runtimeExecutableURL: URL(filePath: text(statement, column: 3)),
             title: text(statement, column: 4),
             titleOrigin: titleOrigin,
+            previousTitles: decodeStringList(optionalText(statement, column: 24) ?? ""),
             status: status,
             createdAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 6)),
             updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 7)),
@@ -190,7 +191,7 @@ actor SQLiteSessionRepository: SessionRepository {
             projectID: sqlite3_column_type(statement, 17) == SQLITE_NULL
                 ? nil
                 : UUID(uuidString: text(statement, column: 17)),
-            additionalRoots: decodeAdditionalRoots(
+            additionalRoots: decodeStringList(
                 sqlite3_column_type(statement, 18) == SQLITE_NULL ? "" : text(statement, column: 18)
             ),
             originWorkspacePath: optionalText(statement, column: 19),
@@ -209,8 +210,8 @@ actor SQLiteSessionRepository: SessionRepository {
                 created_at, updated_at, provider_session_id, unread, completion_state,
                 environment_scope, pinned, title_origin, provider_options, inherited_context, connection_binding,
                 project_id, additional_roots, origin_workspace_path, worktree_name, branch, parent_task_id,
-                lineage_detached, archived
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                lineage_detached, previous_titles, archived
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             ON CONFLICT(id) DO UPDATE SET
                 harness = excluded.harness,
                 workspace_path = excluded.workspace_path,
@@ -233,7 +234,8 @@ actor SQLiteSessionRepository: SessionRepository {
                 worktree_name = excluded.worktree_name,
                 branch = excluded.branch,
                 parent_task_id = excluded.parent_task_id,
-                lineage_detached = excluded.lineage_detached;
+                lineage_detached = excluded.lineage_detached,
+                previous_titles = excluded.previous_titles;
             """
         let statement = try prepare(sql)
         defer { sqlite3_finalize(statement) }
@@ -268,13 +270,15 @@ actor SQLiteSessionRepository: SessionRepository {
         if session.additionalRoots.isEmpty {
             sqlite3_bind_null(statement, 19)
         } else {
-            bind(encodeAdditionalRoots(session.additionalRoots), to: 19, in: statement)
+            bind(encodeStringList(session.additionalRoots), to: 19, in: statement)
         }
         bindOptional(session.originWorkspacePath, to: 20, in: statement)
         bindOptional(session.worktreeName, to: 21, in: statement)
         bindOptional(session.branch, to: 22, in: statement)
         bindOptional(session.parentTaskID?.uuidString, to: 23, in: statement)
         sqlite3_bind_int(statement, 24, session.isLineageDetached ? 1 : 0)
+        bindOptional(session.previousTitles.isEmpty ? nil : encodeStringList(session.previousTitles),
+                     to: 25, in: statement)
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw SessionRepositoryError.statementFailed(errorMessage())
         }
@@ -450,6 +454,9 @@ actor SQLiteSessionRepository: SessionRepository {
         // keep it null until the task reports or its history is read; an earlier build ignores the
         // column, and no save of the task's fields (`upsert`) writes it.
         try addColumnIfMissing(name: "context_usage", definition: "TEXT")
+        // Names the person replaced arrived with renaming from the recent conversation. Existing rows
+        // keep none; an earlier build ignores the column and its saves leave it as it is.
+        try addColumnIfMissing(name: "previous_titles", definition: "TEXT")
     }
 
     private func addColumnIfMissing(name: String, definition: String) throws {
@@ -511,16 +518,16 @@ actor SQLiteSessionRepository: SessionRepository {
         return String(decoding: data, as: UTF8.self)
     }
 
-    private func encodeAdditionalRoots(_ roots: [String]) -> String {
-        guard let data = try? JSONEncoder().encode(roots) else { return "[]" }
+    private func encodeStringList(_ values: [String]) -> String {
+        guard let data = try? JSONEncoder().encode(values) else { return "[]" }
         return String(decoding: data, as: UTF8.self)
     }
 
-    private func decodeAdditionalRoots(_ value: String) -> [String] {
+    private func decodeStringList(_ value: String) -> [String] {
         guard let data = value.data(using: .utf8),
-              let roots = try? JSONDecoder().decode([String].self, from: data)
+              let values = try? JSONDecoder().decode([String].self, from: data)
         else { return [] }
-        return roots
+        return values
     }
 
     private func decodeProviderOptions(_ value: String) -> [String: String] {

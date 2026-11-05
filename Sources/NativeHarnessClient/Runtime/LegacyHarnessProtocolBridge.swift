@@ -759,6 +759,16 @@ actor LegacyHarnessProtocolBridge {
             try await provider.renameProviderSession(handle, to: params.name)
             return try acknowledgement()
         }
+        if request.method == .codexTaskTitleSuggest {
+            let params = try request.decodeParams(HarnessProtocolCodexTaskTitleSuggestParams.self)
+            guard let provider = adapter as? any HarnessTaskTitleSuggesting else {
+                throw HarnessAdapterError.capabilityUnavailable(
+                    "This compatibility adapter does not name tasks from their conversation"
+                )
+            }
+            return try payloadCodec.encode(HarnessProtocolCodexTaskTitleSuggestResult(
+                title: try await provider.suggestTaskTitle(fromRecentConversation: params.excerpt)))
+        }
         if request.method == .codexThreadUnarchive {
             let params = try request.decodeParams(HarnessProtocolCodexThreadReference.self)
             guard let provider = adapter as? any HarnessSessionLifecycleProviding else {

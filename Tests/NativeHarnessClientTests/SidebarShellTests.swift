@@ -323,6 +323,49 @@ final class SidebarShellTests: XCTestCase {
                        "Archived tasks moved into the account menu: \(elements)")
         XCTAssertTrue(elements.contains { $0.label == L10n.format("Project %@", "Website") })
         XCTAssertTrue(elements.contains { $0.label == L10n.string("Restart to update") }, "\(elements)")
+        let renamingRow = try XCTUnwrap(elements.first { $0.label.hasPrefix(fixture.renaming.title) }, "\(elements)")
+        XCTAssertTrue(renamingRow.value.contains(L10n.string("Renaming…")), "\(renamingRow)")
+
+        // "Rename from Recent Conversation" beside Rename… in the row's menu and the title's, as macOS
+        // lists the items; offered once at a time, and only for a harness that can name a task.
+        for (name, session) in [("claude", fixture.renaming), ("codex", Self.copy(of: fixture.renaming, harness: .codex)),
+                                ("renaming", fixture.renaming)] {
+            let renaming: Set<UUID> = name == "renaming" ? [session.id] : []
+            let row = SidebarTaskEntry(session: session, title: session.title, isSelected: false, onSelect: {},
+                onTogglePinned: { _ in }, onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in },
+                onRenameFromConversation: { _ in }, onMarkRead: { _ in }, onMarkUnread: { _ in },
+                projectMove: .none, onMoveToProject: { _ in }, onDropTask: nil)
+            let actions = TaskHeaderActions(onRenameFromConversation: { _ in })
+            try WindowlessRender.hostedInBothAppearances("rename-menus-\(name)", in: directory,
+                                                         size: NSSize(width: 560, height: 300)) { appearance in
+                HStack(alignment: .top, spacing: 24) {
+                    VStack(alignment: .leading, spacing: 8) { row.menuContents }
+                    VStack(alignment: .leading, spacing: 8) { TaskTitleMenu(session: session, actions: actions).menuContents }
+                }
+                // Borderless items dim when disabled, as the menu's do.
+                .buttonStyle(.borderless).font(.system(size: 13))
+                .environment(\.renamingTaskIDs, renaming)
+                .environment(\.colorScheme, appearance.colorScheme)
+                .padding(12).frame(width: 560, height: 300, alignment: .topLeading)
+                .background(ParityTheme.canvas)
+            }
+            let menus = WindowlessRender.Host(
+                VStack(alignment: .leading) { row.menuContents; TaskTitleMenu(session: session, actions: actions).menuContents }
+                    .environment(\.renamingTaskIDs, renaming),
+                size: NSSize(width: 320, height: 600))
+            menus.settle()
+            let items = menus.accessibilityElements().filter { $0.label == L10n.string("Rename from Recent Conversation") }
+            menus.close()
+            XCTAssertEqual(items.count, 2, "\(name): \(items)")
+        }
+        let grokRow = SidebarTaskEntry(session: Self.copy(of: fixture.renaming, harness: .grokBuild), title: "Grok", isSelected: false,
+            onSelect: {}, onTogglePinned: { _ in }, onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in },
+            onRenameFromConversation: { _ in }, onMarkRead: { _ in }, onMarkUnread: { _ in },
+            projectMove: .none, onMoveToProject: { _ in }, onDropTask: nil)
+        let grok = WindowlessRender.Host(VStack { grokRow.menuContents }, size: NSSize(width: 320, height: 400))
+        grok.settle()
+        XCTAssertFalse(grok.accessibilityElements().contains { $0.label == L10n.string("Rename from Recent Conversation") })
+        grok.close()
 
         try WindowlessRender.hostedInBothAppearances("account-button", in: directory,
                                                      size: NSSize(width: 240, height: 220)) { appearance in
@@ -437,6 +480,12 @@ final class SidebarShellTests: XCTestCase {
 
     // MARK: - Fixture
 
+    private static func copy(of session: SessionRecord, harness: HarnessKind) -> SessionRecord {
+        SessionRecord(harness: harness, workspaceURL: session.workspaceURL,
+                      runtimeExecutableURL: session.runtimeExecutableURL, title: session.title,
+                      titleOrigin: session.titleOrigin, updatedAt: session.updatedAt)
+    }
+
     private func task(_ title: String, _ harness: HarnessKind, in folder: URL, minutesAgo: Double,
                       status: SessionStatus = .ready, unread: Bool = false, pinned: Bool = false,
                       parent: SessionRecord? = nil) -> SessionRecord {
@@ -467,6 +516,8 @@ final class SidebarShellTests: XCTestCase {
         let disclosure: SidebarDisclosureStore
         let details: [UUID: TaskAttentionDetail]
         let waiting: Set<UUID>
+        /// A task being renamed from its recent conversation, whose row shows it at work.
+        let renaming: SessionRecord
         let pullRequests = TaskPullRequestMonitor()
         let resources = TaskResourceMonitor(table: FakeProcessTable())
 
@@ -515,6 +566,7 @@ final class SidebarShellTests: XCTestCase {
             selection = .session(review.id)
             details = [waiting.id: TaskAttentionDetail(pendingRequest: .approval)]
             self.waiting = [waiting.id]
+            renaming = merged
             layout = SidebarProjection.layout(visibleGroups: groups, allGroups: groups, chats: chats, splits: [],
                                               isFiltering: false, disclosure: disclosure.disclosure,
                                               selection: selection, waiting: [waiting.id])
@@ -558,8 +610,10 @@ final class SidebarShellTests: XCTestCase {
                 searchText: .constant(""), onNewTask: {}, onActivate: { _ in }, onNewTaskInProject: { _ in },
                 projects: projects, onEditProject: { _ in }, onArchiveProjectChats: { _ in },
                 onRemoveProject: { _ in }, onTogglePinned: { _ in }, onArchive: { _ in }, onDelete: { _ in },
-                onRename: { _ in }, onMarkRead: { _ in }, accountMenu: accountMenu, disclosure: disclosure)
+                onRename: { _ in }, onRenameFromConversation: { _ in }, onMarkRead: { _ in }, accountMenu: accountMenu,
+                disclosure: disclosure)
                 .environment(\.taskAttentionDetails, details)
+                .environment(\.renamingTaskIDs, [renaming.id])
                 .environment(pullRequests)
                 .environment(resources)
                 .background(ParityTheme.sidebar)

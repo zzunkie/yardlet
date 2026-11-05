@@ -819,6 +819,14 @@ extension YHPCodexCompatibilityAdapter: HarnessSessionLifecycleProviding {
     }
 }
 
+extension YHPCodexCompatibilityAdapter: HarnessTaskTitleSuggesting {
+    func suggestTaskTitle(fromRecentConversation excerpt: String) async throws -> String {
+        let result: HarnessProtocolCodexTaskTitleSuggestResult = try await core.perform(
+            .codexTaskTitleSuggest, params: HarnessProtocolCodexTaskTitleSuggestParams(excerpt: excerpt))
+        return result.title
+    }
+}
+
 /// A Codex task forks its attached thread through YHP (`yardlet.codex.session.fork`).
 extension YHPCodexCompatibilityAdapter: HarnessSessionBranching {
     nonisolated var sessionBranchMethod: HarnessSessionBranchMethod? { .attachedSession }

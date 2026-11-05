@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Narrows the archived list the way the sidebar search narrows tasks, by title, project, and
-/// harness. Archived tasks keep no local transcript, so there is no conversation text to match.
+/// Narrows the archived list the way the sidebar search narrows tasks, by title (a name the person
+/// replaced too), project, and harness. Archived tasks keep no local transcript, so there is no
+/// conversation text to match.
 enum ArchivedTaskFilter {
     static func matches(
         _ archived: [ArchivedSessionRecord],
@@ -11,7 +12,8 @@ enum ArchivedTaskFilter {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return archived }
         return archived.filter { record in
-            [record.session.title, projectName(record.session), record.session.harness.displayName]
+            ([record.session.title, projectName(record.session), record.session.harness.displayName]
+                + record.session.previousTitles)
                 .contains { $0.localizedCaseInsensitiveContains(query) }
         }
     }

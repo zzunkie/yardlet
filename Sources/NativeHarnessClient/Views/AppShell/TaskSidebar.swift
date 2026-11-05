@@ -13,6 +13,10 @@ private struct ScheduledTaskIDsKey: EnvironmentKey {
     static let defaultValue: Set<UUID> = []
 }
 
+private struct RenamingTaskIDsKey: EnvironmentKey {
+    static let defaultValue: Set<UUID> = []
+}
+
 /// Opens a sidebar row's item in a new window tab (the row menu's "Open in New Tab"). The window
 /// hands down one action, so its redraws leave the rows that read it alone.
 struct WindowItemNewTabAction: Equatable {
@@ -113,6 +117,13 @@ extension EnvironmentValues {
     var scheduledTaskIDs: Set<UUID> {
         get { self[ScheduledTaskIDsKey.self] }
         set { self[ScheduledTaskIDsKey.self] = newValue }
+    }
+
+    /// Tasks being renamed from their recent conversation (`AppModel.renamingFromConversationIDs`),
+    /// which their row shows at work and their menus offer no second time.
+    var renamingTaskIDs: Set<UUID> {
+        get { self[RenamingTaskIDsKey.self] }
+        set { self[RenamingTaskIDsKey.self] = newValue }
     }
 
     /// The pointer rests on a task's row: its saved conversation can be read before it is opened
@@ -237,6 +248,9 @@ struct TaskSidebar: View {
     /// its menu item shows dimmed.
     let onDelete: ((SessionRecord) -> Void)?
     let onRename: ((SessionRecord) -> Void)?
+    /// "Rename from Recent Conversation", for a task whose harness offers it; nil where the window
+    /// cannot take it, and the item is left out.
+    var onRenameFromConversation: ((SessionRecord) -> Void)? = nil
     let onMarkRead: ((SessionRecord) -> Void)?
     var onMarkUnread: ((SessionRecord) -> Void)? = { _ in }
     /// Moves a task to a project, or back to Chats (nil), from its row's context menu.
@@ -621,6 +635,7 @@ struct TaskSidebar: View {
                     onArchive: onArchive,
                     onDelete: onDelete,
                     onRename: onRename,
+                    onRenameFromConversation: onRenameFromConversation,
                     onMarkRead: onMarkRead,
                     onMarkUnread: onMarkUnread,
                     projectMove: remoteProjectMoveOptions?(session) ?? TaskProjectMove.options(
@@ -718,6 +733,7 @@ struct TaskSidebar: View {
                 onArchive: onArchive,
                 onDelete: onDelete,
                 onRename: onRename,
+                onRenameFromConversation: onRenameFromConversation,
                 onMarkRead: onMarkRead,
                 onMarkUnread: onMarkUnread,
                 projectMove: remoteProjectMoveOptions?(session) ?? TaskProjectMove.options(
@@ -1248,6 +1264,7 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
     let onArchive: (SessionRecord) -> Void
     let onDelete: ((SessionRecord) -> Void)?
     let onRename: ((SessionRecord) -> Void)?
+    var onRenameFromConversation: ((SessionRecord) -> Void)? = nil
     let onMarkRead: ((SessionRecord) -> Void)?
     let onMarkUnread: ((SessionRecord) -> Void)?
     /// The projects the task can move to and whether it can go back to Chats.
@@ -1279,6 +1296,7 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
             && lhs.isSelected == rhs.isSelected && lhs.projectMove == rhs.projectMove
             && lhs.nesting === rhs.nesting
             && (lhs.onRename != nil) == (rhs.onRename != nil)
+            && (lhs.onRenameFromConversation != nil) == (rhs.onRenameFromConversation != nil)
             && (lhs.onDelete != nil) == (rhs.onDelete != nil)
             && (lhs.onMarkRead != nil) == (rhs.onMarkRead != nil)
             && (lhs.onMarkUnread != nil) == (rhs.onMarkUnread != nil)
@@ -1303,6 +1321,9 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
             }
             Button(L10n.string("Rename…")) { onRename?(session) }
                 .disabled(onRename == nil)
+            if let onRenameFromConversation {
+                RenameFromConversationMenuItem(session: session, action: onRenameFromConversation)
+            }
             if session.hasUnreadUpdate {
                 Button(L10n.string("Mark task as read")) { onMarkRead?(session) }
                     .disabled(onMarkRead == nil)
@@ -1365,6 +1386,22 @@ struct SidebarTaskEntry: View, @MainActor Equatable {
         .id("\(session.id):\(session.isPinned):\(session.projectID?.uuidString ?? "-"):"
             + "\(session.parentTaskID?.uuidString ?? "-"):"
             + (familyToggle.map { $0.isCollapsed ? "hidden" : "shown" } ?? "-"))
+    }
+}
+
+/// "Rename from Recent Conversation" in a task's row menu and title menu: offered for a harness that
+/// can name a task (`RecentConversationTitle`), and dimmed while the task is being renamed.
+struct RenameFromConversationMenuItem: View {
+    let session: SessionRecord
+    var isDisabled = false
+    let action: (SessionRecord) -> Void
+    @Environment(\.renamingTaskIDs) private var renamingTaskIDs
+
+    var body: some View {
+        if RecentConversationTitle.isOffered(for: session.harness) {
+            Button(L10n.string("Rename from Recent Conversation")) { action(session) }
+                .disabled(isDisabled || renamingTaskIDs.contains(session.id))
+        }
     }
 }
 
@@ -1866,6 +1903,7 @@ private struct TaskRow: View {
     @Environment(\.shellBusyTaskIDs) private var shellBusyTaskIDs
     @Environment(\.taskAttentionDetails) private var attentionDetails
     @Environment(\.scheduledTaskIDs) private var scheduledTaskIDs
+    @Environment(\.renamingTaskIDs) private var renamingTaskIDs
     @Environment(TaskResourceMonitor.self) private var resources: TaskResourceMonitor?
     @Environment(TaskPullRequestMonitor.self) private var pullRequests: TaskPullRequestMonitor?
     @Environment(AccountAssignmentLog.self) private var accountAssignments: AccountAssignmentLog?
@@ -1883,6 +1921,10 @@ private struct TaskRow: View {
     }
 
     private var isScheduledRun: Bool { scheduledTaskIDs.contains(session.id) }
+    /// Renaming from the recent conversation: the row shows it at work in place of its marks and its
+    /// hover buttons, as an archived row being restored does.
+    private var isRenaming: Bool { renamingTaskIDs.contains(session.id) }
+    private var showsHoverActions: Bool { isHovering && !isRenaming }
 
     private var cpuPercent: Int? {
         resources.flatMap { SidebarTaskIndicatorProjection.cpuPercent(for: [session.id], busyCPU: $0.busyCPU(of: [session.id])) }
@@ -1917,6 +1959,7 @@ private struct TaskRow: View {
     /// whatever the mark shows.
     private var accessibilityStatus: String {
         var parts = [status.map(\.accessibilityName) ?? session.status.displayName]
+        if isRenaming { parts.append(L10n.string("Renaming…")) }
         if session.hasUnreadUpdate, status != .unread { parts.append(SidebarTaskStatus.unread.accessibilityName) }
         if let subtitle { parts.append(subtitle) }
         if isScheduledRun { parts.append(L10n.string("Scheduled task")) }
@@ -1961,11 +2004,18 @@ private struct TaskRow: View {
                             .accessibilityHidden(true)
                     }
                     Spacer(minLength: 3)
-                    if !isHovering {
+                    if isRenaming {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .frame(width: 14, height: 14)
+                            .help(L10n.string("Renaming…"))
+                            // The row's value says it.
+                            .accessibilityHidden(true)
+                    } else if !isHovering {
                         SidebarRowTrailingItemsView(items: trailingItems)
                     }
                 }
-                .padding(.trailing, isHovering ? 53 : SidebarMetrics.rowTrailingPadding)
+                .padding(.trailing, showsHoverActions ? 53 : SidebarMetrics.rowTrailingPadding)
                 .frame(height: rowHeight)
                 .contentShape(Rectangle())
                 .background(alignment: .leading) {
@@ -1985,7 +2035,7 @@ private struct TaskRow: View {
             .accessibilityValue(accessibilityStatus)
             .accessibilityAddTraits(isSelected ? .isSelected : [])
 
-            if isHovering {
+            if showsHoverActions {
                 HStack(spacing: 1) {
                     TaskRowActionButton(
                         systemName: session.isPinned ? "pin.fill" : "pin",

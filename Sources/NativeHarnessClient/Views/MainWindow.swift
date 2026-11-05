@@ -354,6 +354,10 @@ struct MainWindow: View {
         harnessSettingsSession = session
     }
 
+    private func renameFromRecentConversation(_ session: SessionRecord) {
+        Task { await model.renameFromRecentConversation(session) }
+    }
+
     private func presentTaskRename(_ session: SessionRecord) {
         rememberShellFocus()
         taskRenamePresentationID = UUID()
@@ -785,6 +789,7 @@ struct MainWindow: View {
             isAttached: { model.isAttached($0.id) },
             onResume: { session in Task { await model.resume(session) } },
             onRename: presentTaskRename,
+            onRenameFromConversation: renameFromRecentConversation,
             onTogglePinned: { session in Task { await model.togglePinned(session) } },
             onArchive: { session in Task { await model.archive(session) } },
             onBackToConversation: returnToConversation,
@@ -1974,6 +1979,7 @@ struct MainWindow: View {
                         onArchive: { session in Task { await model.archive(session) } },
                         onDelete: { session in rememberShellFocus(); sessionToDelete = session },
                         onRename: presentTaskRename,
+                        onRenameFromConversation: renameFromRecentConversation,
                         onMarkRead: { session in Task { await model.store.markRead(id: session.id) } },
                         onMarkUnread: { session in Task { await model.store.markUnread(id: session.id) } },
                         onMoveToProject: moveTask,
@@ -2233,6 +2239,7 @@ struct MainWindow: View {
             onNewTask: showNewTask,
             onResume: { session in Task { await model.resume(session) } },
             onRename: presentTaskRename,
+            onRenameFromConversation: renameFromRecentConversation,
             onTogglePinned: { session in Task { await model.togglePinned(session) } },
             onArchive: { session in Task { await model.archive(session) } },
             onBackToConversation: returnToConversation,
@@ -2588,6 +2595,7 @@ struct MainWindow: View {
         let _ = ViewBodyCensus.note(.mainWindow)
 #endif
         shellPresentedContent
+        .environment(\.renamingTaskIDs, model.renamingFromConversationIDs)
         .sheet(item: Binding(
             get: { projectToEdit.map { ProjectEditPresentation(id: $0) } },
             set: { if $0 == nil { projectToEdit = nil } }

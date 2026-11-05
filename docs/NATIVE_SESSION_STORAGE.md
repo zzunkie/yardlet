@@ -280,6 +280,35 @@ sources use the same rules for applying a title.
 - Attaching a task, the start and ready status reports the runtime sends on attach (when no turn was in progress), and
   saving settings such as model, reasoning and mode do not change `updatedAt` either. Recent activity is sending, a turn
   in progress, waiting for approval, completion, failure and renaming.
+- A rename by the person keeps the replaced name in the index (`previous_titles`, the last five, newest last), and the
+  sidebar and archived-task searches still find the task by it. A provider's next title replaces its last without
+  keeping it.
+
+A provider title is given once, from the first request (Claude Code writes its `ai-title` in the first turn; Yardlet
+names a new Codex thread the way the Codex app does, `CodexThreadTitle`), so a long task's name stops saying what it is
+about. **Rename from Recent Conversation**, in the row's menu and the task title's menu beside Rename, names it again
+on request (`RecentConversationTitle`). It is offered for Claude Code and Codex; other harnesses have no
+non-interactive way to run their small model without the person's tools, and the item is left out for them.
+
+- **Input:** the person's messages and the start of the closing answers of the latest four turns with words, about
+  3,000 characters at most, read the way opening the task reads its saved conversation. The prompt keeps the
+  first-request rules: plain text in the conversation's language, at most 36 characters and about five words.
+- **Side call:** on the task's own account, in an empty temporary folder that is removed afterwards. Claude Code runs
+  `claude -p` once with the newest Haiku in the account's model list (the `haiku` alias, which the CLI resolves, unless
+  a newer Haiku is listed by its full ID), `--safe-mode` (no CLAUDE.md, skills, plugins, hooks or MCP servers),
+  `--tools ""`, `--strict-mcp-config`, `--disable-slash-commands`, `--no-session-persistence`, a one-line
+  `--system-prompt` and `MAX_THINKING_TOKENS=0`; the conversation goes in on standard input. `--bare` is not used
+  because it signs in only with an API key. Codex runs one turn of the newest luna model in the account's `model/list`
+  (the App Server's default model when none is listed) on an ephemeral, read-only side thread of the account's App
+  Server, attached or not, with a one-line `baseInstructions`, the features the first-request side thread leaves out,
+  no skills list, memories, or permission, app and environment context, and each MCP server that `config/read`
+  reports turned off by name (an empty `mcp_servers` table would leave them on). Codex still sends the account's own
+  AGENTS.md and its built-in tools there, as on its first-request title thread; no setting leaves them out. Neither
+  call is written to the task's history, and no turn starts in the task.
+- **Result:** applied through Rename, so the title becomes the person's (`manual`), an attached Codex thread gets the
+  name with `thread/name/set`, and the previous name stays searchable. The row shows a spinner while the call runs.
+  A failure, or a task with no conversation yet, leaves the name as it was and says why; a name the person gives the
+  task meanwhile is kept.
 
 ## Archive and unarchive
 

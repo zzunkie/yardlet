@@ -102,8 +102,9 @@ enum TaskNavigationProjection {
         }
     }
 
-    /// The tasks whose title, harness or conversation contains the query, as the groups' tasks
-    /// are searched. The Chats section is searched this way; a chat's folder name is not.
+    /// The tasks whose title, a name the person replaced, harness or conversation contains the
+    /// query, as the groups' tasks are searched. The Chats section is searched this way; a chat's
+    /// folder name is not.
     static func filteredSessions(
         _ sessions: [SessionRecord],
         query: String,
@@ -115,6 +116,7 @@ enum TaskNavigationProjection {
         guard !trimmed.isEmpty else { return sessions }
         return sessions.filter { session in
             if session.title.localizedCaseInsensitiveContains(trimmed)
+                || session.previousTitles.contains(where: { $0.localizedCaseInsensitiveContains(trimmed) })
                 || session.harness.displayName.localizedCaseInsensitiveContains(trimmed) { return true }
             let transcript = transcripts[session.id], codex = codexPresentation[session.id]
             func search() -> Bool {

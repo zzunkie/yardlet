@@ -14,6 +14,8 @@ struct TaskHeaderActions {
     var isAttached: (SessionRecord) -> Bool = { _ in false }
     var onResume: (SessionRecord) -> Void = { _ in }
     var onRename: (SessionRecord) -> Void = { _ in }
+    /// "Rename from Recent Conversation"; nil leaves the item out (`TaskSidebar.onRenameFromConversation`).
+    var onRenameFromConversation: ((SessionRecord) -> Void)? = nil
     var onTogglePinned: (SessionRecord) -> Void = { _ in }
     var onArchive: (SessionRecord) -> Void = { _ in }
     var onBackToConversation: (SessionRecord) -> Void = { _ in }
@@ -92,6 +94,10 @@ struct TaskTitleMenu: View {
             Divider()
         }
         Button(L10n.string("Rename task")) { actions.onRename(session) }.disabled(!actions.canManageTask)
+        if let onRenameFromConversation = actions.onRenameFromConversation {
+            RenameFromConversationMenuItem(session: session, isDisabled: !actions.canManageTask,
+                                           action: onRenameFromConversation)
+        }
         Button(L10n.string(session.isPinned ? "Unpin" : "Pin")) { actions.onTogglePinned(session) }
         TaskProjectMoveMenuItems(options: actions.projectMoveOptions(session)) { actions.onMoveToProject(session, $0) }
             .disabled(!actions.canManageTask)
