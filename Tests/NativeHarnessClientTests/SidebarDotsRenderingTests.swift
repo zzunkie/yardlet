@@ -37,7 +37,8 @@ final class SidebarDotsRenderingTests: XCTestCase {
                          details: [UUID: TaskAttentionDetail], splits: [SplitGroup] = [], collapsed: Set<String> = [],
                          selected: SessionRecord?, waiting: Set<UUID> = [],
                          archivedParents: [UUID: UUID] = [:], rowLimit: Int? = nil,
-                         onNest: @escaping (UUID, UUID?) -> Void = { _, _ in }) -> some View {
+                         onNest: @escaping (UUID, UUID?) -> Void = { _, _ in },
+                         onActivate: @escaping (WindowItem) -> Void = { _ in }) -> some View {
         let groups = projects.visibleGroups(sessions: sessions)
         let selection = selected.map { WindowItem.session($0.id) } ?? .home
         let disclosure = SidebarDisclosureStore(defaults: UserDefaults(suiteName: testDefaultsSuite("SidebarDots"))!)
@@ -47,7 +48,7 @@ final class SidebarDotsRenderingTests: XCTestCase {
             disclosure: SidebarDisclosure(collapsedKeys: collapsed, rowLimit: rowLimit), selection: selection,
             waiting: waiting, archivedParents: archivedParents)
         return TaskSidebar(layout: layout, allGroups: groups, isRestoring: false, selection: selection,
-            searchText: .constant(""), onNewTask: {}, onActivate: { _ in }, onNewTaskInProject: { _ in },
+            searchText: .constant(""), onNewTask: {}, onActivate: onActivate, onNewTaskInProject: { _ in },
             projects: projects, onEditProject: { _ in },
             onArchiveProjectChats: { _ in }, onRemoveProject: { _ in }, onTogglePinned: { _ in },
             onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in }, onMarkRead: { _ in },
@@ -55,6 +56,8 @@ final class SidebarDotsRenderingTests: XCTestCase {
             .environment(monitor)
             .environment(pullRequests)
             .environment(\.taskAttentionDetails, details)
+            // The window's monochrome tint (`MainWindow`), which colours the rows' controls.
+            .tint(Color.primary)
     }
 
     private func render(_ name: String, height: CGFloat, _ view: some View) throws -> [WindowlessRender.AccessibilityElement] {
@@ -228,11 +231,14 @@ final class SidebarDotsRenderingTests: XCTestCase {
 
     // MARK: - Moving a task among the families
 
-    /// A task dragged over a row shows where it would go, through SwiftUI's own drop path in an unshown
-    /// window: the row outlined while it would go under it, a line at the row's level along its edge
-    /// while it would go beside it, nothing over a task under it. A drop moves it there, and the row's
-    /// menu offers the same moves. On a long list a drag draws again only the row it is over. Drawn into
-    /// `.build/sidebar-dots-qa`, light and dark:
+    /// A row pressed and moved past the drag threshold starts a drag that carries its task, and a click
+    /// shows the task without one, through mouse events sent to a window ordered in transparent and off
+    /// screen; the drag session the row asks AppKit for is recorded rather than begun
+    /// (`RecordedDragSessions`). A task dragged over a row shows where it would go, through SwiftUI's own
+    /// drop path in an unshown window: the row outlined while it would go under it, a line at the row's
+    /// level along its edge while it would go beside it, nothing over a task under it. A drop moves it
+    /// there, and the row's menu offers the same moves. On a long list a drag draws again only the row it
+    /// is over. Drawn into `.build/sidebar-dots-qa`, light and dark:
     ///
     /// - `nest-drag-under-*.png`: "Write the notes" dragged onto "Tag the build".
     /// - `nest-drag-beside-*.png`: "Check the tag" dragged to the bottom edge of "Tag the build", to go
@@ -251,12 +257,13 @@ final class SidebarDotsRenderingTests: XCTestCase {
         let docs = task("Update the docs", .codex, in: yardlet)
         let store = SessionStore(sessions: [plan, tag, check, notes, docs])
         var moves: [String] = []
+        var shown: [WindowItem] = []
         let names = Dictionary(store.sessions.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
         func view(_ scheme: ColorScheme) -> some View {
-            sidebar(projects: projects, sessions: store.sessions, details: [:], selected: plan) { task, parent in
+            sidebar(projects: projects, sessions: store.sessions, details: [:], selected: plan, onNest: { task, parent in
                 moves.append("\(names[task] ?? "") → \(parent.flatMap { names[$0] } ?? "top level")")
                 Task { try? await store.nest(id: task, under: parent) }
-            }
+            }, onActivate: { shown.append($0) })
             .environment(\.colorScheme, scheme)
             .frame(width: ParityTheme.sidebarWidth, height: 360, alignment: .top)
             .background(ParityTheme.sidebar)
@@ -298,13 +305,46 @@ final class SidebarDotsRenderingTests: XCTestCase {
             XCTAssertTrue(moves.isEmpty, "Passing over a row moves nothing")
         }
 
-        // A drop moves the task where the row showed.
+        // A click on "Write the notes" shows it; pressed and moved, the row starts the task's drag.
+        let sessions = try RecordedDragSessions()
+        defer { sessions.restore() }
+        do {
+            let pressed = WindowlessRender.Host(view(.light), size: size, appearance: .light)
+            defer { pressed.close() }
+            pressed.window.alphaValue = 0
+            pressed.window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
+            pressed.window.orderFrontRegardless()
+            pressed.settle()
+            let row = try rowFrames([notes.title], in: pressed)[0]
+            let start = NSPoint(x: row.minX + 60, y: size.height - row.midY)
+            press(at: start, in: pressed)
+            XCTAssertEqual(shown, [.session(notes.id)], "a click shows the task")
+            XCTAssertTrue(sessions.items.isEmpty, "a click starts no drag")
+            // Along the row, so a press the drag did not take would let go on the row and show it again.
+            press(at: start, movingBy: CGSize(width: 32, height: 0), in: pressed)
+            XCTAssertEqual(shown, [.session(notes.id)], "a drag shows nothing")
+            XCTAssertEqual(sessions.items.count, 1, "the row's drag starts")
+            sessions.endAll()
+            pressed.settle(passes: 2)
+            let item = try XCTUnwrap(sessions.items.first?.first?.item as? NSPasteboardWriting)
+            // What the drag's pasteboard holds for a drop, as `TaskRowDrag` writes it below.
+            let pasteboard = NSPasteboard(name: NSPasteboard.Name("yardlet-test-drag-\(UUID().uuidString)"))
+            defer { pasteboard.releaseGlobally() }
+            pasteboard.clearContents()
+            XCTAssertTrue(pasteboard.writeObjects([item]))
+            let written = try XCTUnwrap(pasteboard.data(
+                forType: NSPasteboard.PasteboardType(UTType.yardletTaskReference.identifier)))
+            XCTAssertEqual(try JSONDecoder().decode(TaskDragItem.self, from: written).sessionID, notes.id,
+                           "the drag carries the task")
+        }
+        XCTAssertEqual(SidebarNesting.draggedTaskID, notes.id, "a row passed over reads the task dragged")
+
+        // A drop on "Tag the build" moves the task where the row showed.
         let host = WindowlessRender.Host(view(.light), size: size, appearance: .light)
         defer { host.close() }
         host.settle()
         let rows = Dictionary(uniqueKeysWithValues: zip(titles, try rowFrames(titles, in: host)))
         let onTag = NSPoint(x: rows[tag.title]!.midX, y: size.height - rows[tag.title]!.minY - 15)
-        _ = SidebarNesting.dragging(notes.id)
         let drag = try TaskRowDrag(notes.id, at: onTag, in: host.window)
         defer { drag.close() }
         let destination = try XCTUnwrap(drag.destination(in: host.hosting))
@@ -564,6 +604,32 @@ final class SidebarDotsRenderingTests: XCTestCase {
         }
     }
 
+    /// A press at `start` (in the window's coordinates), moved by `distance` in eight steps and let go,
+    /// as the person's button would: the press goes to the window, and the moves and the release wait
+    /// in the app's queue for whatever follows the press. Nothing goes to the system.
+    private func press(at start: NSPoint, movingBy distance: CGSize = .zero,
+                       in host: WindowlessRender.Host<some View>) {
+        func event(_ type: NSEvent.EventType, _ fraction: CGFloat) -> NSEvent {
+            NSEvent.mouseEvent(
+                with: type,
+                location: NSPoint(x: start.x + distance.width * fraction, y: start.y + distance.height * fraction),
+                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: host.window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                pressure: type == .leftMouseUp ? 0 : 1)!
+        }
+        if distance != .zero {
+            for step in 1...8 { NSApp.postEvent(event(.leftMouseDragged, CGFloat(step) / 8), atStart: false) }
+        }
+        NSApp.postEvent(event(.leftMouseUp, 1), atStart: false)
+        host.window.sendEvent(event(.leftMouseDown, 0))
+        while let next = NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp], until: Date(), inMode: .default,
+                                         dequeue: true) {
+            host.window.sendEvent(next)
+            host.settle(passes: 1, interval: 0.02)
+        }
+        host.settle()
+    }
+
     /// The list scrolled to `y`, as its scroll view moves it.
     private func scrollList(_ scroll: NSScrollView, to y: CGFloat, in host: WindowlessRender.Host<some View>) async {
         scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
@@ -589,6 +655,47 @@ final class SidebarDotsRenderingTests: XCTestCase {
         }
         visit(root)
         return found
+    }
+}
+
+/// The drag sessions a pressed view asks AppKit for, recorded in place of begun: a session begun for
+/// real would follow the pointer on the real screen. SwiftUI starts a row's drag from its lift gesture
+/// (`beginDraggingSession(with:gesture:source:)`); the event form is recorded too.
+@MainActor
+private final class RecordedDragSessions {
+    /// Each session's dragging items, in the order asked.
+    private(set) var items: [[NSDraggingItem]] = []
+    private var open: [(NSDraggingSession, NSDraggingSource)] = []
+    private var restores: [() -> Void] = []
+
+    init() throws {
+        let methods = ["beginDraggingSessionWithItems:gesture:source:", "beginDraggingSessionWithItems:event:source:"]
+            .compactMap { class_getInstanceMethod(NSView.self, NSSelectorFromString($0)) }
+        _ = try XCTUnwrap(methods.first, "AppKit has no drag session to record")
+        for method in methods {
+            let original = method_getImplementation(method)
+            let record: @convention(block) (NSView, [NSDraggingItem], AnyObject, AnyObject) -> NSDraggingSession = {
+                [weak self] _, items, _, source in
+                let session = (NSDraggingSession.self as NSObject.Type).init() as! NSDraggingSession
+                self?.items.append(items)
+                if let source = source as? NSDraggingSource { self?.open.append((session, source)) }
+                return session
+            }
+            method_setImplementation(method, imp_implementationWithBlock(record))
+            restores.append { method_setImplementation(method, original) }
+        }
+    }
+
+    /// Ends each session as a drag let go where nothing takes it, so its source stops dragging.
+    func endAll() {
+        for (session, source) in open { source.draggingSession?(session, endedAt: .zero, operation: []) }
+        open = []
+    }
+
+    func restore() {
+        endAll()
+        restores.forEach { $0() }
+        restores = []
     }
 }
 
