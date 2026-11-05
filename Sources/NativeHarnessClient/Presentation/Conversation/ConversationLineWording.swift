@@ -335,6 +335,7 @@ enum ConversationLineWording {
         // Already worded where it came from: shown as it is.
         if case let .worded(lines) = tool.kind { return lines.first ?? ConversationLineWords(verb: "") }
         let verb = tool.kind.label
+        if case let .activity(kind) = tool.kind, let words = titleSaying(kind, tool.name) { return words }
         let subject = tool.name.isEmpty || tool.name == verb ? "" : relative(tool.name, to: workspaceURL)
         switch tool.kind {
         // The image itself shows at the line's end; the words say what Codex did with it, as the Codex
@@ -348,6 +349,24 @@ enum ConversationLineWording {
         default:
             return ConversationLineWords(verb: verb, trailing: subject)
         }
+    }
+
+    /// A title that already says what its kind does, as ACP agents word theirs ("Read `README.md`" or
+    /// "Reading README.md" for `read`, "Execute `ls`" for `execute`): the line itself, its first word the verb.
+    /// That word, up to any punctuation or backtick at its end, must be a form of the kind: the kind itself, or
+    /// with -s, -ing or -ed (-ing without the final e and -d for a kind ending in e), in any case. Nil for a
+    /// title that names only what the call works on ("README.md", "Readme check"), which the kind then leads.
+    private static func titleSaying(_ kind: String, _ title: String) -> ConversationLineWords? {
+        let parts = title.split(separator: " ", maxSplits: 1)
+        guard let first = parts.first, !kind.isEmpty else { return nil }
+        var word = first.lowercased()
+        while let last = word.last, last.isPunctuation || last == "`" { word.removeLast() }
+        let base = kind.lowercased()
+        let forms: Set<String> = base.hasSuffix("e")
+            ? [base, base + "s", base.dropLast() + "ing", base + "d"]
+            : [base, base + "s", base + "ing", base + "ed"]
+        guard forms.contains(word) else { return nil }
+        return ConversationLineWords(verb: String(first), trailing: parts.count > 1 ? String(parts[1]) : "")
     }
 
     /// A path inside the task's folder, from the folder.
