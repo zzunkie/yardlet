@@ -61,14 +61,18 @@ public struct RemoteSecurePairingURL: Equatable, Sendable {
     public var hosts: [String]
     public var relayURL: String?
     public var room: String?
+    /// Another address of the same relay, which a client may race against `relayURL`.
+    public var alternateRelayURL: String?
 
-    public init(macKey: Data, secret: Data, name: String, hosts: [String], relayURL: String? = nil, room: String? = nil) {
+    public init(macKey: Data, secret: Data, name: String, hosts: [String], relayURL: String? = nil, room: String? = nil,
+                alternateRelayURL: String? = nil) {
         self.macKey = macKey
         self.secret = secret
         self.name = name
         self.hosts = hosts
         self.relayURL = relayURL
         self.room = room
+        self.alternateRelayURL = alternateRelayURL
     }
 
     public var url: URL? {
@@ -84,6 +88,7 @@ public struct RemoteSecurePairingURL: Equatable, Sendable {
         items += hosts.map { URLQueryItem(name: "h", value: $0) }
         if let relayURL, let room {
             items += [URLQueryItem(name: "r", value: relayURL), URLQueryItem(name: "i", value: room)]
+            if let alternateRelayURL { items.append(URLQueryItem(name: "a", value: alternateRelayURL)) }
         }
         components.queryItems = items
         // `URLComponents` leaves `:` and `/` in query values, which every reader takes.
@@ -107,12 +112,13 @@ public struct RemoteSecurePairingURL: Equatable, Sendable {
         let relay = items.first { $0.name == "r" }?.value
         let room = items.first { $0.name == "i" }?.value
         if relay != nil, let room, !isRoom(room) { return nil }
+        let hasRelay = relay != nil && room != nil
         let hosts = items.filter { $0.name == "h" }.compactMap(\.value).filter(isHostPort)
         let name = String((items.first { $0.name == "n" }?.value ?? "Mac").prefix(maxNameLength))
         return RemoteSecurePairingURL(macKey: key, secret: secret, name: name,
                                       hosts: Array(hosts.prefix(RemoteSavedHost.maxDirectAddresses)),
-                                      relayURL: relay != nil && room != nil ? relay : nil,
-                                      room: relay != nil && room != nil ? room : nil)
+                                      relayURL: hasRelay ? relay : nil, room: hasRelay ? room : nil,
+                                      alternateRelayURL: hasRelay ? items.first { $0.name == "a" }?.value : nil)
     }
 
     /// `host:port` with a port from 1 to 65535: a name or IPv4 address of letters, digits, dots and hyphens, or an IPv6

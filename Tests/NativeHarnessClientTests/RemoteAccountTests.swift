@@ -64,6 +64,7 @@ final class RemoteAccountTests: XCTestCase {
     func testPairingWaitsForTheRelayToStartAfterIdentityLoading() async throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteIdentityPairing")))
         defaults.set("http://127.0.0.1:1", forKey: RemoteControlService.relayURLKey)
+        defaults.set("http://127.0.0.1:2", forKey: RemoteControlService.relayAlternateURLKey)
         let store = DelayedRemoteIdentityStore(blockedRead: 2)
         defer { store.release() }
         let service = RemoteControlService(
@@ -80,10 +81,19 @@ final class RemoteAccountTests: XCTestCase {
         let parsed = try XCTUnwrap(RemoteSecurePairingURL.parse(url))
         XCTAssertEqual(parsed.relayURL, "http://127.0.0.1:1",
                        "A pairing requested during activation must include the relay, as it did before loading became asynchronous")
+        XCTAssertEqual(parsed.alternateRelayURL, "http://127.0.0.1:2")
         XCTAssertEqual(parsed.macKey, store.storedPublicKey)
         XCTAssertEqual(store.writes, 1)
         service.setEnabled(false)
         await service.shutdown()
+
+        // A relay set elsewhere does not take this second address, which may reach another relay.
+        let developer = RemoteControlService(
+            bridge: FakeBridge(), deviceStore: RemoteDeviceStore(fileURL: nil), audit: nil, defaults: defaults,
+            environment: [RemoteControlService.relayURLEnvironmentKey: "ws://127.0.0.1:3"], interfaces: { [] },
+            resolveName: { _ in nil }, listens: false)
+        XCTAssertEqual(developer.relayURL?.absoluteString, "ws://127.0.0.1:3")
+        XCTAssertNil(developer.relayAlternateURL)
     }
 
     func testTheMacSignsInPutsItselfOnTheAccountAndTakesLinkRequests() async throws {

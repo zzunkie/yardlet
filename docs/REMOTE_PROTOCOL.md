@@ -578,6 +578,9 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
 
 Every revision of protocol 2 only adds optional fields or states a rule, except where it says otherwise.
 
+- 2026-11-05: a second address of the same relay, `a` in the pairing link (§12) and `alternate` in message 2's `relay`
+  (§13.1); the Mac races it against the first for its room and answers only the socket whose challenge came first
+  (§14.2). The account API stays on the first.
 - 2026-11-05: a pending request's `command` up to 200,000 characters in every subscription, not only in full detail
   (§6.5), so a phone can read and allow a long command; an answered request's stays at 2,000.
 - 2026-11-04: host accounts, harness runtimes and connectors in Settings (§15.37).
@@ -699,13 +702,14 @@ Settings › Remote › "Pair a device" shows a QR code holding the link below, 
 the clipboard for Yardlet on another computer (§18):
 
 ```
-yardlet-remote://pair?v=2&k=<Mac static public key>&s=<secret>&n=MacBook%20Pro&h=192.168.1.20:47616&h=100.64.12.34:47616&r=wss://relay.example.test&i=<room>
+yardlet-remote://pair?v=2&k=<Mac static public key>&s=<secret>&n=MacBook%20Pro&h=192.168.1.20:47616&h=100.64.12.34:47616&r=wss://relay.example.test&i=<room>&a=https://alternate.relay.example.test
 ```
 
 - `v=2`. `k`: the Mac static public key. `s`: the pairing secret, 32 random bytes. `n`: the Mac's name.
   `h`: zero or more direct addresses `host:port` in the order to try (an IPv6 host in brackets). `r` and
-  `i`: the relay's base URL and the Mac's room, present when the Mac uses a relay. Values are
-  percent-encoded; unknown parameters are ignored.
+  `i`: the relay's base URL and the Mac's room, present when the Mac uses a relay. `a`: optional, another base URL of
+  the same relay that reaches the same room, which a client may race against `r` (§14.2); read only beside `r` and
+  `i`. Values are percent-encoded; unknown parameters are ignored.
 - Anyone can send a link, so a client reads only what it can safely try: at most 8 `h`, each a plain `host:port` (a
   name or address of letters, digits, `.` and `-`, or an IPv6 address in brackets, and a port from 1 to 65535; any
   other is left out), `n` cut to 64 characters, and an `i` of letters, digits, `-` and `_` only (at most 128; a link
@@ -773,7 +777,7 @@ Message 2's payload:
 {"ok": true, "deviceId": "B0D2…", "serverTime": 1792158000000, "paired": true,
  "server": {"name": "MacBook Pro", "app": "Yardlet", "appVersion": "1.0", "protocolVersion": 2},
  "direct": ["192.168.1.20:47616", "100.64.12.34:47616", "mac.example-tailnet.ts.net:47616"],
- "relay": {"url": "wss://relay.example.test", "room": "<room>"}}
+ "relay": {"url": "wss://relay.example.test", "room": "<room>", "alternate": "https://alternate.relay.example.test"}}
 ```
 
 ```json
@@ -781,7 +785,8 @@ Message 2's payload:
 ```
 
 - `paired: true` only on the connection that paired. `direct`: the Mac's addresses now, to try next time.
-  `relay`: absent when the Mac uses none; a phone replaces what it stored with it.
+  `relay`: absent when the Mac uses none; a phone replaces what it stored with it. Its `alternate` is the link's `a`
+  (§12), absent when the Mac has none.
 - Errors, after which the Mac closes: `unknownDevice` (the phone key is not paired, or was removed:
   4403), `pairingUnavailable` and `pairingInvalid` (4401), `unsupportedVersion` (4426), `badRequest`
   (4401), `unavailable` (too many connections, §7; 4503).
@@ -831,6 +836,13 @@ and logs no frame contents. What it sees: rooms, IP addresses, when sockets open
 and times, and a push's token (FCM's registration token or APNs' device token) while sending it.
 
 ### 14.2 The Mac's socket
+
+A relay may be reachable at a second address that reaches the same rooms (`relay/pages/` hands every request to the
+Worker, and its `*.pages.dev` address is often served from a nearer location than the Worker's own domain). The Mac
+then opens its socket to both at once on every attempt, keeps the one whose challenge arrives first, and closes the
+other before answering it: an answered socket would replace the room's (step 4). When one address is refused or never
+answers, the other opens the room. Sign-in and the account API (§14.4) stay on the first address, whose callbacks the
+providers know.
 
 1. The relay sends `{"t": "challenge", "nonce": "<32 random bytes>"}` as soon as it accepts.
 2. The Mac answers `{"t": "auth", "key": "<relay public key>", "sig": "<signature>"}`: an Ed25519

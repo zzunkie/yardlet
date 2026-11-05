@@ -7,7 +7,8 @@ import FoundationNetworking
 /// Mac's room with a signature, then carries every phone that comes in through the relay as numbered
 /// binary frames, each phone a `RemoteSecureConnection`. The relay never sees inside a frame. It also
 /// sends pushes. It reconnects on its own until stopped: at once when a room that stayed open drops, since
-/// every phone on it is waiting, then with backoff.
+/// every phone on it is waiting, then with backoff. With a second address of the same relay, every attempt opens
+/// a socket to each at once and keeps the first that answers.
 public final class RemoteRelayClient: @unchecked Sendable {
     public enum State: Equatable, Sendable {
         case off
@@ -20,9 +21,15 @@ public final class RemoteRelayClient: @unchecked Sendable {
     private let server: RemoteServer
     private let identity: RemoteIdentity
     private let baseURL: URL
+    /// Another address of the same relay, raced against `baseURL` on every attempt (§14.2).
+    private let alternateURL: URL?
     private let session: URLSession
     private let queue = DispatchQueue(label: "yardlet.remote.relay")
     private var task: URLSessionWebSocketTask?
+    /// The attempt's sockets until one of them brings the relay's challenge, and the address each went to.
+    private var racing: [(task: URLSessionWebSocketTask, address: URL)] = []
+    /// Why the attempt's sockets ended so far, `baseURL`'s when it ended.
+    private var raceFailure: (reason: String, detail: String)?
     /// Bumped on every new socket, so callbacks from an old one are ignored.
     private var generation = 0
     private var streams: [UInt32: RemoteRelayStream] = [:]
@@ -52,16 +59,18 @@ public final class RemoteRelayClient: @unchecked Sendable {
     public static let silenceLimit: TimeInterval = 45
     static let stableAfter: TimeInterval = 10
 
-    public init(server: RemoteServer, identity: RemoteIdentity, baseURL: URL, session: URLSession = .shared) {
+    public init(server: RemoteServer, identity: RemoteIdentity, baseURL: URL, alternateURL: URL? = nil,
+                session: URLSession = .shared) {
         self.server = server
         self.identity = identity
         self.baseURL = baseURL
+        self.alternateURL = alternateURL
         self.session = session
     }
 
     /// The room's address for phones, which message 2 and the QR code name.
     public var relayInfo: RemoteHandshakeReply.Relay {
-        RemoteHandshakeReply.Relay(url: baseURL.absoluteString, room: identity.room)
+        RemoteHandshakeReply.Relay(url: baseURL.absoluteString, room: identity.room, alternate: alternateURL?.absoluteString)
     }
 
     public func start() {
@@ -101,24 +110,23 @@ public final class RemoteRelayClient: @unchecked Sendable {
 
     // MARK: - Socket
 
+    /// Opens a socket to every address at once. The first that brings the relay's challenge keeps the room; the
+    /// others close before answering it, since an answered socket would replace the room's (§14.2).
     private func connect() {
         drop(reason: nil)
         generation += 1
         let current = generation
-        var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
-        if components?.scheme == "https" { components?.scheme = "wss" }
-        if components?.scheme == "http" { components?.scheme = "ws" }
-        let base = components?.url ?? baseURL
-        let url = base.appending(path: "v1/rooms/\(identity.room)/host")
-        let task = session.webSocketTask(with: url)
-        task.maximumMessageSize = RemoteNoise.maxMessageLength + 4 + 64 * 1024
-        self.task = task
         update(.connecting)
-        task.resume()
+        racing = ([baseURL] + [alternateURL].compactMap { $0 }).map { address in
+            let task = session.webSocketTask(with: Self.hostURL(base: address, room: identity.room))
+            task.maximumMessageSize = RemoteNoise.maxMessageLength + 4 + 64 * 1024
+            task.resume()
+            return (task, address)
+        }
         startedAt = Date()
         readyAt = nil
         lastHeard = startedAt
-        receive(on: task, generation: current)
+        for entrant in racing { receive(on: entrant.task, generation: current) }
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + Self.pingInterval, repeating: Self.pingInterval)
         timer.setEventHandler { [weak self] in self?.tick(generation: current) }
@@ -126,13 +134,21 @@ public final class RemoteRelayClient: @unchecked Sendable {
         keepalive = timer
     }
 
+    /// The Mac's socket on the relay at `base`, a `ws` or `wss` address.
+    static func hostURL(base: URL, room: String) -> URL {
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        if components?.scheme == "https" { components?.scheme = "wss" }
+        if components?.scheme == "http" { components?.scheme = "ws" }
+        return (components?.url ?? base).appending(path: "v1/rooms/\(room)/host")
+    }
+
     private func tick(generation current: Int) {
-        guard current == generation, let task else { return }
+        guard current == generation, task != nil || !racing.isEmpty else { return }
         if Date().timeIntervalSince(lastHeard) > Self.silenceLimit {
             fail("The relay stopped answering", detail: "nothing for \(RemoteLog.seconds(Self.silenceLimit))")
             return
         }
-        if state == .connected { enqueue(.string("ping"), on: task) }
+        if state == .connected, let task { enqueue(.string("ping"), on: task) }
     }
 
     private func receive(on task: URLSessionWebSocketTask, generation current: Int) {
@@ -140,6 +156,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
             guard let self else { return }
             self.queue.async {
                 guard current == self.generation else { return }
+                if task !== self.task, !self.settleRace(task, with: result) { return }
                 switch result {
                 case let .failure(error):
                     self.fail(error.localizedDescription, detail: Self.ending(of: task, error: error))
@@ -203,6 +220,34 @@ public final class RemoteRelayClient: @unchecked Sendable {
         }
     }
 
+    /// One of the attempt's sockets answered or ended. The first to answer becomes the room's socket and the others
+    /// close; once all have ended the attempt failed, for `baseURL`'s reason when it ended. Says whether `task` is
+    /// now the room's socket.
+    private func settleRace(_ task: URLSessionWebSocketTask,
+                            with result: Result<URLSessionWebSocketTask.Message, Error>) -> Bool {
+        guard let index = racing.firstIndex(where: { $0.task === task }) else { return false }
+        let address = racing[index].address
+        switch result {
+        case .success:
+            for other in racing where other.task !== task { other.task.cancel(with: .goingAway, reason: nil) }
+            racing = []
+            raceFailure = nil
+            self.task = task
+            if alternateURL != nil { RemoteLog.notice("Relay: \(address.host ?? address.absoluteString) answered first") }
+            return true
+        case let .failure(error):
+            racing.remove(at: index)
+            let detail = Self.ending(of: task, error: error)
+            if raceFailure == nil || address == baseURL { raceFailure = (error.localizedDescription, detail) }
+            if racing.isEmpty, let raceFailure {
+                fail(raceFailure.reason, detail: raceFailure.detail)
+            } else {
+                RemoteLog.notice("Relay: \(address.host ?? address.absoluteString) did not answer: \(detail)")
+            }
+            return false
+        }
+    }
+
     /// The socket ended or could not open; `reason` is what Settings shows, `detail` what the log adds.
     private func fail(_ reason: String, detail: String? = nil) {
         let openFor = readyAt.map { Date().timeIntervalSince($0) }
@@ -245,6 +290,9 @@ public final class RemoteRelayClient: @unchecked Sendable {
         keepalive = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
+        for entrant in racing { entrant.task.cancel(with: .goingAway, reason: nil) }
+        racing = []
+        raceFailure = nil
         outbox = []
         unsent = [:]
         isSending = false
@@ -276,7 +324,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
         task.send(next.message) { [weak self] error in
             guard let self else { return }
             self.queue.async {
-                guard current == self.generation else { return }
+                guard current == self.generation, task === self.task else { return }
                 self.isSending = false
                 if let stream = next.stream, let left = self.unsent[stream] {
                     self.unsent[stream] = left > next.bytes ? left - next.bytes : nil

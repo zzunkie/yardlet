@@ -84,7 +84,8 @@ final class RemoteSecureTests: XCTestCase {
         let identity = RemoteIdentity.generate()
         let pairing = RemoteSecurePairingURL(macKey: identity.noise.publicKey, secret: Data(repeating: 7, count: 32),
                                              name: "MacBook Pro", hosts: ["192.168.1.20:47616", "[fd7a:115c:a1e0::1]:47616"],
-                                             relayURL: "wss://relay.example.test", room: identity.room)
+                                             relayURL: "wss://relay.example.test", room: identity.room,
+                                             alternateRelayURL: "https://yardlet-relay-pages.pages.dev")
         let url = try XCTUnwrap(pairing.url)
         XCTAssertTrue(url.absoluteString.hasPrefix("yardlet-remote://pair?v=2&k="))
         XCTAssertEqual(RemoteSecurePairingURL.parse(url), pairing)
@@ -103,6 +104,10 @@ final class RemoteSecureTests: XCTestCase {
         XCTAssertEqual(read.hosts, Array(many.prefix(RemoteSavedHost.maxDirectAddresses)))
         XCTAssertEqual(read.name.count, RemoteSecurePairingURL.maxNameLength)
         XCTAssertEqual(read.room, identity.room)
+        // A second relay address belongs to the relay it names.
+        var unrelayed = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        unrelayed.queryItems = unrelayed.queryItems?.filter { $0.name != "r" }
+        XCTAssertNil(RemoteSecurePairingURL.parse(try XCTUnwrap(unrelayed.url))?.alternateRelayURL)
         for room in ["../../v1/auth", "room/connect", "", String(repeating: "a", count: 129), "방"] {
             crafted.queryItems = (crafted.queryItems ?? []).filter { $0.name != "i" } + [URLQueryItem(name: "i", value: room)]
             XCTAssertNil(RemoteSecurePairingURL.parse(try XCTUnwrap(crafted.url)), room)
@@ -549,6 +554,53 @@ final class RemoteSecureTests: XCTestCase {
         XCTAssertEqual(closed, Int(RemoteCloseCode.revoked.rawValue))
     }
 
+    /// With a second address of the relay, each attempt opens the room on both and keeps the socket that brings the
+    /// challenge first; the other closes before it answers, so it never replaces the room (§14.2). A reconnect races again.
+    func testTheRelayClientKeepsTheAddressThatAnswersFirst() async throws {
+        let current = try FakeRelayHost(challengeDelay: 1)
+        let alternate = try FakeRelayHost()
+        defer { current.stop(); alternate.stop() }
+        try await waitUntil { current.url != nil && alternate.url != nil }
+        let harness = try await SecureHarness()
+        let client = RemoteRelayClient(server: harness.server, identity: harness.identity,
+                                       baseURL: try XCTUnwrap(current.url), alternateURL: try XCTUnwrap(alternate.url))
+        client.start()
+        defer { client.stop() }
+        try await waitUntil { client.currentState == .connected }
+        XCTAssertEqual(alternate.counts.auths, 1)
+        XCTAssertEqual(client.relayInfo.alternate, alternate.url?.absoluteString)
+        try await Task.sleep(for: .seconds(1.5))
+        XCTAssertEqual(current.counts.sockets, 1)
+        XCTAssertEqual(current.counts.auths, 0, "The slower address must not answer the challenge")
+
+        alternate.closeAll()
+        try await waitUntil { current.counts.sockets == 2 && alternate.counts.sockets == 2 }
+        try await waitUntil { client.currentState == .connected }
+        XCTAssertEqual(alternate.counts.auths, 2)
+        XCTAssertEqual(current.counts.auths, 0)
+    }
+
+    /// The current address keeps the room when the second one is refused or never answers, and without a second one
+    /// the client opens one socket as before.
+    func testTheRelayClientKeepsTheCurrentAddressWhenTheAlternateFails() async throws {
+        let current = try FakeRelayHost()
+        let silent = SilentListener()
+        let silentPort = try await silent.start()
+        defer { current.stop(); silent.stop() }
+        try await waitUntil { current.url != nil }
+        let harness = try await SecureHarness()
+        let base = try XCTUnwrap(current.url)
+        for (index, alternate) in [URL(string: "ws://127.0.0.1:1"), URL(string: "ws://127.0.0.1:\(silentPort)"), nil].enumerated() {
+            let client = RemoteRelayClient(server: harness.server, identity: harness.identity, baseURL: base, alternateURL: alternate)
+            client.start()
+            try await waitUntil { client.currentState == .connected }
+            XCTAssertEqual(current.counts.sockets, index + 1, "\(alternate?.absoluteString ?? "no alternate")")
+            XCTAssertEqual(current.counts.auths, index + 1)
+            client.stop()
+        }
+        XCTAssertEqual(silent.accepted, 1)
+    }
+
     // MARK: - Helpers
 
     static let vectorsURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -945,6 +997,76 @@ final class SocketPhone: @unchecked Sendable {
             }
         }
         throw TestChannel.TimedOut(description: "The socket stayed open")
+    }
+}
+
+/// The relay's side of the Mac's socket on loopback (§14.2), without its checks: it sends the challenge
+/// `challengeDelay` after a socket opens, answers any `auth` with `ready` and `ping` with `pong`, and counts both.
+final class FakeRelayHost: @unchecked Sendable {
+    private let listener: NWListener
+    private let queue = DispatchQueue(label: "yardlet.test.fake-relay")
+    private let challengeDelay: TimeInterval
+    private var connections: [NWConnection] = []
+    private var sockets = 0
+    private var auths = 0
+
+    init(challengeDelay: TimeInterval = 0) throws {
+        let parameters = NWParameters.tcp
+        parameters.defaultProtocolStack.applicationProtocols.insert(NWProtocolWebSocket.Options(), at: 0)
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        listener = try NWListener(using: parameters)
+        self.challengeDelay = challengeDelay
+        listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
+        listener.start(queue: queue)
+    }
+
+    /// Nil until the listener has its port.
+    var url: URL? {
+        guard let port = listener.port?.rawValue, port != 0 else { return nil }
+        return URL(string: "ws://127.0.0.1:\(port)")
+    }
+    var counts: (sockets: Int, auths: Int) { queue.sync { (sockets, auths) } }
+
+    /// Closes every socket, as the relay does when it restarts.
+    func closeAll() {
+        queue.sync {
+            for connection in connections { connection.cancel() }
+            connections = []
+        }
+    }
+
+    func stop() {
+        listener.cancel()
+        closeAll()
+    }
+
+    private func accept(_ connection: NWConnection) {
+        connections.append(connection)
+        sockets += 1
+        connection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + challengeDelay) { [weak self] in
+            self?.send(#"{"nonce":"n","t":"challenge"}"#, on: connection)
+        }
+        receive(on: connection)
+    }
+
+    private func receive(on connection: NWConnection) {
+        connection.receiveMessage { [weak self] data, _, _, error in
+            guard let self, error == nil, let data else { return }
+            let text = String(decoding: data, as: UTF8.self)
+            if text == "ping" {
+                send("pong", on: connection)
+            } else if text.contains(#""t":"auth""#) {
+                auths += 1
+                send(#"{"t":"ready"}"#, on: connection)
+            }
+            receive(on: connection)
+        }
+    }
+
+    private func send(_ text: String, on connection: NWConnection) {
+        let context = NWConnection.ContentContext(identifier: "text", metadata: [NWProtocolWebSocket.Metadata(opcode: .text)])
+        connection.send(content: Data(text.utf8), contentContext: context, isComplete: true, completion: .idempotent)
     }
 }
 

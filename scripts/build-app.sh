@@ -211,6 +211,17 @@ if [[ -n "$RELAY_URL" ]]; then
 else
     echo "Relay: none built in (Packaging/RelayURL is absent)" >&2
 fi
+# A second address of the same relay, which the Mac races against the first for its room
+# (docs/REMOTE_PROTOCOL.md §14.2): YARDLET_RELAY_ALTERNATE_URL or the first line of
+# Packaging/RelayAlternateURL (out of git). Only with a relay; without one the Mac uses the first alone.
+RELAY_ALTERNATE_URL=${YARDLET_RELAY_ALTERNATE_URL:-}
+if [[ -z "$RELAY_ALTERNATE_URL" && -f "$PROJECT_ROOT/Packaging/RelayAlternateURL" ]]; then
+    RELAY_ALTERNATE_URL=$(head -n 1 "$PROJECT_ROOT/Packaging/RelayAlternateURL" | tr -d '[:space:]')
+fi
+if [[ -n "$RELAY_URL" && -n "$RELAY_ALTERNATE_URL" ]]; then
+    /usr/libexec/PlistBuddy -c "Add :YardletRelayAlternateURL string $RELAY_ALTERNATE_URL" "$CONTENTS_DIR/Info.plist"
+    echo "Relay: a second address built in" >&2
+fi
 install_executable NativeHarnessClient "$MACOS_DIR/Yardlet"
 
 [[ "$ICON_WORK_DIR" == "$PROJECT_ROOT/.build/YardletIconAssets" ]]

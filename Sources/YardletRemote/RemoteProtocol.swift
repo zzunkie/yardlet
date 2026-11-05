@@ -2686,10 +2686,13 @@ public struct RemoteHandshakeReply: Codable, Equatable, Sendable {
     public struct Relay: Codable, Equatable, Sendable {
         public var url: String
         public var room: String
+        /// Another address of the same relay, which a phone may race against `url` (§14.2).
+        public var alternate: String?
 
-        public init(url: String, room: String) {
+        public init(url: String, room: String, alternate: String? = nil) {
             self.url = url
             self.room = room
+            self.alternate = alternate
         }
     }
 

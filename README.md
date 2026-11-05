@@ -124,7 +124,8 @@ Yardlet has no analytics and no server that receives your work. Task metadata, d
 caches live under `~/.yardlet`; agent sessions stay in each agent's own store. If you pair a phone
 or another Mac with the remote and it is away from your network, its end-to-end encrypted messages pass
 through Yardlet's relay at `relay.yardlet.app`, which cannot read them and stores none
-([relay/README.md](relay/README.md)). Connector sign-ins are kept in the
+([relay/README.md](relay/README.md)). The Mac also reaches the same relay at `yardlet-relay-pages.pages.dev`, which
+is often nearer, and keeps whichever answers first. Connector sign-ins are kept in the
 macOS Keychain, and connector calls go straight from your Mac to the service. What an agent reads
 through a connector is sent to that agent's provider under your account with it. The daily update
 check asks `yardlet.app` for the appcast with Yardlet's and Sparkle's versions in its user agent and

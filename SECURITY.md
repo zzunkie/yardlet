@@ -14,7 +14,8 @@ within a week. Yardlet is maintained by one person, so a fix may take longer; yo
 
 - The Yardlet app for macOS, including its built-in MCP server, connectors, built-in browser and update path
   (Sparkle, `https://yardlet.app/appcast.xml` and, for Intel Macs, `https://yardlet.app/appcast-x86_64.xml`).
-- The phone remote's relay at `relay.yardlet.app` (source in [`relay/`](relay/)).
+- The phone remote's relay at `relay.yardlet.app` (source in [`relay/`](relay/)) and its second address
+  `yardlet-relay-pages.pages.dev`, which forwards every request to it.
 - The release artifacts on [GitHub Releases](https://github.com/zzunkie/yardlet/releases) and the
   [Homebrew cask](https://github.com/zzunkie/homebrew-tap).
 
