@@ -17,6 +17,10 @@ final class YardletApp: XamlApplication {
         let console = WindowsConsole.makeHidden()
         mainWindow = MainActor.assumeIsolated {
             let model = AppModel.live()
+            // Off until the person turns it on in Settings › Remote, as on the Mac; while off it opens nothing.
+            let remote = RemoteControlService.live(model: model)
+            model.remoteControl = remote
+            Task { await remote.start() }
             let window = MainWindow(model: model, directory: RemoteHostDirectory.live())
             window.open()
             QAEventLog.shared.write(console)

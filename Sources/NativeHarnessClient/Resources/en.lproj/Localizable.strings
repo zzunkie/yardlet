@@ -2007,6 +2007,7 @@
 "Remote" = "Remote";
 "Allow remote connections" = "Allow remote connections";
 "Follow and drive this Mac's tasks from Yardlet on your phone or another computer." = "Follow and drive this Mac's tasks from Yardlet on your phone or another computer.";
+"Follow and drive this computer's tasks from Yardlet on your phone or another computer." = "Follow and drive this computer's tasks from Yardlet on your phone or another computer.";
 "Connect from outside" = "Connect from outside";
 "Through the Yardlet server. It is end-to-end encrypted, so the server can't read it." = "Through the Yardlet server. It is end-to-end encrypted, so the server can't read it.";
 "Same Wi-Fi" = "Same Wi-Fi";
@@ -3775,6 +3776,7 @@
 "%@ for %@" = "%@ for %@";
 
 "Change Yardlet settings on this Mac." = "Change Yardlet settings on this Mac.";
+"Change Yardlet settings on this computer." = "Change Yardlet settings on this computer.";
 
 "Change settings" = "Change settings";
 

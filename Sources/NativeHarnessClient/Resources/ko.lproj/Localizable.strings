@@ -2007,6 +2007,7 @@
 "Remote" = "원격 연결";
 "Allow remote connections" = "원격 연결 허용";
 "Follow and drive this Mac's tasks from Yardlet on your phone or another computer." = "휴대폰이나 다른 컴퓨터의 Yardlet으로 이 Mac의 작업을 보고 조작합니다.";
+"Follow and drive this computer's tasks from Yardlet on your phone or another computer." = "휴대폰이나 다른 컴퓨터의 Yardlet으로 이 컴퓨터의 작업을 보고 조작합니다.";
 "Connect from outside" = "밖에서도 연결";
 "Through the Yardlet server. It is end-to-end encrypted, so the server can't read it." = "Yardlet 서버를 거칩니다. 종단 간 암호화되어 서버는 내용을 읽을 수 없습니다.";
 "Same Wi-Fi" = "같은 Wi-Fi";
@@ -3785,6 +3786,7 @@
 "Save and discard changes in the task's workspace." = "작업 폴더의 파일을 저장하거나 변경 내용을 버립니다.";
 
 "Change Yardlet settings on this Mac." = "이 Mac의 Yardlet 설정을 바꿉니다.";
+"Change Yardlet settings on this computer." = "이 컴퓨터의 Yardlet 설정을 바꿉니다.";
 
 "Permission is off for now. Recovery could not be saved; retry before restarting Yardlet." = "현재 권한은 꺼졌지만 복구 기록을 저장하지 못했습니다. Yardlet을 다시 시작하기 전에 다시 시도해 주세요.";
 
