@@ -520,6 +520,121 @@ final class RemoteSecureTests: XCTestCase {
 
     // MARK: - Sockets (§11.1)
 
+    /// The WebSocket the Windows listener speaks over Winsock (`RemoteWebSocket`), which only Windows runs and which
+    /// reads what anyone on the network sends before any Noise: the opening a phone makes is answered as RFC 6455 says,
+    /// and any other refused with 400, as the Mac refuses a browser's.
+    func testTheWinsockWebSocketOpensOnlyForAPhonesUpgrade() throws {
+        // RFC 6455 §1.3's example.
+        XCTAssertEqual(RemoteWebSocket.acceptValue(for: "dGhlIHNhbXBsZSBub25jZQ=="), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+        func request(key: String = "dGhlIHNhbXBsZSBub25jZQ==", version: String = "13", extra: String = "") -> Data {
+            Data(("GET / HTTP/1.1\r\nHost: 192.168.1.20:47616\r\nupgrade: WebSocket\r\nConnection: keep-alive, Upgrade\r\n"
+                + "Sec-WebSocket-Key: \(key)\r\nSec-WebSocket-Version: \(version)\r\n\(extra)\r\n").utf8)
+        }
+        let first = Self.clientFrame(.binary, Data([1, 2, 3]))
+        guard case let .accepted(response, rest) = RemoteWebSocket.open(request() + first) else { return XCTFail("Not accepted") }
+        let answer = String(decoding: response, as: UTF8.self)
+        XCTAssertTrue(answer.hasPrefix("HTTP/1.1 101 "), answer)
+        XCTAssertTrue(answer.contains("\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"), answer)
+        XCTAssertTrue(answer.contains("\r\nX-Yardlet-Remote: 2\r\n"), answer)
+        XCTAssertEqual(rest, first)
+
+        // Headers not all in wait, up to 8 KB; past that, or with anything a phone's upgrade does not have, 400.
+        XCTAssertEqual(RemoteWebSocket.open(request().dropLast(2)), .incomplete)
+        XCTAssertEqual(RemoteWebSocket.open(Data(repeating: 0x41, count: RemoteWebSocket.maxRequestBytes)), .incomplete)
+        let long = request(extra: "X-Padding: \(String(repeating: "a", count: RemoteWebSocket.maxRequestBytes))\r\n")
+        let unfit = [
+            ("over 8 KB", long),
+            ("over 8 KB, not all in", long.prefix(RemoteWebSocket.maxRequestBytes + 1)),
+            ("Origin", request(extra: "Origin: https://example.test\r\n")),
+            ("version 8", request(version: "8")),
+            ("a key that is not base64", request(key: "not base64 at all!")),
+            ("a 15-byte key", request(key: Data(count: 15).base64EncodedString())),
+            ("two keys", request(extra: "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n")),
+            ("POST", Data(String(decoding: request(), as: UTF8.self).replacingOccurrences(of: "GET", with: "POST").utf8)),
+            ("no upgrade", Data(String(decoding: request(), as: UTF8.self).replacingOccurrences(of: "upgrade: WebSocket", with: "upgrade: h2c").utf8)),
+            ("no Connection: upgrade", Data(String(decoding: request(), as: UTF8.self).replacingOccurrences(of: ", Upgrade", with: "").utf8))
+        ]
+        for (name, refused) in unfit {
+            guard case let .refused(response) = RemoteWebSocket.open(refused) else { XCTFail("\(name) was not refused"); continue }
+            XCTAssertTrue(String(decoding: response, as: UTF8.self).hasPrefix("HTTP/1.1 400 "), name)
+        }
+    }
+
+    /// A phone's frames on the Windows listener read back into whole messages as Network.framework hands them to the
+    /// Mac's, however the socket's reads cut them, and every frame RFC 6455 or the protocol's limits do not allow closes
+    /// the connection with its code before any of it is kept.
+    func testTheWinsockWebSocketReadsWholeMessagesWithinItsLimits() throws {
+        // One byte at a time; then a 16-bit length at the limit cut inside its header and its payload.
+        var reader = RemoteWebSocketReader()
+        let small = Self.clientFrame(.binary, Data("hello".utf8))
+        XCTAssertEqual(small.dropLast().flatMap { reader.read([$0]) }, [])
+        XCTAssertEqual(reader.read([small.last!]), [.binary(Data("hello".utf8))])
+        let full = Data((0..<RemoteWebSocketReader.limit).map { UInt8($0 % 251) })
+        let frame = Self.clientFrame(.binary, full)
+        XCTAssertEqual(frame[1], 0x80 | 126)
+        XCTAssertEqual(reader.read(frame.prefix(3)), [])
+        XCTAssertEqual(reader.read(frame[3..<20_000]), [])
+        XCTAssertEqual(reader.read(frame[20_000...]), [.binary(full)])
+        // In fragments, with a ping between them; a pong makes nothing, and a close ends what is read.
+        let fragmented = Self.clientFrame(.binary, Data([1, 2]), final: false) + Self.clientFrame(.ping, Data("p".utf8))
+            + Self.clientFrame(.continuation, Data([3]))
+        XCTAssertEqual(reader.read(fragmented), [.ping(Data("p".utf8)), .binary(Data([1, 2, 3]))])
+        XCTAssertEqual(reader.read(Self.clientFrame(.pong, Data()) + Self.clientFrame(.close, Data([0x03, 0xE8]))), [.close(1000)])
+        XCTAssertEqual(reader.read(Self.clientFrame(.binary, Data([1]))), [], "Nothing is read after a close")
+
+        // Each refused as soon as its header shows it, so a length it names is never waited for.
+        let refused: [(String, Data, RemoteCloseCode)] = [
+            ("unmasked", Data([0x82, 0x01, 0x07]), .protocolError),
+            ("RSV1", Self.clientFrame(.binary, Data([1]), reserved: 0x40), .protocolError),
+            ("RSV3", Self.clientFrame(.binary, Data([1]), reserved: 0x10), .protocolError),
+            ("an unknown opcode", Data([0x83, 0x80, 0, 0, 0, 0]), .protocolError),
+            ("a 64-bit length", Self.clientFrame(.binary, Data([1]), wideLength: true).prefix(2), .messageTooBig),
+            ("the 64-bit maximum", Data([0x82, 0xFF] + [UInt8](repeating: 0xFF, count: 8)), .messageTooBig),
+            ("fragments past the limit", Self.clientFrame(.binary, Data(count: 40_000), final: false)
+                + Self.clientFrame(.continuation, Data(count: 40_000)).prefix(4), .messageTooBig),
+            ("a ping of 126 bytes", Self.clientFrame(.ping, Data(count: 126)).prefix(4), .protocolError),
+            ("a close in fragments", Self.clientFrame(.close, Data(), final: false), .protocolError),
+            ("a continuation of nothing", Self.clientFrame(.continuation, Data([1])), .protocolError),
+            ("a new message before the last ends", Self.clientFrame(.binary, Data([1]), final: false)
+                + Self.clientFrame(.binary, Data([2])), .protocolError),
+            ("a text frame", Self.clientFrame(.text, Data("{}".utf8)).prefix(2), .unsupportedData)
+        ]
+        for (name, bytes, code) in refused {
+            var reader = RemoteWebSocketReader()
+            XCTAssertEqual(reader.read(bytes), [.refused(code)], name)
+        }
+
+        // The listener's own frames go unmasked, their lengths in the fewest bytes.
+        XCTAssertEqual(Array(RemoteWebSocket.frame(.pong, Data("p".utf8))), [0x8A, 0x01, 0x70])
+        XCTAssertEqual(Array(RemoteWebSocket.closeFrame(RemoteCloseCode.unsupportedData.rawValue)), [0x88, 0x02, 0x03, 0xEB])
+        XCTAssertEqual(Array(RemoteWebSocket.frame(.binary, Data(count: 126)).prefix(4)), [0x82, 126, 0, 126])
+
+        // The path a phone came over, from its address as either listener reads it.
+        XCTAssertEqual(RemoteAddressSelection.path(ofPeer: "127.0.0.1"), .loopback)
+        XCTAssertEqual(RemoteAddressSelection.path(ofPeer: "::ffff:127.0.0.1"), .loopback)
+        XCTAssertEqual(RemoteAddressSelection.path(ofPeer: "::ffff:100.101.102.103"), .tailscale)
+        XCTAssertEqual(RemoteAddressSelection.path(ofPeer: "fd7a:115c:a1e0::1%12"), .tailscale)
+        XCTAssertEqual(RemoteAddressSelection.path(ofPeer: "::ffff:192.168.1.30"), .local)
+    }
+
+    /// A client's frame: masked, its length in the fewest bytes unless `wideLength` asks for eight.
+    static func clientFrame(_ opcode: RemoteWebSocket.Opcode, _ payload: Data, final: Bool = true, reserved: UInt8 = 0,
+                            wideLength: Bool = false) -> Data {
+        var frame = Data([(final ? 0x80 : 0) | reserved | opcode.rawValue])
+        if wideLength || payload.count > 0xFFFF {
+            frame.append(0x80 | 127)
+            frame += stride(from: 56, through: 0, by: -8).map { UInt8(truncatingIfNeeded: payload.count >> $0) }
+        } else if payload.count >= 126 {
+            frame += [0x80 | 126, UInt8(payload.count >> 8), UInt8(payload.count & 0xFF)]
+        } else {
+            frame.append(0x80 | UInt8(payload.count))
+        }
+        let mask: [UInt8] = [0x37, 0xFA, 0x21, 0x3D]
+        frame += mask
+        frame += payload.enumerated().map { $0.element ^ mask[$0.offset & 3] }
+        return frame
+    }
+
     func testAPhoneConnectsOverTheSecureListener() async throws {
         let harness = try await SecureHarness()
         let ticket = await harness.server.openPairing()

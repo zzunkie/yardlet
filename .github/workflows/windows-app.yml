@@ -90,9 +90,9 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File Windows/scripts/check-local.ps1 `
             -Executable "$env:APP_BIN\NativeHarnessClient.exe" -OutDirectory window-check
           exit $LASTEXITCODE
-      # That task served through the relay to a phone on the engine's client connection: Settings > Remote turned
-      # on, paired with the link it copies, the task listed, a message answered, the phone listed, and the room
-      # closed once off.
+      # That task served to phones on the engine's client connection, one over the app's direct listener and one
+      # through the relay: Settings > Remote turned on, each paired with a link it copies, the task listed, a message
+      # answered, the phones listed, and the listener and the room closed once off.
       - name: Serve the app's tasks to a phone
         shell: pwsh
         run: |

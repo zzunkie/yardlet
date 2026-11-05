@@ -1,5 +1,4 @@
 import Foundation
-import YardletRemote
 
 // The platform layer, in Foundation alone. Engine code names these types and functions, and each
 // platform defines them under the same names in its own folder: Platform/macOS for the Mac app, and
@@ -64,17 +63,6 @@ extension ClaudeConversationCatalog {
     /// Nor which of them a Yardlet that has gone left, so none is ended.
     @discardableResult
     static func endYardletLeftovers(holding sessionID: String, configDirectory: URL) -> [Int32] { [] }
-}
-
-extension RemoteHostPlatform {
-    /// The relay alone: no direct-path listener, interfaces or network watch yet, and nothing kept awake. The relay
-    /// the build carries is in files beside its executable.
-    static var current: RemoteHostPlatform {
-        RemoteHostPlatform(makeListener: { _, _ in nil }, watchNetwork: { _ in nil }, interfaces: { [] },
-                           resolveName: { _ in nil }, isOnPower: { false }, holdAwake: { _ in nil },
-                           computerName: { ProcessInfo.processInfo.hostName },
-                           builtInRelay: { RemoteHostPlatform.relay(besides: Bundle.main.executableURL) })
-    }
 }
 
 /// No helper keeps the computer awake.

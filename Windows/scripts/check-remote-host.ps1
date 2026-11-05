@@ -1,11 +1,16 @@
-# Serves the Windows app's tasks to another copy of it through a local relay (start-remote-host.ps1 without a
-# fixture, in the same step). The app opens with the remote off, as it ships; the check turns it on in
-# Settings > Remote, waits for the relay, pairs and copies the link. A phone on the engine's client connection
-# (yardlet-remote-fixture --pair) then pairs from the link, lists the host's tasks, opens the task check-local.ps1
-# started, sends a message and waits for the answer, while this check allows the stand-in's request in the host's
-# window. The host's devices must then name the phone, and turning the remote off must close the relay room. (The
-# Windows app's own Connect is check-remote.ps1's; a second copy of the app would share this one's settings and
-# keys, which are the user's, and so host the same room.)
+# Serves the Windows app's tasks to a phone on the same computer, over the app's direct listener and through a local
+# relay (start-remote-host.ps1 without a fixture, in the same step). The app opens with the remote off, as it ships,
+# and neither listens nor holds a relay room; the check turns it on in Settings > Remote and waits until it listens on
+# its direct port (Same Wi-Fi) and has reached the relay. It then pairs two phones on the engine's client connection
+# (yardlet-remote-fixture --pair), each from a link the app copies: the first from the link without its relay, so it
+# pairs and connects over a direct address (the runner's own network address, not loopback), the second from the link
+# without its direct addresses, so it goes through the relay. Each lists the host's tasks, opens the task
+# check-local.ps1 started, sends a message and waits for the answer, while this check allows the stand-in's request in
+# the host's window. A .NET WebSocket then shows the direct listener refuses a browser's handshake (Origin) and closes a
+# text frame with 1003, and what Windows' own DNS-SD browse finds is noted. The host's devices must then name the
+# phones, and turning the remote off must close the relay room, the listening socket and a connection still open. (The
+# Windows app's own Connect is check-remote.ps1's; a second copy of the app would share this one's settings and keys,
+# which are the user's, and so host the same room.)
 # It drives the windows through UI Automation and reads each window's event log (YARDLET_QA_EVENT_LOG); it writes
 # screenshots, the logs and a summary to -OutDirectory. Runs in Windows PowerShell 5.1, which has UI Automation,
 # System.Drawing and a single-threaded apartment for the clipboard; the file stays ASCII because 5.1 reads a script
@@ -17,7 +22,8 @@ param(
     [string] $Relay = 'ws://127.0.0.1:8787',
     [string] $RelayLog = 'serve-relay.log',
     [string] $Task = 'Add the install steps to the readme',
-    [string] $Message = 'Add a section on updates'
+    [string] $Message = 'Add a section on updates',
+    [string] $RelayMessage = 'Add a section on removal'
 )
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -42,6 +48,51 @@ public static class ServeDesktop {
         SetForegroundWindow(window);
         Thread.Sleep(300);
         return GetForegroundWindow() == window;
+    }
+}
+
+// What Windows' own DNS-SD browse (DnsServiceBrowse, the counterpart of the app's DnsServiceRegister) finds of a
+// service type in a few seconds: the instance names its PTR records name.
+public static class ServeBonjour {
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    public delegate void BrowseCallback(uint status, IntPtr context, IntPtr records);
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct BrowseRequest {
+        public uint Version;
+        public uint InterfaceIndex;
+        public IntPtr QueryName;
+        public BrowseCallback Callback;
+        public IntPtr Context;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct Cancel { public IntPtr Reserved; }
+
+    [DllImport("dnsapi.dll")] static extern int DnsServiceBrowse(ref BrowseRequest request, ref Cancel cancel);
+    [DllImport("dnsapi.dll")] static extern int DnsServiceBrowseCancel(ref Cancel cancel);
+    [DllImport("dnsapi.dll")] static extern void DnsRecordListFree(IntPtr records, int type);
+
+    static readonly System.Collections.Generic.List<string> found = new System.Collections.Generic.List<string>();
+    static BrowseCallback kept;
+
+    public static string[] Browse(string service, int milliseconds) {
+        kept = (status, context, records) => {
+            // DNS_RECORDW on x64: pNext at 0, wType at 16, and a PTR record's pNameHost at 32.
+            for (IntPtr record = records; record != IntPtr.Zero; record = Marshal.ReadIntPtr(record)) {
+                if (Marshal.ReadInt16(record, 16) == 12) {
+                    lock (found) { found.Add(Marshal.PtrToStringUni(Marshal.ReadIntPtr(record, 32))); }
+                }
+            }
+            if (records != IntPtr.Zero) DnsRecordListFree(records, 1);
+        };
+        var request = new BrowseRequest { Version = 1, QueryName = Marshal.StringToHGlobalUni(service), Callback = kept };
+        var cancel = new Cancel();
+        int status = DnsServiceBrowse(ref request, ref cancel);
+        if (status != 9506) return new[] { "DnsServiceBrowse returned " + status };
+        Thread.Sleep(milliseconds);
+        DnsServiceBrowseCancel(ref cancel);
+        lock (found) { return found.ToArray(); }
     }
 }
 '@
@@ -131,6 +182,103 @@ function Host-Sockets {
     if (Test-Path $log) { @(Get-Content $log | Where-Object { $_ -match '/host 101' }).Count } else { 0 }
 }
 
+# Whether anything accepts a connection on this computer's $port.
+function Test-Listening([int] $port) {
+    $tcp = New-Object System.Net.Sockets.TcpClient
+    try {
+        return $tcp.ConnectAsync('127.0.0.1', $port).Wait(3000) -and $tcp.Connected
+    } catch {
+        return $false
+    } finally {
+        $tcp.Dispose()
+    }
+}
+
+# A .NET WebSocket to the direct listener, opened or refused within 10 s.
+function Open-Socket([string] $url, [string] $origin) {
+    $socket = New-Object System.Net.WebSockets.ClientWebSocket
+    if ($origin) { $socket.Options.SetRequestHeader('Origin', $origin) }
+    try { $socket.ConnectAsync([Uri]$url, [Threading.CancellationToken]::None).Wait(10000) | Out-Null } catch {}
+    return $socket
+}
+
+# Whether the socket is closed within $seconds, receiving until it is.
+function Wait-Closed($socket, [int] $seconds) {
+    $buffer = [ArraySegment[byte]]::new((New-Object byte[] 1024))
+    $deadline = (Get-Date).AddSeconds($seconds)
+    $receiving = $null
+    while ((Get-Date) -lt $deadline -and $socket.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+        try {
+            if (-not $receiving -or $receiving.IsCompleted) { $receiving = $socket.ReceiveAsync($buffer, [Threading.CancellationToken]::None) }
+            $null = $receiving.Wait(500)
+        } catch {
+            break
+        }
+    }
+    return $socket.State -ne [System.Net.WebSockets.WebSocketState]::Open
+}
+
+# A link the app copies, without the query items named.
+function Without-Items([string] $link, [string[]] $names) {
+    $parts = $link -split '\?', 2
+    $kept = @($parts[1] -split '&' | Where-Object { $names -notcontains ($_ -split '=', 2)[0] })
+    return $parts[0] + '?' + ($kept -join '&')
+}
+
+# Settings > Remote, chosen first unless it shows: a new pairing, its link copied; the link, once it differs from
+# $previous.
+function Copy-PairingLink([string] $previous, [switch] $showing) {
+    if (-not $showing) {
+        $settingsShown = @(Read-Events | Where-Object { $_ -eq 'showing settings' }).Count
+        if (-not (Wait-For { Select-Item $main 'Settings' } 15)) { Finish 'no Settings item' }
+        if (-not (Wait-For { @(Read-Events | Where-Object { $_ -eq 'showing settings' }).Count -gt $settingsShown } 10)) { Finish 'settings not shown' }
+    }
+    $shown = @(Read-Events | Where-Object { $_ -eq 'remote host pairing shown' }).Count
+    $copied = @(Read-Events | Where-Object { $_ -eq 'remote host link copied' }).Count
+    $pair = 'Pair' + [char]0x2026
+    if (-not (Wait-For { Invoke-Named $main $pair } 10)) { Finish 'no Pair button' }
+    if (-not (Wait-For { @(Read-Events | Where-Object { $_ -eq 'remote host pairing shown' }).Count -gt $shown } 15)) { Finish 'no pairing shown' }
+    Start-Sleep -Seconds 1
+    if (-not $previous) { Save-Screen 'pairing' }
+    if (-not (Wait-For { Invoke-Named $main 'Copy link' } 10)) { Finish 'no Copy link button' }
+    if (-not (Wait-For { @(Read-Events | Where-Object { $_ -eq 'remote host link copied' }).Count -gt $copied } 10)) { Finish 'the link was not copied' }
+    $link = Wait-For { $text = [System.Windows.Forms.Clipboard]::GetText(); if ($text -like 'yardlet-remote://pair*' -and $text -ne $previous) { $text } } 10
+    if (-not $link) { Finish 'no link on the clipboard' }
+    return $link
+}
+
+# The phone, on the engine's client connection (yardlet-remote-fixture --pair): it pairs from $link, lists the tasks,
+# opens the task and sends $text, and waits for the answer, while the host's card allows the stand-in's request. Its
+# lines, joined; it must exit 0.
+function Run-Phone([string] $label, [string] $link, [string] $text) {
+    if (-not (Wait-For { Select-Item $main $Task } 15)) { Finish "no task named $Task" }
+    $log = Join-Path $OutDirectory "$Name-phone-$label.log"
+    $phone = Start-Process -FilePath $Fixture -PassThru -NoNewWindow -RedirectStandardOutput $log `
+        -RedirectStandardError (Join-Path $OutDirectory "$Name-phone-$label-errors.log") `
+        -ArgumentList '--pair', "`"$link`"", '--task', "`"$Task`"", '--send', "`"$text`""
+    $script:client = $phone
+    # Held now, or Windows PowerShell reports no exit code for a process it started.
+    $null = $phone.Handle
+    $deadline = (Get-Date).AddSeconds(240)
+    $allowed = 0
+    while (-not $phone.HasExited -and (Get-Date) -lt $deadline) {
+        # The stand-in asks to edit a file for each message; only a request waiting has an Allow button.
+        $clicked = try { Invoke-Named $main 'Allow' } catch { $false }
+        if ($clicked) {
+            $allowed += 1
+            if ($allowed -eq 1) { Save-Screen "allowed-$label" }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    $summary["allowedOnHost-$label"] = $allowed
+    if (-not $phone.HasExited) { Finish "the $label phone did not finish" }
+    $phone.WaitForExit()
+    $lines = (@(Get-Content $log -Encoding UTF8) | Where-Object { $_ -like 'Phone: *' }) -join ' | '
+    $summary["phone-$label"] = $lines
+    if ($phone.ExitCode -ne 0) { Finish "the $label phone was not answered" }
+    return $lines
+}
+
 function Finish([string] $result) {
     $summary.result = $result
     $summary.events = (Read-Events) -join ' | '
@@ -156,12 +304,17 @@ if (-not (Wait-For { (Read-Events) -contains 'ready' } 30)) { Finish 'not ready'
 $main = $UIA::FromHandle($process.MainWindowHandle)
 [void][ServeDesktop]::BringForward($process.MainWindowHandle)
 
-# Off as it ships: a few seconds open, and the app has opened no room on the relay.
+# Off as it ships: a few seconds open, and the app neither listens nor has opened a room on the relay.
 Start-Sleep -Seconds 3
 $summary.roomSocketsWhileOff = Host-Sockets
 if ($summary.roomSocketsWhileOff -ne 0) { Finish 'the remote opened a room while off' }
+$summary.listeningWhileOff = Test-Listening 47616
+if ($summary.listeningWhileOff) { Finish 'the remote listened while off' }
+# Whether Windows' firewall filters what other devices would send, and on which kind of network the runner is.
+$summary.firewall = (Get-NetFirewallProfile | ForEach-Object { "$($_.Name): $($_.Enabled), inbound $($_.DefaultInboundAction)" }) -join '; '
+$summary.networks = (Get-NetConnectionProfile | ForEach-Object { "$($_.InterfaceAlias): $($_.NetworkCategory)" }) -join '; '
 
-# Settings > Remote, turned on, and the relay reached.
+# Settings > Remote, turned on: the direct listener up and the relay reached.
 if (-not (Wait-For { Select-Item $main 'Settings' } 15)) { Finish 'no Settings item' }
 if (-not (Wait-For { (Read-Events) -contains 'showing settings' } 10)) { Finish 'settings not shown' }
 # The event is written as the pane is chosen, a frame before it draws: the pane's switch shows once it has.
@@ -170,69 +323,73 @@ Start-Sleep -Milliseconds 500
 Save-Screen 'settings-off'
 if (-not (Wait-For { Toggle-Remote } 10)) { Finish 'no remote switch' }
 if (-not (Wait-For { (Read-Events) -contains 'remote host: on' } 10)) { Finish 'the remote did not turn on' }
-$reach = Wait-For { Read-Events | Where-Object { $_ -eq 'remote host reach: Yardlet server' } } 60
+$reach = Wait-For { Read-Events | Where-Object { $_ -like 'remote host reach: *Same Wi-Fi*' -and $_ -like '*Yardlet server' } } 60
 $summary.reach = "$(Read-Events | Where-Object { $_ -like 'remote host reach: *' } | Select-Object -Last 1)"
-if (-not $reach) { Finish 'the relay was not reached' }
+if (-not $reach) { Finish 'the remote did not listen and reach the relay' }
+$summary.firewallRules = @(Get-NetFirewallApplicationFilter -Program $Executable -ErrorAction SilentlyContinue | Get-NetFirewallRule |
+    ForEach-Object { "$($_.DisplayName): $($_.Direction) $($_.Action) $($_.Profile)" }) -join '; '
 
-# Pairing: the QR code and the link on the clipboard.
-$pair = 'Pair' + [char]0x2026
-if (-not (Wait-For { Invoke-Named $main $pair } 10)) { Finish 'no Pair button' }
-if (-not (Wait-For { (Read-Events) -contains 'remote host pairing shown' } 15)) { Finish 'no pairing shown' }
-Start-Sleep -Seconds 1
-Save-Screen 'pairing'
-if (-not (Wait-For { Invoke-Named $main 'Copy link' } 10)) { Finish 'no Copy link button' }
-if (-not (Wait-For { (Read-Events) -contains 'remote host link copied' } 10)) { Finish 'the link was not copied' }
-$link = Wait-For { $text = [System.Windows.Forms.Clipboard]::GetText(); if ($text -like 'yardlet-remote://pair*') { $text } } 10
-if (-not $link) { Finish 'no link on the clipboard' }
+# The first phone, from the link without its relay: paired and answered over a direct address.
+$link = Copy-PairingLink '' -showing
 $room = [regex]::Match($link, '[?&]i=([a-z2-7]+)').Groups[1].Value
 $summary.linkHasRelay = $link -like '*r=*'
+$hosts = @([regex]::Matches($link, '[?&]h=([^&]+)') | ForEach-Object { [uri]::UnescapeDataString($_.Groups[1].Value) })
+$summary.directHosts = $hosts -join ', '
+if ($hosts.Count -eq 0) { Finish 'the link names no direct address' }
+$port = [int](($hosts[0] -split ':')[-1])
+$summary.listeningWhileOn = Test-Listening $port
+$direct = Run-Phone 'direct' (Without-Items $link @('r', 'i', 'a')) $Message
+if ($direct -notlike '*Phone: connected through direct(*') { Finish 'the phone did not connect directly' }
 
-# The task shown in the host's window, for its request card.
-if (-not (Wait-For { Select-Item $main $Task } 15)) { Finish "no task named $Task" }
+# The direct listener as another WebSocket client sees it: a browser's handshake refused, a text frame closed with 1003.
+$browser = Open-Socket "ws://$($hosts[0])/" 'https://example.test'
+$summary.browserRefused = $browser.State -ne [System.Net.WebSockets.WebSocketState]::Open
+$browser.Dispose()
+if (-not $summary.browserRefused) { Finish 'a browser opened the direct listener' }
+$text = Open-Socket "ws://$($hosts[0])/" ''
+$summary.socketOpened = $text.State -eq [System.Net.WebSockets.WebSocketState]::Open
+if (-not $summary.socketOpened) { Finish 'a WebSocket did not open on the direct listener' }
+try {
+    $bytes = [ArraySegment[byte]]::new([Text.Encoding]::UTF8.GetBytes('{}'))
+    $text.SendAsync($bytes, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [Threading.CancellationToken]::None).Wait(5000) | Out-Null
+} catch {}
+$null = Wait-Closed $text 10
+$summary.textClosedWith = "$([int]$text.CloseStatus)"
+$text.Dispose()
+if ($summary.textClosedWith -ne '1003') { Finish 'a text frame did not close with 1003' }
+$summary.bonjour = try { ([ServeBonjour]::Browse('_yardlet._tcp.local', 5000)) -join ', ' } catch { "browse failed: $($_.Exception.Message)" }
 
-# The phone, on the engine's client connection (yardlet-remote-fixture --pair): it pairs from the link, lists the
-# tasks, opens the task and sends the message, and waits for the answer.
-$phoneLog = Join-Path $OutDirectory "$Name-phone.log"
-$client = Start-Process -FilePath $Fixture -PassThru -NoNewWindow -RedirectStandardOutput $phoneLog `
-    -RedirectStandardError (Join-Path $OutDirectory "$Name-phone-errors.log") `
-    -ArgumentList '--pair', "`"$link`"", '--task', "`"$Task`"", '--send', "`"$Message`""
-# Held now, or Windows PowerShell reports no exit code for a process it started.
-$null = $client.Handle
+# The second phone, from a new link without its direct addresses: paired and answered through the relay.
+$relayLink = Copy-PairingLink $link
+$relayed = Run-Phone 'relay' (Without-Items $relayLink @('h')) $RelayMessage
+if ($relayed -notlike '*Phone: connected through relay*') { Finish 'the phone did not connect through the relay' }
 
-# The stand-in asks to edit a file for the message the phone sends; the host's card allows it.
-$deadline = (Get-Date).AddSeconds(240)
-$summary.allowedOnHost = $false
-while (-not $client.HasExited -and (Get-Date) -lt $deadline) {
-    if (-not $summary.allowedOnHost) {
-        $allowed = try { Invoke-Named $main 'Allow' } catch { $false }
-        if ($allowed) {
-            $summary.allowedOnHost = $true
-            Save-Screen 'allowed'
-        }
-    }
-    Start-Sleep -Milliseconds 500
-}
-if (-not $client.HasExited) { Finish 'the phone did not finish' }
-$client.WaitForExit()
-$summary.phone = (@(Get-Content $phoneLog -Encoding UTF8) | Where-Object { $_ -like 'Phone: *' }) -join ' | '
-if ($client.ExitCode -ne 0) { Finish 'the phone was not answered' }
-
-# The host's devices name the phone; turning the remote off closes the relay room.
+# The host's devices name the phones; turning the remote off closes the relay room, the listening socket and a
+# connection still open.
 $shownBefore = @(Read-Events | Where-Object { $_ -eq 'showing settings' }).Count
 if (-not (Wait-For { Select-Item $main 'Settings' } 15)) { Finish 'no Settings item' }
 if (-not (Wait-For { @(Read-Events | Where-Object { $_ -eq 'showing settings' }).Count -gt $shownBefore } 10)) { Finish 'settings not shown again' }
-$devices = Wait-For { Read-Events | Where-Object { $_ -like 'remote host devices: *Fixture phone*' } | Select-Object -Last 1 } 15
+$devices = Wait-For { Read-Events | Where-Object { $_ -like 'remote host devices: *Fixture phone*Fixture phone*' } | Select-Object -Last 1 } 15
 $summary.devices = "$devices"
 if (-not (Wait-For { Find-Named $main 'Fixture phone' } 10)) { Finish 'the phone is not shown' }
 Start-Sleep -Milliseconds 500
 Save-Screen 'devices'
-if (-not $devices) { Finish 'no paired device listed' }
+if (-not $devices) { Finish 'the paired devices are not listed' }
 $summary.roomHeldWhileOn = Test-Room $room
 if (-not $summary.roomHeldWhileOn) { Finish 'the room was not held while on' }
 $summary.roomSocketsWhileOn = Host-Sockets
+$open = Open-Socket "ws://$($hosts[0])/" ''
+if ($open.State -ne [System.Net.WebSockets.WebSocketState]::Open) { Finish 'a WebSocket did not open on the direct listener' }
+$turnedOff = Get-Date
 if (-not (Wait-For { Toggle-Remote } 10)) { Finish 'no remote switch' }
 if (-not (Wait-For { (Read-Events) -contains 'remote host: off' } 10)) { Finish 'the remote did not turn off' }
+# Well inside the 10 s a connection has to finish its handshake, so the listener's stop closed it.
+$summary.connectionClosedWhenOff = (Wait-Closed $open 5) -and ((Get-Date) - $turnedOff).TotalSeconds -lt 8
+$open.Dispose()
 $summary.roomClosedWhenOff = Wait-For { -not (Test-Room $room) } 15
+$summary.listeningWhenOff = Test-Listening $port
 Save-Screen 'off'
 if (-not $summary.roomClosedWhenOff) { Finish 'the room stayed open once off' }
+if ($summary.listeningWhenOff) { Finish 'the listener stayed open once off' }
+if (-not $summary.connectionClosedWhenOff) { Finish 'a connection stayed open once off' }
 Finish 'served'

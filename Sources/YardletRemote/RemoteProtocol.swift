@@ -101,6 +101,7 @@ public struct RemoteError: Error, Codable, Equatable, Sendable {
 /// WebSocket close codes the server uses (§8).
 public enum RemoteCloseCode: UInt16, Sendable {
     case normal = 1000
+    case protocolError = 1002
     case unsupportedData = 1003
     case messageTooBig = 1009
     case unauthenticated = 4401

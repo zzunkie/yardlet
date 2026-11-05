@@ -50,10 +50,11 @@ let windowsLayers = ["WinUI", "Platform/Windows"]
 // has its own in Platform/macOS.
 let otherPlatformLayers = ["Platform/Portable"]
 // The Platform/Portable files whose parts the Windows layer provides, which the Windows app leaves out.
-let portableFilesWindowsReplaces = ["Platform/Portable/PortableProcesses.swift"]
+let portableFilesWindowsReplaces = ["Platform/Portable/PortableProcesses.swift", "Platform/Portable/PortableRemoteHost.swift"]
 
-// The phone remote's direct-path listener uses Network.framework; a build on another platform leaves it
-// out until that platform has its own, and serves the relay alone.
+// The phone remote's direct-path listener on the Mac uses Network.framework, which a build on another platform
+// leaves out. Windows has its own on Winsock (RemoteWinsockListener.swift, which builds only there); elsewhere the
+// remote serves the relay alone.
 #if os(macOS)
 let remoteMacOnlySources: [String] = []
 #else
@@ -233,12 +234,18 @@ let package = Package(
             dependencies: ["YardletLidSleep"]
         ),
         // The phone remote (docs/REMOTE_PROTOCOL.md): the protocol, pairing and the server, with no
-        // UI, and the WebSocket listeners (Network.framework). The app adds the bridge to its model.
+        // UI, and the WebSocket listeners (Network.framework on the Mac; Winsock, IP Helper and DNS-SD on
+        // Windows). The app adds the bridge to its model.
         .target(
             name: "YardletRemote",
             dependencies: [.product(name: "Crypto", package: "swift-crypto")],
             exclude: remoteMacOnlySources,
-            linkerSettings: [.linkedFramework("Network", .when(platforms: [.macOS]))]
+            linkerSettings: [
+                .linkedFramework("Network", .when(platforms: [.macOS])),
+                .linkedLibrary("ws2_32", .when(platforms: [.windows])),
+                .linkedLibrary("Iphlpapi", .when(platforms: [.windows])),
+                .linkedLibrary("dnsapi", .when(platforms: [.windows]))
+            ]
         ),
         // The fixture Mac behind the remote protocol, for the phone client and the remote tests;
         // the app does not link it.

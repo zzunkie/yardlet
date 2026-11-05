@@ -19,11 +19,29 @@ struct WindowsRemoteIdentityStore: RemoteIdentityStoring {
     }
 }
 
+extension RemoteHostPlatform {
+    /// Windows': the v2 listener on Winsock advertised with DNS-SD, the interfaces and the MagicDNS name, network
+    /// changes from IP Helper, and this computer named as Windows names it. Nothing keeps the computer awake yet. The
+    /// relay the build carries is in files beside its executable.
+    static var current: RemoteHostPlatform {
+        RemoteHostPlatform(
+            makeListener: { server, identity in
+                RemoteWinsockListener(server: server, staticKey: identity.noise, advertisement: .of(identity))
+            },
+            watchNetwork: { changed in RemoteAddressSelection.watchSystemInterfaces(changed) },
+            interfaces: RemoteAddressSelection.systemInterfaces,
+            resolveName: RemoteAddressSelection.magicDNSName(for:),
+            isOnPower: { false },
+            holdAwake: { _ in nil },
+            computerName: { ProcessInfo.processInfo.environment["COMPUTERNAME"] ?? "Windows" },
+            builtInRelay: { RemoteHostPlatform.relay(besides: Bundle.main.executableURL) })
+    }
+}
+
 extension RemoteControlService {
-    /// The remote for the Windows app: the relay alone for now, the paired devices and the audit log under
-    /// `%LOCALAPPDATA%\Yardlet\remote` as the Mac keeps them under `~/.yardlet/remote`, the keys in Credential
-    /// Manager, and this computer named as Windows names it. Signing in to a relay account is not offered, so no
-    /// account token is kept.
+    /// The remote for the Windows app: the paired devices and the audit log under `%LOCALAPPDATA%\Yardlet\remote` as
+    /// the Mac keeps them under `~/.yardlet/remote`, and the keys in Credential Manager. Signing in to a relay account
+    /// is not offered, so no account token is kept.
     static func live(model: AppModel) -> RemoteControlService {
         let folder = ((try? AppModel.windowsStorageRootURL()) ?? FileManager.default.temporaryDirectory)
             .appending(path: "remote", directoryHint: .isDirectory)
@@ -31,7 +49,6 @@ extension RemoteControlService {
             bridge: AppModelRemoteBridge(model: model),
             deviceStore: RemoteDeviceStore(fileURL: folder.appending(path: "devices.json")),
             audit: RemoteAuditLog(fileURL: folder.appending(path: "audit.log")),
-            identityStore: WindowsRemoteIdentityStore.live(),
-            macName: ProcessInfo.processInfo.environment["COMPUTERNAME"] ?? "Windows")
+            identityStore: WindowsRemoteIdentityStore.live())
     }
 }

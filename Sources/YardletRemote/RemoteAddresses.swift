@@ -25,7 +25,7 @@ public struct RemoteInterfaceAddress: Equatable, Hashable, Sendable {
     }
 }
 
-/// Which of the Mac's addresses a phone is told about (§11.4, §13.3).
+/// Which of the Mac's addresses a phone is told about (§11.4, §13.3), and which path a phone came over.
 public enum RemoteAddressSelection {
     /// An address Tailscale assigns: IPv4 `100.64.0.0/10` (CGNAT) or IPv6 `fd7a:115c:a1e0::/48`.
     public static func isTailscale(_ address: String) -> Bool {
@@ -43,6 +43,15 @@ public enum RemoteAddressSelection {
     public static func isPrivateLAN(_ address: String) -> Bool {
         guard let ipv4 = bytes(of: address, family: AF_INET, count: 4) else { return false }
         return ipv4[0] == 10 || ipv4[0] == 172 && ipv4[1] & 0xF0 == 16 || ipv4[0] == 192 && ipv4[1] == 168
+    }
+
+    /// Which path a phone came over, from the numeric address it connected from: loopback, Tailscale, or else the
+    /// same network. An IPv4 address may come mapped into IPv6 (`::ffff:`), and an IPv6 one with its zone.
+    public static func path(ofPeer address: String) -> RemotePath {
+        let bare = address.split(separator: "%").first.map(String.init) ?? address
+        if bare == "127.0.0.1" || bare == "::1" || bare.hasPrefix("::ffff:127.") { return .loopback }
+        let unmapped = bare.hasPrefix("::ffff:") ? String(bare.dropFirst(7)) : bare
+        return isTailscale(unmapped) ? .tailscale : .local
     }
 
     /// An address in network order, as `inet_pton` reads it; nil when it is not one of `family`.
@@ -92,9 +101,122 @@ public enum RemoteAddressSelection {
             }
         }
         guard status == 0 else { return nil }
+        return tailnetName(host)
+    }
+
+    #elseif os(Windows)
+
+    /// Every IPv4 and IPv6 address of the computer's adapters that are up (`GetAdaptersAddresses`), each under its
+    /// adapter's name as Windows shows it. Reads only.
+    public static func systemInterfaces() -> [RemoteInterfaceAddress] {
+        guard RemoteWinsock.isStarted else { return [] }
+        let flags = ULONG(GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER)
+        // The size Windows asks for can grow between two calls, as adapters come and go.
+        var size: ULONG = 16 * 1024
+        var buffer = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: 8)
+        defer { buffer.deallocate() }
+        var status = GetAdaptersAddresses(ULONG(AF_UNSPEC), flags, nil, buffer.assumingMemoryBound(to: IP_ADAPTER_ADDRESSES.self), &size)
+        while status == ULONG(ERROR_BUFFER_OVERFLOW) {
+            buffer.deallocate()
+            buffer = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: 8)
+            status = GetAdaptersAddresses(ULONG(AF_UNSPEC), flags, nil, buffer.assumingMemoryBound(to: IP_ADAPTER_ADDRESSES.self), &size)
+        }
+        guard status == ULONG(ERROR_SUCCESS) else { return [] }
+        var result: [RemoteInterfaceAddress] = []
+        var adapter: UnsafeMutablePointer<IP_ADAPTER_ADDRESSES>? = buffer.assumingMemoryBound(to: IP_ADAPTER_ADDRESSES.self)
+        while let current = adapter {
+            adapter = current.pointee.Next
+            guard current.pointee.OperStatus == IfOperStatusUp else { continue }
+            let name = current.pointee.FriendlyName.map { String(decodingCString: $0, as: UTF16.self) } ?? ""
+            var unicast = current.pointee.FirstUnicastAddress
+            while let entry = unicast {
+                unicast = entry.pointee.Next
+                guard let address = entry.pointee.Address.lpSockaddr else { continue }
+                let family: RemoteInterfaceAddress.Family
+                switch Int32(address.pointee.sa_family) {
+                case AF_INET: family = .ipv4
+                case AF_INET6: family = .ipv6
+                default: continue
+                }
+                guard let text = numericHost(address, length: entry.pointee.Address.iSockaddrLength) else { continue }
+                result.append(RemoteInterfaceAddress(interface: name, address: text, family: family))
+            }
+        }
+        return result
+    }
+
+    /// The computer's MagicDNS name, when the system resolver names its Tailscale IPv4 address with one
+    /// (`*.ts.net`). A reverse lookup only; it blocks, so call it off the main thread.
+    public static func magicDNSName(for ipv4: String) -> String? {
+        guard RemoteWinsock.isStarted else { return nil }
+        var address = sockaddr_in()
+        address.sin_family = ADDRESS_FAMILY(AF_INET)
+        guard inet_pton(AF_INET, ipv4, &address.sin_addr) == 1 else { return nil }
+        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        let status = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getnameinfo($0, socklen_t(MemoryLayout<sockaddr_in>.size), &host, DWORD(host.count), nil, 0, NI_NAMEREQD)
+            }
+        }
+        guard status == 0 else { return nil }
+        return tailnetName(host)
+    }
+
+    /// Calls `changed` on a thread of Windows' whenever an adapter or one of its addresses changes (IP Helper's
+    /// `NotifyIpInterfaceChange` and `NotifyUnicastIpAddressChange`: a new network brings both, a new lease on the
+    /// same one only the second), until the returned stop is called.
+    public static func watchSystemInterfaces(_ changed: @escaping @Sendable () -> Void) -> () -> Void {
+        let handler = Unmanaged.passRetained(RemoteInterfaceChanges(changed))
+        var interfaces: HANDLE?
+        var addresses: HANDLE?
+        _ = NotifyIpInterfaceChange(ADDRESS_FAMILY(AF_UNSPEC), { context, _, _ in
+            if let context { Unmanaged<RemoteInterfaceChanges>.fromOpaque(context).takeUnretainedValue().changed() }
+        }, handler.toOpaque(), 0, &interfaces)
+        _ = NotifyUnicastIpAddressChange(ADDRESS_FAMILY(AF_UNSPEC), { context, _, _ in
+            if let context { Unmanaged<RemoteInterfaceChanges>.fromOpaque(context).takeUnretainedValue().changed() }
+        }, handler.toOpaque(), 0, &addresses)
+        return {
+            // Each returns once a callback under way has finished, so none is left to call the handler.
+            if let interfaces { _ = CancelMibChangeNotify2(interfaces) }
+            if let addresses { _ = CancelMibChangeNotify2(addresses) }
+            handler.release()
+        }
+    }
+
+    /// An address as text, as `getnameinfo` writes it.
+    static func numericHost(_ address: UnsafePointer<sockaddr>, length: Int32) -> String? {
+        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        guard getnameinfo(address, socklen_t(length), &host, DWORD(host.count), nil, 0, NI_NUMERICHOST) == 0 else { return nil }
+        return String(decoding: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+    #endif
+
+    #if canImport(Darwin) || os(Windows)
+    /// The name a reverse lookup wrote, when it is a Tailscale MagicDNS one.
+    private static func tailnetName(_ host: [CChar]) -> String? {
         var name = String(decoding: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
         if name.hasSuffix(".") { name.removeLast() }
         return name.lowercased().hasSuffix(".ts.net") ? name : nil
     }
     #endif
 }
+
+#if os(Windows)
+/// Winsock, which every socket call needs started first: started once for the process and never cleaned up, since
+/// it stays in use until the process ends.
+enum RemoteWinsock {
+    static let isStarted: Bool = {
+        var data = WSADATA()
+        return WSAStartup(0x0202, &data) == 0
+    }()
+}
+
+/// What `RemoteAddressSelection.watchSystemInterfaces` calls, kept alive for IP Helper's callbacks.
+private final class RemoteInterfaceChanges: Sendable {
+    let changed: @Sendable () -> Void
+
+    init(_ changed: @escaping @Sendable () -> Void) {
+        self.changed = changed
+    }
+}
+#endif

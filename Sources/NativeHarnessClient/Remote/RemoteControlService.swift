@@ -4,7 +4,7 @@ import YardletRemote
 
 /// The phone remote on this computer (docs/REMOTE_PROTOCOL.md): off until the person turns it on in
 /// Settings › Remote. While on, it serves protocol v2 (§11–§17) on every path the platform has: a
-/// listener on every interface advertised with Bonjour (the same network and Tailscale; the Mac's), and
+/// listener on every interface advertised with Bonjour (the same network and Tailscale; the Mac's and Windows'), and
 /// an outgoing socket to the Yardlet relay when one is configured and allowed. It keeps the paired
 /// devices (`devices.json` in the remote's folder: the phones' public keys and push registrations), the
 /// audit log (`audit.log` beside it, no message text) and the computer's keys in the platform's secure
@@ -675,8 +675,8 @@ private actor RemoteIdentityLoader {
     }
 }
 
-/// What the remote takes from the computer it runs on: the Mac's in Platform/macOS, and on other platforms
-/// the relay alone (Platform/Portable).
+/// What the remote takes from the computer it runs on: the Mac's in Platform/macOS, Windows' in Platform/Windows, and
+/// elsewhere the relay alone (Platform/Portable).
 struct RemoteHostPlatform {
     /// The listener for the direct paths (§11.1), or nil where the platform has none yet.
     var makeListener: (RemoteServer, RemoteIdentity) -> (any RemoteDirectListening)?

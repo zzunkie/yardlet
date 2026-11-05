@@ -7,22 +7,7 @@ import Network
 /// unlike v1 there is no need to pick addresses.
 public final class RemoteSecureListener: RemoteDirectListening, @unchecked Sendable {
     public typealias State = RemoteDirectListenerState
-
-    public struct Advertisement: Equatable, Sendable {
-        public var name: String
-        public var txt: [String: String]
-
-        public init(name: String, txt: [String: String]) {
-            self.name = name
-            self.txt = txt
-        }
-
-        /// What a Mac with this identity advertises.
-        public static func of(_ identity: RemoteIdentity) -> Advertisement {
-            Advertisement(name: "Yardlet-\(identity.discoveryID)", txt: ["v": String(RemoteProtocol.secureVersion),
-                                                                         "id": identity.discoveryID])
-        }
-    }
+    public typealias Advertisement = RemoteDirectAdvertisement
 
     private let server: RemoteServer
     private let staticKey: RemoteKeyPair
@@ -76,9 +61,9 @@ public final class RemoteSecureListener: RemoteDirectListening, @unchecked Senda
         websocket.maximumMessageSize = RemoteNoise.maxMessageLength
         // A browser always sends Origin; a web page must not reach the remote.
         websocket.setClientRequestHandler(queue) { _, headers in
-            let fromBrowser = headers.contains { $0.name.caseInsensitiveCompare("Origin") == .orderedSame }
+            let fromBrowser = RemoteWebSocket.isFromBrowser(headers.map { $0.name })
             return NWProtocolWebSocket.Response(status: fromBrowser ? .reject : .accept, subprotocol: nil,
-                                                additionalHeaders: fromBrowser ? nil : [Self.acceptedHeader])
+                                                additionalHeaders: fromBrowser ? nil : [RemoteWebSocket.acceptedHeader])
         }
         parameters.defaultProtocolStack.applicationProtocols.insert(websocket, at: 0)
         // Not shared: a second Yardlet (a QA build) must not take half of this one's phones; it falls
@@ -143,8 +128,6 @@ public final class RemoteSecureListener: RemoteDirectListening, @unchecked Senda
         onStateChange?(new)
     }
 
-    private static let acceptedHeader = (name: "X-Yardlet-Remote", value: String(RemoteProtocol.secureVersion))
-
     private func accept(_ connection: NWConnection) {
         let host = RemoteHandshakeAdmission.host(of: connection.endpoint)
         let waiting = channels.values.filter(\.isHandshaking).map { (id: ObjectIdentifier($0), host: $0.host, since: $0.acceptedAt) }
@@ -163,7 +146,7 @@ public final class RemoteSecureListener: RemoteDirectListening, @unchecked Senda
             switch state {
             case .ready:
                 let metadata = channel.connection.metadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata
-                guard metadata?.additionalServerHeaders?.contains(where: { $0.0 == Self.acceptedHeader.name }) == true else {
+                guard metadata?.additionalServerHeaders?.contains(where: { $0.0 == RemoteWebSocket.acceptedHeader.name }) == true else {
                     channel.connection.cancel()
                     return
                 }
@@ -226,10 +209,7 @@ public final class RemoteSecureListener: RemoteDirectListening, @unchecked Senda
         case let .name(name, _): address = name
         @unknown default: return .local
         }
-        let bare = address.split(separator: "%").first.map(String.init) ?? address
-        if bare == "127.0.0.1" || bare == "::1" || bare.hasPrefix("::ffff:127.") { return .loopback }
-        let unmapped = bare.hasPrefix("::ffff:") ? String(bare.dropFirst(7)) : bare
-        return RemoteAddressSelection.isTailscale(unmapped) ? .tailscale : .local
+        return RemoteAddressSelection.path(ofPeer: address)
     }
 }
 
