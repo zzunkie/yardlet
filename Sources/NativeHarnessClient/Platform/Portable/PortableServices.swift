@@ -66,18 +66,13 @@ extension ClaudeConversationCatalog {
     static func endYardletLeftovers(holding sessionID: String, configDirectory: URL) -> [Int32] { [] }
 }
 
-/// The phone remote is not offered.
-@MainActor
-final class RemoteControlService {
-    private(set) var isEnabled = false
-    private(set) var isRelayEnabled = false
-    private(set) var keepsAwakeOnPower = false
-    private(set) var devices: [RemoteDevice] = []
-    var relayURL: URL? { nil }
-
-    func setEnabled(_ enabled: Bool) {}
-    func setRelayEnabled(_ enabled: Bool) {}
-    func setKeepsAwakeOnPower(_ keepsAwake: Bool) {}
+extension RemoteHostPlatform {
+    /// The relay alone: no direct-path listener, interfaces or network watch yet, and nothing kept awake.
+    static var current: RemoteHostPlatform {
+        RemoteHostPlatform(makeListener: { _, _ in nil }, watchNetwork: { _ in nil }, interfaces: { [] },
+                           resolveName: { _ in nil }, isOnPower: { false }, holdAwake: { _ in nil },
+                           computerName: ProcessInfo.processInfo.hostName)
+    }
 }
 
 /// No helper keeps the computer awake.

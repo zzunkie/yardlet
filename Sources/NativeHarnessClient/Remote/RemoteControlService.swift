@@ -1,17 +1,15 @@
-import AuthenticationServices
 import Foundation
-import Network
 import Observation
-import YardletLidSleep
 import YardletRemote
 
-/// The phone remote on this Mac (docs/REMOTE_PROTOCOL.md): off until the person turns it on in
-/// Settings › Remote. While on, it serves protocol v2 (§11–§17) on every path: a listener on every
-/// interface advertised with Bonjour (the same network and Tailscale), and an outgoing socket to the
-/// Yardlet relay when one is configured and allowed. It keeps the paired devices
-/// (`~/.yardlet/remote/devices.json`: the phones' public keys and push registrations), the audit log (`~/.yardlet/remote/audit.log`, no message text) and the Mac's keys in the
-/// Keychain. The server, listeners and relay run off the main actor; this object holds what
-/// Settings shows.
+/// The phone remote on this computer (docs/REMOTE_PROTOCOL.md): off until the person turns it on in
+/// Settings › Remote. While on, it serves protocol v2 (§11–§17) on every path the platform has: a
+/// listener on every interface advertised with Bonjour (the same network and Tailscale; the Mac's), and
+/// an outgoing socket to the Yardlet relay when one is configured and allowed. It keeps the paired
+/// devices (`devices.json` in the remote's folder: the phones' public keys and push registrations), the
+/// audit log (`audit.log` beside it, no message text) and the computer's keys in the platform's secure
+/// store. The server, listeners and relay run off the main actor; this object holds what Settings shows.
+/// What it takes from the platform is in `RemoteHostPlatform`.
 @MainActor
 @Observable
 final class RemoteControlService {
@@ -58,7 +56,7 @@ final class RemoteControlService {
     private(set) var isRelayEnabled: Bool
     private(set) var keepsAwakeOnPower: Bool
     /// The v2 listener's state; a rendering test sets it where nothing listens.
-    var secureState: RemoteSecureListener.State = .stopped
+    var secureState: RemoteDirectListenerState = .stopped
     /// The relay client's state; a rendering test sets it where nothing connects.
     var relayState: RemoteRelayClient.State = .off
     private(set) var devices: [RemoteDevice] = []
@@ -92,11 +90,12 @@ final class RemoteControlService {
     @ObservationIgnored private(set) var identity: RemoteIdentity?
     /// False where nothing may listen (tests that drive the server directly, visual fixtures).
     @ObservationIgnored private let listens: Bool
-    @ObservationIgnored private var secureListener: RemoteSecureListener?
+    @ObservationIgnored private let platform: RemoteHostPlatform
+    @ObservationIgnored private var secureListener: (any RemoteDirectListening)?
     @ObservationIgnored private var relayClient: RemoteRelayClient?
     @ObservationIgnored private let accountToken: any RemoteSecretStoring
     @ObservationIgnored private let webSignIn: @MainActor (URL, String) async throws -> URL
-    @ObservationIgnored private var monitor: NWPathMonitor?
+    @ObservationIgnored private var stopWatchingNetwork: (() -> Void)?
     @ObservationIgnored private var started = false
     @ObservationIgnored private var startup: Task<Void, Never>?
     @ObservationIgnored private var activation: Task<Void, Never>?
@@ -106,7 +105,7 @@ final class RemoteControlService {
     @ObservationIgnored private var lookedUpAddress: String?
     /// Whether the Mac runs on power now (no battery, or charging); read again every minute while it matters.
     @ObservationIgnored private let isOnPower: @MainActor () -> Bool
-    @ObservationIgnored private var awakeActivity: NSObjectProtocol?
+    @ObservationIgnored private var releaseAwake: (() -> Void)?
     @ObservationIgnored private var powerCheck: Timer?
 
     init(
@@ -118,24 +117,27 @@ final class RemoteControlService {
         webSignIn: @escaping @MainActor (URL, String) async throws -> URL = { _, _ in throw CancellationError() },
         defaults: UserDefaults = .yardlet,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        interfaces: @escaping @Sendable () -> [RemoteInterfaceAddress] = RemoteAddressSelection.systemInterfaces,
-        resolveName: @escaping @Sendable (String) -> String? = RemoteAddressSelection.magicDNSName(for:),
+        platform: RemoteHostPlatform = .current,
+        interfaces: (@Sendable () -> [RemoteInterfaceAddress])? = nil,
+        resolveName: (@Sendable (String) -> String?)? = nil,
         listens: Bool = true,
-        isOnPower: @escaping @MainActor () -> Bool = { !PowerConditions.current().onBattery },
-        macName: String = Host.current().localizedName ?? "Mac",
+        isOnPower: (@MainActor () -> Bool)? = nil,
+        macName: String? = nil,
         appVersion: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
     ) {
+        let macName = macName ?? platform.computerName
+        self.platform = platform
         self.defaults = defaults
         self.environment = environment
-        self.interfaces = interfaces
-        self.resolveName = resolveName
+        self.interfaces = interfaces ?? platform.interfaces
+        self.resolveName = resolveName ?? platform.resolveName
         self.macName = macName
         self.deviceStore = deviceStore
         self.identityStore = RemoteIdentityLoader(store: identityStore)
         self.accountToken = accountToken
         self.webSignIn = webSignIn
         self.listens = listens
-        self.isOnPower = isOnPower
+        self.isOnPower = isOnPower ?? platform.isOnPower
         isEnabled = defaults.bool(forKey: Self.enabledKey)
         isRelayEnabled = defaults.object(forKey: Self.relayEnabledKey) as? Bool ?? true
         keepsAwakeOnPower = defaults.bool(forKey: Self.keepAwakeKey)
@@ -145,26 +147,6 @@ final class RemoteControlService {
             configuration: RemoteServer.Configuration(server: RemoteServerInfo(name: macName, appVersion: appVersion),
                                                       macKey: nil),
             bridge: bridge, devices: deviceStore, audit: audit)
-    }
-
-    /// The remote for the app: its bridge to the model, its files under `~/.yardlet/remote`, and its
-    /// keys in the Keychain.
-    static func live(model: AppModel) -> RemoteControlService {
-        let folder = FileManager.default.homeDirectoryForCurrentUser
-            .appending(path: YardletProduct.storageDirectoryName, directoryHint: .isDirectory)
-            .appending(path: "remote", directoryHint: .isDirectory)
-        return RemoteControlService(
-            bridge: AppModelRemoteBridge(model: model, makePreview: RemoteImagePreviewMaker.make, browser: RemoteTabBridge.Environment(
-                client: AppModel.macBrowserClient, usesMacEditingCommands: true,
-                marksTypedSecrets: {
-                    let vault = MacAgentToolService.shared.vault
-                    return vault.isAllowedBuild && (vault.isEnabled || vault.isWalletEnabled)
-                })),
-            deviceStore: RemoteDeviceStore(fileURL: folder.appending(path: "devices.json")),
-            audit: RemoteAuditLog(fileURL: folder.appending(path: "audit.log")),
-            identityStore: KeychainRemoteIdentityStore.live(),
-            accountToken: KeychainRemoteSecret.accountToken(),
-            webSignIn: { url, scheme in try await RemoteAccountSignIn().signIn(at: url, callbackScheme: scheme) })
     }
 
     // MARK: - Account (§14.4)
@@ -247,8 +229,6 @@ final class RemoteControlService {
             keep(account: signedIn)
             await server.setAcceptsLinks(true)
         } catch is CancellationError {
-            return
-        } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
             return
         } catch {
             accountError = error.localizedDescription
@@ -342,17 +322,16 @@ final class RemoteControlService {
     /// The Mac is kept from sleeping on its own now, as Codex's "Keep this Mac awake" does: the remote is
     /// on, the setting is on and the Mac is on power. The display may still sleep, and the hold ends with
     /// Yardlet.
-    var isKeepingAwake: Bool { awakeActivity != nil }
+    var isKeepingAwake: Bool { releaseAwake != nil }
 
     private func refreshAwake() {
         let wanted = started && isEnabled && keepsAwakeOnPower
         let holds = wanted && isOnPower()
-        if holds, awakeActivity == nil {
-            awakeActivity = ProcessInfo.processInfo.beginActivity(
-                options: [.idleSystemSleepDisabled], reason: "Remote connections are allowed and this Mac stays awake on power")
-        } else if !holds, let awakeActivity {
-            ProcessInfo.processInfo.endActivity(awakeActivity)
-            self.awakeActivity = nil
+        if holds, releaseAwake == nil {
+            releaseAwake = platform.holdAwake("Remote connections are allowed and this Mac stays awake on power")
+        } else if !holds, let releaseAwake {
+            releaseAwake()
+            self.releaseAwake = nil
         }
         // Plugged in or not is read again every minute while the setting wants it.
         if wanted, powerCheck == nil {
@@ -549,9 +528,7 @@ final class RemoteControlService {
         let prepared = await ensureIdentity()
         guard !Task.isCancelled, isEnabled else { return }
         if let identity = prepared {
-            if listens, secureListener == nil {
-                let listener = RemoteSecureListener(server: server, staticKey: identity.noise,
-                                                    advertisement: .of(identity))
+            if listens, secureListener == nil, let listener = platform.makeListener(server, identity) {
                 listener.onStateChange = { [weak self] state in
                     Task { @MainActor in
                         self?.secureState = state
@@ -564,16 +541,13 @@ final class RemoteControlService {
             if isRelayEnabled { startRelay() }
             Task { await refreshAccount() }
         }
-        guard monitor == nil else { return }
-        let monitor = NWPathMonitor()
-        monitor.pathUpdateHandler = { [weak self] _ in
+        guard stopWatchingNetwork == nil else { return }
+        stopWatchingNetwork = platform.watchNetwork { [weak self] in
             Task { @MainActor in
                 self?.refreshAddresses()
                 self?.relayClient?.reconnectSoon()
             }
         }
-        monitor.start(queue: DispatchQueue(label: "yardlet.remote.paths"))
-        self.monitor = monitor
     }
 
     private func deactivate(reason: String) {
@@ -581,8 +555,8 @@ final class RemoteControlService {
         activation?.cancel()
         activation = nil
         pairingRequestID = nil
-        monitor?.cancel()
-        monitor = nil
+        stopWatchingNetwork?()
+        stopWatchingNetwork = nil
         pairing = nil
         secureListener?.stop()
         secureListener = nil
@@ -697,4 +671,43 @@ private actor RemoteIdentityLoader {
         hasLoaded = true
         return identity
     }
+}
+
+/// What the remote takes from the computer it runs on: the Mac's in Platform/macOS, and on other platforms
+/// the relay alone (Platform/Portable).
+struct RemoteHostPlatform {
+    /// The listener for the direct paths (§11.1), or nil where the platform has none yet.
+    var makeListener: (RemoteServer, RemoteIdentity) -> (any RemoteDirectListening)?
+    /// Calls back on each change of the computer's networks until the returned stop is called; nil where
+    /// changes are not watched.
+    var watchNetwork: (@escaping @Sendable () -> Void) -> (() -> Void)?
+    var interfaces: @Sendable () -> [RemoteInterfaceAddress]
+    var resolveName: @Sendable (String) -> String?
+    /// Whether the computer runs on power now (no battery, or charging).
+    var isOnPower: @MainActor () -> Bool
+    /// Keeps the computer from sleeping on its own, for the reason given, until the returned release is
+    /// called; nil where it cannot.
+    var holdAwake: (String) -> (() -> Void)?
+    /// The name phones and other computers see.
+    var computerName: String
+}
+
+/// A secret the remote keeps in the platform's secure store: the relay account's token (§14.4).
+protocol RemoteSecretStoring: Sendable {
+    func load() -> String?
+    func save(_ value: String)
+    func delete()
+}
+
+final class RemoteMemorySecret: RemoteSecretStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String?
+
+    init(_ value: String? = nil) {
+        self.value = value
+    }
+
+    func load() -> String? { lock.withLock { value } }
+    func save(_ value: String) { lock.withLock { self.value = value } }
+    func delete() { lock.withLock { value = nil } }
 }

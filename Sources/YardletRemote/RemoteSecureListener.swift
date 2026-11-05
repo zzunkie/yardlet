@@ -5,13 +5,8 @@ import Network
 /// or a free one when that is taken, advertised with Bonjour under the Mac's discovery id rather than its
 /// name. Every connection is a `RemoteSecureConnection`; nothing is served before its Noise handshake, so
 /// unlike v1 there is no need to pick addresses.
-public final class RemoteSecureListener: @unchecked Sendable {
-    public enum State: Equatable, Sendable {
-        case stopped
-        case starting
-        case ready(port: UInt16)
-        case failed(String)
-    }
+public final class RemoteSecureListener: RemoteDirectListening, @unchecked Sendable {
+    public typealias State = RemoteDirectListenerState
 
     public struct Advertisement: Equatable, Sendable {
         public var name: String

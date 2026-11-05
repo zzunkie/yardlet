@@ -1,4 +1,10 @@
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(WinSDK)
+import WinSDK
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import Foundation
 
 /// An address one of the Mac's interfaces holds.
@@ -23,27 +29,30 @@ public struct RemoteInterfaceAddress: Equatable, Hashable, Sendable {
 public enum RemoteAddressSelection {
     /// An address Tailscale assigns: IPv4 `100.64.0.0/10` (CGNAT) or IPv6 `fd7a:115c:a1e0::/48`.
     public static func isTailscale(_ address: String) -> Bool {
-        var ipv4 = in_addr()
-        if inet_pton(AF_INET, address, &ipv4) == 1 {
-            let value = UInt32(bigEndian: ipv4.s_addr)
-            return value & 0xFFC0_0000 == 0x6440_0000
+        if let ipv4 = bytes(of: address, family: AF_INET, count: 4) {
+            return ipv4[0] == 100 && ipv4[1] & 0xC0 == 64
         }
-        var ipv6 = in6_addr()
         let bare = address.split(separator: "%", maxSplits: 1).first.map(String.init) ?? address
-        if inet_pton(AF_INET6, bare, &ipv6) == 1 {
-            let bytes = withUnsafeBytes(of: ipv6) { Array($0) }
-            return bytes.prefix(6).elementsEqual([0xFD, 0x7A, 0x11, 0x5C, 0xA1, 0xE0])
+        if let ipv6 = bytes(of: bare, family: AF_INET6, count: 16) {
+            return ipv6.prefix(6).elementsEqual([0xFD, 0x7A, 0x11, 0x5C, 0xA1, 0xE0])
         }
         return false
     }
 
     /// A private IPv4 address of the same network (RFC 1918), which v2 names to phones as a direct path.
     public static func isPrivateLAN(_ address: String) -> Bool {
-        var ipv4 = in_addr()
-        guard inet_pton(AF_INET, address, &ipv4) == 1 else { return false }
-        let value = UInt32(bigEndian: ipv4.s_addr)
-        return value & 0xFF00_0000 == 0x0A00_0000 || value & 0xFFF0_0000 == 0xAC10_0000 || value & 0xFFFF_0000 == 0xC0A8_0000
+        guard let ipv4 = bytes(of: address, family: AF_INET, count: 4) else { return false }
+        return ipv4[0] == 10 || ipv4[0] == 172 && ipv4[1] & 0xF0 == 16 || ipv4[0] == 192 && ipv4[1] == 168
     }
+
+    /// An address in network order, as `inet_pton` reads it; nil when it is not one of `family`.
+    private static func bytes(of address: String, family: Int32, count: Int) -> [UInt8]? {
+        var bytes = [UInt8](repeating: 0, count: count)
+        let read = bytes.withUnsafeMutableBytes { inet_pton(family, address, $0.baseAddress) }
+        return read == 1 ? bytes : nil
+    }
+
+    #if canImport(Darwin)
 
     /// Every IPv4 and IPv6 address of the Mac's interfaces that are up (`getifaddrs`). Reads only.
     public static func systemInterfaces() -> [RemoteInterfaceAddress] {
@@ -87,4 +96,5 @@ public enum RemoteAddressSelection {
         if name.hasSuffix(".") { name.removeLast() }
         return name.lowercased().hasSuffix(".ts.net") ? name : nil
     }
+    #endif
 }
