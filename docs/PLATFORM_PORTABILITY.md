@@ -244,7 +244,11 @@ refused. A host's window shows a request card's words without its answers, and n
 or Settings. The remote serves the relay alone: no direct paths (a listener on every interface, the interfaces,
 Bonjour), no relay account to sign in to or link through (docs/REMOTE_PROTOCOL.md, "12.1 Linking through an
 account"), and nothing that keeps the computer awake on power. A Windows build carries no relay of its own, so the
-remote reaches one only from `YARDLET_REMOTE_RELAY_URL` or the `Yardlet.remote.relayURL` setting.
+remote reaches one only from `YARDLET_REMOTE_RELAY_URL` or the `Yardlet.remote.relayURL` setting. Until Foundation
+there hands frames over whole (swiftlang/swift-corelibs-foundation#5255), its relay socket cannot tell a frame that
+does not decrypt from a piece of one: a paired device that sends such a frame holds the frames after it, other phones'
+too, until the bytes reach the limit (4 + 65,535 bytes) and are dropped, and a phone whose frame was dropped is out of
+step with its cipher's nonce and has to connect again.
 
 ## The check that blocks new violations
 
