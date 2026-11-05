@@ -1975,7 +1975,11 @@ private struct TaskRow: View {
                     }
                 }
             }
-            .buttonStyle(.borderless)
+            // Plain, not borderless: a borderless button keeps the press, and the row's drag
+            // (`SidebarTaskEntry`) never starts. A plain button's press gives way to the drag once it
+            // passes the system's threshold, and a click still selects the row. Under the window's tint
+            // both draw the same.
+            .buttonStyle(.plain)
             .parityPointer()
             .accessibilityLabel("\(title), \(session.harness.displayName)")
             .accessibilityValue(accessibilityStatus)
