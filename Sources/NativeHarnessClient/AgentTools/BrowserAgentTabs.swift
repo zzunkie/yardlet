@@ -274,6 +274,8 @@ final class BrowserAgentTabs: BrowserAgentTabDirectory {
         page.agentActFailed = { [weak tab] in tab?.undoAgentInput() }
         page.openFailure = { [weak tab] in tab?.openFailure }
         page.viewport = { [weak tab] in tab?.viewport }
+        page.askForFrame = { [weak tab] in tab?.askForFrame() }
+        page.lastFrameAt = { [weak tab] in tab?.lastViewFrameAt }
         page.emulation = { [weak tab] in tab?.emulation }
         page.emulate = { [weak tab] in try await tab?.emulate($0) }
         page.emulateColorScheme = { [weak tab] in try await tab?.emulateColorScheme($0) }

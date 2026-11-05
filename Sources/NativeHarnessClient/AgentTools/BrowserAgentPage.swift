@@ -54,6 +54,10 @@ final class BrowserAgentPage {
     var openFailure: () -> BrowserTabOpenFailure? = { nil }
     /// The size the host draws the tab at (`BrowserTab.viewport`); nil in tests.
     var viewport: () -> BrowserViewport? = { nil }
+    /// Asks the engine for a fresh frame of the page (`BrowserTab.askForFrame`), and when the last one came
+    /// (`BrowserTab.lastViewFrameAt`); tests have no frames.
+    var askForFrame: () -> Void = {}
+    var lastFrameAt: () -> ContinuousClock.Instant? = { nil }
     /// The agent acts on the page, as opposed to reading it (`BrowserTab.noteAgentInput`), and its act failed
     /// (`BrowserTab.undoAgentInput`).
     var agentActs: () -> Void = {}
