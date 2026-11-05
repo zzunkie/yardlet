@@ -1,6 +1,6 @@
 import { handleAccountRoute } from "./account-api";
 import { isRoom } from "./keys";
-import { roomLocation, roomObjectName } from "./placement";
+import { moveRoomPath, moveRoomsUntil, roomLocation, roomObjectName } from "./placement";
 
 export { Account } from "./account";
 export { Room } from "./room";
@@ -8,7 +8,7 @@ export { Room } from "./room";
 const ROOM_PATH = /^\/v1\/rooms\/([^/]+)\/(host|connect)$/;
 
 export default {
-  async fetch(request, env): Promise<Response> {
+  async fetch(request, env, ctx): Promise<Response> {
     const { pathname } = new URL(request.url);
     if (pathname === "/v1/health") {
       return request.method === "GET" ? new Response("ok") : new Response(null, { status: 405 });
@@ -20,6 +20,9 @@ export default {
     if (!isRoom(room)) return new Response("malformed room", { status: 400 });
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("expected a WebSocket upgrade", { status: 426 });
+    }
+    if (match[2] === "connect" && Date.now() < moveRoomsUntil) {
+      ctx.waitUntil(env.ROOM.get(env.ROOM.idFromName(room)).fetch(`https://relay${moveRoomPath}`, { method: "POST" }));
     }
     const location = roomLocation(request.cf?.country as string | undefined, request.cf?.continent as string | undefined);
     return env.ROOM.get(env.ROOM.idFromName(roomObjectName(room)), location ? { locationHint: location } : undefined)

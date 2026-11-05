@@ -10,6 +10,16 @@ export function roomObjectName(room: string): string {
   return `v2:${room}`;
 }
 
+/** The internal request that tells a room's object from before `roomObjectName` to let its sockets go. A
+ * code update keeps hibernated WebSockets, so a Mac connected through the change stays in the old object
+ * while its phones now look for it in the new one; told this, the old object closes the Mac's socket with
+ * 1012 and the Mac, connecting again, lands in the new object. The Worker never routes outside requests here. */
+export const moveRoomPath = "/v1/internal/move-room";
+
+/** Until when a phone's connection also tells the room's old object to let its Mac go. Every Mac has
+ * connected again by then (a restart, sleep or a network change reconnects it). */
+export const moveRoomsUntil = Date.UTC(2026, 11, 31);
+
 const northeastAsia = new Set(["KR", "JP", "TW", "HK", "MO", "CN", "MN"]);
 const southeastAsia = new Set(["SG", "MY", "ID", "TH", "VN", "PH", "KH", "LA", "MM", "BN", "TL"]);
 const middleEast = new Set(["AE", "SA", "QA", "BH", "KW", "OM", "IL", "JO", "LB", "IQ", "IR", "YE", "SY", "TR"]);

@@ -3,7 +3,7 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "c
 import { describe, expect, it } from "vitest";
 import { hostChallengeMessage } from "../src/keys";
 import { roomLocation, roomObjectName } from "../src/placement";
-import { RELAY, connect, macFrame, macKey, openMac, openPhone, upgrade } from "./helpers";
+import { Peer, RELAY, connect, macFrame, macKey, openMac, openPhone, upgrade } from "./helpers";
 
 const bytes = (...values: number[]) => new Uint8Array(values);
 
@@ -86,6 +86,25 @@ describe("the Mac's socket", () => {
     const { mac } = await openMac();
     mac.ws.send("ping");
     expect(await mac.next()).toBe("pong");
+  });
+
+  it("lets a Mac still in a room's old object go when a phone asks for the room", async () => {
+    const key = await macKey();
+    // A Mac connected before rooms moved to their new object names: its socket is in the old object.
+    const response = await env.ROOM.get(env.ROOM.idFromName(key.room)).fetch(`${RELAY}/v1/rooms/${key.room}/host`, {
+      headers: { Upgrade: "websocket" },
+    });
+    const stale = new Peer(response.webSocket!);
+    const { nonce } = await stale.json();
+    stale.ws.send(JSON.stringify({ t: "auth", key: key.publicKey, sig: await key.sign(hostChallengeMessage(key.room, nonce as string)) }));
+    expect(await stale.json()).toEqual({ t: "ready" });
+    // A phone asks for the room through the Worker, which looks in the new object and tells the old one.
+    expect((await upgrade(`/v1/rooms/${key.room}/connect`)).status).toBe(404);
+    expect(await stale.closeCode()).toBe(1012);
+    // The Mac connects again and lands in the room's new object, where its phones find it.
+    const { mac } = await openMac(key);
+    const { phone: again } = await openPhone(key.room, mac);
+    again.ws.close(1000, "done");
   });
 
   it("replaces an older Mac socket and closes it and its phones with 4409", async () => {

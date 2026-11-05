@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { apnsCredentials, sendApnsPush } from "./apns";
 import { fcmCredentials, parsePush, sendFcmPush, type Push, type PushError } from "./fcm";
 import { toBase64Url, verifyHostAuth } from "./keys";
+import { moveRoomPath } from "./placement";
 
 /** Phones the Mac answered. */
 const MAX_PHONES = 8;
@@ -56,8 +57,20 @@ export class Room extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
-    const [, , , room, role] = new URL(request.url).pathname.split("/");
+    const { pathname } = new URL(request.url);
+    if (pathname === moveRoomPath) return this.letSocketsGo();
+    const [, , , room, role] = pathname.split("/");
     return role === "host" ? this.acceptMac(room) : this.acceptPhone(request.headers.get("CF-Connecting-IP") ?? "");
+  }
+
+  /** A room's object from before `roomObjectName` closes what it still holds, so its Mac connects again into
+   * the room's new object (`moveRoomPath`). */
+  private letSocketsGo(): Response {
+    for (const ws of this.ctx.getWebSockets()) {
+      const state = stateOf(ws);
+      if (state && !state.closed) closeSocket(ws, state, 1012, "the room moved");
+    }
+    return new Response(null, { status: 204 });
   }
 
   private async acceptMac(room: string): Promise<Response> {

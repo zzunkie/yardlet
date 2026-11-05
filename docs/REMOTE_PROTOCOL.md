@@ -848,6 +848,9 @@ and times, and a push's token (FCM's registration token or APNs' device token) w
    relay can die without a word (the next `ping` is then answered by a reset), so the pings are what find it. The Mac
    reconnects when no `pong` came for 45 s and whenever its socket ends: within a quarter of a second when the room
    had stayed open for 10 s, since every phone of the room is waiting, then after 1, 2, 4 … 32 s while attempts fail.
+   A room's relay object can move (the relay places a room near its Mac by the country it is first opened from); a
+   Mac socket left in the old object is closed with 1012 when a phone asks for the room, and the Mac connects again
+   into the new one as above.
 8. Push, at most 60 a minute per room:
 
    ```json
