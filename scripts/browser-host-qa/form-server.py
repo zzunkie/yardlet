@@ -439,6 +439,30 @@ VAULT_OTP_CASES = '''<!doctype html><meta charset="utf-8"><title>Vault code fiel
   <div role="dialog"><h1>Enter your verification code</h1><p>Use your code generator app to generate a code and enter it below.</p>
     <label>Enter code<input data-target name="text" inputmode="numeric" autocomplete="on"></label><button>Next</button></div>
 </section>
+<section data-case="linkedin authenticator step" data-fill="1" data-offer="1">
+  <div id="auth-app-div"><h1 class="content__header">인증앱에서 받은 코드 입력하기</h1>
+    <form id="two-step-challenge" action="/checkpoint/challenge/verify" method="post"><input name="csrfToken" type="hidden" value="ajax:0">
+      <div class="form__content"><input name="challengeId" type="hidden" value="AQ">
+        <input data-target class="form__input--text input_verification_pin" name="pin" maxlength="6" pattern="[0-9]*" autocorrect="off" role="textbox" autocomplete="off" aria-label="코드 입력" aria-describedby="phone-pin-error" id="input__phone_verification_pin" aria-required="true" type="tel">
+        <div id="phone-pin-error" class="form__label--error hidden__imp"></div>
+        <div class="recognized__device"><input name="recognizedDevice" checked id="recognizedDevice" type="checkbox"><label for="recognizedDevice">기기 저장</label></div></div>
+      <div class="form__action"><button id="two-step-submit-button" type="submit">번호 전송</button>
+        <p>인증앱이나 이전에 인식된 기기가 없으신가요? LinkedIn을 이용하려면 <a href="#">본인 인증</a>을 하세요.</p></div></form></div>
+  <div id="recovery-code-div" hidden><h1>8자리 복구 코드 입력</h1>
+    <form id="two-step-challenge-recovery-code" action="/checkpoint/challenge/verifyCode" method="post"><input name="recoveryCode" maxlength="8"></form></div>
+</section>
+<section data-case="linkedin step with a label and no length" data-fill="1" data-offer="1">
+  <div><h1>Enter the code from your authenticator app</h1>
+    <form id="two-step-challenge" method="post"><input name="csrfToken" type="hidden" value="ajax:0">
+      <label for="input__phone_verification_pin">Enter code</label>
+      <input data-target name="pin" type="text" autocomplete="off" id="input__phone_verification_pin" required>
+      <input name="recognizedDevice" checked type="checkbox"> Remember this device
+      <button type="submit">Submit</button><p>No authenticator app? <a href="#">Verify your identity</a></p></form></div>
+</section>
+<section data-case="phone number to verify" data-fill="0" data-offer="0">
+  <h2>Verify your phone number</h2><p>We'll text a 6-digit verification code to this number.</p>
+  <form><label>Phone number<input data-target type="tel" id="input__phone_verification_number" name="phoneVerification"></label></form>
+</section>
 <section data-case="japanese label" data-fill="1" data-offer="1">
   <form><label>確認コード<input data-target type="text"></label></form>
 </section>

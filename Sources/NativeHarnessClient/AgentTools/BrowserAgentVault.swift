@@ -196,7 +196,7 @@ enum VaultPageScripts {
         // read them, and in other languages.
         const codeNames = codePattern(
           /one ?time|\s(otp|otc|totp|mfa|2fa|tfa|2sv|sms)\s|(otp|otc|totp|mfa|2fa|sms)\s?(code|token|pin|pass|input|field|value)/,
-          /(two|2|second)\s?(factor|step)|verif\w*\s?code|\svcode\s|auth\w*\s?code|authenticator|security\s?code|passcode/,
+          /(two|2|second)\s?(factor|step)|verif\w*\s?code|verification\s?pin|\svcode\s|auth\w*\s?code|authenticator|security\s?code|passcode/,
           /approvals?\s?code|log\s?in\s?code|sign\s?in\s?code|code\s(we\s)?sent|sent\s(you\s)?(a\s)?code/,
           /인증\s?(번호|코드)|보안\s?코드|확인\s?(코드|번호)|일회용|2\s?단계|otp\s?번호|전송된\s?코드|받은\s?코드/,
           /認証\s?(コード|番号)|確認\s?(コード|番号)|ワンタイム|セキュリティ\s?コード|2\s?段階|検証\s?コード/,
