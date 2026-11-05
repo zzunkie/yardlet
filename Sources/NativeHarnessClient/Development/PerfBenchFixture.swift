@@ -514,6 +514,14 @@ private final class PerfBenchRunner {
 
     // MARK: Phases
 
+    /// The views whose bodies a phase counts (`ViewBodyCensus`): the window and the views around the
+    /// conversation, and the conversation's timeline, its turns drawn whole, the rows it laid out anew to
+    /// measure them, and the turns' hosting views it made.
+    private static let countedBodies: [ViewBodyCensus.Body] = [
+        .mainWindow, .taskSurface, .sessionRail, .composer, .sidebarRow,
+        .conversationTimeline, .conversationTurn, .conversationRowLaidOut, .conversationTurnHosting
+    ]
+
     /// Writes `<n>-<name>.ready` for the script, waits for its `.go` (it starts its sampler then), and
     /// measures for `seconds`.
     private func phase(_ name: String, seconds: Double, frames: Bool = false,
@@ -533,6 +541,8 @@ private final class PerfBenchRunner {
         let shownItems = shownItemCount()
         steps.reset()
         EventCostLog.reset()
+        ViewBodyCensus.isEnabled = true
+        ViewBodyCensus.reset()
         let started = ContinuousClock.now
         let cpu = ProcessClock.threadCPUSeconds()
         let footprint = ProcessClock.footprintMiB()
@@ -554,7 +564,8 @@ private final class PerfBenchRunner {
             "shownTaskRunning": isRunning(PerfBenchFixture.shownTaskID),
             "memory": ["footprintStartMiB": round2(footprint), "footprintEndMiB": round2(footprintAtEnd),
                        "footprintGrowthMiB": round2(footprintAtEnd - footprint)],
-            "events": EventCostLog.summary()
+            "events": EventCostLog.summary(),
+            "bodies": Dictionary(uniqueKeysWithValues: Self.countedBodies.map { ("\($0)Count", ViewBodyCensus[$0]) })
         ]
         if let probe { entry["frames"] = probe.summary(seconds: elapsed) }
         phases.append(entry)
