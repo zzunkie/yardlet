@@ -617,6 +617,17 @@ final class RemoteSecureTests: XCTestCase {
         XCTAssertEqual(RemoteAddressSelection.path(ofPeer: "::ffff:192.168.1.30"), .local)
     }
 
+    /// What both listeners hold of connections that have not finished their handshakes (§7): a new one from an address
+    /// that already has four waiting closes that address's oldest, and one past sixteen in all closes the oldest.
+    func testAListenerHoldsFewConnectionsThatHaveNotFinishedTheirHandshakes() {
+        let start = Date(timeIntervalSince1970: 0)
+        let one = (0..<4).map { (id: $0, host: "10.0.0.9", since: start.addingTimeInterval(Double($0))) }
+        XCTAssertEqual(RemoteHandshakeAdmission.displaced(waiting: one, host: "10.0.0.9"), [0])
+        XCTAssertEqual(RemoteHandshakeAdmission.displaced(waiting: one, host: "10.0.0.10"), [])
+        let many = (0..<16).map { (id: $0, host: "10.0.0.\($0 % 8)", since: start.addingTimeInterval(Double($0))) }
+        XCTAssertEqual(RemoteHandshakeAdmission.displaced(waiting: many, host: "10.0.0.99"), [0])
+    }
+
     /// A client's frame: masked, its length in the fewest bytes unless `wideLength` asks for eight.
     static func clientFrame(_ opcode: RemoteWebSocket.Opcode, _ payload: Data, final: Bool = true, reserved: UInt8 = 0,
                             wideLength: Bool = false) -> Data {
