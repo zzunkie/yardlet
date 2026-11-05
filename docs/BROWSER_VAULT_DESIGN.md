@@ -753,10 +753,14 @@ apps, and backup and restore work only between devices of the same kind
      user, card, birth year, name, address and so on). A field in a form with a card number or expiry field is the
      card's security code, which Chrome's `kCardCvcRe` also calls `security code` and `verification`.
   3. Its words are its name, id, placeholder, title, `aria-label`, `aria-labelledby` and `<label>` text, with camelCase
-     split. Names of a one-time code (`otp`, `one-time`, `2fa`, `mfa`, `totp`, `verification code`, `security code`,
-     `approvals_code`, `login code`, `passcode`, two-step and two-factor, and in Korean, Japanese, Chinese, Spanish,
-     Portuguese, French, German, Italian and Russian, such as 인증번호, 보안 코드, 確認コード and 验证码) mark a code
-     field. A word alone such as `code`, `pin` or 코드 is weaker.
+     split. Names of a one-time code (`otp`, `one-time`, `2fa`, `mfa`, `totp`, `verification code`, `verification pin`,
+     `security code`, `approvals_code`, `login code`, `passcode`, two-step and two-factor, and in Korean, Japanese,
+     Chinese, Spanish, Portuguese, French, German, Italian and Russian, such as 인증번호, 보안 코드, 確認コード and 验证码)
+     mark a code field. A word alone such as `code`, `pin` or 코드 is weaker, and so is a label such as "Enter code" or
+     "코드 입력". LinkedIn's two-step field is the case that needed `verification pin`: its id,
+     `input__phone_verification_pin`, says `phone`, and its label "코드 입력" and its name `pin` are only weaker words, so
+     the field read as a phone field and an agent's fill was refused on 2026-11-05. "Verify PIN" is left out: a form
+     that sets a PIN asks for it again under that name.
   4. The page asks for a code around the field when the nearest region holding no other field to type in (checkboxes,
      buttons and one-character boxes beside a one-character box do not count), within 4,000 characters of text, says
      a two-step, verification or one-time phrase and a code or digit word. Instagram's two-step dialog is the case that
