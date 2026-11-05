@@ -80,7 +80,9 @@ macOS it re-exports CryptoKit and adds nothing to the app; elsewhere it builds B
 **The phone remote off macOS.** Its direct-path listener on the Mac (`RemoteSecureListener` on Network.framework) is
 left out of a build on another platform. Windows has its own, `RemoteWinsockListener` (`#if os(Windows)`): Winsock on
 every interface, one thread serving every socket with `WSAPoll`, and DNS-SD from Windows itself (`DnsServiceRegister`,
-Windows 10 1903 and later) for the Bonjour advertisement. Winsock hands it bytes, so it speaks the WebSocket with
+Windows 10 1903 and later) for the Bonjour advertisement. Its sockets are made non-inheritable: Winsock's are
+inheritable, and a harness Yardlet started while the remote was on held the listening socket open after the remote was
+turned off (seen on the CI runner). Winsock hands it bytes, so it speaks the WebSocket with
 `RemoteWebSocket`, which builds everywhere and which the Mac tests: the opening request read up to 8 KB and answered
 only for a WebSocket upgrade without Origin, and the phone's frames read back into whole messages, so the Windows
 listener needs none of the piece joining below. The Mac's listener shares its Origin rule, its accepted header and how
