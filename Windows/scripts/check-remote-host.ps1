@@ -359,7 +359,7 @@ $null = Wait-Closed $text 10
 $summary.textClosedWith = "$([int]$text.CloseStatus)"
 $text.Dispose()
 if ($summary.textClosedWith -ne '1003') { Finish 'a text frame did not close with 1003' }
-$summary.bonjour = try { ([ServeBonjour]::Browse('_yardlet._tcp.local', 5000)) -join ', ' } catch { "browse failed: $($_.Exception.Message)" }
+$summary.bonjour = try { @([ServeBonjour]::Browse('_yardlet._tcp.local', 5000) | Select-Object -Unique) -join ', ' } catch { "browse failed: $($_.Exception.Message)" }
 
 # The second phone, from a new link without its direct addresses: paired and answered through the relay.
 $relayLink = Copy-PairingLink $link

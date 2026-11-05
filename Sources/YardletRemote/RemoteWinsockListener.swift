@@ -123,9 +123,9 @@ private final class RemoteWinsockServing: @unchecked Sendable {
     /// it does not. Not shared (`SO_EXCLUSIVEADDRUSE`): a second Yardlet (a QA build) must not take half of this one's
     /// phones; it falls back to a free port instead.
     static func open(port: UInt16) -> Result<RemoteWinsockServing, RemoteWinsockFailure> {
-        var listening = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP.rawValue)
+        var listening = openSocket(AF_INET6, SOCK_STREAM, IPPROTO_TCP.rawValue)
         let dualStack = listening != INVALID_SOCKET
-        if !dualStack { listening = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP.rawValue) }
+        if !dualStack { listening = openSocket(AF_INET, SOCK_STREAM, IPPROTO_TCP.rawValue) }
         guard listening != INVALID_SOCKET else { return .failure(RemoteWinsockFailure("socket")) }
         func fail(_ call: String) -> Result<RemoteWinsockServing, RemoteWinsockFailure> {
             let failure = RemoteWinsockFailure(call)
@@ -154,7 +154,7 @@ private final class RemoteWinsockServing: @unchecked Sendable {
         guard listen(listening, SOMAXCONN) == 0 else { return fail("listen") }
         guard setNonBlocking(listening), let listeningPort = localPort(of: listening) else { return fail("ioctlsocket") }
         // The wake socket: UDP on loopback, which other devices cannot reach.
-        let wake = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP.rawValue)
+        let wake = openSocket(AF_INET, SOCK_DGRAM, IPPROTO_UDP.rawValue)
         guard wake != INVALID_SOCKET else { return fail("socket") }
         var loopback = sockaddr_in()
         loopback.sin_family = ADDRESS_FAMILY(AF_INET)
@@ -170,6 +170,18 @@ private final class RemoteWinsockServing: @unchecked Sendable {
         }
         loopback.sin_port = wakePort.bigEndian
         return .success(RemoteWinsockServing(listening: listening, port: listeningPort, wake: wake, wakeAddress: loopback))
+    }
+
+    /// A socket of this process alone. Windows lets a process Yardlet starts (a harness, Git) inherit every socket
+    /// otherwise, and a socket it inherited stays open after Yardlet closes its own: the port would go on listening once
+    /// the remote is off, and a phone's connection would not end.
+    private static func openSocket(_ family: Int32, _ type: Int32, _ proto: Int32) -> SOCKET {
+        WSASocketW(family, type, proto, nil, 0, DWORD(WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT))
+    }
+
+    /// An accepted socket kept from the processes Yardlet starts, as `openSocket` keeps its own.
+    private static func keepFromChildren(_ socket: SOCKET) -> Bool {
+        SetHandleInformation(HANDLE(bitPattern: UInt(socket)), HANDLE_FLAG_INHERIT, 0)
     }
 
     private static func setOption(_ socket: SOCKET, _ level: Int32, _ name: Int32, _ value: Int32) -> Bool {
@@ -281,7 +293,7 @@ private final class RemoteWinsockServing: @unchecked Sendable {
             let host = withUnsafePointer(to: address) {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { RemoteAddressSelection.numericHost($0, length: length) }
             } ?? "unknown"
-            guard Self.setNonBlocking(socket) else {
+            guard Self.keepFromChildren(socket), Self.setNonBlocking(socket) else {
                 closesocket(socket)
                 continue
             }
