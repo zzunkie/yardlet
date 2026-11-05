@@ -106,6 +106,7 @@ final class RemoteProtocolTests: XCTestCase {
             .forkTask(taskID: "T1", turnID: nil),
             .watchTab(taskID: "T1", tabID: nil, maxWidth: nil, maxHeight: nil),
             .watchTab(taskID: "T1", tabID: "K", maxWidth: 1080, maxHeight: 2000),
+            .watchTab(taskID: "T1", tabID: nil, maxWidth: nil, maxHeight: nil, listOnly: true),
             .unwatchTab(taskID: "T1"),
             .tabFrameAck(taskID: "T1", tabID: "K", frame: 3),
             .tabInput(taskID: "T1", tabID: "K", input: .click(x: 412.5, y: 236, clickCount: 2)),
@@ -192,7 +193,9 @@ final class RemoteProtocolTests: XCTestCase {
             (#"{"id": "43", "type": "unwatchTab", "taskId": "4C1F…"}"#, .unwatchTab(taskID: "4C1F…")),
             (#"{"id": "49", "type": "watchTab", "taskId": "4C1F…", "maxWidth": 1170, "viewport": {"width": 390, "height": 844, "mobile": true}}"#,
              .watchTab(taskID: "4C1F…", tabID: nil, maxWidth: 1170, maxHeight: nil,
-                       viewport: RemoteTabViewport(width: 390, height: 844, mobile: true)))
+                       viewport: RemoteTabViewport(width: 390, height: 844, mobile: true))),
+            (#"{"id": "52", "type": "watchTab", "taskId": "4C1F…", "listOnly": true}"#,
+             .watchTab(taskID: "4C1F…", tabID: nil, maxWidth: nil, maxHeight: nil, listOnly: true))
         ]
         for (json, request) in requests {
             let envelope = try decode(json)
@@ -208,7 +211,8 @@ final class RemoteProtocolTests: XCTestCase {
                      #"{"id":"47","type":"tabInput","taskId":"T","tabId":"K"}"#,
                      #"{"id":"48","type":"tabInput","taskId":"T","tabId":"K","input":{"kind":"swipe"}}"#,
                      #"{"id":"50","type":"watchTab","taskId":"T","viewport":{"width":120,"height":844}}"#,
-                     #"{"id":"51","type":"watchTab","taskId":"T","viewport":{"width":390,"height":9000}}"#] {
+                     #"{"id":"51","type":"watchTab","taskId":"T","viewport":{"width":390,"height":9000}}"#,
+                     #"{"id":"53","type":"watchTab","taskId":"T","tabId":"K","listOnly":true}"#] {
             guard case let .failure(failure) = RemoteRequestEnvelope.decode(Data(json.utf8)) else { return XCTFail(json) }
             XCTAssertEqual(failure.error.code, .badRequest, json)
         }

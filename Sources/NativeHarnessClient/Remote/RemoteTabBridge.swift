@@ -65,26 +65,39 @@ final class RemoteTabBridge {
 
     // MARK: - Listing
 
-    func tabs(taskID: String) async -> Result<[RemoteBrowserTab], RemoteError> {
+    /// - Parameter opening: the panel's saved tabs, and those lost with the host, open first, as the panel or the agent's
+    ///   first call opens them; without it (a watch of the list alone) they are listed as they were, and nothing starts.
+    func tabs(taskID: String, opening: Bool = true) async -> Result<[RemoteBrowserTab], RemoteError> {
         guard let (session, client) = resolve(taskID) else {
             return .failure(isAvailable ? RemoteError(.notFound) : RemoteError(.unavailable, "This Mac has no browser engine"))
         }
         listTold.remove(session)
-        // The panel's saved tabs, and those lost with the host, are the task's tabs: they open as the panel or the
-        // agent's first call opens them.
-        if client.tabs(forSession: session).isEmpty, client.rememberedTabs(forSession: session) != nil {
+        let saved = client.tabs(forSession: session).isEmpty ? client.rememberedTabs(forSession: session) : nil
+        if opening, saved != nil {
             _ = try? client.restoreTabs(forSession: session, viewport: .offscreenDefault)
         }
-        let front = client.tab(forSession: session)
         var listed: [RemoteBrowserTab] = []
-        for tab in client.tabs(forSession: session) {
-            var entry = remote(tab, in: session, client: client, front: front)
-            // A file outside the task's is named by its scheme alone, its title too (a file's title is its name or path).
-            if let address = entry.url, address.lowercased().hasPrefix("file:"), await !showsAllowedPage(address, taskID: taskID) {
-                entry.url = "file://"
-                entry.title = nil
+        if !opening, let saved {
+            for index in saved.addresses.indices {
+                var entry = RemoteBrowserTab(tabId: saved.key(at: index).uuidString)
+                let title = saved.title(at: index)
+                entry.title = title.isEmpty ? nil : RemoteText.short(title, RemoteText.titleLimit)
+                let address = saved.addresses[index]
+                entry.url = client.carriesFilledValue(address) ? URL(string: address).flatMap(Self.origin) : address
+                entry.active = index == saved.fronted ? true : nil
+                listed.append(entry)
             }
-            listed.append(entry)
+        } else {
+            let front = client.tab(forSession: session)
+            listed = client.tabs(forSession: session).map { remote($0, in: session, client: client, front: front) }
+        }
+        // A file outside the task's is named by its scheme alone, its title too (a file's title is its name or path).
+        for index in listed.indices {
+            if let address = listed[index].url, address.lowercased().hasPrefix("file:"),
+               await !showsAllowedPage(address, taskID: taskID) {
+                listed[index].url = "file://"
+                listed[index].title = nil
+            }
         }
         return .success(listed)
     }
@@ -632,6 +645,10 @@ extension AppModelRemoteBridge {
 
     func browserTabs(taskID: String) async -> Result<[RemoteBrowserTab], RemoteError> {
         await browser.tabs(taskID: taskID)
+    }
+
+    func browserTabList(taskID: String) async -> Result<[RemoteBrowserTab], RemoteError> {
+        await browser.tabs(taskID: taskID, opening: false)
     }
 
     func setWatchedTabs(_ watches: Set<RemoteTabWatch>) async {

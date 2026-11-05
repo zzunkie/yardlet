@@ -647,6 +647,8 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
   at most 64 bytes rather than 64 characters.
 
 - 2026-11-04, v2 only: optional `tabControls` and watched-task address opening and tab closing (§15.30).
+- 2026-11-06, v2 only: optional `tabLists` and `watchTab`'s `listOnly`, which follows a task's tab list without
+  watching a tab or opening saved ones (§15.25).
 
 ## 11. v2 transport
 
@@ -1634,7 +1636,7 @@ page as the Mac's own browser panel sends the person's. Hosts advertising `tabCo
 tab closes within the watched task (§15.30); browsing outside a task stays on the Mac.
 
 - The snapshot carries `browserTabs: true` when the Mac answers the requests below (it has a browser engine). A phone
-  offers a task's browser only then.
+  offers a task's browser only then. It also carries `tabLists: true` when `watchTab` takes `listOnly` (below).
 - ```json
   {"id": "40", "type": "watchTab", "taskId": "4C1F…", "maxWidth": 1080, "maxHeight": 2000,
    "viewport": {"width": 390, "height": 844, "mobile": true}}
@@ -1657,7 +1659,12 @@ tab closes within the watched task (§15.30); browsing outside a task stays on t
   `height` 200 to 2,560 (another is `badRequest`), and `mobile` (when absent, true under 768 wide) draws it as a phone:
   a mobile viewport, touch, and a phone's user agent and client hints, as the agent's `browser_resize` does. Without
   it the tab keeps the size it has (Yardlet on another computer sends none). One watch per connection: watching another
-  tab or task replaces it. A tab's fields: `tabId` (the side-panel tab; it stays when the
+  tab or task replaces it. With `listOnly: true` (hosts advertising `tabLists`; no `tabId` or `viewport`, else
+  `badRequest`) the watch follows the task's list alone, as for a task with no tab, whatever tabs it has: `tabId` is
+  absent, no tab paints, takes a size or sends frames or input for it, and tabs saved before Yardlet restarted, or lost
+  with the browser, are listed as they were (their `tabId`s are the ones they open under) and stay unopened, so no
+  browser starts. `browserTabsChanged` follows. Yardlet on another computer (§18) follows the list of the task its
+  window shows this way. A tab's fields: `tabId` (the side-panel tab; it stays when the
   tab's page is opened again in its place), `title`, `url` (only its origin while the address carries a value the
   password manager filled), `active`, `loading`, `canGoBack`, `canGoForward`, `waiting` (what the tab waits on from the
   person, the most pressing: `handoff`, `passkey`, `signIn`, `permission`, `externalApp`, `javaScriptDialog`,
@@ -2495,7 +2502,12 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   Back, Forward and Reload, the handoff's bar, and the watched tab's page, which takes clicks, drags, the trackpad,
   keys and the input method's committed text (what it is still composing shows on the client until committed; ⌘V
   types the client's own clipboard; secure keyboard entry is on while the page's password field has the keyboard); it
-  sends no `viewport`, so the tab keeps its size. A handoff's card has Show Tab, which opens it there. With `tabControls`,
+  sends no `viewport`, so the tab keeps its size. From a host advertising `tabLists`, the window follows the list of the
+  task it shows (`listOnly`) whenever its panel shows none of the task's tabs, so the host's tabs are the panel's tabs
+  from the start, as the local task's engine tabs are its panel's: the title bar's side-panel button and ⌘4 reopen
+  them as they reopen the local task's tabs, the host's front tab first. A tab listed as `file://`
+  (a file outside the task's files, which the host does not picture) says that it shows only on the host rather than
+  waiting for a picture. A handoff's card has Show Tab, which opens it there. With `tabControls`,
   the address field, new-tab button and tab close buttons act on the host (§15.30), and a hook routes loopback links
   there for the window's link handler. The tab strip uses the same `WorkSurfaceHeader` as other side panels.
   With `taskRail`, the rail reads the host's additional facts and the composer shows its context ring (§15.34).

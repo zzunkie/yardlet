@@ -10,7 +10,9 @@ import XCTest
 /// and dark, into `.build/browser-panel-tabs-qa/<phase>/` (`BROWSER_PANEL_TABS_QA_PHASE`, "after" by
 /// default), with what the strip shows at each step (`report.md`). Buttons are pressed through
 /// accessibility and keys go to the page as the keyboard sends them. A handed tab is also drawn as another Mac's window
-/// shows it over the remote (`remote-handoff-*`, beside this Mac's `local-handoff-*`).
+/// shows it over the remote (`remote-handoff-*`, beside this Mac's `local-handoff-*`), and a task's own tabs as that
+/// window lists and shows them (`remote-task-opened`, `remote-panel-button`, `remote-new-tab`, `remote-file-page`,
+/// `remote-saved-tab-shown`).
 @MainActor
 final class BrowserPanelTabsQATests: XCTestCase {
     private typealias Navigation = TaskSurfaceNavigationProjection
@@ -493,17 +495,9 @@ final class BrowserPanelTabsQATests: XCTestCase {
             local.close()
 
             // This Mac as a host, followed by another Mac's window on loopback.
-            let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(
-                model: model, browser: RemoteTabBridge.Environment(client: { client })), port: 47876)
-            defer { stack.stop() }
-            let ticket = await stack.server.openPairing()
-            let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
-                                                            name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
-            let hosts = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
-                                            hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
-            let paired = try await hosts.pair(link: link.absoluteString)
-            let remote = try XCTUnwrap(hosts.model(for: paired.id))
-            defer { hosts.close(paired.id) }
+            let mac = try await anotherMac(fixture, port: 47876)
+            defer { mac.close() }
+            let remote = mac.remote, hosts = mac.hosts
             try await waitUntilAsync { remote.hasSnapshot && remote.task(task.id.uuidString) != nil }
             XCTAssertTrue(remote.offersBrowser)
             remote.select(.task(task.id.uuidString))
@@ -563,16 +557,137 @@ final class BrowserPanelTabsQATests: XCTestCase {
             try await NativeHarnessClientTests.waitUntil { remote.browser.tabID == opened.key.uuidString }
             remote.browser.openAddress("localhost:4000/next")
             try await NativeHarnessClientTests.waitUntil { standIn.sent.contains(.navigate(tab: opened.id, url: "http://localhost:4000/next")) }
-            remote.browser.hide()
-            XCTAssertTrue(remote.browser.surfaceTabs(for: task.id.uuidString).contains { $0.id == "browser:" + opened.key.uuidString })
-            remote.browser.closeSurfaceTab("browser:" + opened.key.uuidString, taskID: task.id.uuidString)
-            try await NativeHarnessClientTests.waitUntil { client.tabs(forSession: task.id).count == priorCount }
-            XCTAssertNil(remote.browser.taskID, "closing a background tab does not open its panel")
-            XCTAssertTrue(standIn.closed.contains(opened.id))
+            // With the panel off the browser, a tab closed from the strip closes on the host, opens no panel, and leaves
+            // the list the window follows.
             window.close()
             remote.browser.hide()
+            let openedID = "browser:" + opened.key.uuidString
+            XCTAssertTrue(remote.browser.surfaceTabs(for: task.id.uuidString).contains { $0.id == openedID })
+            remote.browser.closeSurfaceTab(openedID, taskID: task.id.uuidString)
+            try await NativeHarnessClientTests.waitUntil { client.tabs(forSession: task.id).count == priorCount }
+            try await waitUntilAsync { !remote.browser.surfaceTabs(for: task.id.uuidString).contains { $0.id == openedID } }
+            XCTAssertNil(remote.browser.taskID, "closing a background tab does not open its panel")
+            XCTAssertTrue(standIn.closed.contains(opened.id))
             try await waitUntilAsync { !tab.isRemotelyWatched }
         }
+    }
+
+    /// A host task's own tabs in the window another Mac opens for this one (docs/REMOTE_PROTOCOL.md §15.25 and §18): the
+    /// side panel's button shows the host's front tab and its picture, as this Mac's button shows the
+    /// task's tab, with the task's tabs in the strip; a file page outside the task's files says it shows on the host
+    /// alone rather than waiting for a picture that does not come; a new tab from the panel joins them; and a task whose
+    /// tabs were saved before Yardlet restarted lists them as the task opens, without starting the browser engine.
+    func testAHostTasksOwnTabsShowOnAnotherMac() async throws {
+        let fileTitle = BrowserTabTitle.make(pageTitle: "", address: "file://")
+        for appearance in [WindowlessRender.Appearance.light, .dark] {
+            let fixture = try makeFixture()
+            let task = fixture.task, legacy = fixture.legacy, client = fixture.client
+            let mac = try await anotherMac(fixture, port: 47877)
+            defer { mac.close() }
+            let remote = mac.remote
+            try await waitUntilAsync { remote.hasSnapshot && remote.task(legacy.id.uuidString) != nil }
+            XCTAssertTrue(remote.offersBrowser)
+            let window = WindowlessRender.Host(RemoteHostView(model: remote, directory: mac.hosts)
+                .frame(width: Self.size.width, height: Self.size.height)
+                .environment(\.colorScheme, appearance.colorScheme), size: Self.size, appearance: appearance)
+            orderIn(window)
+            defer { window.close() }
+
+            // The task whose three tabs an earlier Yardlet saved: listed as it opens, none opened, no engine started.
+            remote.select(.task(legacy.id.uuidString))
+            try await settle(window) { remote.browser.tabs(for: legacy.id.uuidString).count == 3 }
+            XCTAssertEqual(remote.browser.tabs(for: legacy.id.uuidString).map(\.url),
+                           ["https://docs.test/", "http://localhost:3000/", "https://status.test/"], "saved tabs listed")
+            let saved = remote.browser.tabs(for: legacy.id.uuidString)
+            let savedFront = saved.first { $0.active == true }
+            XCTAssertEqual(savedFront?.url, "http://localhost:3000/", "the tab saved in front")
+            XCTAssertNil(fixture.host(), "listing the saved tabs starts no browser engine")
+            XCTAssertNil(remote.browser.taskID, "no tab watched, so none painted")
+
+            // The task the agent opened two tabs in on this Mac, its panel closed here: a page, and a file page outside
+            // its folders (the agent's scratch page).
+            let page = try client.newTab(forSession: task.id, url: "https://bookings.example.test/42",
+                                         viewport: .offscreenDefault, select: true)
+            let scratch = try client.newTab(forSession: task.id, url: "file:///private/tmp/agent-scratch/queue.html",
+                                            viewport: .offscreenDefault, select: false)
+            let standIn = try XCTUnwrap(fixture.host())
+            standIn.picture = { width, height in Self.signInPicture(size: NSSize(width: width, height: height)) }
+            standIn.load(page.id, "https://bookings.example.test/42", title: "Booking 42")
+            standIn.load(scratch.id, "file:///private/tmp/agent-scratch/queue.html", title: "Posting queue")
+            remote.select(.task(task.id.uuidString))
+            try await settle(window) { remote.browser.tabs(for: task.id.uuidString).count == 2 }
+            XCTAssertEqual(remote.browser.tabs(for: task.id.uuidString).map(\.url),
+                           ["https://bookings.example.test/42", "file://"])
+            try draw(window, "remote-task-opened", appearance)
+
+            // The panel's button shows the host's front tab and its picture, the task's tabs in the strip.
+            XCTAssertTrue(press(TaskCommandTitle.sidePanel(isShown: false), in: window))
+            try await waitUntilAsync { remote.browser.tabID == page.key.uuidString && remote.browser.frame != nil }
+            try await settle(window) { strip(in: window).contains { $0.label == fileTitle } }
+            XCTAssertEqual(remote.browser.watchedTab?.title, "Booking 42")
+            XCTAssertTrue(strip(in: window).contains { $0.label == fileTitle }, "\(strip(in: window).map(\.label))")
+            XCTAssertTrue(page.isRemotelyWatched)
+            XCTAssertFalse(scratch.isRemotelyWatched)
+            try draw(window, "remote-panel-button", appearance)
+            describe("Another Mac: the side panel's button on a task with two host tabs", strip(in: window), notes: [
+                "The host's front tab (Booking 42) shows with its picture; the file page outside the task is listed as \(fileTitle)"
+            ])
+
+            // A new tab from the strip's + (its menu's Browser, which this QA does not open) opens on the host and joins
+            // the task's tabs.
+            remote.browser.newSurfaceTab(taskID: task.id.uuidString)
+            try await waitUntilAsync { client.tabs(forSession: task.id).count == 3 }
+            let opened = try XCTUnwrap(client.tab(forSession: task.id))
+            try await waitUntilAsync { remote.browser.tabID == opened.key.uuidString && remote.browser.frame != nil }
+            try await settle(window) { strip(in: window).count >= 3 }
+            try draw(window, "remote-new-tab", appearance)
+
+            // The file page outside the task's files: said, not waited for.
+            XCTAssertTrue(press(fileTitle, in: window, among: strip(in: window)))
+            try await waitUntilAsync { remote.browser.tabID == scratch.key.uuidString && remote.browser.isListed }
+            try await settle(window) { false }
+            let notice = L10n.format("This page shows only on %@.", remote.name)
+            let said = window.accessibilityElements().flatMap { [$0.label, $0.value] }
+            XCTAssertTrue(said.contains(notice), "\(said.suffix(12))")
+            try draw(window, "remote-file-page", appearance)
+
+            // Back on the task with saved tabs, the panel's button opens its front tab on the host and shows it.
+            remote.select(.task(legacy.id.uuidString))
+            try await settle(window) { remote.browser.taskID == legacy.id.uuidString }
+            if remote.browser.taskID != legacy.id.uuidString {
+                XCTAssertTrue(press(TaskCommandTitle.sidePanel(isShown: false), in: window))
+            }
+            try await waitUntilAsync { client.tabs(forSession: legacy.id).count == 3 && remote.browser.frame != nil }
+            XCTAssertEqual(remote.browser.tabID, savedFront?.tabId, "the tab saved in front, under its key")
+            // The stand-in reports the restored pages as Chromium would.
+            for tab in client.tabs(forSession: legacy.id) {
+                let listed = saved.first { $0.tabId == tab.key.uuidString }
+                standIn.load(tab.id, listed?.url ?? "", title: listed?.tabId == savedFront?.tabId ? "Login — Dev" : "")
+            }
+            try await settle(window) { remote.browser.watchedTab?.title == "Login — Dev" }
+            try draw(window, "remote-saved-tab-shown", appearance)
+        }
+    }
+
+    private struct AnotherMac {
+        let hosts: RemoteHostDirectory
+        let remote: RemoteHostModel
+        let close: () -> Void
+    }
+
+    /// This Mac as a host on loopback, and another Mac's window paired with it.
+    private func anotherMac(_ fixture: Fixture, port: UInt16) async throws -> AnotherMac {
+        let client = fixture.client
+        let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(
+            model: fixture.model, browser: RemoteTabBridge.Environment(client: { client })), port: port)
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                        name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let hosts = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                        hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
+        let paired = try await hosts.pair(link: link.absoluteString)
+        let remote = try XCTUnwrap(hosts.model(for: paired.id))
+        return AnotherMac(hosts: hosts, remote: remote, close: { hosts.close(paired.id); stack.stop() })
     }
 
     /// Lays the window out and gives the main actor back between passes, until `condition` holds or about half a second
