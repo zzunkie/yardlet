@@ -105,16 +105,32 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
 
 - **Assembly.** `Platform/Windows/AppModel+Live.swift` makes the model with its stores in `%LOCALAPPDATA%\Yardlet`
   and no browser host. `WinUI/YardletApp.swift` makes it once WinUI has started and opens `WinUI/MainWindow.swift`:
-  the store's tasks in the sidebar, followed through Observation, and a composer that sends through the model.
+  the store's tasks in the sidebar, followed through Observation, with their titles as the Mac's rows show them, and a
+  composer that sends through the model. New task at the top lists the harnesses whose CLI Yardlet found and starts a
+  chat with the chosen one from the message typed there. Choosing a task reads its saved history as the Mac does
+  (`refreshConversationStatus`, which starts no turn), and its conversation draws from the projection the Mac's
+  timeline reads; a request in it shows its card's answers as buttons, carried out as the Mac's card carries them out.
+- **Conversations.** `WinUI/ConversationTimeline.swift` draws the engine's `ConversationPresentation` turn by turn,
+  for a task's own conversation and a host's: what was sent, a line for each step of the work, the answers, the
+  requests waiting and how the turn ended. A turn that did not change keeps what it drew. As on the Mac, only the
+  latest turns are drawn (`ConversationTurnWindow`, 10 at first) and Load more history draws 10 more, so what an
+  update compares and draws in the window is bounded by those turns however long the history. Answers draw their
+  Markdown from the engine's reading of it (`WinUI/MarkdownView.swift`, `TranscriptMarkdownDocument`): bold,
+  italic, code, struck and linked words, lists, quotes, code blocks, tables and rules.
+- **No console windows.** The release app is a windowed program with no console, and Foundation's `Process` passes
+  `CreateProcessW` no `CREATE_NO_WINDOW` (confirmed in its source), so each console program the app started, a
+  harness's node or Git, opened a console window of its own, in Windows Terminal where that is the default terminal
+  (seen on the CI runner). At launch the app makes a console with no window for those programs to share
+  (`Platform/Windows/WindowsConsole.swift`, `AllocConsoleWithOptions` with `ALLOC_CONSOLE_MODE_NO_WINDOW`, Windows 11
+  24H2 and later); a Windows without that call keeps the console windows.
 - **Another computer's Yardlet.** Connect to a Mac, below the tasks in the main window, pairs with the link a host
   copies in Settings › Remote, as File › Connect to Mac… does on the Mac (docs/REMOTE_PROTOCOL.md, "Yardlet as a
   client"), and `WinUI/RemoteHostWindow.swift` opens each paired host in a window of its own: the host's tasks as it
   lists them, the chosen task's conversation as it streams, and a composer that sends to the host. The client is the
   engine's `RemoteHostDirectory` and `RemoteHostModel`; `Platform/Windows/WindowsRemoteClientKeys.swift` keeps each
   host's key in Credential Manager and the list and cache under `%LOCALAPPDATA%\Yardlet`. Without Bonjour, a host is
-  reached at the direct addresses it named, on the same network or over Tailscale, and through its relay.
-  `WinUI/ConversationTimeline.swift` draws the engine's `ConversationPresentation` turn by turn, redrawing only the
-  turns that changed, for a host's conversation and later a task's own.
+  reached at the direct addresses it named, on the same network or over Tailscale, and through its relay. A host's
+  sidebar is drawn again only when what it shows changes, not as a task's marks and times change while it streams.
 - **Harness CLIs.** The engine finds a harness's runtime by Windows' rules (`Runtime/ExecutableLookup.swift`, "Paths
   and executable lookup" below), so Claude Code's `claude.exe` in `%USERPROFILE%\.local\bin` and npm's shims in
   `%APPDATA%\npm` are found as a person's own terminal would find them. Harnesses, their account commands and
@@ -160,7 +176,11 @@ stand-in harness the way npm installs one (`Windows/scripts/fake-harness/`, whos
 variable like `YARDLET_QA_EVENT_LOG`): the app finds the shim as a new task would and runs the engine's verification
 probe on it, which starts it through Node.js for `--version` and the ACP handshake and stops it. The stand-in starts
 a detached process of its own, which outlives a stop of the stand-in alone, as the check shows first without the
-app; the check passes when that process ended with the app's stop (`Windows/scripts/check-harness.ps1`). The run
+app; the check passes when that process ended with the app's stop (`Windows/scripts/check-harness.ps1`). With that
+stand-in, which serves one ACP turn that asks to edit a file, the app then starts a task from New task, allows the
+request from its card, waits for the answer to stream in, and opens again to find the answer kept
+(`Windows/scripts/check-local.ps1`); while the stand-in runs, no console window opens beside the ones already there,
+which a console program started on its own first shows the count would see. The run
 gathers the app with its resource folder and the Swift runtime beside it, opens what it gathered from another folder with the
 build folder out of reach, and uploads it (`windows-app-bin`), to open on a PC that has the Windows App Runtime 1.7 but
 no Swift.
@@ -197,13 +217,11 @@ keep the engine in Swift, which needs a layer that carries the engine's state an
 
 **What the Windows app does not have yet:** a Windows layer for the rest of what `Platform/Portable/` stands in for:
 the ConPTY terminal for sign-in and the terminal panel, notifications, credential storage for the vault and
-Antigravity, and the harnesses' icons (`HarnessKind.symbolName` names SF Symbols); the task's transcript in the
-conversation; and a browser host. Each console program Yardlet starts is expected to open a console window of its own
-(not confirmed): the release app has no console, and Foundation's `Process` passes `CreateProcessW` no
-`CREATE_NO_WINDOW` (confirmed in its source). Git is still looked for at its macOS paths (`Diff/GitExecutableLocator.swift`), a connector's program gets a
+Antigravity, and the harnesses' icons (`HarnessKind.symbolName` names SF Symbols); a request's answers given in a
+form (questions, a plan's review); a project's folder for a new task, which starts as a chat; and a browser host. Git is still looked for at its macOS paths (`Diff/GitExecutableLocator.swift`), a connector's program gets a
 POSIX environment (`Connectors/ConnectorProgram.swift`), and npm's `npx.cmd`, which is not one of npm's shims, is
-refused. A host's window shows answers as their Markdown text, a request card's words without its answers, and none
-of the host's panels, new tasks or Settings.
+refused. A host's window shows a request card's words without its answers, and none of the host's panels, new tasks
+or Settings.
 
 ## The check that blocks new violations
 
