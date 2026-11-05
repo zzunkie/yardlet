@@ -3719,6 +3719,8 @@
 "Hide browser" = "브라우저 닫기";
 "No browser tabs" = "브라우저 탭 없음";
 "This task's browser tabs on %@ show here." = "%@에서 이 작업이 연 브라우저 탭이 여기에 보입니다.";
+"This page shows only on %@." = "이 페이지는 %@에서만 볼 수 있습니다.";
+"It is a file outside this task's folders." = "이 작업의 폴더 밖에 있는 파일입니다.";
 "%@. Answer it on %@." = "%@. %@에서 답하세요.";
 "A window or dialog over this page waits on %@." = "이 페이지 위의 창이나 대화상자가 %@에서 답을 기다립니다.";
 "This tab is closed." = "이 탭은 닫혔습니다.";

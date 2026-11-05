@@ -120,17 +120,12 @@ struct RemoteBrowserPanel: View {
     @ViewBuilder
     private var page: some View {
         if browser.isListed, browser.tabs.isEmpty {
-            VStack(spacing: 8) {
-                Image(systemName: "globe")
-                    .font(.system(size: 22))
-                    .foregroundStyle(.tertiary)
-                Text(L10n.string("No browser tabs"))
-                    .font(.callout.weight(.semibold))
-                Text(L10n.format("This task's browser tabs on %@ show here.", model.name))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            placeholder(systemName: "globe", title: L10n.string("No browser tabs"),
+                        detail: L10n.format("This task's browser tabs on %@ show here.", model.name))
+        } else if browser.watchedTab?.url == "file://" {
+            // The host names a file page outside the task's files by its scheme alone and sends no picture of it.
+            placeholder(systemName: "doc", title: L10n.format("This page shows only on %@.", model.name),
+                        detail: L10n.string("It is a file outside this task's folders."))
         } else {
             ZStack {
                 RemoteBrowserPage(browser: browser, hostName: model.name)
@@ -138,6 +133,22 @@ struct RemoteBrowserPanel: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func placeholder(systemName: String, title: String, detail: String) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: systemName)
+                .font(.system(size: 22))
+                .foregroundStyle(.tertiary)
+            Text(title)
+                .font(.callout.weight(.semibold))
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

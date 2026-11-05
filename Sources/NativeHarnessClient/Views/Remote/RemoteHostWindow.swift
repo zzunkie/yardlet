@@ -1023,12 +1023,10 @@ struct RemoteTaskView: View {
         .onChange(of: watchedSurfaceID, initial: true) { _, watched in
             if let watched, panels.trailingSurfaceID != watched { showSidePanelTab(watched) }
         }
-        // A browser tab the host no longer lists has closed there: the panel forgets it and, where it showed it, goes to
-        // the tab shown before it.
-        .onChange(of: browserTabIDs) { _, listed in
-            let gone = panels.trailingTabs.filter { Self.isBrowserTab($0) && !listed.contains($0) }
-            if !gone.isEmpty { panels = TaskSurfaceNavigationProjection.closingTrailingTabs(gone, in: panels) }
-        }
+        // The host's tabs are the panel's browser tabs, as the local task's engine tabs are its panel's. One the host
+        // lists joins, so the panel's button and ⌘4 show the task's tab, the host's front tab first. One it no longer
+        // lists has closed there: the panel forgets it and, where it showed it, goes to the tab shown before it.
+        .onChange(of: browserTabIDs, initial: true) { _, listed in followHostTabs(listed) }
         // Leaving the browser's tab ends the watch, which the host's frames follow.
         .onChange(of: panels.trailingSurfaceID) { old, new in
             if let old, Self.isBrowserTab(old), new.map(Self.isBrowserTab) != true, showsBrowser { model.browser.hide() }
@@ -1128,6 +1126,19 @@ struct RemoteTaskView: View {
     }
 
     private static func isBrowserTab(_ id: String) -> Bool { id.hasPrefix("browser:") }
+
+    private func followHostTabs(_ listed: [String]) {
+        typealias Navigation = TaskSurfaceNavigationProjection
+        var next = panels
+        let gone = next.trailingTabs.filter { Self.isBrowserTab($0) && !listed.contains($0) }
+        if !gone.isEmpty { next = Navigation.closingTrailingTabs(gone, in: next) }
+        let front = model.browser.tabs(for: conversation.taskID).first { $0.active == true }.map { "browser:" + $0.tabId }
+        for id in (front.map { [$0] } ?? []) + listed.filter({ $0 != front }) {
+            guard let key = Navigation.browserKey(inTab: id) else { continue }
+            next = Navigation.addingBrowserTab(key, after: nil, in: next)
+        }
+        if next != panels { panels = next }
+    }
 
     /// The launcher's and the strip's + choices, as the local task's, each available where the host serves it. The
     /// terminal and a side chat are not served from another Mac yet.

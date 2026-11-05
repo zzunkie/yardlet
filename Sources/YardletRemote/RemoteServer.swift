@@ -174,6 +174,9 @@ public protocol RemoteBridge: AnyObject, Sendable {
     /// A task's browser tabs, as its side panel lists them (§15.25). A bridge that answers it and the two below says so
     /// in its snapshot (`browserTabs`).
     func browserTabs(taskID: String) async -> Result<[RemoteBrowserTab], RemoteError>
+    /// The same list for a watch of the list alone (`listOnly`): tabs saved before Yardlet restarted, or lost with the
+    /// browser, are listed as they were and not opened, so following a task's list starts no browser.
+    func browserTabList(taskID: String) async -> Result<[RemoteBrowserTab], RemoteError>
     /// The tabs some connection watches: these paint while watched and report `tabPainted`, and their tasks report
     /// `browserTabs` changes. Empty when no one watches.
     func setWatchedTabs(_ watches: Set<RemoteTabWatch>) async
@@ -321,6 +324,10 @@ extension RemoteBridge {
 
     public func browserTabs(taskID: String) async -> Result<[RemoteBrowserTab], RemoteError> {
         .failure(RemoteError(.unavailable))
+    }
+
+    public func browserTabList(taskID: String) async -> Result<[RemoteBrowserTab], RemoteError> {
+        await browserTabs(taskID: taskID)
     }
 
     public func setWatchedTabs(_ watches: Set<RemoteTabWatch>) async {}
@@ -1763,9 +1770,9 @@ public actor RemoteServer {
             }
         case .openTerminal, .terminalInput, .terminalResize, .closeTerminal, .terminalOutputAck, .terminalStatus:
             await handleTerminal(envelope.id, request: request, on: id)
-        case let .watchTab(taskID, tabID, maxWidth, maxHeight, viewport):
+        case let .watchTab(taskID, tabID, maxWidth, maxHeight, viewport, listOnly):
             await watchTab(envelope.id, taskID: taskID, tabID: tabID, maxWidth: maxWidth, maxHeight: maxHeight,
-                           viewport: viewport, on: id)
+                           viewport: viewport, listOnly: listOnly, on: id)
         case let .unwatchTab(taskID):
             unwatchTab(envelope.id, taskID: taskID, on: id)
         case let .tabFrameAck(taskID, tabID, frame):
@@ -1942,6 +1949,7 @@ public actor RemoteServer {
             response.fileRewind = published?.fileRewind == true ? true : nil
             response.taskActions = published?.taskActions == true ? true : nil
             response.tabControls = published?.tabControls == true ? true : nil
+            response.tabLists = published?.tabLists == true ? true : nil
             response.hostSettings = published?.hostSettings == true ? true : nil
             response.hostAccounts = published?.hostAccounts == true ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
@@ -2471,7 +2479,7 @@ public actor RemoteServer {
     }
 
     /// A connection as the log names it: its device and path.
-    private static func describe(_ connection: Connection) -> String {
+    static func describe(_ connection: Connection) -> String {
         "device \(RemoteLog.device(connection.deviceID)) over \(connection.path?.rawValue ?? "an unknown path")"
     }
 

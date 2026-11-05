@@ -4,7 +4,9 @@ import YardletRemote
 
 /// A host's task browser as this Mac's window shows it (docs/REMOTE_PROTOCOL.md §15.25): the task's tabs, the watched
 /// tab's latest picture, and the person's input to it. One task's browser at a time, while the window's browser panel
-/// is open; frames stay in memory only and go with the panel.
+/// is open; frames stay in memory only and go with the panel. While the panel shows none of its tabs, the list of the
+/// task the window shows is followed alone, where the host offers that (`listsTabs`), so the panel lists the task's tabs
+/// as the host's own panel does.
 @MainActor
 @Observable
 final class RemoteBrowserModel {
@@ -21,6 +23,7 @@ final class RemoteBrowserModel {
 
     func forgetTask(_ taskID: String) {
         rememberedTabs[taskID] = nil
+        if followedTaskID == taskID { follow(nil) }
         if self.taskID == taskID { hide() }
     }
 
@@ -49,6 +52,10 @@ final class RemoteBrowserModel {
     /// The last input the host refused, in a line for the panel.
     var refusal: String?
     var canControlTabs = false
+    /// The host follows a task's list without a watched tab (`listOnly`).
+    @ObservationIgnored var listsTabs = false
+    /// The task the window shows, whose list is followed while the panel shows none of its tabs.
+    @ObservationIgnored private(set) var followedTaskID: String?
 
     /// The host's name, for the panel's words.
     @ObservationIgnored var hostName = ""
@@ -85,19 +92,43 @@ final class RemoteBrowserModel {
         selectionRevision += 1
         watchRevision += 1
         guard let taskID else { return }
-        send(.unwatchTab(taskID: taskID), nil)
         self.taskID = nil
         tabs = []
         tabID = nil
         frame = nil
         isListed = false
         watchedSize = nil
+        followList(ending: taskID)
     }
 
-    /// Watches the task's tab again after a new connection: what the panel showed, or its host's front tab.
+    /// Watches the task's tab again after a new connection: what the panel showed, or its host's front tab; with the
+    /// panel on none, the list of the task the window shows.
     func rewatch() {
-        guard taskID != nil else { return }
-        watch(tabID)
+        if taskID != nil { watch(tabID) } else { followList(ending: nil) }
+    }
+
+    /// The task the window shows now, or nil for none: its list is followed while the panel shows none of its tabs.
+    func follow(_ taskID: String?) {
+        guard taskID != followedTaskID else { return }
+        let previous = followedTaskID
+        followedTaskID = taskID
+        // The panel's watch of a tab follows its task's list itself.
+        if self.taskID == nil, listsTabs { followList(ending: previous) }
+    }
+
+    /// Follows the list of the task the window shows, without a watched tab: nothing is painted, opened or pictured on
+    /// the host. With no task to follow, or a host that does not offer it, the watch of `ending` stops.
+    private func followList(ending: String?) {
+        watchRevision += 1
+        guard listsTabs, let task = followedTaskID else {
+            if let ending { send(.unwatchTab(taskID: ending), nil) }
+            return
+        }
+        let revision = watchRevision
+        send(.watchTab(taskID: task, tabID: nil, maxWidth: nil, maxHeight: nil, listOnly: true)) { [weak self] response in
+            guard let self, self.taskID == nil, self.watchRevision == revision, response.ok else { return }
+            self.remember(response.tabs ?? [], for: task)
+        }
     }
 
     func select(_ tabID: String) {
@@ -193,10 +224,12 @@ final class RemoteBrowserModel {
         if self.taskID == taskID { for tabID in tabIDs { closeTab(tabID) }; return }
         let revision = selectionRevision
         let restoreWatch: @MainActor (RemoteBrowserModel) -> Void = { browser in
-            if browser.taskID == nil { browser.send(.unwatchTab(taskID: taskID), nil) }
+            if browser.taskID == nil { browser.followList(ending: taskID) }
             else { browser.rewatch() }
         }
-        send(.watchTab(taskID: taskID, tabID: nil, maxWidth: 320, maxHeight: 320)) { [weak self] response in
+        // The list alone where the host offers it: no page is painted for a close.
+        send(listsTabs ? .watchTab(taskID: taskID, tabID: nil, maxWidth: nil, maxHeight: nil, listOnly: true)
+             : .watchTab(taskID: taskID, tabID: nil, maxWidth: 320, maxHeight: 320)) { [weak self] response in
             guard let self else { return }
             guard self.selectionRevision == revision else { restoreWatch(self); return }
             guard response.ok else {

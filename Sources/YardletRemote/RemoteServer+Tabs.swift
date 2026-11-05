@@ -20,6 +20,10 @@ struct RemoteServerTabs {
         var lastImage: Data?
         /// The watch's input may go on; watching the same tab again keeps it, anything else ends it.
         var permit: RemoteTabPermit
+        /// The list alone (`listOnly`): no tab, and saved tabs are listed rather than opened.
+        var listOnly = false
+        /// A picture of the tab failed and the log said why, once per watch.
+        var toldNoPicture = false
     }
 
     /// One connection's frames, kept across its watches until it closes, so watching again neither skips an
@@ -63,10 +67,10 @@ extension RemoteServer {
     static let inputAuditWindow: TimeInterval = 60
 
     func watchTab(_ requestID: String, taskID: String, tabID: String?, maxWidth: Int?, maxHeight: Int?,
-                  viewport: RemoteTabViewport?, on id: UUID) async {
+                  viewport: RemoteTabViewport?, listOnly: Bool = false, on id: UUID) async {
         let device = connections[id]?.deviceID
         let listed: [RemoteBrowserTab]
-        switch await bridge.browserTabs(taskID: taskID) {
+        switch listOnly ? await bridge.browserTabList(taskID: taskID) : await bridge.browserTabs(taskID: taskID) {
         case let .success(found):
             listed = found
         case let .failure(error):
@@ -82,7 +86,7 @@ extension RemoteServer {
             respond(.failure(requestID, RemoteError(.notAllowed)), to: id)
             return
         }
-        let chosen = tabID ?? listed.first(where: { $0.active == true })?.tabId ?? listed.first?.tabId
+        let chosen = listOnly ? nil : tabID ?? listed.first(where: { $0.active == true })?.tabId ?? listed.first?.tabId
         let previous = tabs.watches[id]
         let sameTab = previous.map { $0.taskID == taskID && $0.tabID == chosen && chosen != nil } ?? false
         if !sameTab { previous?.permit.revoke() }
@@ -92,7 +96,8 @@ extension RemoteServer {
             maxWidth: min(maxWidth ?? RemoteProtocol.defaultTabFrameWidth, RemoteProtocol.maxTabFrameSide),
             maxHeight: min(maxHeight ?? RemoteProtocol.defaultTabFrameHeight, RemoteProtocol.maxTabFrameSide),
             viewport: viewport, listed: listed, generation: tabs.generation,
-            lastImage: sameTab ? previous?.lastImage : nil, permit: sameTab ? previous?.permit ?? RemoteTabPermit() : RemoteTabPermit())
+            lastImage: sameTab ? previous?.lastImage : nil, permit: sameTab ? previous?.permit ?? RemoteTabPermit() : RemoteTabPermit(),
+            listOnly: listOnly)
         // The pace stays the connection's; only a look scheduled for the last watch is redone for this one.
         if tabs.flows[id] == nil {
             tabs.flows[id] = RemoteServerTabs.Flow(interval: configuration.tabFrameInterval, nextCaptureAt: now())
@@ -266,9 +271,13 @@ extension RemoteServer {
             event.viewportWidth = frame.viewportWidth
             event.viewportHeight = frame.viewportHeight
             send(event, to: id)
-        case .failure:
+        case let .failure(error):
             // A page that cannot be pictured now (a dialog over it, its renderer gone, a file outside the task's): tried
-            // again later.
+            // again later. The client waits for a picture meanwhile, so the log says why, once per watch.
+            if !current.toldNoPicture, let connection = connections[id] {
+                current.toldNoPicture = true
+                RemoteLog.notice("Remote: \(Self.describe(connection)) gets no picture of the tab it watches: \(error.message)")
+            }
             current.painted = true
             pace.interval = configuration.tabFrameIdleInterval
             pace.nextCaptureAt = time.addingTimeInterval(pace.interval)
@@ -293,7 +302,9 @@ extension RemoteServer {
     private func refreshBrowserTabs(_ taskID: String) async {
         tabs.listTimers[taskID] = nil
         guard tabs.watches.values.contains(where: { $0.taskID == taskID }) else { return }
-        let listed = (try? await bridge.browserTabs(taskID: taskID).get()) ?? []
+        // Saved tabs open again only for a watch of a tab, as its `watchTab` opened them.
+        let opening = tabs.watches.values.contains { $0.taskID == taskID && !$0.listOnly }
+        let listed = (try? await (opening ? bridge.browserTabs(taskID: taskID) : bridge.browserTabList(taskID: taskID)).get()) ?? []
         var watchesChanged = false
         for (id, watch) in tabs.watches where watch.taskID == taskID && watch.listed != listed {
             tabs.watches[id]?.listed = listed

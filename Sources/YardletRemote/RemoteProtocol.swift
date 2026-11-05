@@ -267,6 +267,8 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var bankedResets: Bool = false
     public var taskActions: Bool = false
     public var tabControls: Bool = false
+    /// The bridge follows a task's tab list without watching a tab (`watchTab`'s `listOnly`, §15.25).
+    public var tabLists: Bool = false
     public var subtasks: Bool = false
     public var taskNotices: Bool = false
     public var fileRewind: Bool = false
@@ -1063,8 +1065,10 @@ public enum RemoteRequest: Equatable, Sendable {
     case runComposerCommand(taskID: String, command: String, arguments: String? = nil)
     case editMessage(taskID: String, turnID: String, text: String)
     case forkTask(taskID: String, turnID: String?)
-    /// A task's browser tabs: watching one (its frames), acknowledging a frame, input to it, and letting it go (§15.25).
-    case watchTab(taskID: String, tabID: String?, maxWidth: Int?, maxHeight: Int?, viewport: RemoteTabViewport? = nil)
+    /// A task's browser tabs: watching one (its frames), or with `listOnly` only their list, acknowledging a frame, input
+    /// to it, and letting it go (§15.25).
+    case watchTab(taskID: String, tabID: String?, maxWidth: Int?, maxHeight: Int?, viewport: RemoteTabViewport? = nil,
+                  listOnly: Bool = false)
     case unwatchTab(taskID: String)
     case tabFrameAck(taskID: String, tabID: String, frame: Int)
     case tabInput(taskID: String, tabID: String, input: RemoteTabInput)
@@ -1226,7 +1230,7 @@ public enum RemoteRequest: Equatable, Sendable {
              let .actOnQueued(id, _, _), let .answerHandoff(id, _, _), let .chooseAnswer(id, _, _, _, _),
              let .readReview(id, _), let .workspaceFiles(id), let .taskOutputs(id), let .readFile(id, _, _), let .taskSettings(id, _), let .setTaskSetting(id, _, _, _),
              let .composerState(id), let .composerAction(id, _, _, _), let .composerCommands(id), let .runComposerCommand(id, _, _), let .editMessage(id, _, _), let .forkTask(id, _),
-             let .watchTab(id, _, _, _, _), let .unwatchTab(id),
+             let .watchTab(id, _, _, _, _, _), let .unwatchTab(id),
              let .tabFrameAck(id, _, _), let .tabInput(id, _, _), let .openTab(id, _, _), let .closeTab(id, _),
              let .openTerminal(id, _, _), let .terminalInput(id, _, _), let .terminalResize(id, _, _, _),
              let .closeTerminal(id, _), let .terminalOutputAck(id, _, _), let .terminalStatus(id, _): id
@@ -1390,6 +1394,7 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         var frame: Int?
         var input: RemoteTabInput?
         var viewport: RemoteTabViewport?
+        var listOnly: Bool?
         var terminalId: String?
         var columns: Int?
         var rows: Int?
@@ -1770,8 +1775,12 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             if let viewport = wire.viewport, !viewport.isAllowed {
                 return fail(.badRequest, "viewport is \(RemoteProtocol.tabViewportWidths) by \(RemoteProtocol.tabViewportHeights) CSS pixels")
             }
+            let listOnly = wire.listOnly == true
+            if listOnly, wire.tabId != nil || wire.viewport != nil {
+                return fail(.badRequest, "A list-only watch names no tab and asks for no viewport")
+            }
             request = .watchTab(taskID: taskID, tabID: required(wire.tabId), maxWidth: wire.maxWidth, maxHeight: wire.maxHeight,
-                                viewport: wire.viewport)
+                                viewport: wire.viewport, listOnly: listOnly)
         case "unwatchTab":
             guard let taskID = required(wire.taskId) else { return fail(.badRequest, "Missing taskId") }
             request = .unwatchTab(taskID: taskID)
@@ -2057,12 +2066,13 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             wire.taskId = taskID; wire.terminalId = terminalID
         case let .terminalOutputAck(taskID, terminalID, sequence):
             wire.taskId = taskID; wire.terminalId = terminalID; wire.sequence = sequence
-        case let .watchTab(taskID, tabID, maxWidth, maxHeight, viewport):
+        case let .watchTab(taskID, tabID, maxWidth, maxHeight, viewport, listOnly):
             wire.taskId = taskID
             wire.tabId = tabID
             wire.maxWidth = maxWidth
             wire.maxHeight = maxHeight
             wire.viewport = viewport
+            wire.listOnly = listOnly ? true : nil
         case let .unwatchTab(taskID):
             wire.taskId = taskID
         case let .tabFrameAck(taskID, tabID, frame):
@@ -2220,6 +2230,7 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var rewind: RemoteFileRewind?
     public var taskActions: Bool?
     public var tabControls: Bool?
+    public var tabLists: Bool?
     public var browserTabs: Bool?
     /// `watchTab` (§15.25): the task's tabs, and the one watched.
     public var tabs: [RemoteBrowserTab]?

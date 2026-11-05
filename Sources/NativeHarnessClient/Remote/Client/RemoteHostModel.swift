@@ -357,6 +357,7 @@ final class RemoteHostModel: Identifiable {
             }
             offersBrowser = response.browserTabs == true
             browser.canControlTabs = response.tabControls == true
+            browser.listsTabs = response.browserTabs == true && response.tabLists == true
             offersHostAccounts = response.hostAccounts == true
             hasSnapshot = true
             hostTakesPresence = response.presence == true
@@ -456,9 +457,12 @@ final class RemoteHostModel: Identifiable {
         }
         self.selection = selection
         commandError = nil
-        // The panel follows the task shown, as each task's side panel is its own.
+        // The panel follows the task shown, as each task's side panel is its own, and the task's tabs are listed from
+        // the start, as the host's panel lists them.
+        let shownTask: String? = if case let .task(taskID) = selection { taskID } else { nil }
+        browser.follow(shownTask)
         if browser.taskID != nil {
-            if case let .task(taskID) = selection { browser.show(taskID: taskID) } else { browser.hide() }
+            if let shownTask { browser.show(taskID: shownTask) } else { browser.hide() }
         }
         guard case let .task(taskID) = selection else { return }
         Task { await readTaskRail(taskID) }

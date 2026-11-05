@@ -1380,6 +1380,36 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertEqual(harness.audit.entries().filter { $0.type == "watchTab" && $0.task == "A" && $0.result == "ok" }.count, 1)
     }
 
+    /// A watch of a task's list alone (`listOnly`, §15.25): the tabs and their changes, read without opening saved tabs,
+    /// and no tab watched, pictured or driven.
+    func testAListWatchFollowsTheTabsWithoutWatchingOne() async throws {
+        let harness = try await ServerHarness()
+        let phone = try await harness.authenticatedPhone()
+        await harness.send(#"{"id":"1","type":"watchTab","taskId":"A","listOnly":true}"#, on: phone)
+        let listing = try await phone.response("1")
+        XCTAssertNil(listing.tabId)
+        XCTAssertEqual(listing.tabs?.map(\.tabId), ["T1", "T2"])
+        let unopened = await harness.bridge.unopenedLists
+        XCTAssertEqual(unopened, 1)
+        try await waitUntilAsync { await harness.bridge.watchedTabs == [RemoteTabWatch(taskID: "A", tabID: nil)] }
+        await harness.bridge.signal(.tabPainted(taskID: "A", tabID: "T1"))
+        await harness.bridge.setTabs([RemoteBrowserTab(tabId: "T3", title: "Queue", active: true)])
+        await harness.bridge.signal(.browserTabs("A"))
+        let changed = try await phone.event(.browserTabsChanged)
+        XCTAssertEqual(changed.tabs?.map(\.tabId), ["T3"])
+        let unopenedAgain = await harness.bridge.unopenedLists
+        XCTAssertEqual(unopenedAgain, 2, "its changes are read without opening saved tabs too")
+        let looks = await harness.bridge.captures
+        XCTAssertEqual(looks, 0, "a list watch pictures nothing")
+        XCTAssertTrue(phone.events(.tabFrame).isEmpty)
+        await harness.send(#"{"id":"2","type":"tabInput","taskId":"A","tabId":"T3","input":{"kind":"text","text":"x"}}"#,
+                           on: phone)
+        let input = try await phone.response("2").error?.code
+        XCTAssertEqual(input, .notAllowed, "a list watch takes no input")
+        let inputs = await harness.bridge.tabInputs
+        XCTAssertTrue(inputs.isEmpty)
+    }
+
     private func waitUntilAsync(_ condition: () async -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
         let deadline = Date().addingTimeInterval(testWaitLimitSeconds)
         while await !condition() {
@@ -1920,6 +1950,12 @@ actor FakeBridge: RemoteBridge {
         await listGate?.waitIfArmed()
         if listDelay > .zero { try? await Task.sleep(for: listDelay) }
         return taskID == "A" ? .success(tabs) : taskID == "B" ? .success([]) : .failure(RemoteError(.notFound))
+    }
+    /// Lists for a watch of the list alone, which opens no saved tab.
+    private(set) var unopenedLists = 0
+    func browserTabList(taskID: String) async -> Result<[RemoteBrowserTab], RemoteError> {
+        unopenedLists += 1
+        return await browserTabs(taskID: taskID)
     }
     func setWatchedTabs(_ watches: Set<RemoteTabWatch>) { watchedTabs = watches }
     func captureTab(taskID: String, tabID: String, maxWidth: Int, maxHeight: Int) async -> Result<RemoteTabFrame, RemoteError> {
