@@ -19,7 +19,8 @@ final class RemoteHostWindow {
     private let timeline = ConversationTimeline()
     private let composer = TextBox()
     private var items: [(item: NavigationViewItem, taskID: String)] = []
-    private var shownSidebar: RemoteSidebarMirror?
+    /// What the sidebar draws, by section: its name, then each task's ID, title and harness.
+    private var shownRows: [String]?
     private var shownTaskID: String?
     var onClose: (() -> Void)?
 
@@ -69,6 +70,10 @@ final class RemoteHostWindow {
         navigation.content = grid
         window.content = navigation
         try? window.activate()
+        timeline.loadEarlier = { [weak self] in
+            guard let self, let taskID = self.selectedTaskID else { return }
+            self.model.loadOlder(taskID)
+        }
 
         followConnection()
         followTasks()
@@ -96,21 +101,28 @@ final class RemoteHostWindow {
         } onChange: { [weak self] in
             Task { @MainActor in self?.followTasks() }
         }
-        guard let sidebar, sidebar != shownSidebar else { return }
-        shownSidebar = sidebar
-        showSidebar(sidebar)
+        guard let sidebar else { return }
+        // A task's marks and times change as it streams; the sidebar is drawn again only when what it shows does.
+        let sections = Self.sections(of: sidebar)
+        let rows = sections.flatMap { name, sessions in [name] + sessions.map { "\($0.id)\n\($0.title)\n\($0.harness.rawValue)" } }
+        guard rows != shownRows else { return }
+        shownRows = rows
+        showSidebar(sections)
+    }
+
+    private static func sections(of sidebar: RemoteSidebarMirror) -> [(name: String, sessions: [SessionRecord])] {
+        sidebar.groups.map { ($0.displayName, $0.sessions) }
+            + (sidebar.chats.isEmpty ? [] : [(L10n.string("Chats"), sidebar.chats)])
     }
 
     /// The host's projects with their tasks, then its chats, as the host's sidebar lists them.
-    private func showSidebar(_ sidebar: RemoteSidebarMirror) {
+    private func showSidebar(_ sections: [(name: String, sessions: [SessionRecord])]) {
         let taskIDs = Dictionary(model.tasks.map { (RemoteSidebarMirror.sessionID(for: $0.id), $0.id) },
                                  uniquingKeysWith: { first, _ in first })
         let selected: String? = if case let .task(id) = model.selection { id } else { nil }
         navigation.menuItems.clear()
         items = []
         var selectedItem: NavigationViewItem?
-        let sections = sidebar.groups.map { ($0.displayName, $0.sessions) }
-            + (sidebar.chats.isEmpty ? [] : [(L10n.string("Chats"), sidebar.chats)])
         for (name, sessions) in sections {
             let header = NavigationViewItemHeader()
             header.content = name
@@ -153,7 +165,7 @@ final class RemoteHostWindow {
             Task { @MainActor in self?.followConversation() }
         }
         let placeholder = hasSnapshot ? L10n.string("Choose a task") : L10n.format("Connecting to %@…", model.name)
-        timeline.show(presentation, placeholder: taskID == nil ? placeholder : nil,
+        timeline.show(presentation, conversationID: taskID, placeholder: taskID == nil ? placeholder : nil,
                       requestNote: L10n.format("Answer this on %@.", model.name))
         if let taskID, let task = model.task(taskID) {
             composer.placeholderText = L10n.format("Ask %@…", task.harnessName)

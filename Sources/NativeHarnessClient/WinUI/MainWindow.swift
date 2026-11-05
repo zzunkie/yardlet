@@ -7,8 +7,9 @@ import WinUI
 
 /// The Windows app's main window: the engine's tasks in the sidebar, the chosen task's conversation,
 /// and the composer. The sidebar follows the model's `SessionStore` through Observation, and the
-/// composer sends through the model as the Mac's does. The conversation shows what this window sent
-/// and the task's error until the Windows app reads transcripts. Below the tasks, Connect to a Mac pairs with
+/// composer sends through the model as the Mac's does. Choosing a task reads its saved history as the Mac does
+/// (`refreshConversationStatus`, which starts no turn), and its conversation draws through `ConversationTimeline`
+/// from the same projection the Mac's timeline reads. Below the tasks, Connect to a Mac pairs with
 /// another computer's Yardlet from the link it copies, and each paired host opens in a window of its own
 /// (`RemoteHostWindow`).
 @MainActor
@@ -18,12 +19,25 @@ final class MainWindow {
     private let log = QAEventLog.shared
     private let window = Window()
     private let navigation = NavigationView()
-    private let conversation = StackPanel()
-    private let scroller = ScrollViewer()
+    private let timeline = ConversationTimeline()
     private let composer = TextBox()
     private var items: [(item: NavigationViewItem, id: SessionRecord.ID)] = []
-    private var sentBySessionID: [SessionRecord.ID: [String]] = [:]
+    private var projectionCaches: [SessionRecord.ID: ConversationProjectionCache] = [:]
+    /// The tasks whose saved history was read since the window opened.
+    private var preparedSessionIDs: Set<SessionRecord.ID> = []
+    /// Ends the observation of a conversation no longer shown.
+    private var conversationGeneration = 0
+    private var shownSessionID: SessionRecord.ID?
+    private var loggedAnswer: String?
     private let taskPane = Grid()
+    private let newTaskItem = NavigationViewItem()
+    private let newTaskPane = StackPanel()
+    private let harnessList = ListView()
+    private let newTaskPrompt = TextBox()
+    private let newTaskStatus = TextBlock()
+    /// The harnesses the new task list shows, in its order.
+    private var newTaskHarnesses: [HarnessKind] = []
+    private var lookedForRuntimes = false
     private let connectItem = NavigationViewItem()
     private var hostItems: [(item: NavigationViewItem, id: String)] = []
     private var hostWindows: [String: RemoteHostWindow] = [:]
@@ -50,7 +64,10 @@ final class MainWindow {
         // bindings' ==, which compares the COM objects underneath.
         navigation.selectionChanged.addHandler { [weak self] _, args in
             guard let self, let container = args?.selectedItemContainer else { return }
-            if container == self.connectItem {
+            if container == self.newTaskItem {
+                self.navigation.content = self.newTaskPane
+                self.showNewTask()
+            } else if container == self.connectItem {
                 self.navigation.content = self.connectPane
             } else if let hostID = self.hostItems.first(where: { $0.item == container })?.id {
                 self.openHost(hostID)
@@ -67,10 +84,7 @@ final class MainWindow {
         composerRow.height = GridLength(value: 0, gridUnitType: .auto)
         grid.rowDefinitions.append(conversationRow)
         grid.rowDefinitions.append(composerRow)
-        conversation.spacing = 16
-        scroller.padding = Thickness(left: 28, top: 20, right: 28, bottom: 12)
-        scroller.content = conversation
-        grid.children.append(scroller)
+        grid.children.append(timeline.view)
         composer.textWrapping = .wrap
         composer.margin = Thickness(left: 28, top: 8, right: 28, bottom: 20)
         try? Grid.setRow(composer, 1)
@@ -78,6 +92,9 @@ final class MainWindow {
         observeComposer()
         navigation.content = grid
         makeConnectPane()
+        makeNewTaskPane()
+        newTaskItem.content = L10n.string("New task")
+        timeline.respond = { [weak self] request, response in self?.answer(request, response) }
         connectItem.content = L10n.string("Connect to a Mac")
         navigation.footerMenuItems.append(connectItem)
         followHosts()
@@ -105,13 +122,18 @@ final class MainWindow {
         let now = Date()
         let selected = model.store.selectedSessionID ?? ordered.first?.id
         navigation.menuItems.clear()
+        navigation.menuItems.append(newTaskItem)
         items = []
         var selectedItem: NavigationViewItem?
         for session in ordered {
+            // As the Mac's rows show a title Yardlet made: without the folder name it starts with, which a chat's
+            // (`new-chat`) does not need and a project task's shows beside the harness instead.
+            let folder = session.workspaceURL.lastPathComponent
             let title = TextBlock()
-            title.text = session.title
+            title.text = SessionTitleProjection.titleUnderProject(session, projectNames: [folder])
             let detail = TextBlock()
-            detail.text = "\(session.harness.displayName) · \(Self.activityText(session.updatedAt, now: now))"
+            detail.text = ((model.projects.isChatFolder(session.workspaceURL) ? [] : [folder])
+                + [session.harness.displayName, Self.activityText(session.updatedAt, now: now)]).joined(separator: " · ")
             detail.fontSize = 12
             detail.opacity = 0.6
             let label = StackPanel()
@@ -133,6 +155,9 @@ final class MainWindow {
 
     private func choose(_ id: SessionRecord.ID) {
         if model.store.selectedSessionID != id { model.store.selectedSessionID = id }
+        if let session = selectedSession, preparedSessionIDs.insert(id).inserted {
+            Task { await model.refreshConversationStatus(for: session) }
+        }
         showConversation()
     }
 
@@ -140,22 +165,59 @@ final class MainWindow {
         model.store.selectedSessionID.flatMap { id in model.store.sessions.first { $0.id == id } }
     }
 
+    /// The chosen task's conversation, followed through Observation until another is shown.
     private func showConversation() {
-        let session = selectedSession
-        if let session { log.write("showing: \(session.title)") }
-        composer.placeholderText = session.map { L10n.format("Ask %@…", $0.harness.displayName) }
-            ?? L10n.string("Choose a task")
-        conversation.children.clear()
-        guard let session else {
-            if model.store.sessions.isEmpty { appendMessage(role: nil, text: L10n.string("No tasks")) }
-            return
+        conversationGeneration += 1
+        let generation = conversationGeneration
+        let (session, presentation, error, hasTasks) = withObservationTracking {
+            let session = selectedSession
+            return (session, session.map(presentation(of:)), session.flatMap { model.errorBySessionID[$0.id] },
+                    !model.store.sessions.isEmpty)
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self, generation == self.conversationGeneration else { return }
+                self.showConversation()
+            }
         }
-        for text in sentBySessionID[session.id] ?? [] {
-            appendMessage(role: L10n.string("You"), text: text)
+        if session?.id != shownSessionID {
+            shownSessionID = session?.id
+            if let session { log.write("showing: \(session.title)") }
+            composer.placeholderText = session.map { L10n.format("Ask %@…", $0.harness.displayName) }
+                ?? L10n.string("Choose a task")
         }
-        if let error = model.errorBySessionID[session.id] {
-            appendMessage(role: nil, text: error)
+        let placeholder = session != nil ? error : hasTasks ? L10n.string("Choose a task") : L10n.string("No tasks")
+        timeline.show(presentation, conversationID: session?.id.uuidString, placeholder: placeholder)
+        if let latest = presentation?.turns.last.flatMap({ Self.latestText(of: $0) }) {
+            let line = "answer\(latest.isStreaming ? " streaming" : ""): \(latest.text.prefix(80))"
+            if line != loggedAnswer {
+                loggedAnswer = line
+                log.write(line)
+            }
         }
+    }
+
+    /// The words a turn last streamed, for the event log: its latest answer, or while it works, the commentary
+    /// that may become one.
+    private static func latestText(of turn: ConversationTurn) -> (text: String, isStreaming: Bool)? {
+        for item in (turn.work + turn.answers).reversed() {
+            switch item.kind {
+            case let .answer(text, isStreaming), let .commentary(text, isStreaming): return (text, isStreaming)
+            default: continue
+            }
+        }
+        return nil
+    }
+
+    /// A task's conversation as the Mac's timeline reads it: the Codex thread once it has turns, otherwise the
+    /// shared transcript.
+    private func presentation(of session: SessionRecord) -> ConversationPresentation {
+        let cache = projectionCaches[session.id] ?? ConversationProjectionCache()
+        projectionCaches[session.id] = cache
+        if let state = AppModelRemoteBridge.codexState(of: session, in: model) {
+            return cache.codex(state, workspaceURL: session.workspaceURL, historySelection: nil)
+        }
+        return cache.transcript(model.transcriptBySessionID[session.id] ?? [], harness: session.harness,
+                                status: session.status, latestTurnIsComplete: session.completionState == .completed)
     }
 
     // Enter sends what the composer shows, the syllable being composed included: with the Microsoft
@@ -191,11 +253,107 @@ final class MainWindow {
         log.write("sent: \(text)")
         composer.text = ""
         guard let session = selectedSession else { return }
-        sentBySessionID[session.id, default: []].append(text)
-        showConversation()
+        Task { await model.send(text, to: session) }
+    }
+
+    /// A request's answer from its card, carried out as the Mac's card does (`ConversationActions.respond`).
+    private func answer(_ request: ConversationRequest, _ response: ConversationRequestResponse) {
+        guard let session = selectedSession else { return }
+        log.write("answered: \(response.title)")
         Task {
-            await model.send(text, to: session)
-            showConversation()
+            switch response.route {
+            case let .decision(decision): await model.respond(to: request.id, decision: decision, in: session)
+            case let .providerAction(action): await model.respond(to: request.id, action: action, in: session)
+            case let .codex(reply): await model.respondCodex(to: request.id, response: reply, in: session)
+            case .answer, .structured: break
+            }
+        }
+    }
+
+    // MARK: New task
+
+    /// The harnesses whose CLI Yardlet found on this computer, and the message the task starts with. A new task
+    /// is a chat, in a folder made for it, until the Windows app can choose a project.
+    private func makeNewTaskPane() {
+        newTaskPane.spacing = 12
+        newTaskPane.padding = Thickness(left: 28, top: 28, right: 28, bottom: 28)
+        newTaskPane.maxWidth = 560
+        newTaskPane.horizontalAlignment = .left
+        let title = TextBlock()
+        title.text = L10n.string("New task")
+        title.fontSize = 20
+        newTaskPane.children.append(title)
+        let harnessTitle = TextBlock()
+        harnessTitle.text = L10n.string("Harness")
+        harnessTitle.opacity = 0.7
+        newTaskPane.children.append(harnessTitle)
+        harnessList.selectionMode = .single
+        harnessList.selectionChanged.addHandler { [weak self] _, _ in self?.showNewTaskPrompt() }
+        newTaskPane.children.append(harnessList)
+        newTaskPrompt.textWrapping = .wrap
+        newTaskPrompt.keyDown.addHandler { [weak self] _, args in
+            guard let self, let args, args.key == .enter else { return }
+            args.handled = true
+            self.startTask()
+        }
+        newTaskPane.children.append(newTaskPrompt)
+        newTaskStatus.textWrapping = .wrap
+        newTaskStatus.opacity = 0.7
+        newTaskPane.children.append(newTaskStatus)
+    }
+
+    private func showNewTask() {
+        let descriptors = model.runtimeSelections.connectedDescriptors
+        newTaskHarnesses = descriptors.map(\.id)
+        harnessList.items.clear()
+        for descriptor in descriptors { harnessList.items.append(descriptor.displayName) }
+        harnessList.selectedIndex = descriptors.isEmpty ? -1 : 0
+        newTaskStatus.text = descriptors.isEmpty ? L10n.string("Choose or install a runtime first.") : ""
+        log.write("new task harnesses: \(descriptors.map(\.displayName).joined(separator: ", "))")
+        showNewTaskPrompt()
+        // The installs are looked for once, when the list first comes up empty.
+        guard descriptors.isEmpty, !lookedForRuntimes else { return }
+        lookedForRuntimes = true
+        Task {
+            await model.runtimeSelections.findNewest()
+            if !model.runtimeSelections.connectedDescriptors.isEmpty { showNewTask() }
+        }
+    }
+
+    private var chosenHarness: HarnessKind? {
+        let index = Int(harnessList.selectedIndex)
+        return newTaskHarnesses.indices.contains(index) ? newTaskHarnesses[index] : nil
+    }
+
+    private func showNewTaskPrompt() {
+        newTaskPrompt.placeholderText = chosenHarness.map { L10n.format("What should %@ work on?", $0.displayName) } ?? ""
+    }
+
+    private func startTask() {
+        let text = newTaskPrompt.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let harness = chosenHarness else { return }
+        guard let runtime = model.runtimeSelections.selectedURL(for: harness) else {
+            newTaskStatus.text = L10n.format("%@ is not available in Yardlet.", harness.displayName)
+            return
+        }
+        newTaskPrompt.text = ""
+        newTaskStatus.text = ""
+        log.write("new task: \(harness.displayName)")
+        let submission = NewTaskDraft.Submission(originalText: text, attachments: [], harness: harness, workspaceURL: nil,
+                                                 projectID: nil, runtimeURL: runtime)
+        let previousError = model.bootstrapError
+        Task {
+            do {
+                if try await model.createTask(submission) != nil {
+                    navigation.content = taskPane
+                    log.write("new task started")
+                } else {
+                    newTaskStatus.text = (model.bootstrapError != previousError ? model.bootstrapError : nil)
+                        ?? L10n.string("The task could not start.")
+                }
+            } catch {
+                newTaskStatus.text = error.localizedDescription
+            }
         }
     }
 
@@ -284,25 +442,5 @@ final class MainWindow {
         }
         hostWindows[hostID] = hostWindow
         hostWindow.open()
-    }
-
-    private func appendMessage(role: String?, text: String) {
-        let block = StackPanel()
-        block.spacing = 4
-        if let role {
-            let roleText = TextBlock()
-            roleText.text = role
-            roleText.fontSize = 12
-            roleText.opacity = 0.6
-            block.children.append(roleText)
-        }
-        let body = TextBlock()
-        body.text = text
-        body.fontSize = 14
-        body.textWrapping = .wrap
-        body.isTextSelectionEnabled = true
-        block.children.append(body)
-        conversation.children.append(block)
-        _ = try? scroller.changeView(nil, 1_000_000, nil)
     }
 }
