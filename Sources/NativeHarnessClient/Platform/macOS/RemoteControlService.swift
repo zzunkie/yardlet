@@ -31,6 +31,13 @@ final class RemoteControlService {
     /// writes it from Packaging/RelayURL, which stays out of git; REMOTE_V2_DESIGN.md §12).
     static let builtInRelayURLKey = "YardletRelayURL"
     static let builtInRelayURL = Bundle.main.object(forInfoDictionaryKey: builtInRelayURLKey) as? String
+    /// A second address of the same relay, which the Mac's room socket races against the first (§14.2): the
+    /// environment's beside the environment's relay, the default beside the default, and `YardletRelayAlternateURL`
+    /// (scripts/build-app.sh writes it from Packaging/RelayAlternateURL) beside the built-in one.
+    static let relayAlternateURLKey = "Yardlet.remote.relayAlternateURL"
+    static let relayAlternateURLEnvironmentKey = "YARDLET_REMOTE_RELAY_ALTERNATE_URL"
+    static let builtInRelayAlternateURLKey = "YardletRelayAlternateURL"
+    static let builtInRelayAlternateURL = Bundle.main.object(forInfoDictionaryKey: builtInRelayAlternateURLKey) as? String
 
     struct Pairing: Equatable {
         var expiresAt: Date
@@ -265,11 +272,27 @@ final class RemoteControlService {
         return await Task.detached { operation(accountToken) }.value
     }
 
-    /// The relay this Mac uses: the developer's or self-hosted one, else the built-in one.
+    /// The relay this Mac uses: the developer's or self-hosted one, else the built-in one. The account and
+    /// every request but the room's socket go here.
     var relayURL: URL? {
-        let configured = environment[Self.relayURLEnvironmentKey] ?? defaults.string(forKey: Self.relayURLKey) ?? Self.builtInRelayURL
-        guard let configured, let url = URL(string: configured), let scheme = url.scheme,
-              ["wss", "https", "ws", "http"].contains(scheme) else { return nil }
+        configuredRelay.flatMap { Self.relayAddress($0.url) }
+    }
+
+    /// Another address of the same relay, raced against `relayURL` for the room's socket. It comes from where
+    /// `relayURL` came from, so a relay set by hand never gets the built-in one's.
+    var relayAlternateURL: URL? {
+        guard relayURL != nil else { return nil }
+        return configuredRelay?.alternate.flatMap(Self.relayAddress)
+    }
+
+    private var configuredRelay: (url: String, alternate: String?)? {
+        if let url = environment[Self.relayURLEnvironmentKey] { return (url, environment[Self.relayAlternateURLEnvironmentKey]) }
+        if let url = defaults.string(forKey: Self.relayURLKey) { return (url, defaults.string(forKey: Self.relayAlternateURLKey)) }
+        return Self.builtInRelayURL.map { ($0, Self.builtInRelayAlternateURL) }
+    }
+
+    private static func relayAddress(_ text: String) -> URL? {
+        guard let url = URL(string: text), let scheme = url.scheme, ["wss", "https", "ws", "http"].contains(scheme) else { return nil }
         return url
     }
 
@@ -385,7 +408,7 @@ final class RemoteControlService {
         let relay = relayClient?.relayInfo
         pairing = Pairing(expiresAt: ticket.expiresAt, url: RemoteSecurePairingURL(
             macKey: identity.noise.publicKey, secret: ticket.secret, name: macName, hosts: directHosts,
-            relayURL: relay?.url, room: relay?.room).url)
+            relayURL: relay?.url, room: relay?.room, alternateRelayURL: relay?.alternate).url)
         lookUpMagicDNSName()
     }
 
@@ -579,7 +602,7 @@ final class RemoteControlService {
             activate()
             return
         }
-        let client = RemoteRelayClient(server: server, identity: identity, baseURL: url)
+        let client = RemoteRelayClient(server: server, identity: identity, baseURL: url, alternateURL: relayAlternateURL)
         client.onStateChange = { [weak self] state in
             Task { @MainActor in
                 self?.relayState = state

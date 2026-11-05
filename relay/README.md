@@ -89,4 +89,6 @@ Worker's Domains tab after one). To run your own:
    `pages/wrangler.jsonc` set to the same project name and `service` to the Worker's name). Clients race this
    address against the main one, which stays the address for accounts and sign-in. Rooms are placed by the
    country of the request that first opens them (`src/placement.ts`), so a room lives near its Mac whichever
-   address it came in through.
+   address it came in through. For the Mac, put the address on the first line of `Packaging/RelayAlternateURL`
+   (or `YARDLET_RELAY_ALTERNATE_URL`); the bundle carries it as `YardletRelayAlternateURL`, and the Mac races it
+   against the main address for its room (docs/REMOTE_PROTOCOL.md §14.2).

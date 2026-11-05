@@ -20,6 +20,8 @@
 #   YARDLET_SPARKLE_FEED_URL    Apple silicon's feed. Default https://yardlet.app/appcast.xml; Intel's is
 #                               the same address with -x86_64 before .xml.
 #   YARDLET_RELAY_URL           The phone relay built in. Default https://relay.yardlet.app (relay/README.md).
+#   YARDLET_RELAY_ALTERNATE_URL A second address of that relay, else Packaging/RelayAlternateURL's first line
+#                               (build-app.sh); none without either.
 #   YARDLET_SPARKLE_ACCOUNT     The login keychain account that holds the EdDSA key (default yardlet).
 #   YARDLET_SPARKLE_PUBLIC_KEY  The public EdDSA key built into the app. Default: generate_keys -p,
 #                               which reads it from the login keychain.

@@ -711,7 +711,11 @@ are done by the person, and secret values never go in command arguments, docs or
   `PUBLIC_URL` and `AUTH_STATE_SECRET`. Deployed on 2026-10-25: the address contains the name of the account that
   deployed it, so it is not written in the repository. The relay keeps `PUBLIC_URL` as a secret too, and the Mac build
   puts the first line of `Packaging/RelayURL` (outside git) into Info.plist as `YardletRelayURL`, which
-  `RemoteControlService.builtInRelayURL` reads. Android's `yardlet.relayUrl` is a Gradle user property.
+  `RemoteControlService.builtInRelayURL` reads. Android's `yardlet.relayUrl` is a Gradle user property. A second
+  address of the same relay, a Pages project that forwards every request to the Worker and is served from nearer
+  locations for many networks, goes on the first line of `Packaging/RelayAlternateURL` (outside git) and into
+  Info.plist as `YardletRelayAlternateURL`; the Mac races it against the first for its room (REMOTE_PROTOCOL.md
+  §14.2), and sign-in stays on the first.
 - **Notifications:** add the Android app (`com.zzunkie.yardlet.remote`) to a Firebase project and put its values in the
   Android build; the service account key goes into the relay's secrets `FCM_SERVICE_ACCOUNT` and `FCM_PROJECT_ID`.
 - **Accounts:** an OAuth client (web) in the same Google Cloud project and a GitHub OAuth App, with the callback

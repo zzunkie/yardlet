@@ -10,8 +10,9 @@ __pycache__/
 Packaging/GoogleOAuthClient.json
 # Yardlet's own Microsoft Entra app's client ID, built into the app bundle (scripts/build-app.sh).
 Packaging/MicrosoftOAuthClient.json
-# The deployed Yardlet relay's address, built into the app bundle (scripts/build-app.sh).
+# The deployed Yardlet relay's address and a second address of it, built into the app bundle (scripts/build-app.sh).
 Packaging/RelayURL
+Packaging/RelayAlternateURL
 
 # Maintainers' working notes: a separate checkout, or a link to one in a worktree.
 /docs/internal
