@@ -54,7 +54,8 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
     ] = [:]
     private var presentationSequenceByLocalSessionID: [UUID: UInt64] = [:]
     private var pendingPresentationPublicationByLocalSessionID: [UUID: CodexTaskState] = [:]
-    private var presentationFlushTasks: [UUID: Task<Void, Never>] = [:]
+    /// The publication each task's pending state waits for, and when it is due.
+    private var presentationFlushes: [UUID: (due: ContinuousClock.Instant, task: Task<Void, Never>)] = [:]
 
     private let namesNewThreads: Bool
     /// Threads this adapter started whose first request has not been sent yet.
@@ -1609,7 +1610,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         presentationStateByLocalSessionID.removeValue(forKey: session.localSessionID)
         presentationSequenceByLocalSessionID.removeValue(forKey: session.localSessionID)
         pendingPresentationPublicationByLocalSessionID.removeValue(forKey: session.localSessionID)
-        presentationFlushTasks.removeValue(forKey: session.localSessionID)?.cancel()
+        presentationFlushes.removeValue(forKey: session.localSessionID)?.task.cancel()
         presentationContinuations.removeValue(forKey: session.localSessionID)?.finish()
 
         // As the Codex app lets a conversation go: the App Server unloads a thread no client follows, and ends with
@@ -1864,11 +1865,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
                 to: &state
             ) {
                 syncActiveTurnID(from: state, for: localSessionID)
-                publish(
-                    state,
-                    for: localSessionID,
-                    coalesce: CodexTaskReducer.streamingTextMethods.contains(method)
-                )
+                publish(state, for: localSessionID, within: Self.publicationDelay(for: method))
             }
         }
 
@@ -2174,32 +2171,49 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         }
     }
 
+    /// How long the state a notification made may wait before it is published, so that what the App
+    /// Server sent with it is drawn in the same update. Text waits 100 ms: tokens come in bursts, and each
+    /// state crosses the protocol bridge and lays out the visible chats again. A card that starts or
+    /// settles waits a display frame: the App Server sends a card's `item/completed` with the next card's
+    /// `item/started`, and published one at a time they were drawn as two whole updates of the window in
+    /// one pass of the main thread. Requests, approvals and a turn's start and end are published at once,
+    /// with whatever waited.
+    static func publicationDelay(for method: String) -> Duration? {
+        if CodexTaskReducer.streamingTextMethods.contains(method) { return .milliseconds(100) }
+        if method == "item/started" || method == "item/completed" { return .milliseconds(16) }
+        return nil
+    }
+
+    /// Publishes `state` now, or within `delay` with the states that come after it.
     private func publish(
         _ state: CodexTaskState,
         for localSessionID: UUID,
-        coalesce: Bool = false
+        within delay: Duration? = nil
     ) {
         presentationStateByLocalSessionID[localSessionID] = state
-        guard coalesce else {
+        guard let delay else {
             pendingPresentationPublicationByLocalSessionID.removeValue(forKey: localSessionID)
-            presentationFlushTasks.removeValue(forKey: localSessionID)?.cancel()
+            presentationFlushes.removeValue(forKey: localSessionID)?.task.cancel()
             presentationContinuations[localSessionID]?.yield(state)
             return
         }
 
         pendingPresentationPublicationByLocalSessionID[localSessionID] = state
-        guard presentationFlushTasks[localSessionID] == nil else { return }
-        presentationFlushTasks[localSessionID] = Task { [weak self] in
-            // Text snapshots cross the protocol bridge and re-layout both visible chats.
-            // Coalesce token bursts; lifecycle/approval changes still publish immediately.
-            try? await Task.sleep(for: .milliseconds(100))
+        let due = ContinuousClock.now + delay
+        // A publication due no later takes this state with it.
+        if let flush = presentationFlushes[localSessionID], flush.due <= due { return }
+        presentationFlushes[localSessionID]?.task.cancel()
+        presentationFlushes[localSessionID] = (due, Task { [weak self] in
+            try? await Task.sleep(until: due)
             guard !Task.isCancelled else { return }
-            await self?.flushPresentationPublication(for: localSessionID)
-        }
+            await self?.flushPresentationPublication(for: localSessionID, due: due)
+        })
     }
 
-    private func flushPresentationPublication(for localSessionID: UUID) {
-        presentationFlushTasks.removeValue(forKey: localSessionID)
+    private func flushPresentationPublication(for localSessionID: UUID, due: ContinuousClock.Instant) {
+        // A publication moved sooner, or made at once, since this one was due.
+        guard presentationFlushes[localSessionID]?.due == due else { return }
+        presentationFlushes.removeValue(forKey: localSessionID)
         guard let state = pendingPresentationPublicationByLocalSessionID.removeValue(
             forKey: localSessionID
         ) else { return }

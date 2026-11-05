@@ -375,8 +375,8 @@ struct CodexTaskDecoder: Sendable {
 struct CodexTaskReducer: Sendable {
     private let decoder = CodexTaskDecoder()
 
-    /// Notifications that only extend or replace text on a running card. Their publications may
-    /// be coalesced; lifecycle, approval, and completion changes still publish immediately.
+    /// Notifications that only extend or replace text on a running card. Their publications wait
+    /// longest for the ones after them (`CodexAdapter.publicationDelay(for:)`).
     static let streamingTextMethods: Set<String> = [
         "item/agentMessage/delta",
         "item/reasoning/summaryPartAdded",
