@@ -132,10 +132,29 @@ $main = $UIA::FromHandle($process.MainWindowHandle)
 [void][RemoteDesktop]::BringForward($process.MainWindowHandle)
 
 # Connect to a Mac, the link pasted, Connect.
-# A list redrawn meanwhile leaves an item that no longer takes a pattern, so finding and choosing go together.
-$connect = Wait-For { $found = Find-Item $main 'Connect to a Mac'; if ($found) { Select-Item $found; $true } } 10
-if (-not $connect) { Finish 'no Connect to a Mac item' }
-$field = Wait-For { Find-Typed $main ([System.Windows.Automation.ControlType]::Edit) } 10
+# A list redrawn meanwhile leaves an item that no longer takes a pattern, so finding and choosing go together. Just
+# after launch a choice made through UI Automation now and then takes the item's focus but not its selection, so the
+# item is chosen again, once by invoking it, until its pane shows; the summary keeps how many tries it took and how long
+# UI Automation took to answer, which would show a window that stopped answering.
+$summary.connectTries = 0
+$field = $null
+$deadline = (Get-Date).AddSeconds(30)
+while (-not $field -and (Get-Date) -lt $deadline) {
+    $summary.connectTries += 1
+    $chosen = Wait-For { $found = Find-Item $main 'Connect to a Mac'; if ($found) {
+        if ($summary.connectTries % 2 -eq 0) {
+            $found.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        } else {
+            Select-Item $found
+        }
+        $true } } 10
+    if (-not $chosen) { Finish 'no Connect to a Mac item' }
+    # The pane's Connect button, which the task's pane does not have; the pane's one field is then the link's.
+    if (Wait-For { Find-Named $main 'Connect' ([System.Windows.Automation.ControlType]::Button) } 4) {
+        $field = Wait-For { Find-Typed $main ([System.Windows.Automation.ControlType]::Edit) } 4
+    }
+}
+$summary.uiaAnswerSeconds = [math]::Round((Measure-Command { try { [void]$main.FindFirst($Scope::Children, [System.Windows.Automation.Condition]::TrueCondition) } catch {} }).TotalSeconds, 2)
 if (-not $field) { Finish 'no link field' }
 $field.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($Link)
 $button = Wait-For { Find-Named $main 'Connect' ([System.Windows.Automation.ControlType]::Button) } 10
