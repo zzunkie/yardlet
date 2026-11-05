@@ -82,9 +82,11 @@ Worker's Domains tab after one). To run your own:
    Cloudflare location (Korean networks through Los Angeles or Hong Kong, for example), while a `*.pages.dev`
    address is served from the nearest one. `pages/` is a Pages project that hands every request to the Worker
    through a service binding, so both addresses reach the same rooms: after the Worker is deployed,
-   `npx wrangler pages project create <name> --production-branch main` once, then
+   `npx wrangler pages project create <name> --production-branch main --force` once (`--force` keeps it a Pages
+   project, which gets the `*.pages.dev` address; without it Wrangler now deploys a Worker instead, from the nearest
+   Wrangler configuration it finds), then
    `npx wrangler pages deploy pages/public --project-name <name>` from this folder (with `name` in
-   `pages/wrangler.toml` set to the same project name and `service` to the Worker's name). Clients race this
+   `pages/wrangler.jsonc` set to the same project name and `service` to the Worker's name). Clients race this
    address against the main one, which stays the address for accounts and sign-in. Rooms are placed by the
    country of the request that first opens them (`src/placement.ts`), so a room lives near its Mac whichever
    address it came in through.
