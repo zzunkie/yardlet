@@ -24,7 +24,7 @@ extension RemoteHostPlatform {
                 let activity = ProcessInfo.processInfo.beginActivity(options: [.idleSystemSleepDisabled], reason: reason)
                 return { ProcessInfo.processInfo.endActivity(activity) }
             },
-            computerName: Host.current().localizedName ?? "Mac")
+            computerName: { Host.current().localizedName ?? "Mac" })
     }
 }
 
