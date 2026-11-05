@@ -97,6 +97,9 @@ jobs:
         shell: pwsh
         run: |
           Windows/scripts/start-remote-host.ps1 -OutDirectory window-check -Name serve
+          # The local relay, built in as a build carries its relay, beside the app the check opens.
+          $env:YARDLET_RELAY_URL = 'ws://127.0.0.1:8787'
+          Windows/scripts/place-relay.ps1 -Destination $env:APP_BIN
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File Windows/scripts/check-remote-host.ps1 `
             -Executable "$env:APP_BIN\NativeHarnessClient.exe" -Fixture "$env:APP_BIN\yardlet-remote-fixture.exe" `
             -OutDirectory window-check
@@ -105,6 +108,9 @@ jobs:
       # Swift: its executables and libraries and its resource folder, as report.ps1 counts them.
       - name: Gather the app
         shell: pwsh
+        # The relay a public build carries (scripts/release.sh), for the PC the gathered app is opened on.
+        env:
+          YARDLET_RELAY_URL: https://relay.yardlet.app
         run: |
           $out = New-Item -ItemType Directory -Force windows-app-bin
           Get-ChildItem $env:APP_BIN -File | Where-Object { $_.Extension -in '.exe', '.dll', '.pri', '.winmd' } |
@@ -113,6 +119,7 @@ jobs:
             Copy-Item -Destination $out -Recurse
           $runtime = Get-ChildItem "$env:LOCALAPPDATA\Programs\Swift\Runtimes\*\usr\bin" -Directory | Select-Object -First 1
           Copy-Item "$runtime\*.dll" $out
+          Windows/scripts/place-relay.ps1 -Destination $out
           Get-ChildItem $out -Recurse -File | Measure-Object -Property Length -Sum | ForEach-Object { "$($_.Count) files, $([math]::Round($_.Sum / 1MB, 1)) MB" }
           Get-ChildItem $out -Directory | ForEach-Object { "folder: $($_.Name)" }
       # What was gathered opens on its own: copied elsewhere, with the build folder out of reach, so the app

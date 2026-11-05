@@ -25,17 +25,16 @@ final class RemoteControlService {
     /// connections are off; removed on sign-out. The token stays in the Keychain.
     static let accountKey = "Yardlet.remote.account"
     static let relayURLEnvironmentKey = "YARDLET_REMOTE_RELAY_URL"
-    /// The Yardlet relay a build carries, from `YardletRelayURL` in Info.plist (scripts/build-app.sh
-    /// writes it from Packaging/RelayURL, which stays out of git; REMOTE_V2_DESIGN.md §12).
-    static let builtInRelayURLKey = "YardletRelayURL"
-    static let builtInRelayURL = Bundle.main.object(forInfoDictionaryKey: builtInRelayURLKey) as? String
+    /// The Yardlet relay a build carries (`RemoteHostPlatform.builtInRelay`): `YardletRelayURL` in the Mac's
+    /// Info.plist, or a file of that name beside the Windows app's executable, written from Packaging/RelayURL,
+    /// which stays out of git (REMOTE_V2_DESIGN.md §12).
+    nonisolated static let builtInRelayURLKey = "YardletRelayURL"
     /// A second address of the same relay, which the Mac's room socket races against the first (§14.2): the
     /// environment's beside the environment's relay, the default beside the default, and `YardletRelayAlternateURL`
-    /// (scripts/build-app.sh writes it from Packaging/RelayAlternateURL) beside the built-in one.
+    /// (written from Packaging/RelayAlternateURL, as `YardletRelayURL` is) beside the built-in one.
     static let relayAlternateURLKey = "Yardlet.remote.relayAlternateURL"
     static let relayAlternateURLEnvironmentKey = "YARDLET_REMOTE_RELAY_ALTERNATE_URL"
-    static let builtInRelayAlternateURLKey = "YardletRelayAlternateURL"
-    static let builtInRelayAlternateURL = Bundle.main.object(forInfoDictionaryKey: builtInRelayAlternateURLKey) as? String
+    nonisolated static let builtInRelayAlternateURLKey = "YardletRelayAlternateURL"
 
     struct Pairing: Equatable {
         var expiresAt: Date
@@ -91,6 +90,8 @@ final class RemoteControlService {
     /// False where nothing may listen (tests that drive the server directly, visual fixtures).
     @ObservationIgnored private let listens: Bool
     @ObservationIgnored private let platform: RemoteHostPlatform
+    /// The relay this build carries and a second address of it, read once.
+    @ObservationIgnored private let builtInRelay: (url: String, alternate: String?)?
     @ObservationIgnored private var secureListener: (any RemoteDirectListening)?
     @ObservationIgnored private var relayClient: RemoteRelayClient?
     @ObservationIgnored private let accountToken: any RemoteSecretStoring
@@ -127,6 +128,7 @@ final class RemoteControlService {
     ) {
         let macName = macName ?? platform.computerName()
         self.platform = platform
+        builtInRelay = platform.builtInRelay()
         self.defaults = defaults
         self.environment = environment
         self.interfaces = interfaces ?? platform.interfaces
@@ -268,7 +270,7 @@ final class RemoteControlService {
     private var configuredRelay: (url: String, alternate: String?)? {
         if let url = environment[Self.relayURLEnvironmentKey] { return (url, environment[Self.relayAlternateURLEnvironmentKey]) }
         if let url = defaults.string(forKey: Self.relayURLKey) { return (url, defaults.string(forKey: Self.relayAlternateURLKey)) }
-        return Self.builtInRelayURL.map { ($0, Self.builtInRelayAlternateURL) }
+        return builtInRelay
     }
 
     private static func relayAddress(_ text: String) -> URL? {
@@ -691,6 +693,25 @@ struct RemoteHostPlatform {
     /// The name phones and other computers see, asked only when the remote is given none: the Mac's can wait on
     /// a name lookup.
     var computerName: () -> String
+    /// The relay the build carries and a second address of it, nil in a build without one.
+    var builtInRelay: () -> (url: String, alternate: String?)?
+}
+
+extension RemoteHostPlatform {
+    /// The relay a build carries in files beside its executable, as the Windows app's packaging writes them
+    /// (Windows/scripts/place-relay.ps1): the first line of `YardletRelayURL` and of `YardletRelayAlternateURL`.
+    static func relay(besides executable: URL?) -> (url: String, alternate: String?)? {
+        guard let folder = executable?.deletingLastPathComponent() else { return nil }
+        func firstLine(_ name: String) -> String? {
+            guard let text = try? String(contentsOf: folder.appending(path: name), encoding: .utf8),
+                  let line = text.split(whereSeparator: \.isNewline).first?.trimmingCharacters(in: .whitespaces),
+                  !line.isEmpty else { return nil }
+            return line
+        }
+        return firstLine(RemoteControlService.builtInRelayURLKey).map {
+            ($0, firstLine(RemoteControlService.builtInRelayAlternateURLKey))
+        }
+    }
 }
 
 /// A secret the remote keeps in the platform's secure store: the relay account's token (§14.4).

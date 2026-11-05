@@ -100,10 +100,14 @@ function Invoke-Named($root, [string] $text) {
 }
 
 # The switch, not the title beside it that has the same name.
-function Toggle-Remote {
-    $switch = $main.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.AndCondition(@(
+function Find-Toggle {
+    $main.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.AndCondition(@(
         (New-Object System.Windows.Automation.PropertyCondition($UIA::NameProperty, 'Allow remote connections')),
         (New-Object System.Windows.Automation.PropertyCondition($UIA::IsTogglePatternAvailableProperty, $true))))))
+}
+
+function Toggle-Remote {
+    $switch = Find-Toggle
     if (-not $switch) { return $false }
     $switch.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     return $true
@@ -143,7 +147,7 @@ $summary = [ordered]@{ name = $Name }
 $client = $null
 $eventLog = Join-Path $OutDirectory "$Name-events.log"
 $env:YARDLET_QA_EVENT_LOG = $eventLog
-$env:YARDLET_REMOTE_RELAY_URL = $Relay
+# The app reaches -Relay as the relay its build carries (place-relay.ps1 beside -Executable), not from the environment.
 $process = Start-Process -FilePath $Executable -WorkingDirectory (Split-Path $Executable) -PassThru `
     -RedirectStandardError (Join-Path $OutDirectory "$Name-stderr.txt") -RedirectStandardOutput (Join-Path $OutDirectory "$Name-stdout.txt")
 $shown = Wait-For { $process.Refresh(); $process.HasExited -or $process.MainWindowHandle -ne [IntPtr]::Zero } 90
@@ -160,6 +164,9 @@ if ($summary.roomSocketsWhileOff -ne 0) { Finish 'the remote opened a room while
 # Settings > Remote, turned on, and the relay reached.
 if (-not (Wait-For { Select-Item $main 'Settings' } 15)) { Finish 'no Settings item' }
 if (-not (Wait-For { (Read-Events) -contains 'showing settings' } 10)) { Finish 'settings not shown' }
+# The event is written as the pane is chosen, a frame before it draws: the pane's switch shows once it has.
+if (-not (Wait-For { Find-Toggle } 10)) { Finish 'no remote switch' }
+Start-Sleep -Milliseconds 500
 Save-Screen 'settings-off'
 if (-not (Wait-For { Toggle-Remote } 10)) { Finish 'no remote switch' }
 if (-not (Wait-For { (Read-Events) -contains 'remote host: on' } 10)) { Finish 'the remote did not turn on' }
@@ -216,8 +223,8 @@ if (-not (Wait-For { Select-Item $main 'Settings' } 15)) { Finish 'no Settings i
 if (-not (Wait-For { @(Read-Events | Where-Object { $_ -eq 'showing settings' }).Count -gt $shownBefore } 10)) { Finish 'settings not shown again' }
 $devices = Wait-For { Read-Events | Where-Object { $_ -like 'remote host devices: *Fixture phone*' } | Select-Object -Last 1 } 15
 $summary.devices = "$devices"
-# The pane draws in the window's next frame.
-Start-Sleep -Seconds 1
+if (-not (Wait-For { Find-Named $main 'Fixture phone' } 10)) { Finish 'the phone is not shown' }
+Start-Sleep -Milliseconds 500
 Save-Screen 'devices'
 if (-not $devices) { Finish 'no paired device listed' }
 $summary.roomHeldWhileOn = Test-Room $room

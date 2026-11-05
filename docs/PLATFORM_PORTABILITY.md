@@ -146,7 +146,10 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   out of the clipboard's history and off other devices; and the paired devices with their permissions and Remove. The
   remote is the engine's `RemoteControlService`, as on the Mac. `Platform/Windows/WindowsRemoteHost.swift` keeps its
   keys in Credential Manager and its devices and audit log under `%LOCALAPPDATA%\Yardlet\remote`, in the Mac's
-  format. While the remote is off it opens nothing, and turning it off closes its room on the relay.
+  format. While the remote is off it opens nothing, and turning it off closes its room on the relay. A build carries
+  its relay as the Mac's does, written from `YARDLET_RELAY_URL` or Packaging/RelayURL (out of git), but in a file
+  beside the executable, `YardletRelayURL`, rather than in Info.plist (`Windows/scripts/place-relay.ps1`); a build
+  without it has no relay, and the app CI gathers carries `https://relay.yardlet.app`, as a public Mac build does.
 - **Harness CLIs.** The engine finds a harness's runtime by Windows' rules (`Runtime/ExecutableLookup.swift`, "Paths
   and executable lookup" below), so Claude Code's `claude.exe` in `%USERPROFILE%\.local\bin` and npm's shims in
   `%APPDATA%\npm` are found as a person's own terminal would find them. Harnesses, their account commands and
@@ -243,8 +246,7 @@ POSIX environment (`Connectors/ConnectorProgram.swift`), and npm's `npx.cmd`, wh
 refused. A host's window shows a request card's words without its answers, and none of the host's panels, new tasks
 or Settings. The remote serves the relay alone: no direct paths (a listener on every interface, the interfaces,
 Bonjour), no relay account to sign in to or link through (docs/REMOTE_PROTOCOL.md, "12.1 Linking through an
-account"), and nothing that keeps the computer awake on power. A Windows build carries no relay of its own, so the
-remote reaches one only from `YARDLET_REMOTE_RELAY_URL` or the `Yardlet.remote.relayURL` setting. Until Foundation
+account"), and nothing that keeps the computer awake on power. Until Foundation
 there hands frames over whole (swiftlang/swift-corelibs-foundation#5255), its relay socket cannot tell a frame that
 does not decrypt from a piece of one: a paired device that sends such a frame holds the frames after it, other phones'
 too, until the bytes reach the limit (4 + 65,535 bytes) and are dropped, and a phone whose frame was dropped is out of

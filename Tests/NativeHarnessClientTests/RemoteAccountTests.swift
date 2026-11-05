@@ -94,6 +94,25 @@ final class RemoteAccountTests: XCTestCase {
             resolveName: { _ in nil }, listens: false)
         XCTAssertEqual(developer.relayURL?.absoluteString, "ws://127.0.0.1:3")
         XCTAssertNil(developer.relayAlternateURL)
+
+        // A Windows build carries its relay in files beside its executable (Windows/scripts/place-relay.ps1), the
+        // second address only with the first; with nothing set by hand the remote takes both.
+        let folder = FileManager.default.temporaryDirectory
+            .appending(path: "yardlet-relay-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let executable = folder.appending(path: "NativeHarnessClient.exe")
+        try Data("https://relay-two.example.test".utf8).write(to: folder.appending(path: RemoteControlService.builtInRelayAlternateURLKey))
+        XCTAssertNil(RemoteHostPlatform.relay(besides: executable))
+        try Data("wss://relay.example.test\n".utf8).write(to: folder.appending(path: RemoteControlService.builtInRelayURLKey))
+        var platform = RemoteHostPlatform.current
+        platform.builtInRelay = { RemoteHostPlatform.relay(besides: executable) }
+        let built = RemoteControlService(
+            bridge: FakeBridge(), deviceStore: RemoteDeviceStore(fileURL: nil), audit: nil,
+            defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteBuiltInRelay"))), environment: [:],
+            platform: platform, interfaces: { [] }, resolveName: { _ in nil }, listens: false)
+        XCTAssertEqual(built.relayURL?.absoluteString, "wss://relay.example.test")
+        XCTAssertEqual(built.relayAlternateURL?.absoluteString, "https://relay-two.example.test")
     }
 
     func testTheMacSignsInPutsItselfOnTheAccountAndTakesLinkRequests() async throws {
