@@ -78,3 +78,13 @@ Worker's Domains tab after one). To run your own:
    - Next: Sign in with Apple and e-mail links are not implemented yet.
 5. Put the relay's address on the first line of `Packaging/RelayURL` (or `YARDLET_RELAY_URL`) before
    `scripts/build-app.sh`; the bundle carries it as `YardletRelayURL`.
+6. A second, nearer address (optional). On a free-plan zone some networks reach the relay through a far
+   Cloudflare location (Korean networks through Los Angeles or Hong Kong, for example), while a `*.pages.dev`
+   address is served from the nearest one. `pages/` is a Pages project that hands every request to the Worker
+   through a service binding, so both addresses reach the same rooms: after the Worker is deployed,
+   `npx wrangler pages project create <name> --production-branch main` once, then
+   `npx wrangler pages deploy pages/public --project-name <name>` from this folder (with `name` in
+   `pages/wrangler.toml` set to the same project name and `service` to the Worker's name). Clients race this
+   address against the main one, which stays the address for accounts and sign-in. Rooms are placed by the
+   country of the request that first opens them (`src/placement.ts`), so a room lives near its Mac whichever
+   address it came in through.

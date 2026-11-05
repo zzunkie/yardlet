@@ -1,5 +1,6 @@
 import { handleAccountRoute } from "./account-api";
 import { isRoom } from "./keys";
+import { roomLocation, roomObjectName } from "./placement";
 
 export { Account } from "./account";
 export { Room } from "./room";
@@ -20,6 +21,8 @@ export default {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("expected a WebSocket upgrade", { status: 426 });
     }
-    return env.ROOM.get(env.ROOM.idFromName(room)).fetch(request);
+    const location = roomLocation(request.cf?.country as string | undefined, request.cf?.continent as string | undefined);
+    return env.ROOM.get(env.ROOM.idFromName(roomObjectName(room)), location ? { locationHint: location } : undefined)
+      .fetch(request);
   },
 } satisfies ExportedHandler<Env>;

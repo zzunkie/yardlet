@@ -2,6 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { hostChallengeMessage } from "../src/keys";
+import { roomLocation, roomObjectName } from "../src/placement";
 import { RELAY, connect, macFrame, macKey, openMac, openPhone, upgrade } from "./helpers";
 
 const bytes = (...values: number[]) => new Uint8Array(values);
@@ -11,6 +12,20 @@ describe("routes", () => {
     const response = await exports.default.fetch(`${RELAY}/v1/health`);
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("ok");
+  });
+
+  it("places a room by the country it is first asked for from", () => {
+    expect(roomLocation("KR", "AS")).toBe("apac-ne");
+    expect(roomLocation("SG", "AS")).toBe("apac-se");
+    expect(roomLocation("IN", "AS")).toBe("apac");
+    expect(roomLocation("TR", "EU")).toBe("me");
+    expect(roomLocation("BR", "SA")).toBe("sam");
+    expect(roomLocation("ZA", "AF")).toBe("afr");
+    expect(roomLocation("AU", "OC")).toBe("oc");
+    // Networks that already arrive nearby keep Cloudflare's own choice.
+    expect(roomLocation("US", "NA")).toBeUndefined();
+    expect(roomLocation("DE", "EU")).toBeUndefined();
+    expect(roomLocation(undefined, undefined)).toBeUndefined();
   });
 
   it("refuses malformed rooms", async () => {
@@ -56,7 +71,7 @@ describe("the Mac's socket", () => {
     const key = await macKey();
     const mac = await connect(`/v1/rooms/${key.room}/host`);
     await mac.json();
-    const stub = env.ROOM.get(env.ROOM.idFromName(key.room));
+    const stub = env.ROOM.get(env.ROOM.idFromName(roomObjectName(key.room)));
     // Move the 10 s deadline into the past rather than waiting for it.
     await runInDurableObject(stub, (_, state) => {
       for (const ws of state.getWebSockets("mac")) {
@@ -161,7 +176,7 @@ describe("a phone's socket", () => {
 
     // One the Mac does not answer in time is closed.
     const silent = await openPhone(key.room, mac);
-    const stub = env.ROOM.get(env.ROOM.idFromName(key.room));
+    const stub = env.ROOM.get(env.ROOM.idFromName(roomObjectName(key.room)));
     await runInDurableObject(stub, (_, state) => {
       for (const ws of state.getWebSockets(`c${silent.c}`)) {
         ws.serializeAttachment({ ...(ws.deserializeAttachment() as object), openedAt: 0 });
@@ -190,7 +205,7 @@ describe("a phone's socket", () => {
   it("keeps forwarding after the room is evicted from memory", async () => {
     const { mac, key } = await openMac();
     const { phone, c } = await openPhone(key.room, mac);
-    await evictDurableObject(env.ROOM.get(env.ROOM.idFromName(key.room)));
+    await evictDurableObject(env.ROOM.get(env.ROOM.idFromName(roomObjectName(key.room))));
 
     phone.ws.send(bytes(3));
     expect(await mac.binary()).toEqual(macFrame(c, bytes(3)));
