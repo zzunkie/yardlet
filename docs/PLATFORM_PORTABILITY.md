@@ -2,7 +2,8 @@
 
 Yardlet runs on macOS. Windows is in progress: the engine is kept in cross-platform Swift, and each platform gets its
 own screens. The engine builds on its own on macOS, Linux and Windows, and the Windows app, the engine with WinUI 3
-screens, builds and opens its window on Windows ("The Windows app" below); it does not run harnesses yet. For
+screens, builds and opens its window on Windows ("The Windows app" below) and follows another computer's Yardlet
+over the remote protocol; it does not run harnesses yet. For
 dependencies and Foundation behavior on Windows, what was checked in the official source or a build is marked
 "confirmed"; the rest is "not confirmed".
 
@@ -101,6 +102,15 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
 - **Assembly.** `Platform/Windows/AppModel+Live.swift` makes the model with its stores in `%LOCALAPPDATA%\Yardlet`
   and no browser host. `WinUI/YardletApp.swift` makes it once WinUI has started and opens `WinUI/MainWindow.swift`:
   the store's tasks in the sidebar, followed through Observation, and a composer that sends through the model.
+- **Another computer's Yardlet.** Connect to a Mac, below the tasks in the main window, pairs with the link a host
+  copies in Settings › Remote, as File › Connect to Mac… does on the Mac (docs/REMOTE_PROTOCOL.md, "Yardlet as a
+  client"), and `WinUI/RemoteHostWindow.swift` opens each paired host in a window of its own: the host's tasks as it
+  lists them, the chosen task's conversation as it streams, and a composer that sends to the host. The client is the
+  engine's `RemoteHostDirectory` and `RemoteHostModel`; `Platform/Windows/WindowsRemoteClientKeys.swift` keeps each
+  host's key in Credential Manager and the list and cache under `%LOCALAPPDATA%\Yardlet`. Without Bonjour, a host is
+  reached at the direct addresses it named, on the same network or over Tailscale, and through its relay.
+  `WinUI/ConversationTimeline.swift` draws the engine's `ConversationPresentation` turn by turn, redrawing only the
+  turns that changed, for a host's conversation and later a task's own.
 - **Application and message loop.** `Windows/Bindings/Sources/WinUIApplication/XamlApplication.swift` is the
   application type the app derives from. Its `main()` starts the Windows App Runtime through the Windows App SDK's
   bootstrapper, creates the application as the type `@main` names, and runs the thread's message loop. Between
@@ -129,7 +139,13 @@ Windows/scripts/place-bootstrapper.ps1 -Binaries (swift build --show-bin-path)
 `windows-engine.yml` builds the Windows app for every pull request, `main` and `windows-*` branches, beside the
 engine, as a check to read. `windows-app.yml`, for `windows-*` branches only, builds a release, opens it on the
 runner, measures it and types Korean into its composer through the Microsoft Korean IME
-(`Windows/scripts/check-window.ps1`).
+(`Windows/scripts/check-window.ps1`). It then starts the relay (`relay/`) and the fixture host on it
+(`Windows/scripts/start-remote-host.ps1`) and, in the same step, since a Windows runner ends the programs a step
+started when the step ends, pairs the app with the host through Connect to a Mac, opens a task, sends a message and
+waits for the answer to stream in (`Windows/scripts/check-remote.ps1`, through UI Automation). The run gathers the
+app with its resource folder and the Swift runtime beside it, opens what it gathered from another folder with the
+build folder out of reach, and uploads it (`windows-app-bin`), to open on a PC that has the Windows App Runtime 1.7 but
+no Swift.
 
 **Why the screens are Swift.** Before the app target, the same window (sidebar, conversation, composer) was built in
 Swift and in C# with WinUI 3 and opened on a GitHub Actions Windows runner (2026-10-31). Both held 28–30 MB of private
@@ -164,7 +180,9 @@ keep the engine in Swift, which needs a layer that carries the engine's state an
 **What the Windows app does not have yet:** a Windows layer for what `Platform/Portable/` stands in for, beginning
 with `NativeProcessTree` (a job object, so a harness and what it starts end together), the ConPTY terminal for sign-in
 and the terminal panel, notifications, credential storage for the vault and Antigravity, and the harnesses' icons
-(`HarnessKind.symbolName` names SF Symbols); the task's transcript in the conversation; and a browser host.
+(`HarnessKind.symbolName` names SF Symbols); the task's transcript in the conversation; and a browser host. A host's
+window shows answers as their Markdown text, a request card's words without its answers, and none of the host's
+panels, new tasks or Settings.
 
 ## The check that blocks new violations
 

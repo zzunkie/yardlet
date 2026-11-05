@@ -548,7 +548,7 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
 - It prints its pairing URL (§12). Its secret is fixed and reusable unless `--single-use-pairing`, which also
   expires it after 5 minutes like the Mac. `--relay` opens its room on a local relay and `--approve-links`
   approves a link request (§12.1) three seconds after it is shown. Its device list is kept in memory and is
-  gone when it stops.
+  gone when it stops. Without Network.framework (Windows, Linux) it has no listener of its own and needs `--relay`.
 - Fixture tasks (projects Yardlet, Website and Chats):
   - "Approve the index migration" (Claude Code) waits on a Bash approval (`allowOnce`, `deny`,
     `moreOnMac`; `running: true`, so `stopTurn` applies and expires the request). Allow once: the
@@ -2534,5 +2534,10 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   moved the pointer in the last two minutes, and `false` once not, telling only a change and again after each new
   connection. Meanwhile the Mac holds the phones' attention pushes (§16), as Claude Code's remote control does not push
   to a phone while the person watches the terminal. Not a command; a connection's presence ends with it.
+- **On Windows:** Yardlet on Windows follows a host the same way (docs/PLATFORM_PORTABILITY.md, "The Windows app"):
+  Connect to a Mac in its main window pairs with the same link, message 1 names the `platform` `windows`, and each
+  host opens in a window of its own with the host's tasks, a task's conversation and a composer. It has no Bonjour, so
+  it tries the direct addresses and then the relay; keys stay in Credential Manager, and `hosts.json` and the cache
+  under `%LOCALAPPDATA%\Yardlet`.
 - **Host settings:** Settings › Remote's "Keep this Mac awake on power" (off unless turned on) holds off idle sleep
   while remote connections are allowed and the Mac is on power, so a device elsewhere can reach it.

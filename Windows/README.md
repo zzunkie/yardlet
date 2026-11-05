@@ -12,4 +12,5 @@ What the Windows app is built from besides its sources in `Sources/NativeHarness
 | `scripts/place-bootstrapper.ps1` | Puts the Windows App SDK's bootstrapper beside the app's executable |
 | `scripts/test-swift-winrt.ps1` | Builds swift-winrt with the patches and runs its own tests, as its CI does (`.github/workflows/swift-winrt-tests.yml`) |
 | `scripts/check-window.ps1` | Opens a build, measures its memory, idle processor time and what it loads, and types Korean into its composer through the Microsoft Korean IME |
+| `scripts/start-remote-host.ps1`, `scripts/check-remote.ps1` | Start the relay and the fixture host on it, and pair a build with that host, open a task, send a message and wait for the answer to stream in |
 | `scripts/install-swift.ps1`, `scripts/install-windows-app-runtime.ps1`, `scripts/report.ps1` | The CI runner's Swift and Windows App Runtime, and a run's annotations |
