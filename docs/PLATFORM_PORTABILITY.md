@@ -59,8 +59,9 @@ platform's layer has to provide:
 The phone remote itself, `RemoteControlService` (`Remote/RemoteControlService.swift`), is engine code on every
 platform, with its keys behind `RemoteIdentityStoring`: the Keychain on the Mac, Credential Manager on Windows.
 
-The Windows layer provides `NativeProcessTree` (`Platform/Windows/NativeProcessTree.swift`), so the Windows app
-leaves `PortableProcesses.swift` out (`portableFilesWindowsReplaces` in `Package.swift`).
+The Windows layer provides `NativeProcessTree` (`Platform/Windows/NativeProcessTree.swift`) and
+`RemoteHostPlatform.current` (`Platform/Windows/WindowsRemoteHost.swift`), so the Windows app leaves
+`PortableProcesses.swift` and `PortableRemoteHost.swift` out (`portableFilesWindowsReplaces` in `Package.swift`).
 
 `Platform/Portable/PortableFoundation.swift` also holds the few names Foundation outside Apple's platforms lacks
 (`InlinePresentationIntent`, Combine's `ObservableObject` and `Published`, `autoreleasepool`), and
@@ -76,11 +77,18 @@ under `#if canImport(Darwin)` and says the same thing another way elsewhere: `L1
 **Cryptography.** The engine and the phone remote import `Crypto` from swift-crypto, which has CryptoKit's API: on
 macOS it re-exports CryptoKit and adds nothing to the app; elsewhere it builds BoringSSL.
 
-**The phone remote off macOS.** Its direct-path listener (`RemoteSecureListener` on Network.framework) is left out of
-a build on another platform until that platform has its own, and the remote there serves the relay alone
-(`RemoteHostPlatform.current` in `Platform/Portable/`). `RemoteAddresses` builds everywhere: it reads an address with
-`inet_pton`, and only the Mac lists its interfaces (`getifaddrs`) and looks up its MagicDNS name. The rest of
-`YardletRemote` builds: its random bytes fall back to `SystemRandomNumberGenerator`, its free-space check to
+**The phone remote off macOS.** Its direct-path listener on the Mac (`RemoteSecureListener` on Network.framework) is
+left out of a build on another platform. Windows has its own, `RemoteWinsockListener` (`#if os(Windows)`): Winsock on
+every interface, one thread serving every socket with `WSAPoll`, and DNS-SD from Windows itself (`DnsServiceRegister`,
+Windows 10 1903 and later) for the Bonjour advertisement. Winsock hands it bytes, so it speaks the WebSocket with
+`RemoteWebSocket`, which builds everywhere and which the Mac tests: the opening request read up to 8 KB and answered
+only for a WebSocket upgrade without Origin, and the phone's frames read back into whole messages, so the Windows
+listener needs none of the piece joining below. The Mac's listener shares its Origin rule, its accepted header and how
+a phone's address names its path (`RemoteAddressSelection.path(ofPeer:)`). Elsewhere the remote serves the relay
+alone (`RemoteHostPlatform.current` in `Platform/Portable/`). `RemoteAddresses` builds everywhere: it reads an
+address with `inet_pton`; the Mac lists its interfaces with `getifaddrs`, Windows with `GetAdaptersAddresses` and
+watches them with IP Helper's change notifications, and both look up the MagicDNS name. The rest of `YardletRemote`
+builds: its random bytes fall back to `SystemRandomNumberGenerator`, its free-space check to
 `attributesOfFileSystem`, and `RemoteLimits.host(of:)` exists only with Network.framework. Foundation there hands a
 WebSocket frame over in the pieces libcurl reads it in, each as a message of its own (`WebSocketURLProtocol` drops
 `curl_ws_meta`'s `bytesleft`), so the remote's sockets join a piece that does not read (a Noise frame that does not
@@ -141,12 +149,16 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   reached at the direct addresses it named, on the same network or over Tailscale, and through its relay. A host's
   sidebar is drawn again only when what it shows changes, not as a task's marks and times change while it streams.
 - **This computer's tasks elsewhere.** Settings, at the foot of the sidebar, holds Settings › Remote as the Mac's
-  (`WinUI/RemoteSettingsPane.swift`): Allow remote connections, off until turned on and then served through the relay;
-  the paths a device can take now; pairing with a QR code (Swift QR Code Generator) and Copy link, which keeps the link
+  (`WinUI/RemoteSettingsPane.swift`): Allow remote connections, off until turned on and then served on the same
+  network and over Tailscale by a listener on every interface at port 47616, advertised with DNS-SD, and through the
+  relay; the paths a device can take now; pairing with a QR code (Swift QR Code Generator) and Copy link, which keeps the link
   out of the clipboard's history and off other devices; and the paired devices with their permissions and Remove. The
   remote is the engine's `RemoteControlService`, as on the Mac. `Platform/Windows/WindowsRemoteHost.swift` keeps its
   keys in Credential Manager and its devices and audit log under `%LOCALAPPDATA%\Yardlet\remote`, in the Mac's
-  format. While the remote is off it opens nothing, and turning it off closes its room on the relay. A build carries
+  format. While the remote is off it opens nothing, and turning it off closes its listener, its connections and its
+  room on the relay. The first time the listener opens, Windows Defender Firewall asks whether Yardlet may take
+  connections on private and on public networks; a phone on the same network reaches it only on a network whose
+  profile was allowed. A build carries
   its relay as the Mac's does, written from `YARDLET_RELAY_URL` or Packaging/RelayURL (out of git), but in a file
   beside the executable, `YardletRelayURL`, rather than in Info.plist (`Windows/scripts/place-relay.ps1`); a build
   without it has no relay, and the app CI gathers carries `https://relay.yardlet.app`, as a public Mac build does.
@@ -199,11 +211,15 @@ app; the check passes when that process ended with the app's stop (`Windows/scri
 stand-in, which serves one ACP turn that asks to edit a file, the app then starts a task from New task, allows the
 request from its card, waits for the answer to stream in, and opens again to find the answer kept
 (`Windows/scripts/check-local.ps1`); while the stand-in runs, no console window opens beside the ones already there,
-which a console program started on its own first shows the count would see. That task is then served through a
-local relay to a phone on the engine's client connection (`yardlet-remote-fixture --pair`,
-`Windows/scripts/check-remote-host.ps1`): the app holds no room while the remote is off, turns it on in Settings ›
-Remote, pairs and copies the link; the phone pairs from it, lists the tasks and has a message answered, allowed on
-the app's card; the phone is listed among the devices, and turning the remote off closes the room. The run
+which a console program started on its own first shows the count would see. That task is then served to phones
+on the engine's client connection (`yardlet-remote-fixture --pair`, `Windows/scripts/check-remote-host.ps1`): the app
+neither listens nor holds a room while the remote is off, turns it on in Settings › Remote, pairs and copies the link;
+one phone pairs from the link without its relay and so over the runner's own network address, another from a new link
+without its direct addresses and so through a local relay, and each lists the tasks and has a message answered,
+allowed on the app's card. A .NET WebSocket shows the listener refuses a browser's handshake and closes a text frame
+with 1003; the phones are listed among the devices, and turning the remote off closes the listener, a connection
+still open and the room. The runner's phone reaches the listener from the same computer, which Windows' firewall
+does not filter, so what another device on the network needs is the firewall's permission above. The run
 gathers the app with its resource folder and the Swift runtime beside it, opens what it gathered from another folder with the
 build folder out of reach, and uploads it (`windows-app-bin`), to open on a PC that has the Windows App Runtime 1.7 but
 no Swift.
@@ -244,9 +260,8 @@ Antigravity, and the harnesses' icons (`HarnessKind.symbolName` names SF Symbols
 form (questions, a plan's review); a project's folder for a new task, which starts as a chat; and a browser host. Git is still looked for at its macOS paths (`Diff/GitExecutableLocator.swift`), a connector's program gets a
 POSIX environment (`Connectors/ConnectorProgram.swift`), and npm's `npx.cmd`, which is not one of npm's shims, is
 refused. A host's window shows a request card's words without its answers, and none of the host's panels, new tasks
-or Settings. The remote serves the relay alone: no direct paths (a listener on every interface, the interfaces,
-Bonjour), no relay account to sign in to or link through (docs/REMOTE_PROTOCOL.md, "12.1 Linking through an
-account"), and nothing that keeps the computer awake on power. Until Foundation
+or Settings. The remote has no relay account to sign in to or link through (docs/REMOTE_PROTOCOL.md, "12.1 Linking
+through an account"), and nothing that keeps the computer awake on power. Until Foundation
 there hands frames over whole (swiftlang/swift-corelibs-foundation#5255), its relay socket cannot tell a frame that
 does not decrypt from a piece of one: a paired device that sends such a frame holds the frames after it, other phones'
 too, until the bytes reach the limit (4 + 65,535 bytes) and are dropped, and a phone whose frame was dropped is out of
