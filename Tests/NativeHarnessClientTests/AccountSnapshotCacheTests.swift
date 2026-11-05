@@ -32,6 +32,7 @@ import XCTest
             canLogin: false, canLogout: true)])
 
         let cacheURL = root.appending(path: ProviderConnectionStore.snapshotCacheFileName)
+        StateFileWriter.shared.flush()
         let attributes = try FileManager.default.attributesOfItem(atPath: cacheURL.path)
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
         let text = try String(contentsOf: cacheURL, encoding: .utf8)

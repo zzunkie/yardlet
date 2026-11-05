@@ -76,6 +76,7 @@ final class ComposerDraftPersistenceTests: XCTestCase {
         for text in ["first", "replacement"] {
             drafts.home.text = text
             drafts.persistNow()
+            StateFileWriter.shared.flush()
             let file = try FileManager.default.attributesOfItem(atPath: repository.fileURL.path)
             let directory = try FileManager.default.attributesOfItem(atPath: repository.directoryURL.path)
             XCTAssertEqual((file[.posixPermissions] as? NSNumber)?.intValue, 0o600)
@@ -169,6 +170,24 @@ final class ComposerDraftPersistenceTests: XCTestCase {
         drafts.persistNow()
         try await Task.sleep(for: .milliseconds(60))
         XCTAssertTrue(ComposerDrafts(repository: repository).tasks.draft(for: id).submission.isEmpty)
+    }
+
+    func testASaveNeverWaitsForTheDiskAndQuittingWaitsForTheSave() throws {
+        let repository = try fileRepository()
+        let drafts = ComposerDrafts(repository: repository, saveDelay: .seconds(60))
+        // A write that holds the writer stands for a disk that takes a second to sync a file.
+        let disk = DispatchSemaphore(value: 0)
+        StateFileWriter.shared.write(repository.directoryURL.appending(path: "busy")) { _ = disk.wait(timeout: .now() + 10) }
+        drafts.home.text = "Typed just before quitting"
+        drafts.persistNow()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: repository.fileURL.path),
+                       "the draft is written on the writer's queue, not while the main thread waits")
+        disk.signal()
+        // What quitting does after the stores hand over their last state.
+        StateFileWriter.shared.flush()
+        XCTAssertEqual(try FileComposerDraftRepository(directoryURL: repository.directoryURL).load().home.text,
+                       "Typed just before quitting")
+        XCTAssertNil(drafts.storageFailure)
     }
 
     func testShutdownFlushesTheLastKeystrokeBeforeDebounce() async throws {
@@ -345,9 +364,9 @@ private final class FailingComposerDraftRepository: ComposerDraftRepository {
         if failLoad { throw CocoaError(.fileReadUnknown) }
         return snapshot
     }
-    func save(_ snapshot: ComposerDraftSnapshot) throws {
-        if failSave { throw CocoaError(.fileWriteUnknown) }
-        self.snapshot = snapshot
+    func save(_ snapshot: ComposerDraftSnapshot, saved: @escaping StateFileWriter.Done) {
+        if !failSave { self.snapshot = snapshot }
+        saved(!failSave)
     }
 }
 

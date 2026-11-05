@@ -92,8 +92,9 @@ overwrites the original file. A new account folder is 0700.
 them as soon as it opens. For each connection ID (`native:<harness>` for the default sign-in) it keeps only whether the
 account is signed in (`signedIn`/`signedOut`), the account name, organization and plan line that the CLI reported, the
 limit rows (name, used ratio, display text, reset time and kind of evidence) and the lookup time. It keeps no tokens,
-credentials, account folder paths, CLI output or per-task token usage. It uses atomic write and 0600; when it cannot
-be read, it starts empty and the next lookup writes it anew. When a lookup confirms sign-in or sign-out, the entry is
+credentials, account folder paths, CLI output or per-task token usage. It uses atomic write and 0600, encoded and
+written off the main thread with Yardlet's other small state files (`StateFileWriter`); a Claude session's limit
+report that changes no row writes nothing. When it cannot be read, it starts empty and the next lookup writes it anew. When a lookup confirms sign-in or sign-out, the entry is
 rewritten, and when action is needed (a missing folder and the like), it is removed. When a lookup cannot finish
 (time-out, error), the screen keeps the last sign-in value but marks it "Couldn't refresh", and when there is no
 runtime, it shows that state as is. A sign-in remembered from the last run is not a candidate for automatically

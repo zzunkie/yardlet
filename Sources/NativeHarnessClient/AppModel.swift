@@ -5241,6 +5241,7 @@ final class AppModel {
         composerDrafts.persistNow()
         taskWorkspaces.persistNow()
         splits.persistNow()
+        await StateFileWriter.shared.flushed()
         let attachments = handlesBySessionID.compactMap { localSessionID, handle in
             adaptersBySessionID[localSessionID].map { ($0, handle) }
         }

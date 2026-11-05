@@ -44,8 +44,6 @@ final class BrowserAddressHistory {
     /// Nil keeps the history in memory only (tests).
     private let file: URL?
     private let now: () -> Date
-    /// Writes in order, off the main thread.
-    private static let writer = DispatchQueue(label: "Yardlet.browser.addressHistory", qos: .utility)
     private(set) var pages: [String: Page] = [:]
     private(set) var searches: [String: Search] = [:]
     /// Each page's and each site's icon, never saved (`noteIcon`); the pages' at most `maxIcons`.
@@ -59,7 +57,9 @@ final class BrowserAddressHistory {
     init(file: URL?, now: @escaping () -> Date = Date.init) {
         self.file = file
         self.now = now
-        guard let file, let data = try? Data(contentsOf: file),
+        guard let file else { return }
+        StateFileWriter.shared.flush()
+        guard let data = try? Data(contentsOf: file),
               let saved = try? JSONDecoder().decode(Saved.self, from: data) else { return }
         let oldest = now().addingTimeInterval(-Double(Self.keptDays) * 86_400)
         for page in saved.pages where page.lastVisit >= oldest { pages[page.url] = page }
@@ -191,20 +191,29 @@ final class BrowserAddressHistory {
         save(waiting: true)
     }
 
-    /// Writes what is kept: the last 90 days, at most `maxPages` pages, the newest first.
+    /// Writes what is kept: the last 90 days, at most `maxPages` pages, the newest first. Sorting and encoding
+    /// thousands of pages and their visits, and the write, run on `StateFileWriter`'s queue; `waiting` returns
+    /// once the file is written.
     func save(waiting: Bool = false) {
         guard let file else { return }
         isChanged = false
         let oldest = now().addingTimeInterval(-Double(Self.keptDays) * 86_400)
-        let kept = pages.values.filter { $0.lastVisit >= oldest }.sorted { $0.lastVisit > $1.lastVisit }.prefix(Self.maxPages)
-        if kept.count < pages.count { pages = Dictionary(uniqueKeysWithValues: kept.map { ($0.url, $0) }) }
-        searches = searches.filter { $0.value.lastVisit >= oldest }
-        let saved = Saved(pages: Array(kept), searches: searches.values.sorted { $0.lastVisit > $1.lastVisit })
-        guard let data = try? JSONEncoder().encode(saved) else { return }
-        let write: @Sendable () -> Void = {
-            try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? data.write(to: file, options: [.atomic])
+        if pages.values.contains(where: { $0.lastVisit < oldest }) { pages = pages.filter { $0.value.lastVisit >= oldest } }
+        if pages.count > Self.maxPages {
+            let kept = pages.values.sorted { $0.lastVisit > $1.lastVisit }.prefix(Self.maxPages)
+            pages = Dictionary(uniqueKeysWithValues: kept.map { ($0.url, $0) })
         }
-        if waiting { Self.writer.sync(execute: write) } else { Self.writer.async(execute: write) }
+        if searches.values.contains(where: { $0.lastVisit < oldest }) {
+            searches = searches.filter { $0.value.lastVisit >= oldest }
+        }
+        let pages = pages, searches = searches
+        StateFileWriter.shared.write(file) {
+            let saved = Saved(pages: pages.values.sorted { $0.lastVisit > $1.lastVisit },
+                              searches: searches.values.sorted { $0.lastVisit > $1.lastVisit })
+            let data = try JSONEncoder().encode(saved)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: file, options: [.atomic])
+        }
+        if waiting { StateFileWriter.shared.flush() }
     }
 }

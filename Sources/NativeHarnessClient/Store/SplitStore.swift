@@ -57,7 +57,7 @@ final class InMemorySplitRepository: SplitRepository {
 /// Split views are Yardlet-owned presentation state and live beside the other `~/.yardlet`
 /// records. They never carry provider credentials or conversation content. Before the first
 /// save, the earlier `desks.json` workspace grid is read once and converted; that file is left
-/// in place untouched.
+/// in place untouched. Saves are encoded and written on `StateFileWriter`'s queue.
 struct FileSplitRepository: SplitRepository {
     let fileURL: URL
     var legacyDeskFileURL: URL?
@@ -73,6 +73,7 @@ struct FileSplitRepository: SplitRepository {
     }
 
     func load() -> SplitSnapshot? {
+        StateFileWriter.shared.flush()
         if let data = try? Data(contentsOf: fileURL) {
             guard let snapshot = try? JSONDecoder().decode(SplitSnapshot.self, from: data),
                   snapshot.version == 1 else { return nil }
@@ -83,12 +84,13 @@ struct FileSplitRepository: SplitRepository {
     }
 
     func save(_ snapshot: SplitSnapshot) {
-        guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        try? FileManager.default.createDirectory(
-            at: fileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try? data.write(to: fileURL, options: .atomic)
+        let fileURL = fileURL
+        StateFileWriter.shared.write(fileURL) {
+            let data = try JSONEncoder().encode(snapshot)
+            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try data.write(to: fileURL, options: .atomic)
+        }
     }
 }
 
