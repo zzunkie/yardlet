@@ -56,9 +56,9 @@ enum WorkspaceFileListing {
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
+        do { try NativeProcessTree.run(process) } catch { return nil }
         // Apple's Git can block while resolving a folder outside the app's file access.
-        let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        let watchdog = DispatchWorkItem { if process.isRunning { NativeProcessTree.terminate(process: process) } }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
         defer { watchdog.cancel() }
         var data = Data()

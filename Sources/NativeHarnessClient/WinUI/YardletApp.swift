@@ -14,10 +14,12 @@ final class YardletApp: XamlApplication {
     }
 
     override func launched() {
+        let console = WindowsConsole.makeHidden()
         mainWindow = MainActor.assumeIsolated {
             let model = AppModel.live()
             let window = MainWindow(model: model, directory: RemoteHostDirectory.live())
             window.open()
+            QAEventLog.shared.write(console)
             QAHarnessCheck.runIfAsked(model: model)
             return window
         }
