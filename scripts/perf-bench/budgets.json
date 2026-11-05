@@ -16,7 +16,8 @@
     "events.transcriptPublication.cpuP95Ms": 2.0
   },
   "stream-codex/streaming": {
-    "events.codexState.cpuP95Ms": 2.0
+    "events.codexState.cpuP95Ms": 2.0,
+    "bodies.mainWindowCount": 0
   },
   "codex-history/streaming": {
     "events.codexState.cpuP95Ms": 2.0
@@ -27,11 +28,13 @@
   },
   "sidebar/scroll": {
     "mainThread.passP95Ms": 16.0,
-    "mainThread.passesOver50MsCount": 0
+    "mainThread.passesOver50MsCount": 0,
+    "bodies.mainWindowCount": 0
   },
   "sidebar/scroll-streaming": {
     "events.codexState.cpuP95Ms": 2.0,
-    "mainThread.passesOver50MsCount": 5
+    "mainThread.passesOver50MsCount": 5,
+    "bodies.mainWindowCount": 0
   },
   "browser-tabs/tabs-shown": {
     "process.appCPUPercent": 2.0

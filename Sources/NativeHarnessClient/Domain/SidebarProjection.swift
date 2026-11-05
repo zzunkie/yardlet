@@ -681,8 +681,9 @@ extension WindowItem {
 ///
 /// The list crosses its top over and over as the person scrolls near it, starting and ending the hold
 /// each time. That changes how the tasks are listed only when a held task has been active since the
-/// hold began, and only then are those who list them told (`revision`): crossing the top alone draws
-/// neither the window nor its conversation again.
+/// hold began past another task's time, and only then are those who list them told (`revision`):
+/// crossing the top alone draws neither the window nor its conversation again, nor does it after the
+/// person worked in a task that stays where it is.
 ///
 /// In a list grouped by state the shown row's tasks also keep the state they are listed under, so a
 /// message sent in a task far down Idle does not take it up to Working out of view.
@@ -712,7 +713,23 @@ final class SidebarOrderHold {
         }
         self.listedAt = listedAt
         listedStates = states
-        if leavesState || Self.listing(sessions, at: listedAt) != before { revision += 1 }
+        if leavesState || Self.reorders(before, Self.listing(sessions, at: listedAt)) { revision += 1 }
+    }
+
+    /// Whether the sidebar can order `after` otherwise than `before`, the same tasks at other times:
+    /// a task whose time changed passed or met another task's on the way. Rows, families, projects and
+    /// chats all order by their newest time, so any other change leaves every order as it was, and the
+    /// window, which lists them, is not drawn again for it: the shown task held at the top of the list
+    /// and let go there has only a newer time.
+    private static func reorders(_ before: [SessionRecord], _ after: [SessionRecord]) -> Bool {
+        let moved = zip(before, after).compactMap { old, new -> (id: UUID, times: ClosedRange<Date>)? in
+            old.updatedAt == new.updatedAt ? nil
+                : (new.id, min(old.updatedAt, new.updatedAt)...max(old.updatedAt, new.updatedAt))
+        }
+        guard !moved.isEmpty else { return false }
+        return zip(before, after).contains { old, new in
+            moved.contains { $0.id != new.id && ($0.times.contains(old.updatedAt) || $0.times.contains(new.updatedAt)) }
+        }
     }
 
     /// The states the held tasks are listed under in a list grouped by state.

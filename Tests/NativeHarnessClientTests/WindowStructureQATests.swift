@@ -900,6 +900,19 @@ final class WindowStructureQATests: XCTestCase {
             host.settle(passes: 3, interval: 0.02)
         }
         XCTAssertEqual(ViewBodyCensus[.mainWindow], 0, "Crossing the list's top drew the window again")
+
+        // Active again while the list is away from its top, the task stays first: letting it go at the top
+        // changes no order, so the window is not drawn again either.
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 30))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        host.settle(passes: 3, interval: 0.02)
+        try await model.store.moveLastActivity(id: target.id, forwardTo: Date())
+        host.settle(passes: 6, interval: 0.03)
+        ViewBodyCensus.reset()
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
+        host.settle(passes: 6, interval: 0.03)
+        XCTAssertEqual(ViewBodyCensus[.mainWindow], 0, "Letting go of a task that stays in place drew the window again")
     }
 
     /// The same hold in a task list grouped by state: with the list scrolled away from its top, an idle task that starts
