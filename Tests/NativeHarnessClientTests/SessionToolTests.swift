@@ -2226,7 +2226,7 @@ final class SessionToolTests: XCTestCase {
 
         for (account, refusal) in [("separate", "is not one of the accounts tasks are started on automatically"),
                                    ("old", "is not signed in"),
-                                   ("native:codex", "a Claude Code task runs on one of Claude Code's accounts"),
+                                   ("native:codex", "is an account of Codex; Claude Code tasks run on one of Claude Code's accounts"),
                                    ("nobody@example.test", "no account nobody@example.test")] {
             let refused = await call(model, "create_task", ["prompt": "Port it", "account": account], from: fixture.caller)
             XCTAssertTrue(refused.isError, account)

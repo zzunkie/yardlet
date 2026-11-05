@@ -1388,8 +1388,8 @@ extension AppModel: SessionToolHandling {
     func sessionToolPermission(_ value: String, harness: HarnessKind, caller: SessionToolCaller,
                                subject: String, personChooses place: String) -> Result<String?, SessionToolError> {
         guard Self.permissionKey(for: harness) != nil else {
-            return .failure(SessionToolError(message: "permissionMode is for Claude Code and Codex; a "
-                + "\(harness.displayName) task uses that harness's own default permissions."))
+            return .failure(SessionToolError(message: "permissionMode is for Claude Code and Codex; "
+                + "\(harness.displayName) tasks use that harness's own default permissions."))
         }
         guard let choice = NewTaskModelChoice.permission(fromTool: value, harness: harness) else {
             let values = harness == .codex ? ScheduleToolCatalog.codexPermissionModes : ScheduleToolCatalog.permissionModes

@@ -137,8 +137,8 @@ extension AppModel {
         }
         guard var choice = onHarness.first else {
             if let other = matches.first {
-                return .failure(SessionToolError(message: "\(other.title) is a \(other.harness.displayName) account; a "
-                    + "\(harness.displayName) task runs on one of \(harness.displayName)'s accounts (list_accounts)."))
+                return .failure(SessionToolError(message: "\(other.title) is an account of \(other.harness.displayName); "
+                    + "\(harness.displayName) tasks run on one of \(harness.displayName)'s accounts (list_accounts)."))
             }
             return .failure(SessionToolError(message: "no account \(reference). list_accounts lists them."))
         }
