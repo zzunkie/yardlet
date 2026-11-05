@@ -52,12 +52,12 @@ let otherPlatformLayers = ["Platform/Portable"]
 // The Platform/Portable files whose parts the Windows layer provides, which the Windows app leaves out.
 let portableFilesWindowsReplaces = ["Platform/Portable/PortableProcesses.swift"]
 
-// The phone remote's listeners and interface addresses use Network.framework and BSD sockets; a
-// build on another platform leaves them out until that platform has its own.
+// The phone remote's direct-path listener uses Network.framework; a build on another platform leaves it
+// out until that platform has its own, and serves the relay alone.
 #if os(macOS)
 let remoteMacOnlySources: [String] = []
 #else
-let remoteMacOnlySources = ["RemoteSecureListener.swift", "RemoteAddresses.swift"]
+let remoteMacOnlySources = ["RemoteSecureListener.swift"]
 #endif
 
 #if os(Windows)

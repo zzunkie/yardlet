@@ -15,8 +15,11 @@ final class RemoteAccountSignIn: NSObject, ASWebAuthenticationPresentationContex
             let session = ASWebAuthenticationSession(url: url, callback: .customScheme(callbackScheme)) { @Sendable callback, error in
                 if let callback {
                     continuation.resume(returning: callback)
+                } else if let error, (error as? ASWebAuthenticationSessionError)?.code != .canceledLogin {
+                    continuation.resume(throwing: error)
                 } else {
-                    continuation.resume(throwing: error ?? CancellationError())
+                    // The person closed the sheet: the sign-in ends without an error.
+                    continuation.resume(throwing: CancellationError())
                 }
             }
             session.presentationContextProvider = self
@@ -30,13 +33,7 @@ final class RemoteAccountSignIn: NSObject, ASWebAuthenticationPresentationContex
     }
 }
 
-/// A secret the remote keeps in the login keychain under its own service (`<bundle identifier>.remote`).
-protocol RemoteSecretStoring: Sendable {
-    func load() -> String?
-    func save(_ value: String)
-    func delete()
-}
-
+/// The account token in the login keychain under the remote's own service (`<bundle identifier>.remote`).
 struct KeychainRemoteSecret: RemoteSecretStoring {
     let service: String
     let account: String
@@ -71,17 +68,4 @@ struct KeychainRemoteSecret: RemoteSecretStoring {
     func delete() {
         _ = SecItemDelete(query as CFDictionary)
     }
-}
-
-final class RemoteMemorySecret: RemoteSecretStoring, @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: String?
-
-    init(_ value: String? = nil) {
-        self.value = value
-    }
-
-    func load() -> String? { lock.withLock { value } }
-    func save(_ value: String) { lock.withLock { self.value = value } }
-    func delete() { lock.withLock { value = nil } }
 }
