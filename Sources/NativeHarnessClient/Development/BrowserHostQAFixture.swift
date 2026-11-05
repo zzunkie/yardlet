@@ -84,6 +84,12 @@ enum BrowserHostQAFixture {
             Task { @MainActor in await BrowserHostIdleReturnQA(output: output, base: base, panelSession: session).run() }
             return
         }
+        // `--ui-fixture-browser-check-only=screenshot` runs the agent's screenshots of tabs no panel shows alone
+        // (BrowserHostScreenshotQA).
+        if argument("ui-fixture-browser-check-only") == "screenshot" {
+            Task { @MainActor in await BrowserHostScreenshotQA(output: output, base: base, panelSession: session).run() }
+            return
+        }
         Task { @MainActor in await BrowserHostQARunner(output: output, base: base, session: session).run() }
     }
 }
