@@ -97,6 +97,8 @@ final class BrowserAgentTools {
     static let handoffDefaultWait: Duration = .seconds(600)
     /// How long `browser_file_upload` waits for the file chooser a click is opening.
     var fileChooserWait: Duration = .seconds(2)
+    /// How often a screenshot that waits asks the tab for a frame (`capture`).
+    var frameAskInterval: Duration = .seconds(3)
     /// A page that holds a password or code refuses the tools that could read it out, until it goes to another page.
     static let vaultBoundary = AgentToolFailure(.refused, retry: .no)
     /// The notifications of each task's handoffs not ended yet, which go when its turn ends.
@@ -1166,7 +1168,7 @@ final class BrowserAgentTools {
             if let refusal = vaultObservationRefusal(page, AgentToolCatalog.screenshot, linked: false) {
                 throw BrowserAgentToolError(refusal, Self.vaultBoundary)
             }
-            let capture = { try await self.send(page, "Page.captureScreenshot", params, timeout: self.loadTimeout) }
+            let capture = { try await self.capture(page, params) }
             return fullPage ? try await drawn(atLeast: (clip.width, clip.height), pixelRatio: pixelRatio, on: page, capture)
                 : try await capture()
         }
@@ -1190,6 +1192,38 @@ final class BrowserAgentTools {
         var text = "Screenshot of \(location?.url ?? "the page"), \(Self.format(clip.width))×\(Self.format(clip.height)) CSS pixels."
         if pageHeight > clip.height { text += " The page is \(Self.format(pageHeight)) CSS pixels tall; this is its top." }
         return AgentToolResult(content: [.image(data: data, mimeType: "image/\(format)"), .text(text)])
+    }
+
+    /// `Page.captureScreenshot`, which Chromium answers from the next frame the tab's view presents; it keeps a hidden
+    /// tab drawing while it captures, and answers in a few milliseconds. A capture that waits longer asks the tab for a
+    /// frame every few seconds, as a panel coming on screen asks (`BrowserHostClient.askForFrame`). One that times out
+    /// while the page answers other calls says the tab drew no picture, and whether frames of the page came
+    /// meanwhile, rather than that the browser did not answer.
+    private func capture(_ page: BrowserAgentPage, _ params: [String: JSONValue]) async throws -> JSONValue {
+        let started = ContinuousClock.now
+        let asking = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: self.frameAskInterval)
+                if !Task.isCancelled { page.askForFrame() }
+            }
+        }
+        defer { asking.cancel() }
+        do {
+            return try await send(page, "Page.captureScreenshot", params, timeout: loadTimeout)
+        } catch let error as BrowserAgentToolError
+            where error.failure?.kind == .timedOut && error.failure?.details["rendererAnswered"] == .bool(true) {
+            let seconds = Self.format(Double(loadTimeout.components.seconds))
+            let drew = page.lastFrameAt().map { $0 > started } ?? false
+            var failure = error.failure ?? AgentToolFailure(.timedOut, retry: .withChanges)
+            failure.retry = .withChanges
+            failure.details["framesWhileWaiting"] = .bool(drew)
+            throw BrowserAgentToolError("The tab drew no picture for the screenshot within \(seconds) seconds. Chromium "
+                + "takes a screenshot from the next frame the tab draws, and Yardlet asked the tab for frames while it waited: "
+                + (drew ? "frames of the page came meanwhile, but none for the screenshot. "
+                    : "no frame of the page came meanwhile. ")
+                + "The page answers other calls, so browser_snapshot and browser_evaluate still read it. browser_navigate to "
+                + "its address loads it again and draws it anew; browser_resize draws it at a size you set.", failure)
+        }
     }
 
     /// Chromium captures beyond the viewport by drawing the view at the capture's size for the moment

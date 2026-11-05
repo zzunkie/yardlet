@@ -687,6 +687,13 @@ QA="$TMPDIR/browser-host-qa"; mkdir -p "$QA"
 ./scripts/browser-host-qa/cleanup-qa.sh "$QA/Yardlet Browser QA.app" "Yardlet QA builds $(date +%F)"
 ```
 
+`--ui-fixture-browser-check-only=screenshot` (with `--ui-fixture-browser-agent-visible=3`, `BrowserHostScreenshotQA`)
+takes the agent's screenshots of a tab no panel shows, left as an agent's tab is left between calls: scrolled after a
+single-page app's history navigations, hidden after the agent's window, hidden while memory is critical, shown in the
+panel and the panel closed, hidden while other tasks' tabs hid after it, resized back while hidden at the turn's end,
+hidden by its engine while Yardlet takes it as shown, and two tabs in turn. Each picture comes back within 10 seconds
+(about 40 ms each in 2026-11-05 QA, a hidden tab's too: Chromium keeps a tab it captures drawing).
+
 `--ui-fixture-browser-check-only=browser-use` (2026-10-26, `BrowserHostBrowserUseQA`) checks the agent's use of the
 browser: screen size emulation (presets, kept after a new load, reference clicks, screenshot size, color scheme, kept
 after a full-page screenshot, desktop, a size larger than the panel drawn shrunk with the person's clicks landing in the

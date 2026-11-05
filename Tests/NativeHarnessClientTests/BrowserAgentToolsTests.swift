@@ -755,6 +755,28 @@ final class BrowserAgentToolsTests: XCTestCase {
         _ = await run(AgentToolCatalog.screenshot, ["fullPage": .bool(true), "format": .string("jpeg")])
         let full = try XCTUnwrap(cdp.params(of: "Page.captureScreenshot").last)
         XCTAssertEqual(full["captureBeyondViewport"], .bool(true))
+
+        // A capture that waits asks the tab for frames until it is answered.
+        var asks = 0
+        page.askForFrame = { asks += 1 }
+        tools.frameAskInterval = .milliseconds(10)
+        cdp.suspendOn = ["Page.captureScreenshot"]
+        let waiting = Task { await run(AgentToolCatalog.screenshot) }
+        try await waitUntil { asks >= 2 }
+        cdp.suspendOn = []
+        cdp.resumeSuspended()
+        let waited = await waiting.value
+        XCTAssertFalse(waited.isError, waited.text)
+
+        // A tab that draws no frame for the capture, while its page answers other calls, says so.
+        cdp.responders["Page.captureScreenshot"] = { _ in throw BrowserDevToolsError.timedOut("Page.captureScreenshot") }
+        page.rendererAnswered = { _ in true }
+        let undrawn = await run(AgentToolCatalog.screenshot)
+        XCTAssertTrue(undrawn.text.hasPrefix("The tab drew no picture for the screenshot within 30 seconds."), undrawn.text)
+        XCTAssertTrue(undrawn.text.contains("no frame of the page came meanwhile"), undrawn.text)
+        XCTAssertEqual(undrawn.failure?.retry, .withChanges)
+        XCTAssertEqual(undrawn.failure?.details["framesWhileWaiting"], .bool(false))
+        cdp.responders["Page.captureScreenshot"] = { _ in .object(["data": .string("iVBORw0KGgo=")]) }
         XCTAssertEqual(full["format"], .string("jpeg"))
         XCTAssertEqual(full["clip"]?["height"], .number(3000))
 

@@ -589,6 +589,14 @@ final class BrowserHostClient {
         wake(tab)
     }
 
+    /// The agent's screenshot waits for a frame: Chromium takes the picture from the next frame the tab draws, and a
+    /// page that does not change draws none of its own, so the engine is asked for one as a panel coming on screen asks
+    /// (`panelComesOnScreen`), also when it draws the tab already: the host shows the tab and invalidates its view.
+    func askForFrame(of tab: BrowserTab) {
+        guard tabs[tab.id] === tab, tab.isShown else { return }
+        connection?.send(.visibility(tab: tab.id, isHidden: false))
+    }
+
     /// A remote device watches the tab, or no longer does (docs/REMOTE_PROTOCOL.md §15.25): while watched it is shown to
     /// its engine, as a panel on screen shows it, and a discarded or restored page loads. The tab the task's panel
     /// shows does not change.
@@ -1445,6 +1453,8 @@ final class BrowserTab {
     fileprivate(set) var revisits = 0
     fileprivate(set) var lastAgentActivity: ContinuousClock.Instant?
     fileprivate let openedAt = ContinuousClock.now
+    /// When the host last delivered a frame of the page (not of a pop-up), for a screenshot that waited for one.
+    private(set) var lastViewFrameAt: ContinuousClock.Instant?
     /// Whether the engine was last told the tab is shown (a new tab starts shown).
     fileprivate(set) var isShown = true {
         didSet { if isShown != oldValue { hiddenSince = isShown ? nil : .now } }
@@ -1780,6 +1790,11 @@ final class BrowserTab {
     /// Reports agent use of this tab to the lifetime manager.
     func noteAgentActivity() {
         client?.noteAgentActivity(on: self)
+    }
+
+    /// Asks the engine for a fresh frame of the page (`BrowserHostClient.askForFrame`).
+    func askForFrame() {
+        client?.askForFrame(of: self)
     }
 
     // MARK: Screen size emulation
@@ -2156,6 +2171,8 @@ final class BrowserTab {
             javaScriptDialog = nil
             fileDialog = nil
             devTools.failPending()
+        case .frame(_, let frame) where frame.layer == .view:
+            lastViewFrameAt = .now
         default:
             break
         }
