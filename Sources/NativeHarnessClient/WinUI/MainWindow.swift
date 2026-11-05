@@ -11,7 +11,8 @@ import WinUI
 /// (`refreshConversationStatus`, which starts no turn), and its conversation draws through `ConversationTimeline`
 /// from the same projection the Mac's timeline reads. Below the tasks, Connect to a Mac pairs with
 /// another computer's Yardlet from the link it copies, and each paired host opens in a window of its own
-/// (`RemoteHostWindow`).
+/// (`RemoteHostWindow`). Settings holds Settings › Remote (`RemoteSettingsPane`), which lets another computer or a
+/// phone follow this one's tasks.
 @MainActor
 final class MainWindow {
     private let model: AppModel
@@ -45,6 +46,10 @@ final class MainWindow {
     private let linkField = TextBox()
     private let connectButton = Button()
     private let connectStatus = TextBlock()
+    private var remoteSettings: RemoteSettingsPane?
+    /// What the window shows beside the sidebar, so redrawing the tasks keeps what the person chose.
+    private enum Shown { case task, newTask, other }
+    private var shown = Shown.task
 
     init(model: AppModel, directory: RemoteHostDirectory) {
         self.model = model
@@ -56,23 +61,38 @@ final class MainWindow {
         try? window.appWindow.resize(SizeInt32(width: 1000, height: 680))
 
         navigation.paneDisplayMode = .left
-        navigation.isSettingsVisible = false
+        navigation.isSettingsVisible = model.remoteControl != nil
         navigation.isBackButtonVisible = .collapsed
         navigation.isPaneToggleButtonVisible = false
         navigation.openPaneLength = 300
         // XAML hands back a new Swift wrapper for an item, so the chosen one is found with the
         // bindings' ==, which compares the COM objects underneath.
         navigation.selectionChanged.addHandler { [weak self] _, args in
-            guard let self, let container = args?.selectedItemContainer else { return }
+            guard let self else { return }
+            if args?.isSettingsSelected == true, let remote = self.model.remoteControl {
+                let pane = self.remoteSettings ?? RemoteSettingsPane(service: remote)
+                self.remoteSettings = pane
+                self.navigation.content = pane.view
+                self.shown = .other
+                pane.show()
+                self.log.write("showing settings")
+                return
+            }
+            guard let container = args?.selectedItemContainer else { return }
             if container == self.newTaskItem {
+                // Chosen again as the tasks are redrawn, it keeps the harness and the message as they were.
+                guard self.shown != .newTask else { return }
                 self.navigation.content = self.newTaskPane
+                self.shown = .newTask
                 self.showNewTask()
             } else if container == self.connectItem {
                 self.navigation.content = self.connectPane
+                self.shown = .other
             } else if let hostID = self.hostItems.first(where: { $0.item == container })?.id {
                 self.openHost(hostID)
             } else if let id = self.items.first(where: { $0.item == container })?.id {
                 self.navigation.content = self.taskPane
+                self.shown = .task
                 self.choose(id)
             }
         }
@@ -145,7 +165,13 @@ final class MainWindow {
             items.append((item: item, id: session.id))
             if session.id == selected { selectedItem = item }
         }
-        navigation.selectedItem = selectedItem
+        // The rows are new, so the one chosen is chosen again: the task shown, or New task. Connect to a Mac, a host
+        // and Settings are not among them and stay chosen.
+        switch shown {
+        case .task: navigation.selectedItem = selectedItem
+        case .newTask: navigation.selectedItem = newTaskItem
+        case .other: break
+        }
         if let selected { choose(selected) } else { showConversation() }
     }
 
@@ -346,6 +372,7 @@ final class MainWindow {
             do {
                 if try await model.createTask(submission) != nil {
                     navigation.content = taskPane
+                    shown = .task
                     log.write("new task started")
                 } else {
                     newTaskStatus.text = (model.bootstrapError != previousError ? model.bootstrapError : nil)
@@ -428,6 +455,7 @@ final class MainWindow {
 
     /// The host's window, opened or brought forward; the sidebar keeps the task it showed.
     private func openHost(_ hostID: String) {
+        shown = .task
         navigation.selectedItem = items.first { $0.id == model.store.selectedSessionID }?.item
         navigation.content = taskPane
         if let open = hostWindows[hostID] {

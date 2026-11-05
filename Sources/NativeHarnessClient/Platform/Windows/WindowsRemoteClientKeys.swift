@@ -14,20 +14,39 @@ struct WindowsRemoteClientKeys: RemoteClientKeyStoring {
     }
 
     func load(hostID: String) -> RemoteKeyPair? {
-        withTarget(hostID) { target in
-            var credential: PCREDENTIALW?
-            guard CredReadW(target, DWORD(CRED_TYPE_GENERIC), 0, &credential), let credential else { return nil }
-            defer { CredFree(credential) }
-            guard let blob = credential.pointee.CredentialBlob, credential.pointee.CredentialBlobSize > 0,
-                  let text = String(data: Data(bytes: blob, count: Int(credential.pointee.CredentialBlobSize)), encoding: .utf8),
-                  let key = RemoteEncoding.data(base64url: text) else { return nil }
-            return try? RemoteKeyPair(privateKey: key)
-        }
+        guard let blob = WindowsCredential.read(target(hostID)), let text = String(data: blob, encoding: .utf8),
+              let key = RemoteEncoding.data(base64url: text) else { return nil }
+        return try? RemoteKeyPair(privateKey: key)
     }
 
     func save(_ key: RemoteKeyPair, hostID: String) {
-        var secret = Array(RemoteEncoding.base64url(key.privateKey).utf8)
-        withTarget(hostID) { target in
+        WindowsCredential.write(Data(RemoteEncoding.base64url(key.privateKey).utf8), to: target(hostID))
+    }
+
+    func delete(hostID: String) {
+        WindowsCredential.delete(target(hostID))
+    }
+
+    private func target(_ hostID: String) -> String { "\(prefix)client-\(hostID)" }
+}
+
+/// A generic credential of this user's in Windows Credential Manager, kept on this computer and never roamed:
+/// what the Mac keeps as a generic password in its keychain.
+enum WindowsCredential {
+    static func read(_ target: String) -> Data? {
+        target.withCString(encodedAs: UTF16.self) { target in
+            var credential: PCREDENTIALW?
+            guard CredReadW(target, DWORD(CRED_TYPE_GENERIC), 0, &credential), let credential else { return nil }
+            defer { CredFree(credential) }
+            guard let blob = credential.pointee.CredentialBlob, credential.pointee.CredentialBlobSize > 0 else { return nil }
+            return Data(bytes: blob, count: Int(credential.pointee.CredentialBlobSize))
+        }
+    }
+
+    @discardableResult
+    static func write(_ data: Data, to target: String) -> Bool {
+        var secret = Array(data)
+        return target.withCString(encodedAs: UTF16.self) { target in
             "Yardlet".withCString(encodedAs: UTF16.self) { user in
                 secret.withUnsafeMutableBufferPointer { blob in
                     var credential = CREDENTIALW()
@@ -37,20 +56,14 @@ struct WindowsRemoteClientKeys: RemoteClientKeyStoring {
                     credential.CredentialBlob = blob.baseAddress
                     credential.CredentialBlobSize = DWORD(blob.count)
                     credential.Persist = DWORD(CRED_PERSIST_LOCAL_MACHINE)
-                    _ = CredWriteW(&credential, 0)
+                    return CredWriteW(&credential, 0)
                 }
             }
         }
     }
 
-    func delete(hostID: String) {
-        withTarget(hostID) { target in
-            _ = CredDeleteW(target, DWORD(CRED_TYPE_GENERIC), 0)
-        }
-    }
-
-    private func withTarget<Result>(_ hostID: String, _ body: (UnsafePointer<WCHAR>) -> Result) -> Result {
-        "\(prefix)client-\(hostID)".withCString(encodedAs: UTF16.self, body)
+    static func delete(_ target: String) {
+        _ = target.withCString(encodedAs: UTF16.self) { CredDeleteW($0, DWORD(CRED_TYPE_GENERIC), 0) }
     }
 }
 

@@ -785,6 +785,39 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
+#### Swift QR Code Generator 2.0.2
+
+Source: https://github.com/fwcd/swift-qrcode-generator
+
+Draws the pairing QR code in the Windows app's Settings › Remote. It is a Swift translation of Project Nayuki's QR
+Code generator library (https://www.nayuki.io/page/qr-code-generator-library). The macOS app uses Core Image
+instead and does not link it.
+
+```
+MIT License
+
+Copyright (c) Project Nayuki. (MIT License)
+Copyright (c) 2020 fwcd
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 #### Windows App SDK 1.7.250909003 (NuGet package Microsoft.WindowsAppSDK)
 
 Source: https://www.nuget.org/packages/Microsoft.WindowsAppSDK/1.7.250909003

@@ -70,6 +70,12 @@ let sqliteTarget: Target = .target(
 let sqliteTarget: Target = .systemLibrary(name: "CSQLite")
 #endif
 
+// The QR code the Windows app's Settings › Remote shows, drawn from Swift QR Code Generator (THIRD_PARTY_NOTICES.md).
+// Every build declares the package and names it for Windows alone, so a build elsewhere neither links it nor drops
+// its pin from Package.resolved, which the Windows builds read as it is.
+let qrCode: Target.Dependency = .product(name: "QRCodeGenerator", package: "swift-qrcode-generator",
+                                          condition: .when(platforms: [.windows]))
+
 let appTarget: Target = windowsApp
     ? .executableTarget(
         name: "NativeHarnessClient",
@@ -79,7 +85,8 @@ let appTarget: Target = windowsApp
             "YardletRemote",
             .product(name: "Crypto", package: "swift-crypto"),
             .product(name: "Markdown", package: "swift-markdown"),
-            .product(name: "WinUIBindings", package: "Bindings")
+            .product(name: "WinUIBindings", package: "Bindings"),
+            qrCode
         ],
         exclude: macOSLayers + portableFilesWindowsReplaces,
         resources: [
@@ -100,7 +107,8 @@ let appTarget: Target = windowsApp
             "YardletAgentTools",
             "YardletRemote",
             .product(name: "Crypto", package: "swift-crypto"),
-            .product(name: "Markdown", package: "swift-markdown")
+            .product(name: "Markdown", package: "swift-markdown"),
+            qrCode
         ],
         exclude: macOSLayers + windowsLayers,
         resources: [
@@ -118,7 +126,8 @@ let appTarget: Target = windowsApp
             .product(name: "Crypto", package: "swift-crypto"),
             .product(name: "Markdown", package: "swift-markdown"),
             .product(name: "SwiftTerm", package: "SwiftTerm"),
-            .product(name: "Sparkle", package: "Sparkle", condition: .when(platforms: [.macOS]))
+            .product(name: "Sparkle", package: "Sparkle", condition: .when(platforms: [.macOS])),
+            qrCode
         ],
         exclude: otherPlatformLayers + windowsLayers,
         resources: [
@@ -170,6 +179,10 @@ let package = Package(
         .package(
             url: "https://github.com/apple/swift-crypto.git",
             exact: "5.0.3"
+        ),
+        .package(
+            url: "https://github.com/fwcd/swift-qrcode-generator.git",
+            exact: "2.0.2"
         )
     ] + (windowsApp ? [
         .package(path: "Windows/Bindings")
