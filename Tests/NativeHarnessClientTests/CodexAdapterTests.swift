@@ -933,7 +933,9 @@ final class CodexAdapterTests: XCTestCase {
         XCTAssertEqual(state.pendingNotices, [])
     }
 
-    func testAgentDeltasCoalescePresentationPublicationButKeepFinalState() async throws {
+    /// Text waits for the tokens after it, and a card settling waits for the card the App Server starts
+    /// with it, so each reaches the window in one state; the last state holds everything.
+    func testPublicationsCoalesceTextAndACardWithTheNextButKeepFinalState() async throws {
         let transport = FakeCodexTransport(responses: [
             "initialize": [.object(["platformOs": .string("macos")])],
             "thread/start": [threadResult("thread-coalesce")]
@@ -955,33 +957,40 @@ final class CodexAdapterTests: XCTestCase {
         let collector = Task {
             for await state in stream {
                 let count = await recorder.append(state)
-                if count >= 2,
-                   state.thread?.turns.first?.items.first?.id == "assistant-1" {
+                if count >= 2, state.thread?.turns.first?.items.contains(where: { $0.id == "command-1" }) == true {
                     received.fulfill()
                     break
                 }
             }
         }
 
-        for delta in ["a", "b", "c"] {
-            await transport.emit(
-                method: "item/agentMessage/delta",
-                params: .object([
-                    "threadId": .string(handle.providerSessionID),
-                    "turnId": .string("turn-1"),
-                    "itemId": .string("assistant-1"),
-                    "delta": .string(delta)
-                ])
-            )
+        func emit(_ method: String, _ params: [String: JSONValue]) async {
+            await transport.emit(method: method, params: .object(params.merging([
+                "threadId": .string(handle.providerSessionID), "turnId": .string("turn-1")
+            ]) { $1 }))
         }
+        for delta in ["a", "b", "c"] {
+            await emit("item/agentMessage/delta", ["itemId": .string("assistant-1"), "delta": .string(delta)])
+        }
+        await emit("item/completed", ["item": .object([
+            "id": .string("assistant-1"), "type": .string("agentMessage"), "text": .string("abc")
+        ])])
+        await emit("item/started", ["item": .object([
+            "id": .string("command-1"), "type": .string("commandExecution"), "command": .string("swift build"),
+            "cwd": .string("/tmp/workspace"), "status": .string("inProgress")
+        ])])
         await fulfillment(of: [received], timeout: 2)
         try await Task.sleep(for: .milliseconds(40))
         collector.cancel()
 
         let states = await recorder.states
         XCTAssertGreaterThanOrEqual(states.count, 2)
-        let final = try XCTUnwrap(states.last)
-        guard case let .agentMessage(message) = final.thread?.turns.first?.items.first?.content else {
+        let items = states.map { $0.thread?.turns.first?.items ?? [] }
+        XCTAssertFalse(items.contains { $0.count == 1 && $0[0].lifecycle == .completed },
+                       "The message settled in a state of its own, apart from the card that started with it")
+        let final = try XCTUnwrap(items.last)
+        XCTAssertEqual(final.map(\.id), ["assistant-1", "command-1"])
+        guard case let .agentMessage(message) = final.first?.content else {
             return XCTFail("coalesced state should retain agent message")
         }
         XCTAssertEqual(message.text, "abc")

@@ -498,6 +498,10 @@ final class CodexPresentationPatchRouteTests: XCTestCase {
             "threadId": .string(Self.threadID), "turnId": .string("turn-1"),
             "item": Self.command("after-gap", status: "completed", output: "ok\n")
         ]))
+        // The complete snapshot comes first; what follows it is patched onto it.
+        try await waitUntil("snapshot after the gap") {
+            await recorder.states.last?.thread?.turns.first?.items.count == 701
+        }
         await route.transport.emit(method: "item/started", params: .object([
             "threadId": .string(Self.threadID), "turnId": .string("turn-1"),
             "item": .object(["id": .string("after-gap-answer"), "type": .string("agentMessage"), "text": .string("")])
