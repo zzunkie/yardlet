@@ -385,6 +385,21 @@ final class ToolRowWordingTests: XCTestCase {
         let command = ConversationCommand(command: "/bin/zsh -lc 'ls'", status: "completed")
         XCTAssertEqual(ConversationLineWording.command(command, phase: .completed, harness: .openCode, localize: en)
             .map(\.text), ["Ran /bin/zsh -lc 'ls'"])
+        // An ACP title that already says what its kind does reads without the kind; one that names only
+        // what the call works on keeps the kind before it.
+        let titles = [("read", "Read `/repo/README.md`", "Read `/repo/README.md`"),
+                      ("read", "Reading README.md", "Reading README.md"),
+                      ("execute", "Execute `echo hi`", "Execute `echo hi`"),
+                      ("edit", "Edit", "Edit"),
+                      ("execute", "Executing: ls", "Executing: ls"),
+                      ("search", "youtube", "search youtube"),
+                      ("read", "Readme check", "read Readme check"),
+                      ("search", "searchbar.tsx", "search searchbar.tsx")]
+        for (kind, title, line) in titles {
+            let tool = ConversationTool(kind: .activity(kind), name: title)
+            XCTAssertEqual(ConversationLineWording.tool(tool, phase: .completed, harness: .grokBuild, workspaceURL: nil,
+                                                        localize: en).text, line, title)
+        }
     }
 
     // MARK: - Renders
