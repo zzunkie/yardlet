@@ -198,7 +198,8 @@ public final class RemoteSecureListener: @unchecked Sendable {
             let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata
             switch metadata?.opcode {
             case .binary?:
-                channel.secure?.receive(data ?? Data())
+                // Network.framework hands over whole frames: one that does not decrypt is refused.
+                if channel.secure?.receive(data ?? Data()) == false { channel.secure?.refuse() }
                 self.receive(on: channel)
             case .close?:
                 RemoteLog.notice("Direct: a phone closed its connection, code \(Self.code(of: metadata?.closeCode))")

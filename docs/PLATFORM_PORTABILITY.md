@@ -76,7 +76,11 @@ macOS it re-exports CryptoKit and adds nothing to the app; elsewhere it builds B
 **The phone remote off macOS.** Its listeners and interface addresses (`RemoteSecureListener` on Network.framework,
 `RemoteAddresses` on BSD sockets) are left out of a build on another platform until that platform has its own. The
 rest of `YardletRemote` builds: its random bytes fall back to `SystemRandomNumberGenerator`, its free-space check to
-`attributesOfFileSystem`, and `RemoteLimits.host(of:)` exists only with Network.framework.
+`attributesOfFileSystem`, and `RemoteLimits.host(of:)` exists only with Network.framework. Foundation there hands a
+WebSocket frame over in the pieces libcurl reads it in, each as a message of its own (`WebSocketURLProtocol` drops
+`curl_ws_meta`'s `bytesleft`), so the remote's sockets join a piece that does not read (a Noise frame that does not
+decrypt, a relay message that is not JSON) to the next one before reading it again, up to the frame's limit
+(`RemoteFramePieces`); with Apple's Foundation a frame that does not read is refused at once.
 
 **Where it has been built.** On Linux in the `swift:6.4-bookworm` image (confirmed, 2026-10-31). A folder on the Mac's
 desktop cannot be mounted into Docker, so the sources go in as an archive:

@@ -41,6 +41,7 @@ public final class RemoteClientSocket: @unchecked Sendable {
     private var sender: RemoteNoiseCipher
     private var receiver: RemoteNoiseCipher
     private var joiner = RemoteNoiseFraming.Joiner(limit: RemoteProtocol.maxServerMessageBytes)
+    private var pieces = RemoteFramePieces(limit: RemoteNoise.maxMessageLength)
     /// Frames waiting for the socket, in order: a message's chunks never interleave with another's.
     private var outbox: [Data] = []
     private var isSending = false
@@ -83,8 +84,22 @@ public final class RemoteClientSocket: @unchecked Sendable {
         do {
             var noise = try RemoteNoiseHandshake(role: .initiator, localStatic: clientKey, remoteStatic: hostKey)
             try await task.send(.data(noise.writeMessage1(payload: Data(RemoteJSON.string(hello).utf8))))
-            guard case let .data(message2) = try await task.receive() else { throw Failure("Expected a binary frame") }
-            let reply = try JSONDecoder().decode(RemoteHandshakeReply.self, from: noise.readMessage2(message2))
+            // Message 2 too may come in pieces (`RemoteFramePieces`); each try reads on a copy of the handshake.
+            var pieces = RemoteFramePieces(limit: RemoteNoise.maxMessageLength)
+            var payload: Data?
+            while payload == nil {
+                guard case let .data(piece) = try await task.receive() else { throw Failure("Expected a binary frame") }
+                let outcome = try pieces.add(piece) { bytes in
+                    var trial = noise
+                    guard let read = try? trial.readMessage2(bytes) else { return false }
+                    noise = trial
+                    payload = read
+                    return true
+                }
+                // Refused: read again for the handshake's own error.
+                if outcome == .unreadable { _ = try noise.readMessage2(piece) }
+            }
+            let reply = try JSONDecoder().decode(RemoteHandshakeReply.self, from: payload ?? Data())
             let (sender, receiver) = noise.split()
             let socket = RemoteClientSocket(task: task, sender: sender, receiver: receiver)
             guard reply.ok || reply.pending == true else {
@@ -165,16 +180,33 @@ public final class RemoteClientSocket: @unchecked Sendable {
         task.receive { [weak self] result in
             guard let self else { return }
             switch result {
-            case let .success(.data(frame)):
-                let message: Data?
+            case let .success(.data(piece)):
+                var message: Data?
+                let outcome: RemoteFramePieces.Outcome
                 do {
-                    message = try self.lock.withLock { () throws -> Data? in
+                    outcome = try self.lock.withLock { () throws -> RemoteFramePieces.Outcome in
                         self.received = Date()
-                        var receiver = self.receiver
-                        defer { self.receiver = receiver }
-                        return try self.joiner.add(frame, with: &receiver)
+                        return try self.pieces.add(piece) { frame in
+                            var receiver = self.receiver
+                            do {
+                                message = try self.joiner.add(frame, with: &receiver)
+                            } catch let failure as RemoteNoise.Failure where failure == .undecryptable {
+                                return false
+                            }
+                            self.receiver = receiver
+                            return true
+                        }
                     }
+                } catch is RemoteFramePieces.TooLong {
+                    self.task.cancel(with: .messageTooBig, reason: nil)
+                    self.end(reason: "Message too long")
+                    return
                 } catch {
+                    self.task.cancel(with: .normalClosure, reason: nil)
+                    self.end(reason: "Unreadable message")
+                    return
+                }
+                guard outcome != .unreadable else {
                     self.task.cancel(with: .normalClosure, reason: nil)
                     self.end(reason: "Unreadable message")
                     return
