@@ -189,7 +189,8 @@ enum HarnessCatalog {
             transport: .acp,
             executableName: "hermes",
             launchArguments: ["acp"],
-            relativeExecutablePaths: [".local/bin/hermes", ".hermes/hermes-agent/venv/bin/hermes"],
+            relativeExecutablePaths: [".local/bin/hermes",
+                                      HarnessCatalog.virtualEnvironmentProgram(".hermes/hermes-agent/venv", "hermes")],
             websiteURL: URL(string: "https://hermes-agent.nousresearch.com/")!,
             repositoryURL: URL(string: "https://github.com/NousResearch/hermes-agent")!
         ),
@@ -216,6 +217,17 @@ enum HarnessCatalog {
         HarnessKind(rawValue: "deep-agents-code"),
         HarnessKind(rawValue: "oh-my-pi")
     ]
+
+    /// `name` in the Python virtual environment at `environment`: in its `bin` folder, on Windows in
+    /// `Scripts`. A relative path names the program without an extension; on Windows it is looked for with
+    /// PATHEXT's (`ExecutableLookup`).
+    static func virtualEnvironmentProgram(_ environment: String, _ name: String) -> String {
+        #if os(Windows)
+        environment + "/Scripts/" + name
+        #else
+        environment + "/bin/" + name
+        #endif
+    }
 
     private static let descriptorsByID = Dictionary(
         uniqueKeysWithValues: builtIns.map { ($0.id, $0) }

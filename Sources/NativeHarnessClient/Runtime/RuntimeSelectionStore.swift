@@ -52,7 +52,7 @@ final class RuntimeSelectionStore {
             if loadsPersistedSelections,
                let path = defaults.string(forKey: Self.key(for: harness)) {
                 let url = URL(filePath: path).standardizedFileURL
-                if FileManager.default.isExecutableFile(atPath: url.path(percentEncoded: false)),
+                if ExecutableLookup.current.isProgram(url),
                    Self.isCompatibleRuntime(url, for: harness) {
                     selections[harness] = url
                     chosen.insert(harness)
@@ -87,7 +87,7 @@ final class RuntimeSelectionStore {
             return URL(filePath: name)
         }
         guard let url = selectedURLs[harness], Self.isCompatibleRuntime(url, for: harness) else { return nil }
-        if FileManager.default.isExecutableFile(atPath: url.path(percentEncoded: false)) { return url }
+        if ExecutableLookup.current.isProgram(url) { return url }
         // A desktop app replaced the runtime it bundles while Yardlet ran (Claude Desktop deletes the
         // previous version on update): the choice follows it, as on the next launch.
         guard let moved = RuntimeRelocation.successor(of: url, for: harness), Self.isCompatibleRuntime(moved, for: harness) else { return nil }
@@ -229,13 +229,14 @@ final class RuntimeSelectionStore {
     }
 
     /// The executable, compatible installs among `urls`, in their order, each file once (a link
-    /// and the file it leads to are one install; the first path that names it is kept).
+    /// and the file it leads to are one install; the first path that names it is kept). On Windows a
+    /// name without an extension is the program it names with PATHEXT's (`ExecutableLookup`).
     nonisolated static func installs(_ urls: [URL], for harness: HarnessKind) -> [URL] {
         var files: Set<String> = []
-        return urls.map(\.standardizedFileURL).filter { url in
+        return urls.map(\.standardizedFileURL).compactMap { url in
             guard isCompatibleRuntime(url, for: harness),
-                  FileManager.default.isExecutableFile(atPath: url.path(percentEncoded: false)) else { return false }
-            return files.insert(url.resolvingSymlinksInPath().path(percentEncoded: false)).inserted
+                  let program = ExecutableLookup.current.program(at: url) else { return nil }
+            return files.insert(program.resolvingSymlinksInPath().path(percentEncoded: false)).inserted ? program : nil
         }
     }
 
@@ -257,10 +258,13 @@ final class RuntimeSelectionStore {
     }
 
     /// The legacy `antigravity` executable is an IDE launcher. The supported
-    /// structured headless runtime is the official `agy` CLI.
+    /// structured headless runtime is the official `agy` CLI (`agy.exe` on Windows).
     nonisolated static func isCompatibleRuntime(_ url: URL, for harness: HarnessKind) -> Bool {
         if harness == .antigravityCLI {
-            return url.lastPathComponent == "agy"
+            let lookup = ExecutableLookup.current
+            let name = lookup.isWindows && lookup.extensions.contains("." + url.pathExtension.lowercased())
+                ? url.deletingPathExtension().lastPathComponent.lowercased() : url.lastPathComponent
+            return name == "agy"
         }
         return true
     }
@@ -269,7 +273,7 @@ final class RuntimeSelectionStore {
     /// newest version wins and this order only breaks a tie (product document 13.100).
     nonisolated static func codexCandidates(
         home: URL,
-        searchPath: String = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        searchPath: String = ExecutableLookup.current.searchPath(in: ProcessInfo.processInfo.environment)
     ) -> [URL] {
         installedPrograms(named: "codex", home: home, searchPath: searchPath)
             + RuntimeRelocation.chatGPTCodexLayouts(inAppAt: URL(filePath: "/Applications/ChatGPT.app"))
@@ -293,7 +297,7 @@ final class RuntimeSelectionStore {
     nonisolated private static func installedPrograms(
         named executable: String,
         home: URL,
-        searchPath: String = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        searchPath: String = ExecutableLookup.current.searchPath(in: ProcessInfo.processInfo.environment)
     ) -> [URL] {
         RuntimeProcessEnvironment.searchDirectories(home: home, path: searchPath)
             .map { $0.appending(path: executable) }

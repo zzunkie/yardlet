@@ -45,9 +45,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
     }
 
     func probeRuntime() async throws -> HarnessRuntimeDescriptor {
-        guard FileManager.default.isExecutableFile(
-            atPath: executableURL.path(percentEncoded: false)
-        ) else {
+        guard ExecutableLookup.current.isProgram(executableURL) else {
             throw HarnessAdapterError.runtimeNotFound(executableURL)
         }
         let version = try readVersion()
@@ -185,7 +183,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
             Task { await self?.processDidTerminate(process, for: session.localSessionID) }
         }
 
-        try process.run()
+        try NativeProcessTree.run(process)
         processes[session.localSessionID] = process
         emit(.sessionStatusChanged(.running), for: session.localSessionID)
         readerTasks[session.localSessionID] = Task { [weak self] in
@@ -610,7 +608,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
             exitStatus.continuation.yield(process.terminationStatus)
             exitStatus.continuation.finish()
         }
-        try process.run()
+        try NativeProcessTree.run(process)
         pipe.fileHandleForReading.readChunks(into: chunks.continuation)
 
         let timeout = cursorChatTimeout
@@ -859,7 +857,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
         // A listing command left holding an inherited input waits on it (CLI 1.1.23).
         process.standardInput = FileHandle.nullDevice
         process.environment = RuntimeProcessEnvironment.values(executableURL: executableURL)
-        try process.run()
+        try NativeProcessTree.run(process)
         let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
         let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
@@ -913,7 +911,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
         process.arguments = ["--version"]
         process.standardOutput = pipe
         process.standardError = pipe
-        try process.run()
+        try NativeProcessTree.run(process)
         process.waitUntilExit()
         let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)

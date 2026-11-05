@@ -20,7 +20,7 @@ enum CLIProcess {
             // the end is taken from the termination handler.
             let exited = DispatchSemaphore(value: 0)
             process.terminationHandler = { _ in exited.signal() }
-            do { try process.run() } catch {
+            do { try NativeProcessTree.run(process) } catch {
                 return CLICommandResult(exitCode: -1, stdout: "", stderr: error.localizedDescription)
             }
             let timeout = command.timeout
@@ -83,7 +83,7 @@ enum CLIProcess {
             process.environment = environment
             let exited = DispatchSemaphore(value: 0)
             process.terminationHandler = { _ in exited.signal() }
-            do { try process.run() } catch { return .failed(error.localizedDescription) }
+            do { try NativeProcessTree.run(process) } catch { return .failed(error.localizedDescription) }
             let timer = Task {
                 do { try await Task.sleep(for: timeout) } catch { return false }
                 guard process.isRunning else { return false }

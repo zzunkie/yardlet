@@ -434,7 +434,7 @@ actor TaskWorktreeService {
         process.standardOutput = outputHandle
         process.standardError = errorHandle
         do {
-            try process.run()
+            try NativeProcessTree.run(process)
         } catch {
             throw TaskWorktreeError.gitFailed(error.localizedDescription)
         }

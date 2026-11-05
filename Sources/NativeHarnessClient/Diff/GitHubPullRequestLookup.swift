@@ -65,7 +65,7 @@ struct LocalGitHubCLI: GitHubCLIRunning {
             process.standardOutput = output
             process.standardError = error
             do {
-                try process.run()
+                try NativeProcessTree.run(process)
             } catch {
                 throw GitHubCLIFailure.couldNotStart
             }

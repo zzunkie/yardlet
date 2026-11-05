@@ -69,7 +69,7 @@ enum LoginShellPath {
         process.standardError = FileHandle.nullDevice
         let exited = AsyncStream<Void>.makeStream()
         process.terminationHandler = { _ in exited.continuation.finish() }
-        do { try process.run() } catch { return nil }
+        do { try NativeProcessTree.run(process) } catch { return nil }
         let finished = await withTaskGroup(of: Bool.self) { group in
             group.addTask { for await _ in exited.stream {}; return true }
             group.addTask {

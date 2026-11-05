@@ -410,7 +410,7 @@ actor GitDiffService {
         ])
         process.standardOutput = fileHandle
         process.standardError = errorHandle
-        try process.run()
+        try NativeProcessTree.run(process)
 
         do {
             while process.isRunning {

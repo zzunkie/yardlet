@@ -2,8 +2,9 @@
 
 Yardlet runs on macOS. Windows is in progress: the engine is kept in cross-platform Swift, and each platform gets its
 own screens. The engine builds on its own on macOS, Linux and Windows, and the Windows app, the engine with WinUI 3
-screens, builds and opens its window on Windows ("The Windows app" below) and follows another computer's Yardlet
-over the remote protocol; it does not run harnesses yet. For
+screens, builds and opens its window on Windows ("The Windows app" below), follows another computer's Yardlet
+over the remote protocol, and finds, starts and ends harness CLIs by Windows' rules; its window does not start a
+task of its own yet. For
 dependencies and Foundation behavior on Windows, what was checked in the official source or a build is marked
 "confirmed"; the rest is "not confirmed".
 
@@ -54,6 +55,9 @@ platform's layer has to provide:
 | `AccountLoginController`, `NativeTerminalSession`, `TaskShellProcess` | The sign-in terminal, each terminal tab's shell, bash mode's shell | SwiftTerm and a PTY |
 | `BrowserPreviewModel`, `ConversationRenderState` | A tab's preview page, the conversation's cached turn views | WebKit, AppKit |
 | `RemoteControlService`, `LidSleepHelper` | The phone remote, the lid helper | Network.framework, XPC |
+
+The Windows layer provides `NativeProcessTree` (`Platform/Windows/NativeProcessTree.swift`), so the Windows app
+leaves `PortableProcesses.swift` out (`portableFilesWindowsReplaces` in `Package.swift`).
 
 `Platform/Portable/PortableFoundation.swift` also holds the few names Foundation outside Apple's platforms lacks
 (`InlinePresentationIntent`, Combine's `ObservableObject` and `Published`, `autoreleasepool`), and
@@ -111,6 +115,14 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   reached at the direct addresses it named, on the same network or over Tailscale, and through its relay.
   `WinUI/ConversationTimeline.swift` draws the engine's `ConversationPresentation` turn by turn, redrawing only the
   turns that changed, for a host's conversation and later a task's own.
+- **Harness CLIs.** The engine finds a harness's runtime by Windows' rules (`Runtime/ExecutableLookup.swift`, "Paths
+  and executable lookup" below), so Claude Code's `claude.exe` in `%USERPROFILE%\.local\bin` and npm's shims in
+  `%APPDATA%\npm` are found as a person's own terminal would find them. Harnesses, their account commands and
+  checks, MCP servers and the Git and `gh` commands Yardlet may stop start with `NativeProcessTree.run(_:)`, which on
+  Windows starts what npm's `.cmd` shim would, Node.js on the package's script, and refuses any other batch file
+  (`Runtime/NPMCommandShim.swift`, "Foundation `Process`" below), then puts the process in a job object of its own
+  (`Platform/Windows/NativeProcessTree.swift`): `terminate(process:)` ends the job, and so the node and MCP servers
+  a CLI started, and when Yardlet exits Windows ends whatever is left in its jobs.
 - **Application and message loop.** `Windows/Bindings/Sources/WinUIApplication/XamlApplication.swift` is the
   application type the app derives from. Its `main()` starts the Windows App Runtime through the Windows App SDK's
   bootstrapper, creates the application as the type `@main` names, and runs the thread's message loop. Between
@@ -142,8 +154,14 @@ runner, measures it and types Korean into its composer through the Microsoft Kor
 (`Windows/scripts/check-window.ps1`). It then starts the relay (`relay/`) and the fixture host on it
 (`Windows/scripts/start-remote-host.ps1`) and, in the same step, since a Windows runner ends the programs a step
 started when the step ends, pairs the app with the host through Connect to a Mac, opens a task, sends a message and
-waits for the answer to stream in (`Windows/scripts/check-remote.ps1`, through UI Automation). The run gathers the
-app with its resource folder and the Swift runtime beside it, opens what it gathered from another folder with the
+waits for the answer to stream in (`Windows/scripts/check-remote.ps1`, through UI Automation). It installs a
+stand-in harness the way npm installs one (`Windows/scripts/fake-harness/`, whose `kimi.cmd` npm itself writes into
+`%APPDATA%\npm`) and opens the app with `YARDLET_QA_HARNESS_CHECK=kimi-code` (`WinUI/QAHarnessCheck.swift`, a QA
+variable like `YARDLET_QA_EVENT_LOG`): the app finds the shim as a new task would and runs the engine's verification
+probe on it, which starts it through Node.js for `--version` and the ACP handshake and stops it. The stand-in starts
+a detached process of its own, which outlives a stop of the stand-in alone, as the check shows first without the
+app; the check passes when that process ended with the app's stop (`Windows/scripts/check-harness.ps1`). The run
+gathers the app with its resource folder and the Swift runtime beside it, opens what it gathered from another folder with the
 build folder out of reach, and uploads it (`windows-app-bin`), to open on a PC that has the Windows App Runtime 1.7 but
 no Swift.
 
@@ -177,12 +195,15 @@ alone, which must fail and so show what the fixes are for, and with the fixes, w
 bindings; fork it and keep only the fixes the app needs; as a last resort, write the screens in C# with WinUI 3 and
 keep the engine in Swift, which needs a layer that carries the engine's state and events to the C# screens.
 
-**What the Windows app does not have yet:** a Windows layer for what `Platform/Portable/` stands in for, beginning
-with `NativeProcessTree` (a job object, so a harness and what it starts end together), the ConPTY terminal for sign-in
-and the terminal panel, notifications, credential storage for the vault and Antigravity, and the harnesses' icons
-(`HarnessKind.symbolName` names SF Symbols); the task's transcript in the conversation; and a browser host. A host's
-window shows answers as their Markdown text, a request card's words without its answers, and none of the host's
-panels, new tasks or Settings.
+**What the Windows app does not have yet:** a Windows layer for the rest of what `Platform/Portable/` stands in for:
+the ConPTY terminal for sign-in and the terminal panel, notifications, credential storage for the vault and
+Antigravity, and the harnesses' icons (`HarnessKind.symbolName` names SF Symbols); the task's transcript in the
+conversation; and a browser host. Each console program Yardlet starts is expected to open a console window of its own
+(not confirmed): the release app has no console, and Foundation's `Process` passes `CreateProcessW` no
+`CREATE_NO_WINDOW` (confirmed in its source). Git is still looked for at its macOS paths (`Diff/GitExecutableLocator.swift`), a connector's program gets a
+POSIX environment (`Connectors/ConnectorProgram.swift`), and npm's `npx.cmd`, which is not one of npm's shims, is
+refused. A host's window shows answers as their Markdown text, a request card's words without its answers, and none
+of the host's panels, new tasks or Settings.
 
 ## The check that blocks new violations
 
@@ -204,7 +225,7 @@ panels, new tasks or Settings.
 
 | Part | macOS today | What Windows needs |
 | --- | --- | --- |
-| `NativeProcessTree` | Collects descendants with `proc_listchildpids` and ends the tree with `kill` (also on the process group), `waitpid` and `usleep`. Every harness transport, Git, the account commands and the protocol process host end processes through `terminate(process:)` | Put the process in a job object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) right after it starts and end it with `TerminateJobObject`. Adding it after Foundation `Process` has started leaves a short gap, so also consider creating the process with `CREATE_SUSPENDED`. Foundation's `Process` creates no job object on Windows, and `terminate()` ends only the root with `TerminateProcess`, so grandchildren such as node and MCP servers would stay behind (confirmed: [swift-corelibs-foundation `Process.swift`](https://github.com/swiftlang/swift-corelibs-foundation/blob/main/Sources/Foundation/Process.swift)) |
+| `NativeProcessTree` | Collects descendants with `proc_listchildpids` and ends the tree with `kill` (also on the process group), `waitpid` and `usleep`. Every harness transport, Git, the account commands and the protocol process host start processes with `run(_:)` and end them with `terminate(process:)` | Provided (`Platform/Windows/NativeProcessTree.swift`). Foundation's `Process` creates no job object on Windows, and `terminate()` ends only the root with `TerminateProcess`, so grandchildren such as node and MCP servers would stay behind (confirmed: [swift-corelibs-foundation `Process.swift`](https://github.com/swiftlang/swift-corelibs-foundation/blob/main/Sources/Foundation/Process.swift)). `run(_:)` puts each process in a job object of its own (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) right after it starts, `terminate(process:)` ends it with `TerminateJobObject`, and a job is closed once a completion port reports its last process ended. Foundation's `Process` takes no creation flags, so a process the child starts in the moment before it is in the job stays outside it |
 | `AccountLoginController` | A `LocalProcessTerminalViewDelegate` driving a PTY through SwiftTerm, `NSWorkspace.open`, URL detection with `NSDataDetector`. The engine keeps the output parsing (`Account/AccountLoginOutput.swift`: `stripANSI`, device codes, input prompts) | A ConPTY (`CreatePseudoConsole`) host with the members the portable one has. Find URLs with a regular expression, because `NSDataDetector` does not exist in Foundation outside Apple platforms (confirmed: [swift-corelibs-foundation #4305](https://github.com/swiftlang/swift-corelibs-foundation/issues/4305)) |
 | `NativeTerminalSession`, `TaskShellProcess` | SwiftTerm `LocalProcess` and a PTY | ConPTY and a Windows terminal view |
 | `ScopedFiles`, `WorkspaceFileReplacement` | No-follow descriptors | Opening without following reparse points (`FILE_FLAG_OPEN_REPARSE_POINT`); the portable versions refuse |
@@ -225,9 +246,9 @@ Other macOS-specific values that the check does not catch:
 
 | Where | Assumption | Recommended handling |
 | --- | --- | --- |
-| `Runtime/RuntimeProcessEnvironment.swift` | Splits and joins `PATH` with `:`. Fixed `~/.local/bin`, `~/.bun/bin`, `/opt/homebrew/bin`, `/usr/local/bin` and the system folders; `searchDirectories` adds package managers' folders (`~/.volta/bin`, `~/.cargo/bin`, `~/.deno/bin`, `~/.npm-global/bin`, `~/Library/pnpm`), nvm's `~/.nvm/versions/node/*/bin` and Docker Desktop's `bin` | Abstract: the platform provides the separator and the default folders. On Windows: `;`, a case-insensitive `Path` key, `USERPROFILE`, `%APPDATA%\npm` and so on |
-| `Runtime/RuntimeSelectionStore.swift`, `Runtime/RuntimeRelocation.swift` | Install candidates are `searchDirectories`, the ChatGPT app's bundled Codex under `/Applications/ChatGPT.app` and the Claude app's `~/Library/Application Support/Claude/claude-code/…`; relative paths are split at `/` | Abstract: the platform provides the install candidates per harness. The Windows install locations of each CLI are not confirmed |
-| `Domain/HarnessKind.swift` | `relativeExecutablePaths` are POSIX paths without extensions (`.local/bin/codex`, `.hermes/hermes-agent/venv/bin/hermes` and others) | Candidates per platform. A Windows venv uses `Scripts\*.exe` |
+| `Runtime/RuntimeProcessEnvironment.swift` | Splits and joins `PATH` with `:`. Fixed `~/.local/bin`, `~/.bun/bin`, `/opt/homebrew/bin`, `/usr/local/bin` and the system folders; `searchDirectories` adds package managers' folders (`~/.volta/bin`, `~/.cargo/bin`, `~/.deno/bin`, `~/.npm-global/bin`, `~/Library/pnpm`), nvm's `~/.nvm/versions/node/*/bin` and Docker Desktop's `bin` | On Windows (`Runtime/ExecutableLookup.swift`): `Path` split and joined with `;`, each folder once in any case, a variable's name read and replaced in any case and the search path named `Path`, `USERPROFILE` as home. A runtime gets its own folder, `%USERPROFILE%\.local\bin`, `%USERPROFILE%\.bun\bin` and `%APPDATA%\npm` ahead of `Path`; `searchDirectories` looks in those, `%LOCALAPPDATA%\pnpm`, `.cargo\bin`, `.deno\bin` and Scoop's `scoop\shims`, then `Path` |
+| `Runtime/RuntimeSelectionStore.swift`, `Runtime/RuntimeRelocation.swift` | Install candidates are `searchDirectories`, the ChatGPT app's bundled Codex under `/Applications/ChatGPT.app` and the Claude app's `~/Library/Application Support/Claude/claude-code/…`; relative paths are split at `/` | On Windows a candidate without an extension is the program it names with PATHEXT's extensions Windows starts, `.exe` and `.com` before `.cmd` and `.bat` (`ExecutableLookup.program(at:)`, which the adapters' and the task's runtime checks also use), and Antigravity's `agy.exe` counts as `agy`. The desktop apps' bundled runtimes are looked for at their macOS paths only: where they keep them on Windows is not confirmed |
+| `Domain/HarnessKind.swift` | `relativeExecutablePaths` are POSIX paths without extensions (`.local/bin/codex`, `.hermes/hermes-agent/venv/bin/hermes` and others) | The extension comes from the lookup above; a Python virtual environment's program is in `Scripts` on Windows (`HarnessCatalog.virtualEnvironmentProgram`) |
 | `Diff/GitExecutableLocator.swift` | `/opt/homebrew/bin/git`, `/usr/local/bin/git`, `/opt/local/bin/git`, then `/usr/bin/git` | The platform provides the candidates. On Windows: `git.exe` in `PATH` and the Git for Windows install path |
 | `Diff/GitDiffService.swift` | `/dev/null` as a Git argument (`hash-object -t tree`, `diff --no-index`) | Whether Git for Windows accepts this path is not confirmed. For the empty tree, a way without a path, such as `git hash-object -t tree --stdin`. The `/dev/null` that `UnifiedDiffParser` reads is Git's output format and stays |
 | `Account/ProviderConnections.swift`, `Domain/ProviderSessionTitleResolver.swift`, `Domain/WorkspaceGitOrigin.swift` and others | Absolute paths are recognized with `hasPrefix("/")` | One shared check that also accepts `C:\` and UNC paths |
@@ -242,12 +263,12 @@ location there (AppData, the registry and so on) is not confirmed.
 
 | Item | Windows behavior | Recommended handling |
 | --- | --- | --- |
-| `Process.run()` | Quotes the arguments by Windows rules, passes them to `CreateProcessW`, and does not send `.cmd` and `.bat` to `cmd.exe` (confirmed) | Find the real `.exe` during lookup. If there is only a shim, wrap it in `cmd.exe /d /s /c`, with care for argument escaping (the BatBadBut family). `PATHEXT` and npm's `.cmd` shims have to be handled in lookup |
-| `isExecutableFile(atPath:)` | swift-foundation decides with `SHGetFileInfoW(SHGFI_EXETYPE)` | Whether it treats a `.cmd` shim as executable is not confirmed. Put the check in the lookup abstraction |
-| `terminate()` / `interrupt()` | Both are `TerminateProcess` and end only the root (confirmed) | The job object above. `Adapters/Headless/StructuredHeadlessAdapter.swift` stops a turn with `process.interrupt()` (SIGINT on macOS), which becomes an immediate kill on Windows: use the harness's own cancel first, and otherwise consider `CREATE_NEW_PROCESS_GROUP` with `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT)`. Whether each CLI treats that as a stop is not confirmed |
+| `Process.run()` | Quotes the arguments by MSVCRT's rules and passes the command line to `CreateProcessW` with no application name and only `CREATE_UNICODE_ENVIRONMENT` (confirmed in its source). `CreateProcessW` starts a `.cmd` or `.bat` through `cmd.exe`, which reads the arguments by its own rules (the BatBadBut family) | Yardlet never starts a batch file: lookup prefers a real `.exe`, and for npm's shim (cmd-shim's format, `Runtime/NPMCommandShim.swift`) `NativeProcessTree.run(_:)` starts Node.js, the `node.exe` beside the shim or else the first in `Path`, on the script under `node_modules` the shim names, with the same arguments. Any other batch file is refused with an error that says so |
+| `isExecutableFile(atPath:)` | swift-foundation decides with `SHGetFileInfoW(SHGFI_EXETYPE)` | Not used on Windows: a program is a file with one of PATHEXT's `.exe`, `.com`, `.cmd` and `.bat` (`ExecutableLookup`). Whether `SHGetFileInfoW` treats a `.cmd` as executable is not confirmed |
+| `terminate()` / `interrupt()` | Both are `TerminateProcess` and end only the root (confirmed) | `NativeProcessTree.terminate(process:)` ends the job above. `Adapters/Headless/StructuredHeadlessAdapter.swift` stops a turn with `process.interrupt()` (SIGINT on macOS), which becomes an immediate kill of the root on Windows: use the harness's own cancel first, and otherwise consider `CREATE_NEW_PROCESS_GROUP` with `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT)`. Whether each CLI treats that as a stop is not confirmed |
 | A write to a child's standard input after it stopped reading | No SIGPIPE on Windows: the write fails with an error | `Runtime/ChildInputPipe.swift` (`Pipe.childInput()`, used for every child's standard input) sets `F_SETNOSIGPIPE` on macOS only (`#if canImport(Darwin)`), so a CLI that exits before it reads fails the write instead of ending Yardlet. Linux has no such flag: ignore SIGPIPE in the app and restore it for children. Every writer already handles the error. It also marks Yardlet's end close-on-exec, because a terminal's shell is forked with everything Yardlet has open, and a shell that outlived Yardlet would keep the child's input open. On Windows the same end must not be inheritable by other children; whether Foundation's pipes are is not confirmed |
 | `readabilityHandler` | Supported through `DuplicateHandle`, `_open_osfhandle` and a Dispatch read source (confirmed: [`FileHandle.swift`](https://github.com/swiftlang/swift-corelibs-foundation/blob/main/Sources/Foundation/FileHandle.swift)) | No change needed |
-| `process.environment` | Windows environment variable names are case-insensitive | Normalize the keys so that `PATH` and `Path` do not both appear |
+| `process.environment` | Windows environment variable names are case-insensitive. Foundation adds the app's own `Path` to a child's environment that has none under exactly that name (confirmed in its source) | `NativeProcessTree.run(_:)` names each variable once, the search path as `Path` (`ExecutableLookup.normalized`) |
 | `.posixPermissions` 0o600 and 0o700 (private files such as provider connections, drafts and the vault: `ProviderConnections`, `ComposerDraftRepository`, `VaultCenter` and others) | There are no POSIX modes, so access by the user alone is not guaranteed | Store under the user profile with an ACL. How Foundation applies this attribute on Windows is not confirmed |
 
 ## External dependencies

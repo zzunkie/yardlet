@@ -91,9 +91,7 @@ actor MuseAdapter:
     }
 
     func probeRuntime() async throws -> HarnessRuntimeDescriptor {
-        guard FileManager.default.isExecutableFile(
-            atPath: executableURL.path(percentEncoded: false)
-        ) else {
+        guard ExecutableLookup.current.isProgram(executableURL) else {
             throw HarnessAdapterError.runtimeNotFound(executableURL)
         }
         let version = try readVersion()
@@ -1147,7 +1145,7 @@ actor MuseAdapter:
         process.arguments = ["--version"]
         process.standardOutput = pipe
         process.standardError = pipe
-        try process.run()
+        try NativeProcessTree.run(process)
         process.waitUntilExit()
         let output = String(
             decoding: pipe.fileHandleForReading.readDataToEndOfFile(),

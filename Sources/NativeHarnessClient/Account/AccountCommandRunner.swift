@@ -37,7 +37,7 @@ enum AccountCommandRunner {
                 "PAGER": "cat"
                 ].merging(environment) { _, new in new }
             )
-            try process.run()
+            try NativeProcessTree.run(process)
 
             // Foundation owns this child, so the timeout stops its tree and lets `Process`
             // reap it. A wrapper can still exit zero once its stalled child is stopped, so a

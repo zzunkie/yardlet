@@ -1,0 +1,10 @@
+{
+  "name": "yardlet-fake-harness",
+  "version": "1.0.0",
+  "description": "A stand-in for an ACP harness installed with npm, for Windows/scripts/check-harness.ps1",
+  "private": true,
+  "license": "MIT",
+  "bin": {
+    "kimi": "cli.js"
+  }
+}

@@ -13,4 +13,5 @@ What the Windows app is built from besides its sources in `Sources/NativeHarness
 | `scripts/test-swift-winrt.ps1` | Builds swift-winrt with the patches and runs its own tests, as its CI does (`.github/workflows/swift-winrt-tests.yml`) |
 | `scripts/check-window.ps1` | Opens a build, measures its memory, idle processor time and what it loads, and types Korean into its composer through the Microsoft Korean IME |
 | `scripts/start-remote-host.ps1`, `scripts/check-remote.ps1` | Start the relay and the fixture host on it, and pair a build with that host, open a task, send a message and wait for the answer to stream in |
+| `scripts/check-harness.ps1`, `scripts/fake-harness/` | Install a stand-in ACP harness with npm, let a build find it, start it through npm's shim and stop it, and check that a process the stand-in started ended with it |
 | `scripts/install-swift.ps1`, `scripts/install-windows-app-runtime.ps1`, `scripts/report.ps1` | The CI runner's Swift and Windows App Runtime, and a run's annotations |

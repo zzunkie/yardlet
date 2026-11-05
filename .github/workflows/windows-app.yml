@@ -76,6 +76,12 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File Windows/scripts/check-remote.ps1 `
             -Executable "$env:APP_BIN\NativeHarnessClient.exe" -Link $link -OutDirectory window-check
           exit $LASTEXITCODE
+      # A harness installed the way npm installs one: the app finds its shim, starts it for its version and the
+      # ACP handshake, and stopping it also ends a process it started (docs/PLATFORM_PORTABILITY.md, "The
+      # Windows app"). The stand-in's processes end with the step, so they start in the step that checks them.
+      - name: Start a harness installed with npm
+        shell: pwsh
+        run: Windows/scripts/check-harness.ps1 -Executable "$env:APP_BIN\NativeHarnessClient.exe" -OutDirectory window-check
       # The app with the Swift runtime beside it, to run on a PC that has the Windows App Runtime 1.7 but no
       # Swift: its executables and libraries and its resource folder, as report.ps1 counts them.
       - name: Gather the app

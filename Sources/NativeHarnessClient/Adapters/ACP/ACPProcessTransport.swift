@@ -99,7 +99,7 @@ actor ACPProcessTransport: ACPTransport {
         }
 
         do {
-            try process.run()
+            try NativeProcessTree.run(process)
         } catch {
             stdoutPipe.fileHandleForReading.readabilityHandler = nil
             stderrPipe.fileHandleForReading.readabilityHandler = nil

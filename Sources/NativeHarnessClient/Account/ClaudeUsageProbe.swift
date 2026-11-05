@@ -32,7 +32,7 @@ enum ClaudeUsageProbe {
             // The CLI counts the usage endpoint as nonessential traffic.
             values.removeValue(forKey: "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")
             process.environment = values
-            try process.run()
+            try NativeProcessTree.run(process)
 
             let timeoutTask = Task {
                 do { try await Task.sleep(for: timeout) } catch { return false }

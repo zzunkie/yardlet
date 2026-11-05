@@ -5,6 +5,12 @@ import Foundation
 /// (`script`, a shell, or a PTY host) whose children outlive the wrapper's termination
 /// signal, so cleanup snapshots and signals descendants directly before reaping the root.
 enum NativeProcessTree {
+    /// Starts a process Yardlet may end with `terminate(process:)`. On macOS the tree is found when it
+    /// ends, so the process just runs; the Windows layer also puts it in a job object.
+    static func run(_ process: Process) throws {
+        try process.run()
+    }
+
     static func terminate(rootPID: pid_t) {
         guard rootPID > 0 else { return }
 

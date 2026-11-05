@@ -2828,7 +2828,7 @@ final class AppModel {
             if archived.isProviderArchived, !isVisualFixture,
                let providerSessionID = session.providerSessionID {
                 try session.connection?.validate(for: session.harness)
-                let runtime = FileManager.default.isExecutableFile(atPath: session.runtimeExecutableURL.path(percentEncoded: false))
+                let runtime = ExecutableLookup.current.isProgram(session.runtimeExecutableURL)
                     ? session.runtimeExecutableURL
                     : RuntimeRelocation.successor(of: session.runtimeExecutableURL, for: session.harness)
                         ?? runtimeSelections.selectedURL(for: session.harness) ?? session.runtimeExecutableURL
@@ -3816,7 +3816,7 @@ final class AppModel {
     }
 
     func detachedCodexThreadReader(for session: SessionRecord) async -> (any CodexThreadReading)? {
-        guard FileManager.default.isExecutableFile(atPath: session.runtimeExecutableURL.path(percentEncoded: false)),
+        guard ExecutableLookup.current.isProgram(session.runtimeExecutableURL),
               session.connection.map({ (try? $0.validate(for: .codex)) != nil }) ?? true,
               session.connection?.homePath.map({ FileManager.default.fileExists(atPath: $0) }) ?? true
         else { return nil }
@@ -6467,7 +6467,7 @@ final class AppModel {
     /// or else with the harness's current runtime. The provider session and its home stay as they
     /// were, and a recorded runtime that still exists is never replaced.
     private func sessionWithAvailableRuntime(_ session: SessionRecord) async -> SessionRecord {
-        guard !FileManager.default.isExecutableFile(atPath: session.runtimeExecutableURL.path(percentEncoded: false)),
+        guard !ExecutableLookup.current.isProgram(session.runtimeExecutableURL),
               let replacement = RuntimeRelocation.successor(of: session.runtimeExecutableURL, for: session.harness)
                 ?? runtimeSelections.selectedURL(for: session.harness),
               let updated = try? await store.updateRuntimeExecutable(id: session.id, to: replacement)

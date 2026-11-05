@@ -29,6 +29,110 @@ final class RuntimeProcessEnvironmentTests: XCTestCase {
         XCTAssertTrue(environment["PATH"]?.hasPrefix("/opt/homebrew/bin:") ?? false)
     }
 
+    /// On Windows a variable's name is the same in any case: the search path is one `Path`, split and joined at
+    /// `;` with each folder once in any case, the home folder is `USERPROFILE`, npm's global folder is
+    /// preferred, and an isolated account's credentials go whatever case they are written in.
+    func testWindowsRulesKeepOnePathAndReadNamesInAnyCase() {
+        let windows = ExecutableLookup.windows(pathExtensions: ".COM;.EXE;.BAT;.CMD;.VBS;.JS")
+        let environment = RuntimeProcessEnvironment.values(
+            executableURL: URL(filePath: "/C:/Users/test/AppData/Roaming/npm/kimi.cmd"),
+            base: ["USERPROFILE": "C:\\Users\\test", "APPDATA": "C:\\Users\\test\\AppData\\Roaming",
+                   "Path": "C:\\Windows\\system32;C:\\Program Files\\nodejs\\;c:\\windows\\System32;D:\\",
+                   "YARDLET_ACCOUNT_ENVIRONMENT": "isolated", "anthropic_api_key": "secret"],
+            overrides: ["PAGER": "cat"],
+            lookup: windows)
+
+        XCTAssertEqual(environment.keys.filter { $0.uppercased() == "PATH" }, ["Path"])
+        XCTAssertEqual(environment["Path"]?.split(separator: ";").map(String.init), [
+            "C:\\Users\\test\\AppData\\Roaming\\npm", "C:\\Users\\test\\.local\\bin", "C:\\Users\\test\\.bun\\bin",
+            "C:\\Windows\\system32", "C:\\Program Files\\nodejs", "D:\\"
+        ])
+        XCTAssertEqual(environment["PAGER"], "cat")
+        XCTAssertNil(environment["anthropic_api_key"])
+        XCTAssertEqual(windows.extensions, [".com", ".exe", ".bat", ".cmd"])
+    }
+
+    /// A bare name is the program it names with PATHEXT's extensions, a real program before a batch file, and
+    /// never a script Windows does not start. npm's shim starts Node.js, beside it or in `Path`, on the script it
+    /// names with the same arguments; any other batch file is refused.
+    func testWindowsLookupPrefersProgramsAndStartsNpmShimsThroughNode() throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appending(path: "WindowsLookup-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let npm = folder.appending(path: "npm", directoryHint: .isDirectory)
+        let both = folder.appending(path: "both", directoryHint: .isDirectory)
+        let nodejs = folder.appending(path: "nodejs", directoryHint: .isDirectory)
+        let script = npm.appending(path: "node_modules/fake/cli.js")
+        for directory in [npm, both, nodejs, script.deletingLastPathComponent()] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        // What npm's cmd-shim writes for a package's `#!/usr/bin/env node` script.
+        let shim = #"""
+        @ECHO off
+        GOTO start
+        :find_dp0
+        SET dp0=%~dp0
+        EXIT /b
+        :start
+        SETLOCAL
+        CALL :find_dp0
+
+        IF EXIST "%dp0%\node.exe" (
+          SET "_prog=%dp0%\node.exe"
+        ) ELSE (
+          SET "_prog=node"
+        )
+
+        endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & set PATHEXT=%PATHEXT:;.JS;=;% & "%_prog%"  "%dp0%\node_modules\fake\cli.js" %*
+
+        """#.replacingOccurrences(of: "\n", with: "\r\n")
+        try shim.write(to: npm.appending(path: "kimi.cmd"), atomically: true, encoding: .utf8)
+        for file in [script, both.appending(path: "kimi.exe"), both.appending(path: "kimi.cmd"),
+                     both.appending(path: "tool.js"), nodejs.appending(path: "node.exe")] {
+            try Data().write(to: file)
+        }
+        try "@echo off\r\necho %*\r\n".write(to: both.appending(path: "kimi.cmd"), atomically: true, encoding: .utf8)
+        let windows = ExecutableLookup.windows(pathExtensions: ".COM;.EXE;.BAT;.CMD;.VBS;.JS")
+
+        XCTAssertEqual(windows.program(at: npm.appending(path: "kimi")), npm.appending(path: "kimi.cmd"))
+        XCTAssertEqual(windows.program(at: both.appending(path: "kimi")), both.appending(path: "kimi.exe"))
+        XCTAssertNil(windows.program(at: both.appending(path: "tool")))
+
+        let launch = try NPMCommandShim.launch(npm.appending(path: "kimi.cmd"), arguments: ["acp", "a \"b\""],
+                                               searchPath: nodejs.path(percentEncoded: false), lookup: windows)
+        XCTAssertEqual(launch?.executable, nodejs.appending(path: "node.exe"))
+        XCTAssertEqual(launch?.arguments, [windows.nativePath(script.standardizedFileURL), "acp", "a \"b\""])
+        XCTAssertThrowsError(try NPMCommandShim.launch(npm.appending(path: "kimi.cmd"), arguments: [], searchPath: "",
+                                                       lookup: windows)) {
+            XCTAssertEqual($0 as? NPMCommandShimError, .nodeNotFound("kimi.cmd"))
+        }
+        XCTAssertThrowsError(try NPMCommandShim.launch(both.appending(path: "kimi.cmd"), arguments: [], searchPath: "",
+                                                       lookup: windows)) {
+            XCTAssertEqual($0 as? NPMCommandShimError, .notAShim("kimi.cmd"))
+        }
+        XCTAssertNil(try NPMCommandShim.launch(both.appending(path: "kimi.exe"), arguments: [], searchPath: "", lookup: windows))
+        XCTAssertNil(try NPMCommandShim.launch(npm.appending(path: "kimi.cmd"), arguments: [], searchPath: "", lookup: .posix))
+
+        // Older cmd-shims, a script's `#!` arguments, and the shims Yardlet does not start.
+        XCTAssertEqual(NPMCommandShim.parse(#"""
+            @IF EXIST "%~dp0\node.exe" (
+              "%~dp0\node.exe"  "%~dp0\node_modules\npm\bin\npm-cli.js" %*
+            ) ELSE (
+              @SETLOCAL
+              @SET PATHEXT=%PATHEXT:;.JS;=;%
+              node  "%~dp0\node_modules\npm\bin\npm-cli.js" %*
+            )
+            """#), NPMCommandShim.Target(nodeArguments: [], script: ["node_modules", "npm", "bin", "npm-cli.js"],
+                                          startsScriptItself: false))
+        XCTAssertEqual(NPMCommandShim.parse(shim.replacingOccurrences(of: #""%_prog%"  "#, with: #""%_prog%" --no-warnings "#))?
+            .nodeArguments, ["--no-warnings"])
+        XCTAssertEqual(NPMCommandShim.parse("@ECHO off\r\nCALL :find_dp0\r\n\"%dp0%\\node_modules\\esbuild\\esbuild.exe\"   %*\r\n"),
+                       NPMCommandShim.Target(nodeArguments: [], script: ["node_modules", "esbuild", "esbuild.exe"],
+                                             startsScriptItself: true))
+        XCTAssertNil(NPMCommandShim.parse(shim.replacingOccurrences(of: "CALL :find_dp0\r\n", with: "CALL :find_dp0\r\n@SET NODE_OPTIONS=--x\r\n")))
+        XCTAssertNil(NPMCommandShim.parse(shim.replacingOccurrences(of: #"SET "_prog=node""#, with: #"SET "_prog=sh""#)))
+    }
+
     /// The login shell's `PATH` leads, the app's folders it lacks follow, and nothing else changes;
     /// before a read, the app's environment stays as it is.
     func testLoginShellPathLeadsTheAppsOwn() {

@@ -277,7 +277,7 @@ final class ProcessMCPStdioChannel: MCPStdioChannel, @unchecked Sendable {
         } atEnd: {
             ends.reached()
         }
-        try process.run()
+        try NativeProcessTree.run(process)
     }
 
     func send(_ message: Data) throws {

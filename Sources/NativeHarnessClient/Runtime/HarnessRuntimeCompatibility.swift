@@ -84,7 +84,7 @@ enum HarnessRuntimeVersionProbe {
         process.arguments = ["--version"]
         process.standardOutput = pipe
         process.standardError = pipe
-        try process.run()
+        try NativeProcessTree.run(process)
         process.waitUntilExit()
         let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)

@@ -49,6 +49,8 @@ let windowsLayers = ["WinUI", "Platform/Windows"]
 // names, for the engine-only build and for what the Windows layer does not provide yet; the Mac app
 // has its own in Platform/macOS.
 let otherPlatformLayers = ["Platform/Portable"]
+// The Platform/Portable files whose parts the Windows layer provides, which the Windows app leaves out.
+let portableFilesWindowsReplaces = ["Platform/Portable/PortableProcesses.swift"]
 
 // The phone remote's listeners and interface addresses use Network.framework and BSD sockets; a
 // build on another platform leaves them out until that platform has its own.
@@ -79,7 +81,7 @@ let appTarget: Target = windowsApp
             .product(name: "Markdown", package: "swift-markdown"),
             .product(name: "WinUIBindings", package: "Bindings")
         ],
-        exclude: macOSLayers,
+        exclude: macOSLayers + portableFilesWindowsReplaces,
         resources: [
             .process("Resources")
         ],

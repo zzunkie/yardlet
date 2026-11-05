@@ -2100,6 +2100,8 @@
 "Timed out" = "시간 초과";
 "The CLI stopped before it answered" = "CLI가 답하기 전에 멈췄습니다";
 "Yardlet has no check for this CLI" = "Yardlet에 이 CLI를 확인하는 방법이 없습니다";
+"%@ is a batch file. Yardlet starts a batch file only when it is npm's launcher for a Node.js program." = "%@은(는) 배치 파일입니다. Yardlet은 npm이 Node.js 프로그램을 실행하려고 만든 배치 파일만 실행합니다.";
+"Node.js, which %@ runs on, was not found in Path." = "%@을(를) 실행할 Node.js를 Path에서 찾지 못했습니다.";
 "Yardlet could not write its request" = "Yardlet이 요청을 만들 수 없습니다";
 "--version failed: %@" = "--version 실패: %@";
 "initialize was refused" = "initialize가 거절되었습니다";

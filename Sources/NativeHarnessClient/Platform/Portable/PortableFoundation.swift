@@ -66,6 +66,11 @@ struct Published<Value> {
 }
 #endif
 
+/// Foundation outside Apple's platforms has no autorelease pool; the work just runs.
+func autoreleasepool<Result>(invoking body: () throws -> Result) rethrows -> Result {
+    try body()
+}
+
 #if !canImport(Darwin)
 extension URLSession {
     /// A response's body as it arrives (Apple's `bytes(for:)`), through a session of the same configuration

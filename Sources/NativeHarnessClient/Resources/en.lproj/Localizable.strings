@@ -2100,6 +2100,8 @@
 "Timed out" = "Timed out";
 "The CLI stopped before it answered" = "The CLI stopped before it answered";
 "Yardlet has no check for this CLI" = "Yardlet has no check for this CLI";
+"%@ is a batch file. Yardlet starts a batch file only when it is npm's launcher for a Node.js program." = "%@ is a batch file. Yardlet starts a batch file only when it is npm's launcher for a Node.js program.";
+"Node.js, which %@ runs on, was not found in Path." = "Node.js, which %@ runs on, was not found in Path.";
 "Yardlet could not write its request" = "Yardlet could not write its request";
 "--version failed: %@" = "--version failed: %@";
 "initialize was refused" = "initialize was refused";

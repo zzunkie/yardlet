@@ -254,7 +254,7 @@ actor ClaudeAdapter:
     }
 
     func probeRuntime() async throws -> HarnessRuntimeDescriptor {
-        guard FileManager.default.isExecutableFile(atPath: executableURL.path(percentEncoded: false)) else {
+        guard ExecutableLookup.current.isProgram(executableURL) else {
             throw HarnessAdapterError.runtimeNotFound(executableURL)
         }
         let versionOutput = try readVersion()
