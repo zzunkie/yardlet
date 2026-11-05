@@ -8,11 +8,14 @@ import WinUI
 /// The Windows app's main window: the engine's tasks in the sidebar, the chosen task's conversation,
 /// and the composer. The sidebar follows the model's `SessionStore` through Observation, and the
 /// composer sends through the model as the Mac's does. The conversation shows what this window sent
-/// and the task's error until the Windows app reads transcripts.
+/// and the task's error until the Windows app reads transcripts. Below the tasks, Connect to a Mac pairs with
+/// another computer's Yardlet from the link it copies, and each paired host opens in a window of its own
+/// (`RemoteHostWindow`).
 @MainActor
 final class MainWindow {
     private let model: AppModel
-    private let log = QAEventLog()
+    private let directory: RemoteHostDirectory
+    private let log = QAEventLog.shared
     private let window = Window()
     private let navigation = NavigationView()
     private let conversation = StackPanel()
@@ -20,9 +23,18 @@ final class MainWindow {
     private let composer = TextBox()
     private var items: [(item: NavigationViewItem, id: SessionRecord.ID)] = []
     private var sentBySessionID: [SessionRecord.ID: [String]] = [:]
+    private let taskPane = Grid()
+    private let connectItem = NavigationViewItem()
+    private var hostItems: [(item: NavigationViewItem, id: String)] = []
+    private var hostWindows: [String: RemoteHostWindow] = [:]
+    private let connectPane = StackPanel()
+    private let linkField = TextBox()
+    private let connectButton = Button()
+    private let connectStatus = TextBlock()
 
-    init(model: AppModel) {
+    init(model: AppModel, directory: RemoteHostDirectory) {
         self.model = model
+        self.directory = directory
     }
 
     func open() {
@@ -37,12 +49,18 @@ final class MainWindow {
         // XAML hands back a new Swift wrapper for an item, so the chosen one is found with the
         // bindings' ==, which compares the COM objects underneath.
         navigation.selectionChanged.addHandler { [weak self] _, args in
-            guard let self, let container = args?.selectedItemContainer,
-                  let id = self.items.first(where: { $0.item == container })?.id else { return }
-            self.choose(id)
+            guard let self, let container = args?.selectedItemContainer else { return }
+            if container == self.connectItem {
+                self.navigation.content = self.connectPane
+            } else if let hostID = self.hostItems.first(where: { $0.item == container })?.id {
+                self.openHost(hostID)
+            } else if let id = self.items.first(where: { $0.item == container })?.id {
+                self.navigation.content = self.taskPane
+                self.choose(id)
+            }
         }
 
-        let grid = Grid()
+        let grid = taskPane
         let conversationRow = RowDefinition()
         conversationRow.height = GridLength(value: 1, gridUnitType: .star)
         let composerRow = RowDefinition()
@@ -59,6 +77,10 @@ final class MainWindow {
         grid.children.append(composer)
         observeComposer()
         navigation.content = grid
+        makeConnectPane()
+        connectItem.content = L10n.string("Connect to a Mac")
+        navigation.footerMenuItems.append(connectItem)
+        followHosts()
         window.content = navigation
         try? window.activate()
 
@@ -175,6 +197,93 @@ final class MainWindow {
             await model.send(text, to: session)
             showConversation()
         }
+    }
+
+    // MARK: Other computers
+
+    /// The hosts paired before, one footer item each, as the Mac lists them under File › Connect to Mac….
+    private func followHosts() {
+        let hosts = withObservationTracking {
+            directory.hosts
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.followHosts() }
+        }
+        for (item, _) in hostItems {
+            var index: UInt32 = 0
+            if navigation.footerMenuItems.indexOf(item, &index) { navigation.footerMenuItems.removeAt(index) }
+        }
+        hostItems = hosts.map { host in
+            let item = NavigationViewItem()
+            item.content = host.name
+            navigation.footerMenuItems.append(item)
+            return (item: item, id: host.id)
+        }
+    }
+
+    private func makeConnectPane() {
+        connectPane.spacing = 12
+        connectPane.padding = Thickness(left: 28, top: 28, right: 28, bottom: 28)
+        connectPane.maxWidth = 560
+        connectPane.horizontalAlignment = .left
+        let title = TextBlock()
+        title.text = L10n.string("Connect to a Mac")
+        title.fontSize = 20
+        connectPane.children.append(title)
+        let explanation = TextBlock()
+        explanation.text = L10n.string("Follow and drive another Mac's tasks here. On that Mac, open Settings › Remote, choose Pair…, then Copy link, and paste the link below.")
+        explanation.textWrapping = .wrap
+        explanation.opacity = 0.7
+        connectPane.children.append(explanation)
+        linkField.placeholderText = L10n.string("Connection link")
+        connectPane.children.append(linkField)
+        connectButton.content = L10n.string("Connect")
+        connectButton.click.addHandler { [weak self] _, _ in self?.connect() }
+        connectPane.children.append(connectButton)
+        connectStatus.textWrapping = .wrap
+        connectStatus.opacity = 0.7
+        connectPane.children.append(connectStatus)
+    }
+
+    /// Pairs with the host the pasted link names; nothing pairs until Connect is chosen.
+    private func connect() {
+        let link = linkField.text
+        guard !link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        connectButton.isEnabled = false
+        connectStatus.text = L10n.string("Connecting…")
+        log.write("remote pairing")
+        Task {
+            defer { connectButton.isEnabled = true }
+            do {
+                let host = try await directory.pair(link: link)
+                log.write("remote paired: \(host.name)")
+                linkField.text = ""
+                connectStatus.text = ""
+                openHost(host.id)
+            } catch let failure as RemoteHostDirectory.PairingFailure {
+                log.write("remote pairing failed: \(failure.message)")
+                connectStatus.text = failure.message
+            } catch {
+                connectStatus.text = error.localizedDescription
+            }
+        }
+    }
+
+    /// The host's window, opened or brought forward; the sidebar keeps the task it showed.
+    private func openHost(_ hostID: String) {
+        navigation.selectedItem = items.first { $0.id == model.store.selectedSessionID }?.item
+        navigation.content = taskPane
+        if let open = hostWindows[hostID] {
+            open.bringForward()
+            return
+        }
+        guard let hostModel = directory.model(for: hostID) else { return }
+        let hostWindow = RemoteHostWindow(model: hostModel, log: log)
+        hostWindow.onClose = { [weak self] in
+            self?.hostWindows[hostID] = nil
+            self?.directory.close(hostID)
+        }
+        hostWindows[hostID] = hostWindow
+        hostWindow.open()
     }
 
     private func appendMessage(role: String?, text: String) {

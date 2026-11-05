@@ -1,5 +1,8 @@
 import Crypto
 import Foundation
+#if os(Windows)
+import CRT
+#endif
 import YardletRemote
 import YardletRemoteFixtureSupport
 
@@ -16,10 +19,16 @@ import YardletRemoteFixtureSupport
 // fixed and reusable unless --single-use-pairing). --relay opens the fixture's room on a local relay
 // (`relay/`, `wrangler dev`); --relay-public is the address phones are told for it. --approve-links
 // approves a link request (§12.1) three seconds after it arrives. `--v2`, from when protocol 1 was served
-// too, is accepted and changes nothing.
+// too, is accepted and changes nothing. Where Network.framework is missing (Windows, Linux) it has no listener of
+// its own and is reached only through --relay, which it then needs.
 
-// Each line shows at once, also when the output goes to a pipe or a file.
+// Each line shows at once, also when the output goes to a pipe or a file; Windows buffers a "line buffered"
+// stream as a full one, so there it is not buffered.
+#if os(Windows)
+setvbuf(stdout, nil, _IONBF, 0)
+#else
 setvbuf(stdout, nil, _IOLBF, 0)
+#endif
 let arguments = CommandLine.arguments.dropFirst()
 func value(after flag: String) -> String? {
     guard let index = arguments.firstIndex(of: flag), arguments.index(after: index) < arguments.endIndex else { return nil }
@@ -31,7 +40,9 @@ if arguments.contains("--help") || arguments.contains("-h") {
     exit(0)
 }
 let singleUse = arguments.contains("--single-use-pairing")
+#if canImport(Network)
 nonisolated(unsafe) var retainedSecure: RemoteSecureListener?
+#endif
 nonisolated(unsafe) var retainedRelay: RemoteRelayClient?
 
 let folder = FileManager.default.temporaryDirectory
@@ -62,13 +73,14 @@ await server.openPairing(secret: pairingSecret, lifetime: lifetime, isSingleUse:
 print("Audit log: \(folder.appending(path: "audit.log").path)")
 print("Task files: \(bridge.filesFolder.path)")
 do {
+    var boundSecure: UInt16?
+    #if canImport(Network)
     let securePort = value(after: "--secure-port").flatMap(UInt16.init) ?? RemoteProtocol.securePort
     let secure = RemoteSecureListener(server: server, staticKey: identity.noise, port: securePort, advertisement: nil,
                                       loopbackOnly: true)
     let (secureReady, announceSecure) = AsyncStream<RemoteSecureListener.State>.makeStream()
     secure.onStateChange = { announceSecure.yield($0) }
     secure.start()
-    var boundSecure: UInt16 = securePort
     for await state in secureReady {
         if case let .ready(port) = state {
             boundSecure = port
@@ -79,11 +91,13 @@ do {
             exit(1)
         }
     }
+    retainedSecure = secure
+    #endif
     var hosts = arguments.indices.filter { arguments[$0] == "--host" }.compactMap { index -> String? in
         let next = arguments.index(after: index)
         return next < arguments.endIndex ? arguments[next] : nil
     }
-    if hosts.isEmpty { hosts = ["10.0.2.2:\(boundSecure)", "127.0.0.1:\(boundSecure)"] }
+    if hosts.isEmpty, let boundSecure { hosts = ["10.0.2.2:\(boundSecure)", "127.0.0.1:\(boundSecure)"] }
     var relayInfo: RemoteHandshakeReply.Relay?
     if let relay = value(after: "--relay").flatMap(URL.init(string:)) {
         let client = RemoteRelayClient(server: server, identity: identity, baseURL: relay)
@@ -93,8 +107,11 @@ do {
         relayInfo = RemoteHandshakeReply.Relay(url: value(after: "--relay-public") ?? relay.absoluteString, room: identity.room)
         retainedRelay = client
     }
+    if boundSecure == nil, relayInfo == nil {
+        FileHandle.standardError.write(Data("This platform has no listener for the fixture; give it --relay.\n".utf8))
+        exit(1)
+    }
     await server.setDirectory(direct: hosts, relay: relayInfo)
-    retainedSecure = secure
     if arguments.contains("--approve-links") {
         await server.setAcceptsLinks(true)
         await server.setStatusHandler { status in
@@ -108,7 +125,9 @@ do {
     }
     let secureURL = RemoteSecurePairingURL(macKey: identity.noise.publicKey, secret: pairingSecret, name: "Yardlet fixture",
                                            hosts: hosts, relayURL: relayInfo?.url, room: relayInfo?.room).url
-    print("Listening on ws://127.0.0.1:\(boundSecure)/  (Noise IK, binary frames; Android emulator: 10.0.2.2)")
+    if let boundSecure {
+        print("Listening on ws://127.0.0.1:\(boundSecure)/  (Noise IK, binary frames; Android emulator: 10.0.2.2)")
+    }
     print("Pairing URL\(singleUse ? " (single use, 5 minutes)" : " (reusable)"): \(secureURL?.absoluteString ?? "-")")
     print("Room: \(identity.room)")
 }

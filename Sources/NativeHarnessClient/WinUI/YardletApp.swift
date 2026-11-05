@@ -15,7 +15,7 @@ final class YardletApp: XamlApplication {
 
     override func launched() {
         mainWindow = MainActor.assumeIsolated {
-            let window = MainWindow(model: AppModel.live())
+            let window = MainWindow(model: AppModel.live(), directory: RemoteHostDirectory.live())
             window.open()
             return window
         }

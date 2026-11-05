@@ -31,6 +31,7 @@
     "Microsoft.UI.Xaml.Controls.ListViewItem",
     "Microsoft.UI.Xaml.Controls.NavigationView",
     "Microsoft.UI.Xaml.Controls.NavigationViewItem",
+    "Microsoft.UI.Xaml.Controls.NavigationViewItemHeader",
     "Microsoft.UI.Xaml.Controls.XamlControlsResources",
     "Microsoft.UI.Xaml.XamlTypeInfo.XamlControlsXamlMetaDataProvider",
     "Microsoft.UI.Xaml.Markup.IXamlMetadataProvider",

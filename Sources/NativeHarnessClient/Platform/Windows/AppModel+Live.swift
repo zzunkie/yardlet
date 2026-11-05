@@ -80,7 +80,7 @@ extension AppModel {
     }
 
     /// %LOCALAPPDATA%\Yardlet, made on first use.
-    private static func windowsStorageRootURL() throws -> URL {
+    static func windowsStorageRootURL() throws -> URL {
         let base = ProcessInfo.processInfo.environment["LOCALAPPDATA"].map {
             URL(filePath: $0, directoryHint: .isDirectory)
         } ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

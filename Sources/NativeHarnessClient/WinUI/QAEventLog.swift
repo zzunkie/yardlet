@@ -1,12 +1,16 @@
 import Foundation
 
-/// The main window's events, appended to the file YARDLET_QA_EVENT_LOG names, for the check that opens
-/// the Windows app and types Korean through the IME (Windows/scripts/check-window.ps1). Without it
-/// nothing is written.
+/// The windows' events, appended to the file YARDLET_QA_EVENT_LOG names, for the checks that open the
+/// Windows app, type Korean through the IME (Windows/scripts/check-window.ps1) and connect it to a host
+/// (Windows/scripts/check-remote.ps1). Without it nothing is written.
+@MainActor
 final class QAEventLog {
+    /// The app's one log, which every window writes to.
+    static let shared = QAEventLog()
+
     private let handle: FileHandle?
 
-    init() {
+    private init() {
         guard let path = ProcessInfo.processInfo.environment["YARDLET_QA_EVENT_LOG"], !path.isEmpty else {
             handle = nil
             return
