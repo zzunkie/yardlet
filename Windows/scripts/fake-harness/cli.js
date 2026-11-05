@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // A stand-in for an ACP harness installed with npm, for Windows/scripts/check-harness.ps1 and
 // check-local.ps1. It answers --version; under `acp` it starts a detached process of its own, which would
-// outlive it, writes both process IDs beside itself and serves ACP: initialize, a new session, and a prompt
-// that reads a file, asks to edit it, and streams its answer once allowed (or a short one once denied). It
-// keeps running once its input ends, so it ends only when whoever started it ends it.
+// outlive it, writes both process IDs beside itself and serves ACP: initialize, a new session, loading a saved
+// one (whose turns it does not replay), and a prompt that reads a file, asks to edit it, and streams its answer
+// once allowed (or a short one once denied). Its tool call and its request are worded as Kimi Code's ACP bridge
+// words them. It keeps running once its input ends, so it ends only when whoever started it ends it.
 'use strict'
 const { spawn } = require('child_process')
 const fs = require('fs')
@@ -49,6 +50,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const waiting = new Map()
 let nextRequest = 1
 let sessions = 0
+let turns = 0
 
 function ask(method, params) {
   const id = 'stand-in-' + nextRequest++
@@ -65,11 +67,14 @@ function handle(message) {
   }
   switch (message.method) {
     case 'initialize':
-      send({ id: message.id, result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] } })
+      send({ id: message.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true }, authMethods: [] } })
       break
     case 'session/new':
       sessions += 1
       send({ id: message.id, result: { sessionId: 'stand-in-session-' + sessions } })
+      break
+    case 'session/load':
+      send({ id: message.id, result: null })
       break
     case 'session/prompt':
       prompt(message)
@@ -84,11 +89,14 @@ function handle(message) {
 async function prompt(message) {
   const sessionId = message.params.sessionId
   const text = (message.params.prompt || []).map((part) => part.text || '').join(' ')
-  update(sessionId, { sessionUpdate: 'tool_call', toolCallId: 'read-1', title: 'Read README.md', kind: 'read', status: 'completed' })
+  // Each turn's calls are its own, as an agent's are.
+  turns += 1
+  update(sessionId, { sessionUpdate: 'tool_call', toolCallId: 'read-' + turns, title: 'Reading README.md', kind: 'read', status: 'completed' })
   await sleep(300)
   const answer = await ask('session/request_permission', {
     sessionId,
-    toolCall: { toolCallId: 'edit-1', title: 'Edit README.md', kind: 'edit', status: 'pending' },
+    toolCall: { toolCallId: 'edit-' + turns, title: 'Edit',
+      content: [{ type: 'content', content: { type: 'text', text: 'Requesting approval to edit README.md' } }] },
     options: [
       { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
       { optionId: 'reject', name: 'Deny', kind: 'reject_once' }

@@ -14,13 +14,15 @@ import YardletRemoteFixtureSupport
 //   swift run --build-system native yardlet-remote-fixture [--single-use-pairing] [--secure-port 47616]
 //       [--host 10.0.2.2:47616]… [--relay ws://127.0.0.1:8787] [--relay-public ws://10.0.2.2:8787]
 //       [--approve-links]
+//   swift run --build-system native yardlet-remote-fixture --pair LINK --task TITLE --send TEXT
 //
 // It serves the protocol (§11–§17) with a fixed fixture Mac key and prints the pairing URL (its secret is
 // fixed and reusable unless --single-use-pairing). --relay opens the fixture's room on a local relay
 // (`relay/`, `wrangler dev`); --relay-public is the address phones are told for it. --approve-links
 // approves a link request (§12.1) three seconds after it arrives. `--v2`, from when protocol 1 was served
 // too, is accepted and changes nothing. Where Network.framework is missing (Windows, Linux) it has no listener of
-// its own and is reached only through --relay, which it then needs.
+// its own and is reached only through --relay, which it then needs. With --pair it is a phone instead
+// (`FixturePhone`).
 
 // Each line shows at once, also when the output goes to a pipe or a file; Windows buffers a "line buffered"
 // stream as a full one, so there it is not buffered.
@@ -36,8 +38,12 @@ func value(after flag: String) -> String? {
 }
 if arguments.contains("--help") || arguments.contains("-h") {
     print("usage: yardlet-remote-fixture [--single-use-pairing] [--secure-port PORT] [--host HOST:PORT]… "
-          + "[--relay URL] [--relay-public URL] [--approve-links]")
+          + "[--relay URL] [--relay-public URL] [--approve-links]\n"
+          + "       yardlet-remote-fixture --pair LINK --task TITLE --send TEXT")
     exit(0)
+}
+if let link = value(after: "--pair") {
+    exit(await FixturePhone.run(link: link, task: value(after: "--task") ?? "", message: value(after: "--send") ?? ""))
 }
 let singleUse = arguments.contains("--single-use-pairing")
 #if canImport(Network)

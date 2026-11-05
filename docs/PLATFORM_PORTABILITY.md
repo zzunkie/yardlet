@@ -54,7 +54,10 @@ platform's layer has to provide:
 | `HarnessAccountBroker.antigravityCredentialState` | Whether Antigravity is signed in | Keychain |
 | `AccountLoginController`, `NativeTerminalSession`, `TaskShellProcess` | The sign-in terminal, each terminal tab's shell, bash mode's shell | SwiftTerm and a PTY |
 | `BrowserPreviewModel`, `ConversationRenderState` | A tab's preview page, the conversation's cached turn views | WebKit, AppKit |
-| `RemoteControlService`, `LidSleepHelper` | The phone remote, the lid helper | Network.framework, XPC |
+| `RemoteHostPlatform.current`, `LidSleepHelper` | The phone remote's listener, interfaces, network changes and keeping the computer awake; the lid helper | Network.framework, BSD sockets, a process activity, XPC |
+
+The phone remote itself, `RemoteControlService` (`Remote/RemoteControlService.swift`), is engine code on every
+platform, with its keys behind `RemoteIdentityStoring`: the Keychain on the Mac, Credential Manager on Windows.
 
 The Windows layer provides `NativeProcessTree` (`Platform/Windows/NativeProcessTree.swift`), so the Windows app
 leaves `PortableProcesses.swift` out (`portableFilesWindowsReplaces` in `Package.swift`).
@@ -73,9 +76,11 @@ under `#if canImport(Darwin)` and says the same thing another way elsewhere: `L1
 **Cryptography.** The engine and the phone remote import `Crypto` from swift-crypto, which has CryptoKit's API: on
 macOS it re-exports CryptoKit and adds nothing to the app; elsewhere it builds BoringSSL.
 
-**The phone remote off macOS.** Its listeners and interface addresses (`RemoteSecureListener` on Network.framework,
-`RemoteAddresses` on BSD sockets) are left out of a build on another platform until that platform has its own. The
-rest of `YardletRemote` builds: its random bytes fall back to `SystemRandomNumberGenerator`, its free-space check to
+**The phone remote off macOS.** Its direct-path listener (`RemoteSecureListener` on Network.framework) is left out of
+a build on another platform until that platform has its own, and the remote there serves the relay alone
+(`RemoteHostPlatform.current` in `Platform/Portable/`). `RemoteAddresses` builds everywhere: it reads an address with
+`inet_pton`, and only the Mac lists its interfaces (`getifaddrs`) and looks up its MagicDNS name. The rest of
+`YardletRemote` builds: its random bytes fall back to `SystemRandomNumberGenerator`, its free-space check to
 `attributesOfFileSystem`, and `RemoteLimits.host(of:)` exists only with Network.framework. Foundation there hands a
 WebSocket frame over in the pieces libcurl reads it in, each as a message of its own (`WebSocketURLProtocol` drops
 `curl_ws_meta`'s `bytesleft`), so the remote's sockets join a piece that does not read (a Noise frame that does not
@@ -135,6 +140,13 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   host's key in Credential Manager and the list and cache under `%LOCALAPPDATA%\Yardlet`. Without Bonjour, a host is
   reached at the direct addresses it named, on the same network or over Tailscale, and through its relay. A host's
   sidebar is drawn again only when what it shows changes, not as a task's marks and times change while it streams.
+- **This computer's tasks elsewhere.** Settings, at the foot of the sidebar, holds Settings › Remote as the Mac's
+  (`WinUI/RemoteSettingsPane.swift`): Allow remote connections, off until turned on and then served through the relay;
+  the paths a device can take now; pairing with a QR code (Swift QR Code Generator) and Copy link, which keeps the link
+  out of the clipboard's history and off other devices; and the paired devices with their permissions and Remove. The
+  remote is the engine's `RemoteControlService`, as on the Mac. `Platform/Windows/WindowsRemoteHost.swift` keeps its
+  keys in Credential Manager and its devices and audit log under `%LOCALAPPDATA%\Yardlet\remote`, in the Mac's
+  format. While the remote is off it opens nothing, and turning it off closes its room on the relay.
 - **Harness CLIs.** The engine finds a harness's runtime by Windows' rules (`Runtime/ExecutableLookup.swift`, "Paths
   and executable lookup" below), so Claude Code's `claude.exe` in `%USERPROFILE%\.local\bin` and npm's shims in
   `%APPDATA%\npm` are found as a person's own terminal would find them. Harnesses, their account commands and
@@ -184,7 +196,11 @@ app; the check passes when that process ended with the app's stop (`Windows/scri
 stand-in, which serves one ACP turn that asks to edit a file, the app then starts a task from New task, allows the
 request from its card, waits for the answer to stream in, and opens again to find the answer kept
 (`Windows/scripts/check-local.ps1`); while the stand-in runs, no console window opens beside the ones already there,
-which a console program started on its own first shows the count would see. The run
+which a console program started on its own first shows the count would see. That task is then served through a
+local relay to a phone on the engine's client connection (`yardlet-remote-fixture --pair`,
+`Windows/scripts/check-remote-host.ps1`): the app holds no room while the remote is off, turns it on in Settings ›
+Remote, pairs and copies the link; the phone pairs from it, lists the tasks and has a message answered, allowed on
+the app's card; the phone is listed among the devices, and turning the remote off closes the room. The run
 gathers the app with its resource folder and the Swift runtime beside it, opens what it gathered from another folder with the
 build folder out of reach, and uploads it (`windows-app-bin`), to open on a PC that has the Windows App Runtime 1.7 but
 no Swift.
@@ -225,7 +241,10 @@ Antigravity, and the harnesses' icons (`HarnessKind.symbolName` names SF Symbols
 form (questions, a plan's review); a project's folder for a new task, which starts as a chat; and a browser host. Git is still looked for at its macOS paths (`Diff/GitExecutableLocator.swift`), a connector's program gets a
 POSIX environment (`Connectors/ConnectorProgram.swift`), and npm's `npx.cmd`, which is not one of npm's shims, is
 refused. A host's window shows a request card's words without its answers, and none of the host's panels, new tasks
-or Settings.
+or Settings. The remote serves the relay alone: no direct paths (a listener on every interface, the interfaces,
+Bonjour), no relay account to sign in to or link through (docs/REMOTE_PROTOCOL.md, "12.1 Linking through an
+account"), and nothing that keeps the computer awake on power. A Windows build carries no relay of its own, so the
+remote reaches one only from `YARDLET_REMOTE_RELAY_URL` or the `Yardlet.remote.relayURL` setting.
 
 ## The check that blocks new violations
 

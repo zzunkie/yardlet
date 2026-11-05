@@ -1,9 +1,10 @@
-# Starts the relay (relay/, wrangler dev, installed with npm ci beforehand) and the fixture host on it
-# (yardlet-remote-fixture, built beforehand), waits until the fixture prints its pairing link, and writes the link
-# to pairing-link.txt in -OutDirectory, beside both programs' logs. Both share this console rather than opening a
-# window each, which would push the app's window down and its footer off the runner's screen.
+# Starts the relay (relay/, wrangler dev, installed with npm ci beforehand) and, with -Fixture, the fixture host on
+# it (yardlet-remote-fixture, built beforehand): waits until the fixture prints its pairing link, and writes the
+# link to pairing-link.txt in -OutDirectory, beside the programs' logs. Without -Fixture only the relay starts, for
+# the Windows app to host on. The programs share this console rather than opening a window each, which would push
+# the app's window down and its footer off the runner's screen.
 param(
-    [Parameter(Mandatory)] [string] $Fixture,
+    [string] $Fixture,
     [Parameter(Mandatory)] [string] $OutDirectory,
     [string] $Name = 'host'
 )
@@ -18,6 +19,7 @@ do {
     $up = try { (Invoke-WebRequest http://127.0.0.1:8787/v1/health -UseBasicParsing).StatusCode -eq 200 } catch { $false }
 } until ($up -or (Get-Date) -gt $deadline)
 if (-not $up) { throw 'The relay did not start' }
+if (-not $Fixture) { return }
 Start-Process -FilePath $Fixture -ArgumentList '--relay', 'ws://127.0.0.1:8787' -NoNewWindow `
     -RedirectStandardOutput "$OutDirectory/$Name-fixture.log" -RedirectStandardError "$OutDirectory/$Name-fixture-errors.log"
 $deadline = (Get-Date).AddSeconds(60)
