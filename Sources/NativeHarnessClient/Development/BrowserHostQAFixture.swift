@@ -1809,6 +1809,16 @@ private final class BrowserHostQARunner {
             try? await Task.sleep(for: .milliseconds(300))
             let fields = try await evaluate(controller, "document.querySelector('#name').value + '|' + document.querySelector('#nickname').value")
             check("a press while composing keeps the shown text in its place", fields == "A한글안녕b|한하글", "values \"\(fields)\"")
+            // So does the keyboard leaving the page (the address field, the composer): a page that has lost focus
+            // takes no text the input method commits afterwards, and the view used to cancel the composition.
+            for marked in ["ㄷ", "더"] {
+                view.setMarkedText(marked, selectedRange: NSRange(location: marked.utf16.count, length: 0), replacementRange: noRange)
+            }
+            view.window?.makeFirstResponder(nil)
+            view.insertText("더", replacementRange: noRange)
+            try? await Task.sleep(for: .milliseconds(300))
+            let kept = try await evaluate(controller, "document.querySelector('#nickname').value")
+            check("the keyboard leaving the page while composing keeps the shown text once", kept == "한더하글", "value \"\(kept)\"")
 
             // Zoom through the panel's shortcuts.
             view.window?.makeFirstResponder(view)

@@ -109,7 +109,7 @@ final class BrowserHostViewTextInputTests: XCTestCase {
 
     /// A press moves the page's focus while the view stays first responder, so the view finishes the shown
     /// text before the press reaches the page; otherwise the input method carried the word into the next field.
-    func testAPressWhileComposingFinishesTheShownTextFirst() throws {
+    func testAPressOrTheKeyboardLeavingWhileComposingFinishesTheShownText() throws {
         let view = makeView()
         func press(_ type: NSEvent.EventType) throws -> NSEvent {
             try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: 10, y: 10), modifierFlags: [], timestamp: 0,
@@ -128,6 +128,16 @@ final class BrowserHostViewTextInputTests: XCTestCase {
         sent = []
         view.mouseDown(with: try press(.leftMouseDown))
         XCTAssertEqual(sent.count, 1, "only the press when nothing is composed")
+
+        // The keyboard leaving the page keeps it too: before, the view cancelled it and the word went missing.
+        let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView?.addSubview(view)
+        window.makeFirstResponder(view)
+        view.setMarkedText("안녕", selectedRange: NSRange(location: 2, length: 0), replacementRange: noRange)
+        sent = []
+        window.makeFirstResponder(nil)
+        XCTAssertEqual(sent, [.composition(tab: 7, composition: .finish(keepSelection: false)), .focus(tab: 7, isFocused: false)])
+        XCTAssertFalse(view.hasMarkedText())
     }
 
     func testClauseSegmentsBecomeUnderlinesWithTheSelectedClauseThick() {

@@ -508,10 +508,11 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
         )))
     }
 
-    /// A press while the input method composes keeps the shown text where it was typed and starts the input
-    /// method afresh, as Chrome's `finishComposingText` does. The view stays first responder when the press
-    /// moves the page's focus to another field, so the input method would otherwise go on composing the same
-    /// word there. An input method may finish the text itself when asked to discard it.
+    /// Keeps the text the input method is composing where it was typed and starts the input method afresh, before
+    /// a press and when the view gives up the keyboard, as Chrome does. A press can move the page's focus to another
+    /// field while the view stays first responder, so the input method would go on composing the same word there; a
+    /// page that has lost focus takes no text the input method commits afterwards, so cancelling the composition
+    /// then lost the word. An input method may finish the text itself when asked to discard it.
     private func finishComposition() {
         guard hasMarkedText() else { return }
         inputContext?.discardMarkedText()
@@ -579,11 +580,8 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
     }
 
     override func resignFirstResponder() -> Bool {
-        if let tabID {
-            if hasMarkedText() { sendCommand?(.composition(tab: tabID, composition: .cancel)) }
-            markedText = ""
-            sendCommand?(.focus(tab: tabID, isFocused: false))
-        }
+        finishComposition()
+        if let tabID { sendCommand?(.focus(tab: tabID, isFocused: false)) }
         updateSecureInput(hasKeyboard: false)
         reportKeyboard(false)
         return true

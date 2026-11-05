@@ -217,12 +217,14 @@ change and when Yardlet quits (`StateFileWriter`). Chromium's own `History` in e
   in the DOM as `Process` (229). When the input method commits text and passes the key on (`doCommandBySelector:`,
   Return, arrow keys or Tab after Korean composition), the key itself is sent after the committed text (2026-10-24, as
   in Chrome's `render_widget_host_view_cocoa.mm`; before, the first Return after composition did not reach the page).
-  A mouse press while the input method composes keeps the shown text where it was typed before the press reaches the
-  page, as Chrome's `finishComposingText` does: the view asks the input method to discard its composition
-  (`discardMarkedText`) and, unless the input method commits the text itself, sends `finish` (2026-11-05). A press
+  A mouse press while the input method composes, and the keyboard leaving the page (the address field, the composer),
+  keep the shown text where it was typed, as Chrome does (`finishComposingText` on a press; Blink keeps the text when
+  the page loses focus): the view asks the input method to discard its composition (`discardMarkedText`) and, unless
+  the input method commits the text itself, sends `finish` before the press or `focus` false (2026-11-05). A press
   that moves the page's focus to another field leaves the view first responder, so before, the input method went on
   composing the same word there (typing 안녕, pressing another field and typing 하 left 안녕 in the first field and
-  안녕하 in the second).
+  안녕하 in the second). Leaving the page sent `cancel`, which removed the word, and a page that has lost focus takes
+  no text the input method commits afterwards, so the word was gone.
   The candidate window's position uses the character bounds the host reports.
 - Password fields (2026-10-25): while a password field on the page (`<input type=password>`, in any frame) has the
   keyboard, that is, while the focused field of the visible tab is a password field and the panel view is first
