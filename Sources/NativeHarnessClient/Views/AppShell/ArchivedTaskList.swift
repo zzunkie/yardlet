@@ -18,8 +18,9 @@ enum ArchivedTaskFilter {
 }
 
 /// The sidebar's archived-tasks view. It takes the task list's place, as the Codex app's archive
-/// does, lists archived tasks with the most recently archived first, and restores one with
-/// Unarchive. Back returns to the task list.
+/// does, lists archived tasks with the most recently archived first, opens one's conversation
+/// read-only beside it (`ArchivedTaskConversation`), and restores one with Unarchive. Back returns
+/// to the task list.
 struct ArchivedTaskList: View {
     /// nil until the index has been read.
     let archived: [ArchivedSessionRecord]?
@@ -30,6 +31,9 @@ struct ArchivedTaskList: View {
     let onBack: () -> Void
     let onUnarchive: (ArchivedSessionRecord) -> Void
     var showsWorkspace = true
+    /// The task whose conversation the window shows, and opening one; nil where rows only restore.
+    var shownID: UUID? = nil
+    var onOpen: ((ArchivedSessionRecord) -> Void)? = nil
 
     private var shown: [ArchivedSessionRecord] {
         ArchivedTaskFilter.matches(archived ?? [], query: searchText, projectName: projectName)
@@ -84,7 +88,9 @@ struct ArchivedTaskList: View {
                                 record: record,
                                 projectName: projectName(record.session),
                                 isRestoring: restoringIDs.contains(record.id),
-                                onUnarchive: { onUnarchive(record) }, showsWorkspace: showsWorkspace
+                                onUnarchive: { onUnarchive(record) }, showsWorkspace: showsWorkspace,
+                                isShown: shownID == record.id,
+                                onOpen: onOpen.map { open in { open(record) } }
                             )
                             .padding(.horizontal, 4)
                         }
@@ -107,6 +113,10 @@ struct ArchivedTaskRow: View {
     let isRestoring: Bool
     let onUnarchive: () -> Void
     let showsWorkspace: Bool
+    /// The window shows this task's conversation.
+    let isShown: Bool
+    /// Shows the task's conversation read-only; nil where the row only restores.
+    let onOpen: (() -> Void)?
     @State private var isHovering: Bool
     @Environment(\.yardletInterfaceScale) private var interfaceScale
 
@@ -117,13 +127,17 @@ struct ArchivedTaskRow: View {
         isRestoring: Bool,
         onUnarchive: @escaping () -> Void,
         isHovering: Bool = false,
-        showsWorkspace: Bool = true
+        showsWorkspace: Bool = true,
+        isShown: Bool = false,
+        onOpen: (() -> Void)? = nil
     ) {
         self.record = record
         self.projectName = projectName
         self.isRestoring = isRestoring
         self.onUnarchive = onUnarchive
         self.showsWorkspace = showsWorkspace
+        self.isShown = isShown
+        self.onOpen = onOpen
         _isHovering = State(initialValue: isHovering)
     }
 
@@ -161,17 +175,24 @@ struct ArchivedTaskRow: View {
         .padding(.trailing, 5)
         .frame(height: 36 * interfaceScale)
         .contentShape(Rectangle())
-        .background(isHovering ? ParityTheme.hoverFill : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .background(isShown ? ParityTheme.selectedFill : isHovering ? ParityTheme.hoverFill : .clear,
+                    in: RoundedRectangle(cornerRadius: 6))
         .onHover { isHovering = $0 }
+        .onTapGesture { onOpen?() }
         .help(([session.title, session.harness.displayName] + (showsWorkspace ? [session.workspaceURL.path(percentEncoded: false)] : []))
             .joined(separator: "\n"))
         .contextMenu {
+            if let onOpen {
+                Button(L10n.string("Open"), action: onOpen)
+            }
             Button(L10n.string("Unarchive"), action: onUnarchive)
                 .disabled(isRestoring)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(session.title), \(session.harness.displayName)")
         .accessibilityValue(projectName)
+        .accessibilityAddTraits(isShown ? [.isButton, .isSelected] : onOpen == nil ? [] : .isButton)
+        .accessibilityAction { onOpen?() }
         .accessibilityAction(named: L10n.string("Unarchive"), onUnarchive)
     }
 }

@@ -492,6 +492,50 @@ final class ClaudeTranscriptTailTests: XCTestCase {
         XCTAssertEqual(calls, ["resume \(Self.sessionID)"], "nothing was sent")
     }
 
+    /// An archived task's conversation opens from the archived list the way a detached task's does,
+    /// the newest part first and earlier parts as the person scrolls up, into the window's reading
+    /// alone: the task stays archived, no Claude process starts, and none of the model's per-task
+    /// state (the conversation, its reading cache, the read budget) is written for it.
+    func testAnArchivedTaskReadsItsHistoryInPartsWithoutUnarchivingIt() async throws {
+        let fixture = try makeFixture(turns: 900)
+        let model = fixture.model, task = fixture.task
+        await model.archive(task)
+        await model.loadArchivedTasks()
+        let record = try XCTUnwrap(model.store.archivedSessions?.first { $0.id == task.id })
+        let reading = ArchivedTaskReading(record: record)
+        XCTAssertEqual(reading.outcome, .reading)
+
+        await model.readArchivedConversation(reading)
+        XCTAssertEqual(reading.outcome, .shown)
+        XCTAssertEqual(reading.claudeWindow?.bytes, ClaudeTranscriptTail.initialBytes)
+        XCTAssertEqual(Self.requestNumbers(reading.transcript.entries).last, 900)
+        XCTAssertGreaterThan(Self.requestNumbers(reading.transcript.entries).first ?? 0, 700,
+                             "only the newest turns are read on open")
+        var shown = reading.transcript.entries
+        while reading.hasEarlierHistory {
+            await model.readEarlierArchivedHistory(reading)
+            XCTAssertGreaterThan(reading.transcript.entries.count, shown.count)
+            XCTAssertEqual(Array(reading.transcript.entries.suffix(shown.count)), shown,
+                           "what was shown keeps its entries and IDs")
+            shown = reading.transcript.entries
+        }
+        XCTAssertEqual(Self.requestNumbers(shown), Array(1...900), "the whole conversation")
+
+        XCTAssertFalse(model.store.sessions.contains { $0.id == task.id }, "the task stays archived")
+        XCTAssertEqual(model.store.archivedSessions?.map(\.id), [task.id])
+        XCTAssertNil(model.transcriptBySessionID[task.id])
+        XCTAssertNil(model.claudeTranscriptTailBySessionID[task.id])
+        XCTAssertFalse(model.isAttached(task.id))
+        let calls = await fixture.claude.calls
+        XCTAssertEqual(calls, [], "reading started no Claude process")
+
+        // The provider's file is gone: the reading says it found nothing, rather than an empty chat.
+        try FileManager.default.removeItem(at: fixture.file)
+        let gone = ArchivedTaskReading(record: record)
+        await model.readArchivedConversation(gone)
+        XCTAssertEqual(gone.outcome, .unavailable)
+    }
+
     func testReplacingTheEntriesBeforeAnEntryKeepsWhatFollowsIt() {
         let head = TranscriptEntry(content: .assistant(text: "the end of a turn read in part", isStreaming: false))
         let first = TranscriptEntry(content: .user(text: "Request 2"))

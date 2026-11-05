@@ -65,6 +65,9 @@ struct MainWindow: View {
     /// The sidebar shows archived tasks in place of the task list until Back.
     @State private var isShowingArchivedTasks = false
     @State private var archivedSearchText = ""
+    /// The archived task whose conversation the window shows read-only in its item's place, while
+    /// the sidebar lists archived tasks. Held by this window only, and let go with the list.
+    @State private var archivedReading: ArchivedTaskReading?
     /// The sidebar shows the scheduled tasks, and the window the chosen one, until Back.
     @State private var schedulesWindow = ScheduledTasksWindowState()
     /// The sidebar shows the activity view (the Codex app's priority threads) in place of the
@@ -286,7 +289,7 @@ struct MainWindow: View {
                     of: sidebarSessions, details: model.taskAttentionDetails, shellBusy: model.shellBusySessionIDs,
                     kept: isShowingActivity ? activityPlaces : [:])
                 closeArchivedTasks()
-                closeSchedules()
+                closeStandIns()
                 isSidebarVisible = true
                 isShowingActivity = true
             }
@@ -421,7 +424,7 @@ struct MainWindow: View {
     private func showNewTask() {
         sidebarSection = .tasks
         shellFocusBookmark = nil
-        closeSchedules()
+        closeStandIns()
         model.splits.showNewTask()
         homeKeyboardFocus.move(to: .chat)
     }
@@ -515,14 +518,17 @@ struct MainWindow: View {
             open: { showSchedule($0) })
     }
 
-    private func closeSchedules() {
+    /// The window shows its own item again: the scheduled tasks screen closes, and so does an archived
+    /// task's conversation shown in the item's place (the archived list stays).
+    private func closeStandIns() {
+        archivedReading = nil
         guard schedulesWindow.isShowing else { return }
         schedulesWindow.isShowing = false
     }
 
     private var scheduleActions: ScheduledTaskActions {
         schedulesWindow.actions(model: model, newDraft: newScheduleDraft, openTask: { id in
-            closeSchedules()
+            closeStandIns()
             activateTask(id)
         })
     }
@@ -839,18 +845,20 @@ struct MainWindow: View {
     private func show(_ item: WindowItem) {
         sidebarSection = .tasks
         shellFocusBookmark = nil
-        closeSchedules()
+        closeStandIns()
         model.splits.activate(item)
         focusCurrentContent()
     }
 
-    /// View › Back, ⌘[ and the mouse's back button outside a browser page. The scheduled tasks list,
-    /// which stands in for what the window shows, closes first. Personal agents keep no task history.
+    /// View › Back, ⌘[ and the mouse's back button outside a browser page. The scheduled tasks list or
+    /// an archived task's conversation, which stand in for what the window shows, close first.
+    /// Personal agents keep no task history.
     private var goBack: (() -> Void)? {
-        guard sidebarSection == .tasks, schedulesWindow.isShowing || model.splits.canGoBack else { return nil }
+        let hasStandIn = schedulesWindow.isShowing || archivedReading != nil
+        guard sidebarSection == .tasks, hasStandIn || model.splits.canGoBack else { return nil }
         return {
             shellFocusBookmark = nil
-            if schedulesWindow.isShowing { closeSchedules() } else { model.splits.goBack() }
+            if hasStandIn { closeStandIns() } else { model.splits.goBack() }
             focusCurrentContent()
         }
     }
@@ -859,7 +867,7 @@ struct MainWindow: View {
         guard sidebarSection == .tasks, model.splits.canGoForward else { return nil }
         return {
             shellFocusBookmark = nil
-            closeSchedules()
+            closeStandIns()
             model.splits.goForward()
             focusCurrentContent()
         }
@@ -901,7 +909,7 @@ struct MainWindow: View {
     private func openInNewTab(_ item: WindowItem) {
         sidebarSection = .tasks
         shellFocusBookmark = nil
-        closeSchedules()
+        closeStandIns()
         model.splits.openInNewTab(item)
         focusCurrentContent()
     }
@@ -909,7 +917,7 @@ struct MainWindow: View {
     private func selectTab(_ item: WindowItem) {
         sidebarSection = .tasks
         shellFocusBookmark = nil
-        closeSchedules()
+        closeStandIns()
         model.splits.selectTab(item)
         focusCurrentContent()
     }
@@ -917,7 +925,7 @@ struct MainWindow: View {
     private func selectTab(offset: Int) {
         sidebarSection = .tasks
         shellFocusBookmark = nil
-        closeSchedules()
+        closeStandIns()
         model.splits.selectTab(offset: offset)
         focusCurrentContent()
     }
@@ -931,7 +939,7 @@ struct MainWindow: View {
     private func newTab() {
         sidebarSection = .tasks
         shellFocusBookmark = nil
-        closeSchedules()
+        closeStandIns()
         model.splits.newTab()
         focusCurrentContent()
     }
@@ -960,7 +968,7 @@ struct MainWindow: View {
         let isShown = model.splits.activeSplit?.pane(hosting: id) != nil
         guard isShown || canSplit(.right) else { return NSSound.beep() }
         shellFocusBookmark = nil
-        closeSchedules()
+        closeStandIns()
         guard model.splits.openInSplitView(id, pinned: sessionRecord(model.store.selectedSessionID)?.isPinned ?? false)
         else { return NSSound.beep() }
         focusCurrentContent()
@@ -1130,7 +1138,7 @@ struct MainWindow: View {
     private func showArchivedTasks() {
         sidebarSection = .tasks
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) {
-            closeSchedules()
+            closeStandIns()
             isSidebarVisible = true
             isShowingArchivedTasks = true
         }
@@ -1139,6 +1147,28 @@ struct MainWindow: View {
     private func closeArchivedTasks() {
         isShowingArchivedTasks = false
         archivedSearchText = ""
+        archivedReading = nil
+    }
+
+    /// An archived task's conversation, read-only in the window's item's place, as the Codex app opens
+    /// an archived chat from its archive: read from the provider's own history, while the task stays
+    /// archived (`AppModel.readArchivedConversation`).
+    private func openArchivedTask(_ record: ArchivedSessionRecord) {
+        guard archivedReading?.record.id != record.id else { return }
+        let reading = ArchivedTaskReading(record: record)
+        archivedReading = reading
+        Task { await model.readArchivedConversation(reading) }
+    }
+
+    /// Unarchive under the archived conversation: the task comes back and the window shows it, its
+    /// composer in the note's place, as the Codex app leaves its archive with the restored chat.
+    private func unarchiveShownTask(_ record: ArchivedSessionRecord) {
+        Task {
+            await model.unarchive(record)
+            guard model.store.sessions.contains(where: { $0.id == record.id }) else { return }
+            closeArchivedTasks()
+            activateTask(record.id)
+        }
     }
 
     /// The Task menu follows the rows the sidebar lists, the same order arrow keys move through.
@@ -1886,7 +1916,7 @@ struct MainWindow: View {
                     SidebarColumn(state: sidebarWidth, windowWidth: knownWindowWidth) {
                         VStack(spacing: 0) {
                             sidebarTitleBar
-                            ScheduledTasksSidebar(model: model, state: schedulesWindow, onBack: closeSchedules,
+                            ScheduledTasksSidebar(model: model, state: schedulesWindow, onBack: closeStandIns,
                                                   actions: scheduleActions)
                         }
                     }
@@ -1901,7 +1931,9 @@ struct MainWindow: View {
                         searchText: $archivedSearchText,
                         projectName: { model.project(for: $0)?.name ?? projects.displayName(for: $0.workspaceURL) },
                         onBack: closeArchivedTasks,
-                        onUnarchive: { record in Task { await model.unarchive(record) } }
+                        onUnarchive: { record in Task { await model.unarchive(record) } },
+                        shownID: archivedReading?.record.id,
+                        onOpen: openArchivedTask
                     )
                     .task { await model.loadArchivedTasks() }
                     }
@@ -2012,6 +2044,20 @@ struct MainWindow: View {
                             }
                             .accessibilityElement(children: .combine)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    } else if isShowingArchivedTasks, let archivedReading {
+                        VStack(spacing: 0) {
+                            titleBar(for: nil, title: archivedReading.session.title)
+                            ArchivedTaskConversation(
+                                reading: archivedReading,
+                                isUnarchiving: model.unarchivingSessionIDs.contains(archivedReading.record.id),
+                                onUnarchive: { unarchiveShownTask(archivedReading.record) },
+                                onReadEarlier: { Task { await model.readEarlierArchivedHistory(archivedReading) } })
+                        }
+                        // A task unarchived or deleted meanwhile is no longer shown as archived.
+                        .onChange(of: model.store.archivedSessions) { _, archived in
+                            guard archived?.contains(where: { $0.id == archivedReading.record.id }) == false else { return }
+                            self.archivedReading = nil
                         }
                     } else if schedulesWindow.isShowing {
                         VStack(spacing: 0) {
@@ -2167,7 +2213,8 @@ struct MainWindow: View {
     /// The title bar beside the sidebar for what the tab shows: `item` is the window's item the title bar
     /// heads (the shown task, the split view or the new-task screen), nil for a screen in its place
     /// (scheduled tasks, restoring), which shows neither a task's header nor the tabs.
-    private func titleBar(for item: WindowItem?, focusedSurface: FocusState<TaskSurface?>.Binding? = nil) -> IntegratedTitleBar {
+    private func titleBar(for item: WindowItem?, focusedSurface: FocusState<TaskSurface?>.Binding? = nil,
+                          title: String? = nil) -> IntegratedTitleBar {
         let session = item.flatMap { item -> SessionRecord? in
             guard case let .session(id) = item else { return nil }
             return sessionRecord(id)
@@ -2208,7 +2255,8 @@ struct MainWindow: View {
                 onCloseOthers: { model.splits.closeOtherTabs(than: $0) },
                 onNewTab: newTab,
                 onOpenTask: openInOwnTab
-            ) : nil
+            ) : nil,
+            title: title
         )
     }
 
@@ -2217,7 +2265,7 @@ struct MainWindow: View {
         guard sessionRecord(id) != nil else { return }
         sidebarSection = .tasks
         shellFocusBookmark = nil
-        closeSchedules()
+        closeStandIns()
         model.splits.openInOwnTab(id, before: before)
         focusCurrentContent()
     }
@@ -2528,7 +2576,7 @@ struct MainWindow: View {
         .onChange(of: model.taskSurfaceRevealRequest) { _, _ in
             sidebarSection = .tasks
             shellFocusBookmark = nil
-            closeSchedules()
+            closeStandIns()
             focusCurrentContent()
         }
         // A notification or the menu bar menu opens the window again once it was closed.
@@ -2847,7 +2895,7 @@ struct MainWindow: View {
             CommandPaletteItem(
                 id: "archived-tasks",
                 title: L10n.string("Archived tasks"),
-                subtitle: L10n.string("Show archived tasks and restore them."),
+                subtitle: L10n.string("Show archived tasks, read them and restore them."),
                 systemName: "archivebox",
                 action: showArchivedTasks
             ),

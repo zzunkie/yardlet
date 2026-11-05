@@ -2828,10 +2828,7 @@ final class AppModel {
             if archived.isProviderArchived, !isVisualFixture,
                let providerSessionID = session.providerSessionID {
                 try session.connection?.validate(for: session.harness)
-                let runtime = ExecutableLookup.current.isProgram(session.runtimeExecutableURL)
-                    ? session.runtimeExecutableURL
-                    : RuntimeRelocation.successor(of: session.runtimeExecutableURL, for: session.harness)
-                        ?? runtimeSelections.selectedURL(for: session.harness) ?? session.runtimeExecutableURL
+                let runtime = runtimeReplacement(for: session) ?? session.runtimeExecutableURL
                 let adapter = await registry.adapter(for: session.harness, executableURL: runtime,
                     environmentScope: session.environmentScope, connection: session.connection)
                 _ = try await adapter.probeRuntime()
@@ -3466,13 +3463,20 @@ final class AppModel {
         savedConversationReads[id] = remaining > 0 ? remaining : nil
     }
 
+    /// Whether Yardlet reads `harness`'s saved conversations from the harness's own history: Claude
+    /// Code's transcript, Codex's thread, Antigravity CLI's log, or the session another ACP agent
+    /// replays when it loads.
+    static func readsSavedConversation(of harness: HarnessKind) -> Bool {
+        [.claudeCode, .codex, .antigravityCLI].contains(harness) || ACPSessionHistory.reads(harness)
+    }
+
     /// Starts reading a detached task's saved conversation as the task is chosen, rather than once its
     /// surface has been built and its composer asks (`refreshConversationStatus`, which then waits for
     /// this read or finds it done), so the conversation arrives that much sooner. Reading resumes
     /// nothing and starts no turn.
     private func readSavedConversation(of id: UUID) {
         guard !isVisualFixture, let session = store.sessions.first(where: { $0.id == id }),
-              [.claudeCode, .codex, .antigravityCLI].contains(session.harness) || ACPSessionHistory.reads(session.harness),
+              Self.readsSavedConversation(of: session.harness),
               handlesBySessionID[id] == nil, session.providerSessionID != nil else { return }
         // Loading from the frame the task opens in, not from when the read gets going.
         beginSavedConversationRead(id)
@@ -6467,12 +6471,18 @@ final class AppModel {
     /// or else with the harness's current runtime. The provider session and its home stay as they
     /// were, and a recorded runtime that still exists is never replaced.
     private func sessionWithAvailableRuntime(_ session: SessionRecord) async -> SessionRecord {
-        guard !ExecutableLookup.current.isProgram(session.runtimeExecutableURL),
-              let replacement = RuntimeRelocation.successor(of: session.runtimeExecutableURL, for: session.harness)
-                ?? runtimeSelections.selectedURL(for: session.harness),
+        guard let replacement = runtimeReplacement(for: session),
               let updated = try? await store.updateRuntimeExecutable(id: session.id, to: replacement)
         else { return session }
         return updated
+    }
+
+    /// Where a task whose recorded runtime is gone continues: where the desktop app that bundles the
+    /// runtime moved it, or else the harness's current runtime. Nil while the recorded one exists.
+    func runtimeReplacement(for session: SessionRecord) -> URL? {
+        guard !ExecutableLookup.current.isProgram(session.runtimeExecutableURL) else { return nil }
+        return RuntimeRelocation.successor(of: session.runtimeExecutableURL, for: session.harness)
+            ?? runtimeSelections.selectedURL(for: session.harness)
     }
 
     /// Restoration points tasks at moved runtimes up front, so task details and the next attach

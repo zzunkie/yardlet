@@ -104,6 +104,9 @@ struct IntegratedTitleBar: View {
     var draftPanels: Binding<TaskSurfaceNavigationProjection.PanelState>? = nil
     /// The window's tabs, when it has two or more.
     var tabs: TitleBarTabs? = nil
+    /// What a screen in a task's place shows as its title, such as an archived task read beside the
+    /// archived list; nil shows none.
+    var title: String? = nil
 
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.windowDrag) private var drag
@@ -164,6 +167,13 @@ struct IntegratedTitleBar: View {
                     if isDropTarget { TabInsertionMark() }
                     WindowDragRegion().frame(minWidth: 8, maxWidth: .infinity)
                 } else {
+                    if let title {
+                        Text(title)
+                            .font(.system(size: 13 * interfaceScale, weight: .medium))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .allowsHitTesting(false)
+                    }
                     WindowDragRegion().frame(maxWidth: .infinity)
                     controls
                 }

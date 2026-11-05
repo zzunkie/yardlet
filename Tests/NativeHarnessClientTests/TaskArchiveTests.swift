@@ -275,6 +275,85 @@ final class TaskArchiveTests: XCTestCase {
         XCTAssertEqual(persisted.map(\.id), [archived.id])
     }
 
+    // MARK: - Reading an archived task
+
+    /// An archived Codex task's thread opens from the archived list as a detached task's does, through
+    /// the App Server of its account and scope: `thread/read` and the newest page of turns, then the
+    /// page before as the person scrolls up (codex-cli 0.166.0 answers both for a thread in
+    /// `archived_sessions`). The thread is not unarchived or resumed, no turn starts, the task stays
+    /// archived and the model keeps no Codex state for it. A harness whose saved conversations
+    /// Yardlet does not read says so and reads nothing.
+    func testAnArchivedTaskShowsItsConversationWithoutUnarchivingOrResumingIt() async throws {
+        let executable = try fakeCodexExecutable()
+        func turn(_ index: Int) -> JSONValue {
+            .object(["id": .string("turn-\(index)"), "status": .string("completed"), "durationMs": .integer(1_000),
+                     "startedAt": .integer(1_700_000_000 + Int64(index)), "itemsView": .string("full"),
+                     "completedAt": .integer(1_700_000_001 + Int64(index)), "error": .null, "items": .array([
+                        .object(["id": .string("user-\(index)"), "type": .string("userMessage"), "content": .array([
+                            .object(["type": .string("text"), "text": .string("Request \(index)")])])]),
+                        .object(["id": .string("answer-\(index)"), "type": .string("agentMessage"),
+                                 "text": .string("Answer \(index)"), "phase": .string("final_answer")])])])
+        }
+        let thread = JSONValue.object([
+            "id": .string("codex-thread-archived"), "status": .object(["type": .string("notLoaded")]),
+            "historyMode": .string("paginated"), "cwd": .string("/tmp/archive-project"),
+            "preview": .string("Request 1"), "turns": .array((1...7).map(turn))])
+        let transport = FakeCodexTransport(responses: [
+            "initialize": [.object(["platformOs": .string("macos")])],
+            "thread/read": [CodexSavedThreadResponses.metadata(thread)],
+            "thread/turns/list": [CodexSavedThreadResponses.page(thread, limit: Int(CodexThreadPaging.newestTurns)),
+                                  CodexSavedThreadResponses.page(thread, before: "before-2",
+                                                                 limit: Int(CodexThreadPaging.earlierTurns))]
+        ])
+        let adapter = YHPCodexCompatibilityAdapter(
+            adapter: CodexAdapter(executableURL: executable, transport: transport),
+            manifest: HarnessProtocolCompatibilityManifest.codex())
+        var session = codexTask()
+        session.runtimeExecutableURL = executable
+        session.connection = ProviderConnection(id: "codex-work", name: "Work", harness: .codex, providerID: nil,
+            homePath: executable.deletingLastPathComponent().path, credentialSelector: nil)
+        let repository = InMemorySessionRepository(sessions: [session])
+        try await repository.archive(id: session.id, providerArchived: true)
+        let model = AppModel(
+            store: SessionStore(repository: repository),
+            runtimeSelections: RuntimeSelectionStore(defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("Archive")))),
+            registry: HarnessRegistry { _, _ in adapter },
+            restoresIndexOnLaunch: false
+        )
+        await model.loadArchivedTasks()
+        let record = try XCTUnwrap(model.store.archivedSessions?.first)
+
+        let reading = ArchivedTaskReading(record: record)
+        await model.readArchivedConversation(reading)
+        XCTAssertEqual(reading.outcome, .shown)
+        XCTAssertEqual(reading.codexState?.thread?.turns.map(\.id), (3...7).map { "turn-\($0)" }, "the newest page")
+        XCTAssertTrue(reading.hasEarlierHistory)
+        await model.readEarlierArchivedHistory(reading)
+        XCTAssertEqual(reading.codexState?.thread?.turns.map(\.id), (1...7).map { "turn-\($0)" })
+        XCTAssertFalse(reading.hasEarlierHistory)
+
+        let requests = await transport.requests
+        XCTAssertEqual(requests.map(\.method), ["initialize", "thread/read", "thread/turns/list", "thread/turns/list"],
+                       "no thread/unarchive, thread/resume or turn")
+        XCTAssertEqual(requests[1].params["threadId"]?.stringValue, "codex-thread-archived")
+        XCTAssertTrue(model.store.sessions.isEmpty, "the task stays archived")
+        XCTAssertEqual(model.store.archivedSessions?.map(\.id), [session.id])
+        XCTAssertEqual(model.store.archivedSessions?.first?.isProviderArchived, true)
+        XCTAssertNil(model.codexPresentationBySessionID[session.id])
+        XCTAssertNil(model.transcriptBySessionID[session.id])
+        XCTAssertFalse(model.isAttached(session.id))
+
+        let pi = ArchivedTaskReading(record: ArchivedSessionRecord(
+            session: SessionRecord(harness: .pi, workspaceURL: URL(filePath: "/tmp/archive-project"),
+                runtimeExecutableURL: URL(filePath: "/tmp/pi"), title: "Pi task", providerSessionID: "pi-session"),
+            archivedAt: nil, isProviderArchived: false))
+        XCTAssertEqual(pi.outcome, .unsupported)
+        await model.readArchivedConversation(pi)
+        XCTAssertEqual(pi.outcome, .unsupported)
+        let after = await transport.requests
+        XCTAssertEqual(after.count, requests.count)
+    }
+
     func testCodexThreadUnarchiveIsATypedRequestByThreadID() {
         let request = CodexProtocol.unarchiveThread(id: 9, threadID: "thread-1")
         XCTAssertEqual(request.method, "thread/unarchive")

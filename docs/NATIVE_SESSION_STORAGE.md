@@ -285,7 +285,7 @@ sources use the same rules for applying a title.
 
 Archiving can be undone. **Archived tasks** at the bottom of the sidebar (also in the Task menu and the command palette)
 shows the archived tasks in place of the task list, most recently archived first, searches them by title, project and
-harness, and restores them with **Unarchive**.
+harness, opens one's conversation read-only, and restores them with **Unarchive**.
 
 - **Index:** the `archived` column is 0 (listed), 1 (archived) or 2 (deleted, or created and then discarded by a failed
   fork or import, or a side chat from before side chats were temporary). Archiving writes `archived_at` and `provider_archived` together. Rows written before these
@@ -301,6 +301,19 @@ harness, and restores them with **Unarchive**.
   and can be tried again. Tasks archived while not attached, or without a record like older rows, leave the native
   thread alone. Native-side archive, unarchive, delete and rename go only to adapters that implement
   `HarnessSessionLifecycleProviding` (Codex and its YHP wrapper).
+- **Reading an archived task:** choosing a row shows the task's conversation in the window's task area, as the Codex
+  app previews an archived chat and the Claude app opens an archived session, with the archived note and **Unarchive**
+  in the composer's place (`ArchivedTaskConversation`). It is read as opening a detached task reads it, with the stored
+  provider session ID, account, storage scope and runtime (a runtime its desktop app moved is read where it lives now,
+  without writing that to the row): the newest part of the Claude JSONL and then earlier parts as the person scrolls
+  up, Codex's `thread/read` and `thread/turns/list` pages through the App Server of that account and scope (codex-cli
+  0.166.0 answers both for a thread in `archived_sessions`, without `thread/unarchive`), Antigravity CLI's log, or the
+  session another ACP agent replays on `session/load` ("Opening a saved task" and "Reading long histories in parts"
+  above). What is read lives only in the window's `ArchivedTaskReading`: no read cache, Codex state, reading position,
+  draft or index row is written, nothing resumes, attaches or starts a turn, and the task stays archived. Back, another
+  task or Unarchive let it go. Unarchive there restores the task as above and the window shows it with its composer.
+  Harnesses whose saved conversations Yardlet does not read (Muse Code, Cursor Agent, Pi) and a history that cannot be
+  read (the file, runtime or account is gone) say so in place of the conversation.
 - **Local caches:** archiving deletes the draft, the conversation cache and the Codex timeline cache. An unarchived
   Claude task rereads its native history when opened, and a Codex task reads its native thread with `thread/read` when
   opened and loads the conversation from the native thread on continue (`thread/resume`) or the next send. An

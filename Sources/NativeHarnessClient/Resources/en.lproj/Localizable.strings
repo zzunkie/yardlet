@@ -210,7 +210,7 @@
 "Unpin split view" = "Unpin split view";
 "Archive task" = "Archive task";
 "Archived tasks" = "Archived tasks";
-"Show archived tasks and restore them." = "Show archived tasks and restore them.";
+"Show archived tasks, read them and restore them." = "Show archived tasks, read them and restore them.";
 "Unarchive" = "Unarchive";
 "Unarchive %@" = "Unarchive %@";
 "Back to tasks" = "Back to tasks";
@@ -218,6 +218,9 @@
 "Loading archived tasks…" = "Loading archived tasks…";
 "No archived tasks." = "No archived tasks.";
 "No matching archived tasks." = "No matching archived tasks.";
+"This task is archived. Unarchive it to keep working in it." = "This task is archived. Unarchive it to keep working in it.";
+"Yardlet can't show archived %@ conversations. Unarchive the task to open it." = "Yardlet can't show archived %@ conversations. Unarchive the task to open it.";
+"This conversation could not be read from %@'s history." = "This conversation could not be read from %@'s history.";
 "No process error detail" = "No process error detail";
 "No matching tasks." = "No matching tasks.";
 "No working tree changes" = "No working tree changes";
