@@ -55,6 +55,62 @@ jobs:
       - name: Open the app
         shell: powershell
         run: Windows/scripts/check-window.ps1 -Executable "$env:APP_BIN\NativeHarnessClient.exe" -Name app -OutDirectory window-check
+      # The remote client against a host it can reach on the runner: the relay run locally and the fixture
+      # host on it (docs/REMOTE_PROTOCOL.md, "Fixture server" and "Relay").
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # A Windows runner ends the programs a step started when the step ends, so the host starts in the step that
+      # connects to it.
+      - name: Connect to the fixture host
+        shell: pwsh
+        run: |
+          # The lock's wrangler asks for newer Workers types than the lock holds, an optional peer that only
+          # type checks use, so its check is left out to run the relay.
+          npm ci --prefix relay --legacy-peer-deps
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          swift build -c release --product yardlet-remote-fixture --force-resolved-versions
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Windows/scripts/start-remote-host.ps1 -Fixture "$env:APP_BIN\yardlet-remote-fixture.exe" -OutDirectory window-check
+          $link = Get-Content window-check/pairing-link.txt
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File Windows/scripts/check-remote.ps1 `
+            -Executable "$env:APP_BIN\NativeHarnessClient.exe" -Link $link -OutDirectory window-check
+          exit $LASTEXITCODE
+      # The app with the Swift runtime beside it, to run on a PC that has the Windows App Runtime 1.7 but no
+      # Swift: its executables and libraries and its resource folder, as report.ps1 counts them.
+      - name: Gather the app
+        shell: pwsh
+        run: |
+          $out = New-Item -ItemType Directory -Force windows-app-bin
+          Get-ChildItem $env:APP_BIN -File | Where-Object { $_.Extension -in '.exe', '.dll', '.pri', '.winmd' } |
+            Copy-Item -Destination $out
+          Get-ChildItem $env:APP_BIN -Directory | Where-Object Name -match 'resources|bundle' |
+            Copy-Item -Destination $out -Recurse
+          $runtime = Get-ChildItem "$env:LOCALAPPDATA\Programs\Swift\Runtimes\*\usr\bin" -Directory | Select-Object -First 1
+          Copy-Item "$runtime\*.dll" $out
+          Get-ChildItem $out -Recurse -File | Measure-Object -Property Length -Sum | ForEach-Object { "$($_.Count) files, $([math]::Round($_.Sum / 1MB, 1)) MB" }
+          Get-ChildItem $out -Directory | ForEach-Object { "folder: $($_.Name)" }
+      # What was gathered opens on its own: copied elsewhere, with the build folder out of reach, so the app
+      # finds nothing it needs where it was built.
+      - name: Open the gathered app
+        shell: pwsh
+        run: |
+          $copy = Join-Path $env:RUNNER_TEMP 'yardlet-app'
+          Copy-Item windows-app-bin $copy -Recurse
+          Rename-Item .build .build-hidden
+          try {
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File Windows/scripts/check-window.ps1 `
+              -Executable (Join-Path $copy 'NativeHarnessClient.exe') -Name gathered -OutDirectory window-check
+            $code = $LASTEXITCODE
+          } finally {
+            Rename-Item .build-hidden .build
+          }
+          exit $code
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-app-bin
+          path: windows-app-bin
+          retention-days: 7
       - name: Report
         if: always()
         shell: pwsh
