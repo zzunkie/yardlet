@@ -99,6 +99,7 @@ def collect_round(folder):
         flatten('events', phase.get('events', {}), numbers)
         flatten('switches', phase.get('switches', {}), numbers)
         flatten('memory', phase.get('memory', {}), numbers)
+        flatten('bodies', phase.get('bodies', {}), numbers)
         if phase['name'] in samples:
             flatten('process', process_numbers(samples[phase['name']], scene.get('pid')), numbers)
         phases[phase['name']] = {

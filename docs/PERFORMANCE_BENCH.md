@@ -94,6 +94,15 @@ side of a frame; the bench does not measure WindowServer's compositing, since th
 - `agentCPUPercent`: the agent CLIs Yardlet runs, here the fakes. It is reported apart and is not
   Yardlet's cost.
 
+**Bodies** (counted by the app, `bodies.*Count`): how often the window's widest views worked out their
+bodies over the phase (`ViewBodyCensus`): the window itself (`mainWindowCount`), the task's views around its
+conversation (`taskSurfaceCount`), the session rail's cards, the composer and the sidebar's rows; and the
+conversation's timeline (`conversationTimelineCount`), its turns drawn whole (`conversationTurnCount`), the
+rows it laid out anew to measure their heights (`conversationRowLaidOutCount`) and the turns' hosting views it
+made (`conversationTurnHostingCount`). A streamed state is drawn in one evaluation of the timeline, so a
+timeline count well over the states published, or a window drawn while a task streams or the sidebar
+scrolls, is work an update did beyond what it changed.
+
 **Memory** (measured by the app, `memory.*`): its footprint as the phase starts and ends, and how much
 it grew over the phase (`footprintGrowthMiB`). A scene that streams and opens tasks keeps nothing of what
 it let go, so its growth is what the new turns hold.

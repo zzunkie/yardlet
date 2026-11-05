@@ -1,7 +1,8 @@
 #if DEBUG
 /// How often the window's widest views worked out their bodies: the window itself, each sidebar
 /// row, each composer, and a dot's picture. Plain counters the redraw tests read while a task
-/// streams or a pet plays; off unless a test turns them on, and absent from release builds.
+/// streams or a pet plays, and the performance bench counts in each phase (`PerfBenchFixture`); off
+/// unless one of them turns them on, and absent from release builds.
 @MainActor
 enum ViewBodyCensus {
     enum Body: Hashable, Sendable {
