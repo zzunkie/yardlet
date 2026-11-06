@@ -273,6 +273,10 @@ struct TaskSidebar: View {
     var disclosure: SidebarDisclosureStore? = nil
     /// The activity view, shown in place of the task list while it is on.
     var activity: SidebarActivity? = nil
+    /// The person's Codex Cloud tasks, listed under Cloud after the tasks (`CodexCloudTasks`).
+    var cloudTasks: [CodexCloudTask] = []
+    /// Opens a cloud task's page; nil leaves the Cloud section out.
+    var onOpenCloudTask: ((CodexCloudTask) -> Void)? = nil
     /// Told when the list comes to its top or leaves it, where the shown task's place is held
     /// (`SidebarOrderHold`).
     var onListAtTopChange: (Bool) -> Void = { _ in }
@@ -342,12 +346,13 @@ struct TaskSidebar: View {
                             ForEach(layout.states) { section in
                                 stateEntry(section)
                             }
-                            if layout.states.isEmpty, layout.pinned.isEmpty, !searchText.isEmpty {
+                            if layout.states.isEmpty, layout.pinned.isEmpty, !searchText.isEmpty, cloudRows.all.isEmpty {
                                 Text(L10n.string("No matching tasks."))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .padding(.horizontal, 13)
                             }
+                            cloudEntry()
                         } else {
                             pinnedEntry()
 
@@ -362,7 +367,8 @@ struct TaskSidebar: View {
                                     .padding(.top, layout.pinned.isEmpty && layout.chats == nil ? 0 : 16)
                             }
 
-                            if layout.sections.isEmpty, layout.pinned.isEmpty, layout.chats == nil, !searchText.isEmpty {
+                            if layout.sections.isEmpty, layout.pinned.isEmpty, layout.chats == nil, !searchText.isEmpty,
+                               cloudRows.all.isEmpty {
                                 Text(L10n.string("No matching tasks."))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -372,6 +378,7 @@ struct TaskSidebar: View {
                                     projectEntry(section)
                                 }
                             }
+                            cloudEntry()
                         }
                     }
                     .padding(.top, 16)
@@ -532,6 +539,38 @@ struct TaskSidebar: View {
         if chats.hiddenRowCount > 0 {
             SidebarShowMoreButton { disclosure?.showMore(SidebarChats.disclosureKey) }
                 .padding(.horizontal, 4)
+        }
+    }
+
+    /// The cloud tasks a search keeps, and the first few of them until "Show more" lists more, as
+    /// Chats lists its rows.
+    private var cloudRows: (all: [CodexCloudTask], shown: [CodexCloudTask]) {
+        guard onOpenCloudTask != nil else { return ([], []) }
+        let all = CodexCloudTasks.matching(cloudTasks, search: searchText)
+        let limit = disclosure?.disclosure.limit(for: CodexCloudTasks.disclosureKey)
+        return (all, limit.map { Array(all.prefix($0)) } ?? all)
+    }
+
+    /// The Cloud section after the tasks, a group of its own as the Codex app's sidebar keeps its cloud
+    /// group: the person's Codex Cloud tasks, each opening its own page.
+    @ViewBuilder
+    private func cloudEntry() -> some View {
+        let rows = cloudRows
+        if let onOpenCloudTask, !rows.all.isEmpty {
+            ParitySectionTitle(title: L10n.string("Cloud"))
+                .padding(.horizontal, 13)
+                .padding(.top, 16)
+                .padding(.bottom, 2)
+            ForEach(rows.shown) { task in
+                SidebarCloudTaskRow(task: task) { onOpenCloudTask(task) }
+                    .equatable()
+                    .padding(.horizontal, 4)
+                    .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 2)
+            }
+            if rows.all.count > rows.shown.count {
+                SidebarShowMoreButton { disclosure?.showMore(CodexCloudTasks.disclosureKey) }
+                    .padding(.horizontal, 4)
+            }
         }
     }
 

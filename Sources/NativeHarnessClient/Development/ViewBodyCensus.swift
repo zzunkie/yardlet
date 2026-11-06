@@ -8,6 +8,8 @@ enum ViewBodyCensus {
     enum Body: Hashable, Sendable {
         case mainWindow
         case sidebarRow
+        /// A Codex Cloud task's row in the sidebar (`SidebarCloudTaskRow`).
+        case sidebarCloudRow
         case composer
         /// A task's views around its conversation (`TaskDetail`), which what the task streams leaves as
         /// they are: the conversation, the composer and the rail read it in views of their own.

@@ -526,6 +526,49 @@ final class SessionListFollowTests: XCTestCase {
         XCTAssertFalse(model.isFollowingSessionLists)
     }
 
+    /// A pass also reads the person's Codex Cloud tasks with the CLI's own listing, page by page under
+    /// the default Codex home, and only that: the tasks stay out of the index, a page's link never
+    /// names another site or task, a listing that fails keeps the last list and one that succeeds
+    /// replaces it.
+    func testAPassListsCodexCloudTasksWithTheCLIsOwnListing() async throws {
+        let fixture = try makeFixture()
+        let model = fixture.model
+        model.sessionListFollowIsReady = true
+        let pages = CloudListAnswers([
+            #"{"tasks":[{"id":"task_e_1","url":"https://chatgpt.com/codex/tasks/task_e_1","title":" Fix the parser ","status":"pending","updated_at":"2026-11-05T10:00:00.123456Z","environment_id":"env","environment_label":"yardlet","summary":{"files_changed":1,"lines_added":2,"lines_removed":0},"is_review":false,"attempt_total":1},{"id":"task_e_2","url":"https://example.test/codex/tasks/task_e_2","title":"Elsewhere","status":"ready","updated_at":"2026-11-04T09:00:00Z"},{"id":"../x","title":"Not an ID","status":"ready"}],"cursor":"page-2"}"#,
+            #"{"tasks":[{"id":"task_e_1","url":"https://chatgpt.com/codex/tasks/task_e_1","title":"Fix the parser","status":"pending"},{"id":"task_e_3","url":"https://chatgpt.com/codex/tasks/task_e_9","title":"Other","status":"later"}],"cursor":null}"#
+        ])
+        model.codexCloudCommand = { await pages.answer($0) }
+
+        await model.followSessionListsNow(now: Date(timeIntervalSince1970: 1_800_000_000))
+
+        let commands = await pages.commands
+        XCTAssertEqual(commands.map(\.arguments), [["cloud", "list", "--json", "--limit", "20"],
+                                                   ["cloud", "list", "--json", "--limit", "20", "--cursor", "page-2"]])
+        XCTAssertEqual(commands.map(\.executable), Array(repeating: model.runtimeSelections.selectedURL(for: .codex)!, count: 2))
+        XCTAssertEqual(Set(commands.compactMap { $0.environment["CODEX_HOME"] }).count, 1, "The default Codex home")
+        XCTAssertEqual(model.codexCloudTasks.map(\.id), ["task_e_1", "task_e_2", "task_e_3"])
+        let first = try XCTUnwrap(model.codexCloudTasks.first)
+        XCTAssertEqual(first.title, "Fix the parser")
+        XCTAssertEqual(first.status, .pending)
+        XCTAssertEqual(first.environment, "yardlet")
+        XCTAssertEqual(first.updatedAt, Date(timeIntervalSince1970: 1_793_872_800))
+        XCTAssertEqual(model.codexCloudTasks.map(\.url.absoluteString), [
+            "https://chatgpt.com/codex/tasks/task_e_1", "https://chatgpt.com/codex/tasks/task_e_2",
+            "https://chatgpt.com/codex/tasks/task_e_3"
+        ], "Only the task's own page on ChatGPT")
+        XCTAssertNil(model.codexCloudTasks.last?.status, "A status Yardlet does not know shows none")
+        XCTAssertTrue(model.store.sessions.isEmpty, "Cloud tasks are not tasks in the index")
+
+        await pages.reset([nil])
+        await model.followSessionListsNow(now: Date(timeIntervalSince1970: 1_800_000_100))
+        XCTAssertEqual(model.codexCloudTasks.count, 3, "A listing that fails keeps the last list")
+
+        await pages.reset([#"{"tasks":[],"cursor":null}"#])
+        await model.followSessionListsNow(now: Date(timeIntervalSince1970: 1_800_000_200))
+        XCTAssertTrue(model.codexCloudTasks.isEmpty, "An empty listing empties it")
+    }
+
     func testTheAccountMenuOffersTheRefreshAndSaysWhileItRuns() {
         let identity = SidebarAccountIdentity(fullName: "Person", userName: nil)
         let idle = SidebarAccountMenu.make(identity: identity, settingsSections: [.accounts])
@@ -580,6 +623,28 @@ final class SessionListFollowTests: XCTestCase {
         FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "Library/Application Support/Claude/scratch-workspaces/yardlet-follow-test-\(UUID().uuidString.prefix(8))",
                        directoryHint: .isDirectory).standardizedFileURL
+    }
+
+    /// Answers the Codex CLI's cloud listing with the given pages in turn (nil: the command fails) and
+    /// records each command.
+    private actor CloudListAnswers {
+        private var pages: [String?]
+        private(set) var commands: [CLICommand] = []
+
+        init(_ pages: [String?]) { self.pages = pages }
+
+        func reset(_ pages: [String?]) {
+            self.pages = pages
+            commands = []
+        }
+
+        func answer(_ command: CLICommand) -> CLICommandResult {
+            commands.append(command)
+            guard !pages.isEmpty, let page = pages.removeFirst() else {
+                return CLICommandResult(exitCode: 1, stdout: "", stderr: "Not signed in")
+            }
+            return CLICommandResult(exitCode: 0, stdout: page, stderr: "")
+        }
     }
 
     private struct Fixture {
