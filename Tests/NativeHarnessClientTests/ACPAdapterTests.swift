@@ -195,6 +195,33 @@ final class ACPAdapterTests: XCTestCase {
         XCTAssertEqual(stopCount, 1)
     }
 
+    /// A turn Yardlet's quit cut off continues with the Claude app's words as the next prompt, on the
+    /// session as it is (`RestartResumePolicy`): once, not while a prompt runs, and again after it ends.
+    func testAContinuationAfterARestartIsAPromptOfTheClaudeAppsWordsWhileNoPromptRuns() async throws {
+        let transport = FakeACPTransport()
+        let adapter = ACPAdapter(kind: .openCode, executableURL: URL(filePath: "/tmp/fake-opencode"),
+                                 transportFactory: { transport })
+        let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(), workspaceURL: URL(filePath: "/tmp/acp-workspace"), initialPrompt: nil))
+        let started = try await adapter.continueInterruptedTurn(in: handle, after: .quit)
+        XCTAssertTrue(started)
+        let startedAgain = try await adapter.continueInterruptedTurn(in: handle, after: .quit)
+        XCTAssertFalse(startedAgain, "A prompt is running")
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        var prompts = await transport.requestValues.filter { $0["method"]?.stringValue == "session/prompt" }
+        XCTAssertEqual(prompts.count, 1)
+        XCTAssertEqual(prompts.first?["params"]?["sessionId"]?.stringValue, handle.providerSessionID)
+        XCTAssertEqual(prompts.first?["params"]?["prompt"]?.arrayValue?.map { $0["text"]?.stringValue },
+                       [RestartContinuation.claudeText])
+        await transport.completePrompt()
+        try await waitUntil { await transport.pendingPromptCount == 0 }
+        try await waitUntil { try await adapter.continueInterruptedTurn(in: handle, after: .quit) }
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        prompts = await transport.requestValues.filter { $0["method"]?.stringValue == "session/prompt" }
+        XCTAssertEqual(prompts.count, 2)
+        await adapter.close(handle)
+    }
+
     func testCreateStreamPermissionInterruptAndResumeUseSharedACPContract() async throws {
         let transport = FakeACPTransport()
         let next = FakeACPTransport()

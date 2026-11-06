@@ -107,6 +107,13 @@ struct RestartResumeRecord: Codable, Equatable, Sendable {
 ///   install, within 15 minutes. Yardlet continues Codex tasks after any quit, by the rules above,
 ///   sharing the line with Claude Code tasks; subagent threads, which their parent's turn drives,
 ///   never.
+/// - The ACP agents (Antigravity, OpenCode, Kimi Code, Grok Build, Hermes; 2026-11-06, after an
+///   Antigravity turn an update cut off read as completed with no answer and nobody continued it):
+///   none of their own clients continues a turn a quit cut off (the Antigravity app and `agy -c` wait
+///   for the person's next message, and the Antigravity server only tells the model, at that next
+///   prompt, that its subagents stopped with the server's restart), and ACP has no request for it. So
+///   Yardlet loads the session again (`session/load`, the same conversation and storage) and sends the
+///   Claude app's words as the next prompt (`RestartContinuation.claudeText`), by the rules above.
 /// - Other harnesses: their apps continue nothing, so neither does Yardlet.
 /// - `run_agent` subagents keep no history with their harness, so none continues: the quit ends each
 ///   as interrupted, and the next launch tells the caller that waited for it, under this setting and
@@ -123,8 +130,9 @@ enum RestartResumePolicy {
     /// How many times in a row Yardlet continues a turn nobody has opened since. A quit after the
     /// last of them leaves the task stopped, so quitting again and again cannot keep it going unseen.
     static let unseenContinuationLimit = 3
-    /// The harnesses whose cut-off turns continue.
-    static let harnesses: Set<HarnessKind> = [.claudeCode, .codex]
+    /// The harnesses whose cut-off turns continue: Claude Code, Codex and every ACP agent.
+    static let harnesses: Set<HarnessKind> = Set(
+        [.claudeCode, .codex] + HarnessCatalog.builtIns.filter { $0.transport == .acp }.map(\.id))
 
     struct Candidate: Equatable, Sendable {
         let session: SessionRecord
@@ -287,7 +295,8 @@ protocol HarnessInterruptedTurnContinuing: Actor {
 /// The words each provider is sent, exactly as its app sends them.
 enum RestartContinuation {
     /// The Claude app's `gu` (`index.chunk-B5tintml.js`), sent in English as a user message with
-    /// `origin: {kind: "auto-continuation"}`; the app does not translate it.
+    /// `origin: {kind: "auto-continuation"}`; the app does not translate it. An ACP agent is sent the
+    /// same words as its next prompt: its own clients have no continuation (`RestartResumePolicy`).
     static let claudeText = "The app was quit while you were working. Please continue from where you left off."
     /// The Claude app 3.1623.3's continuation of a turn its connection error ended, once its API
     /// answers again (`connectionRecoveryNoteTurnEnd`): "Try again", also `auto-continuation`.
@@ -309,7 +318,7 @@ enum RestartContinuation {
     /// the same empty `turn/start` on the idle thread.
     static let codexResumeTrigger = "resume_interrupted_task"
 
-    /// What Claude Code is sent after each cut.
+    /// What Claude Code, and an ACP agent, is sent after each cut.
     static func claudeText(after cut: TurnCut) -> String {
         switch cut {
         case .quit: claudeText

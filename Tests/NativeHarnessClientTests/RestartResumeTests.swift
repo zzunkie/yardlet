@@ -25,6 +25,8 @@ final class RestartResumeTests: XCTestCase {
         let codexQueued = task(.codex, status: .running)
         let claudeUnseenTwice = task(.claudeCode, status: .running)
         let codexUnseenOnce = task(.codex, status: .running)
+        let antigravity = task(.antigravityCLI, status: .running)
+        let openCode = task(.openCode, status: .waitingForApproval)
         let candidates: [RestartResumePolicy.Candidate] = [
             .init(session: claude),
             .init(session: waiting),
@@ -45,21 +47,26 @@ final class RestartResumeTests: XCTestCase {
             .init(session: task(.codex, status: .running), unseenContinuations: 3),
             .init(session: task(.codex, status: .ready)),
             .init(session: task(.codex, status: .completed)),
-            .init(session: task(.antigravityCLI, status: .running)),
+            .init(session: antigravity),
+            .init(session: task(.antigravityCLI, status: .running), stoppedByPerson: true),
+            .init(session: task(.antigravityCLI, status: .running, providerSessionID: nil)),
             .init(session: task(.cursorAgent, status: .running)),
-            .init(session: task(.openCode, status: .running)),
+            .init(session: openCode),
+            .init(session: task(.kimiCode, status: .ready)),
         ]
 
         let entries = RestartResumePolicy.entries(for: candidates, isOn: true)
         XCTAssertEqual(entries.map(\.sessionID), [claude.id, waiting.id, claudeQueued.id, claudeUnseenTwice.id,
-                                                  codex.id, codexWaiting.id, codexQueued.id, codexUnseenOnce.id],
-            "Any quit continues Claude Code and Codex tasks alike; subagent threads, stopped turns, a third unseen continuation and other harnesses aside")
-        XCTAssertEqual(entries.map(\.wasWaitingForApproval), [false, true, false, false, false, true, false, false])
-        XCTAssertEqual(entries.map(\.sendsQueuedMessages), [nil, nil, true, nil, nil, nil, true, nil],
+                                                  codex.id, codexWaiting.id, codexQueued.id, codexUnseenOnce.id,
+                                                  antigravity.id, openCode.id],
+            "Any quit continues Claude Code, Codex and ACP agent tasks alike; subagent threads, stopped turns, a third unseen continuation and other harnesses aside")
+        XCTAssertEqual(entries.map(\.wasWaitingForApproval), [false, true, false, false, false, true, false, false, false, true])
+        XCTAssertEqual(entries.map(\.sendsQueuedMessages), [nil, nil, true, nil, nil, nil, true, nil, nil, nil],
             "A task with waiting messages sends the first of them as its next turn")
-        XCTAssertEqual(entries.map(\.unseenContinuations), [nil, nil, nil, 2, nil, nil, nil, 1],
+        XCTAssertEqual(entries.map(\.unseenContinuations), [nil, nil, nil, 2, nil, nil, nil, 1, nil, nil],
             "A turn Yardlet continued unseen is written down again with how many times in a row it has been")
-        XCTAssertEqual(entries.map(\.interruptedAt), Array(repeating: nil, count: 8), "Cut off by this quit")
+        XCTAssertEqual(entries.map(\.interruptedAt), Array(repeating: nil, count: 10), "Cut off by this quit")
+        XCTAssertEqual(RestartResumePolicy.harnesses, [.claudeCode, .codex, .antigravityCLI, .openCode, .kimiCode, .grokBuild, .hermes])
         XCTAssertEqual(entries.first?.lastActiveAt, claude.updatedAt, "Each keeps its last activity for the launch's order")
         XCTAssertEqual(entries.first?.providerSessionID, claude.providerSessionID)
         XCTAssertEqual(entries.first?.connection, claude.connection)
@@ -1097,6 +1104,98 @@ final class RestartResumeTests: XCTestCase {
         await after.shutdown()
     }
 
+    /// An ACP agent's turn a quit cut off (2026-11-06: an Antigravity task's turn an update cut off read as
+    /// completed with no answer, and nothing continued it). The quit writes it down as it does a Claude
+    /// Code turn; the next launch reads the turn as interrupted until it continues; the continuation
+    /// loads the agent's own session again (`session/load`, never a new one) and sends the Claude app's
+    /// words as the next prompt, not as the person's message, since ACP has no continuation of its own
+    /// and neither has the Antigravity app (the adapter's own rule: `ACPAdapterTests`).
+    func testAnACPTurnCutByAQuitContinuesWithTheClaudeAppsWordsOnTheLoadedSession() async throws {
+        let root = try directory()
+        let executable = root.appending(path: "agy")
+        try Data("#!/bin/sh\nprintf '1.5.2\\n'\n".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let defaults = try suite()
+        let session = SessionRecord(harness: .antigravityCLI, workspaceURL: root, runtimeExecutableURL: executable,
+            title: "Cut by a quit", status: .running, providerSessionID: "acp-session-1", environmentScope: .native)
+        let repository = InMemorySessionRepository(sessions: [session])
+        // What the task showed at the quit: its request, a finished call and one still running.
+        let transcripts = UserDefaultsTranscriptRepository(defaults: defaults)
+        transcripts.save([
+            TranscriptEntry(content: .user(text: "Build the release")),
+            TranscriptEntry(content: .activity(HarnessActivity(id: "call-1", kind: "read", title: "read"), state: .completed)),
+            TranscriptEntry(content: .activity(HarnessActivity(id: "call-2", kind: "execute", title: "execute"), state: .running))
+        ], for: session.id)
+        let transports = ACPTransportLog()
+        func model(_ store: SessionStore, restoresIndexOnLaunch: Bool = false) -> AppModel {
+            let adapter = YHPProviderCompatibilityAdapter(
+                adapter: ACPAdapter(kind: .antigravityCLI, executableURL: executable, transportFactory: { transports.make() }),
+                manifest: HarnessProtocolCompatibilityManifest.acp(.antigravityCLI))
+            return AppModel(store: store, runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
+                registry: HarnessRegistry { _, _ in adapter },
+                modelCatalogs: HarnessModelCatalogStore(locations: HarnessModelSettingsLocations(
+                    claudeConfigDirectory: root.appending(path: "claude"), codexHome: root.appending(path: "codex-home"),
+                    codexYardletHome: root.appending(path: "codex-yardlet")), environment: [:]),
+                codexQueueRepository: UserDefaultsCodexQueueRepository(defaults: defaults), preferences: defaults,
+                codexPendingRequestRepository: UserDefaultsCodexPendingServerRequestRepository(defaults: defaults),
+                codexTimelineItemRepository: UserDefaultsCodexTimelineItemRepository(defaults: defaults),
+                codexHistorySelectionRepository: UserDefaultsCodexHistorySelectionRepository(defaults: defaults),
+                transcriptRepository: transcripts, restoresIndexOnLaunch: restoresIndexOnLaunch)
+        }
+        try await repository.upsert(session)
+        let before = model(SessionStore(sessions: [session], repository: repository))
+        XCTAssertEqual(before.tasksContinuingAfterRestart(), [session.id])
+        before.recordWorkForRestart(trigger: .update)
+        XCTAssertEqual(RestartResumeRecord.load(from: defaults)?.entries.map(\.sessionID), [session.id],
+            "An ACP agent's turn is written down as a Claude Code turn is")
+        await before.shutdown()
+
+        // The next launch reads the index and the saved transcripts back.
+        let after = model(SessionStore(repository: repository), restoresIndexOnLaunch: true)
+        await after.restoreIndex()
+        let cut = try XCTUnwrap(after.store.sessions.first)
+        XCTAssertEqual(cut.status, .ready)
+        XCTAssertEqual(cut.completionState, .interrupted, "The index read back says the last run ended under the turn")
+        // Until something continues it, the turn ends where it was cut off: not completed. The call still
+        // running at the quit is not in the snapshot read back (`TranscriptBuilder.init(entries:)`).
+        let interrupted = try XCTUnwrap(after.conversationTurns(of: cut).last)
+        XCTAssertEqual(interrupted.status, .interrupted)
+        XCTAssertEqual(interrupted.work.map(\.phase), [.completed])
+
+        await after.continueWorkInterruptedByRestart()
+        let transport = try XCTUnwrap(transports.all.last)
+        let requests = await transport.requestValues
+        XCTAssertEqual(requests.map { $0["method"]?.stringValue }, ["initialize", "session/load", "session/prompt"],
+            "The same conversation is loaded, never a new one, and the continuation is a prompt on it")
+        XCTAssertEqual(requests[1]["params"]?["sessionId"]?.stringValue, "acp-session-1")
+        XCTAssertEqual(requests[2]["params"]?["sessionId"]?.stringValue, "acp-session-1")
+        XCTAssertEqual(requests[2]["params"]?["prompt"]?.arrayValue?.map { $0["text"]?.stringValue },
+                       [RestartContinuation.claudeText])
+        let continued = try XCTUnwrap(after.store.sessions.first)
+        XCTAssertEqual(continued.status, .running)
+        XCTAssertEqual(continued.completionState, SessionCompletionState.none, "A turn running again is not cut off")
+        XCTAssertEqual(after.restartResumeNoticeSessionIDs, [session.id])
+        XCTAssertEqual(after.transcriptBySessionID[session.id]?.compactMap { entry -> String? in
+            if case let .user(text, _) = entry.content { return text }
+            return nil
+        }, ["Build the release"], "The continuation is not shown as something the person sent")
+        XCTAssertEqual(try XCTUnwrap(after.conversationTurns(of: continued).last).status, .running)
+
+        // The agent answers and the turn ends as any turn does.
+        await transport.emit(.object(["jsonrpc": .string("2.0"), "method": .string("session/update"), "params": .object([
+            "sessionId": .string("acp-session-1"),
+            "update": .object(["sessionUpdate": .string("agent_message_chunk"),
+                               "content": .object(["type": .string("text"), "text": .string("Built.")])])])]))
+        await transport.completePrompt()
+        try await waitUntil {
+            after.store.sessions.first?.status == .ready && after.store.sessions.first?.completionState == .completed
+        }
+        let finished = try XCTUnwrap(after.conversationTurns(of: try XCTUnwrap(after.store.sessions.first)).last)
+        XCTAssertEqual(finished.status, .completed)
+        XCTAssertEqual(finished.answers.map(\.phase), [.completed])
+        await after.shutdown()
+    }
+
     /// A task cut off with messages waiting (another task's, or the person's queue) starts its next
     /// turn from the first of them once Yardlet is back, rather than staying stopped until opened.
     func testATaskCutOffWithAWaitingMessageSendsItAfterTheRestart() async throws {
@@ -1596,6 +1695,18 @@ final class RestartResumeTests: XCTestCase {
 
     /// Stands in for the start window's clock: a wait ends only when the test lets its time pass, or
     /// when it is cancelled.
+    /// The fake `agy acp` processes a test's launches start, in order, each answering `session/load`.
+    private final class ACPTransportLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var transports: [FakeACPTransport] = []
+        func make() -> FakeACPTransport {
+            let transport = FakeACPTransport(canLoadSession: true, exposesAntigravity: true)
+            lock.withLock { transports.append(transport) }
+            return transport
+        }
+        var all: [FakeACPTransport] { lock.withLock { transports } }
+    }
+
     private final class ManualSleep: @unchecked Sendable {
         private let lock = NSLock()
         private var waiters: [(id: UUID, continuation: CheckedContinuation<Void, Error>)] = []

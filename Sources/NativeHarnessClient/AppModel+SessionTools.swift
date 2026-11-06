@@ -314,7 +314,7 @@ extension AppModel: SessionToolHandling {
         return TranscriptConversationProjection.presentation(
             from: TranscriptTurns(transcriptBySessionID[session.id] ?? []), harness: session.harness,
             status: session.status, latestTurnIsComplete: session.completionState == .completed,
-            requests: &requests) { inputs in
+            latestTurnWasCutOff: session.completionState == .interrupted, requests: &requests) { inputs in
             project(ids: (0..<inputs.count).map { inputs.id(at: $0).uuidString }) {
                 TranscriptConversationProjection.turn(inputs.input(at: $0))
             }
@@ -334,7 +334,8 @@ extension AppModel: SessionToolHandling {
         var requests = TranscriptRequestIndex()
         let inputs = TranscriptConversationProjection.turnInputs(
             transcript(for: session.id), harness: session.harness, status: session.status,
-            latestTurnIsComplete: session.completionState == .completed, requests: &requests)
+            latestTurnIsComplete: session.completionState == .completed,
+            latestTurnWasCutOff: session.completionState == .interrupted, requests: &requests)
         return (0..<inputs.count).lazy.map { TranscriptConversationProjection.turn(inputs.input(at: $0)) }
     }
 

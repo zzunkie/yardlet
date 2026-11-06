@@ -2196,7 +2196,7 @@
 "The battery is under 20%. Yardlet keeps tasks working with the lid closed again on power." = "The battery is under 20%. Yardlet keeps tasks working with the lid closed again on power.";
 "The Mac is hot with its lid closed" = "The Mac is hot with its lid closed";
 "Tasks keep working. Open the lid or move the Mac somewhere cooler." = "Tasks keep working. Open the lid or move the Mac somewhere cooler.";
-"Claude Code and Codex tasks continue where they left off after Yardlet quits or updates" = "Claude Code and Codex tasks continue where they left off after Yardlet quits or updates";
+"Claude Code, Codex, Antigravity, OpenCode, Kimi Code, Grok Build and Hermes tasks continue where they left off after Yardlet quits or updates" = "Claude Code, Codex, Antigravity, OpenCode, Kimi Code, Grok Build and Hermes tasks continue where they left off after Yardlet quits or updates";
 "Codex did not answer %@ within %lld seconds." = "Codex did not answer %@ within %lld seconds.";
 "This conversation is open in another Codex app, such as ChatGPT, so it cannot continue here. Quit that app, then send again." = "This conversation is open in another Codex app, such as ChatGPT, so it cannot continue here. Quit that app, then send again.";
 

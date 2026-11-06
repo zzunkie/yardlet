@@ -57,9 +57,12 @@ final class SessionStore {
         // The archived list's links place nested tasks from the first sidebar on; without them, a task
         // whose parent is archived waits at top level until the list is read.
         if let archived = try? await repository.loadArchivedSessions() { archivedSessions = archived }
+        // A turn the index still shows running was cut off with the last run (a quit, an update or a
+        // crash): no runtime holds it any more, and its task says so until a turn starts again.
         for index in sessions.indices where
             sessions[index].status == .running || sessions[index].status == .waitingForApproval {
             sessions[index].status = .ready
+            sessions[index].completionState = .interrupted
             sessions[index].updatedAt = Date()
             try await repository.upsert(sessions[index])
         }

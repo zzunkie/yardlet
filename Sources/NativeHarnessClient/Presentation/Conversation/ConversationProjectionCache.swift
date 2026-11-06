@@ -72,7 +72,7 @@ final class ConversationProjectionCache {
     /// an unchanged transcript is known by its turns without comparing its entries: a long conversation
     /// shown again is not projected again.
     var lastTranscript: (transcript: TranscriptTurns, harness: HarnessKind, status: SessionStatus,
-                         latestTurnIsComplete: Bool, presentation: ConversationPresentation)?
+                         latestTurnIsComplete: Bool, latestTurnWasCutOff: Bool, presentation: ConversationPresentation)?
 
     init() {}
 

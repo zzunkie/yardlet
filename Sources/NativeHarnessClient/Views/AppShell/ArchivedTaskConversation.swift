@@ -23,6 +23,7 @@ struct ArchivedTaskConversation: View {
                     // No runtime holds an archived task, whatever it was doing when it was archived.
                     sessionStatus: .ready,
                     latestTurnIsComplete: session.completionState == .completed,
+                    latestTurnWasCutOff: session.completionState == .interrupted,
                     codexTaskState: reading.codexState,
                     providerSessionID: session.providerSessionID,
                     actions: actions,

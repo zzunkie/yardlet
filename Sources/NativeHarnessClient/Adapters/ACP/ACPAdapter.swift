@@ -8,7 +8,8 @@ actor ACPAdapter:
     HarnessImageInputReporting,
     HarnessAgentToolConfiguring,
     HarnessYardletInstructionsConfiguring,
-    HarnessModelCatalogReporting {
+    HarnessModelCatalogReporting,
+    HarnessInterruptedTurnContinuing {
     private struct PermissionContext: Sendable {
         let localSessionID: UUID
         let rpcID: JSONValue
@@ -320,6 +321,17 @@ actor ACPAdapter:
                 await self?.failPrompt(error, for: session.localSessionID)
             }
         }
+    }
+
+    /// Continues a turn Yardlet's quit cut off, on the session loaded again: the Claude app's words go
+    /// as the next prompt (`RestartContinuation`), since ACP has no request for it and none of these
+    /// agents' own clients continues such a turn (`RestartResumePolicy`). Nothing goes while a prompt
+    /// runs.
+    func continueInterruptedTurn(in session: HarnessSessionHandle, after cut: TurnCut) async throws -> Bool {
+        try requireRegistered(session)
+        guard promptTasks[session.localSessionID] == nil else { return false }
+        try await sendPrompt(text: RestartContinuation.claudeText(after: cut), images: [], to: session)
+        return true
     }
 
     func interrupt(_ session: HarnessSessionHandle) async throws {

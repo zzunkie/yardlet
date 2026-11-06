@@ -7,7 +7,8 @@ enum ConversationSource {
     case codex(CodexTaskState, workspaceURL: URL, historySelection: CodexHistorySearchSelection?)
     /// A shared transcript (`TranscriptConversationProjection`), in its turns.
     case transcript(
-        TranscriptTurns, harness: HarnessKind, status: SessionStatus, latestTurnIsComplete: Bool
+        TranscriptTurns, harness: HarnessKind, status: SessionStatus, latestTurnIsComplete: Bool,
+        latestTurnWasCutOff: Bool = false
     )
     /// Turns another Mac's Yardlet sent, projected where they arrived (`RemoteConversationModel`): only
     /// the turns that changed are projected again there, so it is drawn as it is.
@@ -294,9 +295,10 @@ struct ConversationTimeline: View {
         switch source {
         case let .codex(state, workspaceURL, historySelection):
             presentation = cache.codex(state, workspaceURL: workspaceURL, historySelection: historySelection)
-        case let .transcript(transcript, harness, status, latestTurnIsComplete):
+        case let .transcript(transcript, harness, status, latestTurnIsComplete, latestTurnWasCutOff):
             presentation = cache.transcript(
-                transcript, harness: harness, status: status, latestTurnIsComplete: latestTurnIsComplete
+                transcript, harness: harness, status: status, latestTurnIsComplete: latestTurnIsComplete,
+                latestTurnWasCutOff: latestTurnWasCutOff
             )
             // The provider's file holds turns before the ones read from it.
             if actions.readEarlierHistory != nil { presentation.earlier = .providerFile }
@@ -446,7 +448,7 @@ struct ConversationTimeline: View {
 
     private func itemContext(_ presentation: ConversationPresentation) -> ConversationItemContext {
         var context = ConversationItemContext(harness: presentation.harness, workspaceURL: workspaceURL, actions: actions)
-        if case let .transcript(transcript, _, _, _) = source {
+        if case let .transcript(transcript, _, _, _, _) = source {
             context.limitCardEntryID = UsageLimitContinuation.card(in: transcript.entries)?.id
         } else if let card = presentation.limitCardEntryID {
             context.limitCardEntryID = card

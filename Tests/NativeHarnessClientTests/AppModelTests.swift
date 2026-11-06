@@ -2929,7 +2929,7 @@ final class AppModelTests: XCTestCase {
             XCTAssertEqual(restored.harness, live.harness)
             XCTAssertEqual(restored.providerSessionID, live.providerSessionID)
             XCTAssertEqual(restored.title, live.title)
-            XCTAssertEqual(restored.completionState, live.completionState)
+            XCTAssertEqual(restored.completionState, .interrupted, "A turn running at the last quit ends as interrupted")
         }
         XCTAssertTrue(restoredModel.store.sessions.allSatisfy {
             !restoredModel.isAttached($0.id)

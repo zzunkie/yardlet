@@ -38,6 +38,9 @@ enum TranscriptConversationProjection {
         /// Claude: the turn holds the latest message (its request, or one read into it), the one whose
         /// files can be restored.
         let isLatestMessage: Bool
+        /// The last turn, and Yardlet's last run ended under it (`SessionCompletionState.interrupted`);
+        /// false for the others.
+        var wasCutOff = false
 
         var id: String { entries[0].id.uuidString }
     }
@@ -51,6 +54,8 @@ enum TranscriptConversationProjection {
         let harness: HarnessKind
         let status: SessionStatus
         let latestTurnIsComplete: Bool
+        /// The task's latest turn was cut off with Yardlet's last run and nothing has continued it.
+        var latestTurnWasCutOff = false
         /// The turn that holds the latest message, for Claude.
         let latestMessageTurn: Int?
         /// The transcript's requests and tool calls, counted over its turns.
@@ -74,7 +79,8 @@ enum TranscriptConversationProjection {
                 isLast: isLast,
                 isComplete: !isLast || latestTurnIsComplete,
                 status: isLast ? status : nil,
-                isLatestMessage: index == latestMessageTurn
+                isLatestMessage: index == latestMessageTurn,
+                wasCutOff: isLast && latestTurnWasCutOff
             )
         }
 
@@ -87,6 +93,7 @@ enum TranscriptConversationProjection {
                 && previous.isComplete == (!isLast || latestTurnIsComplete)
                 && previous.status == (isLast ? status : nil)
                 && previous.isLatestMessage == (index == latestMessageTurn)
+                && previous.wasCutOff == (isLast && latestTurnWasCutOff)
                 && previous.isHead == isHead(index)
                 && previous.entries == turn.entries
                 && (changedApprovals.isEmpty || turn.toolCallIDs.isDisjoint(with: changedApprovals))
@@ -101,11 +108,13 @@ enum TranscriptConversationProjection {
         from entries: [TranscriptEntry],
         harness: HarnessKind,
         status: SessionStatus,
-        latestTurnIsComplete: Bool
+        latestTurnIsComplete: Bool,
+        latestTurnWasCutOff: Bool = false
     ) -> ConversationPresentation {
         var requests = TranscriptRequestIndex()
         return presentation(from: TranscriptTurns(entries), harness: harness, status: status,
-                            latestTurnIsComplete: latestTurnIsComplete, requests: &requests) { inputs in
+                            latestTurnIsComplete: latestTurnIsComplete, latestTurnWasCutOff: latestTurnWasCutOff,
+                            requests: &requests) { inputs in
             (0..<inputs.count).map { turn(inputs.input(at: $0)) }
         }
     }
@@ -118,11 +127,12 @@ enum TranscriptConversationProjection {
         harness: HarnessKind,
         status: SessionStatus,
         latestTurnIsComplete: Bool,
+        latestTurnWasCutOff: Bool = false,
         requests: inout TranscriptRequestIndex,
         projectTurns: (TurnInputs) -> [ConversationTurn]
     ) -> ConversationPresentation {
-        let inputs = turnInputs(transcript, harness: harness, status: status,
-                                latestTurnIsComplete: latestTurnIsComplete, requests: &requests)
+        let inputs = turnInputs(transcript, harness: harness, status: status, latestTurnIsComplete: latestTurnIsComplete,
+                                latestTurnWasCutOff: latestTurnWasCutOff, requests: &requests)
         return ConversationPresentation(
             harness: harness,
             turns: projectTurns(inputs),
@@ -138,6 +148,7 @@ enum TranscriptConversationProjection {
         harness: HarnessKind,
         status: SessionStatus,
         latestTurnIsComplete: Bool,
+        latestTurnWasCutOff: Bool = false,
         requests: inout TranscriptRequestIndex
     ) -> TurnInputs {
         let turns = transcript.turns
@@ -147,6 +158,7 @@ enum TranscriptConversationProjection {
             harness: harness,
             status: status,
             latestTurnIsComplete: latestTurnIsComplete,
+            latestTurnWasCutOff: latestTurnWasCutOff,
             // The latest message is in the latest turn that holds one, almost always the last.
             latestMessageTurn: harness == .claudeCode ? turns.lastIndex { $0.entries.contains(where: isMessage) } : nil,
             requests: requests,
@@ -188,6 +200,9 @@ enum TranscriptConversationProjection {
         }
         let shown = input.entries.allSatisfy(isDrawn) ? input.entries : input.entries.filter(isDrawn)
         let isBusy = input.status == .running || input.status == .waitingForApproval
+        // Yardlet's last run ended under the turn and nothing has continued it: it ends there. What was
+        // running at the cut is not in the transcript read back (`TranscriptBuilder.init(entries:)`).
+        let isCutOff = input.isLast && !isBusy && input.wasCutOff
         // The part of a turn a read began inside answers too once a later turn follows it: what it
         // ended with is that turn's answer (a final report shown above a background task's notice).
         let answerID: UUID? = if !input.isHead || !input.isLast, input.isComplete, let last = shown.last,
@@ -349,6 +364,8 @@ enum TranscriptConversationProjection {
             .running
         } else if outcome != nil {
             .failed
+        } else if isCutOff {
+            .interrupted
         } else if input.isComplete {
             .completed
         } else {
@@ -599,19 +616,21 @@ extension ConversationProjectionCache {
         _ transcript: TranscriptTurns,
         harness: HarnessKind,
         status: SessionStatus,
-        latestTurnIsComplete: Bool
+        latestTurnIsComplete: Bool,
+        latestTurnWasCutOff: Bool = false
     ) -> ConversationPresentation {
         if let last = lastTranscript, last.harness == harness, last.status == status,
-           last.latestTurnIsComplete == latestTurnIsComplete, last.transcript == transcript {
+           last.latestTurnIsComplete == latestTurnIsComplete, last.latestTurnWasCutOff == latestTurnWasCutOff,
+           last.transcript == transcript {
             return keptWhole(last.presentation)
         }
         let presentation = TranscriptConversationProjection.presentation(
             from: transcript, harness: harness, status: status, latestTurnIsComplete: latestTurnIsComplete,
-            requests: &transcriptRequests
+            latestTurnWasCutOff: latestTurnWasCutOff, requests: &transcriptRequests
         ) { inputs in
             turns(of: inputs, project: TranscriptConversationProjection.turn)
         }
-        lastTranscript = (transcript, harness, status, latestTurnIsComplete, presentation)
+        lastTranscript = (transcript, harness, status, latestTurnIsComplete, latestTurnWasCutOff, presentation)
         return presentation
     }
 
@@ -621,10 +640,12 @@ extension ConversationProjectionCache {
         _ entries: [TranscriptEntry],
         harness: HarnessKind,
         status: SessionStatus,
-        latestTurnIsComplete: Bool
+        latestTurnIsComplete: Bool,
+        latestTurnWasCutOff: Bool = false
     ) -> ConversationPresentation {
         transcript(lastTranscript?.transcript.updated(to: entries, change: .unknown) ?? TranscriptTurns(entries),
-                   harness: harness, status: status, latestTurnIsComplete: latestTurnIsComplete)
+                   harness: harness, status: status, latestTurnIsComplete: latestTurnIsComplete,
+                   latestTurnWasCutOff: latestTurnWasCutOff)
     }
 }
 
