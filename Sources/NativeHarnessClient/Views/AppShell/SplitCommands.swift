@@ -18,6 +18,11 @@ struct YardletSplitCommandSet {
     var splitDown: () -> Void = {}
     var closePane: () -> Void = {}
     var dissolve: () -> Void = {}
+    /// The shown split view's sidebar row actions, which its window tab's name also opens.
+    var isSplitPinned = false
+    var renameSplit: () -> Void = {}
+    var togglePinnedSplit: () -> Void = {}
+    var archiveSplit: () -> Void = {}
     var focusPane: (PaneFocusDirection) -> Void = { _ in }
     var activate: (WindowItem) -> Void = { _ in }
     var tabs = YardletTabCommandSet()
@@ -167,6 +172,17 @@ struct YardletWindowLayerCommands: Commands {
                 .keyboardShortcut("w", modifiers: [.command, .control])
                 .disabled(!(split?.canClosePane ?? false))
             Button(L10n.string("End split view")) { split?.dissolve() }
+                .disabled(!(split?.canClosePane ?? false))
+
+            Divider()
+
+            Button(L10n.string("Rename split view…")) { split?.renameSplit() }
+                .disabled(!(split?.canClosePane ?? false))
+            Button(L10n.string(split?.isSplitPinned == true ? "Unpin split view" : "Pin split view")) {
+                split?.togglePinnedSplit()
+            }
+            .disabled(!(split?.canClosePane ?? false))
+            Button(L10n.string("Archive tasks…")) { split?.archiveSplit() }
                 .disabled(!(split?.canClosePane ?? false))
 
             Divider()

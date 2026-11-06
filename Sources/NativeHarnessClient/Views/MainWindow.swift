@@ -1090,6 +1090,16 @@ struct MainWindow: View {
             dissolve: {
                 if let split = model.splits.activeSplit { model.splits.dissolve(split.id) }
             },
+            isSplitPinned: model.splits.activeSplit?.isPinned ?? false,
+            renameSplit: {
+                if let split = model.splits.activeSplit { presentSplitRename(split) }
+            },
+            togglePinnedSplit: {
+                if let split = model.splits.activeSplit { model.splits.togglePinned(split.id) }
+            },
+            archiveSplit: {
+                if let split = model.splits.activeSplit { presentSplitArchive(split) }
+            },
             focusPane: { model.splits.moveFocus($0) },
             activate: activateRow,
             tabs: YardletTabCommandSet(
@@ -1275,6 +1285,11 @@ struct MainWindow: View {
 
     private func splitMembers(_ split: SplitGroup) -> [SessionRecord] {
         split.sessionIDs.compactMap(sessionRecord)
+    }
+
+    /// The name the split view's sidebar row shows.
+    private func splitName(_ split: SplitGroup) -> String {
+        split.customName ?? splitMembers(split).map(\.title).joined(separator: " + ")
     }
 
     private func presentSplitRename(_ split: SplitGroup) {
@@ -1879,15 +1894,12 @@ struct MainWindow: View {
         }
     }
 
-    /// The split view the tab shows, whose header the title bar is: its sidebar row's name and actions.
-    private var titleBarSplitHeader: SplitViewHeader? {
+    /// The split view the tab shows: its sidebar row's name and actions, for its window tab.
+    private var titleBarSplitTitle: SplitViewTitleMenu? {
         guard !schedulesWindow.isShowing, let split = model.splits.activeSplit else { return nil }
-        var isVertical = false
-        if case let .branch(axis, _, _) = split.root { isVertical = axis == .vertical }
-        return SplitViewHeader(
-            title: split.customName ?? splitMembers(split).map(\.title).joined(separator: " + "),
+        return SplitViewTitleMenu(
+            title: splitName(split),
             isPinned: split.isPinned,
-            isVertical: isVertical,
             rename: { presentSplitRename(split) },
             togglePinned: { model.splits.togglePinned(split.id) },
             dissolve: { model.splits.dissolve(split.id) },
@@ -2238,9 +2250,10 @@ struct MainWindow: View {
         Task { await connectPersonalAgents() }
     }
 
-    /// The title bar beside the sidebar for what the tab shows: `item` is the window's item the title bar
-    /// heads (the shown task, the split view or the new-task screen), nil for a screen in its place
-    /// (scheduled tasks, restoring), which shows neither a task's header nor the tabs.
+    /// The title bar beside the sidebar for what the tab shows: `item` is the window's item the tab shows
+    /// (the shown task, the split view or the new-task screen), nil for a screen in its place (scheduled
+    /// tasks, restoring), which shows neither a task's header nor the tabs. A split view's panes have
+    /// their own headers, so for it the title bar shows only the window's tabs and buttons.
     private func titleBar(for item: WindowItem?, focusedSurface: FocusState<TaskSurface?>.Binding? = nil,
                           title: String? = nil) -> IntegratedTitleBar {
         let session = item.flatMap { item -> SessionRecord? in
@@ -2274,7 +2287,7 @@ struct MainWindow: View {
             pullRequest: session.flatMap { model.pullRequests.pullRequest(for: $0.id) },
             servers: { model.resourceMonitor.servers(of: $0.id) },
             onOpenServer: openServer,
-            splitHeader: isSplit ? titleBarSplitHeader : nil,
+            splitTitle: isSplit ? titleBarSplitTitle : nil,
             draftPanels: item == .home ? taskPanelState : nil,
             tabs: item != nil && model.splits.tabs.count > 1 ? TitleBarTabs(
                 tabs: windowTabs,
@@ -2870,9 +2883,27 @@ struct MainWindow: View {
                 CommandPaletteItem(
                     id: "rename-split",
                     title: L10n.string("Rename split view…"),
-                    subtitle: split.customName ?? splitMembers(split).map(\.title).joined(separator: " + "),
+                    subtitle: splitName(split),
                     systemName: "pencil",
                     action: { presentSplitRename(split) }
+                )
+            )
+            items.append(
+                CommandPaletteItem(
+                    id: "pin-split",
+                    title: L10n.string(split.isPinned ? "Unpin split view" : "Pin split view"),
+                    subtitle: splitName(split),
+                    systemName: split.isPinned ? "pin.slash" : "pin",
+                    action: { model.splits.togglePinned(split.id) }
+                )
+            )
+            items.append(
+                CommandPaletteItem(
+                    id: "archive-split",
+                    title: L10n.string("Archive tasks…"),
+                    subtitle: splitName(split),
+                    systemName: "archivebox",
+                    action: { presentSplitArchive(split) }
                 )
             )
         }

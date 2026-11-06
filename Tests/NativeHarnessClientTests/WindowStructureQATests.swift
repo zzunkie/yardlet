@@ -506,6 +506,9 @@ final class WindowStructureQATests: XCTestCase {
             host.settle(passes: 20, interval: 0.03)
             try draw(host, "split-three-narrow-panes", appearance)
             if light {
+                // With one tab, the title bar beside the sidebar has no name menu: each pane's header heads its task.
+                XCTAssertFalse(titleBarControls(in: host).contains { $0.role == NSAccessibility.Role.menuButton.rawValue },
+                               "a split view's title bar has no header of its own")
                 let panes = paneHeaderControls(in: host)
                 // The right half was split again: the left pane keeps half, the other two a quarter each.
                 XCTAssertEqual(panes.filter { $0.label == more }.count, 2, "the two narrow panes fold their buttons")
