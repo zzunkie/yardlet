@@ -20,6 +20,13 @@ protocol ConnectorToolProviding: AnyObject {
     func connectorTools(for context: ConnectorToolContext) async -> [ToolJSON]
     /// Runs a connector's tool; nil when no connector has a tool of this name.
     func callConnectorTool(named name: String, arguments: ToolJSON, for context: ConnectorToolContext) async -> AgentToolResult?
+    /// The kinds of services whose tools the task's list holds ("Gmail", "Linear"), each once and
+    /// without accounts, for the server's instructions.
+    func serviceNames(for context: ConnectorToolContext) -> [String]
+}
+
+extension ConnectorToolProviding {
+    func serviceNames(for context: ConnectorToolContext) -> [String] { [] }
 }
 
 /// Yardlet's task suggestion tools (`spawn_task`, `dismiss_task`), answered by the app, which keeps
@@ -158,14 +165,17 @@ final class AgentToolBroker: AgentToolLaunchProviding {
         workspaceRoots[localSessionID] = roots
         browserToolsByTask[localSessionID] = browserTools
         connectorScopes[localSessionID] = connectorScope
+        var launchEnvironment = [
+            AgentToolEnvironment.endpoint: environment.endpoint,
+            AgentToolEnvironment.token: token,
+            AgentToolEnvironment.session: localSessionID.uuidString,
+            AgentToolEnvironment.appProcess: String(ProcessInfo.processInfo.processIdentifier)
+        ]
+        let services = connectors?.serviceNames(for: connectorContext(localSessionID)) ?? []
+        if !services.isEmpty { launchEnvironment[AgentToolEnvironment.services] = services.joined(separator: "\n") }
         return AgentToolServerLaunch(
             command: executable.path(percentEncoded: false),
-            environment: [
-                AgentToolEnvironment.endpoint: environment.endpoint,
-                AgentToolEnvironment.token: token,
-                AgentToolEnvironment.session: localSessionID.uuidString,
-                AgentToolEnvironment.appProcess: String(ProcessInfo.processInfo.processIdentifier)
-            ],
+            environment: launchEnvironment,
             privateDirectory: environment.privateDirectory,
             leftOutServerURLs: connectorScope?.leftOutNativeServers.map(\.url) ?? []
         )

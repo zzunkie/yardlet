@@ -76,28 +76,31 @@ package enum AgentToolCatalog {
     /// Every browser tool's name starts with this; connector tools never do.
     package static let browserToolPrefix = "browser_"
 
-    package static let serverInstructions = """
-        Browser tools act on this task's own tabs in Yardlet's built-in Chromium browser, which the \
-        user can watch in the task's browser panel: on the active tab, or on the tab a tool's tabId \
-        names. browser_tab_new opens another tab, in the background unless foreground is set. Call \
-        browser_snapshot to read the page, find an element or text on it, and get element references \
-        such as @e3; an element keeps its reference while it stays on the page, and a navigation ends \
-        them. Tab ids and element references are the tools' own and the user never sees them: when you \
-        tell the user about a tab, name it by its page's title or site, and an element by its label or text. \
-        When a page asks you to sign in or for a two-factor code and you have browser_fill_credential, call it \
-        first, even when the site may ask for another step after: it fills the username and password, the current \
-        authenticator code or a passkey the person saved in Yardlet's password manager without showing you the \
-        values, and when it cannot fill, its answer says why and what would. A code a site sends to mail or texts \
-        you can read is yours to type. Hand the tab to the person with browser_handoff for what is theirs to do: a \
-        sign-in with nothing saved, a passkey on their phone or Touch ID, a CAPTCHA, a payment, or a choice that is \
-        theirs to make. \
-        spawn_task flags out-of-scope work for a separate task: the user sees a chip in this \
-        conversation and decides whether to start it. The session tools read the person's other \
-        Yardlet tasks, message one, start a task, or run a subagent on a harness. The \
-        scheduled-task tools create and change the person's Yardlet schedules, which run while Yardlet \
-        is open. Other tools come from services the user connected in Yardlet, such as issue trackers \
-        or documents; each name starts with its service, and each acts with the user's own account there.
-        """
+    /// What the server tells its client at `initialize`, which Claude Code and Codex show the model whole
+    /// (Claude Code keeps 4,096 characters of it, and Codex's code mode repeats it with every tool), so it
+    /// stays short: what the tools are for, the sign-in rule the agent reads before it loads any tool
+    /// (docs/BROWSER_VAULT_DESIGN.md, "Agents sign in by themselves"), and the kinds of services the task
+    /// has connected, without accounts. What each tool does is in its own description.
+    package static func serverInstructions(services: [String]) -> String {
+        var text = "Browser tools act on this task's own tabs in Yardlet's browser, which the user can watch in the "
+            + "task's browser panel. When a page asks you to sign in or for a two-factor code, call "
+            + "browser_fill_credential first if you have it, even when the site may ask for another step after; a code "
+            + "sent to mail or texts you can read is yours to type. Hand the tab to the user with browser_handoff for "
+            + "what is theirs to do: a sign-in with nothing saved, a passkey on their phone or Touch ID, a CAPTCHA, a "
+            + "payment, or a choice of theirs. spawn_task flags out-of-scope work as a chip the user may start. The "
+            + "session tools read and message the user's other Yardlet tasks, start one, or run a subagent; the "
+            + "scheduled-task tools manage the user's Yardlet schedules."
+        let services = services.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        text += services.isEmpty
+            ? " Other tools come from services the user connected in Yardlet; each name starts with its service, and "
+                + "each acts with the user's own account there."
+            : " Services the user connected in Yardlet: \(services.joined(separator: ", ")). Each tool's name starts "
+                + "with its service, and each acts with the user's own account there."
+        return text
+    }
+
+    /// The instructions of a server that does not know the task's services (not started by Yardlet).
+    package static var serverInstructions: String { serverInstructions(services: []) }
 
     /// The tools Yardlet itself offers, when the app cannot say which a task has: the browser tools,
     /// the task suggestion tools, the session tools, the settings tools, then the scheduled-task tools.
@@ -161,7 +164,8 @@ package enum AgentToolCatalog {
                 + "element or text on the page. Elements you can act on carry references such as @e3 for the other "
                 + "browser tools. An element keeps its reference in later snapshots while it stays on the page; a "
                 + "reference whose element is not in the latest snapshot stops working, and a navigation of the page "
-                + "ends them all.",
+                + "ends them all. References are the tools' own and the user never sees them: name an element to the "
+                + "user by its label or text.",
             inputSchema: pageInput([:]),
             readOnly: true
         ),
@@ -381,7 +385,8 @@ package enum AgentToolCatalog {
             title: "List tabs",
             description: "List this task's browser tabs: each tab's id, the origin of its page (not its title, which "
                 + "the page writes), which one is active, which one the panel shows and whether the person is using it, "
-                + "and say whether the task's browser panel is open.",
+                + "and say whether the task's browser panel is open. Tab ids are the tools' own and the user never sees "
+                + "them: name a tab to the user by its page's title or site.",
             inputSchema: object([:]),
             readOnly: true
         ),

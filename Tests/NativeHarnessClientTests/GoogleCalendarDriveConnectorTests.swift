@@ -46,8 +46,7 @@ final class GoogleCalendarDriveConnectorTests: XCTestCase {
 
     private func call(_ center: ConnectorCenter, _ name: String, _ arguments: [String: ToolJSON] = [:],
                       task: UUID? = nil) async throws -> AgentToolResult {
-        try XCTUnwrapAsync(await center.callConnectorTool(named: name, arguments: .object(arguments),
-                                                          for: ConnectorToolContext(taskID: task)))
+        try XCTUnwrapAsync(await center.callNamingTheOnlyAccount(name, arguments, for: ConnectorToolContext(taskID: task)))
     }
 
     private func json(_ result: AgentToolResult, file: StaticString = #filePath, line: UInt = #line) throws -> ToolJSON {
@@ -112,10 +111,11 @@ final class GoogleCalendarDriveConnectorTests: XCTestCase {
         XCTAssertEqual(tools.count, 9 + 9 + 21)
         let exposed = await center.connectorTools(for: ConnectorToolContext())
         XCTAssertEqual(exposed.first { $0["name"] == .string("calendar_list_events") }?["title"],
-                       .string("Google Calendar · person@example.test: List events"))
+                       .string("Google Calendar: List events"))
         let label = try XCTUnwrap(ConnectorToolLabels.shared.label(forClaudeTool: "mcp__yardlet__drive_create_file"))
         XCTAssertEqual(label.localService, .googleDrive)
-        XCTAssertEqual(label.account, "person@example.test")
+        XCTAssertTrue(label.takesAccount)
+        XCTAssertEqual(label.account(named: "person@example.test"), "person@example.test")
         XCTAssertEqual(label.connector, "Google Drive")
 
         // Every call goes with the account's one token, to its own Calendar and Drive.
@@ -729,7 +729,7 @@ final class GoogleCalendarDriveConnectorTests: XCTestCase {
         XCTAssertNil(launch.codexConfig["mcp_servers"]?["yardlet"]?["tools"])
 
         // Claude Code's card: the account and what the call would do, with no "always allow".
-        let create = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__calendar_create_event", input: .object([
+        let create = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__calendar_create_event", input: .object(["account": .string("person@example.test"), 
             "summary": .string("Yardlet sync"), "startTime": .string("2026-10-23T15:00:00"), "endTime": .string("2026-10-23T15:30:00"),
             "attendees": .array([.object(["email": .string("bob@example.com")])]), "addGoogleMeetUrl": .bool(true)
         ])))
@@ -739,22 +739,22 @@ final class GoogleCalendarDriveConnectorTests: XCTestCase {
             XCTAssertTrue(create.detail.contains(part), "\(part) in \(create.detail)")
         }
         let delete = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__calendar_delete_event",
-                                                              input: .object(["eventId": .string("e1"), "notificationLevel": .string("NONE")])))
+                                                              input: .object(["account": .string("person@example.test"), "eventId": .string("e1"), "notificationLevel": .string("NONE")])))
         XCTAssertEqual(delete.title, L10n.format("Allow Claude to delete an event from %@'s calendar?", "person@example.test"))
         XCTAssertTrue(delete.detail.contains(L10n.string("Google emails no one about it.")))
         let respond = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__calendar_respond_to_event",
-                                                               input: .object(["eventId": .string("e1"), "responseStatus": .string("declined")])))
+                                                               input: .object(["account": .string("person@example.test"), "eventId": .string("e1"), "responseStatus": .string("declined")])))
         XCTAssertEqual(respond.title, L10n.format("Allow Claude to answer an invitation as %@?", "person@example.test"))
         XCTAssertTrue(respond.detail.contains(L10n.format("Answer: %@", L10n.string("Not going"))), respond.detail)
-        let file = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__drive_create_file", input: .object([
+        let file = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__drive_create_file", input: .object(["account": .string("person@example.test"), 
             "title": .string("Costs"), "textContent": .string("a,b\n1,2"), "contentMimeType": .string("text/csv")
         ])))
         XCTAssertEqual(file.title, L10n.format("Allow Claude to create a file in %@'s Drive?", "person@example.test"))
         XCTAssertTrue(file.detail.contains("a,b\n1,2"), file.detail)
-        XCTAssertEqual(GoogleToolApproval.request(toolName: "mcp__yardlet__drive_update_file", input: .object([:]))?.title,
+        XCTAssertEqual(GoogleToolApproval.request(toolName: "mcp__yardlet__drive_update_file", input: .object(["account": .string("person@example.test")]))?.title,
                        L10n.format("Allow Claude to change a file in %@'s Drive?", "person@example.test"))
         // A change inside a Doc, Sheet, or Slides file: which file, the kinds of change, and what it writes.
-        let docCard = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__drive_update_doc", input: .object([
+        let docCard = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__drive_update_doc", input: .object(["account": .string("person@example.test"), 
             "documentId": .string("app-doc"),
             "requests": .array([.object(["insertText": .object(["text": .string("New intro")])]),
                                 .object(["insertText": .object(["text": .string("More")])]),
@@ -764,20 +764,20 @@ final class GoogleCalendarDriveConnectorTests: XCTestCase {
         for part in [L10n.format("File %@", "app-doc"), L10n.format("Changes: %@", "insertText ×2, updateParagraphStyle"), "New intro"] {
             XCTAssertTrue(docCard.detail.contains(part), "\(part) in \(docCard.detail)")
         }
-        let cells = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__drive_update_values", input: .object([
+        let cells = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__drive_update_values", input: .object(["account": .string("person@example.test"), 
             "spreadsheetId": .string("app-sheet"), "range": .string("Costs!A2:B2"),
             "values": .array([.array([.string("servers"), .integer(120)])])
         ])))
         XCTAssertEqual(cells.title, L10n.format("Allow Claude to change a spreadsheet in %@'s Drive?", "person@example.test"))
         XCTAssertTrue(cells.detail.contains(L10n.format("Range: %@", "Costs!A2:B2")), cells.detail)
         XCTAssertTrue(cells.detail.contains("servers\t120"), cells.detail)
-        let rows = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__drive_insert_dimension", input: .object([
+        let rows = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__drive_insert_dimension", input: .object(["account": .string("person@example.test"), 
             "spreadsheetId": .string("app-sheet"), "dimension": .string("ROWS"), "startIndex": .integer(1), "endIndex": .integer(3)
         ])))
         XCTAssertTrue(rows.detail.contains(L10n.format("Inserts %lld rows.", Int64(2))), rows.detail)
-        XCTAssertEqual(GoogleToolApproval.request(toolName: "mcp__yardlet__drive_update_presentation", input: .object([:]))?.title,
+        XCTAssertEqual(GoogleToolApproval.request(toolName: "mcp__yardlet__drive_update_presentation", input: .object(["account": .string("person@example.test")]))?.title,
                        L10n.format("Allow Claude to change a presentation in %@'s Drive?", "person@example.test"))
-        XCTAssertNotNil(GoogleToolApproval.request(toolName: "mcp__yardlet__gmail_send_message", input: .object([:])),
+        XCTAssertNotNil(GoogleToolApproval.request(toolName: "mcp__yardlet__gmail_send_message", input: .object(["account": .string("person@example.test")])),
                         "Gmail's cards come through the same place")
         for read in ["mcp__yardlet__calendar_list_events", "mcp__yardlet__drive_read_file_content", "mcp__yardlet__drive_read_doc",
                      "mcp__yardlet__drive_get_values", "mcp__yardlet__drive_read_slide_page_thumbnail",
@@ -805,7 +805,8 @@ final class GoogleCalendarDriveConnectorTests: XCTestCase {
             await transport.emit(.object([
                 "type": .string("control_request"), "request_id": .string(id),
                 "request": .object(["subtype": .string("can_use_tool"), "tool_name": .string(tool),
-                                    "input": .object(["eventId": .string("e1")]), "tool_use_id": .string("toolu-\(id)"),
+                                    "input": .object(["account": .string("person@example.test"), "eventId": .string("e1")]),
+                                    "tool_use_id": .string("toolu-\(id)"),
                                     "permission_suggestions": .array([suggestion])])
             ]))
         }
@@ -819,7 +820,7 @@ final class GoogleCalendarDriveConnectorTests: XCTestCase {
 
     // MARK: - Two accounts
 
-    func testTwoAccountsKeepTheirOwnTokensNamesAndServices() async throws {
+    func testTwoAccountsKeepTheirOwnTokensAndServicesAndShareTheirTools() async throws {
         let google = FakeGoogleWorkspace()
         let credentials = InMemoryConnectorCredentialStore()
         let (center, personal) = try await signedIn("person@example.test", google: google, credentials: credentials)
@@ -828,14 +829,21 @@ final class GoogleCalendarDriveConnectorTests: XCTestCase {
         await center.waitForConnection(work.id)
         let settled = try XCTUnwrap(center.googleAccounts.first { $0.id == work.id })
         XCTAssertEqual(settled.address, "developer@company.test")
-        XCTAssertEqual(settled.services.map(\.slug), ["calendar_developer", "drive_developer"],
-                       "A second account's tools are named after it")
         XCTAssertEqual(center.googleAccounts.map(\.address), ["person@example.test", "developer@company.test"])
         XCTAssertNotEqual(try credentials.load(personal.id)?.accessToken, try credentials.load(work.id)?.accessToken)
 
-        _ = try json(try await call(center, "calendar_list_calendars"))
+        // Both accounts' Calendar and Drive share one set of tools, each call naming its account.
+        let both = await center.connectorTools(for: ConnectorToolContext())
+        XCTAssertEqual(both.count, 9 + 9 + 21)
+        func accounts(_ tools: [ToolJSON], _ name: String) -> ToolJSON? {
+            tools.first { $0["name"] == .string(name) }?["inputSchema"]?["properties"]?["account"]?["enum"]
+        }
+        XCTAssertEqual(accounts(both, "calendar_list_calendars"),
+                       .array([.string("person@example.test"), .string("developer@company.test")]))
+        XCTAssertEqual(accounts(both, "gmail_list_labels"), .array([.string("person@example.test")]))
+        _ = try json(try await call(center, "calendar_list_calendars", ["account": .string("person@example.test")]))
         XCTAssertEqual(google.requests.last?.account, "person@example.test")
-        let theirs = try json(try await call(center, "calendar_developer_list_calendars"))
+        let theirs = try json(try await call(center, "calendar_list_calendars", ["account": .string("developer@company.test")]))
         XCTAssertEqual(google.requests.last?.account, "developer@company.test")
         XCTAssertEqual(theirs["calendars"]?.arrayValue?.first?["id"], .string("developer@company.test"))
 
@@ -843,17 +851,19 @@ final class GoogleCalendarDriveConnectorTests: XCTestCase {
         let task = UUID()
         let workCalendar = try XCTUnwrap(settled.record(.googleCalendar))
         center.setConnector(workCalendar.id, on: false, inTask: task)
-        let inTask = await center.connectorTools(for: ConnectorToolContext(taskID: task)).compactMap { $0["name"]?.stringValue }
-        XCTAssertFalse(inTask.contains { $0.hasPrefix("calendar_developer_") })
-        XCTAssertTrue(inTask.contains("drive_developer_search_files"))
-        XCTAssertTrue(inTask.contains("calendar_list_events"))
+        let inTask = await center.connectorTools(for: ConnectorToolContext(taskID: task))
+        XCTAssertEqual(accounts(inTask, "calendar_list_events"), .array([.string("person@example.test")]))
+        XCTAssertEqual(accounts(inTask, "drive_search_files"),
+                       .array([.string("person@example.test"), .string("developer@company.test")]))
 
-        // Turning Gmail on for the second account names it after the account too.
+        // Gmail turned on for the second account joins the Gmail tools the first has.
         await center.setService(.gmail, on: true, account: work.id)
         let workGmail = try XCTUnwrap(center.googleAccounts.first { $0.id == work.id }?.record(.gmail))
         await center.waitForConnection(workGmail.id)
-        XCTAssertEqual(center.record(workGmail.id)?.slug, "gmail_developer")
         XCTAssertEqual(center.record(workGmail.id)?.status, .connected)
+        let withGmail = await center.connectorTools(for: ConnectorToolContext())
+        XCTAssertEqual(accounts(withGmail, "gmail_list_labels"),
+                       .array([.string("person@example.test"), .string("developer@company.test")]))
 
         // Signing in to an account that is here already adds its services to that account.
         google.google.signInAs = "Person@example.test"
@@ -865,14 +875,15 @@ final class GoogleCalendarDriveConnectorTests: XCTestCase {
 
         // A revoked sign-in leaves all that account's services needing sign-in, not the other's.
         google.google.revoke("developer@company.test")
-        let refused = try await call(center, "drive_developer_search_files", ["query": .string("x")])
+        let refused = try await call(center, "drive_search_files",
+                                     ["account": .string("developer@company.test"), "query": .string("x")])
         XCTAssertTrue(refused.isError)
         XCTAssertTrue(refused.text.contains("needs the user to sign in again"), refused.text)
         XCTAssertEqual(center.googleAccounts.first { $0.id == work.id }?.services.map(\.status),
                        [.signInRequired, .signInRequired, .signInRequired])
         XCTAssertEqual(center.googleAccounts.first { $0.id == personal.id }?.services.map(\.status),
                        [.connected, .connected, .connected])
-        _ = try json(try await call(center, "drive_search_files", ["query": .string("x")]))
+        _ = try json(try await call(center, "drive_search_files", ["account": .string("person@example.test"), "query": .string("x")]))
     }
 
     // MARK: - Pieces

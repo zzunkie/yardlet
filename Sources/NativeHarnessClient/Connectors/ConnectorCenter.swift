@@ -780,9 +780,9 @@ final class ConnectorCenter: ConnectorToolProviding {
         for record in accountRecords(accountID) { remove(record.id) }
     }
 
-    /// A new connector for one service of a Google or Microsoft account. Its tools are named
-    /// after the service (`calendar_…`), or after the service and the account
-    /// (`calendar_work_…`) when another account has that name already.
+    /// A new connector for one service of a Google or Microsoft account. Its slug is the service's
+    /// (`calendar`), or the service's and the account's (`calendar_work`) when another account has that
+    /// one already; its tools are the service's, which every account shares (`toolOwners`).
     private func makeAccountRecord(_ service: LocalConnectorService, address: String?, accountID: UUID?) -> ConnectorRecord {
         let taken = Set(connectors.map(\.slug))
         let base = if let address, taken.contains(service.slugBase) {
@@ -1242,7 +1242,8 @@ final class ConnectorCenter: ConnectorToolProviding {
             let reason: Error? = granted.contains(service) ? nil
                 : held.contains(service) ? GoogleSignInError.needsOwnApp(held) : Self.scopeNotGranted(provider, [service])
             failures[record.id] = (reason as? LocalizedError)?.errorDescription
-            // A second account's tools are named after it (`gmail_work_…`), the first keeps `gmail_…`.
+            // A second account's own slug is named after it (`gmail_work`), the first keeps `gmail`. The tools are
+            // the service's, which every account shares (`toolOwners`); the slug names only the account's old ones.
             if firstSignIn, record.slug != service.slugBase {
                 let local = address.split(separator: "@").first.map(String.init) ?? address
                 let taken = Set(connectors.filter { $0.id != record.id }.map(\.slug))
@@ -1523,7 +1524,9 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// The tools' runner for a mail account, over the connection the mailbox shares; nil without its servers.
     private func mailAccountRunner(_ record: ConnectorRecord, taskFolders: [URL] = []) -> MailAccountToolRunner? {
         guard let address = record.account, let session = imapSession(record) else { return nil }
-        let account = MailAccount(id: record.id, address: address, provider: .imap, connectorSlug: record.slug, service: record.name)
+        let account = MailAccount(id: record.id, address: address, provider: .imap,
+                                  connectorSlug: ConnectorToolNaming.accountToolPrefix(for: .imapMail, among: connectors),
+                                  service: record.name)
         return MailAccountToolRunner(transport: IMAPMailTransport(session: session, account: account), account: account,
                                      taskFolders: taskFolders)
     }
@@ -1927,18 +1930,71 @@ final class ConnectorCenter: ConnectorToolProviding {
     func connectorTools(for context: ConnectorToolContext) async -> [ToolJSON] {
         var names = Set<String>()
         var tools: [ToolJSON] = []
-        for record in connectors where record.status == .connected
-            || (record.status == .signInRequired && record.toolsUpdatedAt != nil) {
-            guard state(of: record, inTask: context.taskID, scope: context.scope) == .on else { continue }
-            if record.localService == nil, record.program == nil, record.status == .connected { refreshToolsIfStale(record) }
-            for tool in record.offeredTools {
-                guard let exposed = Self.exposedTool(tool, of: record),
-                      let name = exposed["name"]?.stringValue, names.insert(name).inserted
-                else { continue }
-                tools.append(exposed)
+        for owner in toolOwners(listedIn: context) {
+            let exposed: [ToolJSON]
+            switch owner {
+            case .connector(let record):
+                if record.localService == nil, record.program == nil, record.status == .connected { refreshToolsIfStale(record) }
+                exposed = record.offeredTools.compactMap { Self.exposedTool($0, of: record) }
+            case .accounts(let service, let records):
+                let prefix = ConnectorToolNaming.accountToolPrefix(for: service, among: connectors)
+                let accounts = records.compactMap(\.account)
+                exposed = (service.tools ?? []).compactMap {
+                    Self.exposedTool($0, of: service, prefix: prefix, accounts: accounts)
+                }
+            }
+            for tool in exposed {
+                guard let name = tool["name"]?.stringValue, names.insert(name).inserted else { continue }
+                tools.append(tool)
             }
         }
         return tools
+    }
+
+    func serviceNames(for context: ConnectorToolContext) -> [String] {
+        var names: [String] = []
+        for owner in toolOwners(listedIn: context) {
+            let name = switch owner {
+            case .connector(let record): record.localService?.name ?? record.name
+            case .accounts(let service, _): service.name
+            }
+            if !names.contains(name) { names.append(name) }
+        }
+        return names
+    }
+
+    /// What answers a Yardlet tool name: one connector's tool, or a tool the accounts of one service
+    /// share, whose call names the account (`LocalConnectorService.sharesToolsAcrossAccounts`).
+    private enum ToolOwner {
+        case connector(ConnectorRecord)
+        /// The service's accounts in the order they were added, each with its address.
+        case accounts(LocalConnectorService, [ConnectorRecord])
+    }
+
+    /// Whose tools a task's list holds, in the order of the connectors: a service whose accounts share
+    /// their tools comes once, where its first account is, with those of its accounts the list offers.
+    /// A connector that worked and now needs a new sign-in keeps its tools (`connectorTools(for:)`).
+    private func toolOwners(listedIn context: ConnectorToolContext?) -> [ToolOwner] {
+        var owners: [ToolOwner] = []
+        var accountsByService: [LocalConnectorService: [ConnectorRecord]] = [:]
+        for record in connectors {
+            if let context {
+                guard record.status == .connected || (record.status == .signInRequired && record.toolsUpdatedAt != nil),
+                      state(of: record, inTask: context.taskID, scope: context.scope) == .on else { continue }
+            }
+            guard let service = record.localService, service.sharesToolsAcrossAccounts else {
+                owners.append(.connector(record))
+                continue
+            }
+            // An account is offered once its address is known; the address is what a call names.
+            guard record.account != nil else { continue }
+            if accountsByService[service] == nil { owners.append(.accounts(service, [])) }
+            accountsByService[service, default: []].append(record)
+        }
+        return owners.map { owner in
+            guard case .accounts(let service, _) = owner else { return owner }
+            return .accounts(service, accountsByService[service] ?? [])
+        }
     }
 
     /// Runs a connector's tool within one limit for the whole call (`toolCallLimit`), which ends before the
@@ -1946,12 +2002,42 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// that the connection gave out. A call that changes something is never sent again by Yardlet once it
     /// may have reached the server; a read is, once, when the server could not answer it.
     func callConnectorTool(named name: String, arguments: ToolJSON, for context: ConnectorToolContext) async -> AgentToolResult? {
-        guard let (record, toolName) = owner(ofTool: name) else { return nil }
+        guard let (owner, toolName) = owner(ofTool: name) else { return nil }
+        let record: ConnectorRecord
+        var arguments = arguments
+        switch owner {
+        case .connector(let only):
+            record = only
+        case .accounts(let service, let accounts):
+            // The account is checked first: there is no default to act in, so a call that names none, or
+            // one Yardlet does not have, is refused before anything is sent.
+            let addresses = accounts.filter { state(of: $0, inTask: context.taskID, scope: context.scope) == .on }
+                .compactMap(\.account)
+            let tool = service.tools?.first { $0["name"]?.stringValue == toolName }
+            if let failure = AgentToolArgumentCheck.failure(
+                tool: name, arguments: arguments, schema: Self.accountInput(tool?["inputSchema"], of: service, accounts: addresses)) {
+                return failure
+            }
+            let named = arguments[ConnectorToolNaming.accountArgument]?.stringValue ?? ""
+            guard let chosen = Self.record(forAccount: named, in: accounts) else {
+                let choices = addresses.isEmpty ? "None of its accounts is on for this task."
+                    : "account takes one of: \(addresses.joined(separator: ", "))."
+                let unknown = named.isEmpty ? "" : " Yardlet has no \(service.name) account \(named)."
+                return .failure("\(name) was not run:\(unknown) \(choices)",
+                                .invalidArguments, retry: .withChanges,
+                                details: ["account": .string(named), "accounts": .array(addresses.map(ToolJSON.string))])
+            }
+            record = chosen
+            if case .object(var fields) = arguments {
+                fields[ConnectorToolNaming.accountArgument] = nil
+                arguments = .object(fields)
+            }
+        }
         switch state(of: record, inTask: context.taskID, scope: context.scope) {
         case .on:
             break
         case .off:
-            return .failure("\(record.name) is turned off for this task in Yardlet. The user can turn it on in the "
+            return .failure("\(record.displayName) is turned off for this task in Yardlet. The user can turn it on in the "
                 + "composer's + → Connectors.", .refused, retry: .no)
         case .harnessHasIt:
             return .failure("This task's harness has its own \(record.name) server; use that one's tools.", .refused,
@@ -2113,19 +2199,22 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// and an IMAP account keeps one connection for the mailbox and its tools.
     func mailAccounts() -> [(MailAccount, any MailAccountTransport)] {
         connectors.compactMap { record in
-            guard record.status == .connected, let address = record.account else { return nil }
-            switch record.localService {
-            case .gmail?:
-                let account = MailAccount(id: record.credentialID, address: address, provider: .gmail, connectorSlug: record.slug)
+            guard record.status == .connected, let address = record.account,
+                  let service = record.localService, [.gmail, .outlookMail, .imapMail].contains(service) else { return nil }
+            // The account's tools are its service's, which every account shares; a call names the address.
+            let tools = ConnectorToolNaming.accountToolPrefix(for: service, among: connectors)
+            switch service {
+            case .gmail:
+                let account = MailAccount(id: record.credentialID, address: address, provider: .gmail, connectorSlug: tools)
                 let api = GmailAPI(base: environment.google.gmailAPI, session: accountSession(record.credentialID))
                 return (account, GmailMailTransport(api: api, account: account))
-            case .outlookMail?:
-                let account = MailAccount(id: record.credentialID, address: address, provider: .outlook, connectorSlug: record.slug)
+            case .outlookMail:
+                let account = MailAccount(id: record.credentialID, address: address, provider: .outlook, connectorSlug: tools)
                 let api = GraphAPI(base: environment.microsoft.graph, session: accountSession(record.credentialID))
                 return (account, OutlookMailTransport(api: api, account: account))
-            case .imapMail?:
+            case .imapMail:
                 guard let session = imapSession(record) else { return nil }
-                let account = MailAccount(id: record.id, address: address, provider: .imap, connectorSlug: record.slug,
+                let account = MailAccount(id: record.id, address: address, provider: .imap, connectorSlug: tools,
                                           service: record.name)
                 return (account, IMAPMailTransport(session: session, account: account))
             default:
@@ -2137,7 +2226,13 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// The draft a mail send (or a Gmail delete) names, read for its request card (`GmailToolApproval`);
     /// nil when the tool is not a connected mail account's or its server did not answer.
     func mailDraftPreview(tool name: String, arguments: [String: ToolJSON]) async -> MailDraftPreview? {
-        guard let (record, _) = owner(ofTool: name), record.status == .connected else { return nil }
+        guard let (owner, _) = owner(ofTool: name) else { return nil }
+        let account: ConnectorRecord? = switch owner {
+        case .connector(let record): record
+        case .accounts(_, let accounts):
+            Self.record(forAccount: arguments[ConnectorToolNaming.accountArgument]?.stringValue, in: accounts)
+        }
+        guard let record = account, record.status == .connected else { return nil }
         switch record.localService {
         case .gmail?:
             let api = GmailAPI(base: environment.google.gmailAPI, session: accountSession(record.credentialID))
@@ -2152,15 +2247,29 @@ final class ConnectorCenter: ConnectorToolProviding {
         }
     }
 
-    /// The connector and server tool name behind one of Yardlet's names.
-    private func owner(ofTool name: String) -> (ConnectorRecord, String)? {
-        for record in connectors where name.hasPrefix(record.slug + "_") {
-            for tool in record.offeredTools {
+    /// What answers one of Yardlet's names, and the server's name for the tool, in the order a task's
+    /// list takes them (`toolOwners`).
+    private func owner(ofTool name: String) -> (ToolOwner, String)? {
+        for owner in toolOwners(listedIn: nil) {
+            let prefix: String, tools: [ToolJSON]
+            switch owner {
+            case .connector(let record): (prefix, tools) = (record.slug, record.offeredTools)
+            case .accounts(let service, _):
+                (prefix, tools) = (ConnectorToolNaming.accountToolPrefix(for: service, among: connectors), service.tools ?? [])
+            }
+            guard name.hasPrefix(prefix + "_") else { continue }
+            for tool in tools {
                 guard let original = tool["name"]?.stringValue else { continue }
-                if ConnectorToolNaming.name(slug: record.slug, tool: original) == name { return (record, original) }
+                if ConnectorToolNaming.name(slug: prefix, tool: original) == name { return (owner, original) }
             }
         }
         return nil
+    }
+
+    /// The account of `accounts` whose address a call names, in any case.
+    private static func record(forAccount address: String?, in accounts: [ConnectorRecord]) -> ConnectorRecord? {
+        guard let address = address?.trimmingCharacters(in: .whitespacesAndNewlines), !address.isEmpty else { return nil }
+        return accounts.first { $0.account?.caseInsensitiveCompare(address) == .orderedSame }
     }
 
     /// The server's tool under Yardlet's name, its description led by the connector's name (and
@@ -2175,6 +2284,37 @@ final class ConnectorCenter: ConnectorToolProviding {
             fields["inputSchema"] = .object(["type": .string("object")])
         }
         return .object(fields)
+    }
+
+    /// A tool the accounts of one service share, under the service's name (`gmail_search_threads`): its
+    /// input takes the account to act in, required and one of `accounts`' addresses, so no call runs in
+    /// an account it did not name (mail sent from another address). The list changes with the accounts,
+    /// as a task's tools change when an account is added or removed.
+    static func exposedTool(_ tool: ToolJSON, of service: LocalConnectorService, prefix: String,
+                            accounts: [String]) -> ToolJSON? {
+        guard var fields = tool.objectValue, let name = fields["name"]?.stringValue else { return nil }
+        fields["name"] = .string(ConnectorToolNaming.name(slug: prefix, tool: name))
+        let title = fields["title"]?.stringValue ?? fields["annotations"]?["title"]?.stringValue ?? name
+        fields["title"] = .string("\(service.name): \(title)")
+        fields["description"] = .string("[\(service.name)] \(fields["description"]?.stringValue ?? title)")
+        fields["inputSchema"] = accountInput(fields["inputSchema"], of: service, accounts: accounts)
+        return .object(fields)
+    }
+
+    /// A shared tool's input: the service's own, with the account to act in, required and one of `accounts`.
+    static func accountInput(_ input: ToolJSON?, of service: LocalConnectorService, accounts: [String]) -> ToolJSON {
+        var schema = input?.objectValue ?? ["type": .string("object")]
+        var properties = schema["properties"]?.objectValue ?? [:]
+        let argument = ConnectorToolNaming.accountArgument
+        properties[argument] = .object([
+            "type": .string("string"),
+            "enum": .array(accounts.map(ToolJSON.string)),
+            "description": .string("The \(service.name) account this call acts in, by its address.")
+        ])
+        schema["properties"] = .object(properties)
+        let required = (schema["required"]?.arrayValue ?? []).filter { $0.stringValue != argument }
+        schema["required"] = .array([.string(argument)] + required)
+        return .object(schema)
     }
 
     /// A server's `CallToolResult` as Yardlet answers it. A refusal of the call's arguments in the words the MCP

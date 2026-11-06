@@ -265,7 +265,7 @@ final class IMAPMailTransportTests: XCTestCase {
         try Data("# 견적 메모".utf8).write(to: notes)
         let context = ConnectorToolContext(workspaceRoots: [folder])
         let made = try XCTUnwrapAsync(await center.callConnectorTool(named: "mail_create_draft", arguments: .object([
-            "to": .array([.string("haneul@example.com")]), "subject": .string("견적"), "body": .string("첨부 확인 부탁드립니다."),
+            "account": .string("dana@example.com"), "to": .array([.string("haneul@example.com")]), "subject": .string("견적"), "body": .string("첨부 확인 부탁드립니다."),
             "attachments": .array([.string(quote.path(percentEncoded: false)), .string(notes.path(percentEncoded: false))])
         ]), for: context))
         XCTAssertFalse(made.isError, made.text)
@@ -279,16 +279,16 @@ final class IMAPMailTransportTests: XCTestCase {
 
         let appended = state.appended.count
         let refused = try XCTUnwrapAsync(await center.callConnectorTool(named: "mail_create_draft", arguments: .object([
-            "to": .array([.string("haneul@example.com")]), "attachments": .array([.string("/etc/hosts")])
+            "account": .string("dana@example.com"), "to": .array([.string("haneul@example.com")]), "attachments": .array([.string("/etc/hosts")])
         ]), for: context))
         XCTAssertTrue(refused.isError && refused.text.contains("files come from"), refused.text)
         XCTAssertEqual(state.appended.count, appended, "A file from elsewhere saves nothing")
 
         let draftID = try XCTUnwrap(answer["draftId"]?.stringValue)
         XCTAssertTrue(GmailToolApproval.readsDraft(toolName: "mcp__yardlet__mail_send_draft"))
-        let preview = await center.mailDraftPreview(tool: "mail_send_draft", arguments: ["draftId": .string(draftID)])
+        let preview = await center.mailDraftPreview(tool: "mail_send_draft", arguments: ["account": .string("dana@example.com"), "draftId": .string(draftID)])
         let card = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__mail_send_draft",
-                                                            input: .object(["draftId": .string(draftID)]), mailDraft: preview))
+                                                            input: .object(["account": .string("dana@example.com"), "draftId": .string(draftID)]), mailDraft: preview))
         XCTAssertEqual(card.title, L10n.format("Allow Claude to send a draft from %@?", "dana@example.com"))
         XCTAssertTrue(card.detail.contains(L10n.format("To: %@", "haneul@example.com")), card.detail)
         XCTAssertTrue(card.detail.contains(L10n.format("Subject: %@", "견적")), card.detail)

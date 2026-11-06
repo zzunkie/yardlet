@@ -54,8 +54,8 @@ final class GmailConnectorTests: XCTestCase {
 
     private func call(_ center: ConnectorCenter, _ name: String, _ arguments: [String: ToolJSON] = [:],
                       folders: [URL] = []) async throws -> AgentToolResult {
-        try XCTUnwrapAsync(await center.callConnectorTool(named: name, arguments: .object(arguments),
-                                                          for: ConnectorToolContext(workspaceRoots: folders)))
+        try XCTUnwrapAsync(await center.callNamingTheOnlyAccount(name, arguments,
+                                                                 for: ConnectorToolContext(workspaceRoots: folders)))
     }
 
     /// An empty folder of the test's own, removed afterwards.
@@ -162,17 +162,22 @@ final class GmailConnectorTests: XCTestCase {
         let profile = try XCTUnwrap(google.requests.first { $0.url?.path().hasSuffix("/users/me/profile") == true })
         XCTAssertEqual(profile.value(forHTTPHeaderField: "Authorization"), "Bearer \(credential.accessToken)")
 
-        // Its tools reach harnesses under its slug, led by the account.
+        // Its tools reach harnesses under the service's name; each call names its account, one of those here.
         let tools = await center.connectorTools(for: ConnectorToolContext())
         XCTAssertEqual(tools.compactMap { $0["name"]?.stringValue },
                        ["gmail_search_threads", "gmail_get_thread", "gmail_get_message", "gmail_list_labels",
                         "gmail_create_draft", "gmail_send_draft", "gmail_send_message", "gmail_modify_labels",
                         "gmail_delete_draft"])
-        XCTAssertEqual(tools.first?["title"], .string("Gmail · person@example.test: Search threads"))
-        XCTAssertTrue(tools.first?["description"]?.stringValue?.hasPrefix("[Gmail · person@example.test] ") == true)
+        XCTAssertEqual(tools.first?["title"], .string("Gmail: Search threads"))
+        XCTAssertTrue(tools.first?["description"]?.stringValue?.hasPrefix("[Gmail] ") == true)
+        for tool in tools {
+            let schema = tool["inputSchema"]
+            XCTAssertEqual(schema?["required"]?.arrayValue?.first, .string("account"), "No default account")
+            XCTAssertEqual(schema?["properties"]?["account"]?["enum"], .array([.string("person@example.test")]))
+        }
         XCTAssertEqual(ConnectorSettingsState.make(record, in: center), .connected(tools: 9))
-        XCTAssertEqual(ConnectorToolLabels.shared.label(forClaudeTool: "mcp__yardlet__gmail_send_message")?.account,
-                       "person@example.test")
+        XCTAssertEqual(ConversationLineWording.mcpLabel("mcp__yardlet__gmail_send_message", account: "person@example.test"),
+                       "Gmail · person@example.test: send message")
     }
 
     /// The same flow through the real loopback listener: the browser stand-in follows Google's
@@ -295,7 +300,7 @@ final class GmailConnectorTests: XCTestCase {
         XCTAssertNil(center.failures[record.id])
         XCTAssertEqual(center.record(record.id), record)
         XCTAssertEqual(ConnectorSettingsState.ordered(center).map(\.id), order)
-        _ = try json(try await call(center, "gmail_list_labels"))
+        _ = try json(try await call(center, "gmail_list_labels", ["account": .string("person@example.test")]))
         XCTAssertEqual(google.account(of: try XCTUnwrap(google.requests.last)), "person@example.test")
 
         agent.declines = false
@@ -309,7 +314,7 @@ final class GmailConnectorTests: XCTestCase {
         XCTAssertEqual(ConnectorSettingsState.make(record, in: center), .connected(tools: record.offeredTools.count))
         XCTAssertEqual(ConnectorSettingsState.note(record, in: center), center.failures[record.id])
         XCTAssertEqual(ConnectorSettingsState.ordered(center).map(\.id), order)
-        _ = try json(try await call(center, "gmail_list_labels"))
+        _ = try json(try await call(center, "gmail_list_labels", ["account": .string("person@example.test")]))
         XCTAssertEqual(google.account(of: try XCTUnwrap(google.requests.last)), "person@example.test")
     }
 
@@ -665,7 +670,8 @@ final class GmailConnectorTests: XCTestCase {
             "rules": .array([.object(["toolName": .string("mcp__yardlet__gmail_send_message")])])
         ])
         await transport.emit(Self.canUseTool(id: "send-1", tool: "mcp__yardlet__gmail_send_message", input: .object([
-            "to": .array([.string("bob@example.com")]), "subject": .string("Hello"), "body": .string("See you at 3.")
+            "account": .string("person@example.test"), "to": .array([.string("bob@example.com")]),
+            "subject": .string("Hello"), "body": .string("See you at 3.")
         ]), suggestions: [suggestion]))
         let send = try await recorder.waitFor("send-1")
         XCTAssertEqual(send.title, L10n.format("Allow Claude to send an email from %@?", "person@example.test"))
@@ -682,7 +688,8 @@ final class GmailConnectorTests: XCTestCase {
 
         // A draft to delete is read from Gmail first: its recipients, subject, and attachments.
         await transport.emit(Self.canUseTool(id: "delete-1", tool: "mcp__yardlet__gmail_delete_draft",
-                                             input: .object(["draftId": .string("r-1")]), suggestions: [suggestion]))
+                                             input: .object(["account": .string("person@example.test"),
+                                                             "draftId": .string("r-1")]), suggestions: [suggestion]))
         let delete = try await recorder.waitFor("delete-1")
         XCTAssertEqual(delete.title, L10n.format("Allow Claude to delete a draft from %@?", "person@example.test"))
         let deleteDetail = try XCTUnwrap(delete.detail)
@@ -709,11 +716,13 @@ final class GmailConnectorTests: XCTestCase {
 
         let archive = try XCTUnwrap(GmailToolApproval.request(
             toolName: "mcp__yardlet__gmail_modify_labels",
-            input: .object(["threadId": .string("t1"), "removeLabelIds": .array([.string("INBOX")])])))
+            input: .object(["account": .string("person@example.test"), "threadId": .string("t1"),
+                            "removeLabelIds": .array([.string("INBOX")])])))
         XCTAssertEqual(archive.title, L10n.format("Allow Claude to change labels in %@?", "person@example.test"))
         XCTAssertTrue(archive.detail.contains(L10n.string("Archives it.")), archive.detail)
         let draft = try XCTUnwrap(GmailToolApproval.request(toolName: "mcp__yardlet__gmail_send_draft",
-                                                            input: .object(["draftId": .string("r-1")])))
+                                                            input: .object(["account": .string("person@example.test"),
+                                                                            "draftId": .string("r-1")])))
         XCTAssertEqual(draft.title, L10n.format("Allow Claude to send a draft from %@?", "person@example.test"))
         XCTAssertTrue(draft.detail.contains(L10n.string("Yardlet could not read this draft from Gmail.")), draft.detail)
         XCTAssertNil(GmailToolApproval.request(toolName: "mcp__yardlet__gmail_create_draft", input: .object([:])))
@@ -724,40 +733,63 @@ final class GmailConnectorTests: XCTestCase {
 
     // MARK: - Several accounts
 
-    func testEachAccountIsItsOwnConnectorWithItsOwnTokenAndNames() async throws {
+    /// Accounts share one set of tools: each call names the account it acts in, one of those connected and
+    /// on in the task, with no default, and goes with that account's sign-in.
+    func testAccountsShareOneSetOfToolsAndEachCallNamesItsAccount() async throws {
         let google = FakeGoogle()
         let credentials = InMemoryConnectorCredentialStore()
         let (center, personal) = try await signedIn("person@example.test", google: google, credentials: credentials)
         google.signInAs = "developer@company.test"
         let work = try XCTUnwrap(center.addGmailAccount())
         await center.waitForConnection(work.id)
-        let workRecord = try XCTUnwrap(center.record(work.id))
-        XCTAssertEqual(workRecord.account, "developer@company.test")
-        XCTAssertEqual(workRecord.slug, "gmail_developer", "A second account's tools are named after it")
+        XCTAssertEqual(center.record(work.id)?.account, "developer@company.test")
         XCTAssertEqual(center.gmailAccounts.map(\.account), ["person@example.test", "developer@company.test"])
         XCTAssertNotEqual(try credentials.load(personal.id)?.accessToken, try credentials.load(work.id)?.accessToken)
 
-        // Each call goes with its own account's token, to its own mailbox.
-        let mine = try json(try await call(center, "gmail_list_labels"))
+        let tools = await center.connectorTools(for: ConnectorToolContext())
+        XCTAssertEqual(tools.count, 9, "One set for both accounts")
+        XCTAssertTrue(tools.allSatisfy {
+            $0["inputSchema"]?["properties"]?["account"]?["enum"]
+                == .array([.string("person@example.test"), .string("developer@company.test")])
+        })
+
+        // Each call goes with the token of the account it names, in any case, to that account's mailbox.
+        let mine = try json(try await call(center, "gmail_list_labels", ["account": .string("person@example.test")]))
         XCTAssertEqual(google.account(of: try XCTUnwrap(google.requests.last)), "person@example.test")
-        let theirs = try json(try await call(center, "gmail_developer_list_labels"))
+        let theirs = try json(try await call(center, "gmail_list_labels", ["account": .string("Developer@company.test")]))
         XCTAssertEqual(google.account(of: try XCTUnwrap(google.requests.last)), "developer@company.test")
         XCTAssertEqual(mine, theirs)
 
-        let names = await center.connectorTools(for: ConnectorToolContext()).compactMap { $0["name"]?.stringValue }
-        XCTAssertEqual(names.count, 18)
-        XCTAssertTrue(names.contains("gmail_developer_send_message"))
-        XCTAssertTrue(names.contains("gmail_developer_delete_draft"))
-        XCTAssertEqual(GmailToolApproval.request(toolName: "mcp__yardlet__gmail_developer_delete_draft",
-                                                 input: .object(["draftId": .string("r-1")]))?.title,
-                       L10n.format("Allow Claude to delete a draft from %@?", "developer@company.test"))
+        // A call that names no account, or one Yardlet does not have, goes nowhere.
+        let sent = google.requests.count
+        let unnamed = try await call(center, "gmail_list_labels")
+        XCTAssertEqual(unnamed.failure?.kind, .invalidArguments, unnamed.text)
+        let unknown = try await call(center, "gmail_list_labels", ["account": .string("someone@elsewhere.test")])
+        XCTAssertEqual(unknown.failure?.kind, .invalidArguments, unknown.text)
+        XCTAssertTrue(unknown.text.contains("person@example.test, developer@company.test"), unknown.text)
+        XCTAssertEqual(google.requests.count, sent)
+
+        // The card and the conversation's row name the account the call names.
+        XCTAssertEqual(GmailToolApproval.request(toolName: "mcp__yardlet__gmail_delete_draft", input: .object([
+            "account": .string("developer@company.test"), "draftId": .string("r-1")
+        ]))?.title, L10n.format("Allow Claude to delete a draft from %@?", "developer@company.test"))
+        XCTAssertEqual(ConversationLineWording.mcpLabel("mcp__yardlet__gmail_send_message", account: "developer@company.test"),
+                       "Gmail · developer@company.test: send message")
+        // A name from before the accounts shared their tools still reads as its account's.
+        XCTAssertEqual(ConversationLineWording.mcpLabel("mcp__yardlet__gmail_developer_send_message"),
+                       "Gmail · developer@company.test: send message")
 
         // Turned off in one task, only that account leaves it.
         let task = UUID()
         center.setConnector(work.id, on: false, inTask: task)
-        let inTask = await center.connectorTools(for: ConnectorToolContext(taskID: task)).compactMap { $0["name"]?.stringValue }
+        let inTask = await center.connectorTools(for: ConnectorToolContext(taskID: task))
         XCTAssertEqual(inTask.count, 9)
-        XCTAssertTrue(inTask.allSatisfy { !$0.hasPrefix("gmail_developer_") })
+        XCTAssertEqual(inTask.first?["inputSchema"]?["properties"]?["account"]?["enum"], .array([.string("person@example.test")]))
+        let off = try XCTUnwrapAsync(await center.callConnectorTool(
+            named: "gmail_list_labels", arguments: .object(["account": .string("developer@company.test")]),
+            for: ConnectorToolContext(taskID: task)))
+        XCTAssertEqual(off.failure?.kind, .refused, off.text)
+        XCTAssertTrue(off.text.contains("developer@company.test"), off.text)
 
         // Signing in to an account that is here already keeps one connector for it.
         google.signInAs = "Person@example.test"
@@ -767,14 +799,16 @@ final class GmailConnectorTests: XCTestCase {
         XCTAssertEqual(center.gmailAccounts.count, 2)
         XCTAssertNil(try credentials.load(again.id))
         XCTAssertEqual(center.record(personal.id)?.status, .connected)
-        _ = try json(try await call(center, "gmail_list_labels"))
+        _ = try json(try await call(center, "gmail_list_labels", ["account": .string("person@example.test")]))
 
-        // Removing one leaves the other and its sign-in.
+        // Removing one leaves the other, its sign-in and its tools.
         center.remove(work.id)
         await center.waitForPendingDeletions()
         XCTAssertNil(try credentials.load(work.id))
         XCTAssertNotNil(try credentials.load(personal.id))
         XCTAssertEqual(center.gmailAccounts.map(\.account), ["person@example.test"])
+        let left = await center.connectorTools(for: ConnectorToolContext())
+        XCTAssertEqual(left.first?["inputSchema"]?["properties"]?["account"]?["enum"], .array([.string("person@example.test")]))
     }
 
     // MARK: - Reaching each harness
@@ -800,8 +834,8 @@ final class GmailConnectorTests: XCTestCase {
             let list = try XCTUnwrapAsync(await broker.list(AgentToolCall(
                 token: token, session: task.uuidString, tool: "", arguments: .object([:]), method: AgentToolCall.listMethod)))
             let gmail = list.tools.compactMap { $0["name"]?.stringValue }.filter { $0.hasPrefix("gmail_") }
-            let call = await broker.handle(AgentToolCall(token: token, session: task.uuidString,
-                                                         tool: "gmail_list_labels", arguments: .object([:])))
+            let call = await broker.handle(AgentToolCall(token: token, session: task.uuidString, tool: "gmail_list_labels",
+                                                         arguments: .object(["account": .string("person@example.test")])))
             XCTAssertEqual(gmail.count, 9, harness.rawValue)
             XCTAssertFalse(call.isError, "\(harness.rawValue): \(call.text)")
             XCTAssertTrue(call.text.contains("\"labels\""), call.text)
@@ -810,6 +844,14 @@ final class GmailConnectorTests: XCTestCase {
         // Claude's document and ACP's server carry only the launch; the token never goes to a harness.
         let launch = try XCTUnwrap(broker.agentToolServer(for: UUID(), workspaceRoots: [],
                                                           connectorScope: ConnectorTaskScope(harness: .claudeCode)))
+        // The server's instructions name the kinds of services the task has, never an account, and stay short:
+        // Codex's code mode repeats them with every tool.
+        let services = AgentToolEnvironment.services(in: launch.environment)
+        XCTAssertEqual(services, ["Gmail"])
+        let instructions = AgentToolCatalog.serverInstructions(services: services)
+        XCTAssertTrue(instructions.contains("Services the user connected in Yardlet: Gmail."), instructions)
+        XCTAssertFalse(instructions.contains("person@example.test"), instructions)
+        XCTAssertLessThan(instructions.count, 1_200)
         let documents = [launch.claudeConfig, launch.codexConfig, launch.acpServer].map { String(describing: $0) }
         for document in documents {
             XCTAssertFalse(document.contains("access-"), "No Google token in a harness's configuration")

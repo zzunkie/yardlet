@@ -19,6 +19,7 @@ import XCTest
 /// - `add-directory-own-apps-*`: the directory's own-app group, Gmail with its account count.
 /// - `settings-gmail-*`: Settings → Connectors with the Gmail accounts among the connectors.
 /// - `claude-request-send-*`: Claude Code asking before a send, on the request card.
+/// - `claude-row-send-*`: the send's row in the conversation once it ran, with the account it named.
 @MainActor
 final class GmailSetupRenderingTests: XCTestCase {
     private static let folder = "gmail-qa"
@@ -209,11 +210,13 @@ final class GmailSetupRenderingTests: XCTestCase {
 
     func testClaudeAsksBeforeASendInYardletsWords() throws {
         _ = center(Self.accounts, app: true)  // the tool names' labels, with each account
+        // The accounts share Gmail's tools; the call names the one it sends from.
         let input: JSONValue = .object([
+            "account": .string("developer@company.test"),
             "to": .array([.string("bob@example.com")]), "cc": .array([.string("carol@example.com")]),
             "subject": .string("Q3 numbers"), "body": .string("Hi Bob,\nThe numbers are attached to the thread.\nThanks")
         ])
-        let text = try XCTUnwrap(GmailToolApproval.request(toolName: "mcp__yardlet__gmail_developer_send_message", input: input))
+        let text = try XCTUnwrap(GmailToolApproval.request(toolName: "mcp__yardlet__gmail_send_message", input: input))
         XCTAssertEqual(text.title, L10n.format("Allow Claude to send an email from %@?", "developer@company.test"))
         let request = PermissionRequest(id: "perm-gmail", title: text.title, detail: text.detail, command: nil,
                                         toolCallID: "toolu_send")
@@ -223,8 +226,8 @@ final class GmailSetupRenderingTests: XCTestCase {
             TranscriptEntry(createdAt: start.addingTimeInterval(4),
                             content: .assistant(text: "I'll send it from your work account.", isStreaming: false)),
             TranscriptEntry(createdAt: start.addingTimeInterval(6), content: .activity(HarnessActivity(
-                id: "toolu_send", kind: "mcp__yardlet__gmail_developer_send_message",
-                title: "mcp__yardlet__gmail_developer_send_message", input: input.readableText), state: .running)),
+                id: "toolu_send", kind: "mcp__yardlet__gmail_send_message",
+                title: "mcp__yardlet__gmail_send_message", input: input.readableText), state: .running)),
             TranscriptEntry(createdAt: start.addingTimeInterval(7), content: .permission(request, state: .pending))
         ]
         let directory = try WindowlessRender.directory(Self.folder)
@@ -239,5 +242,21 @@ final class GmailSetupRenderingTests: XCTestCase {
             XCTAssertTrue(texts.contains(text.title), texts)
             XCTAssertTrue(texts.contains("bob@example.com"), texts)
         }
+
+        // The call's row, once it ran, names the account it sent from.
+        let activity = HarnessActivity(id: "toolu_send", kind: "mcp__yardlet__gmail_send_message",
+                                       title: "mcp__yardlet__gmail_send_message", input: input.readableText)
+        guard case .tool(let tool) = ConversationActivityProjection.kind(activity, harness: .claudeCode, phase: .completed,
+                                                                         isApproved: true) else {
+            return XCTFail("A connector call is a tool row")
+        }
+        let item = ConversationItem(id: "toolu_send", kind: .tool(tool), phase: .completed,
+                                    source: .transcript(TranscriptEntry(content: .activity(activity, state: .completed))))
+        try WindowlessRender.hostedInBothAppearances("claude-row-send", in: directory, size: NSSize(width: 560, height: 44)) {
+            page(ConversationWorkLine(item: item, harness: .claudeCode, workspaceURL: nil),
+                 size: NSSize(width: 560, height: 44), appearance: $0)
+        }
+        let row = spoken(ConversationWorkLine(item: item, harness: .claudeCode, workspaceURL: nil), size: NSSize(width: 560, height: 44))
+        XCTAssertTrue(row.contains { $0.contains("Gmail · developer@company.test: send message") }, "\(row)")
     }
 }

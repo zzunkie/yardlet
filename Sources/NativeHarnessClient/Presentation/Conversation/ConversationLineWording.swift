@@ -426,7 +426,7 @@ enum ConversationLineWording {
             }
             return words("todos", nil)
         default:
-            let label = mcpLabel(name) ?? name
+            let label = mcpLabel(name, account: arguments[ConnectorToolNaming.accountArgument]) ?? name
             return ConversationLineWords.filling(
                 localize(phase == .running ? "claude.using" : "claude.used"), [label]
             )
@@ -436,11 +436,13 @@ enum ConversationLineWording {
     /// Claude Code's name for an MCP tool, `server: tool name` (`mcp__github__create_issue` reads
     /// "github: create issue"). A server named by an ID alone, as the Claude app names its claude.ai
     /// connectors, says nothing, so the tool's own name stands alone ("slack read channel").
-    static func mcpLabel(_ name: String) -> String? {
+    /// `account` is the account a Yardlet connector's call names, for a tool its service's accounts share.
+    static func mcpLabel(_ name: String, account: String? = nil) -> String? {
         guard name.hasPrefix("mcp__") else { return nil }
-        // A Yardlet connector's tool reads as the connector's: "Linear: create issue".
+        // A Yardlet connector's tool reads as the connector's, with the account it acts in:
+        // "Linear: create issue", "Gmail · person@example.com: send message".
         if let label = ConnectorToolLabels.shared.label(forClaudeTool: name) {
-            return "\(label.connector): \(ConnectorToolLabels.spaced(label.tool))"
+            return "\(label.connectorName(account: account)): \(ConnectorToolLabels.spaced(label.tool))"
         }
         var rest = String(name.dropFirst(5))
         while rest.hasSuffix("_") { rest.removeLast() }

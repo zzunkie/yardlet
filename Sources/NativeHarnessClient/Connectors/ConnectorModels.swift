@@ -241,6 +241,13 @@ enum LocalConnectorService: String, Codable, Sendable, CaseIterable, Identifiabl
     var isGoogle: Bool { Self.google.contains(self) }
     var isMicrosoft: Bool { Self.microsoft.contains(self) }
 
+    /// A service a person may connect several accounts of: Google's, Microsoft's and mail over IMAP.
+    /// Its accounts share one set of tools, named after the service (`gmail_search_threads`), and each
+    /// call names the account it acts in (`ConnectorToolNaming.accountArgument`), as Composio's,
+    /// Pipedream's and the community Google Workspace server's tools do. Neither a harness's tool
+    /// search nor the model then chooses among copies of one tool.
+    var sharesToolsAcrossAccounts: Bool { accountProvider != nil || self == .imapMail }
+
     /// Who signs its accounts in, for a service signed in per account; nil for the rest.
     var accountProvider: ConnectorAccountProvider? {
         if isGoogle { return .google }
@@ -274,7 +281,9 @@ enum LocalConnectorService: String, Codable, Sendable, CaseIterable, Identifiabl
         }
     }
 
-    /// The first account's tool prefix (`calendar_list_events`); a later account's adds its address.
+    /// Its tools' prefix (`calendar_list_events`), which a service's accounts share
+    /// (`ConnectorToolNaming.accountToolPrefix`). A later account's own slug adds its address; it names
+    /// only the tools that account had before they were shared, in conversations from then.
     var slugBase: String {
         switch self {
         case .gmail: "gmail"
@@ -515,6 +524,15 @@ final class InMemoryConnectorCredentialStore: ConnectorCredentialStoring, @unche
 enum ConnectorToolNaming {
     static let maximumLength = 43
     static let maximumSlugLength = 20
+    /// The argument by which a call to a tool its service's accounts share names the account it acts
+    /// in, by the account's address (`LocalConnectorService.sharesToolsAcrossAccounts`).
+    static let accountArgument = "account"
+
+    /// The prefix of the tools a service's accounts share: the service's own (`gmail`), or, when
+    /// another connector holds that slug, the next one free of every other connector's.
+    static func accountToolPrefix(for service: LocalConnectorService, among records: [ConnectorRecord]) -> String {
+        slug(for: service.slugBase, taken: Set(records.filter { $0.localService != service }.map(\.slug)))
+    }
 
     /// A lowercase ASCII prefix from the connector's name. `browser` is the browser tools'.
     static func slug(for name: String, taken: Set<String>) -> String {

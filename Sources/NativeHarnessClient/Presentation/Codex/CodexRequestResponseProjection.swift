@@ -1,4 +1,5 @@
 import Foundation
+import YardletAgentTools
 
 /// A Codex approval or server request as the one request card draws it (plan B4, M12a): its
 /// answers by kind, with the buttons and the `CodexServerRequestResponse` values the Codex cards
@@ -20,7 +21,7 @@ enum CodexRequestResponseProjection {
         return ConversationRequest(
             id: request.id,
             title: request.kind.cardTitle,
-            detail: mcpUnsupportedReason(request),
+            detail: mcpUnsupportedReason(request) ?? connectorAccount(request),
             command: command(request.params),
             form: form,
             state: state,
@@ -113,6 +114,18 @@ enum CodexRequestResponseProjection {
         guard request.kind == .mcpElicitation, CodexMCPToolApproval(params: request.params) == nil,
               case let .form(form) = CodexMCPElicitation(params: request.params), !form.fields.isEmpty else { return nil }
         return .mcpForm(form.answered(request.resolution))
+    }
+
+    /// The account a Yardlet connector's tool acts in, on its approval: Codex's words name the tool, and
+    /// a tool its service's accounts share names the account only in the call's input.
+    static func connectorAccount(_ request: CodexServerRequestState) -> String? {
+        guard request.kind == .mcpElicitation, CodexMCPToolApproval(params: request.params) != nil,
+              request.params?["serverName"]?.stringValue == AgentToolEnvironment.serverName,
+              let meta = request.params?["_meta"], let tool = meta["tool_name"]?.stringValue,
+              let label = ConnectorToolLabels.shared.label(forTool: tool),
+              let account = label.account(named: meta["tool_params"]?[ConnectorToolNaming.accountArgument]?.stringValue)
+        else { return nil }
+        return L10n.format("Account: %@", account)
     }
 
     /// Why an MCP elicitation can only be declined or cancelled, for one Yardlet does not fill in.

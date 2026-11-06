@@ -602,12 +602,28 @@ final class ConnectorToolLabels: @unchecked Sendable {
         var presetID: String?
         /// The server's own name for the tool.
         var tool: String
-        /// The account the connector acts in (a Gmail address), when it has one.
+        /// The account the connector acts in (a Gmail address), when it has one; nil for a tool its
+        /// service's accounts share, whose call names the account (`takesAccount`).
         var account: String? = nil
         /// The local service behind it, whose sending and changing tools ask every time.
         var localService: LocalConnectorService? = nil
         /// Where the connector's picture comes from.
         var icons: ConnectorIconSources = .none
+        /// A tool its service's accounts share: each call names its account (`ConnectorToolNaming.accountArgument`).
+        var takesAccount = false
+
+        /// The account a call acts in: the one it names, for a tool its service's accounts share, else
+        /// the connector's own (a name from before the accounts shared their tools).
+        func account(named argument: String?) -> String? {
+            guard takesAccount else { return account }
+            let named = argument?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return named?.isEmpty == false ? named : account
+        }
+
+        /// The connector with the account a call acts in, where it has one: "Gmail · person@example.com".
+        func connectorName(account argument: String?) -> String {
+            account(named: argument).map { "\(connector) · \($0)" } ?? connector
+        }
     }
 
     static let shared = ConnectorToolLabels()
@@ -615,14 +631,29 @@ final class ConnectorToolLabels: @unchecked Sendable {
     private let lock = NSLock()
     private var labels: [String: Label] = [:]
 
+    /// The names of the connectors' tools now, and, for a service whose accounts share their tools, each
+    /// account's own names from before, so conversations from then still read as that account's.
     func update(_ records: [ConnectorRecord]) {
         var next: [String: Label] = [:]
+        var sharedBy: [LocalConnectorService: ConnectorRecord] = [:]
         for record in records {
             for tool in record.offeredTools {
                 guard let original = tool["name"]?.stringValue else { continue }
                 next[ConnectorToolNaming.name(slug: record.slug, tool: original)] =
                     Label(connector: record.name, presetID: record.presetID, tool: original, account: record.account,
                           localService: record.localService, icons: record.iconSources)
+            }
+            if let service = record.localService, service.sharesToolsAcrossAccounts, sharedBy[service] == nil {
+                sharedBy[service] = record
+            }
+        }
+        for (service, first) in sharedBy {
+            let prefix = ConnectorToolNaming.accountToolPrefix(for: service, among: records)
+            for tool in service.tools ?? [] {
+                guard let original = tool["name"]?.stringValue else { continue }
+                next[ConnectorToolNaming.name(slug: prefix, tool: original)] =
+                    Label(connector: service.name, presetID: first.presetID, tool: original, localService: service,
+                          icons: first.iconSources, takesAccount: true)
             }
         }
         lock.withLock { labels = next }
