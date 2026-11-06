@@ -324,7 +324,8 @@ extension View {
 /// What the shown tab of a tab strip is pressed on, under what the tab shows: a button that does nothing, as the
 /// strip's other tabs are buttons. In the title bar's height AppKit takes a press on SwiftUI content that no button
 /// takes to move the window, at every press while the window is not the active app's key window, so the window moved
-/// in place of the tab. What the tab shows over the handle lets presses through to it.
+/// in place of the tab. What the tab shows over the handle lets presses through to it. A split pane at the window's
+/// top has one over its harness, for the same reason.
 struct TabDragHandle: View {
     var body: some View {
         Button {} label: { Color.clear.contentShape(Rectangle()) }

@@ -668,8 +668,8 @@ struct MainWindow: View {
     /// The window shows the new-task composer, one task, or a split view. A single task keeps the
     /// shell exactly as it is without pane chrome, so the common one-task layout is unchanged. The title
     /// bar heads what the tab shows: a task's or the new-task screen's area draws it over its conversation
-    /// side, so a side panel beside the conversation reaches the window's top; a split view has it above
-    /// its panes, whose headers head their tasks' areas.
+    /// side, so a side panel beside the conversation reaches the window's top. A split view's panes head
+    /// their tasks' areas themselves and reach the window's top, unless the window's tabs stand over them.
     @ViewBuilder
     private var windowItemContent: some View {
         let item = model.splits.selection
@@ -696,8 +696,8 @@ struct MainWindow: View {
             }
         case .split:
             VStack(spacing: 0) {
-                titleBar(for: item)
                 if let split = model.splits.activeSplit {
+                    if hasTabBar { titleBar(for: item) }
                     SplitNodeView(
                         node: split.root,
                         path: [],
@@ -705,11 +705,15 @@ struct MainWindow: View {
                         onResize: { path, fractions in model.splits.resize(at: path, fractions: fractions) }
                     )
                 } else {
+                    titleBar(for: item)
                     newTaskHome
                 }
             }
         }
     }
+
+    /// The window has two tabs or more, so the title bar holds them.
+    private var hasTabBar: Bool { model.splits.tabs.count > 1 }
 
     private func sessionRecord(_ id: UUID?) -> SessionRecord? {
         id.flatMap { id in model.store.sessions.first { $0.id == id } }
@@ -720,17 +724,23 @@ struct MainWindow: View {
         let isFocused = pane.id == split.focusedPaneID
         let needsApproval = session?.status == .waitingForApproval
         let order = split.panes.firstIndex { $0.id == pane.id } ?? 0
+        let frame = split.root.frames()[pane.id]
+        let isAtWindowTop = !hasTabBar && frame?.y == 0
+        let leadsWindow = isAtWindowTop && frame?.x == 0 && !isSidebarVisible
         return Group {
             if let session {
                 // The pane's header heads its task's area, where a side panel beside the conversation
                 // puts its tabs in the header's row.
                 TaskObservationScope { taskContent(for: session) }
                     .environment(\.taskAreaHeader, TaskAreaHeader(
-                        height: SplitLayoutMetrics.paneHeaderHeight, isTitleBar: false,
-                        content: AnyView(paneHeader(pane, session: session, isFocused: isFocused))))
+                        height: isAtWindowTop ? ParityTheme.titleBarHeight : SplitLayoutMetrics.paneHeaderHeight,
+                        isTitleBar: isAtWindowTop,
+                        content: AnyView(paneHeader(pane, session: session, isFocused: isFocused,
+                                                    isAtWindowTop: isAtWindowTop, leadsWindow: leadsWindow))))
             } else {
                 VStack(spacing: 0) {
-                    paneHeader(pane, session: nil, isFocused: isFocused)
+                    paneHeader(pane, session: nil, isFocused: isFocused,
+                               isAtWindowTop: isAtWindowTop, leadsWindow: leadsWindow)
                     newTaskHome
                 }
             }
@@ -760,16 +770,25 @@ struct MainWindow: View {
     }
 
     /// The pane's task's header, whose buttons act on this pane's task (Claude app split panes each
-    /// have theirs), or for an empty pane what fills it.
-    private func paneHeader(_ pane: SplitPane, session: SessionRecord?, isFocused: Bool) -> some View {
+    /// have theirs), or for an empty pane what fills it. At the window's top it stands in for the title
+    /// bar, and in the top-left corner while the sidebar is hidden it keeps the title bar's part for the
+    /// window's buttons and the sidebar button.
+    private func paneHeader(_ pane: SplitPane, session: SessionRecord?, isFocused: Bool,
+                            isAtWindowTop: Bool, leadsWindow: Bool) -> some View {
         SplitPaneHeader(
             isFocused: isFocused,
             onFocus: { focusPane(pane) },
             onClose: { model.splits.closePane(pane.id) },
             dragged: session.map { ($0.id, WindowDragPreview(title: $0.title, harness: $0.harness)) },
-            identity: {
+            isAtWindowTop: isAtWindowTop,
+            windowLead: leadsWindow ? AnyView(TitleBarSidebarPart(
+                isSidebarVisible: false, width: TitleBarSidebarPart.collapsedWidth,
+                onToggleSidebar: toggleSidebar, onNewTask: showNewTask)) : nil,
+            identity: { isFolded in
                 if let session {
-                    TaskHeaderIdentity(session: session, actions: taskHeaderActions, compact: true)
+                    // Beside the window's own room, a narrow pane's title takes the room of the harness's name.
+                    TaskHeaderIdentity(session: session, actions: taskHeaderActions, compact: !isAtWindowTop,
+                                       showsHarnessName: !(leadsWindow && isFolded), dragsByHarness: isAtWindowTop)
                         .id(session.id)
                 } else {
                     HStack(spacing: 6) {
@@ -1009,8 +1028,9 @@ struct MainWindow: View {
     /// The focused pane's size, read from the content area and the pane's share of the split.
     private var focusedPaneSize: CGSize? {
         guard contentSize != .zero else { return nil }
-        // Below the title bar, which heads the content.
-        let area = CGSize(width: contentSize.width, height: max(0, contentSize.height - ParityTheme.titleBarHeight))
+        // Below the title bar, which heads the content; a split view's panes have it only for the tabs.
+        let titleBarHeight = model.splits.activeSplit == nil || hasTabBar ? ParityTheme.titleBarHeight : 0
+        let area = CGSize(width: contentSize.width, height: max(0, contentSize.height - titleBarHeight))
         guard let split = model.splits.activeSplit else { return area }
         guard let frame = split.root.frames()[split.focusedPaneID] else { return nil }
         return CGSize(width: area.width * frame.width, height: area.height * frame.height)
@@ -2252,8 +2272,8 @@ struct MainWindow: View {
 
     /// The title bar beside the sidebar for what the tab shows: `item` is the window's item the tab shows
     /// (the shown task, the split view or the new-task screen), nil for a screen in its place (scheduled
-    /// tasks, restoring), which shows neither a task's header nor the tabs. A split view's panes have
-    /// their own headers, so for it the title bar shows only the window's tabs and buttons.
+    /// tasks, restoring), which shows neither a task's header nor the tabs. A split view has it only
+    /// for the window's tabs: its panes have their own headers.
     private func titleBar(for item: WindowItem?, focusedSurface: FocusState<TaskSurface?>.Binding? = nil,
                           title: String? = nil) -> IntegratedTitleBar {
         let session = item.flatMap { item -> SessionRecord? in

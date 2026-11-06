@@ -224,7 +224,7 @@ extension TaskPullRequestRenderingTests {
                 // A long title shortens only once the servers are gone; the harness and pull request stay.
                 TitleBarShowcase(session: Self.session(title: "Investigate why paid bookings were left pending after the refund webhook"),
                                  pullRequest: Self.states[2].pullRequest, servers: two).frame(width: width)
-                SplitPaneHeader(isFocused: true, onFocus: {}, onClose: {}, identity: {
+                SplitPaneHeader(isFocused: true, onFocus: {}, onClose: {}, identity: { _ in
                     TaskHeaderIdentity(session: session, actions: TaskHeaderActions(servers: { _ in two }), compact: true)
                 }, controls: { _ in EmptyView() })
                 .frame(width: 460)

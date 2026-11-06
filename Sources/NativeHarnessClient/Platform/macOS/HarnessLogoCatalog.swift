@@ -66,13 +66,17 @@ struct HarnessIdentityIcon: View {
 struct HarnessIdentityLabel: View {
     let harness: HarnessKind
     var size: CGFloat = 16
+    /// The mark alone where a header has no room for the name.
+    var showsName = true
 
     var body: some View {
         HStack(spacing: 6) {
             HarnessIdentityIcon(harness: harness, size: size)
-            Text(harness.displayName)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            if showsName {
+                Text(harness.displayName)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(harness.displayName)

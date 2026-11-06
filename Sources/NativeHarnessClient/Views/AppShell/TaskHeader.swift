@@ -4,7 +4,7 @@ import SwiftUI
 /// What a task's header offers besides its panel buttons. The window draws one header for each task
 /// it shows: the title bar is the header of the task or the new-task screen the tab shows, and in a
 /// split view each pane's header is its task's header, as the Claude app gives each split pane its own
-/// header (`paneIndex`); the title bar then heads nothing, so the panes read as windows side by side.
+/// header (`paneIndex`); there the title bar is only the window's tabs, when it has two or more.
 struct TaskHeaderActions {
     var canManageTask = true
     var managesWorkspace = true
@@ -43,6 +43,10 @@ struct TaskHeaderIdentity: View {
     let actions: TaskHeaderActions
     /// A split pane's header, smaller than the title bar's.
     var compact = false
+    /// The harness's name beside its mark; a header short of room leaves it to the title.
+    var showsHarnessName = true
+    /// The header's empty part moves the window, so the pane drags by its harness (`SplitPaneHeader`).
+    var dragsByHarness = false
 
     var body: some View {
         HStack(spacing: compact ? 7 : 9) {
@@ -50,14 +54,15 @@ struct TaskHeaderIdentity: View {
             // keeps the room its harness and pull request need, as before.
             TaskTitleMenu(session: session, actions: actions, size: compact ? 12 : 13)
                 .layoutPriority(1)
-            TaskHeaderStatus(session: session, actions: actions, compact: compact)
+            TaskHeaderStatus(session: session, actions: actions, compact: compact, showsHarnessName: showsHarnessName,
+                             dragsByHarness: dragsByHarness)
         }
     }
 }
 
 /// The task's title, which opens its actions: in its header, and in the window tab that shows it. The
 /// title takes its own width, so the header's empty part beside it stays free (the window's title bar
-/// moves the window there; a split pane's header moves the pane).
+/// moves the window there; a split pane's header moves the pane, or the window at the window's top).
 struct TaskTitleMenu: View {
     let session: SessionRecord
     let actions: TaskHeaderActions
@@ -133,6 +138,8 @@ struct TaskHeaderStatus: View {
     let actions: TaskHeaderActions
     var compact = false
     var showsHarness = true
+    var showsHarnessName = true
+    var dragsByHarness = false
     @AppStorage(TaskServersPreference.key) private var showsServers = true
 
     var body: some View {
@@ -153,10 +160,11 @@ struct TaskHeaderStatus: View {
     private func row(servers: [TaskServerPort], extent: TaskServersLink.Extent) -> some View {
         HStack(spacing: compact ? 7 : 9) {
             if showsHarness {
-                HarnessIdentityLabel(harness: session.harness, size: compact ? 13 : 14)
+                HarnessIdentityLabel(harness: session.harness, size: compact ? 13 : 14, showsName: showsHarnessName)
                     .font(.system(size: compact ? 11 : 11.5))
                     .foregroundStyle(.secondary)
                     .fixedSize()
+                    .overlay { if dragsByHarness { TabDragHandle().help(session.harness.displayName) } }
             }
             if let pullRequest = actions.pullRequest(session) {
                 TaskPullRequestBadgeView(badge: TaskPullRequestBadge(pullRequest), onOpen: actions.onOpenPullRequest)
@@ -290,8 +298,8 @@ enum TaskHeaderFold {
     static let titleRoom: CGFloat = 180
 }
 
-/// A split view's name in the window tab that shows it, which opens its sidebar row's actions. The
-/// title bar has no header of its own for a split view: each pane's header heads its task.
+/// A split view's name in the window tab that shows it, which opens its sidebar row's actions. A split
+/// view has no header of its own: each pane's header heads its task.
 struct SplitViewTitleMenu: View {
     let title: String
     let isPinned: Bool
@@ -328,6 +336,11 @@ struct SplitViewTitleMenu: View {
 
 /// A split pane's header: its task's header (title, harness, state, the panel buttons that act on
 /// this pane's task) and Close pane, or for an empty pane what fills it. Pressing it focuses the pane.
+///
+/// With no tab bar over the split view, the panes reach the window's top and the top ones stand in for
+/// the title bar, so they read as windows side by side: such a header has the title bar's height and
+/// lines up with the sidebar's row, and its empty part moves the window as a title bar's does. The
+/// pane then drags by its harness beside its title, as the shown tab drags by its mark.
 struct SplitPaneHeader<Identity: View, Controls: View>: View {
     static var height: CGFloat { SplitLayoutMetrics.paneHeaderHeight }
 
@@ -338,7 +351,12 @@ struct SplitPaneHeader<Identity: View, Controls: View>: View {
     /// the two, or onto the window's tabs to give the task a tab of its own (`WindowDragState`). An empty
     /// pane does not drag.
     var dragged: (task: UUID, preview: WindowDragPreview)? = nil
-    @ViewBuilder let identity: () -> Identity
+    /// The header stands at the window's top, with no title bar above it.
+    var isAtWindowTop = false
+    /// The title bar's part for the window's buttons and the sidebar button
+    /// (`TitleBarSidebarPart`), ahead of the top-left pane while the sidebar is hidden.
+    var windowLead: AnyView? = nil
+    @ViewBuilder let identity: (_ isFolded: Bool) -> Identity
     /// The pane's buttons, folded into a menu when the header is narrow.
     @ViewBuilder let controls: (_ isFolded: Bool) -> Controls
 
@@ -346,12 +364,27 @@ struct SplitPaneHeader<Identity: View, Controls: View>: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
 
     var body: some View {
-        HStack(spacing: 6) {
-            identity()
-                .frame(minWidth: 60, maxWidth: .infinity, alignment: .leading)
+        HStack(spacing: 0) {
+            if let windowLead {
+                windowLead
+                Rectangle().fill(ParityTheme.separator).frame(width: 1)
+            }
+            header
+        }
+        .frame(height: isAtWindowTop ? ParityTheme.titleBarHeight : Self.height)
+    }
+
+    private var header: some View {
+        // The close button's room comes out of what the title and the buttons share.
+        let isFolded = TaskHeaderFold.folds(headerWidth: width - 24, interfaceScale: interfaceScale)
+        return HStack(spacing: 6) {
+            identity(isFolded)
+                .frame(minWidth: 60, maxWidth: isAtWindowTop ? nil : .infinity, alignment: .leading)
                 .layoutPriority(1)
-            // The close button's room comes out of what the title and the buttons share.
-            controls(TaskHeaderFold.folds(headerWidth: width - 24, interfaceScale: interfaceScale))
+            if isAtWindowTop {
+                WindowDragRegion(onPress: onFocus).frame(minWidth: 8, maxWidth: .infinity)
+            }
+            controls(isFolded)
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .semibold))
@@ -365,7 +398,7 @@ struct SplitPaneHeader<Identity: View, Controls: View>: View {
             .accessibilityLabel(L10n.string("Close pane"))
         }
         .padding(.horizontal, 8)
-        .frame(height: Self.height)
+        .frame(maxHeight: .infinity)
         .background(isFocused ? ParityTheme.selectedFill : ParityTheme.subtleFill)
         .contentShape(Rectangle())
         .onTapGesture(perform: onFocus)

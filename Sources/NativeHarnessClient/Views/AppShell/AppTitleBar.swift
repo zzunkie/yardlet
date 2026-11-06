@@ -97,8 +97,8 @@ struct IntegratedTitleBar: View {
     /// The ports the task's processes listen on, after its pull request (`TaskHeaderActions.servers`).
     var servers: (SessionRecord) -> [TaskServerPort] = { _ in [] }
     var onOpenServer: (SessionRecord, TaskServerPort) -> Void = { _, _ in }
-    /// The split view the window shows: the title bar shows no header for it, since each pane's header
-    /// heads its task. Its name opens its actions in its window tab.
+    /// The split view the window shows, whose name opens its actions in its window tab. The title bar
+    /// stands over a split view only for the window's tabs: each pane's header heads its task.
     var splitTitle: SplitViewTitleMenu? = nil
     /// The new-task screen's panels, when the tab shows it: its header has the terminal and side
     /// panel buttons, as a task's has (the Claude app's New session header, the Codex app's new thread).
@@ -162,9 +162,6 @@ struct IntegratedTitleBar: View {
                     if isDropTarget { TabInsertionMark() }
                     WindowDragRegion().frame(minWidth: 8, maxWidth: .infinity)
                     controls
-                } else if splitTitle != nil {
-                    if isDropTarget { TabInsertionMark() }
-                    WindowDragRegion().frame(maxWidth: .infinity)
                 } else {
                     if let title {
                         Text(title)
@@ -193,7 +190,7 @@ struct IntegratedTitleBar: View {
 
     /// Stands in for the tab bar while there is none; the bar registers itself once there are two tabs.
     private func registerAsTabBar() {
-        guard tabs == nil, session != nil || splitTitle != nil, frame != .zero else {
+        guard tabs == nil, session != nil, frame != .zero else {
             return drag?.removeWindowTabs(token: token) ?? ()
         }
         drag?.setWindowTabs(WindowDropGeometry.Strip(frame: frame, tabs: []), token: token)
@@ -230,7 +227,7 @@ struct IntegratedTitleBar: View {
                                 panelState: $panelState, focusedSurface: focusedSurface, isFolded: isFolded)
                 // Native shortcut registrations must release the previous task's binding.
                 .id(session.id)
-        } else if splitTitle == nil, let draftPanels {
+        } else if let draftPanels {
             TaskSurfaceControls(showsSessionRail: false, onToggleSessionRail: {},
                                 panelState: draftPanels, focusedSurface: focusedSurface,
                                 isFolded: isFolded, offersSessionRail: false)
