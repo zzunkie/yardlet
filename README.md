@@ -13,9 +13,10 @@
 </picture></a>
 <a href="https://www.opensourcealternatives.to"><img src="https://www.opensourcealternatives.to/badge-osa.svg" alt="As seen on Open Source Alternatives"></a>
 
-A native macOS app for running coding agents. Codex, Claude Code and other agent CLIs open side by
-side in one window of projects and tasks, while each agent keeps its own agent loop, sign-in and
-session history.
+Claude Code and Codex, better together. Yardlet is a native macOS app that runs the real agent CLIs
+you already use, Codex, Claude Code, OpenCode, Antigravity CLI and others, side by side in one window
+of projects and tasks, each with the agent loop, sign-in and session history it already has. It adds
+no agent layer of its own and writes nothing into the agents' settings.
 
 Yardlet is written in Swift and SwiftUI; it is not a web view. It does not replace the agents or
 proxy their accounts: it starts the CLI you already use, with the account you already signed in to.
