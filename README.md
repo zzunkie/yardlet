@@ -1,11 +1,17 @@
 # Yardlet
 
 [![CI](https://github.com/zzunkie/yardlet/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/zzunkie/yardlet/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/zzunkie/yardlet?label=release)](https://github.com/zzunkie/yardlet/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/zzunkie/yardlet)](LICENSE)
+[![macOS 15+](https://img.shields.io/badge/macOS-15%2B-000000?logo=apple&logoColor=white)](#requirements)
+[![Swift 6.2](https://img.shields.io/badge/Swift-6.2-F05138?logo=swift&logoColor=white)](Package.swift)
+[![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040?logo=homebrew&logoColor=white)](https://github.com/zzunkie/homebrew-tap)
 
 <a href="https://www.producthunt.com/products/yardlet-2"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1294326&theme=dark">
   <img alt="Yardlet, featured on Product Hunt" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1294326&theme=light" width="200">
 </picture></a>
+[![As seen on Open Source Alternatives](https://www.opensourcealternatives.to/badge-osa.svg)](https://www.opensourcealternatives.to)
 
 A native macOS app for running coding agents. Codex, Claude Code and other agent CLIs open side by
 side in one window of projects and tasks, while each agent keeps its own agent loop, sign-in and
