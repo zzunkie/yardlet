@@ -72,6 +72,9 @@ actor HarnessRegistry {
     /// over ACP from the version that serves it and in print mode before (`AntigravityTransport`);
     /// without this, it keeps print mode.
     private let versions: RuntimeVersionCache?
+    /// Where Antigravity's `agy acp` processes leave schema copies that go once they exit
+    /// (`AntigravitySchemaCopies`). The app passes the CLI's own folder; without it nothing is removed.
+    private let antigravitySchemaCopies: AntigravitySchemaCopies?
     private var adapters: [Key: any HarnessAdapter] = [:]
     /// The adapters start each task's harness in the task's folder, so a task whose folder is gone
     /// cannot be run (`TaskFolderMissing`). Its own adapters do; a factory's are the caller's, which
@@ -84,6 +87,7 @@ actor HarnessRegistry {
         routingPolicy: HarnessRoutingPolicy = .productDefault,
         runtimeOverrides: CLIRuntimeOverrides? = nil,
         versions: RuntimeVersionCache? = nil,
+        antigravitySchemaCopies: AntigravitySchemaCopies? = nil,
         startsHarnessesInTaskFolders: Bool? = nil
     ) {
         self.factory = factory
@@ -92,6 +96,7 @@ actor HarnessRegistry {
         self.routingPolicy = routingPolicy
         self.runtimeOverrides = runtimeOverrides
         self.versions = versions
+        self.antigravitySchemaCopies = antigravitySchemaCopies
     }
 
     func adapter(
@@ -228,7 +233,8 @@ actor HarnessRegistry {
         if HarnessCatalog.descriptor(for: harness)?.transport == .acp, !antigravityPrintMode {
             let legacy = ACPAdapter(kind: harness, executableURL: executableURL,
                 launchArguments: ACPLaunchConfiguration.arguments(for: harness, connection: connection),
-                launchEnvironmentOverrides: connection?.environment)
+                launchEnvironmentOverrides: connection?.environment,
+                schemaCopies: harness == .antigravityCLI ? antigravitySchemaCopies?.counting(executableURL) : nil)
             switch routingPolicy.route(for: harness) {
             case .legacy:
                 return legacy

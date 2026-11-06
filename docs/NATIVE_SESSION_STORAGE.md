@@ -726,7 +726,8 @@ keeps only what happened after that, next to the task.
 
 Antigravity CLI keeps its conversations in `~/.gemini/antigravity-cli` (`conversations/<id>.db`, `brain/<id>/` and the
 index `conversation_summaries.db`). Yardlet itself writes nothing there; the CLI does as tasks run, and Yardlet reads the
-index and logs (`AntigravityConversationStore`).
+index and logs (`AntigravityConversationStore`). The one thing Yardlet removes there is the CLI's extra copies of Yardlet's
+tool schemas, described below.
 
 - **How Yardlet runs it:** from 1.4.11 the CLI serves the Agent Client Protocol (`agy acp`, documented by `agy help acp`),
   and Yardlet runs it as it runs the other ACP agents: one `agy acp` process per account and storage, `session/new` for a
@@ -740,12 +741,24 @@ index and logs (`AntigravityConversationStore`).
 - **What running over ACP leaves:** `session/new` creates the conversation when the task attaches, before its first
   message, as the CLI does for any ACP client; a task removed without a message leaves an empty conversation, which
   `/resume` does not list. Each `agy acp` process writes a small file in `implicit/`, and a session given the Yardlet MCP
-  server keeps that server's tool schemas in `mcp/yardlet/`, as the CLI does for its own servers. A turn that Yardlet's
+  server keeps that server's tool schemas in `mcp/<server>/`, as the CLI does for its own servers. A turn that Yardlet's
   quit or update cut off continues at the next launch, under the restart setting, as a Claude Code turn does: the task
   loads the same conversation again (`session/load`) and sends the Claude app's continuation words as its next prompt,
   which the CLI keeps as a user step of the conversation (`RestartResumePolicy`); the CLI's own clients continue nothing,
   and its server only tells the model at that prompt that its subagents stopped with the restart. Turning Yardlet off or
   removing it leaves these as the CLI wrote them.
+- **Schema copies:** the CLI writes a server's schemas (`<toolName>.json`, `instructions.md`, about 2 MB for Yardlet's)
+  when the server starts for a session and when its tool list changes, and its prompt tells the model to read them there,
+  so they have to stay while the process runs; it does not remove them afterwards. It names servers per process: the first
+  spec named `yardlet` keeps `mcp/yardlet/`, and each other one, since every task's server carries its own token and task ID, gets
+  `yardlet_` and 8, 16 or 64 hex digits of its fingerprint, so each task attached to a process left a folder behind.
+  Yardlet removes a `yardlet_<hex>` folder whose newest file was written before the oldest running `agy` started (any of
+  them, when no `agy` runs): every process writes the copies its sessions read after it starts, so such a folder belongs
+  to no running process, and a later one that needs it writes it again. This runs in the background after an `agy acp`
+  process Yardlet started has exited, and once at launch for what a quit or crash left; a process Yardlet starts waits
+  for a sweep in progress (`AntigravitySchemaCopies`). `mcp/yardlet/`, other servers' folders and anything written since
+  the oldest running `agy` started stay, nothing is removed while the process table cannot be read, and QA runs, fixtures
+  and tests remove nothing there.
 - **Saved options:** a task keeps its model, effort and permission mode under the names print mode used (`model`,
   `reasoningEffort`, `permissionMode`, and the earlier `executionMode`), and over ACP they become the session's `model`
   and `thought_level` (`AntigravityACPOptions`). A model variant print mode saved (`gemini-3.8-flash-low`) is that model

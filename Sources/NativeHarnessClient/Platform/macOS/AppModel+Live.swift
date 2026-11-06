@@ -47,12 +47,17 @@ extension AppModel {
             // One record of the versions runtimes reported, for choosing among installs and for
             // the way a runtime runs (Antigravity CLI over ACP or in print mode).
             let runtimeVersions = RuntimeVersionCache(defaults: defaults)
+            // Only the app itself cleans Antigravity's folder, here and not in anything a view or a test
+            // reaches: a QA run shares the folder with the person's Yardlet, and a fixture runs no `agy`.
+            let antigravitySchemaCopies: AntigravitySchemaCopies? = QABackground.isOn ? nil : .live
+            antigravitySchemaCopies?.sweep()
             let model = AppModel(
                 store: SessionStore(repository: repository),
                 runtimeSelections: RuntimeSelectionStore(defaults: defaults, versions: runtimeVersions),
                 // A harness whose new CLI failed Yardlet's check runs the version before it.
                 registry: HarnessRegistry(codexEnvironmentManager: codexEnvironmentManager,
-                                          runtimeOverrides: .shared, versions: runtimeVersions),
+                                          runtimeOverrides: .shared, versions: runtimeVersions,
+                                          antigravitySchemaCopies: antigravitySchemaCopies),
                 connections: ProviderConnectionStore(fileURL: storageRootURL.appending(path: "provider-connections.json"),
                     snapshotCacheURL: storageRootURL.appending(path: ProviderConnectionStore.snapshotCacheFileName),
                     defaults: defaults),

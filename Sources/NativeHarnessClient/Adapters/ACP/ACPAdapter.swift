@@ -32,6 +32,9 @@ actor ACPAdapter:
     /// The process every open session shares. A stopped transport cannot start again, so stopping
     /// it puts a new one in its place for the next session.
     private var transport: any ACPTransport
+    /// Antigravity's copies of the tool schemas, which go once the process that wrote them has
+    /// exited (`AntigravitySchemaCopies`); nil for the other agents.
+    private let schemaCopies: AntigravitySchemaCopies?
     private let projector = ACPEventProjector()
     private let capabilityProjector = ACPCapabilityProjector()
 
@@ -74,6 +77,7 @@ actor ACPAdapter:
         executableURL: URL,
         launchArguments: [String]? = nil,
         launchEnvironmentOverrides: [String: String]? = nil,
+        schemaCopies: AntigravitySchemaCopies? = nil,
         transportFactory: (@Sendable () -> any ACPTransport)? = nil
     ) {
         self.kind = kind
@@ -82,6 +86,7 @@ actor ACPAdapter:
             ?? HarnessCatalog.descriptor(for: kind)?.launchArguments
             ?? []
         self.launchEnvironmentOverrides = launchEnvironmentOverrides ?? [:]
+        self.schemaCopies = schemaCopies
         let transportFactory = transportFactory ?? { ACPProcessTransport(executableURL: executableURL) }
         self.transportFactory = transportFactory
         self.transport = transportFactory()
@@ -568,6 +573,8 @@ actor ACPAdapter:
         let transport = transport
         guard !initialized else { return transport }
         do {
+            // A new process could write a copy again under a name a sweep is deciding about.
+            if schemaCopies != nil { await AntigravitySchemaCopies.waitForSweeps() }
             try await transport.start(
                 ACPLaunchConfiguration(
                     arguments: launchArguments(for: localSessionID),
@@ -865,14 +872,21 @@ actor ACPAdapter:
     }
 
     /// Ends the shared process and puts a new transport in its place, so the next session starts
-    /// one of its own.
+    /// one of its own. Antigravity's schema copies the process leaves go once it has exited, in the
+    /// background; the next process waits for that.
     private func stopTransport() async {
         messageTask?.cancel()
         messageTask = nil
         initialized = false
         let stopping = transport
         transport = transportFactory()
-        await stopping.stop()
+        guard let schemaCopies else {
+            await stopping.stop()
+            return
+        }
+        let stopped = Task { await stopping.stop() }
+        schemaCopies.sweep(after: stopped)
+        await stopped.value
     }
 
     private func takeRequestID() -> Int64 {

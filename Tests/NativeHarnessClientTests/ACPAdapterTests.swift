@@ -57,6 +57,43 @@ final class ACPAdapterTests: XCTestCase {
         await advertising.close(handle)
     }
 
+    /// A copy `agy` wrote stays while its process runs, goes once the process has ended, and is gone
+    /// before the next process starts; `mcp/yardlet/` stays.
+    func testAnEndedProcessTakesItsSchemaCopiesBeforeTheNextOneStarts() async throws {
+        let mcp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: mcp) }
+        let copy = mcp.appending(path: "yardlet_963b6c4b", directoryHint: .isDirectory)
+        let first = mcp.appending(path: "yardlet", directoryHint: .isDirectory)
+        for folder in [copy, first] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data("{}".utf8).write(to: folder.appending(path: "list_tasks.json"))
+        }
+        let table = FakeProcessTable()
+        let own = ProcessInfo.processInfo.processIdentifier
+        table.set(own, parent: 1, name: "Yardlet")
+        table.set(own &+ 1, parent: 1, start: Int64((Date().timeIntervalSince1970 - 60) * 1_000_000), name: "agy")
+        let adapter = ACPAdapter(
+            kind: .antigravityCLI,
+            executableURL: URL(filePath: "/tmp/agy"),
+            schemaCopies: AntigravitySchemaCopies(directory: mcp, table: table, executableNames: ["agy"]),
+            transportFactory: transportSequence(FakeACPTransport(onStop: { table.remove(own &+ 1) }), FakeACPTransport())
+        )
+        func newSession() async throws -> HarnessSessionHandle {
+            try await adapter.createSession(CreateHarnessSessionRequest(
+                localSessionID: UUID(), workspaceURL: URL(filePath: "/tmp/acp-workspace"), initialPrompt: nil))
+        }
+        func exists(_ folder: URL) -> Bool {
+            FileManager.default.fileExists(atPath: folder.path(percentEncoded: false))
+        }
+
+        let session = try await newSession()
+        XCTAssertEqual(AntigravitySchemaCopies(directory: mcp, table: table, executableNames: ["agy"]).removeUnused(), [])
+        await adapter.close(session)
+        _ = try await newSession()
+        XCTAssertFalse(exists(copy))
+        XCTAssertTrue(exists(first))
+    }
+
     /// A failed `initialize` stops its process and leaves the adapter able to try again: the
     /// registry keeps the adapter, so the next attempt starts a process of its own. A process that
     /// ends on its own, killed mid-turn, ends every session it served, the turn with an error, and
@@ -934,6 +971,8 @@ actor FakeACPTransport: ACPTransport {
     /// Answers as `agy acp` does: a model and thinking level in `configOptions` and the model
     /// variants in `models.availableModels`.
     private let exposesAntigravity: Bool
+    /// Runs while the transport stops, as a process's end changes what the process table shows.
+    private let onStop: (@Sendable () -> Void)?
     private var antigravityModel = "gemini-3.8-flash"
     private var antigravityEffort = "high"
     private(set) var configuration: ACPLaunchConfiguration?
@@ -950,7 +989,8 @@ actor FakeACPTransport: ACPTransport {
         exposesGrokModels: Bool = false,
         canLoadSession: Bool = true,
         advertisesImagePrompts: Bool = false,
-        exposesAntigravity: Bool = false
+        exposesAntigravity: Bool = false,
+        onStop: (@Sendable () -> Void)? = nil
     ) {
         let pair = AsyncStream<ACPRawFrame>.makeStream()
         stream = pair.stream
@@ -961,6 +1001,7 @@ actor FakeACPTransport: ACPTransport {
         self.canLoadSession = canLoadSession
         self.advertisesImagePrompts = advertisesImagePrompts
         self.exposesAntigravity = exposesAntigravity
+        self.onStop = onStop
     }
 
     var pendingPromptCount: Int { promptContinuations.count }
@@ -1092,6 +1133,7 @@ actor FakeACPTransport: ACPTransport {
     func messages() async -> AsyncStream<ACPRawFrame> { stream }
     func stop() async {
         stopCount += 1
+        onStop?()
         continuation.finish()
     }
 

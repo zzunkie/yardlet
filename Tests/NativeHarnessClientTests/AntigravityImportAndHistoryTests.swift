@@ -92,6 +92,52 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
         XCTAssertFalse(AntigravityLeftoverFolder.removeIfPresent(cachesDirectory: nil))
     }
 
+    /// Only the copies `agy` names `yardlet_<hex>` go, and only once no running `agy` can have written
+    /// them: `mcp/yardlet/`, other servers' folders, other names and a copy with a file written since
+    /// stay, and nothing goes while the process table does not list Yardlet itself.
+    func testSchemaCopiesGoOnlyOnceNoRunningAgyCanHaveWrittenThem() throws {
+        let mcp = root.appending(path: "mcp", directoryHint: .isDirectory)
+        let now = Date()
+        let old = now.addingTimeInterval(-3_600)
+        func copy(_ name: String, written: Date, rewritten: Date? = nil) throws {
+            let folder = mcp.appending(path: name, directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for (file, date) in [("list_tasks.json", written), ("instructions.md", rewritten ?? written)] {
+                try Data("{}".utf8).write(to: folder.appending(path: file))
+                try FileManager.default.setAttributes([.modificationDate: date],
+                                                      ofItemAtPath: folder.appending(path: file).path(percentEncoded: false))
+            }
+            try FileManager.default.setAttributes([.modificationDate: written], ofItemAtPath: folder.path(percentEncoded: false))
+        }
+        let unused = ["yardlet_963b6c4b", "yardlet_0123456789abcdef", "yardlet_" + String(repeating: "a", count: 64)]
+        let kept = ["yardlet", "github_963b6c4b", "yardlet_963b6c4g", "yardlet_963b6c4", "yardletprobe_probeplugin"]
+        for name in unused + kept { try copy(name, written: old) }
+        try copy("yardlet_8f50b571", written: old, rewritten: now)
+        try copy("yardlet_921068d5", written: now)
+        func listing() throws -> Set<String> {
+            Set(try FileManager.default.contentsOfDirectory(atPath: mcp.path(percentEncoded: false)))
+        }
+        func microseconds(_ date: Date) -> Int64 { Int64(date.timeIntervalSince1970 * 1_000_000) }
+
+        let table = FakeProcessTable()
+        let own = ProcessInfo.processInfo.processIdentifier
+        let agy = own &+ 1
+        table.set(agy, parent: 1, start: microseconds(now.addingTimeInterval(-60)), name: "agy")
+        let copies = AntigravitySchemaCopies(directory: mcp, table: table, executableNames: ["agy"])
+        XCTAssertEqual(copies.removeUnused(), [])
+
+        table.set(own, parent: 1, start: microseconds(old.addingTimeInterval(-60)), name: "Yardlet")
+        XCTAssertEqual(copies.removeUnused(), unused.sorted())
+        XCTAssertEqual(try listing(), Set(kept + ["yardlet_8f50b571", "yardlet_921068d5"]))
+
+        // A process of the executable Yardlet runs counts as `agy` too; with none running, every copy goes.
+        table.remove(agy)
+        table.set(agy &+ 1, parent: 1, start: microseconds(old.addingTimeInterval(-60)), name: "agy-nightly")
+        XCTAssertEqual(copies.counting(URL(filePath: "/opt/bin/agy-nightly")).removeUnused(), [])
+        XCTAssertEqual(copies.removeUnused(), ["yardlet_8f50b571", "yardlet_921068d5"])
+        XCTAssertEqual(try listing(), Set(kept))
+    }
+
     // MARK: - The log
 
     /// The log's records as the conversation: the request inside `<USER_REQUEST>` (not the CLI's
