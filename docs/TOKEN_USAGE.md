@@ -96,3 +96,8 @@ The reading, counting and summing run off the main thread. The app gets a summar
 counted something, and publishes it only when it differs; only the Home band and the usage page read it, so a new count
 redraws them and nothing else (`TokenUsageLedgerTests`: 60,000 responses read once, then each new response one read of its
 own bytes and one publication).
+
+A window on another Mac carries every range grouped every way, and its Settings page is built again for any change of a
+setting or the vault while it watches. The Mac keeps those rows until the counts, the projects or what a row shows of a
+task change, so a task's status changing all through a turn reads nothing again (`RemoteBridgeTests`). When the rows are
+read, they share one list of tasks and look at each folder once, however many sessions ran there.

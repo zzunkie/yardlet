@@ -2243,6 +2243,57 @@ final class RemoteBridgeTests: XCTestCase {
         await bridge.setWatchesHostSettings(false)
         await model.shutdown()
     }
+
+    /// The page is built for any change of a setting or the vault, and the rows read every counted session.
+    func testHostUsageRowsAreReadAgainOnlyWhenWhatTheyShowChanges() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "remote-bridge-usage-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let workspace = folder.appending(path: "app", directoryHint: .isDirectory).standardizedFileURL
+        let session = SessionRecord(harness: .claudeCode, workspaceURL: workspace, runtimeExecutableURL: URL(filePath: "/usr/bin/true"),
+                                    title: "First title", providerSessionID: "provider")
+        let store = SessionStore(repository: InMemorySessionRepository(sessions: [session]))
+        try await store.restore()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteBridgeUsageRows")))
+        let runtimes = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
+        let model = AppModel(store: store, runtimeSelections: runtimes, preferences: defaults, restoresIndexOnLaunch: false)
+
+        func counts(requests: Int) -> TokenUsageSummary {
+            var amount = TokenUsageAmount()
+            amount.requests = requests
+            let tasks: [TokenUsageSummary.Key: TokenUsageAmount] = [
+                TokenUsageSummary.Key(harness: .claudeCode, value: "provider", folder: workspace.path): amount,
+                // Sessions Yardlet did not start, under the task's folder and in no project's.
+                TokenUsageSummary.Key(harness: .claudeCode, value: "nested", folder: workspace.appending(path: "packages/web").path): amount,
+                TokenUsageSummary.Key(harness: .claudeCode, value: "outside", folder: folder.appending(path: "tools").standardizedFileURL.path): amount
+            ]
+            return TokenUsageSummary(days: [], groups: [.month: [.task: tasks]], updatedAt: Date())
+        }
+        model.tokenUsage = TokenUsageCenter(directory: folder.appending(path: "usage"), summary: counts(requests: 1))
+        let bridge = AppModelRemoteBridge(model: model)
+        func rows(_ grouping: TokenUsageGrouping) -> [RemoteHostSettings.Usage.Row] {
+            bridge.buildHostSettings(in: model).usage?.rows[TokenUsageRange.month.rawValue]?[grouping.rawValue] ?? []
+        }
+
+        XCTAssertEqual(Set(rows(.task).map(\.title)), ["First title", "web", "tools"])
+        XCTAssertEqual(Set(rows(.project).map(\.title)), ["app", "tools"], "A folder counts with the nearest project above it")
+        try await store.updateSession(id: session.id, status: .running)
+        _ = rows(.task)
+        XCTAssertEqual(bridge.hostUsageRowBuilds, 1, "Nothing the rows show changed")
+
+        try await store.renameSession(id: session.id, title: "Second title")
+        XCTAssertEqual(Set(rows(.task).map(\.title)), ["Second title", "web", "tools"])
+        XCTAssertEqual(bridge.hostUsageRowBuilds, 2)
+
+        let project = try XCTUnwrap(model.projects.project(containingRoot: workspace))
+        model.projects.rename(project.id, to: "Renamed")
+        XCTAssertEqual(rows(.project).first { $0.id == project.id.uuidString }?.title, "Renamed")
+        XCTAssertEqual(bridge.hostUsageRowBuilds, 3)
+
+        model.tokenUsage.receive(counts(requests: 5))
+        XCTAssertEqual(rows(.project).first { $0.id == project.id.uuidString }?.amount.requests, 10)
+        XCTAssertEqual(bridge.hostUsageRowBuilds, 4)
+        await model.shutdown()
+    }
 }
 
 /// A browser host whose tabs answer DevTools as an idle page does: the layout `layout` names, a picture, and an empty

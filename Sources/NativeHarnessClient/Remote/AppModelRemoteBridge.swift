@@ -62,6 +62,9 @@ final class AppModelRemoteBridge: RemoteBridge {
     var trackingHostSettings = false
     var hostSettingsObservers: [any NSObjectProtocol] = []
     var answeredHostSettings: RemoteHostSettings?
+    var builtHostUsageRows: (inputs: TokenUsageRowsInputs, rows: HostUsageRows)?
+    /// How many times the usage rows were read anew, for the main thread's budget checks.
+    var hostUsageRowBuilds = 0
     var watchesHostAccounts = false
     var isObservingHostAccounts = false
     var answeredHostAccounts: RemoteAccountsState?

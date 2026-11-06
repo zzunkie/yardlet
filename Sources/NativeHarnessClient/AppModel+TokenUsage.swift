@@ -81,18 +81,26 @@ extension AppModel {
     /// new count or reading comes.
     func tokenUsageOverview() -> TokenUsageOverview {
         let summary = tokenUsage.isEnabled ? tokenUsage.summary : nil
+        let names = TokenUsageNames(model: self)
         return TokenUsageOverview(
             days: summary?.days ?? [], limits: tokenUsageLimitLines(), updatedAt: summary?.updatedAt ?? Date(),
-            rows: { [weak self] range, grouping in
-                guard let self, let groups = summary?.groups[range] else { return [] }
-                return self.tokenUsageRows(groups, grouping: grouping)
+            rows: { range, grouping in
+                guard let groups = summary?.groups[range] else { return [] }
+                return self.tokenUsageRows(groups, grouping: grouping, names: names)
             })
+    }
+
+    /// What the rows of `tokenUsageOverview()` read right now, to tell whether a copy of them still stands.
+    func tokenUsageRowsInputs() -> TokenUsageRowsInputs {
+        TokenUsageRowsInputs(groups: tokenUsage.isEnabled ? tokenUsage.summary?.groups : nil,
+                             projects: projects.projects,
+                             tasks: store.sessions.map(TokenUsageRowsInputs.TaskName.init))
     }
 
     /// One range's counts grouped one way and named: models by name, tasks by title (a session Yardlet
     /// did not start by its folder), projects as the sidebar groups them, accounts as the Usage lines.
     func tokenUsageRows(_ groups: [TokenUsageGrouping: [TokenUsageSummary.Key: TokenUsageAmount]],
-                        grouping: TokenUsageGrouping) -> [TokenUsageRow] {
+                        grouping: TokenUsageGrouping, names: TokenUsageNames) -> [TokenUsageRow] {
         var rows: [String: TokenUsageRow] = [:]
         func add(_ id: String, _ title: String, detail: String? = nil, harness: HarnessKind?, _ amount: TokenUsageAmount) {
             rows[id, default: TokenUsageRow(id: id, title: title, detail: detail, harness: harness,
@@ -107,23 +115,22 @@ extension AppModel {
                     detail: detail, harness: key.harness, amount)
             }
         case .task, .project:
-            let sessions = Dictionary(store.sessions.compactMap { session in
-                session.providerSessionID.map { ($0, session) } }, uniquingKeysWith: { first, _ in first })
-            let placeName = taskPlaceNames()
+            func folderName(_ key: TokenUsageSummary.Key) -> String {
+                URL(filePath: key.folder, directoryHint: .isDirectory).lastPathComponent
+            }
             for (key, amount) in groups[.task] ?? [:] {
-                let session = sessions[key.value]
-                let folder = URL(filePath: key.folder, directoryHint: .isDirectory)
+                let session = names.sessions[key.value]
                 if grouping == .task {
                     if let session {
-                        add(session.id.uuidString, session.title, detail: placeName(session), harness: session.harness, amount)
+                        add(session.id.uuidString, session.title, detail: names.placeName(session), harness: session.harness, amount)
                     } else {
-                        add(key.value, key.folder.isEmpty ? L10n.string("Unknown") : folder.lastPathComponent,
+                        add(key.value, key.folder.isEmpty ? L10n.string("Unknown") : folderName(key),
                             detail: L10n.string("Not started in Yardlet"), harness: key.harness, amount)
                     }
                 } else {
-                    let project = session.flatMap { ProjectProjection.project(for: $0, in: projects.projects) }
-                        ?? Self.project(containing: folder, in: projects.projects)
-                    let name = project?.name ?? session.map(placeName) ?? folder.lastPathComponent
+                    let project = session.flatMap { ProjectProjection.project(for: $0, in: names.projects) }
+                        ?? names.project(containing: key.folder)
+                    let name = project?.name ?? session.map(names.placeName) ?? folderName(key)
                     add(project?.id.uuidString ?? name, name.isEmpty ? L10n.string("Unknown") : name, harness: nil, amount)
                 }
             }
@@ -132,16 +139,71 @@ extension AppModel {
             ($0.amount.cost ?? 0, $0.amount.total) > ($1.amount.cost ?? 0, $1.amount.total)
         }
     }
+}
 
-    /// The project a folder is in: its own root or the nearest folder above it that is one.
-    private static func project(containing folder: URL, in projects: [Project]) -> Project? {
-        var url = folder.standardizedFileURL
-        while url.path != "/" {
-            if let project = ProjectProjection.project(containingRoot: url, in: projects) { return project }
-            url.deleteLastPathComponent()
-        }
-        return nil
+/// What usage rows are named from. Reading it takes a pass over every task, and a folder's project a walk
+/// up its parents, so all the rows of one overview share it. It reads nothing until a row asks, which
+/// keeps the Home band, which draws no rows, from following the tasks and projects.
+@MainActor
+final class TokenUsageNames {
+    private let model: AppModel
+    private var folderProjects: [String: Project?] = [:]
+
+    init(model: AppModel) {
+        self.model = model
     }
+
+    private(set) lazy var sessions = Dictionary(
+        model.store.sessions.compactMap { session in session.providerSessionID.map { ($0, session) } },
+        uniquingKeysWith: { first, _ in first })
+    private(set) lazy var placeName = model.taskPlaceNames()
+    private(set) lazy var projects = model.projects.projects
+
+    /// The project a folder is in: its own root or the nearest folder above it that is one. A history's
+    /// folders share their parents, so each is looked at once.
+    func project(containing folder: String) -> Project? {
+        if let known = folderProjects[folder] { return known }
+        var project: Project?
+        if !folder.isEmpty {
+            let url = URL(filePath: folder, directoryHint: .isDirectory).standardizedFileURL
+            if url.path != "/" {
+                project = ProjectProjection.project(containingRoot: url, in: projects)
+                    ?? self.project(containing: url.deletingLastPathComponent().path)
+            }
+        }
+        folderProjects[folder] = .some(project)
+        return project
+    }
+}
+
+/// Everything usage rows read: the counts, the projects and what a row shows of each task. A task's
+/// status and recency change all through a turn and name nothing, so they are left out.
+struct TokenUsageRowsInputs: Equatable {
+    struct TaskName: Equatable {
+        let id: UUID
+        let providerSessionID: String?
+        let title: String
+        let harness: HarnessKind
+        let projectID: UUID?
+        let isMovedToChats: Bool
+        let workspaceURL: URL
+        let originWorkspacePath: String?
+
+        init(_ session: SessionRecord) {
+            id = session.id
+            providerSessionID = session.providerSessionID
+            title = session.title
+            harness = session.harness
+            projectID = session.projectID
+            isMovedToChats = session.isMovedToChats
+            workspaceURL = session.workspaceURL
+            originWorkspacePath = session.originWorkspacePath
+        }
+    }
+
+    let groups: [TokenUsageRange: [TokenUsageGrouping: [TokenUsageSummary.Key: TokenUsageAmount]]]?
+    let projects: [Project]
+    let tasks: [TaskName]
 }
 
 /// A model id as people read it: `claude-opus-5-5` as "Claude Opus 5.5", `gpt-6.1-sol` as "GPT-6.1 Sol".

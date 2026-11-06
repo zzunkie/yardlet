@@ -3,6 +3,8 @@ import Observation
 import YardletRemote
 
 extension AppModelRemoteBridge {
+    typealias HostUsageRows = [String: [String: [RemoteHostSettings.Usage.Row]]]
+
     /// Settings that configure the client Mac itself or belong to sections not shown in the remote Settings sheet.
     private static let excludedRemoteSettingIDs: Set<String> = [
         YardletSetting.language.id,
@@ -39,6 +41,7 @@ extension AppModelRemoteBridge {
         } else {
             removeHostSettingsNotificationObservers()
             answeredHostSettings = nil
+            builtHostUsageRows = nil
         }
     }
 
@@ -200,7 +203,7 @@ extension AppModelRemoteBridge {
             )
         }
 
-        let usage: RemoteHostSettings.Usage? = (!model.usesVisualFixture && context.hasUsage) ? Self.buildUsage(in: model) : nil
+        let usage: RemoteHostSettings.Usage? = (!model.usesVisualFixture && context.hasUsage) ? buildUsage(in: model) : nil
 
         return RemoteHostSettings(
             writable: false,
@@ -213,12 +216,12 @@ extension AppModelRemoteBridge {
         )
     }
 
-    private static func buildUsage(in model: AppModel) -> RemoteHostSettings.Usage {
+    private func buildUsage(in model: AppModel) -> RemoteHostSettings.Usage {
         let overview = model.tokenUsageOverview()
         let days = overview.days.map {
             RemoteHostSettings.Usage.Day(
                 start: RemoteJSON.milliseconds($0.start),
-                amount: encodeAmount($0.amount)
+                amount: Self.encodeAmount($0.amount)
             )
         }
         let limits = overview.limits.map { line in
@@ -242,22 +245,6 @@ extension AppModelRemoteBridge {
                 runsOutAt: line.runsOutAt.mapValues(RemoteJSON.milliseconds)
             )
         }
-        var rows: [String: [String: [RemoteHostSettings.Usage.Row]]] = [:]
-        for range in TokenUsageRange.allCases {
-            var byGrouping: [String: [RemoteHostSettings.Usage.Row]] = [:]
-            for grouping in TokenUsageGrouping.allCases {
-                byGrouping[grouping.rawValue] = overview.rows(range, grouping).map { row in
-                    RemoteHostSettings.Usage.Row(
-                        id: row.id,
-                        title: row.title,
-                        detail: row.detail,
-                        harness: row.harness?.rawValue,
-                        amount: encodeAmount(row.amount)
-                    )
-                }
-            }
-            rows[range.rawValue] = byGrouping
-        }
         let limitsCheckedAt = MenuBarMenuProjection.limitAccounts(
             choices: model.connections.menuBarUsageChoices(for: HarnessCatalog.builtIns.map(\.id))
         ).compactMap(\.checkedAt).max()
@@ -267,8 +254,34 @@ extension AppModelRemoteBridge {
             updatedAt: RemoteJSON.milliseconds(overview.updatedAt),
             days: days,
             limits: limits,
-            rows: rows
+            rows: usageRows(of: overview, in: model)
         )
+    }
+
+    /// Every range grouped every way, which reads every counted session, while the page is built for any
+    /// change of a setting or the vault: the rows stand until what they read changes.
+    private func usageRows(of overview: TokenUsageOverview, in model: AppModel) -> HostUsageRows {
+        let inputs = model.tokenUsageRowsInputs()
+        if let built = builtHostUsageRows, built.inputs == inputs { return built.rows }
+        var rows: HostUsageRows = [:]
+        for range in TokenUsageRange.allCases {
+            var byGrouping: [String: [RemoteHostSettings.Usage.Row]] = [:]
+            for grouping in TokenUsageGrouping.allCases {
+                byGrouping[grouping.rawValue] = overview.rows(range, grouping).map { row in
+                    RemoteHostSettings.Usage.Row(
+                        id: row.id,
+                        title: row.title,
+                        detail: row.detail,
+                        harness: row.harness?.rawValue,
+                        amount: Self.encodeAmount(row.amount)
+                    )
+                }
+            }
+            rows[range.rawValue] = byGrouping
+        }
+        builtHostUsageRows = (inputs, rows)
+        hostUsageRowBuilds += 1
+        return rows
     }
 
     private static func encodeAmount(_ amount: TokenUsageAmount) -> RemoteHostSettings.Usage.Amount {
