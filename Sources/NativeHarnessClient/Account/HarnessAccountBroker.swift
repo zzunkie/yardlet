@@ -840,7 +840,8 @@ actor HarnessAccountBroker {
                     usedFraction: min(1, used / 100), detail: L10n.format("%.0f%% remaining", max(0, 100 - used)),
                     resetsAt: window["resetsAt"]?.doubleValue.map(Date.init(timeIntervalSince1970:)),
                     evidence: .exactQuota,
-                    windowMinutes: window["windowDurationMins"]?.doubleValue
+                    windowMinutes: window["windowDurationMins"]?.doubleValue,
+                    modelGroup: buckets.count > 1 ? bucket.name : nil
                 )
             }
         }

@@ -26,7 +26,7 @@ enum AntigravityUsage {
                     id: "antigravity:\(id)", label: name.map { "\($0) · \(window)" } ?? window,
                     usedFraction: 1 - left, detail: L10n.format("%.0f%% remaining", left * 100),
                     resetsAt: bucket["reset_time"]?.stringValue.flatMap(date), evidence: .exactQuota,
-                    windowMinutes: minutes)
+                    windowMinutes: minutes, modelGroup: name)
             }
         }
         return rows.isEmpty ? nil : rows

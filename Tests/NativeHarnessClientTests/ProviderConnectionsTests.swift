@@ -84,6 +84,12 @@ import XCTest
         XCTAssertEqual(usage.map(\.usedFraction), [0.1, 0.97])
         XCTAssertEqual(usage.map(\.label), [L10n.format("%.0f hour limit", 5.0), L10n.format("%.0f day limit", 7.0)],
                        "A bucket without windows does not make the one that has them need its name")
+        XCTAssertEqual(usage.map(\.modelGroup), [nil, nil])
+        let buckets = HarnessAccountBroker.codexRateLimitUsage(from: .object(["rateLimitsByLimitId": .object([
+            "codex": .object(["limitName": .string("Codex"), "primary": .object(["usedPercent": .integer(10)])]),
+            "spark": .object(["limitName": .string("Spark"), "primary": .object(["usedPercent": .integer(20)])])
+        ])]))
+        XCTAssertEqual(Set(buckets.compactMap(\.modelGroup)), ["Codex", "Spark"], "Several buckets are limits of their own")
     }
 
     func testExplicitAccountEnvironmentDoesNotUseInheritedModelCredentials() throws {

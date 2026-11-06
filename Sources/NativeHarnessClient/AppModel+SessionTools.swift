@@ -703,10 +703,10 @@ extension AppModel: SessionToolHandling {
             if notifies { watchForNotification(child.id, caller: caller) }
             let queued = "Queued task \(child.id.uuidString) (\(child.title)), \(createdTaskPlacement(parentTaskID, caller: caller)); it starts when "
                 + "there is room. wait_tasks with this id waits for it." + quoted.lines + "\n"
-                + Self.createdTaskLinkLine(child) + account.assignment.toolLine
+                + Self.createdTaskLinkLine(child) + account.toolLines
             guard wait else { return .text(queued) }
             let ended = await waitForAny([child.id], timeout: caller.remaining)
-            return createdChildResult(child.id, ended: ended, quoted: quoted)
+            return createdChildResult(child.id, ended: ended, quoted: quoted, account: account)
         }
         sessionTools.starting.insert(child.id)
         await startHeldTask(child, text: first)
@@ -719,10 +719,10 @@ extension AppModel: SessionToolHandling {
             return .text("Created task \(child.id.uuidString) (\(child.title)), \(createdTaskPlacement(parentTaskID, caller: caller)); its first "
                 + "turn is running. wait_tasks or read_task show its answer." + quoted.lines + "\n"
                 + Self.createdTaskLinkLine(child)
-                + account.assignment.toolLine)
+                + account.toolLines)
         }
         let ended = await waitForAny([child.id], timeout: caller.remaining)
-        return createdChildResult(child.id, ended: ended, quoted: quoted)
+        return createdChildResult(child.id, ended: ended, quoted: quoted, account: account)
     }
 
     /// Where `create_task` nests the new task: under the caller, under the open task `parent_task_id`
@@ -757,12 +757,11 @@ extension AppModel: SessionToolHandling {
 
     /// What `create_task` with `wait` answers: the child's state and latest answer, and that it goes
     /// on when the call's time ran out first.
-    private func createdChildResult(_ id: UUID, ended: Bool, quoted: PersonQuotes) -> AgentToolResult {
+    private func createdChildResult(_ id: UUID, ended: Bool, quoted: PersonQuotes, account: AccountStart) -> AgentToolResult {
         let note = ended ? "" : sessionTools.isQueued(id)
             ? " It is queued and starts when there is room; wait_tasks with this id waits for it."
             : " It is still running; wait_tasks with this id waits again."
-        let account = accountAssignments.assignment(for: id).map { "\n" + $0.toolLine } ?? ""
-        return .text("Created task \(id.uuidString).\(note)\(quoted.lines)\(account)\n"
+        return .text("Created task \(id.uuidString).\(note)\(quoted.lines)\n\(account.toolLines)\n"
             + SessionToolText.json(sessionToolOutcome(of: id)))
     }
 

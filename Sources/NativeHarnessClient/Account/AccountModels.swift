@@ -46,6 +46,10 @@ struct AccountUsageMetric: Identifiable, Codable, Equatable, Sendable {
     var windowMinutes: Double? = nil
     /// The one model a limit covers (Claude's per-model weekly limit); nil covers every model.
     var model: String? = nil
+    /// The group of models a limit covers, for a harness that keeps its limits by group and names the
+    /// group rather than a model (Antigravity's "Claude and GPT", one of several Codex buckets). The
+    /// window's `label` starts with it. Only `AccountRouting.mostRoom` reads it.
+    var modelGroup: String? = nil
 }
 
 /// The banked resets of an account's plan limits, as its harness reported them beside the limits

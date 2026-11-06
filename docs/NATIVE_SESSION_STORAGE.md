@@ -66,6 +66,8 @@ works for it. A Codex, Kimi Code or Grok Build sign-in in a separate folder (`CO
 `GROK_HOME`) has its own history, so it is not used until the person includes it. An account whose tasks are moving to another of its folders before it leaves the list is not used either.
 No authentication or history files are copied and no account folder changes. The reason for each
 assignment is kept in the Yardlet file `~/.yardlet/account-assignments.json` (task ID → account ID, window and time).
+Assignment stays within the harness: when every account is nearly out, an agent's tool result names the other harnesses
+with room and the agent chooses (see [AGENT_BROWSER_TOOLS.md](AGENT_BROWSER_TOOLS.md), "Room on other harnesses").
 
 **Schedules and nearly spent accounts.** A schedule's run starts on the account the schedule names, or the one new
 tasks start on, unless that account's last reading says it is nearly spent (a limit window at or under 10% left, as

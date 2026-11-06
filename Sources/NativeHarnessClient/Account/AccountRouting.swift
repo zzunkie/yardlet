@@ -158,6 +158,29 @@ enum AccountRouting {
         (headroom?.pace ?? 0) / Double(1 + max(running, 0))
     }
 
+    // MARK: - Room for a task on any model
+
+    /// The window that decides for the model with the most left on these accounts, whichever model that
+    /// is; nil when no model has room. `pick` counts every limit for a task whose model is not known;
+    /// here a limit of one model or of a group of them (`AccountUsageMetric.modelGroup`) stops only those.
+    static func mostRoom(_ candidates: [Candidate], now: Date) -> Window? {
+        candidates.flatMap { candidate in
+            modelPools(of: candidate.choice.quotas).compactMap { pool -> Window? in
+                guard let room = headroom(of: pool, model: nil, now: now), !room.isNearlySpent else { return nil }
+                return room.deciding
+            }
+        }
+        .max { ($0.left, $1.label) < ($1.left, $0.label) }
+    }
+
+    /// The limits of `usage` by the models they stop: those every model shares, alone, and with each
+    /// model's or group's own.
+    private static func modelPools(of usage: [AccountUsageMetric]) -> [[AccountUsageMetric]] {
+        let shared = usage.filter { $0.model == nil && $0.modelGroup == nil }
+        let own = Dictionary(grouping: usage.filter { $0.model != nil || $0.modelGroup != nil }) { $0.model ?? $0.modelGroup }
+        return (shared.isEmpty ? [] : [shared]) + own.values.map { shared + $0 }
+    }
+
     // MARK: - Moving a task to an account with room
 
     /// How long a conversation's prompt cache lives after its last request: Claude Code asks for an
@@ -259,7 +282,7 @@ struct AccountAssignment: Codable, Equatable, Sendable {
         case .newTaskAccount: why.append("the account new tasks start on; no other account is in automatic assignment")
         }
         if let windowLabel, let usedFraction {
-            var window = "\(windowLabel) \(Int((usedFraction * 100).rounded()))% used"
+            var window = Self.usedLine(windowLabel, usedFraction)
             if let resetsAt { window += ", resets \(Self.iso(resetsAt))" }
             why.append(window)
         }
@@ -294,6 +317,11 @@ struct AccountAssignment: Codable, Equatable, Sendable {
     /// was nearly out of its limit".
     var switchLine: String? {
         replacedAccountName.map { L10n.format("Switched to %@: %@ was nearly out of its limit", accountName, $0) }
+    }
+
+    /// A window in the tools' English: "5 hour limit 12% used".
+    static func usedLine(_ label: String, _ usedFraction: Double) -> String {
+        "\(label) \(Int((usedFraction * 100).rounded()))% used"
     }
 
     static func iso(_ date: Date) -> String {

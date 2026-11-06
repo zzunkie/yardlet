@@ -206,15 +206,15 @@ final class ProviderUsageTests: XCTestCase {
             AccountUsageMetric(id: "antigravity:gemini-weekly", label: "Gemini · \(week)", usedFraction: 0.25,
                                detail: L10n.format("%.0f%% remaining", 75.0),
                                resetsAt: Date(timeIntervalSince1970: 1_793_628_400), evidence: .exactQuota,
-                               windowMinutes: 10_080),
+                               windowMinutes: 10_080, modelGroup: "Gemini"),
             AccountUsageMetric(id: "antigravity:gemini-5h", label: "Gemini · \(fiveHours)", usedFraction: 0.5,
                                detail: L10n.format("%.0f%% remaining", 50.0),
                                resetsAt: Date(timeIntervalSince1970: 1_793_630_237), evidence: .exactQuota,
-                               windowMinutes: 300),
+                               windowMinutes: 300, modelGroup: "Gemini"),
             AccountUsageMetric(id: "antigravity:3p-weekly", label: "Claude and GPT · \(week)", usedFraction: 0,
                                detail: L10n.format("%.0f%% remaining", 100.0),
                                resetsAt: Date(timeIntervalSince1970: 1_794_164_345), evidence: .exactQuota,
-                               windowMinutes: 10_080)
+                               windowMinutes: 10_080, modelGroup: "Claude and GPT")
         ])
         XCTAssertNil(AntigravityUsage.metrics(fromOutput: #"{"status":"ERROR","num_turns":0}"#))
         XCTAssertNil(AntigravityUsage.metrics(fromOutput: "not signed in"))

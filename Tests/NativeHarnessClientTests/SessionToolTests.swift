@@ -2253,6 +2253,75 @@ final class SessionToolTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// With every account of a harness nearly out, `list_accounts`, `create_task` and `run_agent` name
+    /// the other harnesses with room, a group of models by its name, and the work still goes where it
+    /// was going. Accounts left out of automatic assignment and harnesses with no limits are not room,
+    /// and with room at home the answers say nothing new.
+    func testAHarnessWithNoRoomNamesTheHarnessesThatHaveItAndChoosesNothing() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "session-room-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let store = ProviderConnectionStore()
+        store.defaultLoginEnvironment = ["CLAUDE_CONFIG_DIR": root.path]
+        let now = Date()
+        func limit(_ label: String, used: Double, group: String? = nil) -> AccountUsageMetric {
+            AccountUsageMetric(id: label, label: label, usedFraction: used, detail: "", resetsAt: now.addingTimeInterval(5 * 86_400),
+                               evidence: .exactQuota, windowMinutes: 10_080, modelGroup: group)
+        }
+        func snapshot(_ harness: HarnessKind, _ usage: [AccountUsageMetric]) -> HarnessAccountSnapshot {
+            HarnessAccountSnapshot(id: harness.rawValue, harness: harness, providerID: nil, state: .signedIn,
+                                   accountLabel: "\(harness.rawValue)@example.test", detail: "", credentialOwner: "",
+                                   checkedAt: now, usage: usage, canLogin: false, canLogout: false)
+        }
+        store.publishDefaults([
+            snapshot(.claudeCode, [limit("7 day limit", used: 0.98)]),
+            snapshot(.codex, [limit("7 day limit", used: 0.28)]),
+            snapshot(.antigravityCLI, [limit("Gemini · 7 day limit", used: 1, group: "Gemini"),
+                                       limit("Claude and GPT · 7 day limit", used: 0, group: "Claude and GPT")]),
+            snapshot(.openCode, [])
+        ])
+        let fixture = try Fixture(connections: store, antigravity: FakeHarnessAdapter(kind: .antigravityCLI))
+        defer { fixture.tearDown() }
+        let model = fixture.model
+        let elsewhere = "Every Claude Code account is nearly out. Room elsewhere: Codex (7 day limit 28% used), "
+            + "Antigravity CLI (Claude and GPT · 7 day limit 0% used)."
+
+        let listed = await call(model, "list_accounts", [:], from: fixture.caller)
+        XCTAssertTrue(listed.text.contains(#""roomElsewhere":"\#(elsewhere)""#), listed.text)
+        let created = await call(model, "create_task", ["prompt": "Write the migration guide"], from: fixture.caller)
+        XCTAssertTrue(created.text.contains("every account is nearly out, this one frees up first"), created.text)
+        XCTAssertTrue(created.text.hasSuffix("\n" + elsewhere), created.text)
+        let child = try XCTUnwrap(model.store.sessions.first { $0.parentTaskID == fixture.caller.id && $0.id != fixture.sibling.id })
+        XCTAssertEqual(child.harness, .claudeCode, "The note changes no choice")
+        let started = await call(model, "run_agent", ["harness": "claude-code", "prompt": "Check it", "background": true],
+                              from: fixture.caller)
+        XCTAssertTrue(started.text.hasSuffix("\n" + elsewhere), started.text)
+        let run = try await waitForRun(hostedBy: fixture.caller.id, model: model)
+        XCTAssertEqual(run.harness, .claudeCode)
+        XCTAssertTrue(AppModel.agentRunResultText(run).contains("\n" + elsewhere + "\n"), "A foreground call's answer says it too")
+        let fromCodex = await call(model, "list_accounts", ["harness": "codex"], from: fixture.caller)
+        XCTAssertFalse(fromCodex.text.contains("roomElsewhere"), "Codex has room of its own")
+
+        store.setInAutomaticAssignment(false, for: try XCTUnwrap(store.choices(for: [.codex]).first))
+        let withoutCodex = await call(model, "list_accounts", [:], from: fixture.caller)
+        XCTAssertTrue(withoutCodex.text.contains(#"Room elsewhere: Antigravity CLI (Claude and GPT · 7 day limit 0% used).""#),
+                      withoutCodex.text)
+        store.setInAutomaticAssignment(false, for: try XCTUnwrap(store.choices(for: [.antigravityCLI]).first))
+        let withoutAny = await call(model, "list_accounts", [:], from: fixture.caller)
+        XCTAssertFalse(withoutAny.text.contains("roomElsewhere"), "Nowhere to name, nothing to say")
+
+        store.setInAutomaticAssignment(true, for: try XCTUnwrap(store.choices(for: [.codex]).first))
+        store.publishDefaults([snapshot(.claudeCode, [limit("7 day limit", used: 0.4)])])
+        let withRoom = await call(model, "list_accounts", [:], from: fixture.caller)
+        XCTAssertFalse(withRoom.text.contains("roomElsewhere"), withRoom.text)
+        let roomy = await call(model, "create_task", ["prompt": "Port it"], from: fixture.caller)
+        XCTAssertFalse(roomy.text.contains("Room elsewhere"), roomy.text)
+        let roomyRun = await call(model, "run_agent", ["harness": "claude-code", "prompt": "Check it", "background": true],
+                                  from: fixture.caller)
+        XCTAssertFalse(roomyRun.text.contains("Room elsewhere"), roomyRun.text)
+        await model.shutdown()
+    }
+
     // MARK: - list_projects, hide_project, show_project
 
     /// The sidebar's Remove project and its way back, for an agent: the list shows hidden projects too, a

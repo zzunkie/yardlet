@@ -65,6 +65,34 @@ import XCTest
         XCTAssertEqual(AccountRouting.pick(candidates, model: nil, now: now)?.choice.id, "half")
     }
 
+    /// A harness has room when any of its models does: a limit of one model or group of models stops
+    /// only those, a limit every model shares stops them all, and an account without a reading is
+    /// no room at all. The most left wins, across the accounts too.
+    func testMostRoomReadsEachGroupOfModelsApart() throws {
+        func most(_ choices: AccountChoice...) -> AccountRouting.Window? {
+            AccountRouting.mostRoom(choices.map { candidate($0) }, now: now)
+        }
+        func pool(_ group: String, used: Double) -> AccountUsageMetric {
+            metric("weekly:\(group)", label: "\(group) · 7 day limit", used: used, resetsIn: 6, minutes: 10_080, modelGroup: group)
+        }
+        let geminiSpent = choice("gemini-spent", windows: [pool("Gemini", used: 1), pool("Claude and GPT", used: 0.02)])
+        XCTAssertEqual(most(geminiSpent)?.label, "Claude and GPT · 7 day limit")
+        XCTAssertEqual(most(choice("both", windows: [pool("Gemini", used: 0.3), pool("Claude and GPT", used: 0.6)]))?.label,
+                       "Gemini · 7 day limit")
+        XCTAssertNil(most(choice("all-spent", windows: [pool("Gemini", used: 0.95), pool("Claude and GPT", used: 1)])))
+
+        let fableSpent = choice("fable-spent", windows: [session(used: 0.1), weekly(used: 0.3, resetsIn: 6),
+                                                         weekly(used: 1, resetsIn: 6, model: "Fable")])
+        XCTAssertEqual(most(fableSpent)?.label, "7 day limit")
+        XCTAssertEqual(most(fableSpent)?.usedFraction, 0.3, "The window that decides, not the one with the most left")
+        XCTAssertNil(most(choice("week-spent", windows: [weekly(used: 0.95, resetsIn: 6), weekly(used: 0, resetsIn: 6, model: "Fable")])),
+                     "A limit every model shares stops a model that has room of its own")
+
+        let unread = AccountChoice(harness: .claudeCode, connection: connection("unread"), snapshot: snapshot("unread", windows: []))
+        XCTAssertNil(most(unread))
+        XCTAssertEqual(most(unread, choice("half", windows: [weekly(used: 0.5, resetsIn: 6)]), fableSpent)?.usedFraction, 0.3)
+    }
+
     /// Moving a task while its prompt cache lives writes its conversation again on the other account,
     /// so a task on a nearly spent account moves only once its cache has expired, and one a limit
     /// stopped waits for a reset that comes before then. Without room elsewhere nothing moves, and a
@@ -195,9 +223,9 @@ import XCTest
     }
 
     private func metric(_ id: String, label: String, used: Double, resetsIn days: Double, minutes: Double,
-                        model: String? = nil) -> AccountUsageMetric {
+                        model: String? = nil, modelGroup: String? = nil) -> AccountUsageMetric {
         AccountUsageMetric(id: id, label: label, usedFraction: used, detail: "", resetsAt: now.addingTimeInterval(days * 86_400),
-                           evidence: .exactQuota, windowMinutes: minutes, model: model)
+                           evidence: .exactQuota, windowMinutes: minutes, model: model, modelGroup: modelGroup)
     }
 
     private func connection(_ id: String) -> ProviderConnection {

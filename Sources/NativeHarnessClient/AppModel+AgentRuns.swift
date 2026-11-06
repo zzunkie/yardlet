@@ -101,7 +101,7 @@ extension AppModel {
             if run.notifiesCaller { watchForNotification(run.id, caller: caller) }
             if background {
                 return .text("Queued agent \(run.id.uuidString) on \(harness.displayName); it starts when there is "
-                    + "room. wait_tasks with this id waits for it.\n" + account.assignment.toolLine)
+                    + "room. wait_tasks with this id waits for it.\n" + account.toolLines)
             }
             return .text(await agentRunAnswer(run, caller: caller))
         }
@@ -115,7 +115,7 @@ extension AppModel {
         if run.notifiesCaller { watchForNotification(run.id, caller: caller) }
         if background {
             return .text("Started agent \(run.id.uuidString) on \(harness.displayName). wait_tasks with this id "
-                + "returns its answer.\n" + account.assignment.toolLine)
+                + "returns its answer.\n" + account.toolLines)
         }
         return .text(await agentRunAnswer(run, caller: caller))
     }
@@ -148,6 +148,7 @@ extension AppModel {
             + " · state: \(run.state.word)"
             + (run.accountStart.map { "\n" + $0.assignment.toolLine } ?? "")
         if case let .failed(reason) = run.state { text += " · \(reason)" }
+        if let roomElsewhere = run.accountStart?.roomElsewhere { text += "\n" + roomElsewhere }
         if run.state == .queued {
             text += "\nIt is queued and starts when there is room; wait_tasks with this id waits for it."
         } else if !run.state.isFinished {
