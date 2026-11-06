@@ -772,7 +772,7 @@ final class TerminalCommandHandoffTests: XCTestCase {
     }
 
     private func waitForText(_ text: String, in host: WindowlessRender.Host<some View>) throws {
-        let deadline = ContinuousClock.now + .seconds(15)
+        let deadline = ContinuousClock.now + testWaitLimit
         while ContinuousClock.now < deadline {
             host.settle(passes: 1, interval: 0.05)
             if host.hosting.terminalText.contains(text) { return }
@@ -781,7 +781,7 @@ final class TerminalCommandHandoffTests: XCTestCase {
     }
 
     private func waitForLine(_ prefix: String, in host: WindowlessRender.Host<some View>) throws {
-        let deadline = ContinuousClock.now + .seconds(15)
+        let deadline = ContinuousClock.now + testWaitLimit
         while ContinuousClock.now < deadline {
             host.settle(passes: 1, interval: 0.05)
             if host.hosting.terminalText.components(separatedBy: "\n").contains(where: { $0.hasPrefix(prefix) }) {

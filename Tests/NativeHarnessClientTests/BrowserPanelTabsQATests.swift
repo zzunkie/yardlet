@@ -233,7 +233,7 @@ final class BrowserPanelTabsQATests: XCTestCase {
     }
 
     private func waitUntil<Content: View>(_ host: WindowlessRender.Host<Content>, _ condition: () -> Bool) -> Bool {
-        let deadline = ContinuousClock.now + .seconds(5)
+        let deadline = ContinuousClock.now + testWaitLimit
         while ContinuousClock.now < deadline {
             if condition() { return true }
             host.settle(passes: 1, interval: 0.03)

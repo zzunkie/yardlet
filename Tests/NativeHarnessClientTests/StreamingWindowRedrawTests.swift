@@ -405,15 +405,6 @@ final class StreamingWindowRedrawTests: XCTestCase {
         }
         return Fixture(model: model, tasks: tasks, book: book)
     }
-
-    private func waitUntil(_ condition: @MainActor () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(3)
-        while ContinuousClock.now < deadline {
-            if condition() { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        XCTAssertTrue(condition(), "Timed out")
-    }
 }
 
 /// The main window as `NativeHarnessClientApp`'s window group shows it: the appearance and size

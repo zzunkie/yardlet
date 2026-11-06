@@ -95,7 +95,7 @@ final class RemoteEndToEndTests: XCTestCase {
     }
 
     private static func waitUntilClosed(_ task: URLSessionWebSocketTask) async throws {
-        let deadline = Date().addingTimeInterval(10)
+        let deadline = Date().addingTimeInterval(testWaitLimitSeconds)
         while Date() < deadline {
             do { _ = try await task.receive() } catch { return }
         }
@@ -232,7 +232,7 @@ final class PhoneSocket: @unchecked Sendable {
         _ = try await waitFor("close") { self.lock.withLock { self.ended } ? true : nil }
     }
 
-    func waitFor<Value>(_ what: String, timeout: TimeInterval = 10, _ read: () -> Value?) async throws -> Value {
+    func waitFor<Value>(_ what: String, timeout: TimeInterval = testWaitLimitSeconds, _ read: () -> Value?) async throws -> Value {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if let value = read() { return value }

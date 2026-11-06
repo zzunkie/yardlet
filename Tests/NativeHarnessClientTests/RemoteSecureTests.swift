@@ -923,7 +923,8 @@ final class RemoteSecureTests: XCTestCase {
     }
 
     static func waitUntilNoLinkRequest(_ server: RemoteServer) async throws {
-        for _ in 0..<200 {
+        let deadline = ContinuousClock.now + testWaitLimit
+        while ContinuousClock.now < deadline {
             if await server.status.linkRequest == nil { return }
             try await Task.sleep(for: .milliseconds(10))
         }

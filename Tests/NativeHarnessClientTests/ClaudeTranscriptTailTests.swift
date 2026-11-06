@@ -798,7 +798,7 @@ final class ClaudeTranscriptTailTests: XCTestCase {
     }
 
     private func eventually(_ condition: () -> Bool) async -> Bool {
-        let deadline = ContinuousClock.now + .seconds(10)
+        let deadline = ContinuousClock.now + testWaitLimit
         while ContinuousClock.now < deadline {
             if condition() { return true }
             try? await Task.sleep(for: .milliseconds(20))

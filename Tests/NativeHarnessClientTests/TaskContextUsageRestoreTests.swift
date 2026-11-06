@@ -541,18 +541,6 @@ final class TaskContextUsageRestoreTests: XCTestCase {
         try data.write(to: folder.appending(path: "\(Self.claudeSessionID).jsonl"))
     }
 
-    /// The deadline only bounds a failure: a check that holds goes on at once, however busy the machine is.
-    private func waitUntil(timeout: Duration = .seconds(10), _ condition: @escaping () async -> Bool,
-                           file: StaticString = #filePath, line: UInt = #line) async throws {
-        let deadline = ContinuousClock.now + timeout
-        while ContinuousClock.now < deadline {
-            if await condition() { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        if await condition() { return }
-        XCTFail("Condition was not met within \(timeout)", file: file, line: line)
-    }
-
     private static func ringText(_ model: AppModel, _ task: SessionRecord) -> String? {
         let options = ComposerSessionOptionsProjection.make(
             harness: task.harness, session: task, providerCapabilities: nil,

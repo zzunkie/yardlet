@@ -701,7 +701,7 @@ final class TaskResourceSamplingTests: XCTestCase {
 
     /// The port and process a `listener` wrote to `file`, once it has.
     static func listening(_ file: URL) async throws -> (port: Int, processID: Int32) {
-        let deadline = ContinuousClock.now + .seconds(10)
+        let deadline = ContinuousClock.now + testWaitLimit
         while ContinuousClock.now < deadline {
             if let text = try? String(contentsOf: file, encoding: .utf8) {
                 let parts = text.split(separator: " ").compactMap { Int($0) }

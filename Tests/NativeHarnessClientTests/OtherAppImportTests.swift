@@ -1119,7 +1119,7 @@ final class OtherAppImportTests: XCTestCase {
     private func path(_ url: URL) -> String { ProjectSidebarPresentation.normalizedPath(for: url) }
 
     private func eventually(_ condition: () -> Bool) async -> Bool {
-        let deadline = ContinuousClock.now + .seconds(10)
+        let deadline = ContinuousClock.now + testWaitLimit
         while ContinuousClock.now < deadline {
             if condition() { return true }
             try? await Task.sleep(for: .milliseconds(20))
