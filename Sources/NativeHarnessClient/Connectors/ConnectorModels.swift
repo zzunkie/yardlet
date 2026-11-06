@@ -507,11 +507,13 @@ final class InMemoryConnectorCredentialStore: ConnectorCredentialStoring, @unche
     }
 }
 
-/// Names under which a connector's tools reach a harness. Claude Code and Codex call a tool
-/// `mcp__yardlet__<name>` and the model APIs allow 64 characters of `[A-Za-z0-9_-]`, so a name
-/// is the connector's slug, an underscore, and the server's tool name, cleaned and kept to 50.
+/// Names under which a connector's tools reach a harness. The model APIs allow 64 characters of
+/// `[A-Za-z0-9_-]`, and each harness puts its own prefix before the name: Claude Code and Codex
+/// `mcp__yardlet__`, Antigravity `mcp_yardlet_`, or `mcp_yardlet_<8 hex>_` (21 characters) for every
+/// session after the first in one process, whose server spec differs by its task. So a name is the
+/// connector's slug, an underscore, and the server's tool name, cleaned and kept to 43.
 enum ConnectorToolNaming {
-    static let maximumLength = 50
+    static let maximumLength = 43
     static let maximumSlugLength = 20
 
     /// A lowercase ASCII prefix from the connector's name. `browser` is the browser tools'.

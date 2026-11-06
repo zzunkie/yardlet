@@ -11,8 +11,9 @@ package struct AgentToolDefinition: Equatable, Sendable {
     /// The tool reaches beyond Yardlet: a web page for the browser tools. The task suggestion
     /// tools stay inside Yardlet.
     package var openWorld = true
-    /// Claude Code keeps the tool in the prompt instead of behind its tool search
-    /// (`_meta` `anthropic/alwaysLoad`), as the Claude app loads its own `spawn_task`.
+    /// Claude Code and Antigravity keep the tool in the prompt instead of behind their tool search
+    /// (`_meta` `anthropic/alwaysLoad` and `antigravity/alwaysLoad`), as the Claude app loads its own
+    /// `spawn_task`.
     package var alwaysLoad = false
 
     package var json: ToolJSON {
@@ -28,7 +29,9 @@ package struct AgentToolDefinition: Equatable, Sendable {
                 "openWorldHint": .bool(openWorld)
             ])
         ]
-        if alwaysLoad { fields["_meta"] = .object(["anthropic/alwaysLoad": .bool(true)]) }
+        if alwaysLoad {
+            fields["_meta"] = .object(["anthropic/alwaysLoad": .bool(true), "antigravity/alwaysLoad": .bool(true)])
+        }
         return .object(fields)
     }
 }

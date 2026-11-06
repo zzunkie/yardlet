@@ -27,8 +27,10 @@ final class ConnectorTests: XCTestCase {
         XCTAssertEqual(first.count, ConnectorToolNaming.maximumLength)
         XCTAssertNotEqual(first, second)
         XCTAssertEqual(first, ConnectorToolNaming.name(slug: "atlassian", tool: "getConfluencePageFooterCommentsForSpaceWithLongName"))
-        // Claude Code adds `mcp__yardlet__`; the model APIs stop at 64.
+        // Claude Code adds `mcp__yardlet__`, and Antigravity `mcp_yardlet_<8 hex>_` in its later
+        // sessions of one process; the model APIs stop at 64.
         XCTAssertLessThanOrEqual(("mcp__yardlet__" + first).count, 64)
+        XCTAssertLessThanOrEqual(("mcp_yardlet_921068d5_" + first).count, 64)
     }
 
     // MARK: - Protocol pieces
