@@ -1,10 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// What a task's header offers besides its panel buttons. The window draws one header for each thing
-/// it shows: the title bar is the header of the item the tab shows (one task, a split view, the new-task
-/// screen), and in a split view each pane's header is its task's header, as the Claude app gives each
-/// split pane its own header (`paneIndex`).
+/// What a task's header offers besides its panel buttons. The window draws one header for each task
+/// it shows: the title bar is the header of the task or the new-task screen the tab shows, and in a
+/// split view each pane's header is its task's header, as the Claude app gives each split pane its own
+/// header (`paneIndex`); the title bar then heads nothing, so the panes read as windows side by side.
 struct TaskHeaderActions {
     var canManageTask = true
     var managesWorkspace = true
@@ -290,29 +290,19 @@ enum TaskHeaderFold {
     static let titleRoom: CGFloat = 180
 }
 
-/// A split view's header in the title bar: the name its sidebar row shows, which opens the row's
-/// actions. Its tasks' buttons are in their panes' headers.
-struct SplitViewHeader: View {
+/// A split view's name in the window tab that shows it, which opens its sidebar row's actions. The
+/// title bar has no header of its own for a split view: each pane's header heads its task.
+struct SplitViewTitleMenu: View {
     let title: String
     let isPinned: Bool
-    let isVertical: Bool
     var rename: () -> Void = {}
     var togglePinned: () -> Void = {}
     var dissolve: () -> Void = {}
     var archive: () -> Void = {}
 
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: isVertical ? "rectangle.split.1x2" : "rectangle.split.2x1")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-            titleMenu(size: 13)
-        }
-    }
+    @Environment(\.yardletInterfaceScale) private var interfaceScale
 
-    /// The name, which opens the split view's actions: in the title bar, and in the window tab that shows it.
-    func titleMenu(size: CGFloat) -> some View {
+    var body: some View {
         Menu {
             Button(L10n.string("Rename split view…"), action: rename)
             Button(L10n.string(isPinned ? "Unpin split view" : "Pin split view"), action: togglePinned)
@@ -321,7 +311,7 @@ struct SplitViewHeader: View {
             Button(L10n.string("Archive tasks…"), role: .destructive, action: archive)
         } label: {
             Text(title)
-                .font(.system(size: size, weight: .medium))
+                .font(.system(size: 12.5 * interfaceScale, weight: .medium))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .contentShape(Rectangle())
