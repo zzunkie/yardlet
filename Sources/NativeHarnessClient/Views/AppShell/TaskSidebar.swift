@@ -273,10 +273,11 @@ struct TaskSidebar: View {
     var disclosure: SidebarDisclosureStore? = nil
     /// The activity view, shown in place of the task list while it is on.
     var activity: SidebarActivity? = nil
-    /// The person's Codex Cloud tasks, listed under Cloud after the tasks (`CodexCloudTasks`).
-    var cloudTasks: [CodexCloudTask] = []
-    /// Opens a cloud task's page; nil leaves the Cloud section out.
-    var onOpenCloudTask: ((CodexCloudTask) -> Void)? = nil
+    /// The person's cloud tasks, listed under Cloud after the tasks (`SidebarCloudItem`).
+    var cloudItems: [SidebarCloudItem] = []
+    /// Opens a cloud task: a Codex Cloud task's page, a dot's task in Personal agents; nil leaves the
+    /// Cloud section out.
+    var onOpenCloudItem: ((SidebarCloudItem) -> Void)? = nil
     /// Told when the list comes to its top or leaves it, where the shown task's place is held
     /// (`SidebarOrderHold`).
     var onListAtTopChange: (Bool) -> Void = { _ in }
@@ -544,25 +545,25 @@ struct TaskSidebar: View {
 
     /// The cloud tasks a search keeps, and the first few of them until "Show more" lists more, as
     /// Chats lists its rows.
-    private var cloudRows: (all: [CodexCloudTask], shown: [CodexCloudTask]) {
-        guard onOpenCloudTask != nil else { return ([], []) }
-        let all = CodexCloudTasks.matching(cloudTasks, search: searchText)
+    private var cloudRows: (all: [SidebarCloudItem], shown: [SidebarCloudItem]) {
+        guard onOpenCloudItem != nil else { return ([], []) }
+        let all = SidebarCloudItem.matching(cloudItems, search: searchText)
         let limit = disclosure?.disclosure.limit(for: CodexCloudTasks.disclosureKey)
         return (all, limit.map { Array(all.prefix($0)) } ?? all)
     }
 
     /// The Cloud section after the tasks, a group of its own as the Codex app's sidebar keeps its cloud
-    /// group: the person's Codex Cloud tasks, each opening its own page.
+    /// group: the person's Codex Cloud tasks and the Codex tasks their dots started.
     @ViewBuilder
     private func cloudEntry() -> some View {
         let rows = cloudRows
-        if let onOpenCloudTask, !rows.all.isEmpty {
+        if let onOpenCloudItem, !rows.all.isEmpty {
             ParitySectionTitle(title: L10n.string("Cloud"))
                 .padding(.horizontal, 13)
                 .padding(.top, 16)
                 .padding(.bottom, 2)
-            ForEach(rows.shown) { task in
-                SidebarCloudTaskRow(task: task) { onOpenCloudTask(task) }
+            ForEach(rows.shown) { item in
+                SidebarCloudTaskRow(item: item) { onOpenCloudItem(item) }
                     .equatable()
                     .padding(.horizontal, 4)
                     .accessibilitySortPriority(ParityAccessibility.sidebarPrimary - 2)

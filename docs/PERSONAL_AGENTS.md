@@ -91,7 +91,9 @@ These parts only read. Activity is the dot's own task list, empty until it has
 tasks; it is not the list of its execution threads.
 
 **Codex tasks** lists the tasks the dot's conversations started, newest first, five
-with **Show more**. They are the threads its profile binds (`GET /tbo/{dot}/threads`)
+with **Show more**. The same tasks list in the task list's **Cloud** section, read through
+the app's watch on the dots, and open in this reader from there
+([NATIVE_SESSION_STORAGE.md](NATIVE_SESSION_STORAGE.md), "Cloud tasks"). They are the threads its profile binds (`GET /tbo/{dot}/threads`)
 whose binding names one of the dot's conversation roots as parent; the history host's
 own metadata names no parent for them, so only that listing ties them to the dot. The
 list is read when the details first show, with each thread's metadata from the

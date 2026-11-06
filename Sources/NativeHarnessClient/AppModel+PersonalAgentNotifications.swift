@@ -11,6 +11,8 @@ extension AppModel {
         let watch = personalAgentWatch
         watch.isActive = { [weak self] in self?.applicationAttention?.isActive ?? false }
         watch.announce = { [weak self] in await self?.postPersonalAgentNotification($0) }
+        // The dots' Codex tasks are listed in the sidebar once the watch has the dots.
+        watch.agentsRead = { [weak self] agents in Task { await self?.refreshPersonalAgentCloudTasks(agents: agents) } }
         watch.withdraw = { [weak self] identity in
             self?.systemNotificationCenter.removeNotifications(identifiers: [false, true].map {
                 PersonalAgentAnnouncement.identifier(roomID: identity.roomID, isRequest: $0)
@@ -55,13 +57,16 @@ extension AppModel {
             // Turned off, nothing of it stays: the connection, the unread marks, the account it followed
             // and what was kept of the dots.
             personalAgentWatch.stop()
+            if !personalAgentCloudTasks.isEmpty { personalAgentCloudTasks = [] }
             if defaults.object(forKey: accountKey) != nil { defaults.removeObject(forKey: accountKey) }
             return
         }
         guard !usesVisualFixture, let accountID = state[1],
               let account = connections.choices(for: [.codex]).first(where: { $0.id == accountID }),
               let runtime = runtimeSelections.selectedURL(for: .codex) else {
-            return personalAgentWatch.stop()
+            personalAgentWatch.stop()
+            if !personalAgentCloudTasks.isEmpty { personalAgentCloudTasks = [] }
+            return
         }
         let manager = codexEnvironmentManager
         let home = account.connection?.homePath ?? manager?.paths.nativeHomeURL.path()

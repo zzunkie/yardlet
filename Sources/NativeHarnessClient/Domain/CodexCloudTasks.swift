@@ -78,13 +78,4 @@ enum CodexCloudTasks {
         let whole = text.replacing(/\.\d+/, with: "", maxReplacements: 1)
         return try? Date(whole, strategy: .iso8601)
     }
-
-    /// The tasks a sidebar search keeps: those whose title or environment holds the search text.
-    static func matching(_ tasks: [CodexCloudTask], search: String) -> [CodexCloudTask] {
-        let search = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !search.isEmpty else { return tasks }
-        return tasks.filter {
-            $0.title.localizedStandardContains(search) || $0.environment?.localizedStandardContains(search) == true
-        }
-    }
 }

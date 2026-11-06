@@ -1754,6 +1754,82 @@ final class PersonalAgentTests: XCTestCase {
     /// the room the topic names, marks and announces once per burst, and never marks a dot a window
     /// shows. An unrelated room's change publishes nothing, however many dots there are. A login that
     /// ends stops it until a window reads the dots again.
+    /// The Codex tasks a dot started list in the sidebar's Cloud section, read through the app's watch
+    /// on the dots once it has them, beside the Codex Cloud tasks and newest first; the setting turned
+    /// off takes them out. Opening one shows the dot and reads the task through the bound-thread reads,
+    /// on the connection the window makes for it.
+    func testADotsCodexTasksListUnderCloudThroughTheAppsWatchAndOpenInTheDotsReader() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "yardlet-dot-cloud-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("PersonalAgentCloudTasks")))
+        defaults.removeObject(forKey: PersonalAgentNotificationPreference.key)
+        let model = AppModel(
+            store: SessionStore(repository: InMemorySessionRepository()),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
+            codexQueueRepository: UserDefaultsCodexQueueRepository(defaults: defaults, keyPrefix: "queue."),
+            preferences: defaults,
+            codexPendingRequestRepository: UserDefaultsCodexPendingServerRequestRepository(defaults: defaults),
+            codexTimelineItemRepository: UserDefaultsCodexTimelineItemRepository(defaults: defaults),
+            codexHistorySelectionRepository: UserDefaultsCodexHistorySelectionRepository(defaults: defaults, keyPrefix: "history."),
+            transcriptRepository: FileTranscriptRepository(directoryURL: root.appending(path: "transcripts")),
+            sessionTitleResolver: { _ in nil }, sessionTitleRetryCount: 0, restoresIndexOnLaunch: false)
+        addTeardownBlock { await model.shutdown() }
+        let agent = fixtureAgent()
+        let reader = FixturePersonalAgentReader(agents: [agent])
+        let turn: (String) -> CodexTurnState = { CodexTaskDecoder().turn(from: .object(["id": .string($0)]), fallbackID: $0)! }
+        let at = Int64(Date(timeIntervalSince1970: 1_800_000_000).timeIntervalSince1970)
+        await reader.setOutputs(
+            scope: ["thread", "spawned"],
+            metadata: ["thread": .object(["id": .string("thread"), "threadSource": .string("aeon")]),
+                       "spawned": .object(["id": .string("spawned"), "threadSource": .string("aeon_child"),
+                                           "preview": .string("Run the tests"), "updatedAt": .integer(at),
+                                           "status": .object(["type": .string("active")])])],
+            turns: ["spawned:": .init(turns: [turn("t1")], nextCursor: nil, backwardsCursor: nil)],
+            items: ["spawned:t1:": .init(entries: [], nextCursor: nil, backwardsCursor: nil)])
+        await reader.setBindingParents(["spawned": "thread"])
+        model.codexCloudTasks = [CodexCloudTask(id: "task_e_1", title: "Fix the parser", status: .ready,
+                                                updatedAt: Date(timeIntervalSince1970: 1_799_990_000), environment: nil,
+                                                url: CodexCloudTasks.pageURL(nil, id: "task_e_1"))]
+        model.startPersonalAgentWatch(defaults: defaults)
+        XCTAssertTrue(model.personalAgentCloudTasks.isEmpty, "No watch, no list")
+        model.personalAgentWatch.follow(.init(key: "account|home|codex", accountChoiceID: "account")) { reader }
+        try await waitUntil { model.personalAgentCloudTasks.map(\.id) == ["spawned"] }
+        let task = try XCTUnwrap(model.personalAgentCloudTasks.first)
+        XCTAssertEqual(task.agent, agent)
+        XCTAssertEqual(task.accountChoiceID, "account")
+        XCTAssertEqual(model.cloudItems.map(\.title), ["Run the tests", "Fix the parser"], "Newest first, both kinds")
+        XCTAssertEqual(model.cloudItems.first?.status, .running)
+        XCTAssertEqual(model.cloudItems.first?.source, "Atlas")
+        XCTAssertNil(model.cloudItems.first?.url, "A dot's task opens in Yardlet")
+        XCTAssertEqual(SidebarCloudItem.matching(model.cloudItems, search: "atlas").map(\.title), ["Run the tests"])
+        XCTAssertTrue(model.store.sessions.isEmpty, "Not a task in the index")
+
+        // Opening it: the dot is revealed with the task, before the window's connection; the connection opens it.
+        let center = PersonalAgentCenter()
+        await center.reveal(agent.id, thread: task.thread)
+        XCTAssertNil(center.activityReading)
+        await center.connect(sourceKey: "home") { reader }
+        let reading = try XCTUnwrap(center.activityReading)
+        XCTAssertEqual(reading.activity.id, "spawned")
+        XCTAssertTrue(reading.isBoundThread)
+        try await waitUntil { reading.history.phase == .loaded }
+        let reads = await reader.outputReads
+        XCTAssertTrue(reads.contains("thread:spawned") && reads.contains("turns:spawned:"), "\(reads)")
+        let activityReads = await reader.historyReads
+        XCTAssertTrue(activityReads.isEmpty, "Not through the Activity's reads")
+        center.closeActivity()
+        // Opened again while the dot shows on a connection: at once.
+        await center.reveal(agent.id, thread: task.thread)
+        XCTAssertEqual(center.activityReading?.activity.id, "spawned")
+        await center.disconnect()
+
+        // The setting turned off ends the watch and the list with it.
+        defaults.set(false, forKey: PersonalAgentNotificationPreference.key)
+        model.followPersonalAgents(defaults: defaults, force: true)
+        XCTAssertTrue(model.personalAgentCloudTasks.isEmpty)
+        XCTAssertEqual(model.cloudItems.map(\.title), ["Fix the parser"])
+    }
+
     func testTheAppWatchAnnouncesOnlyNewMessagesFromTheDotOnce() async throws {
         func dot(_ index: Int) -> PersonalAgent {
             .init(id: .init(accountID: "account", userID: "person", agentID: "dot\(index)", roomID: "room\(index)"),

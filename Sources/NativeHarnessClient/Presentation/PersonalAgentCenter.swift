@@ -186,6 +186,9 @@ final class PersonalAgentCenter {
     }
     /// The dot a notification asked to show, chosen once the agents are read.
     @ObservationIgnored private var preferredID: PersonalAgentIdentity?
+    /// A task of a dot's to open in its reader once that dot is shown on a connection
+    /// (`reveal(_:thread:)`, from the sidebar's Cloud rows).
+    @ObservationIgnored private var pendingThread: (agent: PersonalAgentIdentity, thread: PersonalAgentThread)?
     /// What every window of the app last read of each source, shown while this window reads its own.
     @ObservationIgnored let readings: PersonalAgentReadings?
     /// The account the shown dots were kept under, until this connection's own read replaces them.
@@ -248,13 +251,29 @@ final class PersonalAgentCenter {
     }
 
     /// Shows `id` once it is among the agents read: now, if it is, or after the next connection reads it.
-    func reveal(_ id: PersonalAgentIdentity) async {
+    /// With `thread`, a task of that dot's, it then opens the task in the reader, as the details' list
+    /// does, through the bound-thread reads (`openThread`): on this connection when the dot is shown
+    /// on it, or on the next one.
+    func reveal(_ id: PersonalAgentIdentity, thread: PersonalAgentThread? = nil) async {
+        pendingThread = thread.map { (id, $0) }
         if agents.contains(where: { $0.id == id }) {
             preferredID = nil
             await select(id)
+            openPendingThread()
         } else {
             preferredID = id
         }
+    }
+
+    /// Opens the task `reveal` was given once its dot is the one shown and a connection can read it.
+    private func openPendingThread() {
+        guard let pending = pendingThread, let agent = selected, agent.id == pending.agent, client != nil else { return }
+        pendingThread = nil
+        if let open = activityReading, open.agentID == agent.id, open.activity.id == pending.thread.id { return }
+        closeActivity()
+        let reading = PersonalAgentActivityReading(agentID: agent.id, activity: pending.thread.activity, isBoundThread: true)
+        activityReading = reading
+        startActivity(reading)
     }
 
     private func observeSelected() {
@@ -345,8 +364,12 @@ final class PersonalAgentCenter {
             unavailableSprites = []
             loadAvatars(values, from: reader, generation: current)
             await showSelected()
+            guard current == generation, !Task.isCancelled else { return }
+            openPendingThread()
         } catch {
             guard current == generation, !Task.isCancelled else { return }
+            // A connection that fails takes the task it was to open with it: a later one is the person's.
+            pendingThread = nil
             isLoading = false
             accept(error)
         }
@@ -398,6 +421,7 @@ final class PersonalAgentCenter {
     }
 
     func select(_ id: PersonalAgentIdentity) async {
+        if let pending = pendingThread, pending.agent != id { pendingThread = nil }
         guard agents.contains(where: { $0.id == id }), selectedID != id else { return }
         closeActivity()
         cancelOutputs()
@@ -887,6 +911,7 @@ final class PersonalAgentCenter {
     }
 
     func disconnect() async {
+        pendingThread = nil
         let old = detach()
         await old?.stop()
     }

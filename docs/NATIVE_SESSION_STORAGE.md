@@ -907,15 +907,27 @@ own page.
   access) keeps the last list; one that succeeds replaces it. The list is kept in memory only: Yardlet writes nothing
   to its index or preferences for it, and the CLI keeps its own sign-in as it does for any command. No other
   `codex cloud` command runs (no `exec`, `apply` or `diff`), so no cloud task changes and no model turn starts.
-- **What a row shows:** the task's title, Codex's mark, the running dot while the task is `pending` and the error mark
-  when it is `error`; its help and accessibility value add "Codex Cloud", the state and the environment's label. The
-  section lists five tasks and "Show more" lists ten more, as Chats does, and the sidebar search filters it by title and
-  environment.
-- **Opening one:** a click, or "Open in default browser" in its menu, opens the task's page in the default browser
-  (`OutsideBrowser`), the address the CLI prints for it. Only `https://chatgpt.com/codex/tasks/<id>` for the task's
-  own ID is taken; any other address in the listing is replaced by that page, so a listing never opens another site.
-  "Copy link" copies the same address. A cloud row is never the selected row: the arrow keys and Return move through
-  the tasks only, and nothing in the window changes when one opens.
+- **A dot's Codex tasks:** the tasks the person's dots started, which the dots' details list as **Codex tasks**
+  ([PERSONAL_AGENTS.md](PERSONAL_AGENTS.md), "Details"), also list here. They are read through the app's watch on the
+  dots (`PersonalAgentWatch.reading`: the reader of the account a window last opened the dots with, while Settings
+  keeps their notifications on), with the same reads as the details (`PersonalAgentThreads`: each dot's bound threads,
+  keeping the tasks a conversation spawned), once the watch has the dots and in the same passes as above
+  (`AppModel.refreshPersonalAgentCloudTasks`). No second login or connection is made, and nothing is written. Without
+  the watch (the setting off, no dots opened yet, a login that ended) there are none; a read that fails keeps the last
+  list. The two lists are one section, newest first (`SidebarCloudItem`).
+- **What a row shows:** the task's title, Codex's mark, the running dot while a Codex Cloud task is `pending` or a
+  dot's task is running, and the error mark when it is `error` or ended on one; its help and accessibility value add
+  where it comes from ("Codex Cloud", or the dot's name), the state and, for a Codex Cloud task, the environment's
+  label. The section lists five tasks and "Show more" lists ten more, as Chats does, and the sidebar search filters it
+  by title, source and environment.
+- **Opening one:** a click on a Codex Cloud task, or "Open in default browser" in its menu, opens the task's page in
+  the default browser (`OutsideBrowser`), the address the CLI prints for it. Only `https://chatgpt.com/codex/tasks/<id>`
+  for the task's own ID is taken; any other address in the listing is replaced by that page, so a listing never opens
+  another site. "Copy link" copies the same address. A click on a dot's task shows that dot in Personal agents, under
+  the account it was read with, and opens the task in the dot's reader as the details' list does
+  (`PersonalAgentCenter.reveal(_:thread:)`, through the bound-thread reads, on the connection the window makes for
+  the dot). A cloud row is never the selected row: the arrow keys and Return move through the tasks only, and nothing
+  else in the window changes when one opens.
 - **Not listed:** Claude Code cloud sessions (Claude Code lists them only in its interactive `--teleport` and `/tasks`
   pickers, and the Claude app reads them from its own server), and the threads of Codex's newer cloud service, which
   the Codex app reads over its own hosted connection and neither the Codex CLI nor the App Server lists. They stay in

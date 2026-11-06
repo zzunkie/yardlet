@@ -67,6 +67,8 @@ final class PersonalAgentWatch {
     /// Whether Yardlet is the active app, so a window showing the dot is in front of the person.
     @ObservationIgnored var isActive: @MainActor () -> Bool = { false }
     @ObservationIgnored var announce: @MainActor (PersonalAgentAnnouncement) async -> Void = { _ in }
+    /// Told the dots each connection read, once it has them: what reads through `reading` can start.
+    @ObservationIgnored var agentsRead: @MainActor ([PersonalAgent]) -> Void = { _ in }
     /// Withdraws a dot's delivered notifications once its conversation is shown.
     @ObservationIgnored var withdraw: @MainActor (PersonalAgentIdentity) -> Void = { _ in }
 #if DEBUG
@@ -185,6 +187,7 @@ final class PersonalAgentWatch {
         // No dots, nothing to watch: the reader and its runtime stop.
         guard current == generation, !values.isEmpty else { return current == generation ? end() : () }
         agents = Dictionary(values.map { ($0.id.roomID, $0) }, uniquingKeysWith: { first, _ in first })
+        agentsRead(values)
         let stream = await reader.roomUpdates(for: values)
         // Each room's newest page is what later messages are new against; nothing is announced for it.
         for room in agents.keys.sorted() {

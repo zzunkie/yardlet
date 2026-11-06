@@ -444,6 +444,27 @@ struct MainWindow: View {
         }
     }
 
+    /// Shows a dot in Personal agents under the account it was read with, and, with `thread`, opens
+    /// that task of the dot's in its reader once the dot is shown.
+    private func revealPersonalAgent(_ identity: PersonalAgentIdentity, accountChoiceID: String,
+                                     thread: PersonalAgentThread? = nil) {
+        if personalAccounts.contains(where: { $0.id == accountChoiceID }) { personalAccountID = accountChoiceID }
+        Task { await personalAgents.reveal(identity, thread: thread) }
+        showPersonalAgents()
+    }
+
+    /// A row of the sidebar's Cloud section: a Codex Cloud task opens on its page in the default
+    /// browser, where the Codex CLI sends it; a dot's task opens in Personal agents, in the reader the
+    /// dot's details open it in.
+    private func openCloudItem(_ item: SidebarCloudItem) {
+        switch item {
+        case let .codexCloud(task):
+            OutsideBrowser.open(task.url)
+        case let .personalAgent(task):
+            revealPersonalAgent(task.agent.id, accountChoiceID: task.accountChoiceID, thread: task.thread)
+        }
+    }
+
     private func closePersonalAgents() {
         withAnimation(ParityMotion.easeInOut(reduceMotion: reduceMotion)) { sidebarSection = .tasks }
         focusCurrentContent()
@@ -2002,8 +2023,8 @@ struct MainWindow: View {
                         accountMenu: accountMenu,
                         disclosure: sidebarDisclosure,
                         activity: sidebarActivity,
-                        cloudTasks: model.codexCloudTasks,
-                        onOpenCloudTask: { OutsideBrowser.open($0.url) },
+                        cloudItems: model.cloudItems,
+                        onOpenCloudItem: openCloudItem,
                         onListAtTopChange: { atTop in
                             isSidebarListAtTop = atTop
                             holdSidebarOrder()
@@ -2143,9 +2164,7 @@ struct MainWindow: View {
         .onChange(of: model.personalAgentReveal, initial: true) { _, reveal in
             guard let reveal else { return }
             model.personalAgentReveal = nil
-            if personalAccounts.contains(where: { $0.id == reveal.accountChoiceID }) { personalAccountID = reveal.accountChoiceID }
-            Task { await personalAgents.reveal(reveal.agent) }
-            showPersonalAgents()
+            revealPersonalAgent(reveal.agent, accountChoiceID: reveal.accountChoiceID)
         }
         // Only the task on screen is looked up, when it comes into view and while it stays.
         .onChange(of: model.pullRequestTargets(), initial: true) { _, targets in

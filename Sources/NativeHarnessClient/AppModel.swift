@@ -322,7 +322,12 @@ final class AppModel {
     private(set) var isFollowingSessionLists = false
     /// The person's Codex Cloud tasks as the last pass read them, newest first: listed beside the
     /// tasks, never in the index (`refreshCodexCloudTasks`).
-    var codexCloudTasks: [CodexCloudTask] = []
+    var codexCloudTasks: [CodexCloudTask] = [] { didSet { updateCloudItems() } }
+    /// The Codex tasks the person's dots started, as the app's watch on the dots last read them
+    /// (`refreshPersonalAgentCloudTasks`).
+    var personalAgentCloudTasks: [PersonalAgentCloudTask] = [] { didSet { updateCloudItems() } }
+    /// Both as the sidebar's Cloud section lists them, newest first.
+    private(set) var cloudItems: [SidebarCloudItem] = []
     /// Runs the Codex CLI's cloud listing; tests answer it.
     @ObservationIgnored var codexCloudCommand: @Sendable (CLICommand) async -> CLICommandResult = {
         await CLIProcess.run($0)
@@ -4409,8 +4414,10 @@ final class AppModel {
             isFollowingSessionLists = false
         }
         async let cloud: Void = refreshCodexCloudTasks()
+        async let dots: Void = refreshPersonalAgentCloudTasks()
         await followSessionLists(now: now)
         await cloud
+        await dots
     }
 
     /// The person's "Refresh from the Claude App and Codex": a pass now, whenever the last one was.
@@ -4423,8 +4430,10 @@ final class AppModel {
             isFollowingSessionLists = false
         }
         async let cloud: Void = refreshCodexCloudTasks()
+        async let dots: Void = refreshPersonalAgentCloudTasks()
         await followSessionLists(now: now)
         await cloud
+        await dots
     }
 
     /// Reads the person's Codex Cloud tasks under the default Codex login with the Codex CLI's own
@@ -4454,6 +4463,40 @@ final class AppModel {
         var seen = Set<String>()
         tasks = tasks.filter { seen.insert($0.id).inserted }
         if tasks != codexCloudTasks { codexCloudTasks = tasks }
+    }
+
+    /// Reads the Codex tasks the person's dots started, through the app's watch on the dots
+    /// (`PersonalAgentWatch.reading`: the reader of the account a window last opened the dots with,
+    /// while their notifications are on), as the dots' details list them (`PersonalAgentThreads`):
+    /// each dot's bound threads, keeping the tasks a conversation spawned. Nothing else is read or
+    /// sent. Without the watch there is no list; a read that fails keeps the last one.
+    /// - Parameter agents: the dots the watch just read, when it has them; otherwise they are asked.
+    func refreshPersonalAgentCloudTasks(agents listed: [PersonalAgent]? = nil) async {
+        guard !isVisualFixture else { return }
+        guard let reading = personalAgentWatch.reading else {
+            if !personalAgentCloudTasks.isEmpty { personalAgentCloudTasks = [] }
+            return
+        }
+        do {
+            let agents: [PersonalAgent]
+            if let listed { agents = listed } else { agents = try await reading.reader.agents() }
+            var tasks: [PersonalAgentCloudTask] = []
+            for agent in agents {
+                let threads = try await PersonalAgentThreads.read(from: reading.reader, agent: agent)
+                tasks += threads.filter { $0.kind == .task }.map {
+                    PersonalAgentCloudTask(agent: agent, accountChoiceID: reading.accountChoiceID, thread: $0)
+                }
+            }
+            guard !Task.isCancelled, personalAgentWatch.reading?.accountChoiceID == reading.accountChoiceID else { return }
+            if tasks != personalAgentCloudTasks { personalAgentCloudTasks = tasks }
+        } catch {
+            // Unread this time: the list stays until the next pass, or the watch connects again.
+        }
+    }
+
+    private func updateCloudItems() {
+        let items = SidebarCloudItem.merged(codexCloud: codexCloudTasks, personalAgents: personalAgentCloudTasks)
+        if items != cloudItems { cloudItems = items }
     }
 
     /// Brings the task list in step with the Claude app's Code sessions and the Codex threads a

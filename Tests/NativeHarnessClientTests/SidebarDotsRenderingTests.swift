@@ -674,6 +674,19 @@ final class SidebarDotsRenderingTests: XCTestCase {
                            updatedAt: now.addingTimeInterval(-Double(index) * 3600), environment: "yardlet",
                            url: CodexCloudTasks.pageURL(nil, id: "task_e_\(index)"))
         }
+        // Two Codex tasks a dot started, as the app's watch reads them: one running, one done.
+        let dot = PersonalAgent(id: .init(accountID: "example", userID: "person", agentID: "dot", roomID: "room"),
+                                name: "Atlas", rootThreadID: "root", isPaused: false, isPrimary: true)
+        let spawned = [("spawn-1", "Run the release checks on the launch site", "active", -1_800.0),
+                       ("spawn-2", "Compare the staging build", "idle", -5.5 * 3600)]
+        model.personalAgentCloudTasks = try spawned.map { id, preview, status, age in
+            let thread = try PersonalAgentActivityHistory.thread(.object(["thread": .object([
+                "id": .string(id), "threadSource": .string("aeon_child"), "preview": .string(preview),
+                "updatedAt": .integer(Int64(now.addingTimeInterval(age).timeIntervalSince1970)),
+                "status": .object(["type": .string(status)])])]), id: id)
+            return PersonalAgentCloudTask(agent: dot, accountChoiceID: "account", thread: PersonalAgentThread(
+                binding: .init(id: id, parentID: "root", attachedAt: nil), currentRoot: "root", thread: thread))
+        }
         // Home shown: the list does not scroll back to a shown task's row.
         model.splits.activate(.home)
         let size = NSSize(width: 1280, height: 820)
@@ -699,7 +712,9 @@ final class SidebarDotsRenderingTests: XCTestCase {
                 && $0.contains(L10n.string("Task encountered a system error")) }, spoken.description)
             XCTAssertTrue(spoken.contains { $0.hasPrefix("\(titles[2]), Codex") && $0.contains(L10n.string("Codex Cloud")) },
                           spoken.description)
-            XCTAssertFalse(spoken.contains { $0.hasPrefix(titles[5]) }, "Five until Show more")
+            XCTAssertTrue(spoken.contains { $0.hasPrefix("\(spawned[0].1), Codex") && $0.contains("Atlas")
+                && $0.contains(L10n.string("Running")) }, "The dot's task among the cloud rows, by its time: \(spoken)")
+            XCTAssertFalse(spoken.contains { $0.hasPrefix(titles[5]) || $0.hasPrefix(spawned[1].1) }, "Five until Show more")
             if appearance == .light {
                 // The tasks changing leave the cloud rows alone; a cloud task changing draws its row only.
                 ViewBodyCensus.isEnabled = true
