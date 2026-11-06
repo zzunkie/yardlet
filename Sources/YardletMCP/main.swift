@@ -6,8 +6,10 @@ import YardletAgentTools
 // calling task's browser tab. Everything it needs arrives in its environment.
 
 let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0"
+let environment = ProcessInfo.processInfo.environment
 let server = MCPServer(
     version: version,
-    invoker: UnixSocketToolInvoker(environment: ProcessInfo.processInfo.environment)
+    instructions: AgentToolCatalog.serverInstructions(services: AgentToolEnvironment.services(in: environment)),
+    invoker: UnixSocketToolInvoker(environment: environment)
 )
 await MCPStdioLoop.run(server)

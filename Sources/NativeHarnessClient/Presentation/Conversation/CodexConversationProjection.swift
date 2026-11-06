@@ -611,7 +611,9 @@ enum CodexConversationProjection {
                 let connector = tool.server == AgentToolEnvironment.serverName
                     ? ConnectorToolLabels.shared.label(forTool: tool.tool) : nil
                 kind = .tool(ConversationTool(
-                    kind: .mcp, name: connector.map { "\($0.connector) · \($0.tool)" } ?? "\(tool.server) · \(tool.tool)",
+                    kind: .mcp, name: connector.map {
+                        "\($0.connectorName(account: tool.arguments[ConnectorToolNaming.accountArgument]?.stringValue)) · \($0.tool)"
+                    } ?? "\(tool.server) · \(tool.tool)",
                     status: tool.status, input: tool.arguments.readableText, errorMessage: tool.errorMessage,
                     mcpResult: CodexMCPResultProjection(result: tool.result, itemID: item.id),
                     connector: connector

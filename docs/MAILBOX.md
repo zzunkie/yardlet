@@ -230,7 +230,7 @@ connector › **Mail (IMAP)**, as Apple Mail and Thunderbird add them.
 ## Agents
 
 - **Ask an agent** starts a chat whose composer names the thread: its subject, sender, account, thread ID
-  and the connector tool that reads it (`gmail_get_thread`). The message's words are not put in the
+  and the connector tool that reads it (`gmail_get_thread`, which takes the account's address). The message's words are not put in the
   prompt; the agent reads them with the account's Gmail connector, and the person writes what to do.
 - Agents read and draft through the Gmail connector's tools as before (docs/CONNECTORS.md, "Google");
   the mailbox shows the drafts they make.

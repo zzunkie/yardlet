@@ -12,13 +12,13 @@ enum GmailToolApproval {
     /// The most attachments a card names one by one.
     static let listedAttachments = 20
 
-    /// The Gmail tool behind a Claude Code name that asks every time, with its account; nil for
-    /// any other tool.
-    static func tool(named claudeToolName: String?,
+    /// The Gmail tool behind a Claude Code name that asks every time, with the account the call acts
+    /// in (the one its input names); nil for any other tool.
+    static func tool(named claudeToolName: String?, input: JSONValue,
                      labels: ConnectorToolLabels = .shared) -> (tool: String, account: String?)? {
         guard let claudeToolName, let label = labels.label(forClaudeTool: claudeToolName),
               label.localService == .gmail, GmailToolCatalog.approvalRequired.contains(label.tool) else { return nil }
-        return (label.tool, label.account)
+        return (label.tool, label.account(named: input[ConnectorToolNaming.accountArgument]?.stringValue))
     }
 
     /// Whether the call's card shows a draft read from its mailbox: a Gmail send or delete of one, or
@@ -38,7 +38,8 @@ enum GmailToolApproval {
         let prefix = "mcp__\(AgentToolEnvironment.serverName)__"
         guard let toolName, toolName.hasPrefix(prefix) else { return nil }
         var arguments: [String: ToolJSON] = [:]
-        for key in ["draftId", "messageId"] {
+        // The account goes too: a tool its service's accounts share reads the draft from the one the call names.
+        for key in ["draftId", "messageId", ConnectorToolNaming.accountArgument] {
             if let value = input[key]?.stringValue, !value.isEmpty { arguments[key] = .string(value) }
         }
         return await reader.read(tool: String(toolName.dropFirst(prefix.count)), arguments: arguments)
@@ -46,7 +47,7 @@ enum GmailToolApproval {
 
     static func request(toolName: String?, input: JSONValue, draft: MailDraftPreview? = nil,
                         labels: ConnectorToolLabels = .shared) -> (title: String, detail: String)? {
-        guard let (tool, account) = tool(named: toolName, labels: labels) else { return nil }
+        guard let (tool, account) = tool(named: toolName, input: input, labels: labels) else { return nil }
         let mailbox = account ?? "Gmail"
         var lines: [String] = []
         func list(_ key: String) -> [String] {

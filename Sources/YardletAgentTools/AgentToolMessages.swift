@@ -15,6 +15,14 @@ package enum AgentToolEnvironment {
     /// The process ID of the app run that started the server, so that a server whose endpoint does not answer
     /// can tell whether that run ended or only the connection went.
     package static let appProcess = "YARDLET_TOOLS_APP_PID"
+    /// The kinds of services the task had connected when it was started, one name to a line, for the
+    /// server's instructions (`AgentToolCatalog.serverInstructions(services:)`); no account is named.
+    package static let services = "YARDLET_TOOLS_SERVICES"
+
+    /// The services `services` names in an environment.
+    package static func services(in environment: [String: String]) -> [String] {
+        (environment[services] ?? "").split(separator: "\n").map(String.init)
+    }
 }
 
 /// How long the app runs one call to a connector's tool at most: renewing its sign-in, initializing its

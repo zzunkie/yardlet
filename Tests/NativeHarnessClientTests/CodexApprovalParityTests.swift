@@ -175,6 +175,36 @@ final class CodexApprovalParityTests: XCTestCase {
         XCTAssertEqual(noPersist.map(\.title), [L10n.string("Deny"), L10n.string("Allow once")])
     }
 
+    /// Codex's words name a Yardlet connector's tool; the card also names the account the call acts in,
+    /// which a tool its service's accounts share carries only in its input.
+    @MainActor
+    func testAYardletConnectorApprovalNamesTheAccountTheCallActsIn() {
+        ConnectorToolLabels.shared.update([ConnectorRecord(
+            name: "Gmail", slug: "gmail", serverURL: URL(string: "https://gmail.googleapis.com/gmail/v1/")!,
+            status: .connected, presetID: "gmail", localService: .gmail, account: "person@example.test")])
+        defer { ConnectorToolLabels.shared.update([]) }
+        func approval(server: String, account: String?) -> CodexServerRequestState {
+            var parameters: [String: JSONValue] = ["to": .string("bob@example.com")]
+            parameters["account"] = account.map(JSONValue.string)
+            return CodexServerRequestState(
+                id: "s:3", method: "mcpServer/elicitation/request", kind: .mcpElicitation,
+                threadID: "thread", turnID: "turn", itemID: nil,
+                params: .object([
+                    "threadId": .string("thread"), "turnId": .string("turn"), "serverName": .string(server),
+                    "mode": .string("form"), "message": .string("Allow the yardlet MCP server to run tool \"gmail_send_message\"?"),
+                    "requestedSchema": .object(["type": .string("object"), "properties": .object([:])]),
+                    "_meta": .object(["codex_approval_kind": .string("mcp_tool_call"), "tool_name": .string("gmail_send_message"),
+                                      "tool_params": .object(parameters)])
+                ]),
+                resolution: .pending)
+        }
+        XCTAssertEqual(CodexRequestResponseProjection.request(approval(server: "yardlet", account: "work@example.test")).detail,
+                       L10n.format("Account: %@", "work@example.test"))
+        XCTAssertNil(CodexRequestResponseProjection.request(approval(server: "yardlet", account: nil)).detail)
+        XCTAssertNil(CodexRequestResponseProjection.request(approval(server: "gmail", account: "work@example.test")).detail,
+                     "Another server's tool is its own")
+    }
+
     func testAnElicitationThatIsNotAToolApprovalKeepsItsAnswers() {
         let request = CodexServerRequestState(
             id: "s:2", method: "mcpServer/elicitation/request", kind: .mcpElicitation,

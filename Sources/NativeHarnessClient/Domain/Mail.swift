@@ -23,8 +23,8 @@ struct MailAccount: Identifiable, Hashable, Sendable {
     let id: UUID
     let address: String
     let provider: MailProvider
-    /// The name the account's connector gives its tools (`gmail`, `gmail_dana`), by which an agent
-    /// reads the account's mail.
+    /// The prefix of the tools by which an agent reads the account's mail (`gmail`), which its service's
+    /// accounts share: a call names the account by its address.
     var connectorSlug: String? = nil
     /// The service an IMAP account is at, as its connector names it ("Naver Mail"); nil names the provider.
     var service: String? = nil

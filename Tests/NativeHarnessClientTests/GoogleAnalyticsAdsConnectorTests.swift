@@ -24,7 +24,7 @@ final class GoogleAnalyticsAdsConnectorTests: XCTestCase {
     }
 
     private func call(_ center: ConnectorCenter, _ name: String, _ arguments: [String: ToolJSON]) async throws -> AgentToolResult {
-        try XCTUnwrapAsync(await center.callConnectorTool(named: name, arguments: .object(arguments), for: ConnectorToolContext()))
+        try XCTUnwrapAsync(await center.callNamingTheOnlyAccount(name, arguments, for: ConnectorToolContext()))
     }
 
     func testAnalyticsAndAdsAskOnlyForTheirScopesAndNameTheAccountByItsUserInfo() async throws {

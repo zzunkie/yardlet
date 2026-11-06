@@ -45,8 +45,8 @@ final class MicrosoftConnectorTests: XCTestCase {
 
     private func call(_ center: ConnectorCenter, _ name: String, _ arguments: [String: ToolJSON] = [:],
                       folders: [URL] = []) async throws -> AgentToolResult {
-        try XCTUnwrapAsync(await center.callConnectorTool(named: name, arguments: .object(arguments),
-                                                          for: ConnectorToolContext(workspaceRoots: folders)))
+        try XCTUnwrapAsync(await center.callNamingTheOnlyAccount(name, arguments,
+                                                                 for: ConnectorToolContext(workspaceRoots: folders)))
     }
 
     private func json(_ result: AgentToolResult, file: StaticString = #filePath, line: UInt = #line) throws -> ToolJSON {
@@ -241,15 +241,15 @@ final class MicrosoftConnectorTests: XCTestCase {
 
         // The cards name the files: a send's from the disk, a draft's as Outlook keeps it.
         let size = ByteCountFormatter.string(fromByteCount: 2_048, countStyle: .file)
-        let sending = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__outlook_send_message", input: .object([
+        let sending = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__outlook_send_message", input: .object(["account": .string("person@contoso.test"), 
             "to": .string("bo@contoso.test"), "attachments": .array([.string(report.path(percentEncoded: false))])
         ])))
         XCTAssertTrue(sending.detail.contains(L10n.format("Attachments: %@", size)), sending.detail)
         XCTAssertTrue(sending.detail.contains("• 보고서.pdf (\(size))"), sending.detail)
         XCTAssertTrue(GmailToolApproval.readsDraft(toolName: "mcp__yardlet__outlook_send_draft"))
-        let preview = await center.mailDraftPreview(tool: "outlook_send_draft", arguments: ["draftId": .string("d1")])
+        let preview = await center.mailDraftPreview(tool: "outlook_send_draft", arguments: ["account": .string("person@contoso.test"), "draftId": .string("d1")])
         let draftCard = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__outlook_send_draft",
-                                                                 input: .object(["draftId": .string("d1")]), mailDraft: preview))
+                                                                 input: .object(["account": .string("person@contoso.test"), "draftId": .string("d1")]), mailDraft: preview))
         XCTAssertEqual(draftCard.title, L10n.format("Allow Claude to send a draft from %@?", "person@contoso.test"))
         XCTAssertTrue(draftCard.detail.contains(L10n.format("To: %@", "Bo <bo@contoso.test>")), draftCard.detail)
         XCTAssertTrue(draftCard.detail.contains("• 보고서.pdf (\(size))"), draftCard.detail)
@@ -312,10 +312,10 @@ final class MicrosoftConnectorTests: XCTestCase {
 
         XCTAssertEqual(LocalConnectorService.teams.approvalRequiredTools, ["send_chat_message", "send_channel_message"])
         let card = try XCTUnwrap(GoogleToolApproval.request(toolName: "mcp__yardlet__teams_send_chat_message",
-                                                            input: .object(["chatId": .string("19:abc"), "content": .string("On my way")])))
+                                                            input: .object(["account": .string("person@contoso.test"), "chatId": .string("19:abc"), "content": .string("On my way")])))
         XCTAssertEqual(card.title, L10n.format("Allow Claude to send a Teams message as %@?", "person@contoso.test"))
         XCTAssertEqual(card.detail, L10n.format("Chat %@", "19:abc") + "\n\nOn my way")
-        XCTAssertNil(GoogleToolApproval.request(toolName: "mcp__yardlet__teams_list_chats", input: .object([:])))
+        XCTAssertNil(GoogleToolApproval.request(toolName: "mcp__yardlet__teams_list_chats", input: .object(["account": .string("person@contoso.test")])))
     }
 }
 

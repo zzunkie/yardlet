@@ -300,11 +300,25 @@ registry package, or a server that another app or harness starts (the "Harnesses
   `<slug>_<server's tool name>`. The slug is the connector name reduced to lowercase ASCII (at most 20 characters; a
   number is added on a clash, and `browser` is not used). If a name made this way equals one of Yardlet's own tool names
   (`spawn_task` and others), that connector tool is left out of the list.
+- **A service with several accounts has one set of tools.** Google's services, Microsoft's and Mail (IMAP)
+  (`LocalConnectorService.sharesToolsAcrossAccounts`) offer each tool once under the service's slug
+  (`gmail_search_threads`, `calendar_list_events`, `drive_read_doc`, `outlook_send_message`, `mail_get_message`), however
+  many accounts are connected, as Composio's, Pipedream's and the community Google Workspace server's tools do. Each takes
+  a required `account` (`ConnectorToolNaming.accountArgument`): a JSON Schema `enum` of the addresses of the accounts on in
+  that task, with no default, so a call never runs in an account it did not name (mail sent from another address). An
+  account added, removed or turned off in a task changes the enum the way it changed the tool list before. A call that
+  names no account, or an address Yardlet does not have, is refused before anything is sent (`invalid_arguments`); one
+  that names an account turned off in the task is refused as off for this task. The call then goes with that account's
+  sign-in and runner, without `account`. With six Google accounts this is 39 tools instead of 234, so neither a
+  harness's tool search nor the model chooses among copies of one tool. The slug is the service's own unless another
+  connector holds it (`ConnectorToolNaming.accountToolPrefix`). Each account keeps the slug it was given
+  (`gmail_<prefix>` for a later one), which now names only the tools it had in conversations from before.
 - Names are 43 characters or fewer, because the model API accepts up to 64 and the longest prefix a harness adds is
   Antigravity's `mcp_yardlet_<8 hex>_` (21 characters; Claude Code adds `mcp__yardlet__`). A longer name uses its first
   part and an 8-character FNV-1a of the original name. Characters outside `[A-Za-z0-9_-]` become `_`.
-- Titles start with `Linear: …` and descriptions with `[Linear] …`. `inputSchema`, `outputSchema` and `annotations` are
-  exactly what the server gave.
+- Titles start with `Linear: …` and descriptions with `[Linear] …`; a tool its service's accounts share starts with the
+  service alone (`Gmail: …`, `[Gmail] …`). `inputSchema`, `outputSchema` and `annotations` are exactly what the server
+  gave, with `account` added to a shared tool's input.
 - Results pass on the server's `content` items (text, images, audio, resource links and others), `structuredContent` and
   `isError` as they are. The server's JSON-RPC errors and connection failures become `isError` results. Yardlet leaves
   checking a server's arguments to the server; a refusal in the MCP SDKs' own words (TypeScript "Invalid arguments for
@@ -327,7 +341,16 @@ registry package, or a server that another app or harness starts (the "Harnesses
 - A call to a connector turned off in this task becomes an "off for this task" tool error at once. A call to a connector
   that needs sign-in returns an error saying that signing in again in Yardlet Settings → Connectors makes the same tool
   work again.
-- Tool rows: tool rows in the conversation show the connector's name and icon instead of the `yardlet` server name.
+- Tool rows: tool rows in the conversation show the connector's name and icon instead of the `yardlet` server name, and
+  for a tool its service's accounts share, the account the call names ("Gmail · person@example.com: send message").
+  Request cards name it too: Claude Code's in their title ("Allow Claude to send an email from …?"), Codex's on a line
+  under its own words ("Account: …"). A name from before the accounts shared their tools (`gmail_work_send_message`)
+  still reads as its account's (`ConnectorToolLabels`).
+- The server's instructions (`AgentToolCatalog.serverInstructions(services:)`) name the kinds of services the task had
+  connected when it started (`YARDLET_TOOLS_SERVICES`; "Gmail, Google Calendar, Linear"), never an account, and stay
+  under about 1,000 characters: Claude Code keeps 4,096 of them, and Codex's code mode repeats them with every tool.
+  What each browser tool does, such as naming a tab or element to the person by its title or label, is in its own
+  description; the sign-in rule stays in the instructions ([AGENT_BROWSER_TOOLS](AGENT_BROWSER_TOOLS.md) section 2).
   Claude `mcp__yardlet__linear_create_issue` → "Linear: create issue", Codex `yardlet · linear_create_issue` → "Linear ·
   create_issue". `ConnectorToolLabels` makes the labels from the current connector list. Old rows of a removed connector
   show the original name.
@@ -693,10 +716,11 @@ also provides tools that read and edit the structure inside Docs, Sheets and Sli
   stays while another service uses it (even when the first service is turned off). The Keychain item is deleted with the
   last service. Yardlet does not revoke scopes at Google (the user revokes them under third-party access in their Google
   Account).
-- **Names:** the first account's slugs are `gmail`, `calendar`, `drive`, `analytics` and `google_ads`; when a name is
-  already taken, the first part
-  of the address is added (`gmail_<prefix>`). Tool titles and descriptions are `Gmail · address: …` and
-  `[Gmail · address] …`. The tool list is built into the app, so no server is asked.
+- **Names:** the services' tools are `gmail_…`, `calendar_…`, `drive_…`, `analytics_…` and `google_ads_…`, which every
+  account shares, each call naming its account in `account` (section 4, "A service with several accounts has one set of
+  tools"). Tool titles and descriptions are `Gmail: …` and `[Gmail] …`. An account's own slug (`gmail` for the first,
+  `gmail_<prefix>` for a later one, the first part of its address) names only its tools from before. The tool list is
+  built into the app, so no server is asked.
 - **Refresh (`OAuthAPISession`):** before a call when the token expires within 1 minute, and on a 401 it refreshes once
   and sends again. One refresh runs at a time per account. When Google refuses a refresh with `invalid_grant` (access
   revoked, 6 months unused, password changed, 7 days in Testing status), that account becomes "Needs sign-in", settings
@@ -830,8 +854,7 @@ v1):
 
 - **They are tools of the Drive connector.** Their scopes are the same as Drive's and their files are Drive files, so
   they have no service row, chip, sign-in or per-task switch of their own. The Drive connector provides the nine above
-  and these twelve, 21 in all (`drive_*`). The first account has `drive_read_doc`, and later accounts
-  `drive_<prefix>_read_doc`.
+  and these twelve, 21 in all (`drive_*`), which every account shares (`drive_read_doc` with `account`).
 - **Names and arguments:** they follow the tool names and argument names of Google's official Docs, Sheets and Slides
   MCP servers (`docsmcp`, `sheetsmcp` and `slidesmcp.googleapis.com`): `documentId`, `requests`, `writeControl`,
   `spreadsheetId`, `range`, `values`, `formulas`, `sheetId`, `presentationId`, `pageId`, `fields`, `commentsIncluded`
@@ -1374,8 +1397,8 @@ Google's (the "Google" section, "Accounts and services").
   any case; both are read (`MicrosoftOAuth.grantedServices`). A service whose permissions are missing gets "Needs
   sign-in" with a reason, as Google's partial grants do.
 - **Account address:** Graph `GET me?$select=mail,userPrincipalName`: `mail`, else the sign-in name (a personal account
-  may have no `mail`). A different account on a reconnect, cancelling, merging the same account, and naming slugs
-  (`outlook`, `outlook_calendar`, `onedrive`, `teams`; a later account adds its address's first part) are as for Google.
+  may have no `mail`). A different account on a reconnect, cancelling, merging the same account, and names (`outlook_…`,
+  `outlook_calendar_…`, `onedrive_…`, `teams_…`, which every account shares with `account`) are as for Google.
 - **Consent:** none of the permissions needs an administrator by Graph's permission table, but an organization's
   consent policy can still require one; Microsoft's default for a new tenant leaves mail, calendar and chat permissions
   out of user consent. The page says to ask the administrator to grant consent, or to register the app in the
@@ -1527,8 +1550,8 @@ what belongs to connectors.
 - **Adding.** Add connector › Mail (IMAP) › Set up… opens the setup page (`MailAccountSetupPage`): the address picks
   the service and its steps, the app password goes in a secure field, and Connect signs in to IMAP and SMTP once
   (`ConnectorCenter.addMailAccount`). Nothing is stored until both servers accept it. The same address added again
-  replaces its password and servers. The first account's slug is `mail`; later ones add the part before the `@`
-  (`mail_dana`).
+  replaces its password and servers. Every account shares the `mail_…` tools, each call naming its address in
+  `account`; a later account's own slug (`mail_dana`, the part before the `@`) names only its tools from before.
 - **Tools** (`MailAccountToolCatalog`): `search_messages` (a folder's newest messages, or the server's search),
   `get_message`, `list_folders`, `create_draft` (a new message, or a reply with the original's subject and quote, with
   `attachments` by Gmail's rules, `GmailAttachmentFiles`) and `send_draft`. Names and arguments follow Outlook Mail's.

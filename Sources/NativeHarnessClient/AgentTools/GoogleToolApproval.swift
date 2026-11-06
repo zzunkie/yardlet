@@ -15,17 +15,19 @@ enum GoogleToolApproval {
         }
         guard let toolName, let label = labels.label(forClaudeTool: toolName),
               let service = label.localService, service.approvalRequiredTools.contains(label.tool) else { return nil }
-        let account = label.account ?? service.name
+        // The account the call names, for a tool its service's accounts share.
+        let named = label.account(named: input[ConnectorToolNaming.accountArgument]?.stringValue)
+        let account = named ?? service.name
         switch service {
         case .googleCalendar: return calendar(label.tool, account: account, input: input)
         case .googleDrive: return drive(label.tool, account: account, input: input)
         case let microsoft where microsoft.isMicrosoft:
-            return MicrosoftToolApproval.request(microsoft, tool: label.tool, account: label.account, input: input,
+            return MicrosoftToolApproval.request(microsoft, tool: label.tool, account: named, input: input,
                                                  draft: mailDraft)
         case .imapMail where label.tool == MailAccountToolCatalog.sendDraft:
             return (L10n.format("Allow Claude to send a draft from %@?", account),
                     mailDraft.map(GmailToolApproval.draftDetail) ?? text(input, "draftId").map { L10n.format("Draft %@", $0) } ?? "")
-        default: return AppleToolApproval.request(service, tool: label.tool, account: label.account, input: input)
+        default: return AppleToolApproval.request(service, tool: label.tool, account: named, input: input)
         }
     }
 

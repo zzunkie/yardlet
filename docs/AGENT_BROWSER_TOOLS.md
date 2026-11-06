@@ -24,9 +24,10 @@ All of them act on the calling task's tabs. Page tools pick a tab with the optio
 that `browser_tab_list` or `browser_tab_new` gave), and use the agent's active tab without it. That is usually the front
 tab (the `tabId` of the Claude app 3.1623.3 Browser pane tools: "Omit for the fronted tab; get ids from tabs_context");
 while the person uses a tab in the panel, it is the tab the agent chose or opened ("The tab the person uses" below). The
-person never sees a tab id or an element reference (a panel tab shows the page's title), so the server's instructions
-tell the agent to name a tab to the person by its page's title or site and an element by its label or text, and the tab
-tools give a tab's origin with its id. The server's instructions also say that a page asking to sign in or for a two-factor code goes to
+person never sees a tab id or an element reference (a panel tab shows the page's title), so `browser_tab_list` and
+`browser_snapshot` say in their descriptions to name a tab to the person by its page's title or site and an element by
+its label or text, and the tab tools give a tab's origin with its id. The server's instructions, kept short (docs/CONNECTORS.md,
+"What harnesses see"), say that a page asking to sign in or for a two-factor code goes to
 `browser_fill_credential` first, and what is the person's to do with `browser_handoff` (2026-11-03,
 [BROWSER_VAULT_DESIGN](BROWSER_VAULT_DESIGN.md) section 19): Claude Code lists an MCP server's tools by name until it
 loads them, and the instructions are what it always reads. Every
