@@ -216,6 +216,7 @@ struct TaskDetail: View {
                     transcript: transcript,
                     sessionStatus: session.status,
                     latestTurnIsComplete: session.completionState == .completed,
+                    latestTurnWasCutOff: session.completionState == .interrupted,
                     codexTaskState: readCodexState(),
                     codexHistorySelection: codexHistorySelection,
                     providerSessionID: session.providerSessionID,
@@ -966,6 +967,8 @@ struct TaskConversationView: View {
     let transcript: TranscriptTurns
     var sessionStatus: SessionStatus = .ready
     var latestTurnIsComplete = false
+    /// Yardlet's last run ended under the latest turn (`SessionCompletionState.interrupted`).
+    var latestTurnWasCutOff = false
     var codexTaskState: CodexTaskState? = nil
     var codexHistorySelection: CodexHistorySearchSelection? = nil
     /// The provider's session: for Codex, the thread a detached snapshot was flattened from.
@@ -993,7 +996,7 @@ struct TaskConversationView: View {
                     .codex($0, workspaceURL: workspaceURL, historySelection: codexHistorySelection)
                 } ?? .transcript(
                     transcript, harness: harness, status: sessionStatus,
-                    latestTurnIsComplete: latestTurnIsComplete
+                    latestTurnIsComplete: latestTurnIsComplete, latestTurnWasCutOff: latestTurnWasCutOff
                 ),
                 snapshotThreadID: providerSessionID,
                 readingPosition: codexReading,

@@ -2196,7 +2196,7 @@
 "The battery is under 20%. Yardlet keeps tasks working with the lid closed again on power." = "배터리가 20% 아래로 내려갔습니다. 전원을 연결하면 다시 덮개를 닫아도 작업을 계속합니다.";
 "The Mac is hot with its lid closed" = "덮개를 닫은 Mac이 뜨겁습니다";
 "Tasks keep working. Open the lid or move the Mac somewhere cooler." = "작업은 계속 진행됩니다. 덮개를 열거나 Mac을 시원한 곳으로 옮기세요.";
-"Claude Code and Codex tasks continue where they left off after Yardlet quits or updates" = "Yardlet을 끝내거나 업데이트한 뒤 Claude Code·Codex 작업을 멈춘 곳부터 이어갑니다";
+"Claude Code, Codex, Antigravity, OpenCode, Kimi Code, Grok Build and Hermes tasks continue where they left off after Yardlet quits or updates" = "Yardlet을 끝내거나 업데이트한 뒤 Claude Code·Codex·Antigravity·OpenCode·Kimi Code·Grok Build·Hermes 작업을 멈춘 곳부터 이어갑니다";
 "Codex did not answer %@ within %lld seconds." = "Codex가 %@ 요청에 %lld초 안에 답하지 않았습니다.";
 "This conversation is open in another Codex app, such as ChatGPT, so it cannot continue here. Quit that app, then send again." = "ChatGPT 같은 다른 Codex 앱에서 이 대화가 열려 있어 여기서 이어갈 수 없습니다. 그 앱을 종료한 뒤 다시 보내세요.";
 

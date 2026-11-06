@@ -243,7 +243,8 @@ final class MainWindow {
             return cache.codex(state, workspaceURL: session.workspaceURL, historySelection: nil)
         }
         return cache.transcript(model.transcriptBySessionID[session.id] ?? [], harness: session.harness,
-                                status: session.status, latestTurnIsComplete: session.completionState == .completed)
+                                status: session.status, latestTurnIsComplete: session.completionState == .completed,
+                                latestTurnWasCutOff: session.completionState == .interrupted)
     }
 
     // Enter sends what the composer shows, the syllable being composed included: with the Microsoft

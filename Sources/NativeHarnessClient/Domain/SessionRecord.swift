@@ -27,6 +27,10 @@ enum SessionCompletionState: String, Codable, Sendable {
     case none
     case completed
     case failed
+    /// The latest turn was still running when Yardlet's own run ended under it: a quit, an update or
+    /// a crash, as the index read back at the next launch says (`SessionStore.restore`). It stands
+    /// until a turn starts again.
+    case interrupted
 }
 
 enum SessionEnvironmentScope: String, Codable, Sendable {

@@ -372,7 +372,7 @@ extension YardletSetting {
     static let continueAfterRestart = YardletSetting(
         id: "continue_after_restart", section: .general, generalGroup: .tasks, symbol: "arrow.clockwise",
         title: L10n.string("Continue running work after a restart"),
-        hint: L10n.string("Claude Code and Codex tasks continue where they left off after Yardlet quits or updates"),
+        hint: L10n.string("Claude Code, Codex, Antigravity, OpenCode, Kimi Code, Grok Build and Hermes tasks continue where they left off after Yardlet quits or updates"),
         values: .onOff, storage: .flag(key: RestartResumePreference.key, defaultValue: true))
 
     static let keepScreenUnlocked = YardletSetting(
