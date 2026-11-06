@@ -11,7 +11,7 @@
   <source media="(prefers-color-scheme: dark)" srcset="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1294326&theme=dark">
   <img alt="Yardlet, featured on Product Hunt" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1294326&theme=light" width="200">
 </picture></a>
-[![As seen on Open Source Alternatives](https://www.opensourcealternatives.to/badge-osa.svg)](https://www.opensourcealternatives.to)
+<a href="https://www.opensourcealternatives.to"><img src="https://www.opensourcealternatives.to/badge-osa.svg" alt="As seen on Open Source Alternatives"></a>
 
 A native macOS app for running coding agents. Codex, Claude Code and other agent CLIs open side by
 side in one window of projects and tasks, while each agent keeps its own agent loop, sign-in and
