@@ -2002,6 +2002,8 @@ struct MainWindow: View {
                         accountMenu: accountMenu,
                         disclosure: sidebarDisclosure,
                         activity: sidebarActivity,
+                        cloudTasks: model.codexCloudTasks,
+                        onOpenCloudTask: { OutsideBrowser.open($0.url) },
                         onListAtTopChange: { atTop in
                             isSidebarListAtTop = atTop
                             holdSidebarOrder()

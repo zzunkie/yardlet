@@ -892,6 +892,35 @@ the person chose, once; following adds and updates the rest, read-only (`Session
   index rows (new rows, `updated_at`, provider titles, `archived`), the projects that import creates, and the one
   preference above.
 
+## Cloud tasks
+
+The sidebar lists the person's cloud sessions under **Cloud**, after the tasks, for each agent that offers a supported
+way to list them, in a group of its own as the Codex app's sidebar keeps its cloud group. A cloud session runs on the
+provider's machines and has no local history, so it is not a task: it has no row in Yardlet's index and opens on its
+own page.
+
+- **Codex Cloud tasks:** read with the Codex CLI's own listing, `codex cloud list --json` (an experimental CLI
+  command), under the default Codex sign-in (`CODEX_HOME` set to the native Codex home, as for "Following the session
+  list" above), at most 5 pages of 20 with `--cursor` (`CodexCloudTasks`, `AppModel.refreshCodexCloudTasks`). It runs
+  in the same passes as following the session list: once after the index is restored and when the person asks for a
+  refresh. A listing that fails (no Codex runtime, signed out, no cloud
+  access) keeps the last list; one that succeeds replaces it. The list is kept in memory only: Yardlet writes nothing
+  to its index or preferences for it, and the CLI keeps its own sign-in as it does for any command. No other
+  `codex cloud` command runs (no `exec`, `apply` or `diff`), so no cloud task changes and no model turn starts.
+- **What a row shows:** the task's title, Codex's mark, the running dot while the task is `pending` and the error mark
+  when it is `error`; its help and accessibility value add "Codex Cloud", the state and the environment's label. The
+  section lists five tasks and "Show more" lists ten more, as Chats does, and the sidebar search filters it by title and
+  environment.
+- **Opening one:** a click, or "Open in default browser" in its menu, opens the task's page in the default browser
+  (`OutsideBrowser`), the address the CLI prints for it. Only `https://chatgpt.com/codex/tasks/<id>` for the task's
+  own ID is taken; any other address in the listing is replaced by that page, so a listing never opens another site.
+  "Copy link" copies the same address. A cloud row is never the selected row: the arrow keys and Return move through
+  the tasks only, and nothing in the window changes when one opens.
+- **Not listed:** Claude Code cloud sessions (Claude Code lists them only in its interactive `--teleport` and `/tasks`
+  pickers, and the Claude app reads them from its own server), and the threads of Codex's newer cloud service, which
+  the Codex app reads over its own hosted connection and neither the Codex CLI nor the App Server lists. They stay in
+  each agent's own app or web page.
+
 ## Index of tasks that touched a file
 
 To show, from a file, the tasks that touched it, Yardlet keeps the files each task read and edited separately, in its

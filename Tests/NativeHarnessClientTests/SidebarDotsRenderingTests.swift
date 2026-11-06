@@ -630,12 +630,111 @@ final class SidebarDotsRenderingTests: XCTestCase {
         host.settle()
     }
 
+    /// The person's Codex Cloud tasks under Cloud after a long task list, in the whole main window,
+    /// into `.build/sidebar-dots-qa/cloud-{top,end}-*.png`: the list's top, which they do not change,
+    /// and its end with five cloud tasks (a running one, a failed one), "Show more" and nothing of
+    /// theirs among the rows the arrow keys move through. Nothing is pressed: a press opens a browser.
+    func testCloudTasksListAfterTheTasksInTheWindow() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "yardlet-cloud-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("SidebarCloudTasks")))
+        var sessions: [SessionRecord] = []
+        let harnesses: [HarnessKind] = [.claudeCode, .codex]
+        for (index, name) in ["yardlet", "website", "docs"].enumerated() {
+            let folder = root.appending(path: name, directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for row in 0..<12 {
+                sessions.append(task("\(name.capitalized) task \(row + 1)", harnesses[(index + row) % 2], in: folder,
+                                     status: row == 0 ? .running : .ready))
+            }
+        }
+        let model = AppModel(
+            store: SessionStore(sessions: sessions, repository: InMemorySessionRepository(sessions: sessions)),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
+            codexQueueRepository: UserDefaultsCodexQueueRepository(defaults: defaults, keyPrefix: "queue."),
+            preferences: defaults,
+            codexPendingRequestRepository: UserDefaultsCodexPendingServerRequestRepository(defaults: defaults),
+            codexTimelineItemRepository: UserDefaultsCodexTimelineItemRepository(defaults: defaults),
+            codexHistorySelectionRepository: UserDefaultsCodexHistorySelectionRepository(defaults: defaults,
+                                                                                         keyPrefix: "history."),
+            transcriptRepository: FileTranscriptRepository(directoryURL: root.appending(path: "transcripts")),
+            sessionTitleResolver: { _ in nil },
+            sessionTitleRetryCount: 0,
+            restoresIndexOnLaunch: false)
+        addTeardownBlock { await model.shutdown() }
+        for name in ["yardlet", "website", "docs"] {
+            _ = model.projects.ensureProject(forRoot: root.appending(path: name, directoryHint: .isDirectory))
+        }
+        let titles = ["Add dark mode to the settings page", "Fix the flaky parser test",
+                      "Write release notes for 0.12", "Translate the onboarding guide into Korean",
+                      "Review the cache eviction change", "Bump the Swift toolchain", "Audit the network calls"]
+        let statuses: [CodexCloudTask.Status] = [.pending, .error, .ready, .ready, .applied, .ready, .ready]
+        model.codexCloudTasks = zip(titles, statuses).enumerated().map { index, pair in
+            CodexCloudTask(id: "task_e_\(index)", title: pair.0, status: pair.1,
+                           updatedAt: now.addingTimeInterval(-Double(index) * 3600), environment: "yardlet",
+                           url: CodexCloudTasks.pageURL(nil, id: "task_e_\(index)"))
+        }
+        // Home shown: the list does not scroll back to a shown task's row.
+        model.splits.activate(.home)
+        let size = NSSize(width: 1280, height: 820)
+        let directory = try WindowlessRender.directory("sidebar-dots-qa")
+        for appearance in WindowlessRender.Appearance.allCases {
+            let host = WindowlessRender.Host(MainWindow(model: model).frame(width: size.width, height: size.height)
+                .environment(\.colorScheme, appearance.colorScheme), size: size, appearance: appearance)
+            host.settle(passes: 20, interval: 0.03)
+            try WindowlessRender.writePNG(host.capture().bitmap,
+                                          to: directory.appending(path: "cloud-top-\(appearance.suffix).png"))
+            let scroll = try XCTUnwrap(scrollViews(in: host.hosting).first {
+                $0.convert($0.bounds, to: nil).minX < 1 && $0.frame.width < 400
+            }, "The sidebar's list")
+            let end = (scroll.documentView?.frame.height ?? 0) - scroll.contentView.bounds.height
+            await scrollList(scroll, to: max(0, end), in: host)
+            host.settle(passes: 10, interval: 0.03)
+            try WindowlessRender.writePNG(host.capture().bitmap,
+                                          to: directory.appending(path: "cloud-end-\(appearance.suffix).png"))
+            let spoken = host.accessibilityElements().map { "\($0.label) = \($0.value)" }
+            XCTAssertTrue(spoken.contains { $0.hasPrefix("\(titles[0]), Codex") && $0.contains(L10n.string("Running")) },
+                          spoken.description)
+            XCTAssertTrue(spoken.contains { $0.hasPrefix("\(titles[1]), Codex")
+                && $0.contains(L10n.string("Task encountered a system error")) }, spoken.description)
+            XCTAssertTrue(spoken.contains { $0.hasPrefix("\(titles[2]), Codex") && $0.contains(L10n.string("Codex Cloud")) },
+                          spoken.description)
+            XCTAssertFalse(spoken.contains { $0.hasPrefix(titles[5]) }, "Five until Show more")
+            if appearance == .light {
+                // The tasks changing leave the cloud rows alone; a cloud task changing draws its row only.
+                ViewBodyCensus.isEnabled = true
+                ViewBodyCensus.reset()
+                defer { ViewBodyCensus.isEnabled = false; ViewBodyCensus.reset() }
+                for session in sessions.prefix(10) {
+                    await model.store.markUnread(id: session.id)
+                    host.settle(passes: 1, interval: 0.02)
+                }
+                XCTAssertGreaterThan(ViewBodyCensus[.sidebarRow], 0, "The changed tasks' rows were drawn")
+                XCTAssertEqual(ViewBodyCensus[.sidebarCloudRow], 0, "Tasks changing drew cloud rows again")
+                ViewBodyCensus.reset()
+                let changed = model.codexCloudTasks[0]
+                model.codexCloudTasks[0] = CodexCloudTask(id: changed.id, title: changed.title, status: .ready,
+                                                          updatedAt: changed.updatedAt, environment: changed.environment,
+                                                          url: changed.url)
+                host.settle(passes: 5, interval: 0.02)
+                XCTAssertEqual(ViewBodyCensus[.sidebarCloudRow], 1, "Only the changed cloud row is drawn again")
+                model.codexCloudTasks[0] = changed
+                host.settle(passes: 5, interval: 0.02)
+            }
+            host.close()
+        }
+    }
+
     /// The list scrolled to `y`, as its scroll view moves it.
     private func scrollList(_ scroll: NSScrollView, to y: CGFloat, in host: WindowlessRender.Host<some View>) async {
         scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
         scroll.reflectScrolledClipView(scroll.contentView)
         try? await Task.sleep(for: .milliseconds(50))
         host.settle(passes: 2, interval: 0.01)
+    }
+
+    private func scrollViews(in root: NSView) -> [NSScrollView] {
+        ((root as? NSScrollView).map { [$0] } ?? []) + root.subviews.flatMap { scrollViews(in: $0) }
     }
 
     private func scrollView(in root: NSView) -> NSScrollView? {

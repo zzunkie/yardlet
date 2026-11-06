@@ -320,6 +320,13 @@ final class AppModel {
     @ObservationIgnored var sessionListFollowIsReady = false
     /// A pass over the Claude app's and Codex's lists is running (the refresh item says so).
     private(set) var isFollowingSessionLists = false
+    /// The person's Codex Cloud tasks as the last pass read them, newest first: listed beside the
+    /// tasks, never in the index (`refreshCodexCloudTasks`).
+    var codexCloudTasks: [CodexCloudTask] = []
+    /// Runs the Codex CLI's cloud listing; tests answer it.
+    @ObservationIgnored var codexCloudCommand: @Sendable (CLICommand) async -> CLICommandResult = {
+        await CLIProcess.run($0)
+    }
     /// Folders whose conversations a pass leaves alone; tests follow their temporary folders.
     @ObservationIgnored var sessionListFollowSkipsFolder: (URL) -> Bool = SessionListFollow.isTemporaryFolder
     /// Antigravity CLI's conversation index and logs, for importing and reading its conversations.
@@ -4401,7 +4408,9 @@ final class AppModel {
             sessionListFollowSchedule.end()
             isFollowingSessionLists = false
         }
+        async let cloud: Void = refreshCodexCloudTasks()
         await followSessionLists(now: now)
+        await cloud
     }
 
     /// The person's "Refresh from the Claude App and Codex": a pass now, whenever the last one was.
@@ -4413,7 +4422,38 @@ final class AppModel {
             sessionListFollowSchedule.end()
             isFollowingSessionLists = false
         }
+        async let cloud: Void = refreshCodexCloudTasks()
         await followSessionLists(now: now)
+        await cloud
+    }
+
+    /// Reads the person's Codex Cloud tasks under the default Codex login with the Codex CLI's own
+    /// listing, `codex cloud list --json`: the newest pages, each once. It only reads; no task is
+    /// changed, applied or started there, and nothing is written to Yardlet's index. A listing that
+    /// fails (no Codex, signed out, no cloud access) leaves the last list as it was; one that
+    /// succeeds replaces it.
+    func refreshCodexCloudTasks() async {
+        guard !isVisualFixture, let codex = runtimeSelections.selectedURL(for: .codex) else { return }
+        let home = codexEnvironmentManager?.paths.nativeHomeURL.path() ?? CodexEnvironmentPaths.live().nativeHomeURL.path()
+        var tasks: [CodexCloudTask] = []
+        var cursor: String?
+        for pageIndex in 0..<CodexCloudTasks.pageLimit {
+            let result = await codexCloudCommand(CLICommand(
+                executable: codex, arguments: CodexCloudTasks.arguments(cursor: cursor),
+                environment: ["CODEX_HOME": home], timeout: .seconds(30)))
+            guard !Task.isCancelled else { return }
+            guard result.succeeded, let page = CodexCloudTasks.page(from: result.stdout) else {
+                // A first page that fails keeps the old list; a later one keeps the pages read.
+                if pageIndex == 0 { return }
+                break
+            }
+            tasks += page.tasks
+            cursor = page.cursor
+            guard cursor != nil else { break }
+        }
+        var seen = Set<String>()
+        tasks = tasks.filter { seen.insert($0.id).inserted }
+        if tasks != codexCloudTasks { codexCloudTasks = tasks }
     }
 
     /// Brings the task list in step with the Claude app's Code sessions and the Codex threads a
