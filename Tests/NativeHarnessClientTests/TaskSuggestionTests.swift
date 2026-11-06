@@ -37,6 +37,7 @@ final class TaskSuggestionTests: XCTestCase {
         XCTAssertEqual(spawn["annotations"]?["destructiveHint"], .bool(false))
         XCTAssertEqual(spawn["_meta"]?["anthropic/alwaysLoad"], .bool(true),
                        "Claude Code keeps it in the prompt, as the Claude app loads its spawn_task")
+        XCTAssertEqual(spawn["_meta"]?["antigravity/alwaysLoad"], .bool(true), "Antigravity CLI 1.3.3 and later too")
         XCTAssertNil(AgentToolCatalog.browserTools.first?.json["_meta"], "The browser tools stay behind tool search")
 
         let dismiss = try XCTUnwrap(TaskSuggestionToolCatalog.definition(named: "dismiss_task")).json

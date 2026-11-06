@@ -300,9 +300,9 @@ registry package, or a server that another app or harness starts (the "Harnesses
   `<slug>_<server's tool name>`. The slug is the connector name reduced to lowercase ASCII (at most 20 characters; a
   number is added on a clash, and `browser` is not used). If a name made this way equals one of Yardlet's own tool names
   (`spawn_task` and others), that connector tool is left out of the list.
-- Names are 50 characters or fewer, because Claude Code adds `mcp__yardlet__` and the model API accepts up to 64. A
-  longer name uses its first part and an 8-character FNV-1a of the original name. Characters outside `[A-Za-z0-9_-]`
-  become `_`.
+- Names are 43 characters or fewer, because the model API accepts up to 64 and the longest prefix a harness adds is
+  Antigravity's `mcp_yardlet_<8 hex>_` (21 characters; Claude Code adds `mcp__yardlet__`). A longer name uses its first
+  part and an 8-character FNV-1a of the original name. Characters outside `[A-Za-z0-9_-]` become `_`.
 - Titles start with `Linear: …` and descriptions with `[Linear] …`. `inputSchema`, `outputSchema` and `annotations` are
   exactly what the server gave.
 - Results pass on the server's `content` items (text, images, audio, resource links and others), `structuredContent` and
@@ -487,6 +487,12 @@ not kept.
 Antigravity CLI from 1.4.11 runs over ACP (`agy acp`) and gets connectors as the other ACP agents do, through
 `mcpServers` of `session/new` and `session/load`. An earlier version runs in print mode, which takes no MCP server, so its
 tasks run without them.
+
+One `agy acp` process serves several tasks, and it names their servers across the whole process: the first spec named
+`yardlet` keeps the name, and a spec that differs under the same name (each task's token and ID are in its environment)
+becomes `yardlet_` and the first 8 hex digits of the spec's SHA-256 (16, then all 64, when that is taken). Its tools are
+then `mcp_yardlet_<8 hex>_<tool>`, which is why connector tool names stop at 43 characters. The CLI keeps each server
+name's tool schemas in `~/.gemini/antigravity-cli/mcp/<name>/` and does not remove them.
 
 ## 7. UI
 

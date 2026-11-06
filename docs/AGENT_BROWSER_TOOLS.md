@@ -256,8 +256,9 @@ built into the server (`builtInTools`) either.
 ### Task suggestion tools (2026-10-16)
 
 These carry over the `ccd_session` server tools of the Claude app (2.37337.1) with the same names and the same use. Both
-tools have `readOnlyHint: true`, `openWorldHint: false` and `_meta` `{"anthropic/alwaysLoad": true}` (Claude Code does
-not defer them behind tool search; the same as the Claude app's `alwaysLoad: true`, a key CLI 2.1.291 reads per tool).
+tools have `readOnlyHint: true`, `openWorldHint: false` and `_meta` `{"anthropic/alwaysLoad": true,
+"antigravity/alwaysLoad": true}` (Claude Code does not defer them behind tool search; the same as the Claude app's
+`alwaysLoad: true`, a key CLI 2.1.291 reads per tool. Antigravity CLI reads its own key from 1.3.3).
 They start no model turn and change no files or harness.
 
 | Tool | Arguments | Behavior |
