@@ -129,7 +129,7 @@ final class WindowStructureQATests: XCTestCase {
 
     /// The buttons in the split panes' headers, left to right: those on a Close pane button's line.
     private func paneHeaderControls<Content: View>(in host: WindowlessRender.Host<Content>) -> [Control] {
-        let all = controls(in: host).filter { $0.frame.height > 0 && $0.frame.midY > ParityTheme.titleBarHeight }
+        let all = controls(in: host).filter { $0.frame.height > 0 && $0.frame.minX > ParityTheme.sidebarWidth }
         let lines = all.filter { $0.label == L10n.string("Close pane") }.map(\.frame.midY)
         return all.filter { control in lines.contains { abs($0 - control.frame.midY) < 6 } }
             .sorted { ($0.frame.minY, $0.frame.minX) < ($1.frame.minY, $1.frame.minX) }
@@ -506,10 +506,10 @@ final class WindowStructureQATests: XCTestCase {
             host.settle(passes: 20, interval: 0.03)
             try draw(host, "split-three-narrow-panes", appearance)
             if light {
-                // With one tab, the title bar beside the sidebar has no name menu: each pane's header heads its task.
-                XCTAssertFalse(titleBarControls(in: host).contains { $0.role == NSAccessibility.Role.menuButton.rawValue },
-                               "a split view's title bar has no header of its own")
                 let panes = paneHeaderControls(in: host)
+                // With one tab there is no title bar: the panes reach the window's top, in the sidebar's row.
+                XCTAssertEqual(panes.first { $0.label == L10n.string("Close pane") }?.frame.midY ?? 0,
+                               ParityTheme.titleBarHeight / 2, accuracy: 1, "the panes' headers take the title bar's row")
                 // The right half was split again: the left pane keeps half, the other two a quarter each.
                 XCTAssertEqual(panes.filter { $0.label == more }.count, 2, "the two narrow panes fold their buttons")
                 XCTAssertEqual(panes.filter { $0.label == terminal }.count, 1, "the wide pane keeps its buttons")
@@ -630,9 +630,9 @@ final class WindowStructureQATests: XCTestCase {
                 let closePanel = try XCTUnwrap(all.first { $0.label == L10n.string("Close panel") })
                 XCTAssertEqual(closePanel.frame.midY, paneLine, accuracy: 3, "the pane's panel strip is in its header's row")
                 let top = try XCTUnwrap(pageTop(host))
-                XCTAssertEqual(top, ParityTheme.titleBarHeight + SplitLayoutMetrics.paneHeaderHeight + 41, accuracy: 2)
-                notes.append("Split view (1680×900), side panel browser in the right pane: page starts at \(Int(top.rounded())) pt "
-                             + "(previous layout 50 + 36 + 42 + 41 = 169 pt, 34 pt more with two or more tabs)")
+                XCTAssertEqual(top, ParityTheme.titleBarHeight + 41, accuracy: 2)
+                notes.append("Split view with one tab (1680×900), side panel browser in the right pane: page starts at \(Int(top.rounded())) pt, "
+                             + "as beside one task (with the window's tabs over the panes, 50 + 36 + 41 = 127 pt)")
             }
             model.taskWorkspaces.state(for: fixture.right.id).setPanels(.init())
             host.close()
@@ -822,6 +822,82 @@ final class WindowStructureQATests: XCTestCase {
 
         try (["# One-row header (option A) and dragging in the window", ""] + notes.map { "- " + $0 }).joined(separator: "\n")
             .write(to: directory.appending(path: "header-and-drag.md"), atomically: true, encoding: .utf8)
+    }
+
+    /// With one tab a split view's panes reach the window's top: a top pane's header moves the window by its empty
+    /// part, which focuses the pane as a press on the header does, and the pane still drags by the harness beside its
+    /// title. The window has the app's title bar and is not the active app's, as a test's never is. The window's moves
+    /// are counted, not made.
+    func testATopPanesHeaderMovesTheWindowByItsEmptyPart() throws {
+        let fixture = try makeFixture()
+        let splits = fixture.model.splits
+        splits.activate(.session(fixture.left.id))
+        splits.split(.right, placing: fixture.right.id)
+        let split = try XCTUnwrap(splits.activeSplit)
+        let host = WindowlessRender.Host(window(fixture.model, .light, size: Self.size)
+            .ignoresSafeArea(.container, edges: .top), size: Self.size, appearance: .light, titled: true)
+        orderIn(host)
+        defer { host.close() }
+
+        var moves = 0
+        let performDrag = try XCTUnwrap(class_getInstanceMethod(NSWindow.self, #selector(NSWindow.performDrag(with:))))
+        let original = method_getImplementation(performDrag)
+        let counted: @convention(block) (NSWindow, NSEvent) -> Void = { _, _ in moves += 1 }
+        method_setImplementation(performDrag, imp_implementationWithBlock(counted))
+        defer { method_setImplementation(performDrag, original) }
+
+        /// A press at `from` (from the window's top-left) moved to `to` and let go. The moves wait in the app's queue,
+        /// as the window server's do, for whatever tracks the press.
+        func drag(from: CGPoint, to: CGPoint) throws {
+            func event(_ type: NSEvent.EventType, at point: CGPoint) throws -> NSEvent {
+                try XCTUnwrap(NSEvent.mouseEvent(
+                    with: type, location: NSPoint(x: point.x, y: host.window.frame.height - point.y), modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: host.window.windowNumber, context: nil,
+                    eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1))
+            }
+            for step in 1...8 {
+                let f = CGFloat(step) / 8
+                NSApp.postEvent(try event(.leftMouseDragged, at: CGPoint(x: from.x + (to.x - from.x) * f,
+                                                                         y: from.y + (to.y - from.y) * f)), atStart: false)
+            }
+            NSApp.postEvent(try event(.leftMouseUp, at: to), atStart: false)
+            host.window.sendEvent(try event(.leftMouseDown, at: from))
+            while let next = NSApp.nextEvent(matching: [.leftMouseDragged, .leftMouseUp], until: Date(),
+                                             inMode: .default, dequeue: true) {
+                host.window.sendEvent(next)
+                host.settle(passes: 1, interval: 0.01)
+            }
+            host.settle(passes: 8, interval: 0.03)
+        }
+        /// The left pane's header: its title's menu, and the first button after it.
+        func leftHeader() throws -> (title: Control, firstButton: Control) {
+            let header = paneHeaderControls(in: host).filter { $0.frame.maxX < (paneFrame(1)?.minX ?? .infinity) }
+            let title = try XCTUnwrap(header.first { $0.role == NSAccessibility.Role.menuButton.rawValue })
+            return (title, try XCTUnwrap(header.first { $0.frame.minX > title.frame.maxX + 1 }))
+        }
+        func paneFrame(_ index: Int) -> CGRect? {
+            let panes = elements(in: host, buttonsOnly: false).filter { $0.label == L10n.string("Pane") }.map(\.frame)
+                .sorted { $0.minX < $1.minX }
+            return panes.indices.contains(index) ? panes[index] : nil
+        }
+
+        let left = try XCTUnwrap(split.pane(hosting: fixture.left.id))
+        XCTAssertNotEqual(splits.activeSplit?.focusedPaneID, left.id, "the right pane starts focused")
+        let header = try leftHeader()
+        let y = header.title.frame.midY
+        XCTAssertLessThan(y, host.window.frame.height - host.window.contentLayoutRect.height, "in the title bar's height")
+
+        let empty = CGPoint(x: header.firstButton.frame.minX - 10, y: y)
+        try drag(from: empty, to: CGPoint(x: empty.x + 40, y: y))
+        XCTAssertEqual(moves, 1, "a top pane's empty header moves the window")
+        XCTAssertEqual(splits.activeSplit?.focusedPaneID, left.id, "and focuses the pane")
+
+        // By the harness beside the title, onto the other pane's middle: they swap, and the window stays.
+        let harness = CGPoint(x: header.title.frame.maxX + 16, y: y)
+        let other = try XCTUnwrap(paneFrame(1))
+        try drag(from: harness, to: CGPoint(x: other.midX, y: other.midY))
+        XCTAssertEqual(moves, 1, "the pane's drag moved the window")
+        XCTAssertEqual(splits.activeSplit?.panes.map(\.sessionID), [fixture.right.id, fixture.left.id])
     }
 
     /// 2026-10-24 (a user reported that a message sent in an old task, with the sidebar scrolled down, moved the

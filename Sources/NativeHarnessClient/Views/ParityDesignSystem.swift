@@ -419,10 +419,16 @@ private struct ParityPointerModifier: ViewModifier {
 }
 
 private final class WindowDragNSView: NSView {
+    var onPress: (() -> Void)?
+
     override var mouseDownCanMoveWindow: Bool { false }
+
+    /// A press with its own meaning counts in a window that is not active yet, as a button's does.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { onPress != nil }
 
     override func mouseDown(with event: NSEvent) {
         guard let window else { return }
+        onPress?()
         if event.clickCount == 2 {
             window.zoom(nil)
         } else {
@@ -432,9 +438,16 @@ private final class WindowDragNSView: NSView {
 }
 
 struct WindowDragRegion: NSViewRepresentable {
+    /// What a press does besides moving the window: the region takes the press from the views around it.
+    var onPress: (() -> Void)? = nil
+
     func makeNSView(context: Context) -> NSView {
-        WindowDragNSView()
+        let view = WindowDragNSView()
+        view.onPress = onPress
+        return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? WindowDragNSView)?.onPress = onPress
+    }
 }
