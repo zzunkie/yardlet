@@ -12,7 +12,7 @@ import XCTest
 /// accessibility and keys go to the page as the keyboard sends them. A handed tab is also drawn as another Mac's window
 /// shows it over the remote (`remote-handoff-*`, beside this Mac's `local-handoff-*`), and a task's own tabs as that
 /// window lists and shows them (`remote-task-opened`, `remote-panel-button`, `remote-new-tab`, `remote-file-page`,
-/// `remote-saved-tab-shown`).
+/// `remote-file-address-refused`, `remote-agent-file-page`, `remote-saved-tab-shown`).
 @MainActor
 final class BrowserPanelTabsQATests: XCTestCase {
     private typealias Navigation = TaskSurfaceNavigationProjection
@@ -575,7 +575,8 @@ final class BrowserPanelTabsQATests: XCTestCase {
     /// A host task's own tabs in the window another Mac opens for this one (docs/REMOTE_PROTOCOL.md §15.25 and §18): the
     /// side panel's button shows the host's front tab and its picture, as this Mac's button shows the
     /// task's tab, with the task's tabs in the strip; a file page outside the task's files says it shows on the host
-    /// alone rather than waiting for a picture that does not come; a new tab from the panel joins them; and a task whose
+    /// alone rather than waiting for a picture that does not come, its address typed here is refused with why, and once
+    /// the task's agent opens it in that tab it shows; a new tab from the panel joins them; and a task whose
     /// tabs were saved before Yardlet restarted lists them as the task opens, without starting the browser engine.
     func testAHostTasksOwnTabsShowOnAnotherMac() async throws {
         let fileTitle = BrowserTabTitle.make(pageTitle: "", address: "file://")
@@ -608,12 +609,12 @@ final class BrowserPanelTabsQATests: XCTestCase {
             // its folders (the agent's scratch page).
             let page = try client.newTab(forSession: task.id, url: "https://bookings.example.test/42",
                                          viewport: .offscreenDefault, select: true)
-            let scratch = try client.newTab(forSession: task.id, url: "file:///private/tmp/agent-scratch/queue.html",
-                                            viewport: .offscreenDefault, select: false)
+            let scratchAddress = "file:///private/tmp/agent-scratch/queue.html"
+            let scratch = try client.newTab(forSession: task.id, url: scratchAddress, viewport: .offscreenDefault, select: false)
             let standIn = try XCTUnwrap(fixture.host())
             standIn.picture = { width, height in Self.signInPicture(size: NSSize(width: width, height: height)) }
             standIn.load(page.id, "https://bookings.example.test/42", title: "Booking 42")
-            standIn.load(scratch.id, "file:///private/tmp/agent-scratch/queue.html", title: "Posting queue")
+            standIn.load(scratch.id, scratchAddress, title: "Posting queue")
             remote.select(.task(task.id.uuidString))
             try await settle(window) { remote.browser.tabs(for: task.id.uuidString).count == 2 }
             XCTAssertEqual(remote.browser.tabs(for: task.id.uuidString).map(\.url),
@@ -650,6 +651,24 @@ final class BrowserPanelTabsQATests: XCTestCase {
             let said = window.accessibilityElements().flatMap { [$0.label, $0.value] }
             XCTAssertTrue(said.contains(notice), "\(said.suffix(12))")
             try draw(window, "remote-file-page", appearance)
+
+            // Its address typed here stays the host's to open, and the panel's bar says why.
+            remote.browser.openAddress(scratchAddress)
+            let refusal = L10n.format("Files outside this task's folders open only on %@.", remote.name)
+            try await waitUntilAsync { remote.browser.refusal == refusal }
+            try await settle(window) { false }
+            try draw(window, "remote-file-address-refused", appearance)
+            remote.browser.refusal = nil
+
+            // The agent opens that file in its tab (browser_navigate tells the tab, then the page loads): it shows here.
+            standIn.picture = { width, height in Self.queuePicture(size: NSSize(width: width, height: height)) }
+            scratch.noteAgentOpened(scratchAddress)
+            standIn.load(scratch.id, scratchAddress, title: "Posting queue")
+            try await waitUntilAsync { remote.browser.watchedTab?.url == scratchAddress && remote.browser.frame != nil }
+            try await settle(window) { false }
+            XCTAssertEqual(remote.browser.watchedTab?.title, "Posting queue")
+            XCTAssertFalse(window.accessibilityElements().flatMap { [$0.label, $0.value] }.contains(notice))
+            try draw(window, "remote-agent-file-page", appearance)
 
             // Back on the task with saved tabs, the panel's button opens its front tab on the host and shows it.
             remote.select(.task(legacy.id.uuidString))
@@ -738,6 +757,35 @@ final class BrowserPanelTabsQATests: XCTestCase {
             space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
         ) else { return nil }
         drawSignInPage(in: context, size: size, scale: scale)
+        guard let image = context.makeImage() else { return nil }
+        return NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.6])
+    }
+
+    /// A page the agent wrote for the person, as Chromium pictures it: a heading and a few rows.
+    private static func queuePicture(size: NSSize, scale: CGFloat = 2) -> Data? {
+        let width = Int(size.width * scale), height = Int(size.height * scale)
+        guard width > 0, height > 0, let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+        ) else { return nil }
+        context.translateBy(x: 0, y: size.height * scale)
+        context.scaleBy(x: scale, y: -scale)
+        let previous = NSGraphicsContext.current
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        NSColor.white.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        func text(_ string: String, _ point: NSPoint, size: CGFloat, weight: NSFont.Weight = .regular) {
+            NSAttributedString(string: string, attributes: [.font: NSFont.systemFont(ofSize: size, weight: weight),
+                                                            .foregroundColor: NSColor.black]).draw(at: point)
+        }
+        text("Posting queue", NSPoint(x: 32, y: 32), size: 24, weight: .semibold)
+        for (index, row) in ["Fri 12:00  682 carousel", "Fri 21:00  087 reel", "Sat 12:00  087 carousel"].enumerated() {
+            let y = 88 + CGFloat(index) * 40
+            NSColor(white: 0.93, alpha: 1).setFill()
+            NSRect(x: 32, y: y, width: min(size.width - 64, 420), height: 32).fill()
+            text(row, NSPoint(x: 44, y: y + 7), size: 14)
+        }
+        NSGraphicsContext.current = previous
         guard let image = context.makeImage() else { return nil }
         return NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.6])
     }

@@ -58,6 +58,8 @@ final class BrowserAgentPage {
     /// (`BrowserTab.lastViewFrameAt`); tests have no frames.
     var askForFrame: () -> Void = {}
     var lastFrameAt: () -> ContinuousClock.Instant? = { nil }
+    /// The agent's `browser_navigate` opens an address in the tab (`BrowserTab.noteAgentOpened`).
+    var agentOpens: (String) -> Void = { _ in }
     /// The agent acts on the page, as opposed to reading it (`BrowserTab.noteAgentInput`), and its act failed
     /// (`BrowserTab.undoAgentInput`).
     var agentActs: () -> Void = {}

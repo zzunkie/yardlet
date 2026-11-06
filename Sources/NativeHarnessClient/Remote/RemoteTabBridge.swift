@@ -77,6 +77,8 @@ final class RemoteTabBridge {
             _ = try? client.restoreTabs(forSession: session, viewport: .offscreenDefault)
         }
         var listed: [RemoteBrowserTab] = []
+        // The open tab each entry is, for the file its agent opened there; a saved one has none and is known as no one's.
+        var open: [BrowserTab?] = []
         if !opening, let saved {
             for index in saved.addresses.indices {
                 var entry = RemoteBrowserTab(tabId: saved.key(at: index).uuidString)
@@ -86,15 +88,18 @@ final class RemoteTabBridge {
                 entry.url = client.carriesFilledValue(address) ? URL(string: address).flatMap(Self.origin) : address
                 entry.active = index == saved.fronted ? true : nil
                 listed.append(entry)
+                open.append(nil)
             }
         } else {
             let front = client.tab(forSession: session)
-            listed = client.tabs(forSession: session).map { remote($0, in: session, client: client, front: front) }
+            open = client.tabs(forSession: session)
+            listed = open.compactMap { $0.map { remote($0, in: session, client: client, front: front) } }
         }
-        // A file outside the task's is named by its scheme alone, its title too (a file's title is its name or path).
+        // A file outside the task's is named by its scheme alone, its title too (a file's title is its name or path),
+        // unless it is the page the task's agent opened in that tab.
         for index in listed.indices {
             if let address = listed[index].url, address.lowercased().hasPrefix("file:"),
-               await !showsAllowedPage(address, taskID: taskID) {
+               await !showsAllowedPage(address, taskID: taskID, in: open[index]) {
                 listed[index].url = "file://"
                 listed[index].title = nil
             }
@@ -130,8 +135,11 @@ final class RemoteTabBridge {
         return "\(scheme)://\(host)" + (url.port.map { ":\($0)" } ?? "")
     }
 
-    /// A `file:` page the task may show: one of its files or folders, as `readFile` would serve it.
-    private func showsAllowedPage(_ address: String, taskID: String) async -> Bool {
+    /// A `file:` page the task may show: one of its files or folders, as `readFile` would serve it, or, in `tab`, the page
+    /// the task's agent last opened there (`BrowserTab.agentOpenedFile`). An address a remote device asks to open is
+    /// checked without a tab: only the agent's own opening lets a file outside the task's files show.
+    private func showsAllowedPage(_ address: String, taskID: String, in tab: BrowserTab? = nil) async -> Bool {
+        if let tab, tab.isAgentOpenedFile(address) { return true }
         guard let path = URL(string: address)?.path(percentEncoded: false), let scope = await fileScope(taskID) else { return false }
         return await RemoteFileReader.perform { RemoteFileReader.allowsPage(path, in: scope) }
     }
@@ -282,7 +290,7 @@ final class RemoteTabBridge {
         // The page checked is the one pictured: one that moved meanwhile is not, also when it came back to the same
         // address (`BrowserTab.navigations`), nor one any of whose frames moved (`frameMark`).
         let page = tab.navigations
-        if let refusal = await outsideFiles(tab.currentURL, taskID: taskID) { return .failure(refusal) }
+        if let refusal = await outsideFiles(tab.currentURL, taskID: taskID, in: tab) { return .failure(refusal) }
         // A frame that comes and goes between the two reads of the tree is heard as it navigates (the Page domain's
         // events, as the agent's tools follow a page's frames): a file outside the task's among them keeps the picture.
         _ = try? await tab.devTools.send("Page.enable", timeout: Self.captureTimeout)
@@ -327,7 +335,7 @@ final class RemoteTabBridge {
                 return .failure(RemoteError(.unavailable, "The page moved"))
             }
             for file in navigatedFiles {
-                if let refusal = await outsideFiles(file, taskID: taskID) { return .failure(refusal) }
+                if let refusal = await outsideFiles(file, taskID: taskID, in: tab) { return .failure(refusal) }
             }
             return .success(RemoteTabFrame(image: data, mediaType: "image/jpeg", width: Int((width * fit).rounded()),
                                            height: Int((height * fit).rounded()), viewportWidth: width, viewportHeight: height))
@@ -510,7 +518,7 @@ final class RemoteTabBridge {
                       tab.navigations == navigations else { return RemoteError(.notAllowed, "The page moved") }
                 return nil
             }
-            if let refusal = await bridge.outsideFiles(tab.currentURL, taskID: taskID) { return refusal }
+            if let refusal = await bridge.outsideFiles(tab.currentURL, taskID: taskID, in: tab) { return refusal }
             let frames: String
             switch await bridge.checkFrames(tab, taskID: taskID) {
             case let .success(mark): frames = mark
@@ -547,7 +555,7 @@ final class RemoteTabBridge {
             return .failure(RemoteError(.unavailable, "The page cannot be read now"))
         }
         for file in Set(frames.files) {
-            if let refusal = await outsideFiles(file, taskID: taskID) { return .failure(refusal) }
+            if let refusal = await outsideFiles(file, taskID: taskID, in: tab) { return .failure(refusal) }
         }
         return .success(frames.mark)
     }
@@ -564,10 +572,10 @@ final class RemoteTabBridge {
         return nil
     }
 
-    /// A `file:` page outside the task's files is neither shown nor driven.
-    fileprivate func outsideFiles(_ address: String?, taskID: String) async -> RemoteError? {
+    /// A `file:` page outside the task's files is neither shown nor driven, unless it is the one the agent opened in `tab`.
+    fileprivate func outsideFiles(_ address: String?, taskID: String, in tab: BrowserTab? = nil) async -> RemoteError? {
         guard let address, address.lowercased().hasPrefix("file:") else { return nil }
-        return await showsAllowedPage(address, taskID: taskID) ? nil : RemoteError(.notAllowed, "Not one of the task's files")
+        return await showsAllowedPage(address, taskID: taskID, in: tab) ? nil : RemoteError(.notAllowed, "Not one of the task's files")
     }
 
     /// Typing into a password field marks the page as one that holds a secret before the text goes in, so no script of

@@ -721,6 +721,9 @@ final class BrowserAgentTools {
         }
         // A file outside the task's folders, after `..` and symbolic links, opens only as the task's shell could read it.
         try await allowFile(url, on: page, sessionID: sessionID)
+        // A file the agent opens here, the person allowing it where it lies outside the task's folders, is one a remote
+        // device may see in this tab.
+        page.agentOpens(url)
         let mark = page.cdp.eventLog.count
         let blockedMark = page.blockedNavigations.count
         let result = try await send(page, "Page.navigate", ["url": .string(url)], timeout: loadTimeout)

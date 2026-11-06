@@ -3722,6 +3722,7 @@
 "This task's browser tabs on %@ show here." = "This task's browser tabs on %@ show here.";
 "This page shows only on %@." = "This page shows only on %@.";
 "It is a file outside this task's folders." = "It is a file outside this task's folders.";
+"Files outside this task's folders open only on %@." = "Files outside this task's folders open only on %@.";
 "%@. Answer it on %@." = "%@. Answer it on %@.";
 "A window or dialog over this page waits on %@." = "A window or dialog over this page waits on %@.";
 "This tab is closed." = "This tab is closed.";

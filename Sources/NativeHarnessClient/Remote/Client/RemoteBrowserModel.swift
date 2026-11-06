@@ -206,7 +206,11 @@ final class RemoteBrowserModel {
         send(.openTab(taskID: taskID, tabID: inNewTab ? nil : tabID, address: address)) { [weak self] response in
             guard let self, self.taskID == taskID, self.selectionRevision == revision else { return }
             if response.ok { self.watch(response.tabId) }
-            else { self.refusal = Self.refusal(response.error, host: self.hostName) }
+            else if response.error?.code == .notAllowed,
+                    (try? BrowserURLPolicy.addressFieldURL(address)).flatMap(BrowserURLPolicy.scheme(of:)) == "file" {
+                // A file outside the task's opens only from the host's own screen, or where the task's agent opened it.
+                self.refusal = L10n.format("Files outside this task's folders open only on %@.", self.hostName)
+            } else { self.refusal = Self.refusal(response.error, host: self.hostName) }
         }
     }
 

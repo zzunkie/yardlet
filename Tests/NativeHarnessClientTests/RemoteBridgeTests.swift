@@ -1700,6 +1700,115 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertNil(next.last?.title)
     }
 
+    /// A file outside the task's files shows to a remote device only as the page the task's agent opened in that tab
+    /// (`browser_navigate`, `BrowserTab.noteAgentOpened`): listed by its address and title, pictured and driven there.
+    /// The remote's own opening of it, the page moving to another file (and a frame showing one), and the tab after the
+    /// agent opened another address stay refused; a tab opened again after Yardlet restarted knows of no such page.
+    func testTheFileTheAgentOpenedInATabShowsToARemoteDeviceAndNoOtherFile() async throws {
+        let base = FileManager.default.temporaryDirectory.appending(path: "remote-agent-file-\(UUID().uuidString)")
+        let work = base.appending(path: "work"), scratch = base.appending(path: "scratch")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        try Data("<p>queue</p>".utf8).write(to: scratch.appending(path: "queue.html"))
+        try Data("<p>other</p>".utf8).write(to: scratch.appending(path: "other.html"))
+        let queue = scratch.appending(path: "queue.html").absoluteString
+        let other = scratch.appending(path: "other.html").absoluteString
+        let task = SessionRecord(harness: .claudeCode, workspaceURL: work, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                 title: "Posting queue")
+        let restarted = SessionRecord(harness: .claudeCode, workspaceURL: work, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                      title: "Restarted")
+        let model = try Self.model(sessions: [task, restarted], transcripts: [:])
+        let connection = AnsweringHostConnection()
+        let client = BrowserHostClient(idleGrace: .seconds(60)) { connection }
+        let bridge = AppModelRemoteBridge(model: model, browser: RemoteTabBridge.Environment(client: { client }))
+        let tab = try client.openTab(forSession: task.id, url: "about:blank", viewport: .offscreenDefault)
+        let taskID = task.id.uuidString, tabID = tab.key.uuidString
+        await bridge.setWatchedTabs([RemoteTabWatch(taskID: taskID, tabID: tabID)])
+        func show(_ address: String, child: String? = nil) {
+            connection.eventHandler?(.address(tab: tab.id, url: address))
+            connection.eventHandler?(.title(tab: tab.id, title: "Posting queue"))
+            let children = child.map { #","childFrames":[{"frame":{"id":"child","parentId":"main","loaderId":"C1","url":"\#($0)"}}]"# } ?? ""
+            connection.frameTree = #"{"frameTree":{"frame":{"id":"main","loaderId":"L1","url":"\#(address)"}"# + children + "}}"
+        }
+        func pictured() async -> RemoteErrorCode? {
+            switch await bridge.captureTab(taskID: taskID, tabID: tabID, maxWidth: 640, maxHeight: 640) {
+            case .success: nil
+            case let .failure(error): error.code
+            }
+        }
+        func listed() async throws -> RemoteBrowserTab? {
+            try await bridge.browserTabs(taskID: taskID).get().first { $0.tabId == tabID }
+        }
+
+        // Shown in the tab, not opened there by the agent: named by its scheme alone, neither pictured nor driven.
+        show(queue)
+        let unopened = try await listed()
+        XCTAssertEqual(unopened?.url, "file://")
+        XCTAssertNil(unopened?.title)
+        let unopenedPicture = await pictured()
+        XCTAssertEqual(unopenedPicture, .notAllowed)
+
+        // The agent opened it there: listed, pictured and driven, its own reload included.
+        tab.noteAgentOpened(queue)
+        let opened = try await listed()
+        XCTAssertEqual(opened?.url, queue)
+        XCTAssertEqual(opened?.title, "Posting queue")
+        let openedPicture = await pictured()
+        XCTAssertNil(openedPicture)
+        let clicked = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .click(x: 5, y: 5), permit: RemoteTabPermit())
+        XCTAssertNil(clicked)
+        let reloaded = await bridge.tabInput(taskID: taskID, tabID: tabID, input: RemoteTabInput(kind: .navigate, action: "reload"),
+                                             permit: RemoteTabPermit())
+        XCTAssertNil(reloaded)
+
+        // The remote device's own opening of a file stays refused, of that same file too.
+        for (address, inTab) in [(queue, tabID), (queue, nil), (other, tabID)] as [(String, String?)] {
+            let refused = await bridge.openTab(taskID: taskID, tabID: inTab, address: address, permit: RemoteTabPermit())
+            guard case let .failure(error) = refused else { return XCTFail("The remote opened \(address)") }
+            XCTAssertEqual(error.code, .notAllowed, address)
+        }
+
+        // The page moves to another file (a link, a script, Back): refused; back on the agent's file, shown again. A frame
+        // of the agent's page that shows another file keeps the picture too.
+        show(other)
+        let moved = await pictured()
+        XCTAssertEqual(moved, .notAllowed)
+        let movedListing = try await listed()
+        XCTAssertEqual(movedListing?.url, "file://")
+        let movedInput = await bridge.tabInput(taskID: taskID, tabID: tabID, input: .click(x: 5, y: 5), permit: RemoteTabPermit())
+        XCTAssertEqual(movedInput?.code, .notAllowed)
+        show(queue)
+        let back = await pictured()
+        XCTAssertNil(back)
+        show(queue, child: other)
+        let framed = await pictured()
+        XCTAssertEqual(framed, .notAllowed)
+
+        // The agent opens another file in the tab: that one shows, the first no longer; after it opens a site, neither.
+        tab.noteAgentOpened(other)
+        show(other)
+        let next = await pictured()
+        XCTAssertNil(next)
+        show(queue)
+        let previous = await pictured()
+        XCTAssertEqual(previous, .notAllowed)
+        tab.noteAgentOpened("https://example.com/")
+        show(other)
+        let afterSite = await pictured()
+        XCTAssertEqual(afterSite, .notAllowed)
+
+        // A tab opened again after Yardlet restarted does not know who opened its file: it stays the host's.
+        client.rememberTabs(BrowserRememberedTabs(addresses: [queue], keys: [UUID()], titles: ["Posting queue"], favicons: [nil],
+                                                  fronted: 0), forSession: restarted.id)
+        _ = try await bridge.browserTabs(taskID: restarted.id.uuidString).get()
+        let restoredTab = try XCTUnwrap(client.tabs(forSession: restarted.id).first, "opened again for the watch")
+        connection.eventHandler?(.address(tab: restoredTab.id, url: queue))
+        XCTAssertNil(restoredTab.agentOpenedFile)
+        let reopened = try await bridge.browserTabs(taskID: restarted.id.uuidString).get()
+        XCTAssertEqual(reopened.map(\.url), ["file://"])
+    }
+
     private static let frame = BrowserFrame(layer: .view, surface: 1, pixelWidth: 2560, pixelHeight: 1600, sequence: 1,
                                             paintedAt: 0, source: "accelerated")
 

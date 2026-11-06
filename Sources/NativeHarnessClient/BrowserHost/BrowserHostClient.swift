@@ -1434,6 +1434,10 @@ final class BrowserTab {
     fileprivate(set) var wasOnScreen = false
     /// The agent's tools opened the tab, or the agent's input in another tab opened it as a pop-up.
     fileprivate(set) var openedByAgent = false
+    /// The real path of the `file:` page the agent last opened in this tab with `browser_navigate`, nil after it opened
+    /// any other address: a remote device sees that page though it lies outside the task's files
+    /// (docs/REMOTE_PROTOCOL.md §15.25). Kept in memory only, so a tab opened again after Yardlet restarted has none.
+    private(set) var agentOpenedFile: String?
     /// A remote device watches the tab (`BrowserHostClient.setRemotelyWatched`).
     fileprivate(set) var isRemotelyWatched = false
     /// When the person's last input came from a remote device (`notePersonInput(remote:)`).
@@ -1666,6 +1670,17 @@ final class BrowserTab {
     var isDrivenByRemote: Bool {
         if let remote = lastRemoteInput { return remote == lastPersonInput }
         return remoteOpener && lastPersonInput == nil
+    }
+
+    /// The agent's `browser_navigate` opens `address` in this tab (`agentOpenedFile`).
+    func noteAgentOpened(_ address: String) {
+        agentOpenedFile = BrowserAgentWorkspaceFile.realPath(ofFileAddress: address)
+    }
+
+    /// `address` is the `file:` page the agent last opened in this tab, by its real path now.
+    func isAgentOpenedFile(_ address: String) -> Bool {
+        guard let agentOpenedFile else { return false }
+        return BrowserAgentWorkspaceFile.realPath(ofFileAddress: address) == agentOpenedFile
     }
 
     /// The agent acted on the page (a click, typing, a navigation …), as opposed to reading it: what the page downloads

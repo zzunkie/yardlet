@@ -649,6 +649,8 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
 - 2026-11-04, v2 only: optional `tabControls` and watched-task address opening and tab closing (§15.30).
 - 2026-11-06, v2 only: optional `tabLists` and `watchTab`'s `listOnly`, which follows a task's tab list without
   watching a tab or opening saved ones (§15.25).
+- 2026-11-06, a rule: a `file:` page outside the task's files shows to a remote device in the tab where the task's
+  agent opened it with `browser_navigate`, and only there (§15.25); a remote's own opening of one stays refused (§15.30).
 
 ## 11. v2 transport
 
@@ -1743,7 +1745,13 @@ tab closes within the watched task (§15.30); browsing outside a task stays on t
   it (a click, typing, a navigation that reaches the page; not a read), whose downloads are its own. The Mac's panel says so, and an empty tab
   the page opened only for that download closes; the person downloads it on the Mac to keep it. A `file:` page, in the
   tab or in any of its frames (an iframe, an embed, a frame a link moved), is shown and driven only when `readFile`
-  would serve it, or it is a folder inside the task's folders (§15.22), as the agent's tools hold them. It is checked
+  would serve it, or it is a folder inside the task's folders (§15.22), as the agent's tools hold them, or it is the
+  file the task's agent last opened in that very tab with `browser_navigate` (by its real path, symbolic links
+  resolved; the person allowed it first where it lies outside the task's folders). That allowance belongs to the tab
+  and lasts until the agent opens another address there: the page moving to another file by a link, a script, Back or
+  Forward, a frame of it showing another, and a file in any other tab stay refused, and the Mac keeps it in memory
+  only, so a tab opened again after Yardlet restarted, or lost with the browser, has none. A remote device's own
+  opening of a file never adds one (§15.30). It is checked
   for the very page pictured or driven: a picture during which the page or one of its frames moved, even away and back
   to the same address, or a frame showed a file outside the task's, even one that went again, is not sent. Another is listed as `file://`, without its title, and the page the tab moves to
   next shows no title until it names itself. Pictures show the page as it draws itself (a password field as dots) and
@@ -1973,7 +1981,10 @@ to another task's tabs.
   With `tabId`, navigate that task's existing tab; without it, create a tab in that task's browser profile.
   The host resolves address-field text with its normal URL and search rules. The successful response includes
   `taskId` and `tabId`; the client then watches that tab. An address beginning with `file:` must stay within
-  the task's existing file boundary (§15.22). App schemes and browser-internal schemes remain refused.
+  the task's existing file boundary (§15.22), also when it names the file the task's agent opened in that tab
+  (§15.25): that file shows there, but only the agent opens it. App schemes and browser-internal schemes remain
+  refused. Yardlet on another computer says that a file outside the task's folders opens only on the host when such an
+  address is refused.
 - `closeTab`: `{id, type: "closeTab", taskId, tabId}`. Ask that task's page to close through the host's normal
   close path. A page's confirmation remains on the host. Success acknowledges the close request; the tab list
   event reports whether the tab actually closed.

@@ -191,6 +191,9 @@ final class BrowserAgentToolsTests: XCTestCase {
         cdp.responders["Page.navigate"] = { _ in .object(["frameId": .string("F")]) }
         let rootPath = root.path(percentEncoded: false)
         let key = secret.appending(path: "key.txt").resolvingSymlinksInPath().path(percentEncoded: false)
+        // What the tab is told the agent opened, for a remote device (`BrowserTab.noteAgentOpened`).
+        var agentOpened: [String] = []
+        page.agentOpens = { agentOpened.append($0) }
 
         let inside = await run(AgentToolCatalog.navigate, ["url": .string(root.appending(path: "page.html").absoluteString)])
         XCTAssertFalse(inside.isError, inside.text)
@@ -208,6 +211,8 @@ final class BrowserAgentToolsTests: XCTestCase {
         let allowed = await run(AgentToolCatalog.navigate, ["url": .string(root.appending(path: "link/key.txt").absoluteString)])
         XCTAssertFalse(allowed.isError, allowed.text)
         XCTAssertEqual(cdp.params(of: "Page.navigate").count, 2)
+        XCTAssertEqual(agentOpened, [root.appending(path: "page.html").absoluteString, root.appending(path: "link/key.txt").absoluteString],
+                       "only the files it opened, a refused one not")
         // The page shows that file now; reading it asks no more.
         cdp.eventLog.append(("Page.frameNavigated", .object(["frame": .object(["id": .string("F"), "url": .string("file://" + key)])])))
         let console = await run(AgentToolCatalog.consoleMessages)
