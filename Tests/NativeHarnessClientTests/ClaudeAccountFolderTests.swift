@@ -174,6 +174,96 @@ import XCTest
         XCTAssertEqual(afterRefusedMove, [[], [], ["After the move"]])
     }
 
+    /// A context limit reaches a running task's CLI by giving the task its runtime back on the same
+    /// conversation, as Choose account does: at once when idle, when the turn ends otherwise, with no
+    /// message sent and no turn cut off. A limit taken back in time restarts nothing.
+    func testAContextLimitRestartsOnlyAnIdleTaskOnItsOwnConversation() async throws {
+        let root = try directory()
+        let cli = try script(root, "exit 0")
+        let adapters = AdapterLog()
+        let model = AppModel(store: SessionStore(repository: InMemorySessionRepository()),
+            runtimeSelections: RuntimeSelectionStore(discoversRuntimes: false),
+            registry: HarnessRegistry { kind, _ in adapters.make(kind) }, restoresIndexOnLaunch: false)
+        addTeardownBlock { await model.shutdown() }
+        let created = await model.createSession(harness: .claudeCode, workspaceURL: root, runtimeExecutableURL: cli,
+                                                title: "Task")
+        let task = try XCTUnwrap(created, model.errorBySessionID.values.first ?? "Missing task")
+        let providerID = try XCTUnwrap(task.providerSessionID)
+        let key = ClaudeLaunchOption.contextLimit
+        func saved() -> String? { model.store.sessions.first?.providerOptions[key] }
+        func current() throws -> SessionRecord { try XCTUnwrap(model.store.sessions.first) }
+        func turn(_ status: SessionStatus) async throws {
+            await adapters.emit(.sessionStatusChanged(status), in: task.id)
+            try await waitUntil { model.store.sessions.first?.status == status }
+        }
+
+        // Only a task with a conversation to resume offers one, on the harness that takes it.
+        XCTAssertEqual(model.composerProviderCapabilities(for: task)?.offersContextLimit, true)
+        let sideChat = try await model.store.createSession(harness: .claudeCode, workspaceURL: root,
+            runtimeExecutableURL: cli, title: "Side chat", titleOrigin: .automatic, selectsSession: false, isTemporary: true)
+        XCTAssertEqual(model.composerProviderCapabilities(for: sideChat)?.offersContextLimit, false)
+        try await model.store.discardSession(id: sideChat.id)
+        XCTAssertNotEqual(model.composerProviderCapabilities(for: ComposerUnificationFixtures.session(.openCode))?.offersContextLimit, true)
+
+        await model.setProviderOption(key, value: "123", for: task)
+        XCTAssertNil(saved(), "Only a limit the menu offers is kept")
+        let notOffered = await adapters.resumedIDs()
+        XCTAssertEqual(notOffered, [])
+
+        await model.setProviderOption(key, value: "200000", for: task)
+        XCTAssertEqual(saved(), "200000")
+        let idle = await adapters.resumedIDs()
+        XCTAssertEqual(idle, [providerID])
+        let launched = await adapters.launchOptions()
+        XCTAssertEqual(launched.last?[key], "200000")
+        XCTAssertFalse(try XCTUnwrap(model.composerProviderCapabilities(for: current())).contextLimitAppliesLater)
+
+        try await turn(.running)
+        await model.setProviderOption(key, value: ClaudeLaunchOption.defaultContextLimit, for: try current())
+        XCTAssertNil(saved(), "Default leaves nothing with the task")
+        XCTAssertTrue(try XCTUnwrap(model.composerProviderCapabilities(for: current())).contextLimitAppliesLater)
+        let duringTurn = await adapters.resumedIDs()
+        XCTAssertEqual(duringTurn, [providerID], "A turn is not cut off")
+        try await turn(.ready)
+        try await waitUntil { await adapters.resumedIDs().count == 2 }
+        let afterTurn = await adapters.launchOptions()
+        XCTAssertNil(afterTurn.last?[key])
+        XCTAssertFalse(try XCTUnwrap(model.composerProviderCapabilities(for: current())).contextLimitAppliesLater)
+
+        try await turn(.running)
+        await model.setProviderOption(key, value: "400000", for: try current())
+        await model.setProviderOption(key, value: ClaudeLaunchOption.defaultContextLimit, for: try current())
+        XCTAssertFalse(try XCTUnwrap(model.composerProviderCapabilities(for: current())).contextLimitAppliesLater)
+        try await turn(.ready)
+        await model.restartForContextLimit(task.id)
+        let takenBack = await adapters.resumedIDs()
+        XCTAssertEqual(takenBack.count, 2, "The runtime already has what is chosen")
+        let sent = await adapters.sent()
+        XCTAssertEqual(sent.joined().count, 0)
+
+        // Under a limit Claude Code reports the limit as the window: the ring shows it, a turn's result
+        // does not take it back, and the model keeps its own window for other tasks.
+        let underLimit = HarnessProtocolUsage(inputTokens: nil, cachedInputTokens: nil, outputTokens: nil,
+            reasoningTokens: nil, totalCostUSD: nil, contextWindowTokens: 200_000, contextUsedTokens: 50_000,
+            extensionValues: [:], contextBreakdown: HarnessContextBreakdown(categories: [], windowTokens: 200_000,
+                autoCompactThresholdTokens: 167_000, isAutoCompactEnabled: true, autoCompactSource: "env"),
+            contextWindowModel: "claude-opus-5-5")
+        let turnResult = HarnessProtocolUsage(inputTokens: nil, cachedInputTokens: nil, outputTokens: 7,
+            reasoningTokens: nil, totalCostUSD: nil, contextWindowTokens: 1_000_000, contextUsedTokens: nil,
+            extensionValues: [:])
+        await adapters.emit(.usageUpdated(underLimit), in: task.id)
+        try await waitUntil { model.providerUsageBySessionID[task.id]?.contextWindowTokens == 200_000 }
+        await adapters.emit(.usageUpdated(turnResult), in: task.id)
+        try await waitUntil { model.providerUsageBySessionID[task.id]?.outputTokens == 7 }
+        XCTAssertEqual(model.providerUsageBySessionID[task.id]?.contextWindowTokens, 200_000)
+        XCTAssertNil(model.modelCatalogs.claudeContextWindows["claude-opus-5-5"])
+
+        // Another computer's composer chooses it by the same path.
+        let bridge = AppModelRemoteBridge(model: model)
+        _ = try await bridge.setTaskSetting(taskID: task.id.uuidString, setting: key, value: "400000", confirmed: false).get()
+        XCTAssertEqual(saved(), "400000")
+    }
+
     /// An account's tasks, archived ones too, move to another folder signed in to the same account (the
     /// same address and organization) that keeps the same conversations, each with its own provider
     /// session; a task in a turn moves as soon as the turn ends, and only then does the account leave the
@@ -399,6 +489,11 @@ import XCTest
             lock.withLock { adapters.append(adapter) }
             return adapter
         }
+        func launchOptions() async -> [[String: String]] {
+            var result: [[String: String]] = []
+            for adapter in lock.withLock({ adapters }) { result += await adapter.launchOptions }
+            return result
+        }
         func resumedIDs() async -> [String] {
             var result: [String] = []
             for adapter in lock.withLock({ adapters }) { result += await adapter.resumed }
@@ -417,13 +512,15 @@ import XCTest
 
     /// Keeps each session's event stream open until it is closed, as a running CLI does, and takes
     /// messages during a turn as Claude Code does.
-    private actor RecordingAdapter: HarnessAdapter, HarnessFollowUpQueueing {
+    private actor RecordingAdapter: HarnessAdapter, HarnessFollowUpQueueing, HarnessLaunchOptionConfiguring {
         nonisolated let kind: HarnessKind
         private(set) var resumed: [String] = []
         private(set) var sent: [String] = []
+        private(set) var launchOptions: [[String: String]] = []
         private var streams: [UUID: AsyncStream<HarnessEventEnvelope>.Continuation] = [:]
         init(kind: HarnessKind) { self.kind = kind }
 
+        func setLaunchOptions(_ options: [String: String], for localSessionID: UUID) { launchOptions.append(options) }
         func probeRuntime() async throws -> HarnessRuntimeDescriptor {
             HarnessRuntimeDescriptor(harness: kind, executableURL: URL(filePath: "/tmp/stub"), version: "stub",
                                      capabilities: .unavailable, fingerprint: "stub")

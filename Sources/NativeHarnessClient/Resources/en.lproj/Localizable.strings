@@ -1934,6 +1934,8 @@
 "Auto-compacts soon" = "Auto-compacts soon";
 "Send a message to see context usage." = "Send a message to see context usage.";
 "Compact session" = "Compact session";
+"Context limit" = "Context limit";
+"Claude Code compacts this task before its context reaches this size. Other tasks keep their own." = "Claude Code compacts this task before its context reaches this size. Other tasks keep their own.";
 "Available when %@ finishes this turn" = "Available when %@ finishes this turn";
 "Available when reconnected" = "Available when reconnected";
 "Manage connectors" = "Manage connectors";

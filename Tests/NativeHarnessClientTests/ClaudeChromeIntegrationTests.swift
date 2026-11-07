@@ -48,6 +48,31 @@ final class ClaudeChromeIntegrationTests: XCTestCase {
         )
     }
 
+    /// A context limit is the CLI's own `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, in the environment of the
+    /// task that chose it and of no other, and only a limit the menu offers gets there.
+    func testAContextLimitGoesInTheEnvironmentOnlyWhenTheTaskChoseOne() async throws {
+        let variable = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+        XCTAssertNil(ClaudeProcessTransport.environment(base: [:], overrides: [:])[variable])
+        XCTAssertEqual(ClaudeProcessTransport.environment(base: [:], overrides: [:], contextLimit: 200_000)[variable],
+                       "200000")
+        XCTAssertEqual(ClaudeProcessTransport.environment(base: [variable: "500000"], overrides: [:])[variable], "500000",
+                       "One the person set outside Yardlet stays for a task that chose nothing")
+
+        for (saved, launched) in [("400000", UInt64(400_000)), ("123", nil), ("default", nil)] as [(String, UInt64?)] {
+            let transport = FakeClaudeTransport()
+            let adapter = ClaudeAdapter(executableURL: URL(filePath: "/tmp/fake-claude"), transportFactory: { _ in transport })
+            let id = UUID()
+            await adapter.setLaunchOptions([ClaudeLaunchOption.contextLimit: saved], for: id)
+            let handle = try await adapter.createSession(
+                CreateHarnessSessionRequest(localSessionID: id, workspaceURL: workspace, initialPrompt: nil))
+            let configuration = await transport.configuration
+            XCTAssertEqual(configuration?.contextLimit, launched)
+            // Restoring the saved options after the launch is not refused.
+            _ = try await adapter.setProviderOption(id: ClaudeLaunchOption.contextLimit, value: saved, in: handle)
+            await adapter.close(handle)
+        }
+    }
+
     func testTheChromeOptionIsOneOffOrOnSelectorThatStartsOff() async throws {
         let transport = FakeClaudeTransport()
         let adapter = ClaudeAdapter(

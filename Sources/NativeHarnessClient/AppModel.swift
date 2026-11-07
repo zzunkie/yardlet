@@ -226,6 +226,9 @@ final class AppModel {
     private var reviewedFileRewinds: [UUID: FileRewindPreview] = [:]
     var pendingCodexReview: CodexReviewRequest?
     private(set) var switchingAccounts = Set<UUID>()
+    /// Tasks whose running CLI still has the context limit it started with, which is kept here until
+    /// the chosen one reaches it (`chooseContextLimit`).
+    private(set) var contextLimitRestarts: [UUID: String] = [:]
     /// The account each task moves to when its turn ends, chosen while it worked (`chooseAccount`).
     private(set) var accountSwitchesAfterTurn: [UUID: ProviderConnection] = [:]
     /// Tasks moving to the account chosen during their turn now that it ended, and the wait of each
@@ -1056,7 +1059,7 @@ final class AppModel {
                 title: L10n.string("Side chat"), titleOrigin: .automatic,
                 environmentScope: parent.environmentScope, selectsSession: false,
                 inheritedContext: context.messages.isEmpty ? nil : context,
-                providerOptions: parent.providerOptions,
+                providerOptions: Self.inheritedOptions(parent.providerOptions, harness: parent.harness, chosen: [:]),
                 connection: parent.connection, isTemporary: true
             )
             guard store.sessions.contains(where: { $0.id == parent.id }) else {
@@ -3413,7 +3416,9 @@ final class AppModel {
                 title: selectsSession ? L10n.format("Fork of %@", current.title) : L10n.string("Side chat"),
                 titleOrigin: .automatic, providerSessionID: UUID().uuidString.lowercased(),
                 environmentScope: current.environmentScope, selectsSession: false,
-                inheritedContext: context, providerOptions: current.providerOptions, connection: current.connection,
+                inheritedContext: context,
+                providerOptions: Self.inheritedOptions(current.providerOptions, harness: .claudeCode, chosen: [:]),
+                connection: current.connection,
                 projectID: current.projectID, additionalRoots: current.additionalRoots,
                 isMovedToChats: current.isMovedToChats,
                 // A fork nests under its task in the sidebar; a side chat lives in its side panel.
@@ -5072,6 +5077,10 @@ final class AppModel {
     }
 
     func setProviderOption(_ id: String, value: String, for session: SessionRecord) async {
+        if session.harness == .claudeCode, id == ClaudeLaunchOption.contextLimit {
+            await chooseContextLimit(value, for: session)
+            return
+        }
         if session.harness == .claudeCode, !isAttached(session.id),
            id == ClaudeLaunchOption.model || id == ClaudeLaunchOption.effort {
             await chooseClaudeModelBeforeAttach(id, value: value, for: session)
@@ -5126,6 +5135,13 @@ final class AppModel {
     /// Claude Code's default — named from the list Claude Code last advertised, and can choose
     /// from that list without connecting.
     func composerProviderCapabilities(for session: SessionRecord) -> ProviderCapabilityState? {
+        var state = composerCapabilities(for: session)
+        if session.harness == .claudeCode, !store.isTemporary(session.id) { state?.offersContextLimit = true }
+        if contextLimitRestarts[session.id] != nil { state?.contextLimitAppliesLater = true }
+        return state
+    }
+
+    private func composerCapabilities(for session: SessionRecord) -> ProviderCapabilityState? {
         let live = providerCapabilitiesBySessionID[session.id]
         if session.harness == .antigravityCLI {
             // An attached task reads its own list as it attaches (`refreshConversationStatus`).
@@ -5525,16 +5541,65 @@ final class AppModel {
         guard stillIdle(), TaskAccountSwitch.allows(connection, for: current) else {
             throw ProviderConnectionError.invalidBinding
         }
-        eventTasksBySessionID.removeValue(forKey: current.id)?.cancel()
-        flushTranscriptDeltas(for: current.id)
-        if let adapter = adaptersBySessionID.removeValue(forKey: current.id),
-           let handle = handlesBySessionID.removeValue(forKey: current.id) { await adapter.close(handle) }
+        await closeIdleRuntime(of: current.id)
         await registry.invalidate(harness: current.harness, executableURL: current.runtimeExecutableURL,
             environmentScope: current.environmentScope, connection: current.connection)
         guard stillIdle() else {
             throw ProviderConnectionError.invalidBinding
         }
         try await store.updateConnection(id: current.id, connection: connection)
+    }
+
+    private func closeIdleRuntime(of id: UUID) async {
+        eventTasksBySessionID.removeValue(forKey: id)?.cancel()
+        flushTranscriptDeltas(for: id)
+        if let adapter = adaptersBySessionID.removeValue(forKey: id),
+           let handle = handlesBySessionID.removeValue(forKey: id) { await adapter.close(handle) }
+    }
+
+    // MARK: A task's context limit
+
+    /// Keeps a Claude task's context limit with the task. Claude Code reads the limit when it starts and
+    /// nothing changes it in a running process, so a task with a runtime gets it back on the same
+    /// conversation, as Choose account does: now if nothing keeps the task busy, else when its turn
+    /// ends (`restartForContextLimit`). No turn starts, and a task with no runtime takes the limit when
+    /// it next starts.
+    private func chooseContextLimit(_ value: String, for session: SessionRecord) async {
+        guard let current = store.sessions.first(where: { $0.id == session.id }), current.harness == .claudeCode,
+              !store.isTemporary(current.id) else { return }
+        let isDefault = value == ClaudeLaunchOption.defaultContextLimit
+        guard isDefault || ClaudeLaunchOption.contextLimitTokens(value) != nil else { return }
+        let saved = current.providerOptions[ClaudeLaunchOption.contextLimit] ?? ClaudeLaunchOption.defaultContextLimit
+        guard value != saved else { return }
+        do {
+            if isDefault {
+                try await store.removeProviderOption(id: current.id, optionID: ClaudeLaunchOption.contextLimit)
+            } else {
+                try await store.updateProviderOption(id: current.id, optionID: ClaudeLaunchOption.contextLimit, value: value)
+            }
+        } catch {
+            updateProviderActionError(error, for: current.id)
+            return
+        }
+        guard handlesBySessionID[current.id] != nil else { return }
+        // Choosing again what the runtime started with leaves nothing to do.
+        let running = contextLimitRestarts[current.id] ?? saved
+        contextLimitRestarts[current.id] = value == running ? nil : running
+        await restartForContextLimit(current.id)
+    }
+
+    /// Gives a task with a waiting context limit its runtime back, once the task settles as an account
+    /// move waits for it to. One that stays busy, with a background command say, takes the limit
+    /// the next time it starts.
+    func restartForContextLimit(_ id: UUID) async {
+        guard contextLimitRestarts[id] != nil, let task = store.sessions.first(where: { $0.id == id }),
+              settlesForAccountMove(task), switchingAccounts.insert(id).inserted else { return }
+        defer { switchingAccounts.remove(id) }
+        contextLimitRestarts[id] = nil
+        await closeIdleRuntime(of: id)
+        guard let current = store.sessions.first(where: { $0.id == id }) else { return }
+        do { try await attach(current, resumesExistingSession: current.providerSessionID != nil) }
+        catch { errorBySessionID[id] = error.localizedDescription }
     }
 
     /// Moves every task on a saved Claude account, archived ones included, to another of the same
@@ -6635,6 +6700,7 @@ final class AppModel {
         // process load it; that one ends before the task's loads the same conversation.
         if let replay = savedConversationReadTasks["acp|\(session.id)"] { await replay.value }
         if handlesBySessionID[session.id] != nil { return }
+        if contextLimitRestarts[session.id] != nil { contextLimitRestarts[session.id] = nil }
         // Two processes must not continue one Claude conversation: one another app still holds
         // is followed read-only until it lets the conversation go, and one a gone Yardlet left is ended.
         if resumesExistingSession {
@@ -7145,6 +7211,9 @@ final class AppModel {
                 wakeAccountMove(for: event.localSessionID)
                 switchAccountAfterTurn(event.localSessionID)
                 considerAccountMoveAfterTurn(event.localSessionID)
+                if contextLimitRestarts[event.localSessionID] != nil {
+                    Task { await restartForContextLimit(event.localSessionID) }
+                }
             }
             // A shell command's output waits for the turn to end, however it ended.
             if status != .running, status != .waitingForApproval {
@@ -7530,13 +7599,17 @@ final class AppModel {
         newest: HarnessProtocolUsage,
         fallback: HarnessProtocolUsage?
     ) -> HarnessProtocolUsage {
-        HarnessProtocolUsage(
+        // A turn's result gives the model's whole window. Under a context limit the window is the
+        // limit, which only Claude Code's context count gives.
+        let keepsLimit = newest.contextBreakdown == nil && fallback?.contextBreakdown?.autoCompactSource == "env"
+        return HarnessProtocolUsage(
             inputTokens: newest.inputTokens ?? fallback?.inputTokens,
             cachedInputTokens: newest.cachedInputTokens ?? fallback?.cachedInputTokens,
             outputTokens: newest.outputTokens ?? fallback?.outputTokens,
             reasoningTokens: newest.reasoningTokens ?? fallback?.reasoningTokens,
             totalCostUSD: newest.totalCostUSD ?? fallback?.totalCostUSD,
-            contextWindowTokens: newest.contextWindowTokens ?? fallback?.contextWindowTokens,
+            contextWindowTokens: keepsLimit ? fallback?.contextWindowTokens
+                : newest.contextWindowTokens ?? fallback?.contextWindowTokens,
             contextUsedTokens: newest.contextUsedTokens ?? fallback?.contextUsedTokens,
             extensionValues: newest.extensionValues.isEmpty
                 ? fallback?.extensionValues ?? [:]
@@ -7573,9 +7646,11 @@ final class AppModel {
     }
 
     /// A harness's report: kept for after a restart, and, from Claude Code, the window its model has.
+    /// The window under a limit in the environment is that process's, not the model's.
     private func keepLiveContextUsage(_ usage: HarnessProtocolUsage, for id: UUID) {
         liveContextUsageSessionIDs.insert(id)
         if let model = usage.contextWindowModel, let window = usage.contextWindowTokens,
+           usage.contextBreakdown?.autoCompactSource != "env",
            store.sessions.first(where: { $0.id == id })?.harness == .claudeCode {
             modelCatalogs.recordClaudeContextWindow(window, model: model)
         }
@@ -7639,9 +7714,10 @@ final class AppModel {
             ?? modelCatalogs.defaults(for: .claudeCode, connection: session.connection,
                                       workspaceURL: session.workspaceURL)?.model
         let current = providerUsageBySessionID[session.id]
-        guard let window = read.model.flatMap({
+        let limit = ClaudeLaunchOption.contextLimitTokens(session.providerOptions[ClaudeLaunchOption.contextLimit])
+        guard let modelWindow = read.model.flatMap({
                   modelCatalogs.claudeContextWindow(forResponseModel: $0, chosenModel: chosen)
-              }) ?? current?.contextWindowTokens, window > 0,
+              }) ?? current?.contextWindowTokens, case let window = min(modelWindow, limit ?? modelWindow), window > 0,
               current?.contextUsedTokens != read.usedTokens || current?.contextWindowTokens != window else { return }
         providerUsageBySessionID[session.id] = HarnessProtocolUsage(
             inputTokens: nil, cachedInputTokens: nil, outputTokens: nil, reasoningTokens: nil, totalCostUSD: nil,

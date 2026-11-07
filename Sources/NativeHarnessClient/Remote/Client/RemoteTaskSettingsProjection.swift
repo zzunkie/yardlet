@@ -2,8 +2,8 @@ import Foundation
 import YardletRemote
 
 /// A host task's settings (docs/REMOTE_PROTOCOL.md §15.23) as the composer's bottom row reads them
-/// (`ComposerSessionOptions`), so the local controls draw them: the mode or the Plan indicator, the permissions and the
-/// model menu. Every choice goes back under the host's own ID and value (`ComposerApplyPath.providerOption`), and the
+/// (`ComposerSessionOptions`), so the local controls draw them: the mode or the Plan indicator, the permissions, the
+/// model menu and the context window's limit. Every choice goes back under the host's own ID and value (`ComposerApplyPath.providerOption`), and the
 /// host applies it by the path its own menu takes.
 enum RemoteTaskSettingsProjection {
     static func options(_ settings: [RemoteSetting], task: RemoteTask?) -> ComposerSessionOptions {
@@ -27,6 +27,8 @@ enum RemoteTaskSettingsProjection {
                 menu.effort = selector(setting)
             case "speed":
                 menu.speed = selector(setting)
+            case "contextLimit":
+                options.contextLimit = ComposerContextLimitSlot(selector: selector(setting), note: setting.note)
             default:
                 continue
             }

@@ -1418,8 +1418,10 @@ extension AppModel: SessionToolHandling {
     static func inheritedOptions(_ parent: [String: String], harness: HarnessKind,
                                  chosen: [String: String]) -> [String: String] {
         var inherited = parent
-        // Whether a session's next message is suggested is the caller's own, not a choice to pass on.
+        // Whether a session's next message is suggested is the caller's own, not a choice to pass on,
+        // and a context limit is chosen for one long task, not for the tasks it starts.
         inherited[ClaudeLaunchOption.nextMessageSuggestions] = nil
+        inherited[ClaudeLaunchOption.contextLimit] = nil
         if harness == .claudeCode, chosen[ClaudeLaunchOption.model] != nil, chosen[ClaudeLaunchOption.effort] == nil {
             inherited[ClaudeLaunchOption.effort] = nil
         }

@@ -152,6 +152,24 @@ final class ComposerContextAndConnectorsTests: XCTestCase {
                                                            providerUsage: nil, isAttached: true)
         XCTAssertTrue(claude.reportsContextWindow)
         XCTAssertEqual(claude.compact, .providerCommand("/compact"))
+
+        // A host's settings carry a task's context limit to a remote composer, with why the running
+        // task does not have it yet.
+        XCTAssertNil(claude.contextLimit)
+        var waiting = ProviderCapabilityState()
+        waiting.offersContextLimit = true
+        waiting.contextLimitAppliesLater = true
+        let limited = ComposerSessionOptionsProjection.make(
+            harness: .claudeCode,
+            session: ComposerUnificationFixtures.session(.claudeCode, options: [ClaudeLaunchOption.contextLimit: "200000"]),
+            providerCapabilities: waiting, providerUsage: nil, isAttached: true)
+        XCTAssertEqual(limited.contextLimit?.selector.choices.map(\.name), [L10n.string("Default"), "200k", "400k"])
+        XCTAssertEqual(limited.contextLimit?.selector.currentValue, "200000")
+        XCTAssertNotNil(limited.contextLimit?.note)
+        let remote = RemoteTaskSettingsProjection.options(AppModelRemoteBridge.taskSettings(limited), task: nil)
+        XCTAssertEqual(remote.contextLimit?.selector.choices, limited.contextLimit?.selector.choices)
+        XCTAssertEqual(remote.contextLimit?.selector.currentValue, "200000")
+        XCTAssertEqual(remote.contextLimit?.note, limited.contextLimit?.note)
     }
 
     /// The Korean words are the Claude app's own (`ko-KR.json`).

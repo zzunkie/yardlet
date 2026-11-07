@@ -1934,6 +1934,8 @@
 "Auto-compacts soon" = "곧 자동 압축됨";
 "Send a message to see context usage." = "컨텍스트 사용량을 확인하려면 메시지를 보내세요.";
 "Compact session" = "세션 압축";
+"Context limit" = "컨텍스트 한도";
+"Claude Code compacts this task before its context reaches this size. Other tasks keep their own." = "Claude Code가 이 작업의 컨텍스트가 이 크기에 닿기 전에 압축합니다. 다른 작업은 각자의 설정을 유지합니다.";
 "Available when %@ finishes this turn" = "%@가 이번 차례를 마치면 사용할 수 있습니다";
 "Available when reconnected" = "다시 연결되면 사용할 수 있습니다";
 "Manage connectors" = "커넥터 관리";

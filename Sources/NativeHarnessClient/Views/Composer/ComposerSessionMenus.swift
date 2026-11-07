@@ -10,6 +10,7 @@ struct ComposerContextUsageIndicator: View {
     var usage: HarnessProtocolUsage? = nil
     var breakdowns: [ComposerUsageBreakdown] = []
     var compact: ComposerContextUsageDetails.Compact? = nil
+    var limit: ComposerContextUsageDetails.Limit? = nil
 
     @State private var isPresented = false
 
@@ -32,7 +33,7 @@ struct ComposerContextUsageIndicator: View {
                                                 isPresented = false
                                                 compact.run()
                                             }
-                                        })
+                                        }, limit: limit)
                 .onExitCommand { isPresented = false }
         }
         .accessibilityLabel(L10n.string("Context window"))
@@ -80,10 +81,23 @@ struct ComposerContextUsageDetails: View {
         var run: () -> Void
     }
 
+    /// The task's own context limit.
+    struct Limit {
+        var slot: ComposerContextLimitSlot
+        var choose: (String) -> Void
+
+        static func make(_ slot: ComposerContextLimitSlot?, onChoose: @escaping (ComposerSessionChoice) -> Void) -> Limit? {
+            slot.map { slot in
+                Limit(slot: slot) { onChoose(.providerOption(id: slot.selector.id, value: $0)) }
+            }
+        }
+    }
+
     let summary: ComposerContextSummary
     var usage: HarnessProtocolUsage? = nil
     var breakdowns: [ComposerUsageBreakdown] = []
     var compact: Compact? = nil
+    var limit: Limit? = nil
     /// Inside the session rail's Context card (the Claude app's `presentation: "inline"`): the card's
     /// width and background rather than the window's.
     var isInline = false
@@ -125,6 +139,10 @@ struct ComposerContextUsageDetails: View {
 
             if summary.autoCompactHint != nil || (compact != nil && summary.offersCompact) {
                 compactRow
+            }
+
+            if let limit {
+                limitRow(limit)
             }
 
             ForEach(Array(breakdowns.enumerated()), id: \.offset) { _, breakdown in
@@ -217,6 +235,35 @@ struct ComposerContextUsageDetails: View {
                     .controlSize(.small)
                     .disabled(!compact.isAvailable)
                     .help(compact.isAvailable ? "" : compact.unavailableReason ?? "")
+            }
+        }
+    }
+
+    private func limitRow(_ limit: Limit) -> some View {
+        let selector = limit.slot.selector
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(selector.name)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Picker(selector.name, selection: Binding(get: { selector.currentValue }, set: limit.choose)) {
+                    ForEach(selector.choices) { choice in
+                        Text(choice.name).tag(choice.value)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                .fixedSize()
+                .help(selector.description ?? "")
+            }
+            if let note = limit.slot.note {
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

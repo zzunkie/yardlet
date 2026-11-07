@@ -51,6 +51,11 @@ extension AppModelRemoteBridge {
                 if let selector { settings.append(setting(selector, role: role, prepares: !menu.canChoose)) }
             }
         }
+        if let limit = options.contextLimit {
+            var setting = setting(limit.selector, role: "contextLimit", prepares: false)
+            setting.note = RemoteText.short(limit.note, RemoteText.detailLimit)
+            settings.append(setting)
+        }
         return settings
     }
 
@@ -102,6 +107,8 @@ extension AppModelRemoteBridge {
         } else if let slot = options.model,
                   let selector = [slot.menu.model, slot.menu.effort, slot.menu.speed].compactMap({ $0 }).first(where: { $0.id == id }) {
             found = (selector, slot.menu.canChoose, slot.apply, [:])
+        } else if let limit = options.contextLimit, limit.selector.id == id {
+            found = (limit.selector, true, .providerOption, [:])
         }
         guard let found else { return .failure(RemoteError(.notAllowed, "The task's composer has no such setting")) }
         guard found.canChoose else {
