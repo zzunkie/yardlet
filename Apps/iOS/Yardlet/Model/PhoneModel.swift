@@ -137,7 +137,7 @@ final class PhoneModel {
                 self.session = nil
             }
             var host = previous ?? RemoteSavedHost(name: link.name, hostKey: link.macKey, direct: link.hosts,
-                                                   relayURL: link.relayURL, room: link.room)
+                                                   relayURL: link.relayURL, room: link.room, alternateRelayURL: link.alternateRelayURL)
             host.update(from: reply)
             keys.save(key, hostID: host.id)
             if previous != nil { PushKeys.delete(hostID: host.id) }

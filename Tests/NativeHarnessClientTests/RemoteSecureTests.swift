@@ -840,6 +840,31 @@ final class RemoteSecureTests: XCTestCase {
         XCTAssertFalse(relay.offeredExtensions.contains { $0.contains("deflate") }, "\(relay.offeredExtensions)")
     }
 
+    /// v2 uses no extensions (§11.1): a server that answers with one gets no connection, from a client or from the Mac.
+    func testARemoteSocketRefusesAnExtensionItDidNotOffer() async throws {
+        let server = try ExtensionAnsweringServer()
+        defer { server.stop() }
+        try await waitUntil { server.url != nil }
+        let url = try XCTUnwrap(server.url)
+        let harness = try await SecureHarness()
+        do {
+            _ = try await RemoteClientSocket.open(url: url, clientKey: .generate(), hostKey: harness.identity.noise.publicKey,
+                                                  hello: RemoteHandshakeHello(name: "Phone"), timeout: 5)
+            XCTFail("The client's socket took the extension")
+        } catch {}
+        XCTAssertEqual(server.counts.requests, 1)
+
+        let room = RemoteRelayClient(server: harness.server, identity: harness.identity, baseURL: url)
+        room.start()
+        defer { room.stop() }
+        try await waitUntil {
+            if case .failed = room.currentState { return true }
+            return false
+        }
+        XCTAssertEqual(server.counts.requests, 2)
+        XCTAssertEqual(server.counts.framesFromClients, 0)
+    }
+
     /// Where Foundation hands a relay message over in pieces, each socket of the race joins its own: a socket that
     /// brought only part of the challenge does not win against one whose challenge came whole, nor is its piece joined
     /// to that challenge; and a challenge that came in two pieces on one socket is joined and answered.
@@ -1376,6 +1401,57 @@ final class FakeRelayHost: @unchecked Sendable {
     private func send(_ text: String, on connection: NWConnection) {
         let context = NWConnection.ContentContext(identifier: "text", metadata: [NWProtocolWebSocket.Metadata(opcode: .text)])
         connection.send(content: Data(text.utf8), contentContext: context, isComplete: true, completion: .idempotent)
+    }
+}
+
+/// A server that takes a WebSocket's opening request and answers it with an extension no client offered.
+final class ExtensionAnsweringServer: @unchecked Sendable {
+    private let listener: NWListener
+    private let queue = DispatchQueue(label: "yardlet.test.extension")
+    private var connections: [NWConnection] = []
+    private var requests = 0
+    private var framesFromClients = 0
+
+    init() throws {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        listener = try NWListener(using: parameters)
+        listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
+        listener.start(queue: queue)
+    }
+
+    /// Nil until the listener has its port.
+    var url: URL? {
+        guard let port = listener.port?.rawValue, port != 0 else { return nil }
+        return URL(string: "ws://127.0.0.1:\(port)")
+    }
+    var counts: (requests: Int, framesFromClients: Int) { queue.sync { (requests, framesFromClients) } }
+
+    func stop() {
+        listener.cancel()
+        queue.sync {
+            for connection in connections { connection.cancel() }
+            connections = []
+        }
+    }
+
+    private func accept(_ connection: NWConnection) {
+        connections.append(connection)
+        connection.start(queue: queue)
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, _, _ in
+            guard let self, let data else { return }
+            let lines = String(decoding: data, as: UTF8.self).components(separatedBy: "\r\n")
+            guard let key = lines.first(where: { $0.lowercased().hasPrefix("sec-websocket-key:") })?.dropFirst(18)
+                .trimmingCharacters(in: .whitespaces) else { return }
+            requests += 1
+            let answer = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                + "Sec-WebSocket-Accept: \(RemoteWebSocket.acceptValue(for: key))\r\n"
+                + "Sec-WebSocket-Extensions: permessage-deflate\r\n\r\n"
+            connection.send(content: Data(answer.utf8), completion: .idempotent)
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] data, _, _, _ in
+                if data?.isEmpty == false { self?.framesFromClients += 1 }
+            }
+        }
     }
 }
 
