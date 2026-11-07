@@ -8,8 +8,9 @@ import YardletAgentTools
 /// role, a list page and a message read without marking it, flags and an archive made on first use, a
 /// draft saved and saved over, a send without its Bcc line and its copy in Sent unless the server filed
 /// one, new mail from the inbox's STATUS and its newest messages' flags, a search where the server's TEXT
-/// finds less than it should, and adding an account through Settings › Connectors with its password in
-/// the secure store only, whose tools draft with the task's files and whose card before a send names them.
+/// finds less than it should and which an agent can keep to one folder, and adding an account through
+/// Settings › Connectors with its password in the secure store only, whose tools draft with the task's
+/// files and whose card before a send names them.
 final class IMAPMailTransportTests: XCTestCase {
     private static let now = Date(timeIntervalSince1970: 1_793_620_800) // 2026-11-02 12:00 UTC
     private static let drafts = "&x4TC3Lz0rQDVaA-"   // 임시보관함
@@ -173,7 +174,8 @@ final class IMAPMailTransportTests: XCTestCase {
 
     /// The server's search in the inbox and Sent, numbers read as sequence numbers by the list's FETCH:
     /// what TEXT misses is found by subject and sender; nothing found is no results when the server finds
-    /// its last message by number, and a failure when it cannot.
+    /// its last message by number, and a failure when it cannot. An agent's `folderId` keeps the search to
+    /// that folder, as it keeps a list and Outlook's search.
     func testSearchFallsBackToSubjectAndSenderAndSaysWhenTheServerCannotSearch() async throws {
         let state = FakeMailState()
         let opener = FakeMailOpener(imap: { FakeIMAPServer(answer: state.answer) })
@@ -198,6 +200,19 @@ final class IMAPMailTransportTests: XCTestCase {
             "SEARCH 2",
             #"SELECT "\#(Self.sent)""#,
         ], "Sent is empty, so it is not searched")
+
+        let runner = MailAccountToolRunner(transport: transport, account: transport.account)
+        _ = try await transport.saveDraft(MailComposition(accountID: transport.account.id, to: "min@example.com", body: "Price"))
+        let searchedBefore = server.commands.count
+        let scoped = try await runner.call(MailAccountToolCatalog.searchMessages,
+                                           .object(["query": .string("Price"), "folderId": .string(Self.drafts)]))
+        XCTAssertFalse(scoped.isError, scoped.text)
+        XCTAssertTrue(scoped.text.contains(Self.drafts), scoped.text)
+        XCTAssertEqual(server.commands.dropFirst(searchedBefore).filter { $0.hasPrefix("SELECT") }, [#"SELECT "\#(Self.drafts)""#],
+                       "Only the folder named")
+        let unknown = try await runner.call(MailAccountToolCatalog.searchMessages,
+                                            .object(["query": .string("Price"), "folderId": .string("Nowhere")]))
+        XCTAssertTrue(unknown.isError && unknown.text.contains("list_folders"), unknown.text)
 
         state.searchesNothing = true
         do {

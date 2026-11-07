@@ -14,6 +14,8 @@ struct IMAPMailTransport: MailAccountTransport {
         try await session.list(folder.id, pageToken: pageToken)
     }
     func search(_ query: String, pageToken: String?) async throws -> MailPage { try await session.search(query) }
+    /// A search of one folder, for an agent's tools; the mailbox searches the account.
+    func search(_ query: String, in folder: MailFolder) async throws -> MailPage { try await session.search(query, in: folder.id) }
     func thread(_ threadID: String) async throws -> MailThread { try await session.thread(threadID) }
     func change(_ threadID: String, _ change: MailThreadChange) async throws { try await session.change(threadID, change) }
     func saveDraft(_ composition: MailComposition) async throws -> String { try await session.saveDraft(composition) }
@@ -236,16 +238,20 @@ actor IMAPMailSession {
         }
     }
 
-    /// The server's own search (`TEXT`, headers and body) in the inbox, the archive and sent mail; the
-    /// newest results of all three. A folder where TEXT finds nothing is searched again by subject and
-    /// sender, as some servers leave the message out of TEXT. When nothing is found anywhere, the
-    /// server is asked to find a message by its number; one that cannot answer that has no search to
-    /// offer, which is said rather than shown as no results.
-    func search(_ query: String) async throws -> MailPage {
+    /// The server's own search (`TEXT`, headers and body) in the folder named, else in the inbox, the
+    /// archive and sent mail; the newest results of them all. A folder where TEXT finds nothing is
+    /// searched again by subject and sender, as some servers leave the message out of TEXT. When nothing
+    /// is found anywhere, the server is asked to find a message by its number; one that cannot answer
+    /// that has no search to offer, which is said rather than shown as no results.
+    func search(_ query: String, in folderID: String? = nil) async throws -> MailPage {
         try await run { client in
-            let boxes = try await self.mailboxList(client)
-            let roles = Self.roles(boxes)
-            let searched = [MailFolderRole.inbox, .archive, .sent].compactMap { role in roles.first { $0.value == role }?.key }
+            let searched: [String]
+            if let folderID {
+                searched = [folderID]
+            } else {
+                let roles = Self.roles(try await self.mailboxList(client))
+                searched = [MailFolderRole.inbox, .archive, .sent].compactMap { role in roles.first { $0.value == role }?.key }
+            }
             let term = IMAPClient.quoted(query)
             var threads: [MailThreadSummary] = []
             var answers = false

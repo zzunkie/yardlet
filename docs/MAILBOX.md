@@ -127,9 +127,10 @@ connector › **Mail (IMAP)**, as Apple Mail and Thunderbird add them.
   read as HTML, and a subject or name sent as raw bytes that are not UTF-8 is read in the message's
   charset, else as Korean code page 949, else as Latin-1.
 - **Search** is the server's (`SEARCH TEXT`, any language as UTF-8) over the inbox, the archive and sent
-  mail, its sequence numbers read with the FETCH the list uses. A folder where TEXT finds nothing is
-  searched again by subject and sender. When nothing is found, the server is asked to find its last
-  message by number; a server that cannot is said to have no search, rather than shown as no results.
+  mail, or over the one folder an agent gives as `folderId`, its sequence numbers read with the FETCH the
+  list uses. A folder where TEXT finds nothing is searched again by subject and sender. When nothing is
+  found, the server is asked to find its last message by number; a server that cannot is said to have no
+  search, rather than shown as no results.
 - **Changes.** Read and Star are the `\Seen` and `\Flagged` flags; Archive moves the message to the
   archive folder, made as "Archive" the first time on an account without one, as Mail and Thunderbird
   do; Not spam and Move out of the Trash move it to the inbox. There is no **Open in** button: these

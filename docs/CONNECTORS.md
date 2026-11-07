@@ -1552,7 +1552,8 @@ what belongs to connectors.
   (`ConnectorCenter.addMailAccount`). Nothing is stored until both servers accept it. The same address added again
   replaces its password and servers. Every account shares the `mail_…` tools, each call naming its address in
   `account`; a later account's own slug (`mail_dana`, the part before the `@`) names only its tools from before.
-- **Tools** (`MailAccountToolCatalog`): `search_messages` (a folder's newest messages, or the server's search),
+- **Tools** (`MailAccountToolCatalog`): `search_messages` (a folder's newest messages, or the server's search of
+  that folder; with no folder, the inbox's newest messages or a search of the inbox, the archive and sent mail),
   `get_message`, `list_folders`, `create_draft` (a new message, or a reply with the original's subject and quote, with
   `attachments` by Gmail's rules, `GmailAttachmentFiles`) and `send_draft`. Names and arguments follow Outlook Mail's.
   There is no delete. A message read through them is not marked read.

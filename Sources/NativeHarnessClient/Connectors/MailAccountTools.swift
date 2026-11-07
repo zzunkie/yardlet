@@ -2,7 +2,7 @@ import Foundation
 import YardletAgentTools
 
 /// The tools a mail account added with a password (`LocalConnectorService.imapMail`) offers agents,
-/// over the mailbox's own transport for it (`MailAccountTransport`). Names and arguments follow
+/// over the mailbox's own transport for it (`IMAPMailTransport`). Names and arguments follow
 /// Yardlet's Outlook mail tools where the two mean the same, so a model uses every mailbox alike. Each
 /// reaches a harness under the account's slug (`mail_search_messages`). Sending asks the person before
 /// every call through the harness's own approval (`approvalRequired`); there is no delete.
@@ -23,7 +23,8 @@ enum MailAccountToolCatalog {
                         + "Gives each message's ID, sender, recipients, subject, date, first words and flags; no body.",
                     properties: [
                         "query": Schema.string("Words to search for in the messages. Without them, the newest messages."),
-                        "folderId": Schema.string("A folder ID from list_folders. Defaults to the inbox."),
+                        "folderId": Schema.string("A folder ID from list_folders. Without one, the newest messages are the inbox's and "
+                            + "a search covers the inbox, the archive and sent mail."),
                         "pageToken": Schema.string("nextPageToken from the previous page.")
                     ], readOnly: true),
         Schema.tool(getMessage, "Get message",
@@ -57,7 +58,7 @@ enum MailAccountToolCatalog {
 /// Arguments are checked first; a mistake the model can fix is an error result, and the server's own
 /// failures (`MailFailure`) are the caller's to report. A message read here is not marked read.
 struct MailAccountToolRunner {
-    let transport: any MailAccountTransport
+    let transport: IMAPMailTransport
     let account: MailAccount
     /// The calling task's folders, where attachments may come from besides the person's own
     /// (`GmailAttachmentFiles`).
@@ -92,16 +93,18 @@ struct MailAccountToolRunner {
 
     private func search(_ arguments: [String: ToolJSON]) async throws -> ToolJSON {
         let token = Arguments.string(arguments, "pageToken")
-        let page: MailPage
-        if let query = Arguments.string(arguments, "query") {
-            page = try await transport.search(query, pageToken: token)
-        } else if let folderID = Arguments.string(arguments, "folderId") {
-            guard let folder = try await transport.folders().first(where: { $0.id == folderID }) else {
+        var folder: MailFolder?
+        if let folderID = Arguments.string(arguments, "folderId") {
+            folder = try await transport.folders().first { $0.id == folderID }
+            guard folder != nil else {
                 throw Problem.invalid("folderId is not a folder of this account; list_folders gives their IDs.")
             }
-            page = try await transport.list(folder, pageToken: token)
-        } else {
-            page = try await transport.inbox(pageToken: token)
+        }
+        let page: MailPage = switch (Arguments.string(arguments, "query"), folder) {
+        case (let query?, let folder?): try await transport.search(query, in: folder)
+        case (let query?, nil): try await transport.search(query, pageToken: token)
+        case (nil, let folder?): try await transport.list(folder, pageToken: token)
+        case (nil, nil): try await transport.inbox(pageToken: token)
         }
         var answer: [String: ToolJSON] = ["messages": .array(page.threads.map(Self.line))]
         if let next = page.nextPageToken { answer["nextPageToken"] = .string(next) }
