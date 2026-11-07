@@ -98,6 +98,27 @@ PICK = '''<!doctype html>
 
 # The full-page screenshot's page: bands of known height and color, so a capture shows whether each
 # comes once and in order. window.qa.resizes counts the page's resize events.
+# What a remote device's picture of a page must show (BrowserHostRemoteFramesQA): a dark page, with text, a 2D canvas, a
+# WebGL canvas and a video, each at a fixed place of the 1280 by 800 page.
+REMOTE_FRAMES = '''<!doctype html>
+<html><meta charset="utf-8"><title>Remote frames</title>
+<style>
+html, body { margin: 0; height: 100%; background: #111214; color: #e9e9ea; font: 24px sans-serif; overflow: hidden; }
+canvas, video { position: absolute; top: 140px; width: 320px; height: 240px; }
+#flat { left: 40px; } #gl { left: 400px; } #clip { left: 760px; }
+</style>
+<h1>A dark page</h1>
+<canvas id="flat" width="320" height="240"></canvas><canvas id="gl" width="320" height="240"></canvas>
+<video id="clip" src="/media/h264.mp4" muted playsinline preload="auto"></video>
+<script>
+const flat = document.getElementById('flat').getContext('2d');
+flat.fillStyle = 'rgb(230, 50, 40)';
+flat.fillRect(0, 0, 320, 240);
+const gl = document.getElementById('gl').getContext('webgl', {preserveDrawingBuffer: true});
+gl.clearColor(0.1, 0.85, 0.3, 1);
+gl.clear(gl.COLOR_BUFFER_BIT);
+</script></html>'''
+
 TALL = '''<!doctype html>
 <html><meta charset="utf-8"><title>Tall</title>
 <script>window.qa = {resizes: 0}; addEventListener('resize', () => window.qa.resizes++)</script>
@@ -1652,6 +1673,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = ACCESSIBILITY.encode()
         elif self.path.startswith('/large'):
             payload = large_page().encode()
+        elif self.path.startswith('/remote-frames'):
+            payload = REMOTE_FRAMES.encode()
         elif self.path.startswith('/tall'):
             payload = TALL.encode()
         elif self.path.startswith('/viewport'):

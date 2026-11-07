@@ -24,6 +24,8 @@ struct RemoteServerTabs {
         var listOnly = false
         /// A picture of the tab failed and the log said why, once per watch.
         var toldNoPicture = false
+        /// The log said how large the watch's first picture is.
+        var toldPicture = false
     }
 
     /// One connection's frames, kept across its watches until it closes, so watching again neither skips an
@@ -271,6 +273,13 @@ extension RemoteServer {
             event.viewportWidth = frame.viewportWidth
             event.viewportHeight = frame.viewportHeight
             send(event, to: id)
+            // A picture of one color takes a few KB, and a drawn page far more: the log tells a client that saw an empty
+            // page from one that got a page's picture, without keeping any of it.
+            if !current.toldPicture, let connection = connections[id] {
+                current.toldPicture = true
+                RemoteLog.notice("Remote: \(Self.describe(connection)) gets a picture of the tab it watches: "
+                    + "\(frame.width)x\(frame.height), \(frame.image.count) bytes")
+            }
         case let .failure(error):
             // A page that cannot be pictured now (a dialog over it, its renderer gone, a file outside the task's): tried
             // again later. The client waits for a picture meanwhile, so the log says why, once per watch.

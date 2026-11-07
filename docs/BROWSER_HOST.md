@@ -694,6 +694,13 @@ panel and the panel closed, hidden while other tasks' tabs hid after it, resized
 hidden by its engine while Yardlet takes it as shown, and two tabs in turn. Each picture comes back within 10 seconds
 (about 40 ms each in 2026-11-05 QA, a hidden tab's too: Chromium keeps a tab it captures drawing).
 
+`--ui-fixture-browser-check-only=remote-frames` (with `--ui-fixture-browser-agent-visible=3`,
+`BrowserHostRemoteFramesQA`) checks the pictures a remote device gets (docs/REMOTE_PROTOCOL.md, section 15.25) of a dark
+page with a 2D canvas, a WebGL canvas and a video, in an agent's tab no panel ever showed: hidden and then watched, at
+the sizes a side panel or a phone asks for, reloaded, and while other tasks' tabs hid after it and memory is critical.
+Each picture must hold the page's colors at their places, and the window another Mac opens over loopback must draw them
+in its panel, in light and dark.
+
 `--ui-fixture-browser-check-only=browser-use` (2026-10-26, `BrowserHostBrowserUseQA`) checks the agent's use of the
 browser: screen size emulation (presets, kept after a new load, reference clicks, screenshot size, color scheme, kept
 after a full-page screenshot, desktop, a size larger than the panel drawn shrunk with the person's clicks landing in the

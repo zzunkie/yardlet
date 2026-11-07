@@ -498,6 +498,10 @@ final class RemoteHostModelTests: XCTestCase {
         // Each frame follows the one the window took.
         try await waitUntil { (browser.frame?.number ?? 0) > first.number }
         XCTAssertTrue(redrawn.changes.isEmpty, "frames and the list redraw only the browser panel")
+        // A movement under a whole pixel sends nothing: the host would refuse a scroll of nothing.
+        browser.scroll(x: 10, y: 10, deltaX: 0, deltaY: 0.3)
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertNil(browser.refusal)
         for _ in 0..<5 { browser.scroll(x: 10, y: 10, deltaX: 0, deltaY: 30) }
         browser.input(.text("hunter2"))
         browser.input(.key("Enter"))

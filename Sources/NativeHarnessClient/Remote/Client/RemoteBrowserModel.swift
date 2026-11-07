@@ -286,12 +286,13 @@ final class RemoteBrowserModel {
 
     private func flushScroll() {
         guard let pending = scroll else { return }
-        scroll = nil
         scrollFlush?.cancel()
         scrollFlush = nil
-        guard pending.deltaX != 0 || pending.deltaY != 0 else { return }
-        input(RemoteTabInput(kind: .scroll, x: pending.x, y: pending.y, deltaX: pending.deltaX.rounded(),
-                             deltaY: pending.deltaY.rounded()))
+        let deltaX = pending.deltaX.rounded(), deltaY = pending.deltaY.rounded()
+        // What is under a whole pixel stays for the next movement: the host refuses a scroll of nothing.
+        scroll = (pending.x, pending.y, pending.deltaX - deltaX, pending.deltaY - deltaY)
+        guard deltaX != 0 || deltaY != 0 else { return }
+        input(RemoteTabInput(kind: .scroll, x: pending.x, y: pending.y, deltaX: deltaX, deltaY: deltaY))
     }
 
     static func refusal(_ error: RemoteError?, host: String) -> String {

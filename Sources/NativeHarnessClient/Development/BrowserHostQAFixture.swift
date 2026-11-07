@@ -90,6 +90,12 @@ enum BrowserHostQAFixture {
             Task { @MainActor in await BrowserHostScreenshotQA(output: output, base: base, panelSession: session).run() }
             return
         }
+        // `--ui-fixture-browser-check-only=remote-frames` runs the pictures a remote device gets of a task's tabs alone
+        // (BrowserHostRemoteFramesQA).
+        if argument("ui-fixture-browser-check-only") == "remote-frames" {
+            Task { @MainActor in await BrowserHostRemoteFramesQA(output: output, base: base, panelSession: session).run() }
+            return
+        }
         Task { @MainActor in await BrowserHostQARunner(output: output, base: base, session: session).run() }
     }
 }
