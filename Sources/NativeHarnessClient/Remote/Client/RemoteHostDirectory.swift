@@ -42,7 +42,6 @@ final class RemoteHostDirectory {
     @ObservationIgnored private let store: RemoteHostStore
     @ObservationIgnored private let keys: any RemoteClientKeyStoring
     @ObservationIgnored private let hello: RemoteHandshakeHello
-    @ObservationIgnored private let session: URLSession
     @ObservationIgnored private let timing: RemoteHostConnection.Timing
     /// Where each host's window keeps what it last showed; nil keeps nothing.
     @ObservationIgnored private let cacheRoot: URL?
@@ -53,12 +52,11 @@ final class RemoteHostDirectory {
     @ObservationIgnored var onWithdrawTaskNotification: ((String, String) -> Void)?
 
     init(store: RemoteHostStore, keys: any RemoteClientKeyStoring, hello: RemoteHandshakeHello,
-         session: URLSession = .shared, timing: RemoteHostConnection.Timing = .init(), cacheRoot: URL? = nil,
+         timing: RemoteHostConnection.Timing = .init(), cacheRoot: URL? = nil,
          discovery: RemoteHostDiscovery? = nil) {
         self.store = store
         self.keys = keys
         self.hello = hello
-        self.session = session
         self.timing = timing
         self.cacheRoot = cacheRoot
         self.discovery = discovery
@@ -91,7 +89,7 @@ final class RemoteHostDirectory {
         if let model = models[hostID] { return model }
         guard let host = store.host(hostID), let key = keys.load(hostID: hostID) else { return nil }
         let cache = cacheRoot.flatMap { RemoteHostCache.folder(in: $0, hostID: hostID) }.map { RemoteHostCache(folder: $0) }
-        let model = RemoteHostModel(host: host, clientKey: key, hello: hello, store: store, session: session, timing: timing,
+        let model = RemoteHostModel(host: host, clientKey: key, hello: hello, store: store, timing: timing,
                                     cache: cache, discovery: discovery)
         model.onAttention = { [weak self, weak model] event in
             guard let self, let model else { return }
@@ -142,7 +140,7 @@ final class RemoteHostDirectory {
         let key = RemoteKeyPair.generate()
         let reply: RemoteHandshakeReply
         do {
-            reply = try await RemoteHostConnection.pair(link, clientKey: key, hello: hello, session: session, timing: timing)
+            reply = try await RemoteHostConnection.pair(link, clientKey: key, hello: hello, timing: timing)
         } catch let failure as RemoteClientSocket.Failure {
             switch failure.error?.code {
             case .pairingUnavailable?, .pairingInvalid?: throw PairingFailure.linkSpent
@@ -172,7 +170,7 @@ final class RemoteHostDirectory {
         if let model = models[hostID], model.isConnected {
             _ = await model.response(to: .forgetDevice)
         } else if models[hostID] == nil, let target = store.host(hostID)?.target, let key = keys.load(hostID: hostID) {
-            await Self.askToForget(target: target, key: key, hello: hello, session: session, timing: timing)
+            await Self.askToForget(target: target, key: key, hello: hello, timing: timing)
         }
         if let model = models.removeValue(forKey: hostID) {
             for task in model.tasks { onWithdrawTaskNotification?(hostID, task.id) }
@@ -187,10 +185,10 @@ final class RemoteHostDirectory {
 
     /// Connects for a moment to send `forgetDevice`, giving up after a few seconds.
     private static func askToForget(target: RemoteHostTarget, key: RemoteKeyPair, hello: RemoteHandshakeHello,
-                                    session: URLSession, timing: RemoteHostConnection.Timing) async {
+                                    timing: RemoteHostConnection.Timing) async {
         var timing = timing
         timing.backoff = [5]
-        let connection = RemoteHostConnection(target: target, clientKey: key, hello: hello, session: session, timing: timing)
+        let connection = RemoteHostConnection(target: target, clientKey: key, hello: hello, timing: timing)
         let deadline = Task {
             try? await Task.sleep(for: .seconds(6))
             await connection.stop()

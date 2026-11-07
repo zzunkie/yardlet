@@ -142,7 +142,7 @@ final class RemoteHostModel: Identifiable {
     @ObservationIgnored static let keptSubscriptions = 6
 
     init(host: RemoteSavedHost, clientKey: RemoteKeyPair, hello: RemoteHandshakeHello, store: RemoteHostStore?,
-         session: URLSession = .shared, timing: RemoteHostConnection.Timing = .init(), cache: RemoteHostCache? = nil,
+         timing: RemoteHostConnection.Timing = .init(), cache: RemoteHostCache? = nil,
          discovery: RemoteHostDiscovery? = nil) {
         id = host.id
         self.host = host
@@ -151,7 +151,7 @@ final class RemoteHostModel: Identifiable {
         self.discovery = discovery
         files = RemoteHostFiles(hostID: host.id)
         connector = RemoteHostConnection(target: host.target ?? RemoteHostTarget(hostKey: Data(), direct: []),
-                                         clientKey: clientKey, hello: hello, session: session, timing: timing)
+                                         clientKey: clientKey, hello: hello, timing: timing)
         schedules.model = self
         files.model = self
         terminals.model = self
