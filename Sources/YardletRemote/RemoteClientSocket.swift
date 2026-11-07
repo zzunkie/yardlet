@@ -3,20 +3,6 @@ import Foundation
 import FoundationNetworking
 #endif
 
-extension URLSession {
-    /// A WebSocket for v2 frames that offers no compression (§11.1). URLSession on Apple's platforms offers
-    /// `permessage-deflate` unless the request names its own extensions. Noise output does not compress, and
-    /// `maximumMessageSize` limits a message as it arrives, so a relay that takes the offer makes a full-size frame
-    /// larger than the socket accepts and the socket closes with 1009. Foundation elsewhere offers no extensions.
-    func remoteWebSocketTask(with url: URL, timeoutInterval: TimeInterval = 60) -> URLSessionWebSocketTask {
-        var request = URLRequest(url: url, timeoutInterval: timeoutInterval)
-        #if !canImport(FoundationNetworking)
-        request.setValue("", forHTTPHeaderField: "Sec-WebSocket-Extensions")
-        #endif
-        return webSocketTask(with: request)
-    }
-}
-
 /// The client's side of one v2 connection (docs/REMOTE_PROTOCOL.md §11–§13), as a phone has it: a
 /// WebSocket to the host, directly or through the relay, the Noise IK handshake as the initiator, then
 /// JSON messages encrypted and cut into chunks both ways. Yardlet on another computer uses it to follow
@@ -51,7 +37,7 @@ public final class RemoteClientSocket: @unchecked Sendable {
     }
 
     private let lock = NSLock()
-    private let task: URLSessionWebSocketTask
+    private let task: RemoteClientWebSocket
     private var sender: RemoteNoiseCipher
     private var receiver: RemoteNoiseCipher
     private var joiner = RemoteNoiseFraming.Joiner(limit: RemoteProtocol.maxServerMessageBytes)
@@ -67,7 +53,7 @@ public final class RemoteClientSocket: @unchecked Sendable {
     private var earlyClose: Closing?
     private var received = Date()
 
-    private init(task: URLSessionWebSocketTask, sender: RemoteNoiseCipher, receiver: RemoteNoiseCipher) {
+    private init(task: RemoteClientWebSocket, sender: RemoteNoiseCipher, receiver: RemoteNoiseCipher) {
         self.task = task
         self.sender = sender
         self.receiver = receiver
@@ -77,9 +63,8 @@ public final class RemoteClientSocket: @unchecked Sendable {
     /// when the socket, the handshake or message 2 does not complete within `timeout`, or when the host
     /// refuses (`Failure.error`).
     public static func open(url: URL, clientKey: RemoteKeyPair, hostKey: Data, hello: RemoteHandshakeHello,
-                            session: URLSession = .shared, timeout: TimeInterval) async throws -> (RemoteClientSocket, RemoteHandshakeReply) {
-        let task = session.remoteWebSocketTask(with: url, timeoutInterval: timeout)
-        task.maximumMessageSize = RemoteNoise.maxMessageLength + 1
+                            timeout: TimeInterval) async throws -> (RemoteClientSocket, RemoteHandshakeReply) {
+        let task = RemoteClientWebSocket.connecting(to: url, maximumMessageSize: RemoteNoise.maxMessageLength + 1, timeout: timeout)
         task.resume()
         let deadline = Task {
             try await Task.sleep(for: .seconds(timeout))
@@ -93,7 +78,7 @@ public final class RemoteClientSocket: @unchecked Sendable {
         }
     }
 
-    private static func handshake(task: URLSessionWebSocketTask, clientKey: RemoteKeyPair, hostKey: Data,
+    private static func handshake(task: RemoteClientWebSocket, clientKey: RemoteKeyPair, hostKey: Data,
                                   hello: RemoteHandshakeHello) async throws -> (RemoteClientSocket, RemoteHandshakeReply) {
         do {
             var noise = try RemoteNoiseHandshake(role: .initiator, localStatic: clientKey, remoteStatic: hostKey)

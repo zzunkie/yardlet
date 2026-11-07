@@ -659,7 +659,8 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
 Every v2 connection is a WebSocket that carries **binary frames only**, one Noise message per frame
 (§13). A text frame closes the connection (1003); a frame over 65,535 bytes closes it (1009). Neither side
 offers WebSocket compression: Noise output does not compress, and a compressed full-size frame arrives larger than
-any Noise message. The same handshake and encryption run on every path:
+any Noise message. v2 uses no WebSocket extensions: a client or the Mac ends a connection whose server answers with
+one or whose frames use one. The same handshake and encryption run on every path:
 
 | path | phone connects to | notes |
 |---|---|---|
@@ -696,8 +697,9 @@ phone also keeps the direct addresses of §13.3.
 
 1. Candidates: addresses Bonjour resolved for the Mac, the direct addresses last received (§13.3; the
    private-range ones when on Wi-Fi or Ethernet, Tailscale ones when a VPN is up), then the relay.
-2. Start the direct candidates at once (3 s each to finish the handshake) and the relay 0.7 s later;
-   the first handshake that completes wins and the others are closed.
+2. Start the direct candidates at once (3 s each to finish the handshake) and the relay 0.7 s later, at
+   each of its addresses when the Mac names two (§14.2); the first handshake that completes wins and the
+   others are closed.
 3. While on the relay, try direct again when the network changes or Bonjour finds the Mac; when one
    completes, move to it (send `snapshot` and subscribe again) and close the relay connection.
 
