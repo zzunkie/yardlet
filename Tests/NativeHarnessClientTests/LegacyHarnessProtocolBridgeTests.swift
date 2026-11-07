@@ -1665,6 +1665,38 @@ final class LegacyHarnessProtocolBridgeTests: XCTestCase {
         collector.cancel()
     }
 
+    /// The provider's end reaches the bridge on two streams. The last presentation is what ends a turn it left running,
+    /// so it crosses even when the events get there first, and only then does the protocol's stream end.
+    func testTheLastPresentationCrossesAfterTheEventsEnd() async throws {
+        let adapter = FakeHarnessAdapter(kind: .codex)
+        let bridge = LegacyHarnessProtocolBridge(adapter: adapter, manifest: HarnessProtocolCompatibilityManifest.codex())
+        let localSessionID = UUID()
+        _ = try await bridge.handle(HarnessProtocolRequest(
+            id: "create", method: .sessionCreate,
+            typedParams: HarnessProtocolCreateSessionParams(
+                localSessionID: localSessionID,
+                config: HarnessProtocolSessionConfig(workspacePath: "/tmp/codex-yhp-workspace", modelID: nil, modeID: nil,
+                                                     featureValues: [:], extensionValues: [:]),
+                initialPrompt: [])))
+        let recorder = ProtocolEventRecorder()
+        let collector = Task {
+            for await event in await bridge.events(for: localSessionID) { await recorder.append(event) }
+        }
+        await adapter.finishEvents(for: localSessionID, keepingPresentation: true)
+        // Long enough for the event relay to reach its end.
+        try await Task.sleep(for: .milliseconds(200))
+        var last = CodexTaskState.empty
+        last.lastAppliedSequence = 7
+        await adapter.emitPresentation(last, for: localSessionID)
+        await adapter.finishPresentation(for: localSessionID)
+        await collector.value
+
+        let presented = try await recorder.events.compactMap(\.payload.extensionEvent)
+            .filter { $0.name == HarnessProtocolCodexPresentationEvent.updated }
+            .map { try decode(HarnessProtocolCodexPresentationSnapshot.self, from: $0.payload) }
+        XCTAssertEqual(presented.last?.lastAppliedSequence, 7)
+    }
+
     func testStructuredHeadlessBridgePreservesLifecycleAndConforms() async throws {
         let fixture = try makeAntigravityFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
