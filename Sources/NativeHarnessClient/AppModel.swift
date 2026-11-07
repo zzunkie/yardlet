@@ -239,6 +239,8 @@ final class AppModel {
     /// for what else keeps it busy; the end of another turn cuts the wait short.
     @ObservationIgnored private var switchingAfterTurn = Set<UUID>()
     @ObservationIgnored private var accountSwitchWaits: [UUID: Task<Void, Never>] = [:]
+    /// How long a new task waits for the first reading of its login; tests give their own.
+    @ObservationIgnored var firstReadingWait: Duration = .seconds(3)
     /// The moves in `accountSwitchesAfterTurn` Yardlet made itself, to an account with room
     /// (AppModel+AccountMoves.swift), and the state each was made for.
     @ObservationIgnored var automaticAccountMoves: [UUID: AutomaticAccountMove] = [:]
@@ -651,8 +653,8 @@ final class AppModel {
             self?.noteMemorySaverScreen()
         }
         taskWorkspaces.onSideChatClose = { [weak self] id in self?.endSideChat(of: id) }
-        self.connections.onSignedIn = { [weak self] harness, connection in
-            Task { await self?.continueTasks(afterSignInOf: harness, connection: connection) }
+        self.connections.onSignedIn = { [weak self] harness, connection, isFirstReading in
+            Task { await self?.continueTasks(afterSignInOf: harness, connection: connection, isFirstReading: isFirstReading) }
         }
         resourceMonitor.request = { [weak self] in self?.taskResourceRequest() ?? TaskResourceRequest() }
         resourceMonitor.describe = { [weak self] in self?.taskResourceDescription($0) }
@@ -752,6 +754,10 @@ final class AppModel {
     /// the composer to show beside the draft. A chat gets a new folder of its own when it starts
     /// (`ChatWorkspaces.makeFolder`), as the Codex app makes one, and no project.
     func createTask(_ submission: NewTaskDraft.Submission) async throws -> SessionRecord? {
+        // Said where the task would start, with its draft still there, rather than as its failure.
+        let connection = connections.startConnection(submission.connection)
+        await waitForFirstReading(of: submission.harness, connection: connection)
+        if await isSignedOut(submission.harness, connection: connection) { throw HarnessSignInRequired() }
         let created = try await createSession(for: submission)
         if let created, let assignment = submission.accountAssignment {
             accountAssignments.record(assignment, for: created.id)
@@ -1412,6 +1418,9 @@ final class AppModel {
         var startedTurn = false
         var steersRunningTurn = false
         do {
+            if !followsRunningTurn, await isSignedOut(session.harness, connection: session.connection) {
+                throw HarnessSignInRequired()
+            }
             if handlesBySessionID[session.id] == nil {
                 try await attach(session, resumesExistingSession: session.providerSessionID != nil)
             }
@@ -5294,22 +5303,15 @@ final class AppModel {
                 modelCatalogs.recordCodex(models, for: connection)
             }
         case .antigravityCLI:
-            // Over ACP every session is a conversation the CLI keeps, so the list comes from the
-            // tasks that attach (`rememberAdvertisedModels`) instead.
-            guard await !registry.servesACP(.antigravityCLI, executableURL: runtimeURL) else { return }
-            // A session that runs nothing: its lists are `agy models` and its kin, which send no prompt.
-            let adapter = await registry.adapter(for: .antigravityCLI, executableURL: runtimeURL,
-                                                 environmentScope: .native, connection: nil)
+            // `agy models` sends no prompt and, unlike a session, leaves no conversation in the CLI's
+            // store. A task that attaches reports the same names (`rememberAdvertisedModels`).
+            let executable = await registry.startedExecutable(for: .antigravityCLI, requested: runtimeURL)
             let folder = workspaceURL ?? FileManager.default.homeDirectoryForCurrentUser
-            guard let provider = adapter as? any ProviderCapabilityProviding,
-                  let reporting = adapter as? any HarnessModelCatalogReporting,
-                  (try? await adapter.probeRuntime()) != nil,
-                  let handle = try? await adapter.createSession(CreateHarnessSessionRequest(
-                      localSessionID: UUID(), workspaceURL: folder, initialPrompt: nil)) else { return }
-            _ = try? await provider.providerCapabilities(for: handle)
-            let models = await reporting.advertisedModels(for: handle.localSessionID)
-            await adapter.close(handle)
-            if let models { modelCatalogs.recordAntigravity(models) }
+            guard case let .success(output) = await StructuredHeadlessAdapter.runCatalogCommand(
+                      executable, ["models"], workspaceURL: folder, environment: ["AGY_CLI_DISABLE_AUTO_UPDATE": "true"]),
+                  let models = AntigravityACPOptions.catalog(from: StructuredHeadlessAdapter.catalogChoices(in: output.stdout))
+            else { return }
+            modelCatalogs.recordAntigravity(models)
         default:
             return
         }
@@ -6748,7 +6750,11 @@ final class AppModel {
         if let missing = taskFolderMissing(session) { throw missing }
         let session = await sessionWithAvailableRuntime(session)
         // A login just read as signed out is the reason, before a CLI starts and a turn says the same.
-        if await isSignedOut(session) { throw HarnessSignInRequired() }
+        // A Codex thread needs no login, and what a task reads from one still works; `submitCodex`
+        // stops its turn instead.
+        if session.harness != .codex, await isSignedOut(session.harness, connection: session.connection) {
+            throw HarnessSignInRequired()
+        }
         // Opening a task is the one moment a row written before worktree origins existed may
         // gain one, and only when its folder really is a worktree. Launch never rescans.
         try? await store.recordWorkspaceOriginIfMissing(id: session.id)
@@ -8069,14 +8075,27 @@ final class AppModel {
         )
     }
 
-    /// Whether the login a Claude task runs on was read as signed out, and still is when read again.
-    /// Only `auth status` runs, which starts no turn and no refresh.
-    private func isSignedOut(_ session: SessionRecord) async -> Bool {
-        guard session.harness == .claudeCode else { return false }
-        let account = connections.choice(for: session.harness, connection: session.connection)
+    /// Whether the login a task runs on was read as signed out, and still is when read again. Only
+    /// the account check runs, which starts no turn and no refresh. A login not read yet, or one a
+    /// check could not vouch for, is no reason to stop a task: its turn says when it is refused.
+    private func isSignedOut(_ harness: HarnessKind, connection: ProviderConnection?) async -> Bool {
+        guard ProviderSignIn.readingDecidesTurns(harness) else { return false }
+        let account = connections.choice(for: harness, connection: connection)
         guard account.snapshot?.state == .signedOut else { return false }
         await connections.check(account, policy: .refresh, runtimeSelections: runtimeSelections)
-        return connections.choice(for: session.harness, connection: session.connection).snapshot?.state == .signedOut
+        return connections.choice(for: harness, connection: connection).snapshot?.state == .signedOut
+    }
+
+    /// A first run's first seconds: a check of a login never read before gets a moment to answer, so
+    /// a new task knows whether it can start. A check that takes longer decides nothing.
+    private func waitForFirstReading(of harness: HarnessKind, connection: ProviderConnection?) async {
+        guard ProviderSignIn.readingDecidesTurns(harness) else { return }
+        let deadline = ContinuousClock.now + firstReadingWait
+        while ContinuousClock.now < deadline {
+            let account = connections.choice(for: harness, connection: connection)
+            guard account.snapshot == nil, connections.isChecking(account) else { return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
     }
 
     /// A turn the CLI refused for its sign-in, which the account's reading may not know yet.
@@ -8091,12 +8110,17 @@ final class AppModel {
 
     /// A login was just read signed in. A CLI that found none keeps running on that answer, so each
     /// idle one on this login ends and the task's next message starts one that reads it. The
-    /// provider ID, history and binding stay, and a task that failed for it reads ready again.
-    func continueTasks(afterSignInOf harness: HarnessKind, connection: ProviderConnection?) async {
+    /// provider ID, history and binding stay, and a task that failed for it reads ready again. The
+    /// first reading of a login says nothing about the CLIs running on it, so only a task that
+    /// failed for its sign-in is touched then.
+    func continueTasks(afterSignInOf harness: HarnessKind, connection: ProviderConnection?,
+                       isFirstReading: Bool = false) async {
         for session in store.sessions where session.harness == harness && session.connection == connection {
             guard session.status != .running, session.status != .waitingForApproval else { continue }
+            let failedForSignIn = errorBySessionID[session.id].map(ProviderSignIn.asksToSignIn) == true
+            guard failedForSignIn || !isFirstReading else { continue }
             if handlesBySessionID[session.id] != nil { await endRuntimeToSaveMemory(session.id, evenOnScreen: true) }
-            if let error = errorBySessionID[session.id], ProviderSignIn.asksToSignIn(error) {
+            if failedForSignIn {
                 errorBySessionID.removeValue(forKey: session.id)
                 try? await store.updateSession(id: session.id, status: .ready)
             }

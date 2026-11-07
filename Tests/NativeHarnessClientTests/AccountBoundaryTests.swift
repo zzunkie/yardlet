@@ -18,6 +18,16 @@ final class AccountBoundaryTests: XCTestCase {
         XCTAssertEqual(snapshot.state, .signedOut)
         XCTAssertTrue(snapshot.canLogin)
         XCTAssertFalse(snapshot.canLogout)
+
+        // A provider of the person's own needs no OpenAI sign-in (Codex 0.166.0 answers so), and
+        // reads as signed out would stop tasks that run.
+        let ownProvider = HarnessAccountBroker.codexSnapshot(
+            account: .object(["account": .null, "requiresOpenaiAuth": .bool(false)]),
+            rateLimits: nil,
+            accountUsage: nil
+        )
+        XCTAssertEqual(ownProvider.state, .unknown)
+        XCTAssertFalse(ownProvider.canLogin)
     }
 
     func testPiAccountCheckDoesNotRequestCredentialMaterial() async {

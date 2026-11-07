@@ -1114,6 +1114,9 @@ final class AppModelRemoteBridge: RemoteBridge {
                 return .failure(RemoteError(.internal, reason ?? "The task did not start"))
             }
             return .success(created.id.uuidString)
+        } catch let signIn as HarnessSignInRequired {
+            Self.discard(stored)
+            return .failure(RemoteError(.notAllowed, signIn.localizedDescription))
         } catch {
             Self.discard(stored)
             return .failure(RemoteError(.internal, error.localizedDescription))

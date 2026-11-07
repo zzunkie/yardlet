@@ -309,8 +309,10 @@ final class ProviderConnectionStore {
     @ObservationIgnored private let defaults: UserDefaults?
     /// The environment default logins are found in (`CLAUDE_CONFIG_DIR`); tests give their own.
     @ObservationIgnored var defaultLoginEnvironment = ProcessInfo.processInfo.environment
-    /// A login was just read signed in after being read as anything else.
-    @ObservationIgnored var onSignedIn: ((HarnessKind, ProviderConnection?) -> Void)?
+    /// A login was just read signed in after being read as anything else, or for the first time
+    /// (`isFirstReading`), which says nothing about the CLIs already running on it.
+    @ObservationIgnored var onSignedIn: ((_ harness: HarnessKind, _ connection: ProviderConnection?,
+                                          _ isFirstReading: Bool) -> Void)?
     /// Where Yardlet makes the folders of accounts added with a new sign-in; tests give their own.
     @ObservationIgnored var accountsRoot = CodexEnvironmentPaths.live().yardletRootURL.appending(path: "connections")
     /// The home folder discovery looks in; tests give their own.
@@ -901,14 +903,15 @@ final class ProviderConnectionStore {
         announceSignIn(of: nil, harness: snapshot.harness, before: before, reading: defaultSnapshots[snapshot.harness])
     }
 
-    /// A login read signed in after it was read as anything else: the tasks that failed without it can go on.
+    /// A login read signed in after it was read as anything else, or never read before (a sign-in
+    /// that finished ahead of the first check): the tasks that failed without it can go on.
     private func announceSignIn(of connection: ProviderConnection?, harness: HarnessKind,
                                 before: AccountAuthState?, reading: HarnessAccountSnapshot?) {
         guard reading?.state == .signedIn else { return }
         // The sign-in is the next task's at once, not after the next check of the list.
         replaceSignedOutDefaultSelection(for: harness)
-        guard let before, before != .signedIn else { return }
-        onSignedIn?(harness, connection)
+        guard before != .signedIn else { return }
+        onSignedIn?(harness, connection, before == nil)
     }
 
     /// Ends the check running for `key` as far as the shown reading goes, and returns the

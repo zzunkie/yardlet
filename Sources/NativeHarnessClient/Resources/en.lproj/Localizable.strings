@@ -3855,3 +3855,5 @@
 "%@ isn't signed in" = "%@ isn't signed in";
 "Continue with %@" = "Continue with %@";
 "Sign in, then send your message again." = "Sign in, then send your message again.";
+"Models unavailable" = "Models unavailable";
+"Sign in to %@ to start a task here." = "Sign in to %@ to start a task here.";

@@ -38,12 +38,17 @@ storage. Different CLI sign-ins are not merged because they share an email or a 
 - Adding an account keeps the harness context and leads into sign-in. The account name and folder choice are advanced
   settings. Pi picks the provider first. Sign-in for each provider and API-key entry belong to the CLI.
 - Cancelling a new sign-in flow does not change the existing default account. The new task's choice changes when **Use
-  this account** is clicked after a successful sign-in. Files the CLI created while trying to sign in are not deleted on
-  Yardlet's own judgment.
+  this account** is clicked after a successful sign-in, or when a sign-in opened from a task's account controls finishes
+  and the sheet closes with **Done**. Files the CLI created while trying to sign in are not deleted on Yardlet's own
+  judgment.
 - No saved connection, provider choice needed, status unavailable and remaining limit not provided are told apart. A CLI
   can run with an environment key or an external provider's authentication even without a saved OAuth sign-in, so
   choosing is not blocked across the board. An account is not chosen when the runtime is missing or a problem with its
   account binding is confirmed.
+- Claude Code, Codex and Antigravity CLI answer for every way they sign in, so a new task on a login read as signed out,
+  and still so when read again at Start, stays on the new-task screen with its draft and the sign-in. Start stays on,
+  since a sign-in made in Terminal is not known until that read. A check that could not finish stops nothing; the turn
+  says when the CLI refuses it. A Codex thread needs no login, so an existing Codex task stops at its next turn.
 - Harnesses that do not support a new account environment get no add button that would not work. The account, session ID
   and draft of existing tasks do not change with this selection UI change.
 

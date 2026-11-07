@@ -11,6 +11,17 @@ private struct PendingSignOut {
     var signsInAfter = false
 }
 
+extension AccountCenterModel {
+    /// New tasks start on the account the console just signed in to.
+    func useFinishedSignIn() {
+        guard loginController.phase == .completed, loginController.operation == .connect,
+              let activeHarness else { return }
+        connections.selection[activeHarness] = activeConnection.flatMap { active in
+            connections.connections.first { $0.id == active.id }
+        }?.id
+    }
+}
+
 /// Starts an accounts presentation's checks once and follows Codex's account notifications while
 /// it is open. The owner applies it, so the checks keep running while the user moves between
 /// Settings sections, and the notifications stop when the window closes. The readings belong to
@@ -119,7 +130,11 @@ struct HarnessCenterView: View {
                 Text(L10n.string("Connections"))
                     .font(.system(size: 14, weight: .semibold))
                 Spacer()
-                Button(L10n.string("Done")) { dismiss() }
+                Button(L10n.string("Done")) {
+                    // A sign-in this sheet was opened for is used however the sheet closes.
+                    if returnsSetupToTask { model.useFinishedSignIn() }
+                    dismiss()
+                }
                     .keyboardShortcut(.cancelAction)
                     .disabled(model.loginController.isRunning)
                     .controlSize(.small)
@@ -1201,8 +1216,7 @@ struct ConnectionCenterContent: View {
                             && model.loginController.operation == .connect
                         Button(L10n.string(signedIn ? "Use this account" : "Back")) {
                             if signedIn {
-                                let binding = model.activeConnection.flatMap { active in connections.connections.first { $0.id == active.id } }
-                                connections.selection[descriptor.id] = binding?.id
+                                model.useFinishedSignIn()
                                 model.closeConsole()
                                 onFinish()
                             } else {

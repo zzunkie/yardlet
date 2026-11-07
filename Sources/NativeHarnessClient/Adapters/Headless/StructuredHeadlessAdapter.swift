@@ -836,15 +836,15 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
 
     /// One listing command run off the actor, so several can run side by side.
     nonisolated static func runCatalogCommand(
-        _ executableURL: URL, _ arguments: [String], workspaceURL: URL
+        _ executableURL: URL, _ arguments: [String], workspaceURL: URL, environment: [String: String] = [:]
     ) async -> Result<CatalogOutput, any Error> {
         await Task.detached {
-            Result { try runCatalogCommandSync(executableURL, arguments, workspaceURL: workspaceURL) }
+            Result { try runCatalogCommandSync(executableURL, arguments, workspaceURL: workspaceURL, environment: environment) }
         }.value
     }
 
     nonisolated static func runCatalogCommandSync(
-        _ executableURL: URL, _ arguments: [String], workspaceURL: URL
+        _ executableURL: URL, _ arguments: [String], workspaceURL: URL, environment: [String: String] = [:]
     ) throws -> CatalogOutput {
         let process = Process()
         let outputPipe = Pipe()
@@ -856,7 +856,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
         process.standardError = errorPipe
         // A listing command left holding an inherited input waits on it (CLI 1.1.23).
         process.standardInput = FileHandle.nullDevice
-        process.environment = RuntimeProcessEnvironment.values(executableURL: executableURL)
+        process.environment = RuntimeProcessEnvironment.values(executableURL: executableURL, overrides: environment)
         try NativeProcessTree.run(process)
         let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
         let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()

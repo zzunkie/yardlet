@@ -62,6 +62,57 @@ final class ComposerModelMenuWindowTests: XCTestCase {
         }
     }
 
+    /// A first run knows no Antigravity models until `agy models` answers. The menu says when it has
+    /// not, and Retry reads the list again.
+    func testAMenuWithNoListSaysSoAndRetryReadsItAgain() throws {
+        let fixture = try CatalogFixture(arrival: .whenOpened, in: self)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("ModelMenuWindow")))
+        let runtimes = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
+        // A runtime is known for its harness by its name.
+        let agy = fixture.root.appending(path: "agy")
+        try Data("#!/bin/sh\n".utf8).write(to: agy)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agy.path)
+        runtimes.select(agy, for: .antigravityCLI)
+        let connections = ProviderConnectionStore()
+        connections.usesFixtureSnapshots = true
+        let project = Project(name: "yardlet-sandbox", primaryRoot: fixture.root)
+        let draft = NewTaskDraft()
+        draft.workspaceURL = fixture.root
+        draft.projectID = project.id
+        draft.harness = .antigravityCLI
+        var reads = 0
+        let view = NewTaskHome(recentSessions: [], projects: [project], draft: draft, runtimeSelections: runtimes,
+            connections: connections,
+            models: NewTaskModelSource(catalogs: fixture.catalogs) { _, _, _, _ in
+                reads += 1
+                if reads > 1 { fixture.catalogs.recordAntigravity([HarnessModelOption(value: "fixture-pro", name: "Fixture Pro")]) }
+            },
+            onSelectSession: { _ in }, onChooseWorkspace: { _ in }, onShowHarnesses: {}, onCreate: { _ in nil })
+        let size = NSSize(width: 1500, height: 640)
+        let host = WindowlessRender.Host(view.frame(width: size.width, height: size.height), size: size)
+        defer {
+            host.close()
+            host.settle(passes: 2)
+        }
+        host.window.alphaValue = 0
+        host.window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
+        host.window.orderFrontRegardless()
+        host.settle()
+
+        let trigger = try XCTUnwrap(host.hosting.accessibilityElement(labelled: L10n.string("Model")))
+        XCTAssertTrue(trigger.accessibilityPerformPress?() ?? false)
+        let empty = try XCTUnwrap(waitForPopover(of: host, rows: [L10n.string("Retry")]))
+        XCTAssertEqual(reads, 1)
+        XCTAssertEqual(empty.buttons(in: [L10n.string("Retry")]), [L10n.string("Retry")])
+        try empty.write("antigravity no list")
+
+        let retry = try XCTUnwrap(empty.content.accessibilityElement(labelled: L10n.string("Retry")))
+        XCTAssertTrue(retry.accessibilityPerformPress?() ?? false)
+        let listed = try XCTUnwrap(waitForPopover(of: host, rows: [L10n.string("Model")]))
+        XCTAssertEqual(reads, 2)
+        XCTAssertEqual(listed.buttons(in: [L10n.string("Retry")]), [])
+    }
+
     /// Task › Select model (⌃⇧M, the Codex app's `composer.openModelPicker`) asks the shown task's
     /// keyboard focus for the model menu, and the composer's control opens it at the effort; the
     /// session rail's copy of the control does not take the request.

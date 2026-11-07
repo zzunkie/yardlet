@@ -42,8 +42,11 @@ struct ComposerModelControl: View {
                 } else if isLoading {
                     ProgressView().controlSize(.small).frame(maxWidth: .infinity).padding(16)
                 } else {
-                    Button(L10n.string("Retry")) { Task { await load() } }
-                        .parityPointer().frame(maxWidth: .infinity).padding(12)
+                    VStack(spacing: 8) {
+                        Text(L10n.string("Models unavailable")).font(.caption).foregroundStyle(.secondary)
+                        Button(L10n.string("Retry")) { Task { await load() } }.parityPointer()
+                    }
+                    .frame(maxWidth: .infinity).padding(12)
                 }
             }
             .frame(width: 284)

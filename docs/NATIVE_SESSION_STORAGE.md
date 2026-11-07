@@ -815,9 +815,10 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
 - **Title:** the pull path for task titles (`ProviderSessionTitleResolver`) reads `title` from the index. It is not read
   before a print-mode task's first turn (local placeholder ID).
 - **Model list:** the collapsed model list a task read is kept in `antigravity` of `model-catalogs.json` (an optional
-  field that earlier builds ignore), and the new task view uses it. Over ACP it is the session's
-  `models.availableModels`, collapsed the same way, from the last task that attached: the new task view starts no session
-  of its own to read it, since every ACP session is a conversation the CLI keeps.
+  field that earlier builds ignore), and the new task view uses it. Over ACP a task reports the session's
+  `models.availableModels`, collapsed the same way. Before any task has, opening the new task view's model menu reads
+  `agy models`, which names the same models and starts no session, since every ACP session is a conversation the CLI
+  keeps.
 - Native conversations, the index, logs, settings and credentials are not copied, moved or modified, and reading alone
   causes no model turn, attach or authentication change.
 

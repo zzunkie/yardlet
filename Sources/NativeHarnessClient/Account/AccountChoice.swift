@@ -26,10 +26,13 @@ struct AccountChoice: Identifiable, Equatable {
         AccountIdentityProjection.organizationTitle(snapshot?.accountOrganization, of: snapshot?.accountLabel)
     }
     /// How a composer's account control names the account a new task starts on: the account,
-    /// or what keeps it from being chosen, or that it is still being checked.
+    /// or what keeps it from being chosen, or that it is still being checked. A name read from a
+    /// config file on a login its CLI could not vouch for is no account yet: its list row and the
+    /// control's help keep the name, beside this status.
     var composerTitle: String {
         guard canSelect else { return status }
         if snapshot == nil, knownLabel == nil, connection == nil { return L10n.string("Checking account…") }
+        if snapshot?.state == .unknown, snapshot?.accountLabel != nil { return status }
         return title
     }
     /// How this row names itself under an account block: the connection the user

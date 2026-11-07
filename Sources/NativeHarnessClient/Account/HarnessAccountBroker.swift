@@ -480,8 +480,14 @@ actor HarnessAccountBroker {
     /// prompt; the credential is elsewhere. Nil for a config folder with no account in it.
     private func claudeConfigIdentity() -> ClaudeAccountIdentity? {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let folder = connection?.homePath.map { URL(filePath: $0) } ?? home.appending(path: ".claude")
+        let folder = claudeConfigFolder.map { URL(filePath: $0) } ?? home.appending(path: ".claude")
         return Self.claudeConfigIdentity(file: NativeMCPHome.claudeConfigFile(configDirectory: folder, homeURL: home))
+    }
+
+    /// What `CLAUDE_CONFIG_DIR` is for this login's CLI: a saved account's folder, or the value the
+    /// app runs the default login with. Nil for `~/.claude`.
+    private var claudeConfigFolder: String? {
+        connection?.homePath ?? RuntimeProcessEnvironment.app["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : $0 }
     }
 
     static func claudeConfigIdentity(file: URL) -> ClaudeAccountIdentity? {
@@ -509,7 +515,7 @@ actor HarnessAccountBroker {
         guard AccountCheckLog.fileURL != nil else { return }
         let milliseconds = AccountCheckLog.milliseconds(since: started)
         var entry = AccountCheckLog.Entry(harness: HarnessKind.claudeCode.rawValue, account: connection?.id ?? "default",
-            runtime: runtime.path(percentEncoded: false), configHome: connection?.homePath ?? "default",
+            runtime: runtime.path(percentEncoded: false), configHome: claudeConfigFolder ?? "default",
             state: state?.rawValue, exitCode: result?.exitCode, milliseconds: milliseconds, failure: failure)
         if let result {
             let fields = Self.claudeStatusFields(from: result.output)
@@ -518,7 +524,7 @@ actor HarnessAccountBroker {
         }
         if state != .signedIn {
             let looked = ContinuousClock.now
-            entry.credentialItem = Self.claudeCredentialItem(configDirectory: connection?.homePath)
+            entry.credentialItem = Self.claudeCredentialItem(configDirectory: claudeConfigFolder)
             entry.credentialItemMilliseconds = AccountCheckLog.milliseconds(since: looked)
             entry.shellVariables = LoginShellPath.claudeSignInVariables
         }
@@ -1022,6 +1028,8 @@ actor HarnessAccountBroker {
     ) -> HarnessAccountSnapshot {
         let accountValue = account?["account"]
         let signedIn = codexAccountIsSignedIn(account)
+        // A provider of the person's own (`requires_openai_auth` off) runs Codex with no account here.
+        let needsSignIn = !signedIn && account?["requiresOpenaiAuth"]?.boolValue != false
         let email = accountValue?["email"]?.stringValue
         let plan = accountValue?["planType"]?.stringValue
         let usage = codexRateLimitUsage(from: rateLimits)
@@ -1030,11 +1038,11 @@ actor HarnessAccountBroker {
             id: HarnessKind.codex.rawValue,
             harness: .codex,
             providerID: accountValue?["type"]?.stringValue == "apiKey" ? "openai" : "openai-codex",
-            state: signedIn ? .signedIn : .signedOut,
+            state: signedIn ? .signedIn : needsSignIn ? .signedOut : .unknown,
             accountLabel: email,
             accountPlan: plan.map { L10n.format("ChatGPT %@ plan", planName($0)) },
             detail: plan.map { L10n.format("ChatGPT %@ plan", planName($0)) }
-                ?? L10n.string("Codex App Server account"),
+                ?? (needsSignIn ? ProviderSignIn.neededHere(.codex) : L10n.string("Codex App Server account")),
             credentialOwner: L10n.string("Codex CLI / system credential store"),
             checkedAt: Date(),
             usage: usage.isEmpty ? [
@@ -1053,7 +1061,7 @@ actor HarnessAccountBroker {
                 resets.restores = usage.filter { $0.evidence == .exactQuota && $0.id.hasPrefix("codex:") }.map(\.id)
                 return resets
             } : nil,
-            canLogin: !signedIn,
+            canLogin: needsSignIn,
             canLogout: signedIn
         )
     }

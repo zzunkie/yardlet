@@ -261,6 +261,12 @@ final class NewTaskDraft {
         return submission
     }
 
+    /// What stopped the last start no longer stands.
+    func clearFailure() {
+        creationFailed = false
+        creationError = nil
+    }
+
     func complete(_ submission: Submission, succeeded: Bool, error: String? = nil) {
         guard pendingSubmission?.id == submission.id else { return }
         pendingSubmission = nil

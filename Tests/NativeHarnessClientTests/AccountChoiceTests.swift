@@ -44,6 +44,195 @@ import XCTest
         XCTAssertEqual(store.selection[.claudeCode], saved.id, "And new tasks start on it at once")
     }
 
+    /// A name read from a config file, on a login its CLI could not vouch for, does not stand as the
+    /// account a task starts on. The list keeps it beside the status, so rows stay grouped by account.
+    func testANameFromAConfigFileIsNoAccountUntilTheCLIVouchesForIt() throws {
+        let choice = AccountChoice(harness: .claudeCode, connection: nil, snapshot: snapshot(.claudeCode, state: .unknown))
+        XCTAssertEqual(choice.composerTitle, L10n.string("Status not verified"))
+        XCTAssertEqual(choice.title, "owner@example.test")
+        XCTAssertEqual(choice.status, L10n.string("Status not verified"))
+        XCTAssertEqual(ProviderConnectionDisplay(choice: choice).accessibilityTitle, "owner@example.test")
+        XCTAssertEqual(AccountChoice(harness: .claudeCode, connection: nil, snapshot: snapshot(.claudeCode)).composerTitle,
+                       "owner@example.test")
+    }
+
+    /// A sign-in can finish before a login's first reading, so the tasks waiting for it hear of it too,
+    /// told that the login was not known before.
+    func testASignInIsAnnouncedEvenAheadOfTheFirstReading() {
+        let store = ProviderConnectionStore()
+        var announced: [Bool] = []
+        store.onSignedIn = { _, _, isFirstReading in announced.append(isFirstReading) }
+        store.publishDefaults([snapshot(.claudeCode)])
+        XCTAssertEqual(announced, [true])
+        store.publishDefaults([snapshot(.claudeCode)])
+        XCTAssertEqual(announced, [true], "Still signed in is no sign-in")
+        store.publishDefaults([snapshot(.claudeCode, state: .signedOut, email: nil)])
+        store.publishDefaults([snapshot(.claudeCode)])
+        XCTAssertEqual(announced, [true, false])
+    }
+
+    private nonisolated static func login(_ harness: HarnessKind, state: AccountAuthState) -> HarnessAccountSnapshot {
+        HarnessAccountSnapshot(id: harness.rawValue, harness: harness, providerID: nil, state: state, accountLabel: nil,
+            detail: "Provider observation", credentialOwner: harness.displayName, checkedAt: Date(), usage: [],
+            canLogin: state != .signedIn, canLogout: state == .signedIn)
+    }
+
+    /// What a harness's own login check answers is what `createTask` hears from the fixture below.
+    private actor Reading {
+        var state: AccountAuthState
+        init(_ state: AccountAuthState) { self.state = state }
+        func set(_ state: AccountAuthState) { self.state = state }
+    }
+
+    private func signInFixture(_ harness: HarnessKind, connections: ProviderConnectionStore)
+        throws -> (model: AppModel, adapter: SuggestionRecordingAdapter, draft: NewTaskDraft) {
+        let root = FileManager.default.temporaryDirectory.appending(path: "sign-in-start-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let defaults = SuggestionVolatileDefaults()
+        let runtimes = RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false)
+        runtimes.select(URL(filePath: "/usr/bin/true"), for: harness)
+        let adapter = SuggestionRecordingAdapter()
+        let model = AppModel(store: SessionStore(repository: InMemorySessionRepository()), runtimeSelections: runtimes,
+            registry: HarnessRegistry { _, _ in adapter }, connections: connections, preferences: defaults,
+            codexHistorySelectionRepository: UserDefaultsCodexHistorySelectionRepository(defaults: defaults),
+            chatWorkspaceHome: root.appending(path: "home", directoryHint: .isDirectory), sessionTitleResolver: { _ in nil },
+            sessionTitleRetryCount: 0, restoresIndexOnLaunch: false)
+        addTeardownBlock { await model.shutdown() }
+        let draft = NewTaskDraft()
+        draft.text = "Explain the build"
+        draft.harness = harness
+        draft.workspaceURL = root
+        return (model, adapter, draft)
+    }
+
+    private func loginStore(answering reading: Reading, harness: HarnessKind) -> ProviderConnectionStore {
+        ProviderConnectionStore(defaultLoader: { _, _ in
+            await Self.login(harness, state: reading.state)
+        })
+    }
+
+    private func start(_ fixture: (model: AppModel, adapter: SuggestionRecordingAdapter, draft: NewTaskDraft)) async throws
+        -> SessionRecord? {
+        let submission = try XCTUnwrap(fixture.draft.beginSubmission(runtimeURL: URL(filePath: "/usr/bin/true")))
+        defer { fixture.draft.complete(submission, succeeded: false) }
+        return try await fixture.model.createTask(submission)
+    }
+
+    /// A login read as signed out stops a new task before it exists, so the person stays on the
+    /// new-task screen with their draft. A reading the CLI no longer agrees with stops nothing, and
+    /// neither does one that does not speak for how the harness runs.
+    func testANewTaskStopsOnlyOnALoginThatIsStillSignedOut() async throws {
+        for harness in [HarnessKind.claudeCode, .codex, .antigravityCLI] {
+            let reading = Reading(.signedOut)
+            let store = loginStore(answering: reading, harness: harness)
+            store.publishDefaults([snapshot(harness, state: .signedOut, email: nil)])
+            let fixture = try signInFixture(harness, connections: store)
+            do {
+                _ = try await start(fixture)
+                XCTFail("\(harness) started signed out")
+            } catch {
+                XCTAssertTrue(error is HarnessSignInRequired, "\(harness): \(error)")
+            }
+            XCTAssertTrue(fixture.model.store.sessions.isEmpty, "\(harness) made no task")
+
+            // Signed in from Terminal since the last reading: the start reads the login again.
+            await reading.set(.signedIn)
+            let created = try await start(fixture)
+            XCTAssertNotNil(created, "\(harness) starts on the login as it is now")
+        }
+
+        // OpenCode runs on a key in its environment with no connection saved.
+        let store = loginStore(answering: Reading(.signedOut), harness: .openCode)
+        store.publishDefaults([snapshot(.openCode, state: .signedOut, email: nil)])
+        let created = try await start(try signInFixture(.openCode, connections: store))
+        XCTAssertNotNil(created)
+
+        // A check that could not finish vouches for nothing either way.
+        let unverified = loginStore(answering: Reading(.unknown), harness: .claudeCode)
+        unverified.publishDefaults([snapshot(.claudeCode, state: .unknown, email: nil)])
+        let started = try await start(try signInFixture(.claudeCode, connections: unverified))
+        XCTAssertNotNil(started)
+    }
+
+    /// In a first run's first seconds the check under way gets a moment; one that takes longer holds
+    /// nothing up.
+    func testANewTaskWaitsAMomentForAFirstReading() async throws {
+        func answeringStore() -> (ProviderConnectionStore, AsyncStream<AccountAuthState>.Continuation) {
+            let (answers, answer) = AsyncStream<AccountAuthState>.makeStream()
+            return (ProviderConnectionStore(defaultLoader: { _, _ in
+                var iterator = answers.makeAsyncIterator()
+                return await Self.login(.claudeCode, state: iterator.next() ?? .unknown)
+            }), answer)
+        }
+        let (store, answer) = answeringStore()
+        let fixture = try signInFixture(.claudeCode, connections: store)
+        fixture.model.firstReadingWait = testWaitLimit
+        let runtimes = fixture.model.runtimeSelections
+        let launch = Task { await store.check(defaultsOf: [.claudeCode], savedOf: [], runtimeSelections: runtimes) }
+        try await waitUntil { store.isCheckingDefault(.claudeCode) }
+        let starting = Task { [fixture] in try await self.start(fixture) }
+        // The first check's answer, then the same again when the start reads the login once more.
+        answer.yield(.signedOut)
+        answer.yield(.signedOut)
+        await launch.value
+        do {
+            _ = try await starting.value
+            XCTFail("Started on a login the first check read as signed out")
+        } catch {
+            XCTAssertTrue(error is HarnessSignInRequired, "\(error)")
+        }
+        XCTAssertTrue(fixture.model.store.sessions.isEmpty)
+
+        let (slowStore, slowAnswer) = answeringStore()
+        let slowFixture = try signInFixture(.claudeCode, connections: slowStore)
+        slowFixture.model.firstReadingWait = .milliseconds(30)
+        let slowRuntimes = slowFixture.model.runtimeSelections
+        let slowLaunch = Task { await slowStore.check(defaultsOf: [.claudeCode], savedOf: [], runtimeSelections: slowRuntimes) }
+        try await waitUntil { slowStore.isCheckingDefault(.claudeCode) }
+        let created = try await start(slowFixture)
+        XCTAssertNotNil(created, "A check that takes longer stops nothing")
+        slowAnswer.yield(.signedIn)
+        await slowLaunch.value
+    }
+
+    /// A Codex thread opens with no login and what a task reads from one keeps working, so it is the
+    /// turn that stops. After the sign-in the failed task is ready again.
+    func testACodexTurnStopsAtASignedOutReadingAndItsTaskIsReadyAfterTheSignIn() async throws {
+        let store = loginStore(answering: Reading(.signedOut), harness: .codex)
+        store.publishDefaults([snapshot(.codex, state: .signedOut, email: nil)])
+        let fixture = try signInFixture(.codex, connections: store)
+        let model = fixture.model
+        let made = await model.createSession(harness: .codex, workspaceURL: fixture.draft.workspaceURL!,
+                                             runtimeExecutableURL: URL(filePath: "/usr/bin/true"), title: "Failed")
+        let task = try XCTUnwrap(made, model.bootstrapError ?? "Missing task")
+        XCTAssertTrue(model.isAttached(task.id), "The thread opened without a login")
+        await model.send("Hello", to: task)
+        let prompts = await fixture.adapter.prompts
+        XCTAssertTrue(prompts.isEmpty, "No turn started")
+        XCTAssertEqual(model.errorBySessionID[task.id], ProviderSignIn.prompt)
+        XCTAssertEqual(model.store.sessions.first { $0.id == task.id }?.status, .failed)
+
+        await model.continueTasks(afterSignInOf: .codex, connection: nil, isFirstReading: true)
+        XCTAssertNil(model.errorBySessionID[task.id])
+        XCTAssertEqual(model.store.sessions.first { $0.id == task.id }?.status, .ready)
+    }
+
+    /// A sign-in ends each idle CLI on the login, since one that found none keeps running on that
+    /// answer. A login's first reading says nothing about them, so they run on.
+    func testOnlyASignInAfterAKnownReadingEndsIdleCLIs() async throws {
+        let fixture = try signInFixture(.claudeCode, connections: ProviderConnectionStore())
+        let model = fixture.model
+        let made = await model.createSession(harness: .claudeCode, workspaceURL: fixture.draft.workspaceURL!,
+                                             runtimeExecutableURL: URL(filePath: "/usr/bin/true"), title: "Idle")
+        let task = try XCTUnwrap(made, model.bootstrapError ?? "Missing task")
+        XCTAssertTrue(model.isAttached(task.id))
+        await model.continueTasks(afterSignInOf: .claudeCode, connection: nil, isFirstReading: true)
+        XCTAssertTrue(model.isAttached(task.id))
+        await model.continueTasks(afterSignInOf: .claudeCode, connection: nil)
+        XCTAssertFalse(model.isAttached(task.id))
+    }
+
     /// The account of a login with no address comes from the config file, and only the account.
     func testAClaudeConfigFileNamesItsAccountWithoutTheCLI() throws {
         let file = FileManager.default.temporaryDirectory.appending(path: "claude-config-\(UUID().uuidString).json")

@@ -747,7 +747,9 @@ private struct NewTaskComposer: View {
     }
 
     /// The account the next task starts on, when it has to be signed in to first. Said before the
-    /// first message rather than as that message's failure.
+    /// first message rather than as that message's failure. Start stays on: a sign-in made in
+    /// Terminal is not known here yet, and `AppModel.createTask` reads the login again and keeps the
+    /// person on this screen when it is still missing.
     private var accountNeedingSignIn: AccountChoice? {
         guard let harness = draft.harness, let connections, runtimeURL != nil, !startsOnAutomaticAccount,
               let choice = connections.choices(for: [harness]).first(where: { $0.connection?.id == connections.selection[harness] }),
@@ -899,6 +901,10 @@ private struct NewTaskComposer: View {
         }
         .onChange(of: projects.map(\.id), initial: true) { _, _ in
             draft.dropUnavailableProject(visible: projects)
+        }
+        // A start stopped for its sign-in is over once the sign-in is done or another account chosen.
+        .onChange(of: accountNeedingSignIn == nil) { _, needsNone in
+            if needsNone { draft.clearFailure() }
         }
     }
 
