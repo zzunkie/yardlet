@@ -708,7 +708,8 @@ hidden by its engine while Yardlet takes it as shown, and two tabs in turn. Each
 page with a 2D canvas, a WebGL canvas and a video, in an agent's tab no panel ever showed: hidden and then watched, at
 the sizes a side panel or a phone asks for, reloaded, while other tasks' tabs hid after it and memory is critical, and
 after a handoff in a task the host's window does not show. Each picture must hold the page's colors at their places, and
-the window another Mac opens over loopback must draw them in its panel, in light and dark.
+the window another Mac opens over loopback must draw them in its panel, in light and dark, at the panel's size, which
+the picture follows when the panel resizes.
 
 `--ui-fixture-browser-check-only=browser-use` (2026-10-26, `BrowserHostBrowserUseQA`) checks the agent's use of the
 browser: screen size emulation (presets, kept after a new load, reference clicks, screenshot size, color scheme, kept

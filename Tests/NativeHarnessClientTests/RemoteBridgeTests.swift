@@ -1484,6 +1484,12 @@ final class RemoteBridgeTests: XCTestCase {
         try await waitUntilAsync { tab.emulation?.owner == .remote }
         await tab.endAgentEmulation()
         XCTAssertEqual(tab.emulation?.owner, .remote, "the agent's turn ending leaves the phone's size")
+        // A size set during the watch goes back to the watch's, not to the tab's own, as a panel's picture must keep filling it.
+        tab.noteAgentActivity()
+        try await tab.emulate(BrowserViewportEmulation(width: 1024, height: 768, owner: .agent))
+        await tab.endAgentEmulation()
+        XCTAssertEqual(tab.emulation?.owner, .remote)
+        XCTAssertEqual(metrics().last, .integer(390))
         await bridge.setWatchedTabs([])
         try await waitUntilAsync { tab.emulation == nil && metrics().last == .string("cleared") }
     }

@@ -25,8 +25,8 @@ extension RemoteProtocol {
     public static let maxPendingTabInputs = 32
 }
 
-/// The size a client asks a watched tab to be drawn at while it watches (a phone's screen), in CSS pixels; `mobile`
-/// draws it as a phone (touch, a phone's user agent), as the agent's `browser_resize` does.
+/// The size a client asks a watched tab to be drawn at while it watches (a phone's screen, another computer's panel), in
+/// CSS pixels; `mobile` draws it as a phone (touch, a phone's user agent), as the agent's `browser_resize` does.
 public struct RemoteTabViewport: Codable, Hashable, Sendable {
     public var width: Int
     public var height: Int
