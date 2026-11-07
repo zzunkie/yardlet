@@ -23,14 +23,13 @@ public final class RemoteRelayClient: @unchecked Sendable {
     private let baseURL: URL
     /// Another address of the same relay, raced against `baseURL` on every attempt (§14.2).
     private let alternateURL: URL?
-    private let session: URLSession
     private let joinsPieces: Bool
     private let queue = DispatchQueue(label: "yardlet.remote.relay")
-    private var task: URLSessionWebSocketTask?
+    private var task: RemoteClientWebSocket?
     /// One of the attempt's sockets, the address it went to, and the piece of a relay message it holds: each socket
     /// is a stream of its own, so a piece joins only the next one from the same socket (`RemoteFramePieces`).
     private struct Entrant {
-        let task: URLSessionWebSocketTask
+        let task: RemoteClientWebSocket
         let address: URL
         var text: RemoteFramePieces
     }
@@ -49,7 +48,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
     private var heldStream: RemoteSecureConnection?
     static let textLimit = 64 * 1024
     /// What waits for the socket, in order, and the phone each message is for.
-    private var outbox: [(message: URLSessionWebSocketTask.Message, stream: UInt32?, bytes: Int)] = []
+    private var outbox: [(message: RemoteClientWebSocket.Message, stream: UInt32?, bytes: Int)] = []
     /// Bytes each phone has waiting in `outbox` or on its way into the socket.
     private var unsent: [UInt32: Int] = [:]
     private var isSending = false
@@ -75,12 +74,11 @@ public final class RemoteRelayClient: @unchecked Sendable {
     static let stableAfter: TimeInterval = 10
 
     public init(server: RemoteServer, identity: RemoteIdentity, baseURL: URL, alternateURL: URL? = nil,
-                session: URLSession = .shared, joinsPieces: Bool = RemoteFramePieces.platformSplitsFrames) {
+                joinsPieces: Bool = RemoteFramePieces.platformSplitsFrames) {
         self.server = server
         self.identity = identity
         self.baseURL = baseURL
         self.alternateURL = alternateURL
-        self.session = session
         self.joinsPieces = joinsPieces
         framePieces = RemoteFramePieces(limit: 4 + RemoteNoise.maxMessageLength, joinsPieces: joinsPieces)
         textPieces = RemoteFramePieces(limit: Self.textLimit, joinsPieces: joinsPieces)
@@ -139,8 +137,8 @@ public final class RemoteRelayClient: @unchecked Sendable {
         heldStream = nil
         update(.connecting)
         racing = ([baseURL] + [alternateURL].compactMap { $0 }).map { address in
-            let task = session.remoteWebSocketTask(with: Self.hostURL(base: address, room: identity.room))
-            task.maximumMessageSize = RemoteNoise.maxMessageLength + 4 + 64 * 1024
+            let task = RemoteClientWebSocket.connecting(to: Self.hostURL(base: address, room: identity.room),
+                                                  maximumMessageSize: RemoteNoise.maxMessageLength + 4 + 64 * 1024)
             task.resume()
             return Entrant(task: task, address: address, text: RemoteFramePieces(limit: Self.textLimit, joinsPieces: joinsPieces))
         }
@@ -172,7 +170,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
         if state == .connected, let task { enqueue(.string("ping"), on: task) }
     }
 
-    private func receive(on task: URLSessionWebSocketTask, generation current: Int) {
+    private func receive(on task: RemoteClientWebSocket, generation current: Int) {
         task.receive { [weak self] result in
             guard let self else { return }
             self.queue.async {
@@ -203,7 +201,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
         }
     }
 
-    private func handle(_ message: URLSessionWebSocketTask.Message, on task: URLSessionWebSocketTask) {
+    private func handle(_ message: RemoteClientWebSocket.Message, on task: RemoteClientWebSocket) {
         switch message {
         case let .data(piece):
             guard state == .connected else { return }
@@ -245,7 +243,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
     }
 
     /// A whole relay message the room's socket brought.
-    private func handleRelayText(_ text: String, on task: URLSessionWebSocketTask) {
+    private func handleRelayText(_ text: String, on task: RemoteClientWebSocket) {
         guard text != "pong" else { return }
         guard let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
               let type = object["t"] as? String else { return }
@@ -298,7 +296,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
 
     /// A message one of the attempt's sockets brought. The first socket whose message reads (the relay's challenge,
     /// pieces of it joined on that socket alone) becomes the room's socket and the others close.
-    private func race(_ task: URLSessionWebSocketTask, _ message: URLSessionWebSocketTask.Message) -> RaceStep {
+    private func race(_ task: RemoteClientWebSocket, _ message: RemoteClientWebSocket.Message) -> RaceStep {
         guard let index = racing.firstIndex(where: { $0.task === task }) else { return .gone }
         var text: String?
         if case let .string(piece) = message {
@@ -320,7 +318,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
 
     /// One of the attempt's sockets ended. Once all have ended the attempt failed, for `baseURL`'s reason when it
     /// ended.
-    private func leaveRace(_ task: URLSessionWebSocketTask, error: Error) {
+    private func leaveRace(_ task: RemoteClientWebSocket, error: Error) {
         guard let index = racing.firstIndex(where: { $0.task === task }) else { return }
         let address = racing[index].address
         racing.remove(at: index)
@@ -362,9 +360,9 @@ public final class RemoteRelayClient: @unchecked Sendable {
     }
 
     /// How a socket ended, for the log: the relay's close code and reason when it sent one, and the error.
-    private static func ending(of task: URLSessionWebSocketTask, error: Error) -> String {
+    private static func ending(of task: RemoteClientWebSocket, error: Error) -> String {
         let code = task.closeCode.rawValue
-        guard code != URLSessionWebSocketTask.CloseCode.invalid.rawValue else { return RemoteLog.error(error) }
+        guard code != RemoteClientWebSocket.CloseCode.invalid.rawValue else { return RemoteLog.error(error) }
         let reason = task.closeReason.map { String(decoding: $0.prefix(123), as: UTF8.self) } ?? ""
         return "close code \(code) \"\(reason)\", \(RemoteLog.error(error))"
     }
@@ -395,13 +393,13 @@ public final class RemoteRelayClient: @unchecked Sendable {
 
     // MARK: - Sending (in order, one at a time)
 
-    private func enqueue(_ message: URLSessionWebSocketTask.Message, on task: URLSessionWebSocketTask,
+    private func enqueue(_ message: RemoteClientWebSocket.Message, on task: RemoteClientWebSocket,
                          stream: UInt32? = nil, bytes: Int = 0) {
         outbox.append((message, stream, bytes))
         pump(task)
     }
 
-    private func pump(_ task: URLSessionWebSocketTask) {
+    private func pump(_ task: RemoteClientWebSocket) {
         guard !isSending, task === self.task, !outbox.isEmpty else { return }
         isSending = true
         let next = outbox.removeFirst()
