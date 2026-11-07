@@ -2301,6 +2301,15 @@ final class SessionToolTests: XCTestCase {
         XCTAssertTrue(AppModel.agentRunResultText(run).contains("\n" + elsewhere + "\n"), "A foreground call's answer says it too")
         let fromCodex = await call(model, "list_accounts", ["harness": "codex"], from: fixture.caller)
         XCTAssertFalse(fromCodex.text.contains("roomElsewhere"), "Codex has room of its own")
+        let onClaudeModel = await call(model, "list_accounts", ["harness": "antigravity-cli", "model": "claude-opus-5-5"],
+                                       from: fixture.caller)
+        XCTAssertFalse(onClaudeModel.text.contains("nearly out"), "Only the Gemini group is spent: \(onClaudeModel.text)")
+        XCTAssertTrue(onClaudeModel.text.contains("Claude and GPT · 7 day limit 0% used"), onClaudeModel.text)
+        let onGeminiModel = await call(model, "list_accounts", ["harness": "antigravity-cli", "model": "gemini-4-argon"],
+                                       from: fixture.caller)
+        XCTAssertTrue(onGeminiModel.text.contains("Every Antigravity CLI account is nearly out. Room elsewhere: Codex"), onGeminiModel.text)
+        let onUnknownModel = await call(model, "list_accounts", ["harness": "antigravity-cli"], from: fixture.caller)
+        XCTAssertTrue(onUnknownModel.text.contains("Every Antigravity CLI account is nearly out."), onUnknownModel.text)
 
         store.setInAutomaticAssignment(false, for: try XCTUnwrap(store.choices(for: [.codex]).first))
         let withoutCodex = await call(model, "list_accounts", [:], from: fixture.caller)

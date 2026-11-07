@@ -11,12 +11,13 @@ import Foundation
 /// without a harness or an account.
 ///
 /// The rule, in order:
-/// 1. Each window that applies (every window without a model, and a model's own window when the
-///    task's model is that model or is not known) gives its share left, or all of it once its reset
-///    has passed. Divided by the share of the window's time still to run, that is its pace: 1 spends
-///    the window evenly to its reset, more is room that a reset soon would otherwise waste. The
-///    account's headroom is its smallest pace, divided by one more than the tasks running on it, so
-///    several tasks started at once spread over the accounts.
+/// 1. Each window that applies (every window without a model or a group of models, a model's own
+///    window when the task's model is that model or is not known, and a group's window when the task's
+///    model is in that group or in no group of the reading) gives its share left, or all of it once
+///    its reset has passed. Divided by the share of the window's time still to run, that is its pace:
+///    1 spends the window evenly to its reset, more is room that a reset soon would otherwise waste.
+///    The account's headroom is its smallest pace, divided by one more than the tasks running on it,
+///    so several tasks started at once spread over the accounts.
 /// 2. An account with any window at or under `nearlySpentFraction` left (and not yet reset) is
 ///    nearly spent; it is chosen only when every account is, the one that frees up first.
 /// 3. An account with no reading comes after the ones with room and before the nearly spent.
@@ -86,7 +87,7 @@ enum AccountRouting {
     /// The windows of `usage` that apply to a task on `model`, with their pace at `now`; nil when the
     /// reading has no plan limit.
     static func headroom(of usage: [AccountUsageMetric], model: String?, now: Date) -> Headroom? {
-        let windows = usage.filter { $0.evidence == .exactQuota && applies($0, to: model) }
+        let windows = limits(of: usage.filter { $0.evidence == .exactQuota }, stopping: model)
             .compactMap { metric -> Window? in
                 guard let used = metric.usedFraction, used.isFinite else { return nil }
                 let hasReset = metric.resetsAt.map { $0 <= now } ?? false
@@ -110,6 +111,26 @@ enum AccountRouting {
         }
         guard let model = model?.trimmingCharacters(in: .whitespaces).lowercased(), !model.isEmpty else { return true }
         return model.contains(scoped) || scoped.contains(model)
+    }
+
+    /// The limits of `usage` that stop a task on `model`. A model in a group the reading names is
+    /// stopped by that group's limits and no other group's; a model in none of them, because it is not
+    /// known or the reading leaves its group out, could be in any, so every group's count.
+    private static func limits(of usage: [AccountUsageMetric], stopping model: String?) -> [AccountUsageMetric] {
+        let groups = Set(usage.compactMap(\.modelGroup).filter { covers($0, model) })
+        return usage.filter { metric in
+            applies(metric, to: model) && (groups.isEmpty || metric.modelGroup.map(groups.contains) ?? true)
+        }
+    }
+
+    /// Whether `model` is in a group, which is named by the families in it ("Claude and GPT",
+    /// "Gemini", "Spark"). The rest of a model's name is the provider's.
+    private static func covers(_ group: String, _ model: String?) -> Bool {
+        guard let model = model?.trimmingCharacters(in: .whitespaces).lowercased() else { return false }
+        return group.lowercased().components(separatedBy: " and ").contains { family in
+            let family = family.trimmingCharacters(in: .whitespaces)
+            return !family.isEmpty && model.contains(family)
+        }
     }
 
     /// The account a task on `model` starts on, or nil when there is no candidate.

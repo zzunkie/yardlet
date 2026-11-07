@@ -48,7 +48,7 @@ struct AccountUsageMetric: Identifiable, Codable, Equatable, Sendable {
     var model: String? = nil
     /// The group of models a limit covers, for a harness that keeps its limits by group and names the
     /// group rather than a model (Antigravity's "Claude and GPT", one of several Codex buckets). The
-    /// window's `label` starts with it. Only `AccountRouting.mostRoom` reads it.
+    /// window's `label` starts with it. `AccountRouting` reads it, to count the limit only for those models.
     var modelGroup: String? = nil
 }
 

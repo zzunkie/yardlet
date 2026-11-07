@@ -65,15 +65,53 @@ import XCTest
         XCTAssertEqual(AccountRouting.pick(candidates, model: nil, now: now)?.choice.id, "half")
     }
 
+    /// A limit of a group of models counts for a task on a model in that group, and not for one in
+    /// another group. A model in no group of the reading could be in any, so every group's limit counts;
+    /// a limit without a group counts for every model.
+    func testAGroupsLimitCountsOnlyForTheModelsInIt() throws {
+        func basis(_ windows: [AccountUsageMetric], _ model: String?) -> AccountRouting.Basis? {
+            AccountRouting.pick([candidate(choice("account", windows: windows))], model: model, now: now)?.basis
+        }
+        let geminiSpent = [pool("Gemini", used: 0.95), pool("Claude and GPT", used: 0.02)]
+        let claudeSpent = [pool("Gemini", used: 0.02), pool("Claude and GPT", used: 0.95)]
+        for model in ["claude-opus-5-5", "gpt-6-astra", "CLAUDE-OPUS-4-6-THINKING"] {
+            XCTAssertEqual(basis(geminiSpent, model), .headroom, model)
+            XCTAssertEqual(basis(claudeSpent, model), .nearlySpent, model)
+        }
+        for model in ["gemini-4-argon", "gemini-3.8-flash-low"] {
+            XCTAssertEqual(basis(geminiSpent, model), .nearlySpent, model)
+            XCTAssertEqual(basis(claudeSpent, model), .headroom, model)
+        }
+        for model in [nil, "", "default"] {
+            XCTAssertEqual(basis(geminiSpent, model), .nearlySpent, "Its group is not known: \(String(describing: model))")
+            XCTAssertEqual(basis(claudeSpent, model), .nearlySpent, "Its group is not known: \(String(describing: model))")
+        }
+        XCTAssertEqual(basis([pool("Gemini", used: 0.95)], "claude-opus-5-5"), .nearlySpent,
+                       "A reading that leaves the model's group out says nothing about it")
+        XCTAssertEqual(basis([weekly(used: 0.95, resetsIn: 6)] + claudeSpent, "gemini-4-argon"), .nearlySpent,
+                       "A limit every model shares stops a model whose group has room")
+
+        let spent = choice("gemini-spent", windows: geminiSpent)
+        let half = choice("half", windows: [pool("Gemini", used: 0.5), pool("Claude and GPT", used: 0.5)])
+        let candidates = [candidate(spent), candidate(half)]
+        let claude = try XCTUnwrap(AccountRouting.pick(candidates, model: "claude-opus-5-5", now: now))
+        XCTAssertEqual(claude.choice.id, "gemini-spent")
+        XCTAssertEqual(claude.headroom?.deciding?.label, "Claude and GPT · 7 day limit", "The reason names the model's own group")
+        XCTAssertEqual(AccountRouting.pick(candidates, model: "gemini-4-argon", now: now)?.choice.id, "half")
+        XCTAssertEqual(AccountRouting.pick(candidates, model: nil, now: now)?.choice.id, "half")
+
+        let sparkSpent = [pool("Codex", used: 0.2), pool("Spark", used: 0.95)]
+        XCTAssertEqual(basis(sparkSpent, "gpt-5.5-codex"), .headroom, "Codex's buckets are groups too")
+        XCTAssertEqual(basis(sparkSpent, "gpt-5.3-codex-spark-high"), .nearlySpent)
+        XCTAssertEqual(basis(sparkSpent, "gpt-6-astra"), .nearlySpent)
+    }
+
     /// A harness has room when any of its models does: a limit of one model or group of models stops
     /// only those, a limit every model shares stops them all, and an account without a reading is
     /// no room at all. The most left wins, across the accounts too.
     func testMostRoomReadsEachGroupOfModelsApart() throws {
         func most(_ choices: AccountChoice...) -> AccountRouting.Window? {
             AccountRouting.mostRoom(choices.map { candidate($0) }, now: now)
-        }
-        func pool(_ group: String, used: Double) -> AccountUsageMetric {
-            metric("weekly:\(group)", label: "\(group) · 7 day limit", used: used, resetsIn: 6, minutes: 10_080, modelGroup: group)
         }
         let geminiSpent = choice("gemini-spent", windows: [pool("Gemini", used: 1), pool("Claude and GPT", used: 0.02)])
         XCTAssertEqual(most(geminiSpent)?.label, "Claude and GPT · 7 day limit")
@@ -220,6 +258,10 @@ import XCTest
     private func weekly(used: Double, resetsIn days: Double, model: String? = nil) -> AccountUsageMetric {
         metric("weekly:\(model ?? "")", label: model.map { "\($0) · 7 day limit" } ?? "7 day limit", used: used,
                resetsIn: days, minutes: 10_080, model: model)
+    }
+
+    private func pool(_ group: String, used: Double) -> AccountUsageMetric {
+        metric("weekly:\(group)", label: "\(group) · 7 day limit", used: used, resetsIn: 6, minutes: 10_080, modelGroup: group)
     }
 
     private func metric(_ id: String, label: String, used: Double, resetsIn days: Double, minutes: Double,

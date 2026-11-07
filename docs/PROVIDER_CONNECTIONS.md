@@ -228,7 +228,11 @@ hour limit"), as Claude's and Codex's windows are named. The length comes
 from the bucket's `window` (`weekly`, `daily`, or a count and a unit such as `5h`) or, when that is not one, from the
 end of its `id`, which names the window too (`gemini-weekly`, `gemini-5h`); a bucket whose length neither gives keeps
 the CLI's own name. An answer that is not `SUCCESS`, or none, shows no rows rather than 0. AI credits (`/credits`) are
-not read.
+not read. Each row keeps its group (`AccountUsageMetric.modelGroup`, which Codex's buckets fill too when an account has
+several), and choosing an account counts a group's limits only for the models in it (`AccountRouting`): a task on
+`claude-opus-5-5` has room while only the Gemini group is spent, and the reverse. A model is in a group when its name
+holds the group's name or one of its families ("Claude", "GPT"). A task whose model is not known, or is in no group of the
+reading, could be in any, so every group's limits count for it.
 
 ## Continuing after a usage limit
 
