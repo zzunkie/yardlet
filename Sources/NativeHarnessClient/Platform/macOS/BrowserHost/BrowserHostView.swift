@@ -322,6 +322,9 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
     }
 
     private func reportViewportIfChanged() {
+        // Out of every window, or before layout, the view has no size to give: the tab keeps the one it has until the
+        // view is laid out in a window (a task's kept views make a panel for a handoff out of the window).
+        guard window != nil, !bounds.isEmpty else { return }
         let viewport = viewport
         guard viewport.width != lastViewport?.width || viewport.height != lastViewport?.height
                 || viewport.scale != lastViewport?.scale || viewport.framesPerSecond != lastViewport?.framesPerSecond else { return }
