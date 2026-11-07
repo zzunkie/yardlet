@@ -71,6 +71,13 @@ actor ACPAdapter:
     /// what the agent says of its messages, thinking, tool calls and plan before the next prompt is
     /// not a turn of this task.
     private var replayingProviderSessionIDs: Set<String> = []
+    /// Antigravity: the conversations' store, for the turns the agent starts between prompts, which
+    /// `agy acp` does not stream (`AntigravityAgentTurnFollower`); nil for the other agents.
+    private let conversationStore: AntigravityConversationStore?
+    private let agentTurnReadInterval: Duration
+    private var agentTurnFollowers: [UUID: AntigravityAgentTurnFollower] = [:]
+    private var agentTurnReadTasks: [UUID: Task<Void, Never>] = [:]
+    private var redeliveries: [UUID: AntigravityRedelivery] = [:]
 
     init(
         kind: HarnessKind,
@@ -78,6 +85,8 @@ actor ACPAdapter:
         launchArguments: [String]? = nil,
         launchEnvironmentOverrides: [String: String]? = nil,
         schemaCopies: AntigravitySchemaCopies? = nil,
+        conversationStore: AntigravityConversationStore? = nil,
+        agentTurnReadInterval: Duration = .seconds(2),
         transportFactory: (@Sendable () -> any ACPTransport)? = nil
     ) {
         self.kind = kind
@@ -87,6 +96,8 @@ actor ACPAdapter:
             ?? []
         self.launchEnvironmentOverrides = launchEnvironmentOverrides ?? [:]
         self.schemaCopies = schemaCopies
+        self.conversationStore = conversationStore
+        self.agentTurnReadInterval = agentTurnReadInterval
         let transportFactory = transportFactory ?? { ACPProcessTransport(executableURL: executableURL) }
         self.transportFactory = transportFactory
         self.transport = transportFactory()
@@ -298,6 +309,7 @@ actor ACPAdapter:
             )
         }
         replayingProviderSessionIDs.remove(session.providerSessionID)
+        stopFollowingAgentTurns(of: session.localSessionID)
         emit(.sessionStatusChanged(.running), for: session.localSessionID)
         let id = takeRequestID()
         promptTasks[session.localSessionID] = Task { [weak self] in
@@ -354,6 +366,10 @@ actor ACPAdapter:
         try await transport.send(
             ACPProtocol.cancel(providerSessionID: session.providerSessionID)
         )
+        // A prompt's turn ends with its answer; an agent's own turn has no answer to wait for.
+        for payload in agentTurnFollowers[session.localSessionID]?.stop() ?? [] {
+            emit(payload, for: session.localSessionID)
+        }
     }
 
     func respond(
@@ -542,6 +558,9 @@ actor ACPAdapter:
         localSessionIDByProviderID.removeValue(forKey: session.providerSessionID)
         replayingProviderSessionIDs.remove(session.providerSessionID)
         promptTasks.removeValue(forKey: session.localSessionID)?.cancel()
+        agentTurnReadTasks.removeValue(forKey: session.localSessionID)?.cancel()
+        agentTurnFollowers.removeValue(forKey: session.localSessionID)
+        redeliveries.removeValue(forKey: session.localSessionID)
         permissions = permissions.filter { $0.value.localSessionID != session.localSessionID }
         activities.removeValue(forKey: session.localSessionID)
         capabilityStateByLocalSessionID.removeValue(forKey: session.localSessionID)
@@ -653,6 +672,7 @@ actor ACPAdapter:
         if replayingProviderSessionIDs.contains(providerSessionID), ACPReplayTranscript.conversationUpdates.contains(updateKind ?? "") {
             return
         }
+        if redeliveries[localSessionID]?.absorbs(update) == true { return }
         if updateKind == "turn_completed",
            let usage = projector.usage(from: update) {
             emit(.usageUpdated(usage), for: localSessionID, rawData: frame.data)
@@ -820,6 +840,7 @@ actor ACPAdapter:
     private func finishPrompt(for localSessionID: UUID) {
         guard !Task.isCancelled else { return }
         promptTasks.removeValue(forKey: localSessionID)
+        followAgentTurns(of: localSessionID)
         completeAssistantIfNeeded(for: localSessionID)
         emit(.turnCompleted, for: localSessionID)
         emit(.sessionStatusChanged(.ready), for: localSessionID)
@@ -830,9 +851,43 @@ actor ACPAdapter:
         // The process ended under the turn; its end, which follows, reports the turn with the session.
         if case HarnessAdapterError.processExited = error { return }
         promptTasks.removeValue(forKey: localSessionID)
+        followAgentTurns(of: localSessionID)
         completeAssistantIfNeeded(for: localSessionID)
         emit(.error(message: error.localizedDescription, recoverable: true), for: localSessionID)
         emit(.sessionStatusChanged(.failed), for: localSessionID)
+    }
+
+    /// From the end of a prompt until the next, reads what the agent does on its own, which `agy acp`
+    /// does not stream (`AntigravityAgentTurnFollower`). The log is looked at as a detached task's is:
+    /// its size, and the new lines when it has grown.
+    private func followAgentTurns(of localSessionID: UUID) {
+        guard let conversationStore, let handle = handles[localSessionID] else { return }
+        agentTurnFollowers[localSessionID] = AntigravityAgentTurnFollower(
+            store: conversationStore,
+            conversationID: handle.providerSessionID,
+            redelivery: redeliveries.removeValue(forKey: localSessionID) ?? AntigravityRedelivery()
+        )
+        let interval = agentTurnReadInterval
+        agentTurnReadTasks[localSessionID] = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                guard let self, !Task.isCancelled else { return }
+                await self.readAgentTurn(of: localSessionID)
+            }
+        }
+    }
+
+    private func readAgentTurn(of localSessionID: UUID) {
+        for payload in agentTurnFollowers[localSessionID]?.read() ?? [] {
+            emit(payload, for: localSessionID)
+        }
+    }
+
+    /// A prompt takes over: its stream carries what the agent does from here, and first repeats what
+    /// the log showed. A turn of the agent's still running goes on as part of the prompt's.
+    private func stopFollowingAgentTurns(of localSessionID: UUID) {
+        agentTurnReadTasks.removeValue(forKey: localSessionID)?.cancel()
+        redeliveries[localSessionID] = agentTurnFollowers.removeValue(forKey: localSessionID)?.redelivery
     }
 
     private func requireRegistered(_ session: HarnessSessionHandle) throws {
