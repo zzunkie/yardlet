@@ -14,6 +14,7 @@ protocol CodexPresentationProviding: Actor {
         cursor: String?,
         limit: Int64?
     ) async throws -> CodexItemPage
+    /// Ends when the session's events end: the protocol bridge closes a session's stream only after this one.
     func presentationStates(
         for session: HarnessSessionHandle
     ) async throws -> AsyncStream<CodexTaskState>

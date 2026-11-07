@@ -1024,9 +1024,13 @@ actor LegacyHarnessProtocolBridge {
         }
     }
 
-    private func endEventStream(for localSessionID: UUID) {
+    /// The adapter ends a session's presentation with its events, and the last state it published is what ends a turn
+    /// the provider left running, so that state crosses before the stream closes behind it.
+    private func endEventStream(for localSessionID: UUID) async {
+        await presentationRelayTasks[localSessionID]?.value
+        guard !Task.isCancelled else { return }
+        presentationRelayTasks.removeValue(forKey: localSessionID)
         endedSessionIDs.insert(localSessionID)
-        presentationRelayTasks.removeValue(forKey: localSessionID)?.cancel()
         continuations[localSessionID]?.finish()
     }
 

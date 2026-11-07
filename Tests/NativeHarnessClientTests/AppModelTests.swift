@@ -4618,13 +4618,19 @@ actor FakeHarnessAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresent
         )
     }
 
-    func finishEvents(for localSessionID: UUID) {
+    /// As the real adapter does, the session's presentation ends with its events unless a test holds it back.
+    func finishEvents(for localSessionID: UUID, keepingPresentation: Bool = false) {
         continuations[localSessionID]?.finish()
+        if !keepingPresentation { finishPresentation(for: localSessionID) }
     }
 
     func emitPresentation(_ state: CodexTaskState, for localSessionID: UUID) {
         codexPresentationStates[localSessionID] = state
         codexPresentationContinuations[localSessionID]?.yield(state)
+    }
+
+    func finishPresentation(for localSessionID: UUID) {
+        codexPresentationContinuations[localSessionID]?.finish()
     }
 
     private func createEventStream(for localSessionID: UUID) {
