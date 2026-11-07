@@ -579,7 +579,8 @@ final class RemoteHostModelTests: XCTestCase {
     /// conversation show before the host is reached, the host's own replace them once it is, here found on a
     /// new port by a stand-in for Bonjour, and removing the host removes them.
     func testAReopenedWindowShowsWhatItLastShowedUntilTheHostAnswers() async throws {
-        let stack = try await LoopbackStack()
+        // The fixture's release task stays in its first turn, so the badge counts the same tasks at every step.
+        let stack = try await LoopbackStack(bridge: RemoteFixtureBridge(speed: 0.01))
         defer { stack.stop() }
         let root = FileManager.default.temporaryDirectory.appending(path: "remote-cache-\(UUID().uuidString)", directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: root) }
