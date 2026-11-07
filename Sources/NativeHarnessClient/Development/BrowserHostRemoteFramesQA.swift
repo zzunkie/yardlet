@@ -11,7 +11,8 @@ import YardletRemote
 /// page is dark, as a person's own may be, with text, a 2D canvas, a WebGL canvas and a video, in an agent's tab no panel
 /// ever showed. Each picture must show the page itself, in its colors at their places, not only come back: hidden and
 /// then watched, at the sizes a side panel or a phone asks for, while other tasks' tabs hid after it and memory is
-/// critical, and in the window another Mac opens for this one over loopback, in light and dark.
+/// critical, in the window another Mac opens for this one over loopback, in light and dark, and after a handoff in a
+/// task the host's window does not show.
 @MainActor
 final class BrowserHostRemoteFramesQA {
     private let output: URL
@@ -87,7 +88,25 @@ final class BrowserHostRemoteFramesQA {
         bridge?.setWatched([])
 
         for scheme in [NSAppearance.Name.aqua, .darkAqua] { await anotherMac(showing: tab, appearance: scheme) }
+        await handedOverOutOfTheWindow(tab)
         await finish()
+    }
+
+    /// The agent hands a tab over in a task the host's window does not show: the task's kept views make the panel out of
+    /// the window, where it has no size. The tab keeps its own, so a remote device still gets the page, not one point of it.
+    private func handedOverOutOfTheWindow(_ tab: BrowserTab) async {
+        guard let other = BrowserHostQAFixture.model?.store.sessions.first(where: { $0.id != session }) else {
+            return check("another task to show", false, "")
+        }
+        BrowserHostQAFixture.model?.revealTask(other.id)
+        try? await Task.sleep(for: .seconds(2))
+        let size = tab.viewport
+        watch(tab)
+        _ = await call(AgentToolCatalog.handoff, ["reason": .string("Check the page"), "timeout": .integer(1)])
+        try? await Task.sleep(for: .seconds(1))
+        check("a handoff out of the window leaves the tab's size", tab.viewport == size, "\(tab.viewport.map { "\($0.width)x\($0.height)" } ?? "none")")
+        await picture(tab, named: "handed-over-out-of-the-window")
+        bridge?.setWatched([])
     }
 
     /// Waits for the video's first frame.
