@@ -108,6 +108,12 @@ final class RemoteHostClientTests: XCTestCase {
         XCTAssertEqual(found.map(\.path), [.direct("Mac-Studio.local:47616"), .direct("192.168.0.2:47616"),
                                            .direct("[fd7a::1]:47616"), .relay])
         XCTAssertEqual(found.map(\.delay), [0, 0, 0, 0.7])
+        var second = target
+        second.alternateRelayURL = "https://alternate.relay.example.test"
+        let both = RemoteHostConnection.candidates(second, includeRelay: true, timing: .init()).suffix(2)
+        XCTAssertEqual(both.map(\.url.absoluteString), ["wss://relay.example.test/v1/rooms/abc/connect",
+                                                        "wss://alternate.relay.example.test/v1/rooms/abc/connect"])
+        XCTAssertEqual(both.map(\.delay), [0.7, 0.7])
     }
 
     /// Bonjour finding the host (§11.4): an address found while waiting out a backoff is tried now, and one
@@ -153,6 +159,43 @@ final class RemoteHostClientTests: XCTestCase {
         let snapshot = try await inbox.response("1")
         XCTAssertTrue(snapshot.ok)
         await relayed.stop()
+    }
+
+    /// The relay's second address (§14.2) is raced with the first: it connects a client the first address does not
+    /// answer, it comes from the pairing link and message 2, and a host that names none any more leaves only the first.
+    func testAClientRacesTheRelaysSecondAddress() async throws {
+        let stack = try await LoopbackStack()
+        defer { stack.stop() }
+        let silent = SilentListener()
+        let silentPort = try await silent.start()
+        defer { silent.stop() }
+        let ticket = await stack.server.openPairing()
+        let first = "ws://127.0.0.1:\(silentPort)", second = "ws://127.0.0.1:\(stack.port)"
+        // Here the same listener stands under the relay's path.
+        let link = RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret, name: "Loopback", hosts: [],
+                                          relayURL: first, room: "room", alternateRelayURL: second)
+        let key = RemoteKeyPair.generate()
+        let hello = RemoteHandshakeHello(name: "Studio", platform: "macos", appVersion: "test")
+        let reply = try await RemoteHostConnection.pair(link, clientKey: key, hello: hello)
+        try await waitUntil { silent.accepted == 1 }
+
+        var host = RemoteSavedHost(name: link.name, hostKey: link.macKey, direct: [], relayURL: first, room: "room",
+                                   alternateRelayURL: second)
+        let connection = RemoteHostConnection(target: try XCTUnwrap(host.target), clientKey: key, hello: hello)
+        let inbox = Inbox(connection.inbound)
+        await connection.start()
+        _ = try await inbox.waitFor("on the relay") { if case .connected(.relay, _)? = $0.lastState { true } else { nil } }
+        await connection.stop()
+
+        XCTAssertNil(reply.relay, "the listener alone names no relay")
+        host.update(from: reply)
+        XCTAssertNil(host.alternateRelayURL)
+        var named = reply
+        named.relay = RemoteHandshakeReply.Relay(url: first, room: "room", alternate: second)
+        host.update(from: named)
+        XCTAssertEqual(host.alternateRelayURL, second)
+        let saved = try JSONDecoder.remoteDates.decode(RemoteSavedHost.self, from: JSONEncoder.remoteDates.encode(host))
+        XCTAssertEqual(saved.target?.alternateRelayURL, second)
     }
 
     /// Asking to connect now while an attempt is under way (the app coming back from Face ID or a permission

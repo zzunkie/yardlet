@@ -8,12 +8,15 @@ public struct RemoteHostTarget: Equatable, Sendable {
     public var direct: [String]
     public var relayURL: String?
     public var room: String?
+    /// Another address of the same relay, raced against `relayURL` (§14.2).
+    public var alternateRelayURL: String?
 
-    public init(hostKey: Data, direct: [String], relayURL: String? = nil, room: String? = nil) {
+    public init(hostKey: Data, direct: [String], relayURL: String? = nil, room: String? = nil, alternateRelayURL: String? = nil) {
         self.hostKey = hostKey
         self.direct = direct
         self.relayURL = relayURL
         self.room = room
+        self.alternateRelayURL = alternateRelayURL
     }
 
     /// The WebSocket for a direct address.
@@ -329,7 +332,7 @@ public actor RemoteHostConnection {
     }
 
     /// The addresses found on the network first, then the ones the host named, each once, at once; the
-    /// relay after them.
+    /// relay after them, at each of its addresses.
     static func candidates(_ target: RemoteHostTarget, discovered: [String] = [], includeRelay: Bool,
                            timing: Timing) -> [Candidate] {
         let direct = Array(NSOrderedSet(array: discovered + target.direct)).compactMap { $0 as? String }
@@ -338,10 +341,12 @@ public actor RemoteHostConnection {
                 Candidate(url: $0, path: .direct(host), delay: 0, timeout: timing.directTimeout)
             }
         }
-        if includeRelay, let base = target.relayURL, let room = target.room,
-           let url = RemoteHostTarget.relayURL(base: base, room: room) {
-            candidates.append(Candidate(url: url, path: .relay, delay: candidates.isEmpty ? 0 : timing.relayDelay,
-                                        timeout: timing.relayTimeout))
+        if includeRelay, let room = target.room {
+            let delay = candidates.isEmpty ? 0 : timing.relayDelay
+            candidates += [target.relayURL, target.alternateRelayURL].compactMap { base in
+                base.flatMap { RemoteHostTarget.relayURL(base: $0, room: room) }
+                    .map { Candidate(url: $0, path: .relay, delay: delay, timeout: timing.relayTimeout) }
+            }
         }
         return candidates
     }
@@ -410,7 +415,8 @@ public actor RemoteHostConnection {
                             timing: Timing = Timing()) async throws -> RemoteHandshakeReply {
         var hello = hello
         hello.pair = RemoteEncoding.base64url(link.secret)
-        let target = RemoteHostTarget(hostKey: link.macKey, direct: link.hosts, relayURL: link.relayURL, room: link.room)
+        let target = RemoteHostTarget(hostKey: link.macKey, direct: link.hosts, relayURL: link.relayURL, room: link.room,
+                                      alternateRelayURL: link.alternateRelayURL)
         switch await race(candidates(target, includeRelay: true, timing: timing), clientKey: clientKey, hostKey: link.macKey,
                           hello: hello) {
         case let .success(won):
