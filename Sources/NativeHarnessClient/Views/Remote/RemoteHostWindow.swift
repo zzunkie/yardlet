@@ -239,6 +239,9 @@ struct RemoteHostView: View {
             windowSize = $0
             windowWidth = $0.width
         }
+        // The title bar's row is the window's top, as in the local window, with the window's buttons centred on it.
+        .background(WindowChromeAlignmentAnchor())
+        .ignoresSafeArea(.container, edges: .top)
         // Ordinary controls stay monochrome, as in the local window; status, links and Send opt into the accent.
         .tint(Color.primary)
         .navigationTitle(model.name)

@@ -307,8 +307,8 @@ final class RemoteBrowserPageView: NSView, @preconcurrency NSTextInputClient {
         CATransaction.setDisableActions(true)
         layoutPicture()
         CATransaction.commit()
-        let scale = window?.backingScaleFactor ?? 2
-        browser?.setPictureSize(width: Int(bounds.width * scale), height: Int(bounds.height * scale))
+        guard let window, !bounds.isEmpty else { return }
+        browser?.setPanelSize(width: bounds.width, height: bounds.height, scale: window.backingScaleFactor)
     }
 
     /// Where the picture is drawn: the page's whole width fitted to the panel, at its top.

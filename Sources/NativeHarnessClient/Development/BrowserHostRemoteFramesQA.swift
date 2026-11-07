@@ -11,7 +11,8 @@ import YardletRemote
 /// page is dark, as a person's own may be, with text, a 2D canvas, a WebGL canvas and a video, in an agent's tab no panel
 /// ever showed. Each picture must show the page itself, in its colors at their places, not only come back: hidden and
 /// then watched, at the sizes a side panel or a phone asks for, while other tasks' tabs hid after it and memory is
-/// critical, and in the window another Mac opens for this one over loopback, in light and dark.
+/// critical, in the window another Mac opens for this one over loopback, in light and dark, and after a handoff in a
+/// task the host's window does not show.
 @MainActor
 final class BrowserHostRemoteFramesQA {
     private let output: URL
@@ -87,7 +88,25 @@ final class BrowserHostRemoteFramesQA {
         bridge?.setWatched([])
 
         for scheme in [NSAppearance.Name.aqua, .darkAqua] { await anotherMac(showing: tab, appearance: scheme) }
+        await handedOverOutOfTheWindow(tab)
         await finish()
+    }
+
+    /// The agent hands a tab over in a task the host's window does not show: the task's kept views make the panel out of
+    /// the window, where it has no size. The tab keeps its own, so a remote device still gets the page, not one point of it.
+    private func handedOverOutOfTheWindow(_ tab: BrowserTab) async {
+        guard let other = BrowserHostQAFixture.model?.store.sessions.first(where: { $0.id != session }) else {
+            return check("another task to show", false, "")
+        }
+        BrowserHostQAFixture.model?.revealTask(other.id)
+        try? await Task.sleep(for: .seconds(2))
+        let size = tab.viewport
+        watch(tab)
+        _ = await call(AgentToolCatalog.handoff, ["reason": .string("Check the page"), "timeout": .integer(1)])
+        try? await Task.sleep(for: .seconds(1))
+        check("a handoff out of the window leaves the tab's size", tab.viewport == size, "\(tab.viewport.map { "\($0.width)x\($0.height)" } ?? "none")")
+        await picture(tab, named: "handed-over-out-of-the-window")
+        bridge?.setWatched([])
     }
 
     /// Waits for the video's first frame.
@@ -175,7 +194,12 @@ final class BrowserHostRemoteFramesQA {
             defer { window.orderOut(nil) }
             try? await Task.sleep(for: .seconds(2))
             remote.browser.show(taskID: task, tabID: tab.key.uuidString)
-            let drew = await waitUntil(.seconds(15)) { remote.browser.frame != nil }
+            func fillsPanel() -> Bool {
+                guard let frame = remote.browser.frame, let size = remote.browser.viewport else { return false }
+                return frame.viewportWidth == Double(size.width) && frame.viewportHeight == Double(size.height)
+            }
+            let drew = await waitUntil(.seconds(15), fillsPanel)
+            check("the picture has the panel's size, \(appearance.rawValue)", drew, "\(remote.browser.viewport.map { "\($0.width)x\($0.height)" } ?? "none")")
             try? await Task.sleep(for: .seconds(2))
             guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
                 return check("the window draws", false, "")
@@ -186,6 +210,14 @@ final class BrowserHostRemoteFramesQA {
             if let image = remote.browser.frame?.image { try? image.write(to: frames.appending(path: "window-\(appearance.rawValue).jpg")) }
             check("the window's panel shows the page, \(appearance.rawValue)", drew && Self.showsMarks(bitmap),
                   "frame \(remote.browser.frame?.number ?? -1), \(remote.browser.frame?.image.count ?? 0) bytes")
+            let before = remote.browser.viewport
+            hosting.setFrameSize(NSSize(width: size.width, height: size.height - 120))
+            hosting.layoutSubtreeIfNeeded()
+            let followed = await waitUntil(.seconds(10)) { remote.browser.viewport != before && fillsPanel() }
+            check("the picture follows the panel, \(appearance.rawValue)", followed, "\(remote.browser.viewport.map { "\($0.width)x\($0.height)" } ?? "none")")
+            hosts.close(paired.id)
+            let gone = await waitUntil(.seconds(5)) { tab.emulation == nil && tab.viewport?.width == 1_280 && tab.viewport?.height == 800 }
+            check("the tab takes its size back when the window goes, \(appearance.rawValue)", gone, "\(tab.viewport.map { "\($0.width)x\($0.height)" } ?? "none")")
         } catch {
             check("another Mac follows the host", false, "\(error)")
         }

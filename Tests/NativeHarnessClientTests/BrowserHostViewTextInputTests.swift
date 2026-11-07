@@ -18,6 +18,34 @@ final class BrowserHostViewTextInputTests: XCTestCase {
 
     private let noRange = NSRange(location: NSNotFound, length: 0)
 
+    /// A task's kept views can make a panel out of the window, with no size yet: it must not draw the tab at one point.
+    func testOnlyAViewLaidOutInAWindowSizesItsTab() {
+        let view = makeView()
+        view.frame = .zero
+        func sizes() -> [BrowserViewport] {
+            sent.compactMap { if case let .resize(_, viewport) = $0 { viewport } else { nil } }
+        }
+        view.resendViewport()
+        XCTAssertEqual(sizes(), [])
+
+        view.frame = NSRect(x: 0, y: 0, width: 640, height: 480)
+        view.resendViewport()
+        XCTAssertEqual(sizes(), [], "Out of a window, what the view last had is not a panel's size")
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [.borderless],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        view.frame = .zero
+        window.contentView?.addSubview(view)
+        XCTAssertEqual(sizes(), [], "In a window, before layout")
+
+        view.frame = NSRect(x: 0, y: 0, width: 640, height: 480)
+        view.layout()
+        XCTAssertEqual(sizes().map(\.width), [640])
+        XCTAssertEqual(sizes().map(\.height), [480])
+    }
+
     func testMarkedTextBecomesCompositionAndInsertCommitsIt() {
         let view = makeView()
         view.setMarkedText("한", selectedRange: NSRange(location: 1, length: 0), replacementRange: noRange)

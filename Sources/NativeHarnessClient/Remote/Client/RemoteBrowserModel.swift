@@ -60,15 +60,21 @@ final class RemoteBrowserModel {
     /// The host's name, for the panel's words.
     @ObservationIgnored var hostName = ""
     /// The largest picture to ask for: the panel's page area in pixels.
-    @ObservationIgnored var pictureSize = (width: RemoteProtocol.defaultTabFrameWidth, height: RemoteProtocol.defaultTabFrameHeight)
+    @ObservationIgnored private(set) var pictureSize = (width: RemoteProtocol.defaultTabFrameWidth, height: RemoteProtocol.defaultTabFrameHeight)
+    /// The size the tab lays out at while the panel watches it: the panel's page area in points, which the page takes as
+    /// CSS pixels, as in the host's own panel, at any width a desktop page and never a phone's. Nil before the panel's
+    /// first layout.
+    @ObservationIgnored private(set) var viewport: RemoteTabViewport?
     /// Sends a request in the order of the ones before it.
     @ObservationIgnored var send: (RemoteRequest, ((RemoteResponse) -> Void)?) -> Void = { _, _ in }
     @ObservationIgnored private var scroll: (x: Double, y: Double, deltaX: Double, deltaY: Double)?
     @ObservationIgnored private var scrollFlush: Task<Void, Never>?
-    /// What the watch asked for, to ask again when the panel grows past it.
     @ObservationIgnored private var selectionRevision = 0
     @ObservationIgnored private var watchRevision = 0
-    @ObservationIgnored private var watchedSize: (width: Int, height: Int)?
+    /// The watch that takes the panel's new size, once the panel rests.
+    @ObservationIgnored private var panelResize: Task<Void, Never>?
+    /// How long the panel stays at a size before the tab takes it: a dragged divider moves it on every frame.
+    nonisolated static let panelRest: Duration = .milliseconds(200)
 
     var watchedTab: RemoteBrowserTab? { tabs.first { $0.tabId == tabID } }
 
@@ -97,7 +103,7 @@ final class RemoteBrowserModel {
         tabID = nil
         frame = nil
         isListed = false
-        watchedSize = nil
+        panelResize?.cancel()
         followList(ending: taskID)
     }
 
@@ -137,23 +143,35 @@ final class RemoteBrowserModel {
         watch(tabID)
     }
 
-    /// The panel's page area changed: a picture much larger than the one asked for is asked for again.
-    func setPictureSize(width: Int, height: Int) {
-        pictureSize = (min(max(width, 320), RemoteProtocol.maxTabFrameSide), min(max(height, 320), RemoteProtocol.maxTabFrameSide))
-        guard let watchedSize, tabID != nil,
-              pictureSize.width > watchedSize.width * 5 / 4 || pictureSize.height > watchedSize.height * 5 / 4 else { return }
-        watch(tabID)
+    /// The panel's page area changed, in points, at `scale` pixels a point: the tab lays out at that size and the picture
+    /// is asked for at its pixels, once the panel rests there.
+    func setPanelSize(width: Double, height: Double, scale: Double) {
+        func within(_ value: Double, _ range: ClosedRange<Int>) -> Int { min(max(Int(value.rounded()), range.lowerBound), range.upperBound) }
+        let viewport = RemoteTabViewport(width: within(width, RemoteProtocol.tabViewportWidths),
+                                         height: within(height, RemoteProtocol.tabViewportHeights), mobile: false)
+        let picture = (width: within(width * scale, 320...RemoteProtocol.maxTabFrameSide),
+                       height: within(height * scale, 320...RemoteProtocol.maxTabFrameSide))
+        guard viewport != self.viewport || picture != pictureSize else { return }
+        self.viewport = viewport
+        pictureSize = picture
+        panelResize?.cancel()
+        guard taskID != nil else { return }
+        panelResize = Task { [weak self] in
+            try? await Task.sleep(for: Self.panelRest)
+            guard !Task.isCancelled, let self else { return }
+            self.watch(self.tabID)
+        }
     }
 
     private func watch(_ tabID: String?) {
         guard let taskID else { return }
         watchRevision += 1
         let revision = watchRevision
-        let size = pictureSize
-        watchedSize = size
+        panelResize?.cancel()
         if tabID != self.tabID { frame = nil }
         self.tabID = tabID
-        send(.watchTab(taskID: taskID, tabID: tabID, maxWidth: size.width, maxHeight: size.height)) { [weak self] response in
+        send(.watchTab(taskID: taskID, tabID: tabID, maxWidth: pictureSize.width, maxHeight: pictureSize.height,
+                       viewport: viewport)) { [weak self] response in
             guard let self, self.taskID == taskID, self.watchRevision == revision else { return }
             if response.ok {
                 self.tabs = response.tabs ?? []
