@@ -16,7 +16,8 @@ struct SessionRailCardBody: View {
         case .context:
             if let summary = content.context {
                 ComposerContextUsageDetails(summary: summary, usage: content.contextUsage,
-                                            breakdowns: content.usageBreakdowns, compact: actions.compact, isInline: true)
+                                            breakdowns: content.usageBreakdowns, compact: actions.compact,
+                                            limit: .make(content.contextLimit, onChoose: actions.onChoose), isInline: true)
             }
         case .usage:
             if let usage = content.usage { SessionRailUsageCard(account: usage) }

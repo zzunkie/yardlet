@@ -38,6 +38,8 @@ struct ComposerSessionOptions: Equatable {
     var reportsContextWindow = false
     /// How the context window's "Compact session" compacts, for a harness the composer can ask.
     var compact: ComposerCompactPath?
+    /// The context window's limit for this task, for a harness that takes one per task.
+    var contextLimit: ComposerContextLimitSlot?
     var model: ComposerModelSlot?
     /// The "+" menu's connector list: the session's MCP servers and Yardlet's connectors.
     var connectors: ComposerConnectorsSlot?
@@ -50,6 +52,28 @@ struct ComposerSessionOptions: Equatable {
 enum ComposerCompactPath: Equatable, Sendable {
     case providerCommand(String)
     case codexCommand
+}
+
+/// A task's own context limit, as the context window offers it: Default leaves the harness's own.
+struct ComposerContextLimitSlot: Equatable {
+    var selector: ProviderCapabilitySelector
+    /// Why the choice has not reached the running task yet.
+    var note: String?
+
+    static func claude(saved: String?, appliesLater: Bool) -> Self {
+        let limits = ClaudeLaunchOption.contextLimits.map {
+            ProviderCapabilityChoice(value: String($0), name: ComposerContextSummary.tokenText($0), description: nil)
+        }
+        return ComposerContextLimitSlot(
+            selector: ProviderCapabilitySelector(
+                id: ClaudeLaunchOption.contextLimit, name: L10n.string("Context limit"),
+                description: L10n.string("Claude Code compacts this task before its context reaches this size. Other tasks keep their own."),
+                category: "contextLimit",
+                currentValue: saved ?? ClaudeLaunchOption.defaultContextLimit,
+                choices: [ProviderCapabilityChoice(value: ClaudeLaunchOption.defaultContextLimit,
+                                                   name: L10n.string("Default"), description: nil)] + limits),
+            note: appliesLater ? L10n.string("Claude Code applies this setting the next time the task starts") : nil)
+    }
 }
 
 /// A choice from a session control, in the form the path that applies it takes.
@@ -333,6 +357,10 @@ enum ComposerSessionOptionsProjection {
         options.connectors = connectorsSlot(harness: harness, servers: providerCapabilities?.mcpServers)
         guard let session else { return options }
         options.refreshesStatusOnAttach = true
+        if providerCapabilities?.offersContextLimit == true {
+            options.contextLimit = .claude(saved: session.providerOptions[ClaudeLaunchOption.contextLimit],
+                                           appliesLater: providerCapabilities?.contextLimitAppliesLater == true)
+        }
         let selectors = ConversationSessionStatusProjection.inlineSelectors(from: providerCapabilities)
         func selector(_ role: ConversationSessionControlRole) -> ProviderCapabilitySelector? {
             selectors.first { ConversationSessionStatusProjection.role(for: $0) == role }

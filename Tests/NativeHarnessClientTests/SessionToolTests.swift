@@ -1187,7 +1187,8 @@ final class SessionToolTests: XCTestCase {
     /// starts nothing.
     func testChildrenInheritTheCallersModelEffortAndPermissionMode() async throws {
         let parent = [ClaudeLaunchOption.permissionMode: "bypassPermissions", ClaudeLaunchOption.model: "opus",
-                      ClaudeLaunchOption.effort: "xhigh", ClaudeLaunchOption.nextMessageSuggestions: "off"]
+                      ClaudeLaunchOption.effort: "xhigh", ClaudeLaunchOption.nextMessageSuggestions: "off",
+                      ClaudeLaunchOption.contextLimit: "200000"]
         XCTAssertEqual(AppModel.inheritedOptions(parent, harness: .claudeCode, chosen: [:]),
                        [ClaudeLaunchOption.permissionMode: "bypassPermissions", ClaudeLaunchOption.model: "opus",
                         ClaudeLaunchOption.effort: "xhigh"])

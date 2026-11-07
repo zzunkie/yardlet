@@ -130,6 +130,12 @@ separate from the harness's native conversations and session IDs.
   Default. If saving fails, the provider choice goes back to the previous mode. Forks and the pass-through of
   new-conversation options follow the stored value as is. The Codex service tier is an optional field in the same
   selection JSON. The provider ID, account, scope, native history and drafts are not moved or changed.
+- **Claude context limit per task:** a limit chosen in the context window is stored as `contextLimit` (tokens) in the
+  task's provider options, and Default removes the key. It reaches Claude Code only as `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+  in the environment of that task's process, so no settings file changes and other tasks keep their own window. The CLI
+  reads it when it starts, so a task with a runtime gets one back on the same conversation, with no turn: at once when
+  idle, when the turn ends otherwise, and at its next start if a background command still keeps it busy. Child tasks,
+  forks and side chats start without it; a conversation `/clear` starts in its place keeps it.
 - Per-file drafts in Files are stored in app-owned workspace preferences.
 
 ## Runtime paths
@@ -821,6 +827,8 @@ task showed next to its index row, and rereads it from the harness history when 
   a detached task opens or is followed, it additionally uses only the main chain's last response `message.usage`,
   `message.model` and `timestamp`. The context window is looked up in the optional field `claudeContextWindows` of
   `model-catalogs.json` (model name → the `rawMaxTokens` that `get_context_usage` reported; earlier builds ignore it).
+  Under a limit in the environment `rawMaxTokens` is that limit, so such a report (`autocompactSource: "env"`) is not
+  kept there, and a task's own context limit caps the window looked up for it.
 - **Codex rollout:** from the end (from 1 MiB up to 8 MiB) of the `path` that the detached task's `thread/read`
   reported, it reads only the `info` of the last `event_msg` `token_count`. It does not search Codex folders to find the
   rollout, and does not read Codex's SQLite or settings.

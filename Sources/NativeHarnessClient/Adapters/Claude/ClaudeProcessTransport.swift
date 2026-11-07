@@ -64,7 +64,7 @@ actor ClaudeProcessTransport: ClaudeTransport {
         process.executableURL = executableURL
         process.currentDirectoryURL = configuration.workspaceURL.standardizedFileURL
         process.arguments = Self.arguments(for: configuration)
-        process.environment = environment()
+        process.environment = environment(contextLimit: configuration.contextLimit)
         process.standardInput = stdinPipe
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
@@ -222,9 +222,9 @@ actor ClaudeProcessTransport: ClaudeTransport {
         return arguments
     }
 
-    private func environment() -> [String: String] {
+    private func environment(contextLimit: UInt64?) -> [String: String] {
         Self.environment(base: RuntimeProcessEnvironment.app, overrides: environmentOverrides,
-                         claudeAIConnectors: ClaudeAIConnectorPreference.isEnabled())
+                         claudeAIConnectors: ClaudeAIConnectorPreference.isEnabled(), contextLimit: contextLimit)
     }
 
     /// The longest a background Bash command may run, in milliseconds: the CLI's own ceiling
@@ -243,9 +243,12 @@ actor ClaudeProcessTransport: ClaudeTransport {
     /// The CLI's environment: the app's own, the account's overrides, Yardlet's entrypoint and the
     /// variables the sessions rely on. Only the process Yardlet starts sees them; no settings file
     /// is written. Unless `claudeAIConnectors`, the account's claude.ai connectors stay out of the
-    /// session (`ClaudeAIConnectorPreference`); turned on, the CLI's own default applies.
+    /// session (`ClaudeAIConnectorPreference`); turned on, the CLI's own default applies. A task's
+    /// `contextLimit` is the CLI's documented `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, which it reads when
+    /// it starts and which outranks its own settings, so one task can compact earlier without a
+    /// setting that reaches every task on the account.
     static func environment(base: [String: String], overrides: [String: String],
-                            claudeAIConnectors: Bool = false) -> [String: String] {
+                            claudeAIConnectors: Bool = false, contextLimit: UInt64? = nil) -> [String: String] {
         var environment = base
         environment.removeValue(forKey: "CLAUDECODE")
         environment["CLAUDE_CODE_ENTRYPOINT"] = "native-harness-client"
@@ -259,6 +262,7 @@ actor ClaudeProcessTransport: ClaudeTransport {
         if !claudeAIConnectors {
             scoped[ClaudeAIConnectorPreference.environmentVariable] = "false"
         }
+        if let contextLimit { scoped["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = String(contextLimit) }
         return scoped
     }
 

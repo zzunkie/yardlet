@@ -81,7 +81,8 @@ struct ComposerSessionControls: View {
         if let summary = ComposerContextSummary.make(usage: options.contextUsage,
                                                      reportsContextWindow: options.reportsContextWindow) {
             ComposerContextUsageIndicator(summary: summary, usage: options.contextUsage,
-                                          breakdowns: options.usageBreakdowns, compact: compact)
+                                          breakdowns: options.usageBreakdowns, compact: compact,
+                                          limit: .make(options.contextLimit, onChoose: onChoose))
         }
         // Beside Send, as both reference apps place it.
         if let model = options.model {

@@ -2323,7 +2323,7 @@ public struct RemoteSetting: Codable, Equatable, Sendable {
     public var name: String
     public var value: String
     public var choices: [Choice]
-    /// Where the Mac's task composer shows it (§15.23): `mode`, `plan`, `permission`, `model`, `effort` or `speed`.
+    /// Where the Mac's task composer shows it (§15.23): `mode`, `plan`, `permission`, `model`, `effort`, `speed` or `contextLimit`.
     public var role: String?
     /// The Mac's menu reads its choices first when it opens: ask `taskSettings` with `prepare` (§15.23).
     public var prepare: Bool?

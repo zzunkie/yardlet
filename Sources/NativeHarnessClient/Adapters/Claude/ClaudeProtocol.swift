@@ -14,6 +14,9 @@ struct ClaudeLaunchConfiguration: Equatable, Sendable {
     /// Claude in Chrome, the CLI's own `--chrome` integration. False leaves the launch arguments
     /// unchanged; the CLI owns whether the extension is present and may refuse the flag.
     var chromeIntegration = false
+    /// The task's own context limit, passed in the CLI's environment. Nil leaves the environment
+    /// as the account has it.
+    var contextLimit: UInt64? = nil
     /// The Yardlet MCP server's `--mcp-config` file. Nil leaves the launch arguments unchanged;
     /// the servers the user configured for Claude Code load as they always do.
     var agentToolConfigPath: String? = nil

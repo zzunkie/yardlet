@@ -131,6 +131,7 @@ struct SessionRailContent: Equatable {
     var context: ComposerContextSummary?
     var contextUsage: HarnessProtocolUsage?
     var usageBreakdowns: [ComposerUsageBreakdown] = []
+    var contextLimit: ComposerContextLimitSlot?
     var usage: SessionRailAccount?
     var connectors: ComposerConnectorList?
     var progress: Progress?
@@ -230,6 +231,7 @@ struct SessionRailContent: Equatable {
                                                  reportsContextWindow: options.reportsContextWindow),
             contextUsage: options.contextUsage,
             usageBreakdowns: options.usageBreakdowns,
+            contextLimit: options.contextLimit,
             usage: account.flatMap { $0.windows.isEmpty ? nil : $0 },
             // A list with nothing in it is no card (Claude's: "when there is at least one connector").
             connectors: connectors.flatMap { $0.rows.isEmpty ? nil : $0 },

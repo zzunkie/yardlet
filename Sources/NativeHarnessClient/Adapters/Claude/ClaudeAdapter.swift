@@ -13,6 +13,12 @@ enum ClaudeLaunchOption {
     /// `off` for a session no one types into (a `run_agent` subagent), whose suggested next message
     /// would be a model request no one reads. Absent, Yardlet's "Next message suggestions" decides.
     static let nextMessageSuggestions = "nextMessageSuggestions"
+    /// The task's own context limit, in tokens. Absent, the CLI decides, as it does for every task
+    /// that never chose one. It is the task's alone: `AppModel.inheritedOptions` leaves it behind.
+    static let contextLimit = "contextLimit"
+    /// The limits a task can choose; `defaultContextLimit` is the CLI's own.
+    static let contextLimits: [UInt64] = [200_000, 400_000]
+    static let defaultContextLimit = "default"
     static let on = "on"
     static let off = "off"
 
@@ -24,6 +30,11 @@ enum ClaudeLaunchOption {
         guard let value, value != "default", !value.isEmpty, !value.hasPrefix("-"),
               value.allSatisfy({ !$0.isWhitespace && !$0.isNewline }) else { return nil }
         return value
+    }
+
+    /// The tokens a saved context limit stands for, or nil for anything the menu does not offer.
+    static func contextLimitTokens(_ value: String?) -> UInt64? {
+        value.flatMap(UInt64.init).flatMap { contextLimits.contains($0) ? $0 : nil }
     }
 }
 
@@ -80,6 +91,7 @@ actor ClaudeAdapter:
     private var earlyCommandInitByLocalSessionID: [UUID: JSONValue] = [:]
     private var additionalRootsByLocalSessionID: [UUID: [URL]] = [:]
     private var chromeIntegrationByLocalSessionID: [UUID: Bool] = [:]
+    private var contextLimitByLocalSessionID: [UUID: UInt64] = [:]
     /// The permission mode a task last chose, passed at launch so a restart resumes in it.
     private var permissionModeByLocalSessionID: [UUID: String] = [:]
     /// The model a task chose, passed at launch so its first turn already runs on it.
@@ -191,15 +203,18 @@ actor ClaudeAdapter:
         forkSources[localSessionID] = source
     }
 
-    /// Saved options the CLI takes as flags, applied to the next launch: Claude in Chrome, and
-    /// the permission mode the task last chose, so a restarted task resumes in that mode rather
-    /// than in Manual. The in-session settings keep going through `setProviderOption`.
+    /// Saved options the CLI reads when it starts, applied to the next launch: Claude in Chrome,
+    /// the task's context limit, and the permission mode the task last chose, so a restarted task
+    /// resumes in that mode rather than in Manual. The in-session settings keep going through
+    /// `setProviderOption`.
     func setLaunchOptions(_ options: [String: String], for localSessionID: UUID) {
         if ClaudeLaunchOption.isEnabled(options[ClaudeLaunchOption.chromeIntegration]) {
             chromeIntegrationByLocalSessionID[localSessionID] = true
         } else {
             chromeIntegrationByLocalSessionID.removeValue(forKey: localSessionID)
         }
+        contextLimitByLocalSessionID[localSessionID] =
+            ClaudeLaunchOption.contextLimitTokens(options[ClaudeLaunchOption.contextLimit])
         if let mode = options[ClaudeLaunchOption.permissionMode],
            ClaudePermissionMode.selectable.contains(mode) {
             permissionModeByLocalSessionID[localSessionID] = mode
@@ -768,6 +783,11 @@ actor ClaudeAdapter:
             appliesAtNextStart =
                 requested != (chromeIntegrationByLocalSessionID[session.localSessionID] ?? false)
             chromeIntegrationByLocalSessionID[session.localSessionID] = requested
+        case ClaudeLaunchOption.contextLimit:
+            // Saved options are restored here after a launch, which already took this one.
+            return providerStateByLocalSessionID[session.localSessionID]
+                ?? claudeCapabilityState(initializeResponse: .object([:]),
+                    chromeIntegration: chromeIntegrationByLocalSessionID[session.localSessionID] ?? false)
         default:
             throw HarnessAdapterError.capabilityUnavailable(
                 L10n.string("Claude Code does not expose that setting")
@@ -831,6 +851,7 @@ actor ClaudeAdapter:
         earlyCommandInitByLocalSessionID.removeValue(forKey: session.localSessionID)
         additionalRootsByLocalSessionID.removeValue(forKey: session.localSessionID)
         chromeIntegrationByLocalSessionID.removeValue(forKey: session.localSessionID)
+        contextLimitByLocalSessionID.removeValue(forKey: session.localSessionID)
         permissionModeByLocalSessionID.removeValue(forKey: session.localSessionID)
         launchModelByLocalSessionID.removeValue(forKey: session.localSessionID)
         requestedModelByLocalSessionID.removeValue(forKey: session.localSessionID)
@@ -883,6 +904,7 @@ actor ClaudeAdapter:
                     resumesExistingSession: resumesExistingSession && newSessionIDs[handle.localSessionID] == nil,
                     additionalRoots: additionalRootsByLocalSessionID[handle.localSessionID] ?? [],
                     chromeIntegration: chromeIntegrationByLocalSessionID[handle.localSessionID] ?? false,
+                    contextLimit: contextLimitByLocalSessionID[handle.localSessionID],
                     agentToolConfigPath: agentToolConfigPath(for: handle.localSessionID),
                     forkSource: forkSources[handle.localSessionID],
                     permissionMode: permissionModeByLocalSessionID[handle.localSessionID],

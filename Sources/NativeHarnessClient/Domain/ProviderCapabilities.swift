@@ -44,6 +44,11 @@ struct ProviderCapabilityState: Equatable, Sendable {
     /// The MCP servers the running session loaded, as the harness last reported them. Nil where
     /// the harness has not reported any (or reports none at all).
     var mcpServers: [HarnessMCPServerStatus]?
+    /// The task can keep a context limit of its own. A side chat cannot: it has no history to
+    /// resume, so its runtime is not started again.
+    var offersContextLimit = false
+    /// The task chose a context limit its running process does not have yet.
+    var contextLimitAppliesLater = false
 
     static let empty = ProviderCapabilityState()
 }
