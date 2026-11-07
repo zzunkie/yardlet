@@ -1,7 +1,4 @@
 import Foundation
-#if canImport(FoundationNetworking)
-import FoundationNetworking
-#endif
 
 /// Where a client finds a host (docs/REMOTE_PROTOCOL.md §11.4): its static key, the direct addresses it
 /// last named, and its room on the relay.
@@ -88,7 +85,6 @@ public actor RemoteHostConnection {
     private var target: RemoteHostTarget
     private let clientKey: RemoteKeyPair
     private let hello: RemoteHandshakeHello
-    private let session: URLSession
     private let timing: Timing
     private var socket: RemoteClientSocket?
     private var path: RemoteClientPath?
@@ -109,11 +105,10 @@ public actor RemoteHostConnection {
     private var retryAfterRace = false
 
     public init(target: RemoteHostTarget, clientKey: RemoteKeyPair, hello: RemoteHandshakeHello,
-                session: URLSession = .shared, timing: Timing = Timing()) {
+                timing: Timing = Timing()) {
         self.target = target
         self.clientKey = clientKey
         self.hello = hello
-        self.session = session
         self.timing = timing
         (inbound, continuation) = AsyncStream.makeStream(of: Inbound.self)
     }
@@ -205,7 +200,7 @@ public actor RemoteHostConnection {
         foundWhileRacing = false
         retryAfterRace = false
         let result = await Self.race(Self.candidates(target, discovered: discovered, includeRelay: true, timing: timing),
-                                     clientKey: clientKey, hostKey: target.hostKey, hello: hello, session: session)
+                                     clientKey: clientKey, hostKey: target.hostKey, hello: hello)
         racing = false
         guard running, !Task.isCancelled else {
             if case let .success(won) = result { won.socket.close() }
@@ -302,9 +297,9 @@ public actor RemoteHostConnection {
     private func tryDirectUpgrade() {
         let candidates = Self.candidates(target, discovered: discovered, includeRelay: false, timing: timing)
         guard path == .relay, !candidates.isEmpty else { return }
-        let hostKey = target.hostKey, clientKey = clientKey, hello = hello, session = session
+        let hostKey = target.hostKey, clientKey = clientKey, hello = hello
         Task { [weak self] in
-            let result = await Self.race(candidates, clientKey: clientKey, hostKey: hostKey, hello: hello, session: session)
+            let result = await Self.race(candidates, clientKey: clientKey, hostKey: hostKey, hello: hello)
             guard case let .success(won) = result else { return }
             await self?.upgradeTo(won)
         }
@@ -354,8 +349,8 @@ public actor RemoteHostConnection {
     /// Starts every candidate after its delay; the first handshake that completes wins and the others are
     /// let go. A refusal that names this device (removed, or never paired) or the pairing ends the race at
     /// once, since every path reaches the same host.
-    static func race(_ candidates: [Candidate], clientKey: RemoteKeyPair, hostKey: Data, hello: RemoteHandshakeHello,
-                     session: URLSession) async -> Result<RaceWinner, RemoteClientSocket.Failure> {
+    static func race(_ candidates: [Candidate], clientKey: RemoteKeyPair, hostKey: Data,
+                     hello: RemoteHandshakeHello) async -> Result<RaceWinner, RemoteClientSocket.Failure> {
         guard !candidates.isEmpty else { return .failure(RemoteClientSocket.Failure("No address to try")) }
         return await withTaskGroup(of: Result<RaceWinner, RemoteClientSocket.Failure>.self) { group in
             for candidate in candidates {
@@ -364,8 +359,7 @@ public actor RemoteHostConnection {
                     guard !Task.isCancelled else { return .failure(RemoteClientSocket.Failure("Cancelled")) }
                     do {
                         let (socket, reply) = try await RemoteClientSocket.open(
-                            url: candidate.url, clientKey: clientKey, hostKey: hostKey, hello: hello, session: session,
-                            timeout: candidate.timeout)
+                            url: candidate.url, clientKey: clientKey, hostKey: hostKey, hello: hello, timeout: candidate.timeout)
                         return .success(RaceWinner(socket: socket, reply: reply, path: candidate.path))
                     } catch let failure as RemoteClientSocket.Failure {
                         return .failure(failure)
@@ -413,12 +407,12 @@ public actor RemoteHostConnection {
     /// Pairs with the host a pairing link names (§12): the client's key becomes a device of that host.
     /// The connection that paired is closed; the host's answer names its addresses and the device.
     public static func pair(_ link: RemoteSecurePairingURL, clientKey: RemoteKeyPair, hello: RemoteHandshakeHello,
-                            session: URLSession = .shared, timing: Timing = Timing()) async throws -> RemoteHandshakeReply {
+                            timing: Timing = Timing()) async throws -> RemoteHandshakeReply {
         var hello = hello
         hello.pair = RemoteEncoding.base64url(link.secret)
         let target = RemoteHostTarget(hostKey: link.macKey, direct: link.hosts, relayURL: link.relayURL, room: link.room)
         switch await race(candidates(target, includeRelay: true, timing: timing), clientKey: clientKey, hostKey: link.macKey,
-                          hello: hello, session: session) {
+                          hello: hello) {
         case let .success(won):
             won.socket.close()
             return won.reply
