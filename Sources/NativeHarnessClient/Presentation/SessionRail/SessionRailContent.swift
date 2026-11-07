@@ -296,12 +296,14 @@ struct SessionRailContent: Equatable {
     /// (`generatedImages(in:)`, `AppModel.generatedFilesBySessionID`). A path only a message names is none of these.
     static func outputs(entries: [TranscriptEntry], codexChanges: [CodexChangeHandoff],
                         generatedFiles: [Output] = [], workspaceURL: URL) -> [Output] {
-        let root = workspaceURL.standardizedFileURL.path(percentEncoded: false)
+        // `standardized` works on the text alone: the rail reads this on every draw, and
+        // `standardizedFileURL` asks the disk about `/private` and `..` paths.
+        let root = workspaceURL.standardized.path(percentEncoded: false)
         let folder = root.hasSuffix("/") ? root : root + "/"
         var seen = Set<String>()
         var result: [Output] = []
         func add(_ url: URL, at date: Date?) {
-            let url = url.standardizedFileURL
+            let url = url.standardized
             let path = url.path(percentEncoded: false)
             guard result.count < outputLimit, seen.insert(path).inserted else { return }
             if path.hasPrefix(folder), !documentExtensions.contains(url.pathExtension.lowercased()) { return }
@@ -321,7 +323,7 @@ struct SessionRailContent: Equatable {
         }
         // By its date among the others, so the newest are the ones kept; one without a date goes last.
         for file in generatedFiles.prefix(outputLimit) {
-            let url = file.url.standardizedFileURL
+            let url = file.url.standardized
             guard seen.insert(url.path(percentEncoded: false)).inserted else { continue }
             let place = result.firstIndex { ($0.writtenAt ?? .distantPast) < (file.writtenAt ?? .distantPast) }
             result.insert(Output(url: url, writtenAt: file.writtenAt), at: place ?? result.count)

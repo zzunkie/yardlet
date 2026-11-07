@@ -9,6 +9,8 @@ extension AppModel {
 
     static func live() -> AppModel {
         HostSessionEnvironment.detachFromHostSession()
+        // Its one look at the disk, before the first view asks.
+        Task.detached(priority: .userInitiated) { _ = MacBrowserHost.isAvailable }
         #if DEBUG
         if let fixture = VisualFixtureScenario.requested() {
             return fixture.makeModel()
