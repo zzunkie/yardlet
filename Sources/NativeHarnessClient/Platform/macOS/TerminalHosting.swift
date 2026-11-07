@@ -1,6 +1,26 @@
 import Foundation
 @preconcurrency import SwiftTerm
 
+/// A shell's exit status as SwiftTerm should have read it. SwiftTerm asks once, without waiting, as soon as the kernel
+/// says the shell is exiting. A shell that leads its terminal's session is not finished then: it first waits for its
+/// output to be read. SwiftTerm then reports 0 and leaves the process unreaped, so a 0 is checked here. Never wait for
+/// this on the queue that reads the terminal, which the exit is waiting on.
+enum TerminalExitStatus: Equatable {
+    case notReady
+    case known(Int32?)
+
+    static func read(processID: pid_t, reported: Int32?) -> TerminalExitStatus {
+        guard reported == 0, processID > 1 else { return .known(reported) }
+        var status: Int32 = 0
+        switch waitpid(processID, &status, WNOHANG) {
+        case 0: return .notReady
+        case processID: return .known(status)
+        // SwiftTerm did reap it: 0 is the status.
+        default: return .known(reported)
+        }
+    }
+}
+
 /// A terminal's byte stream and lifetime, independent of its renderer.
 @MainActor
 protocol TerminalHosting: AnyObject {
@@ -124,7 +144,13 @@ final class LocalTerminalHosting: TerminalHosting, @MainActor LocalProcessDelega
     func dataReceived(slice: ArraySlice<UInt8>) { onOutput?(slice) }
     func processTerminated(_ source: LocalProcess, exitCode: Int32?) {
         guard source === process else { return }
-        onExit?(exitCode)
+        guard case let .known(status) = TerminalExitStatus.read(processID: source.shellPid, reported: exitCode) else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(10)) { [weak self] in
+                self?.processTerminated(source, exitCode: exitCode)
+            }
+            return
+        }
+        onExit?(status)
     }
     func getWindowSize() -> winsize {
         winsize(ws_row: UInt16(rows), ws_col: UInt16(columns), ws_xpixel: 0, ws_ypixel: 0)

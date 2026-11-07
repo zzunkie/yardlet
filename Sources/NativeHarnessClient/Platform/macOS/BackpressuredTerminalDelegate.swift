@@ -40,8 +40,11 @@ final class BackpressuredTerminalDelegate: LocalProcessDelegate, @unchecked Send
     }
     private func finishWhenDrained(_ source: LocalProcess, status: Int32?) {
         guard !finished else { return }
-        if source.childfd < 0 { finish(status) }
-        else { queue.asyncAfter(deadline: .now() + .milliseconds(10)) { [self] in finishWhenDrained(source, status: status) } }
+        if source.childfd < 0, case let .known(known) = TerminalExitStatus.read(processID: source.shellPid, reported: status) {
+            finish(known)
+        } else {
+            queue.asyncAfter(deadline: .now() + .milliseconds(10)) { [self] in finishWhenDrained(source, status: status) }
+        }
     }
     func stop() { queue.async { [self] in finish(nil) } }
     private func finish(_ status: Int32?) {

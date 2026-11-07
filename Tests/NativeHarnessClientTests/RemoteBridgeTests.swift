@@ -115,6 +115,24 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(stale?.code, .notFound)
     }
 
+    /// SwiftTerm can report a shell that has not finished exiting as 0 (`TerminalExitStatus`): the status is read once it
+    /// is ready, and a 0 it read itself stands.
+    func testAShellsExitStatusIsReadOnceItIsReady() async throws {
+        var shell: pid_t = 0
+        let arguments = [strdup("/bin/sh"), strdup("-c"), strdup("sleep 0.3; exit 7"), nil]
+        defer { arguments.forEach { free($0) } }
+        XCTAssertEqual(posix_spawn(&shell, "/bin/sh", nil, nil, arguments, environ), 0)
+        XCTAssertEqual(TerminalExitStatus.read(processID: shell, reported: 0), .notReady)
+        XCTAssertEqual(TerminalExitStatus.read(processID: shell, reported: 9 << 8), .known(9 << 8), "Only a 0 is in doubt")
+        var status = TerminalExitStatus.notReady
+        try await waitUntil {
+            status = TerminalExitStatus.read(processID: shell, reported: 0)
+            return status != .notReady
+        }
+        XCTAssertEqual(status, .known(7 << 8))
+        XCTAssertEqual(TerminalExitStatus.read(processID: shell, reported: 0), .known(0), "The shell is reaped once")
+    }
+
     func testHeadlessTerminalBackpressurePreservesOutputBeforeExit() async throws {
         let folder = FileManager.default.temporaryDirectory.appending(path: "remote-terminal-tail-\(UUID())")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
