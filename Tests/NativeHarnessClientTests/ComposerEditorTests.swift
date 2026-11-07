@@ -281,15 +281,25 @@ final class ComposerEditorTests: XCTestCase {
         try XCTUnwrap(mounted.window.firstResponder as? NSTextView)
     }
 
-    private func type(_ text: String, into mounted: Mounted) throws {
+    /// Types `text`. A typed list comes from a file search or a catalog read that takes its own time, so a test that goes
+    /// on to use one names a row of it in `showing`.
+    private func type(_ text: String, into mounted: Mounted, showing row: String? = nil) throws {
         let editor = try editor(mounted)
         for character in text {
             editor.insertText(String(character), replacementRange: NSRange(location: (editor.string as NSString).length,
                                                                            length: 0))
             mounted.host.settle(passes: 2)
         }
-        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
-        mounted.host.settle()
+        guard let row else {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+            mounted.host.settle()
+            return
+        }
+        let deadline = Date().addingTimeInterval(testWaitLimitSeconds)
+        while !mounted.shows(row), Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+            mounted.host.settle(passes: 1)
+        }
     }
 
     private func press(_ characters: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags = [],
@@ -357,7 +367,7 @@ final class ComposerEditorTests: XCTestCase {
         ]
         for (name, draft, make) in composers {
             let mounted = try make()
-            try type("/re", into: mounted)
+            try type("/re", into: mounted, showing: "/review")
             XCTAssertTrue(mounted.shows("/review"), "The typed list shows (\(name))")
             XCTAssertTrue(mounted.shows("/release-notes"), name)
             try press(down, keyCode: 125, in: mounted)
@@ -368,7 +378,7 @@ final class ComposerEditorTests: XCTestCase {
 
             draft.text = ""
             mounted.host.settle()
-            try type("/re", into: mounted)
+            try type("/re", into: mounted, showing: "/review")
             try press("\t", keyCode: 48, in: mounted)
             XCTAssertEqual(draft.text, "/review ", "Tab chooses the first row (\(name))")
         }
@@ -386,7 +396,7 @@ final class ComposerEditorTests: XCTestCase {
         ]
         for (name, make) in composers {
             let mounted = try make()
-            try type("Explain @read", into: mounted)
+            try type("Explain @read", into: mounted, showing: "README.md")
             XCTAssertTrue(mounted.shows("README.md"), "The `@` list shows (\(name))")
             try press("\u{1b}", keyCode: 53, in: mounted)
             XCTAssertFalse(mounted.shows("README.md"), "Escape closes it (\(name))")
@@ -406,7 +416,7 @@ final class ComposerEditorTests: XCTestCase {
         ]
         for (name, draft, make) in composers {
             let mounted = try make()
-            try type("Explain @sess", into: mounted)
+            try type("Explain @sess", into: mounted, showing: "Session.swift")
             try press("\r", keyCode: 36, in: mounted)
             XCTAssertEqual(draft.text, "Explain", name)
             XCTAssertEqual(draft.attachments, [.mention(name: "Session.swift",
@@ -741,7 +751,7 @@ final class ComposerEditorTests: XCTestCase {
         for modifiers in [NSEvent.ModifierFlags.shift, .command] {
             let probe = FollowUpProbe()
             let mounted = try mount(followUpComposer(.claudeCode, probe, preferred: .steer))
-            try type("/re", into: mounted)
+            try type("/re", into: mounted, showing: "/review")
             XCTAssertTrue(mounted.shows("/review"))
             try press("\r", keyCode: 36, modifiers: modifiers, in: mounted)
             XCTAssertEqual(probe.draft.text, "/review ", "The modified Return chooses the highlighted row")
