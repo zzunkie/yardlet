@@ -3,6 +3,8 @@ import Foundation
 /// Editing is a local draft operation, never a provider retry or a connection attempt.
 enum TranscriptRecoveryProjection {
     static func errorSummary(_ message: String) -> String {
+        // The CLI's own words name a screen a task here does not have.
+        if ProviderSignIn.asksToSignIn(message) { return ProviderSignIn.prompt }
         let value = try? JSONDecoder().decode(JSONValue.self, from: Data(message.utf8))
         let source = (value?["message"]?.stringValue ?? value?["error"]?["message"]?.stringValue)
             .map(unwrappedErrorMessage) ?? message

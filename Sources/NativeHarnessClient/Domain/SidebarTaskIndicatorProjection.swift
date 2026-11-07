@@ -45,7 +45,8 @@ enum SidebarTaskStatus: Equatable, Sendable {
         case .awaitingApproval: L10n.string("Awaiting input")
         case .needsInput: L10n.string("Awaiting answer")
         case .waitingInBrowser: L10n.string("Waiting in the browser")
-        case .failed: L10n.string("Task encountered a system error")
+        case let .failed(message):
+            L10n.string(message.map(ProviderSignIn.asksToSignIn) == true ? "Not signed in" : "Task encountered a system error")
         case let .usageLimit(limit): ProviderNoticeText.limitHeadline(limit)
         case .running: L10n.string("Running")
         case .reconnecting: L10n.string("Reconnecting")
@@ -56,6 +57,8 @@ enum SidebarTaskStatus: Equatable, Sendable {
     /// The line a row's help adds: the name, and the error or the limit's reset when known.
     var help: String {
         switch self {
+        case let .failed(message?) where ProviderSignIn.asksToSignIn(message):
+            return ProviderSignIn.prompt
         case let .failed(message?):
             let summary = TranscriptRecoveryProjection.errorSummary(message)
             return summary.isEmpty ? accessibilityName : accessibilityName + "\n" + summary

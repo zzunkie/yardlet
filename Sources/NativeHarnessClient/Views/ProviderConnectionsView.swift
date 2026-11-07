@@ -63,7 +63,8 @@ struct ProviderConnectionPicker: View {
                 maxListHeight: 330)
                 .padding(16).frame(width: 610)
         }
-        .task(id: harness) {
+        // Again when the runtime changes: one only the login shell's `PATH` finds comes after launch.
+        .task(id: [harness.rawValue, runtimeSelections.selectedURL(for: harness)?.path(percentEncoded: false) ?? ""]) {
             await store.checkNewTaskAccounts(for: harness, runtimeSelections: runtimeSelections)
         }
     }

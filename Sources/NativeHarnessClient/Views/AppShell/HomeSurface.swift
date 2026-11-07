@@ -746,6 +746,16 @@ private struct NewTaskComposer: View {
         return choice.canSelect
     }
 
+    /// The account the next task starts on, when it has to be signed in to first. Said before the
+    /// first message rather than as that message's failure.
+    private var accountNeedingSignIn: AccountChoice? {
+        guard let harness = draft.harness, let connections, runtimeURL != nil, !startsOnAutomaticAccount,
+              let choice = connections.choices(for: [harness]).first(where: { $0.connection?.id == connections.selection[harness] }),
+              choice.snapshot?.state == .signedOut,
+              AccountListProjection.offersConnect(choice, mode: .newTask(harness)) else { return nil }
+        return choice
+    }
+
     /// The next task starts on the account automatic assignment picks when it is sent.
     private var startsOnAutomaticAccount: Bool {
         guard let harness = draft.harness else { return false }
@@ -838,6 +848,12 @@ private struct NewTaskComposer: View {
                              action: "Manage harnesses", perform: onShowHarnesses)
             } else if availableHarnesses.isEmpty {
                 homeGuidance("Add a harness to start a task.", action: "Manage harnesses", perform: onShowHarnesses)
+            }
+
+            if let signIn = accountNeedingSignIn {
+                homeGuidance(signIn.snapshot?.detail ?? ProviderSignIn.neededHere(signIn.harness), action: "Sign in") {
+                    onConnectAccount?(signIn) ?? onShowHarnesses()
+                }
             }
 
             if startsOnAutomaticAccount, let harness = draft.harness, let accounts {

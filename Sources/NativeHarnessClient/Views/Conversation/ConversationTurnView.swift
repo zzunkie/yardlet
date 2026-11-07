@@ -45,7 +45,8 @@ struct ConversationTurnOffers: Equatable, Sendable {
         let actions = context.actions
         self.actions = [actions.chooseOption != nil, actions.answer != nil, actions.showHarnessSettings != nil,
                         actions.subtaskControls != nil, actions.subtaskControls?.stop != nil,
-                        actions.providerNotices != nil, actions.rewind != nil, actions.runInTerminal != nil]
+                        actions.providerNotices != nil, actions.rewind != nil, actions.runInTerminal != nil,
+                        actions.signIn != nil, actions.signIn?.moveTo != nil]
         autoContinueResetsAt = actions.providerNotices?.autoContinueResetsAt
         canContinue = actions.providerNotices?.canContinue ?? false
         switchError = actions.providerNotices?.switchError
@@ -435,7 +436,8 @@ struct ConversationTurnView: View, Equatable {
                 harness: context.harness, title: error.title, message: error.message,
                 recoverable: error.isRecoverable,
                 onRetry: retry, onEditRequest: isTurnOutcome ? editFailedRequest : nil,
-                onShowHarnessSettings: error.entryID == nil || retry != nil ? nil : context.actions.showHarnessSettings
+                onShowHarnessSettings: error.entryID == nil || retry != nil ? nil : context.actions.showHarnessSettings,
+                signIn: isTurnOutcome ? context.actions.signIn : nil
             )
         case let .usageLimit(limit, entryID):
             // Only the card the task continues from offers to continue, under another account or

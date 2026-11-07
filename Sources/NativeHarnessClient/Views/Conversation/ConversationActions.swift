@@ -1,5 +1,12 @@
 import SwiftUI
 
+/// The way out of a turn that failed for a missing sign-in: the harness's own sign-in, and a move to
+/// another signed-in account that shares the task's history, when there is one.
+struct ConversationSignIn {
+    var signIn: () -> Void
+    var moveTo: (name: String, action: () -> Void)? = nil
+}
+
 /// What a task's conversation can ask of the app: answers to requests, Codex turn actions, edits,
 /// and what the task around the conversation offers.
 ///
@@ -67,6 +74,8 @@ struct ConversationActions {
     // MARK: The task around the conversation
 
     var showHarnessSettings: (() -> Void)? = nil
+    /// What a turn that failed for a missing sign-in offers; nil while the task's login is signed in.
+    var signIn: ConversationSignIn? = nil
     /// Runs a command in the task's terminal, opening it: "Run in terminal" on every harness's
     /// command card (plan B10). Nil where the conversation has no terminal of its own.
     var runInTerminal: ((String) -> Void)? = nil

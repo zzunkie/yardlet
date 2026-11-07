@@ -22,6 +22,41 @@ import XCTest
         XCTAssertNil(store.selection[.codex], "The original native storage binding remains nil")
     }
 
+    /// A first run with Claude history and no Claude Code login: the row and the new-task chip say
+    /// so, and a task can always be given an account while no saved one is signed in.
+    func testASignedOutDefaultLoginSaysSoAndStaysUntilASavedAccountIsSignedIn() throws {
+        let store = ProviderConnectionStore()
+        store.publishDefaults([snapshot(.claudeCode, state: .signedOut, email: nil)])
+        var choice = try XCTUnwrap(store.choices(for: [.claudeCode]).first)
+        XCTAssertEqual(choice.title, L10n.string("Not signed in"))
+        XCTAssertEqual(choice.composerTitle, L10n.string("Not signed in"))
+        XCTAssertEqual(choice.status, L10n.string("Not signed in"))
+        XCTAssertTrue(AccountListProjection.offersConnect(choice, mode: .newTask(.claudeCode)))
+
+        let saved = ProviderConnection(id: "second", name: "Second", harness: .claudeCode, providerID: nil,
+                                       homePath: "/tmp/second", credentialSelector: nil)
+        try store.save(saved)
+        store.publish(snapshot(.claudeCode, state: .unknown, email: nil), for: saved)
+        XCTAssertEqual(store.choices(for: [.claudeCode]).count, 2, "A saved account that could not be read leaves the default its row")
+        store.publish(snapshot(.claudeCode), for: saved)
+        choice = try XCTUnwrap(store.choices(for: [.claudeCode]).first)
+        XCTAssertEqual(choice.connection, saved, "A saved account signed in is the one left to choose")
+        XCTAssertEqual(store.selection[.claudeCode], saved.id, "And new tasks start on it at once")
+    }
+
+    /// The account of a login with no address comes from the config file, and only the account.
+    func testAClaudeConfigFileNamesItsAccountWithoutTheCLI() throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: "claude-config-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        XCTAssertNil(HarnessAccountBroker.claudeConfigIdentity(file: file))
+        try Data(#"{"oauthAccount":{"emailAddress":"owner@example.test","organizationName":"Example Team"}}"#.utf8).write(to: file)
+        let identity = try XCTUnwrap(HarnessAccountBroker.claudeConfigIdentity(file: file))
+        XCTAssertEqual(identity.displayLabel, "owner@example.test")
+        XCTAssertEqual(identity.groupingOrganization, "Example Team")
+        try Data(#"{"projects":{}}"#.utf8).write(to: file)
+        XCTAssertNil(HarnessAccountBroker.claudeConfigIdentity(file: file))
+    }
+
     func testDefaultAndAdditionalAccountRemainInOneScopedListAndSelectionDoesNotChangeOtherHarness() throws {
         let store = ProviderConnectionStore()
         let additional = ProviderConnection(id: "pi-second", name: "Second", harness: .pi, providerID: "anthropic", homePath: "/tmp/pi-second", credentialSelector: nil)

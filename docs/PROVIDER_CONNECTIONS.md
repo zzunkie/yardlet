@@ -49,6 +49,8 @@ The latest screen flow and design decisions follow [ACCOUNT_SELECTION_UX.md](ACC
   their app bundles, 2026-11-02.
 - When usage is not published, it is shown as not available. Short-term and long-term limits are shown separately,
   not combined, and a limit without a number is not turned into 0.
+- A login that cannot work says so before anything is sent ("Signing in when a login is missing" below): the account
+  row and the chip read "Not signed in", and the new-task screen offers **Sign in** above the composer's controls.
 
 ## Support boundaries
 
@@ -135,7 +137,10 @@ one, it is the newest version among the installs on this Mac; a runtime the pers
 CLI Updates offers a newer install found elsewhere. Installs are looked for in the desktop apps' bundles and where the
 person's shell would find them, not only in Yardlet's own `PATH`, which has only the system's folders when Yardlet
 opens from the Dock: `~/.local/bin`, the package managers' folders (bun, Volta, Cargo, Deno, `~/.npm-global/bin`,
-pnpm, each Node version of nvm), Homebrew, `/usr/local/bin`, `PATH` and the system. The same account can see different models depending on the
+pnpm, asdf's and mise's shims, each Node version of nvm), Claude Code's older `~/.claude/local`, Homebrew,
+`/usr/local/bin`, the `PATH` the login shell sets (`LoginShellPath`, read in the background at launch, which
+`findNewest()` waits for) and the system. `--version`, status checks and limit reads run with the same `PATH`, so a CLI
+installed as a Node script finds `node`. The same account can see different models depending on the
 runtime's version: the App Server's `model/list` answered one user's older Codex without the GPT-6.1 models. The
 versions are read off the main thread at launch, only for installs that changed since the last launch; until then the
 choice rests on the versions read before. The window and the task list do not wait for the read, but the launch's
@@ -197,6 +202,54 @@ history in its account's folder (`ProviderSessionTitlePaths.forAccount`). Import
 too: the import list's `session/list` and the replay's `session/load` run in that account's environment, and the task
 imported keeps that account ([NATIVE_SESSION_STORAGE.md](NATIVE_SESSION_STORAGE.md), "Importing conversations from
 other apps").
+
+## Signing in when a login is missing
+
+The Claude app runs Claude Code with its own sign-in, which it hands to the CLI it starts as an environment variable and
+keeps nowhere the CLI looks. Someone who only ever used the app has history in `~/.claude`, which Yardlet reads and
+imports, and no Claude Code login, so the first turn would end in the CLI's "Not logged in · Please run /login". Yardlet
+never reads or reuses the app's sign-in. It reads under `~/Library/Application Support/Claude` only: the session and
+schedule lists, the scratch folders' path, and the bundled CLI it can run.
+
+- **Before a turn.** `claude auth status` answers without a prompt, a turn or a token renewal. A login it reports as
+  signed out reads "Not signed in" on its row and the chip (a login with no name is never shown as a working account:
+  a default login reads by its state, "Default login" when it works but names no address). The new-task screen says what
+  is needed and offers **Sign in**, the harness's own `claude auth login`. A Claude task on a login read as signed out
+  reads it once more and, still signed out, fails at once with no CLI started (`AppModel.isSignedOut`,
+  `HarnessSignInRequired`). The CLI waits for its MCP servers before its first turn, up to 30 seconds for one that
+  does not answer, so a failure left to the turn would take that long to say the same.
+- **Status checks.** A Claude check has 30 seconds. When it cannot finish, or names no address, the account comes from
+  `oauthAccount` in the login's `.claude.json`, which needs no prompt; a CLI signed in with a key or a token from elsewhere
+  has no account, so a name left there by an earlier sign-in is not used.
+- **A turn the CLI refused.** Claude Code's refusal that names `/login` is the error card alone, without the same words
+  as an answer (`ClaudeSessionProjection`, `ProviderSignIn.asksToSignIn`); `/login` is a screen tasks here do not have.
+  The card offers **Sign in** and, when another signed-in account shares the task's history (`TaskAccountSwitch`),
+  **Continue with** that account, which moves the task as the task menu does. Its details keep the CLI's words, the
+  sidebar's help and the notification say the same as the card, and the account is read again. A key the CLI rejects
+  ("Fix external API key") stays a plain error: a sign-in does not fix it.
+- **After a sign-in.** The first reading of a login as signed in after any other (`ProviderConnectionStore.onSignedIn`)
+  makes it usable at once. A saved account replaces a default login that is signed out, or a Claude one that could not
+  be confirmed, as the account new tasks start on; a choice the person made stands. A CLI that found no login keeps
+  running on that answer, so each idle one on that login ends, on screen or not, and the task's next message resumes the
+  same conversation (`AppModel.continueTasks`). Its provider ID, history and binding stay. A task that failed for the
+  sign-in reads ready again. A task is not moved to another account without the person's click.
+- **A login only the terminal has.** `claude` in a terminal can be signed in from something an app does not get: an API
+  key or token a profile exports, or another `CLAUDE_CONFIG_DIR`, whose login is in its own Keychain item (the item name
+  ends in a digest of the folder). Yardlet takes only `PATH` from the login shell, and the same read says, by name and
+  without the value, which of `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` and
+  `ANTHROPIC_AUTH_TOKEN` it sets (`LoginShellPath.claudeSignInNames`). The signed-out line then says so. Nothing is copied.
+- **An app opened by an agent.** `open` hands the calling shell's variables to the app, and an agent's session has
+  its own. They are dropped at launch (`HostSessionEnvironment`): the `CLAUDE_CODE_*` family, which holds the Claude
+  app's token, and the API key, token, base URL and headers that session runs with.
+- **Renewals are not cut off.** A renewal gets a new refresh token and retires the old one, and Claude Code, told that a
+  stored refresh token is dead, clears the login from the store every program on that login shares. So a CLI read for its
+  limits is never stopped first: the end of its input ends it, also at the time limit, and only one still running 20
+  seconds later is stopped (`ClaudeUsageProbe`). `auth status` contacts no server, so its time limit cuts nothing off.
+- **What is recorded.** `~/.yardlet/logs/account-checks.log` (one JSON object a line, 0600, the newest half kept past
+  512 KiB) holds each Claude status check and each refused turn: the program, the config folder, state, exit code, how
+  long it took, the CLI's `authMethod` and `apiProvider`, and for a login that was not found, whether its Keychain item
+  exists (identity only, never its value) and the shell variables above by name. It holds no credential, address or CLI
+  output, and nothing sends it.
 
 ## Claude plan limit lookup (2026-10-06)
 

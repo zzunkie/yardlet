@@ -349,6 +349,24 @@ struct MainWindow: View {
     }
 
     /// Every entry to a task's settings opens the one harness settings sheet (plan B6).
+    /// The way out of a failed turn while the task's login is not signed in. Only a failed task
+    /// asks: whether an account shares its history is read from the folders.
+    private func signInRecovery(for session: SessionRecord) -> ConversationSignIn? {
+        guard session.status == .failed || session.completionState == .failed else { return nil }
+        let account = model.connections.choice(for: session.harness, connection: session.connection)
+        guard account.snapshot?.state != .signedIn else { return nil }
+        let other = model.connections.choices(for: [session.harness]).first { choice in
+            guard let connection = choice.connection, connection != session.connection,
+                  choice.snapshot?.state == .signedIn else { return false }
+            return TaskAccountSwitch.allows(connection, for: session)
+        }
+        return ConversationSignIn(signIn: { presentAccounts(session.harness, connect: account) },
+            moveTo: other.flatMap { choice in choice.connection.map { connection in
+                let move: () -> Void = { Task { await model.chooseAccount(connection, for: session) } }
+                return (choice.title, move)
+            } })
+    }
+
     private func presentHarnessSettings(_ session: SessionRecord) {
         rememberShellFocus()
         harnessSettingsSession = session
@@ -1662,6 +1680,7 @@ struct MainWindow: View {
                 restoreFiles: { try await model.restoreClaudeFiles($0) }
             ),
             showHarnessSettings: { presentHarnessSettings(session) },
+            signIn: signInRecovery(for: session),
             providerNotices: providerNotices(for: session),
             readSubtask: { activity in
                 try await model.readClaudeSubtask(activityID: activity.id, from: session)

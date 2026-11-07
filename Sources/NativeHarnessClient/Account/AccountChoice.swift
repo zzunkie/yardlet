@@ -18,7 +18,7 @@ struct AccountChoice: Identifiable, Equatable {
         if let label = snapshot?.accountLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
             return label
         }
-        return knownLabel ?? identity.displayLabel
+        return (snapshot?.state == .signedOut ? nil : knownLabel) ?? identity.displayLabel
     }
     /// The organization beside the address in an account row: a team's name, or "Personal" for
     /// the address's own (`AccountIdentityProjection.organizationTitle`).
@@ -63,7 +63,8 @@ struct AccountChoice: Identifiable, Equatable {
         guard let snapshot else { return L10n.string("Checking account…") }
         switch snapshot.state {
         case .signedIn: return L10n.string("Connected")
-        case .signedOut: return L10n.string("No saved connection")
+        case .signedOut:
+            return L10n.string(AccountConnectionPresentation.usesProviderLanguage(harness) ? "No saved connection" : "Not signed in")
         case .unavailable: return L10n.string("Runtime unavailable")
         case .actionRequired: return L10n.string("Account needs attention")
         case .unknown:
@@ -85,9 +86,11 @@ enum AccountChoiceProjection {
         harnesses.flatMap { harness in
             let stored = connections.filter { $0.harness == harness }
             // A default login the runtime reports as signed out is not an account to choose once
-            // saved accounts exist for this harness (Session Switch account folders leave
-            // `~/.claude` without a login, for example).
-            let native = stored.isEmpty || defaults[harness]?.state != .signedOut
+            // saved accounts exist for this harness (Session Switch account folders leave `~/.claude`
+            // without a login, for example). It stays, with its sign-in, when every saved account has
+            // been read and none is signed in, so the list always holds something a task can start on.
+            let native = defaults[harness]?.state != .signedOut
+                || stored.allSatisfy { snapshots[$0.id].map { $0.state != .signedIn } ?? false }
                 ? [AccountChoice(harness: harness, connection: nil, snapshot: defaults[harness],
                                  knownLabel: knownLabels[AccountChoice.nativeID(for: harness)])] : []
             return native + stored.map {

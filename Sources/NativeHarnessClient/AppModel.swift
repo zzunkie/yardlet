@@ -651,6 +651,9 @@ final class AppModel {
             self?.noteMemorySaverScreen()
         }
         taskWorkspaces.onSideChatClose = { [weak self] id in self?.endSideChat(of: id) }
+        self.connections.onSignedIn = { [weak self] harness, connection in
+            Task { await self?.continueTasks(afterSignInOf: harness, connection: connection) }
+        }
         resourceMonitor.request = { [weak self] in self?.taskResourceRequest() ?? TaskResourceRequest() }
         resourceMonitor.describe = { [weak self] in self?.taskResourceDescription($0) }
         systemNotificationCenter.setResponseHandler { [weak self] response in
@@ -5274,12 +5277,13 @@ final class AppModel {
         do { try connection?.validate(for: harness) } catch { return }
         switch harness {
         case .claudeCode:
-            guard let workspaceURL else { return }
             let adapter = await registry.adapter(for: .claudeCode, executableURL: runtimeURL,
                                                  environmentScope: .native, connection: connection)
+            // A new task with no folder yet still lists its models; a session with no turn writes nothing.
             guard (try? await adapter.probeRuntime()) != nil,
                   let handle = try? await adapter.createSession(CreateHarnessSessionRequest(
-                      localSessionID: UUID(), workspaceURL: workspaceURL, initialPrompt: nil)) else { return }
+                      localSessionID: UUID(), workspaceURL: workspaceURL ?? FileManager.default.homeDirectoryForCurrentUser,
+                      initialPrompt: nil)) else { return }
             let models = await (adapter as? any HarnessModelCatalogReporting)?.advertisedModels(for: handle.localSessionID)
             await adapter.close(handle)
             if let models { modelCatalogs.recordClaude(models, for: connection) }
@@ -6268,8 +6272,12 @@ final class AppModel {
     /// processes keeping a core busy (its terminal's among them), child tasks and subagents still working, and an edit,
     /// move or continuation under way. An idle terminal does not keep it: the shell goes on without the runtime.
     func memorySaverKeeps(_ session: SessionRecord) -> String? {
+        memorySaverOnScreenIDs().contains(session.id) ? "on screen" : workKeepingRuntime(of: session)
+    }
+
+    /// What needs the task's runtime whether or not the task is on screen.
+    private func workKeepingRuntime(of session: SessionRecord) -> String? {
         let id = session.id
-        if memorySaverOnScreenIDs().contains(id) { return "on screen" }
         // A side chat's runtime holds its whole conversation: its harness keeps none of it.
         if store.isTemporary(id) { return "side chat" }
         if session.status == .running || session.status == .waitingForApproval
@@ -6306,9 +6314,10 @@ final class AppModel {
     /// (`eventStreamEnded`), but the task stays ready and its next message resumes the same provider session. Nothing
     /// is sent to the conversation. A Codex thread with a background terminal stays, and so does one whose terminals the
     /// App Server could not list.
-    func endRuntimeToSaveMemory(_ id: UUID) async {
+    func endRuntimeToSaveMemory(_ id: UUID, evenOnScreen: Bool = false) async {
         guard let adapter = adaptersBySessionID[id], let handle = handlesBySessionID[id],
-              let session = store.sessions.first(where: { $0.id == id }), memorySaverKeeps(session) == nil else { return }
+              let session = store.sessions.first(where: { $0.id == id }),
+              (evenOnScreen ? workKeepingRuntime(of: session) : memorySaverKeeps(session)) == nil else { return }
         if session.harness == .codex {
             guard let terminals = await codexBackgroundTerminals(of: session), terminals.isEmpty else { return }
         }
@@ -6320,7 +6329,7 @@ final class AppModel {
         }
         // The person may have come back to it meanwhile.
         guard handlesBySessionID[id] == handle, let current = store.sessions.first(where: { $0.id == id }),
-              memorySaverKeeps(current) == nil else { return }
+              (evenOnScreen ? workKeepingRuntime(of: current) : memorySaverKeeps(current)) == nil else { return }
         eventTasksBySessionID.removeValue(forKey: id)?.cancel()
         codexPresentationTasks.removeValue(forKey: id)?.cancel()
         followUpDrainTasks.removeValue(forKey: id)?.cancel()
@@ -6738,6 +6747,8 @@ final class AppModel {
         // A harness starts in the task's folder; one that is gone is the reason, not the launch's words.
         if let missing = taskFolderMissing(session) { throw missing }
         let session = await sessionWithAvailableRuntime(session)
+        // A login just read as signed out is the reason, before a CLI starts and a turn says the same.
+        if await isSignedOut(session) { throw HarnessSignInRequired() }
         // Opening a task is the one moment a row written before worktree origins existed may
         // gain one, and only when its folder really is a worktree. Launch never rescans.
         try? await store.recordWorkspaceOriginIfMissing(id: session.id)
@@ -7300,6 +7311,8 @@ final class AppModel {
             keepLiveContextUsage(usage, for: event.localSessionID)
         case let .error(message, _, _):
             errorBySessionID[event.localSessionID] = message
+            let asksToSignIn = ProviderSignIn.asksToSignIn(message)
+            if asksToSignIn { noteSignInRefused(message, for: event.localSessionID) }
             let shouldMarkUnread = !isSessionVisible(event.localSessionID)
             try? await store.updateSession(
                 id: event.localSessionID,
@@ -7311,7 +7324,7 @@ final class AppModel {
                 await postBackgroundNotification(
                     for: event.localSessionID,
                     status: .failed,
-                    detail: message
+                    detail: asksToSignIn ? ProviderSignIn.prompt : message
                 )
             }
         default:
@@ -8054,6 +8067,40 @@ final class AppModel {
                 return (session.id, selection)
             }
         )
+    }
+
+    /// Whether the login a Claude task runs on was read as signed out, and still is when read again.
+    /// Only `auth status` runs, which starts no turn and no refresh.
+    private func isSignedOut(_ session: SessionRecord) async -> Bool {
+        guard session.harness == .claudeCode else { return false }
+        let account = connections.choice(for: session.harness, connection: session.connection)
+        guard account.snapshot?.state == .signedOut else { return false }
+        await connections.check(account, policy: .refresh, runtimeSelections: runtimeSelections)
+        return connections.choice(for: session.harness, connection: session.connection).snapshot?.state == .signedOut
+    }
+
+    /// A turn the CLI refused for its sign-in, which the account's reading may not know yet.
+    private func noteSignInRefused(_ message: String, for sessionID: UUID) {
+        guard let session = store.sessions.first(where: { $0.id == sessionID }) else { return }
+        AccountCheckLog.record(AccountCheckLog.Entry(event: "turn-refused", harness: session.harness.rawValue,
+            account: session.connection?.id ?? "default", runtime: session.runtimeExecutableURL.path(percentEncoded: false),
+            configHome: session.connection?.homePath ?? "default", failure: message))
+        let account = connections.choice(for: session.harness, connection: session.connection)
+        Task { await connections.check(account, policy: .refresh, runtimeSelections: runtimeSelections) }
+    }
+
+    /// A login was just read signed in. A CLI that found none keeps running on that answer, so each
+    /// idle one on this login ends and the task's next message starts one that reads it. The
+    /// provider ID, history and binding stay, and a task that failed for it reads ready again.
+    func continueTasks(afterSignInOf harness: HarnessKind, connection: ProviderConnection?) async {
+        for session in store.sessions where session.harness == harness && session.connection == connection {
+            guard session.status != .running, session.status != .waitingForApproval else { continue }
+            if handlesBySessionID[session.id] != nil { await endRuntimeToSaveMemory(session.id, evenOnScreen: true) }
+            if let error = errorBySessionID[session.id], ProviderSignIn.asksToSignIn(error) {
+                errorBySessionID.removeValue(forKey: session.id)
+                try? await store.updateSession(id: session.id, status: .ready)
+            }
+        }
     }
 
     private func recordLocalError(_ message: String, for sessionID: UUID) {

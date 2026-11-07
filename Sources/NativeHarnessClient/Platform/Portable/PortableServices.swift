@@ -43,6 +43,7 @@ enum MacConditionReader {
 extension HarnessAccountBroker {
     /// Where the Antigravity CLI keeps its credential on this platform is not known.
     static func antigravityCredentialState() -> AccountAuthState { .unknown }
+    static func claudeCredentialItem(configDirectory: String?) -> String { "unreadable" }
 }
 
 extension ShellLaunchEnvironment {

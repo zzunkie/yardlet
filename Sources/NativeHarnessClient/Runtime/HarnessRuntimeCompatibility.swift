@@ -82,6 +82,9 @@ enum HarnessRuntimeVersionProbe {
         let pipe = Pipe()
         process.executableURL = executableURL
         process.arguments = ["--version"]
+        // As every other run of the runtime: a CLI installed as a Node script (npm's `claude` and
+        // `codex`) finds `node` beside it or on the login shell's `PATH`, not in launchd's.
+        process.environment = RuntimeProcessEnvironment.values(executableURL: executableURL)
         process.standardOutput = pipe
         process.standardError = pipe
         try NativeProcessTree.run(process)

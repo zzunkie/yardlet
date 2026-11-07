@@ -59,6 +59,12 @@ struct ClaudeSessionProjection: Sendable {
         if frame["type"]?.stringValue == "assistant", frame["error"]?.stringValue == "rate_limit" {
             return [.usageLimitReached(stoppedTurn(message: assistantText(frame), in: frame))]
         }
+        // A turn the CLI could not sign in for is no answer: its `result` brings the same words,
+        // which become the card that offers the sign-in.
+        if frame["type"]?.stringValue == "assistant", frame["error"]?.stringValue == "authentication_failed",
+           ProviderSignIn.asksToSignIn(assistantText(frame)) {
+            return []
+        }
 
         if frame["type"]?.stringValue == "assistant" {
             for block in frame["message"]?["content"]?.arrayValue ?? [] {

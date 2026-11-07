@@ -4,12 +4,27 @@ import Foundation
 /// official CLI answers a `get_usage` control request with its own login. No model request is
 /// sent, no conversation is written, and Yardlet never handles a credential.
 enum ClaudeUsageProbe {
+    /// Waits off this path for a CLI whose input ended, and stops it only past `grace`. Its output
+    /// stays open and read meanwhile, as a closed one would end the CLI at its next write.
+    private static func endWhenDone(_ process: Process, output: Pipe, grace: Duration) {
+        output.fileHandleForReading.readabilityHandler = { _ = $0.availableData }
+        Task.detached(priority: .utility) {
+            let deadline = ContinuousClock.now + grace
+            while process.isRunning, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(100)) }
+            if process.isRunning { NativeProcessTree.terminate(process: process) }
+            process.waitUntilExit()
+            output.fileHandleForReading.readabilityHandler = nil
+        }
+    }
+
     static func read(
         executableURL: URL,
         environment: [String: String],
-        timeout: Duration = .seconds(20)
+        timeout: Duration = .seconds(20),
+        exitGrace: Duration = .seconds(20)
     ) async throws -> [AccountUsageMetric]? {
-        try await Task.detached(priority: .utility) {
+        await LoginShellPath.ready()
+        return try await Task.detached(priority: .utility) {
             // An empty private folder keeps the probe out of every project's settings and history.
             let folder = FileManager.default.temporaryDirectory
                 .appending(path: "Yardlet-ClaudeUsage-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -34,17 +49,23 @@ enum ClaudeUsageProbe {
             process.environment = values
             try NativeProcessTree.run(process)
 
+            // This process may be the one that renews the login: its token expired, and the server
+            // answers a renewal with a new refresh token and retires the old one. Stopped in between,
+            // the stored login holds a token the server no longer takes, and the next renewal ends the
+            // login for everything that shares it. So the CLI is never stopped first: the end of its
+            // input ends it, once it has saved what it is saving, and only one that stays past
+            // `exitGrace` is stopped.
+            let started = ContinuousClock.now
             let timeoutTask = Task {
-                do { try await Task.sleep(for: timeout) } catch { return false }
-                guard process.isRunning else { return false }
-                NativeProcessTree.terminate(process: process)
-                return true
+                do { try await Task.sleep(for: timeout) } catch { return }
+                try? input.fileHandleForWriting.close()
+                do { try await Task.sleep(for: exitGrace) } catch { return }
+                if process.isRunning { NativeProcessTree.terminate(process: process) }
             }
             defer {
                 timeoutTask.cancel()
                 try? input.fileHandleForWriting.close()
-                if process.isRunning { NativeProcessTree.terminate(process: process) }
-                process.waitUntilExit()
+                endWhenDone(process, output: output, grace: exitGrace)
             }
             for (id, request) in [("init", #"{"subtype":"initialize"}"#),
                                   ("usage", #"{"subtype":"get_usage","skip_behaviors":true}"#)] {
@@ -68,7 +89,7 @@ enum ClaudeUsageProbe {
                     return usage(from: value["response"]?["response"])
                 }
             }
-            if await timeoutTask.value { throw AccountCommandError.timedOut }
+            if ContinuousClock.now - started >= timeout { throw AccountCommandError.timedOut }
             return nil
         }.value
     }

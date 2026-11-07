@@ -47,9 +47,8 @@ struct AccountSnapshotCache {
                 id: id, harness: harness, providerID: providerID, state: state,
                 accountLabel: accountLabel, accountOrganization: accountOrganization,
                 accountPlan: accountPlan,
-                detail: L10n.string(state == .signedIn
-                    ? "The selected runtime reports usable authentication."
-                    : "No usable runtime-owned account was found."),
+                detail: state == .signedIn ? L10n.string("The selected runtime reports usable authentication.")
+                    : ProviderSignIn.neededHere(harness),
                 credentialOwner: HarnessCatalog.descriptor(for: harness)
                     .map { L10n.format("%@ credential store", $0.displayName) } ?? "",
                 checkedAt: checkedAt, usage: usage, usageResets: usageResets, canLogin: false, canLogout: false

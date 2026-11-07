@@ -118,9 +118,7 @@ enum AccountIdentityProjection {
             return AccountIdentity(
                 provider: provider,
                 accountKey: accountKey,
-                displayLabel: label.flatMap { $0.isEmpty ? nil : $0 }
-                    ?? connection?.name
-                    ?? L10n.string("Current connection"),
+                displayLabel: label.flatMap { $0.isEmpty ? nil : $0 } ?? unnamedLabel(connection, snapshot),
                 planLabel: snapshot?.accountPlan,
                 isIdentified: true
             )
@@ -130,12 +128,24 @@ enum AccountIdentityProjection {
         return AccountIdentity(
             provider: harnessScopePrefix + harness.rawValue,
             accountKey: connectionScopePrefix + fallbackScope,
-            displayLabel: label.flatMap { $0.isEmpty ? nil : $0 }
-                ?? connection?.name
-                ?? L10n.string("Current connection"),
+            displayLabel: label.flatMap { $0.isEmpty ? nil : $0 } ?? unnamedLabel(connection, snapshot),
             planLabel: nil,
             isIdentified: false
         )
+    }
+
+    /// What names a login that reported no account: a saved connection by its name, and the default
+    /// login by the state it was read in, so a row never reads as a working account it is not.
+    private static func unnamedLabel(_ connection: ProviderConnection?, _ snapshot: HarnessAccountSnapshot?) -> String {
+        if let name = connection?.name { return name }
+        guard let snapshot else { return L10n.string("Checking account…") }
+        switch snapshot.state {
+        case .signedOut:
+            return L10n.string(AccountConnectionPresentation.usesProviderLanguage(snapshot.harness)
+                ? "Provider not connected" : "Not signed in")
+        case .unavailable: return L10n.string("Runtime unavailable")
+        case .signedIn, .unknown, .actionRequired: return L10n.string("Default login")
+        }
     }
 }
 
