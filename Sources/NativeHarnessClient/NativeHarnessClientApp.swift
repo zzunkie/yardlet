@@ -460,19 +460,9 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct NativeHarnessClientApp: App {
     @NSApplicationDelegateAdaptor(NativeHarnessClientAppDelegate.self) private var appDelegate
-    @State private var model = Self.liveModel()
+    @State private var model = AppModel.live()
     /// The other Macs this one follows, each in a window of its own; nothing connects until one opens.
     @State private var remoteHosts = RemoteHostDirectory.live()
-
-    /// The app's model, once what Yardlet kept of addresses that carried a vault password is gone: before the task
-    /// workspaces and the browser host read it (`BrowserFilledValueCleanup`). Preferences saved under their earlier
-    /// keys are copied to their keys now first (`PreferenceKeyCarryOver`).
-    private static func liveModel() -> AppModel {
-        PreferenceKeyCarryOver.run()
-        MacAgentToolService.startPreparing()
-        BrowserFilledValueCleanup.runAtLaunch()
-        return AppModel.live()
-    }
 
     var body: some Scene {
         // A fixed scene ID keeps SwiftUI's own saved window frame from depending on the root view's type.
@@ -609,7 +599,9 @@ struct NativeHarnessClientApp: App {
                     // kept for the rest of the session.
                     let newestRuntimes = Task { await model.runtimeSelections.findNewest() }
                     await model.restoreIndex()
-                    if !model.usesVisualFixture {
+                    // What follows reads the restored tasks against what is kept beside them, so none of it
+                    // runs on a list that failed to load: it would take every saved task for gone.
+                    if !model.usesVisualFixture, model.hasRestoredIndex {
                         // What the last quit cut off continues alongside the rest of the launch.
                         Task {
                             await newestRuntimes.value

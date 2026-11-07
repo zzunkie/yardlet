@@ -206,6 +206,14 @@ import XCTest
         try await waitUntil { model.usageLimitAutoContinue[task.id] != nil }
         XCTAssertEqual(model.usageLimitAutoContinue[task.id]?.waits(for: later), true)
         XCTAssertNil(model.usageLimitAutoContinue[task.id]?.armedBy, "The person's own choice carries over")
+
+        // Archiving the task takes its armed continue along, the saved one too, so nothing is sent at
+        // the reset, nor after the task is unarchived or Yardlet relaunched.
+        XCTAssertNotNil(UsageLimitAutoContinue.load(from: fixture.defaults)[task.id])
+        await model.archive(try XCTUnwrap(model.store.sessions.first { $0.id == task.id }))
+        XCTAssertFalse(model.store.sessions.contains { $0.id == task.id })
+        XCTAssertNil(model.usageLimitAutoContinue[task.id])
+        XCTAssertNil(UsageLimitAutoContinue.load(from: fixture.defaults)[task.id])
     }
 
     /// An armed continue outlasts a relaunch, which Claude Code's own wait does not, and goes once the

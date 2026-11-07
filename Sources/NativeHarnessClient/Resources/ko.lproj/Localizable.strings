@@ -283,7 +283,7 @@
 "Codex steer is unavailable for this runtime" = "이 런타임에서는 Codex 조정을 사용할 수 없습니다";
 "Send" = "보내기";
 "Session failed" = "세션 실패";
-"Session index unavailable: %@" = "세션 인덱스를 사용할 수 없습니다: %@";
+"Yardlet could not open its task list, so it shows and saves no tasks until it is restarted: %@" = "작업 목록을 열 수 없어, Yardlet을 다시 시작할 때까지 작업을 보여 주거나 저장하지 않습니다: %@";
 "Show sidebar" = "사이드바 보기";
 "Reasoning effort" = "추론 강도";
 "Controls how much reasoning Grok applies to this session." = "이 세션에서 Grok이 적용할 추론 강도를 정합니다.";

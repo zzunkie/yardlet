@@ -56,26 +56,7 @@ extension AppModel {
                 fileURL: storageRootURL.appending(path: AccountAssignmentLog.fileName))
             return model
         } catch {
-            return AppModel(
-                store: SessionStore(repository: InMemorySessionRepository()),
-                runtimeSelections: RuntimeSelectionStore(),
-                codexEnvironmentManager: codexEnvironmentManager,
-                bootstrapError: L10n.format(
-                    "Session index unavailable: %@",
-                    error.localizedDescription
-                ),
-                codexTimelineItemRepository: FileCodexTimelineItemRepository.live(),
-                composerDraftRepository: FileComposerDraftRepository(
-                    directoryURL: FileManager.default.temporaryDirectory.appending(path: "yardlet-drafts")
-                ),
-                taskWorkspaceRepository: UserDefaultsTaskWorkspaceRepository(defaults: .yardlet),
-                taskSuggestionRepository: UserDefaultsTaskSuggestionRepository(defaults: .yardlet),
-                splitRepository: FileSplitRepository.live(),
-                projectRepository: FileProjectRepository.live(),
-                scheduleRepository: FileScheduledTaskRepository.live(),
-                legacyProjectFolderPreferences: LegacyProjectFolderPreferences.stored(in: .yardlet),
-                restoresIndexOnLaunch: false
-            )
+            return storageUnavailable(error, codexEnvironmentManager: codexEnvironmentManager)
         }
     }
 

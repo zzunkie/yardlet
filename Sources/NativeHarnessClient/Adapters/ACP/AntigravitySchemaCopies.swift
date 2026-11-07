@@ -21,7 +21,8 @@ import Foundation
 struct AntigravitySchemaCopies: Sendable {
     let directory: URL
     let table: any ProcessTableReading
-    /// The names a process runs under to count as `agy`: the CLI's own, and the executable Yardlet runs.
+    /// The names a process runs under to count as `agy`: the CLI's own, the executable Yardlet runs,
+    /// and at launch every install Yardlet finds, since an earlier run's process may still be running.
     let executableNames: Set<String>
 
     static var live: AntigravitySchemaCopies {
@@ -33,8 +34,16 @@ struct AntigravitySchemaCopies: Sendable {
 
     /// The same copies, counting processes of `executableURL` as `agy` too.
     func counting(_ executableURL: URL) -> AntigravitySchemaCopies {
-        AntigravitySchemaCopies(directory: directory, table: table,
-                                executableNames: executableNames.union([executableURL.lastPathComponent]))
+        counting([executableURL])
+    }
+
+    /// The same copies, counting processes of each of `executableURLs` as `agy` too: under the name
+    /// it was started by and, for a link, the name of the file it leads to, which is the name the
+    /// process table gives the running process.
+    func counting(_ executableURLs: some Sequence<URL>) -> AntigravitySchemaCopies {
+        let names = executableURLs.flatMap { [$0.lastPathComponent, $0.resolvingSymlinksInPath().lastPathComponent] }
+        return AntigravitySchemaCopies(directory: directory, table: table,
+                                       executableNames: executableNames.union(names.filter { !$0.isEmpty }))
     }
 
     /// `yardlet_` and 8, 16 or 64 lowercase hex digits, as `agy` names a second spec called `yardlet`.

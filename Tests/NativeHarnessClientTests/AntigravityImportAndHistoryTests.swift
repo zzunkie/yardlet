@@ -134,6 +134,16 @@ final class AntigravityImportAndHistoryTests: XCTestCase {
         table.remove(agy)
         table.set(agy &+ 1, parent: 1, start: microseconds(old.addingTimeInterval(-60)), name: "agy-nightly")
         XCTAssertEqual(copies.counting(URL(filePath: "/opt/bin/agy-nightly")).removeUnused(), [])
+        // Run through a link, the process carries the name of the file the link leads to; launch
+        // counts every install found so (`AppModel.live`).
+        let target = root.appending(path: "versions/agy-nightly")
+        let link = root.appending(path: "bin/agy")
+        for folder in [target, link] {
+            try FileManager.default.createDirectory(at: folder.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        try Data().write(to: target)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        XCTAssertEqual(copies.counting([link]).removeUnused(), [])
         XCTAssertEqual(copies.removeUnused(), ["yardlet_8f50b571", "yardlet_921068d5"])
         XCTAssertEqual(try listing(), Set(kept))
     }

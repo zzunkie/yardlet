@@ -283,7 +283,7 @@
 "Codex steer is unavailable for this runtime" = "Codex steer is unavailable for this runtime";
 "Send" = "Send";
 "Session failed" = "Session failed";
-"Session index unavailable: %@" = "Session index unavailable: %@";
+"Yardlet could not open its task list, so it shows and saves no tasks until it is restarted: %@" = "Yardlet could not open its task list, so it shows and saves no tasks until it is restarted: %@";
 "Show sidebar" = "Show sidebar";
 "Reasoning effort" = "Reasoning effort";
 "Controls how much reasoning Grok applies to this session." = "Controls how much reasoning Grok applies to this session.";

@@ -100,6 +100,12 @@ folder. Codex, Kimi Code and Grok Build account folders keep their own history.
 Yardlet keeps its link index in `~/.yardlet/session-index.sqlite3`, together with drafts and read caches. This data is
 separate from the harness's native conversations and session IDs.
 
+- **When the index cannot be opened at launch:** Yardlet does not know which tasks exist, so it runs with an empty task
+  list and keeps every record it would keep beside the index (window layout and tabs, projects, schedules, drafts, task
+  view state, read caches) in memory until it quits (`AppModel.storageUnavailable`). The launch work that compares saved
+  state with the restored tasks (continuing cut-off turns, armed continues, schedules, following the session list) does
+  not run, and the window says why until Yardlet is restarted. None of those records on disk change, so the next launch
+  that opens the index finds them as they were. Settings and sign-ins are used as usual.
 - **Codex read cache:** `~/.yardlet/transcripts/<task UUID>.json` keeps `[TranscriptEntry]`. Entry IDs are name-based
   UUIDs (v5) made from the thread, turn and item IDs, so they are the same at every checkpoint; the message that opened a
   turn is named from the turn ID alone. A reading position saved while the task was detached therefore connects to the
@@ -763,7 +769,10 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
   them, when no `agy` runs): every process writes the copies its sessions read after it starts, so such a folder belongs
   to no running process, and a later one that needs it writes it again. This runs in the background after an `agy acp`
   process Yardlet started has exited, and once at launch for what a quit or crash left; a process Yardlet starts waits
-  for a sweep in progress (`AntigravitySchemaCopies`). `mcp/yardlet/`, other servers' folders and anything written since
+  for a sweep in progress (`AntigravitySchemaCopies`). A process counts as `agy` under the CLI's own name, the name of
+  the executable Yardlet runs and, for a link, of the file it leads to (the name the process table gives); the launch
+  sweep counts every Antigravity CLI install Yardlet finds, and the earlier version run in place of one, since a process
+  of an earlier run may still be running. `mcp/yardlet/`, other servers' folders and anything written since
   the oldest running `agy` started stay, nothing is removed while the process table cannot be read, and QA runs, fixtures
   and tests remove nothing there.
 - **Saved options:** a task keeps its model, effort and permission mode under the names print mode used (`model`,

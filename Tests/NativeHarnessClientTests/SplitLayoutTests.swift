@@ -514,6 +514,16 @@ final class SplitLayoutTests: XCTestCase {
         XCTAssertEqual(model.store.selectedSessionID, b.id)
         await model.shutdown()
         XCTAssertEqual(splits.snapshot?.splits.first?.sessionIDs, [a.id, b.id])
+
+        // A launch whose task index could not be opened knows no tasks, so it keeps everything beside
+        // the index in memory, never counts as restored (the launch work that compares saved state
+        // with the tasks waits for that), and says why for the whole run.
+        let failed = AppModel.storageUnavailable(CocoaError(.fileReadCorruptFile), codexEnvironmentManager: nil)
+        await failed.restoreIndex()
+        XCTAssertFalse(failed.hasRestoredIndex)
+        XCTAssertFalse(failed.sessionListFollowIsReady)
+        XCTAssertNotNil(failed.storageFailure)
+        await failed.shutdown()
     }
 
     // MARK: - Helpers

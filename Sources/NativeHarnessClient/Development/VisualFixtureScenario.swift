@@ -151,11 +151,13 @@ struct VisualFixtureScenario: Sendable {
     }
 
     @MainActor
-    func makeModel(preferences: UserDefaults = .yardlet) -> AppModel {
-        let preferences = ShowcaseFixture.isRequested ? ShowcaseFixture.preferences()
-            : PerfBenchFixture.isRequested ? PerfBenchFixture.preferences() : preferences
+    func makeModel(preferences: UserDefaults? = nil) -> AppModel {
         let defaults = UserDefaults(suiteName: "NativeHarnessClient.VisualFixture") ?? .standard
         defaults.removePersistentDomain(forName: "NativeHarnessClient.VisualFixture")
+        // The fixture's own settings unless a test hands it some, as its runtime choices: what the model
+        // reads and writes there (a restart's record, an armed continue) never reaches the person's.
+        let preferences = ShowcaseFixture.isRequested ? ShowcaseFixture.preferences()
+            : PerfBenchFixture.isRequested ? PerfBenchFixture.preferences() : preferences ?? defaults
         let notificationCenter: any SystemNotificationCenter = if let initialNotificationAuthorization {
             FixtureSystemNotificationCenter(authorization: initialNotificationAuthorization)
         } else {

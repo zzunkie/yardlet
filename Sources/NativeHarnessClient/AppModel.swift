@@ -257,6 +257,9 @@ final class AppModel {
     @ObservationIgnored var followedAccountMovePreference: Bool?
     private(set) var sideChatErrors: [UUID: String] = [:]
     private(set) var bootstrapError: String?
+    /// Why this run keeps no tasks, when the task index could not be opened at launch
+    /// (`AppModel.storageUnavailable`). Unlike `bootstrapError`, nothing done later clears it.
+    var storageFailure: String?
     /// Archived tasks being restored, and the last restore or listing failure, for the archived list.
     private(set) var unarchivingSessionIDs = Set<UUID>()
     /// Tasks being renamed from their recent conversation, which their row shows at work.
@@ -3033,6 +3036,9 @@ final class AppModel {
         discardShellCommands(for: session.id)
         sessionTitleResolutionTasks.removeValue(forKey: session.id)?.cancel()
         sessionTitleRefreshes.removeValue(forKey: session.id)
+        // Before anything below waits: a timer that fired meanwhile would send to the task going away,
+        // or to it again once it is unarchived.
+        forgetContinuations(of: session.id)
         clearBackgroundNotificationDeduplication(for: session.id)
         agentTools?.releaseAgentTools(for: session.id)
         if let adapter = adaptersBySessionID.removeValue(forKey: session.id),
@@ -3091,6 +3097,13 @@ final class AppModel {
             codexSettledTurns.removeValue(forKey: session.id)
             codexItemSaveTasks.removeValue(forKey: session.id)?.cancel()
             codexPresentations.removeValue(forKey: session.id)
+            // Set from other sources too (a browser wait, a restart question), so emptying the
+            // conversation above does not always clear them.
+            if taskAttentionDetails[session.id] != nil { taskAttentionDetails.removeValue(forKey: session.id) }
+            _ = codexRailStates.removeValue(forKey: session.id)
+            missingTaskFolders.removeValue(forKey: session.id)
+            providerRetryBySessionID.removeValue(forKey: session.id)
+            rateLimitWarningBySessionID.removeValue(forKey: session.id)
             followUps.discard(session.id)
             codexPendingRequestRepository.remove(for: session.id)
             codexTimelineItemRepository.remove(for: session.id)
@@ -5363,6 +5376,14 @@ final class AppModel {
         sessionJobRelaunches.removeAll()
         restartResumeStartWaits.values.forEach { $0.cancel() }
         restartResumeStartWaits.removeAll()
+        // The timers that would continue a task stop with the quit. An account move's wait is left:
+        // cancelling it means "look again now".
+        usageLimitAutoContinueTasks.values.forEach { $0.cancel() }
+        usageLimitAutoContinueTasks.removeAll()
+        connectionResumeWaits.values.forEach { $0.cancel() }
+        connectionResumeWaits.removeAll()
+        sessionJobReads.values.forEach { $0.cancel() }
+        sessionJobReads.removeAll()
         routingEvaluationLoop?.cancel()
         // What waits for room stays written down and waits again at the next launch.
         sessionTools.admissionLoop?.cancel()
@@ -6426,6 +6447,24 @@ final class AppModel {
         if restartResumeNoticeSessionIDs.contains(id) { restartResumeNoticeSessionIDs.remove(id) }
         stopAskingRestartQuestion(id)
         forgetConnectionResume(id)
+    }
+
+    /// A task leaving the list (archived or deleted) takes along every continuation waiting for it: a
+    /// cut-off turn, a lost connection's resume, the continue armed for its limit's reset, the account
+    /// it was to move to, and the reads of its session jobs. Nothing of them fires afterwards, nor
+    /// once the task is unarchived; its next limit or move arms them again.
+    private func forgetContinuations(of id: UUID) {
+        personActed(on: id)
+        cancelUsageLimitAutoContinue(for: id)
+        usageLimitAutoContinueHandedOver.removeValue(forKey: id)
+        usageLimitSwitchErrorBySessionID.removeValue(forKey: id)
+        accountSwitchesAfterTurn.removeValue(forKey: id)
+        automaticAccountMoves.removeValue(forKey: id)
+        declinedAccountMoves.remove(id)
+        accountSwitchWaits.removeValue(forKey: id)?.cancel()
+        contextLimitRestarts.removeValue(forKey: id)
+        sessionJobReads.removeValue(forKey: id)?.cancel()
+        sessionJobsBySessionID.removeValue(forKey: id)
     }
 
     // MARK: Continuing after a lost connection
