@@ -1044,8 +1044,77 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
         try await render("local-composer-new-task-empty", size: size, titled: false, ready: ready, onMounted: { host.revealNewTask() }, focusedPlaceholder: NewTaskComposerText.placeholder(harnessName: HarnessKind.claudeCode.displayName)) {
             MainWindow(model: host)
         }
+        // Each window's title bar row is its top, with the window's buttons on it, the sidebar shown and hidden.
+        let remoteRow = try await titleBarRows("remote-title-bar", size: size, ready: ready) {
+            RemoteHostView(model: model, directory: hosts)
+        }
+        let localRow = try await titleBarRows("local-title-bar", size: size, ready: ready) {
+            // The main scene's own safe area rule, which `MainWindow` leaves to it.
+            MainWindow(model: host).ignoresSafeArea(.container, edges: .top)
+        }
+        XCTAssertEqual(remoteRow, localRow)
         hosts.close(paired.id)
         await host.shutdown()
+    }
+
+    /// The window's top as it draws in a window shaped as `.windowStyle(.hiddenTitleBar)` shapes the app's: first with the
+    /// sidebar shown, over the sidebar's column, then with it hidden, over the row's sidebar part. Each is one number for
+    /// each of the row's pixel lines, so two windows compare without comparing what their details show. The window's
+    /// buttons must be centred on the row.
+    private func titleBarRows<Content: View>(_ name: String, size: NSSize,
+                                             ready: @escaping ([WindowlessRender.AccessibilityElement]) -> Bool,
+                                             @ViewBuilder content: () -> Content) async throws -> [[Int]] {
+        let hosting = NSHostingView(rootView: content().environment(\.colorScheme, .light))
+        let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.contentView = hosting
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+        let themeFrame = try XCTUnwrap(hosting.superview)
+        func pixelLines(width: CGFloat) throws -> [Int] {
+            let bitmap = try WindowlessRender.capture(themeFrame)
+            let scale = bitmap.pixelsWide / Int(themeFrame.bounds.width)
+            let columns = Int(width) * scale
+            let background = bitmap.colorAt(x: columns - 2 * scale, y: scale)
+            return (0..<(Int(ParityTheme.titleBarHeight) * scale)).map { y in
+                (0..<columns).filter { bitmap.colorAt(x: $0, y: y) != background }.count
+            }
+        }
+        // At rest: the buttons on the row, and the row the same twice over once the sidebar's motion has ended.
+        func row(_ state: String, width: CGFloat) async throws -> [Int] {
+            var last: [Int] = []
+            try await waitUntil {
+                Self.turnRunLoop(hosting)
+                guard let button = window.standardWindowButton(.closeButton), let bar = button.superview,
+                      let lines = try? pixelLines(width: width) else { return false }
+                defer { last = lines }
+                let center = bar.convert(NSPoint(x: button.frame.midX, y: button.frame.midY), to: nil)
+                return abs(window.frame.height - center.y - ParityTheme.titleBarHeight / 2) < 1 && lines == last
+            }
+            try WindowlessRender.writePNG(WindowlessRender.capture(themeFrame), to: WindowlessRender.directory("remote-qa")
+                .appending(path: "\(name)-\(state).png"))
+            return last
+        }
+        try await waitUntil {
+            Self.turnRunLoop(hosting)
+            return ready(WindowlessRender.accessibilityElements(in: hosting))
+        }
+        let shown = try await row("sidebar-shown", width: SidebarWidth.minimum)
+        XCTAssertTrue(hosting.pressAccessibilityElement(labelled: L10n.string("Hide sidebar")))
+        try await waitUntil {
+            Self.turnRunLoop(hosting)
+            return WindowlessRender.accessibilityElements(in: hosting).contains { $0.label == L10n.string("Show sidebar") }
+        }
+        try await Task.sleep(for: .milliseconds(500))
+        let hidden = try await row("sidebar-hidden", width: TitleBarSidebarPart.collapsedWidth)
+        return [shown, hidden]
     }
 
     /// The local task as the window draws it from the host's own model: its conversation, then its composer with the
