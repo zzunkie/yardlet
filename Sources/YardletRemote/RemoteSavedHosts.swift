@@ -13,19 +13,23 @@ public struct RemoteSavedHost: Codable, Equatable, Identifiable, Sendable {
     public var direct: [String]
     public var relayURL: String?
     public var room: String?
+    /// Another address of the same relay, which a client races against `relayURL`.
+    public var alternateRelayURL: String?
     /// What the host calls this device.
     public var deviceID: String?
     public var pairedAt: Date
     public var lastConnectedAt: Date?
 
     public init(id: String = UUID().uuidString, name: String, hostKey: Data, direct: [String], relayURL: String? = nil,
-                room: String? = nil, deviceID: String? = nil, pairedAt: Date = Date(), lastConnectedAt: Date? = nil) {
+                room: String? = nil, alternateRelayURL: String? = nil, deviceID: String? = nil, pairedAt: Date = Date(),
+                lastConnectedAt: Date? = nil) {
         self.id = id
         self.name = name
         self.hostKey = RemoteEncoding.base64url(hostKey)
         self.direct = direct
         self.relayURL = relayURL
         self.room = room
+        self.alternateRelayURL = alternateRelayURL
         self.deviceID = deviceID
         self.pairedAt = pairedAt
         self.lastConnectedAt = lastConnectedAt
@@ -33,7 +37,7 @@ public struct RemoteSavedHost: Codable, Equatable, Identifiable, Sendable {
 
     public var target: RemoteHostTarget? {
         guard let key = RemoteEncoding.data(base64url: hostKey), key.count == 32 else { return nil }
-        return RemoteHostTarget(hostKey: key, direct: direct, relayURL: relayURL, room: room)
+        return RemoteHostTarget(hostKey: key, direct: direct, relayURL: relayURL, room: room, alternateRelayURL: alternateRelayURL)
     }
 
     /// The most direct addresses kept: the host's latest first, then earlier ones it did not name this
@@ -48,6 +52,7 @@ public struct RemoteSavedHost: Codable, Equatable, Identifiable, Sendable {
         // A host that names no relay uses none now (§13.1).
         relayURL = reply.relay?.url
         room = reply.relay?.room
+        alternateRelayURL = reply.relay?.alternate
         if let deviceID = reply.deviceId { self.deviceID = deviceID }
         lastConnectedAt = now
     }

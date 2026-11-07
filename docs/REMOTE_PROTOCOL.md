@@ -697,8 +697,9 @@ phone also keeps the direct addresses of §13.3.
 
 1. Candidates: addresses Bonjour resolved for the Mac, the direct addresses last received (§13.3; the
    private-range ones when on Wi-Fi or Ethernet, Tailscale ones when a VPN is up), then the relay.
-2. Start the direct candidates at once (3 s each to finish the handshake) and the relay 0.7 s later;
-   the first handshake that completes wins and the others are closed.
+2. Start the direct candidates at once (3 s each to finish the handshake) and the relay 0.7 s later, at
+   each of its addresses when the Mac names two (§14.2); the first handshake that completes wins and the
+   others are closed.
 3. While on the relay, try direct again when the network changes or Bonjour finds the Mac; when one
    completes, move to it (send `snapshot` and subscribe again) and close the relay connection.
 

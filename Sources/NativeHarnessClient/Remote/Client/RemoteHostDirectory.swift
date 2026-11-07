@@ -150,7 +150,7 @@ final class RemoteHostDirectory {
         }
         let earlier = store.host(key: link.macKey)
         var host = earlier ?? RemoteSavedHost(name: link.name, hostKey: link.macKey, direct: link.hosts,
-                                              relayURL: link.relayURL, room: link.room)
+                                              relayURL: link.relayURL, room: link.room, alternateRelayURL: link.alternateRelayURL)
         if earlier != nil {
             // Paired again: the old key's device is the host's to remove; this window takes the new key.
             models.removeValue(forKey: host.id)?.stop()
