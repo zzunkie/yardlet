@@ -88,6 +88,9 @@ final class TaskSurfaceHostings {
         // The window gives the task its size, with the title bar's safe area already laid out.
         hosting.sizingOptions = []
         hosting.safeAreaRegions = []
+#if DEBUG
+        PerfMemoryCensus.track(hosting, .taskSurfaceHosting)
+#endif
         return hosting
     }
 }

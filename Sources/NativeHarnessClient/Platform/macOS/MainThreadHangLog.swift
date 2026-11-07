@@ -20,7 +20,10 @@ enum MainThreadHangLog {
     static let defaultsKey = "Yardlet.debug.hangLog"
 
     static var isEnabled: Bool {
-        UserDefaults.yardlet.object(forKey: defaultsKey) as? Bool ?? true
+        #if DEBUG
+        if PerfBenchFixture.isRequested, let override = PerfBenchFixture.hangLogOverride { return override }
+        #endif
+        return UserDefaults.yardlet.object(forKey: defaultsKey) as? Bool ?? true
     }
 
     /// The log in real use. It is kept under `maximumFileSize`; the entries before go to `hangs.1.log`.

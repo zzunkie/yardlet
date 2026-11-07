@@ -134,6 +134,11 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
         textView.delegate = self
         textView.textLayoutManager?.delegate = fragments
         addSubview(textView)
+#if DEBUG
+        PerfMemoryCensus.track(self, .transcriptProseContainer)
+        PerfMemoryCensus.track(textView, .transcriptProseTextView)
+        PerfMemoryCensus.track(textView.textLayoutManager, .transcriptProseLayoutManager)
+#endif
     }
 
     @available(*, unavailable)

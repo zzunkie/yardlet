@@ -45,6 +45,9 @@ struct ConversationTurnHost: NSViewRepresentable, Equatable {
         context.coordinator.hosting = hosting
         let view = ConversationPressSurface()
         let content = hosting.controller.view
+#if DEBUG
+        PerfMemoryCensus.track(content, .conversationTurnView)
+#endif
         content.frame = view.bounds
         content.autoresizingMask = [.width, .height]
         view.addSubview(content)
@@ -92,6 +95,8 @@ final class ConversationTurnHosting {
         controller.sizingOptions = []
 #if DEBUG
         ViewBodyCensus.note(.conversationTurnHosting)
+        PerfMemoryCensus.track(self, .conversationTurnHosting)
+        PerfMemoryCensus.track(controller, .conversationTurnController)
 #endif
     }
 

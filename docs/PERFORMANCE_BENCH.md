@@ -13,11 +13,18 @@ what else runs on it, so they are compared between runs on the same Mac.
 ./scripts/perf-bench/run.sh --no-micro       # the app's scenes only (about 10 minutes)
 ./scripts/perf-bench/run.sh --scenes "codex-history subagent" --repeat 3 --compare main
 ./scripts/perf-bench/run.sh --micro-only     # the in-process benchmarks only
+./scripts/perf-bench/run.sh --scenes memory-cycle --cycle-seconds 1800 --no-micro
+./scripts/perf-bench/run.sh --scenes memory-cycle --cycle-seconds 300 --cycle-rest-seconds 300 --memory-census --no-micro
 ```
 
-- It needs a debug bundle of the checkout (`scripts/build-app.sh debug`, or `--build`). Release builds do
+- Build it first with `--build`. It needs a debug bundle of the checkout. Release builds do
   not contain the bench's fixture. The `browser-tabs` scene needs a bundle with the browser engine (CEF);
   without it the scene records a problem and the other scenes still run.
+- `--build` records the executable SHA-256, commit, diff digest and a digest of the checkout's non-ignored inputs
+  (including untracked sources) in `<app>.perf-bench.json` beside the bundle. Reusing a bundle, including
+  with `--app`, requires that its executable and the current inputs still match that record; otherwise
+  run `--build` again. The result keeps this identity and the SHA-256 of the QA executable after signing.
+  A checkout commit by itself is not treated as proof of what a reused binary contains.
 - It waits for the shared heavy-build lock (`~/Library/Caches/yardlet-heavy-build.lock`), so builds and
   test runs started the same way do not run beside it. Other work on the Mac still shows in the numbers:
   the result records the load average when the run and each scene started.
@@ -33,7 +40,9 @@ what else runs on it, so they are compared between runs on the same Mac.
   it compares with; by default it is the newest earlier result. `--tolerance` sets how much worse a number
   must be to be marked (default 15%). `scripts/perf-bench/report.py compare <earlier.json> <later.json>`
   compares two results again.
-- The command exits with status 1 when a number is over its budget or a scene could not be set up (§4).
+- The command exits with status 1 when a number is over its budget, a planned result is missing, or a
+  benchmark could not complete (§4). `contract.json` lists the scenes' required phases and the exact
+  in-process tests and measurements; the selected plan is saved in every new result.
 
 ## 2. Scenes
 
@@ -52,6 +61,8 @@ projects unless the scene says otherwise. Phases are measured after the scene ha
 | `sidebar` | 400 tasks in 40 projects and 400 archived tasks (every fifth task's parent is archived); the sidebar scrolled down to its end and back at 1,200 points a second | `scroll` (10), then with a Codex answer streaming in the shown task: `scroll-streaming` (10) |
 | `browser-tabs` | six local pages open in the shown task's browser panel | `tabs-shown` (15), then with the panel closed: `tabs-hidden` (10) |
 | `codex-switch` | ten Codex tasks, each a turn of 400 finished commands with output followed by the reasoning, commands and answers of a 400-second stream (about 540 items, 1.4 MB) | `switch` (30): another task opened every 1.5 seconds, each after the four the window keeps; then `stream-switch` (120): three tasks at a time stream an answer for 30 seconds while another task opens every 2 seconds |
+| `memory-cycle` | the same ten long Codex tasks, loaded once; history stays fixed while views are repeatedly opened and let go | `warm` (30), `revisit` (60 by default, `--cycle-seconds` changes it), `recovered` (15 at rest) |
+| `composer-input` | a 60-turn Claude task streaming while its actual field editor receives alternating plain text and marked-text commits | `typing` (20): application-side dispatch, edit and layout latency, without sending the draft |
 
 The fakes stream about 30 fragments a second, the rate of a working agent, in the providers' own frame
 shapes: Claude Code's `stream-json` with partial messages, and Codex App Server notifications. A message
@@ -76,8 +87,8 @@ and shows under the main thread's passes and frames.
 - A *pass* is one turn of the main run loop from waking to going back to sleep: everything the thread
   did for one event, timer, frame or block before it could take the next. `passMedianMs` and
   `passP95Ms` are its median and 95th percentile; `passMaxMs` the longest. `passesOver16MsCount` and
-  `passesOver50MsCount` count passes long enough to miss a 60 Hz frame and to feel stuck: a key pressed
-  then waits that long.
+  `passesOver50MsCount` count long processing intervals that could delay an input event. They do not
+  establish a perceived freeze; the bench has no hardware input or visible presentation timing.
 - `busyPercent` is the share of the phase spent in passes; `cpuPercent` is the main thread's CPU time
   over the phase (100% is one core).
 
@@ -94,6 +105,13 @@ side of a frame; the bench does not measure WindowServer's compositing, since th
 - `agentCPUPercent`: the agent CLIs Yardlet runs, here the fakes. It is reported apart and is not
   Yardlet's cost.
 
+The process sampler reads every half second, identifies processes by PID and start time, and uses the
+actual elapsed time for CPU. Endpoint footprint stays comparable with older results. The new
+`appPeakFootprintMiB`, `browserPeakFootprintMiB` and `yardletPeakFootprintMiB` are maxima of simultaneous
+samples; they can see an allocation that was released before the endpoint. Processes that end during
+the phase retain their observed CPU contribution, with zero endpoint memory. Very short-lived processes
+between samples can still be missed.
+
 **Bodies** (counted by the app, `bodies.*Count`): how often the window's widest views worked out their
 bodies over the phase (`ViewBodyCensus`): the window itself (`mainWindowCount`), the task's views around its
 conversation (`taskSurfaceCount`), the session rail's cards, the composer and the sidebar's rows; and the
@@ -104,12 +122,43 @@ timeline count well over the states published, or a window drawn while a task st
 scrolls, is work an update did beyond what it changed.
 
 **Memory** (measured by the app, `memory.*`): its footprint as the phase starts and ends, and how much
-it grew over the phase (`footprintGrowthMiB`). A scene that streams and opens tasks keeps nothing of what
-it let go, so its growth is what the new turns hold.
+it grew over the phase (`footprintGrowthMiB`). Growth can include live turn data, caches and temporary
+allocations; use a fixed working set and recovery interval to investigate what remains afterward.
 
 **Switches** (measured by the app in `codex-switch/switch`, `switches.*`): for each task opened, the main
 thread's time in the 1.5 seconds after it (`busyMedianMs`, `busyMaxMs`) and its longest pass then
-(`longestPassMedianMs`, `longestPassMaxMs`), which is how long the window stopped answering.
+(`longestPassMedianMs`, `longestPassMaxMs`). These are processing intervals in the synthetic scene, not
+measurements of a visible window freezing.
+
+**Input** (`composer-input/typing`, `input.*`): an edit is queued from a background queue, then applied to
+the actual composer's AppKit field editor while the fake answer streams. The probe records queue delay,
+edit plus synchronous layout time, and the total request-to-layout median, p95 and maximum. It alternates
+plain text with marked text followed by a Korean-text commit and checks that edits really happened.
+The window remains off screen. These are application-side costs, not hardware keyboard, input-method
+service, WindowServer or display-presentation latency. No draft is submitted to a provider.
+
+**Recovery** (`memory-cycle/recovered`, `memory.retainedGrowthMiB`): footprint after returning to the same
+task and resting for 15 seconds (`--cycle-rest-seconds` changes it), minus the footprint after warming the same fixed set of ten tasks.
+The scene checks that the items in each history did not change. `memoryCycle.samples` in each round's
+extra data records footprint about every 30 revisits. Longer runs use the same process rather than
+restarting it; `--repeat` still starts a new process for each independent run. A rise is evidence to
+investigate, not by itself proof of a leak. The new input and recovery measures initially establish a
+baseline; they do not invent accepted performance budgets from their first run.
+
+The memory cycle posts process-local `applicationDefined` events after its programmatic interactions
+and waits for its baseline and recovery boundaries to be consumed. AppKit normally releases temporary
+objects at event-loop boundaries ([Apple's memory management guide](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/MemoryMgmt/Articles/mmAutoreleasePools.html)).
+An offscreen driver with no input events can otherwise retain autoreleased text drawing objects while
+the views and layout managers themselves have already been released. Posted and received event counts
+are recorded and must agree. These events are only inside the QA app; no keyboard, mouse, or system-wide
+event is generated, and the window remains off screen. `--no-event-pulse` retains the old driver as a
+diagnostic control, not a comparable performance baseline.
+
+`--hang-log off` disables the main-thread diagnostic watcher in the QA process only. `--memory-census`
+records cumulative creations, live objects and releases for task/turn hostings and prose/TextKit objects.
+It keeps only weak references and discards dead entries at coarse checkpoints. Both settings and the
+actual diagnostic state are included in the result. Census and heap-inspection runs are diagnostic
+profiles; use the same settings for comparisons and keep them separate from normal baseline runs.
 
 **Launch** (`launch.*`, from the kernel's start time of the process): to the model being made
 (`processStartToModelMs`), to the app finishing launching (`processStartToFinishedLaunchingMs`), to the
@@ -155,6 +204,13 @@ A budget can fail on the main branch: then the bench has found a cost to fix, an
 that brings the number under its limit. The result of the fix's branch compared with the main branch's
 (`--compare main`) shows what it changed.
 
+Every planned round and phase must have a result and a process sample, and every budgeted metric must
+be finite in every round. A missing round cannot disappear into the median of the other rounds. The
+in-process test command must exit successfully, each selected test must report that it passed, and
+each required measurement must be recorded. Skips, stale test selectors, missing records and malformed
+measurements fail the run. These outcome contracts can be checked without running the app:
+`python3 -B scripts/perf-bench/test_report.py`.
+
 ## 5. Reading a result
 
 The summary prints, for every phase, Yardlet's CPU, the app's footprint, the main thread's CPU and long
@@ -163,6 +219,16 @@ grew by more than the tolerance and by more than its unit's floor: 2 ms, 1 perce
 a second, 2 for a count, and 50 ms for launch timings. Every compared number is in the result's
 `comparison`, the summary lists the worse ones it did not show, and `better` lists numbers that shrank as
 much.
+
+New results retain each scene's `roundData`, including its numeric values, process samples and load,
+beside the median summary. Inspect those rounds for outliers; the budget itself still applies to the
+median. Old result JSON files remain usable as comparisons. Collecting old raw folders without a run
+plan cannot establish that every intended check ran and therefore reports a failed validity check.
+Compare the same phase durations, especially `parameters.memoryCycleSeconds`; a 30-minute cycle is not
+equivalent to the default one-minute cycle. Phase pictures are retained beside every round's result
+when `--keep` is used.
+
+
 
 - Compare runs on the same Mac, with the same build configuration, at a similar load; the summary says
   when the two runs' load differed much. A debug build is slower than a release build; the bench is for
@@ -254,3 +320,17 @@ turns can still block the main thread.
 Batching offscreen reflow would require coordinating changing row heights with the reading anchor
 across every batch. This path keeps its existing exact synchronous sizing; the optimization does not
 remove the cost of measuring many retained turns during a drag.
+
+## 8. Observing a running app
+
+`swiftc -O scripts/perf-bench/observe.swift -o .build/perf-observe` builds a separate read-only sampler.
+`.build/perf-observe /Applications/Yardlet.app 3600 5 > observation.jsonl` observes for one wall-clock
+hour at a five-second interval, without starting, restarting or operating the app. It writes process
+group totals and a per-process breakdown every twelfth sample; command arguments and conversation
+contents are never written. CPU time units are checked against `getrusage` at startup. Each snapshot
+drains its autorelease pool and only live identities and previous counters are kept, so Foundation's
+temporary bridge objects cannot accumulate over a long command-line loop.
+
+Observer cost is reported separately. Treat a growing observer, missing samples, app restarts or changed
+builds as measurement limitations. This resource sampler alone does not collect the app's main-thread
+diagnostic log. Those busy intervals must remain distinct from perceived freezes.

@@ -1,0 +1,182 @@
+{
+  "scenes": {
+    "launch": [
+      "settled"
+    ],
+    "idle-running": [
+      "idle",
+      "idle-running"
+    ],
+    "stream-claude": [
+      "streaming",
+      "streaming-elsewhere"
+    ],
+    "stream-codex": [
+      "streaming"
+    ],
+    "codex-history": [
+      "streaming"
+    ],
+    "subagent": [
+      "streaming"
+    ],
+    "sidebar": [
+      "scroll",
+      "scroll-streaming"
+    ],
+    "browser-tabs": [
+      "tabs-shown",
+      "tabs-hidden"
+    ],
+    "codex-switch": [
+      "switch",
+      "stream-switch"
+    ],
+    "memory-cycle": [
+      "warm",
+      "revisit",
+      "recovered"
+    ],
+    "composer-input": [
+      "typing"
+    ]
+  },
+  "micro": [
+    {
+      "test": "CodexTimelineMergeCostTests/testBenchmarkAStreamedStateAgainstTheSavedCards",
+      "records": [
+        "codex-merge-500-saved-cards"
+      ]
+    },
+    {
+      "test": "ConcurrentStreamingPerformanceTests/testBenchmarkTenConcurrentStreamingTasks",
+      "records": [
+        "ten-streaming-tasks"
+      ]
+    },
+    {
+      "test": "LongCodexThreadPerformanceTests/testBenchmarkLongCodexThreadStreaming",
+      "records": [
+        "long-codex-app-0x10",
+        "long-codex-app-300x10",
+        "long-codex-direct-0x10",
+        "long-codex-direct-300x10",
+        "long-codex-projection-0x10",
+        "long-codex-projection-300x10",
+        "long-codex-yhp-0x10",
+        "long-codex-yhp-300x10"
+      ]
+    },
+    {
+      "test": "ConversationStreamingCostTests/testBenchmarkACodexFragmentInATurnOfManyCalls",
+      "records": [
+        "codex-fragment-3-calls",
+        "codex-fragment-72-calls"
+      ]
+    },
+    {
+      "test": "ConversationStreamingCostTests/testBenchmarkACodexFragmentBesideAScrollingList",
+      "records": [
+        "codex-fragment-beside-a-scrolling-list-none",
+        "codex-fragment-beside-a-scrolling-list-short",
+        "codex-fragment-beside-a-scrolling-list-long"
+      ]
+    },
+    {
+      "test": "ConversationStreamingCostTests/testBenchmarkACodexCardAddedToAStreamingTurn",
+      "records": [
+        "codex-card-added-long-turn",
+        "codex-card-added-long-turn-beside-a-list",
+        "codex-card-added-new-turn",
+        "codex-card-added-new-turn-beside-a-list"
+      ]
+    },
+    {
+      "test": "ConversationBlankFrameTests/testBenchmarkSwitchingToALongConversation",
+      "records": [
+        "switch-to-20-turns",
+        "switch-to-300-turns"
+      ]
+    },
+    {
+      "test": "ConversationBlankFrameTests/testBenchmarkStreamingInTheWholeWindow",
+      "records": [
+        "window-streaming-1-turn",
+        "window-streaming-9-turns",
+        "window-streaming-300-turns"
+      ]
+    },
+    {
+      "test": "ConversationBlankFrameTests/testBenchmarkHoverReadsArrivingWhileTheSidebarScrolls",
+      "records": [
+        "hover-reads-8-first-reads",
+        "hover-reads-no-reads",
+        "hover-reads-the-same-8-again"
+      ]
+    },
+    {
+      "test": "ConversationBlankFrameTests/testBenchmarkAnEarlierPageArriving",
+      "records": [
+        "earlier-page-read-still",
+        "earlier-page-wheeling-up"
+      ]
+    },
+    {
+      "test": "ConversationReopenGapRenderingTests/testBenchmarkOpeningATaskWhoseTurnsWereLetGo",
+      "records": [
+        "reopen-20-turns-let-go",
+        "reopen-300-turns-let-go"
+      ]
+    },
+    {
+      "test": "LongTranscriptRenderPerformanceTests/testBenchmarkALongClaudeTranscript",
+      "records": [
+        "claude-transcript-400x6-all",
+        "claude-transcript-400x6-projection",
+        "claude-transcript-400x6-window"
+      ]
+    },
+    {
+      "test": "WindowStructureQATests/testBenchmarkAStateChangeInASidebarOfThousands",
+      "records": [
+        "sidebar-state-change-3000-tasks"
+      ]
+    },
+    {
+      "test": "WindowStructureQATests/testBenchmarkTheSidebarCrossingItsTop",
+      "records": [
+        "sidebar-crossing-its-top-828-tasks"
+      ]
+    },
+    {
+      "test": "SubagentStatePerformanceTests/testAStreamingSubagentStateReadsWhatItWaitsOnWithoutDrawingItsCards",
+      "records": [
+        "subagent-states-4-runs"
+      ]
+    },
+    {
+      "test": "StreamingTurnRenderPerformanceTests/testAFragmentOfATurnWithManyCallsStaysWithinItsBudget",
+      "records": [
+        "streaming-turn-fragment-120-calls"
+      ]
+    }
+  ],
+  "metrics": {
+    "composer-input": {
+      "typing": [
+        "input.editCount",
+        "input.queueP95Ms",
+        "input.layoutP95Ms",
+        "input.responseMedianMs",
+        "input.responseP95Ms",
+        "input.responseMaxMs"
+      ]
+    },
+    "memory-cycle": {
+      "recovered": [
+        "memory.retainedGrowthMiB",
+        "switches.completedCount"
+      ]
+    }
+  }
+}

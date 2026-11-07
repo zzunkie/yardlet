@@ -43,6 +43,10 @@ enum PerfBenchFixture {
         /// stream left after them, opened one after another; then three of them at a time stream a new
         /// answer while the window goes from task to task.
         case codexSwitch = "codex-switch"
+        /// Reopen a fixed set of long tasks, then rest, without adding history during measurement.
+        case memoryCycle = "memory-cycle"
+        /// Edit the actual composer while a fake Claude answer streams in the same window.
+        case composerInput = "composer-input"
     }
 
     static var isRequested: Bool { CommandLine.arguments.contains(argument) }
@@ -59,6 +63,22 @@ enum PerfBenchFixture {
     static let codexThreadID = "perf-codex-thread"
     static let otherCodexThreadID = "perf-codex-other"
     static let switchTaskCount = 10
+    static var cycleSeconds: Double {
+        let value = Double(value("ui-fixture-perf-cycle-seconds") ?? "60") ?? 60
+        return value.isFinite ? min(86_400, max(10, value)) : 60
+    }
+    static var cycleRestSeconds: Double {
+        let seconds = Double(value("ui-fixture-perf-cycle-rest-seconds") ?? "15") ?? 15
+        return seconds.isFinite ? min(3_600, max(15, seconds)) : 15
+    }
+    static var hangLogOverride: Bool? {
+        switch value("ui-fixture-perf-hang-log") {
+        case "on": true
+        case "off": false
+        default: nil
+        }
+    }
+    static var eventPulseEnabled: Bool { !CommandLine.arguments.contains("--ui-fixture-perf-no-event-pulse") }
 
     /// The `codex-switch` scene's tasks; the first is the shown task.
     static func switchTaskID(_ index: Int) -> UUID {
@@ -98,7 +118,15 @@ enum PerfBenchFixture {
             directory.appending(path: "projects/\(names[index % names.count])\(index < names.count ? "" : "-\(index / names.count)")",
                                 directoryHint: .isDirectory)
         }
-        for folder in projects { try? fileManager.createDirectory(at: folder, withIntermediateDirectories: true) }
+        for folder in projects {
+            // Keep Git-origin reads inside the fixture. Otherwise a worktree under the checkout can
+            // inherit its outer .git file and ask a background QA copy to read the person's repository.
+            let git = folder.appending(path: ".git", directoryHint: .isDirectory)
+            try? fileManager.createDirectory(at: git.appending(path: "refs/heads"), withIntermediateDirectories: true)
+            try? fileManager.createDirectory(at: git.appending(path: "objects"), withIntermediateDirectories: true)
+            try? Data("ref: refs/heads/bench\n".utf8).write(to: git.appending(path: "HEAD"))
+            try? Data("[core]\nrepositoryformatversion = 0\nbare = false\n".utf8).write(to: git.appending(path: "config"))
+        }
         let threads = directory.appending(path: "threads", directoryHint: .isDirectory)
         try? fileManager.createDirectory(at: threads, withIntermediateDirectories: true)
         let codex = directory.appending(path: "bin/codex")
@@ -163,7 +191,7 @@ enum PerfBenchFixture {
                 codexTask(otherRunningTaskID, title: "Tidy the lexer", threadID: otherCodexThreadID,
                           turns: (0..<10).map { LongConversationFixture.codexTurn($0) })
             ]
-        case .streamClaude:
+        case .streamClaude, .composerInput:
             shown = [
                 claudeTask(shownTaskID, title: "Fix the parser's empty input", runtime: claude,
                            sessionID: claudeSessionID, turns: 60),
@@ -185,7 +213,7 @@ enum PerfBenchFixture {
                                turns: (0..<4).map { LongConversationFixture.codexTurn($0) })]
         case .browserTabs:
             shown = [claudeTask(shownTaskID, title: "Check the pages", runtime: none, sessionID: claudeSessionID, turns: 5)]
-        case .codexSwitch:
+        case .codexSwitch, .memoryCycle:
             shown = (0..<switchTaskCount).map { index in
                 let threadID = "\(codexThreadID)-\(index)"
                 let turn = LongConversationFixture.streamedCodexTurn(id: "\(threadID)-turn", commands: 400, seconds: 400)
@@ -282,6 +310,8 @@ private final class PerfBenchRunner {
         steps.start()
         record["scene"] = scene.rawValue
         record["pid"] = Int(getpid())
+        record["diagnostics"] = ["hangLogEnabled": MainThreadHangLog.isEnabled, "memoryCensusEnabled": PerfMemoryCensus.isEnabled,
+                                  "eventPulseEnabled": PerfBenchFixture.eventPulseEnabled]
         let processStart = ProcessClock.startDate()
         guard await waitUntil(.seconds(20), { self.mainWindow() != nil }), let window = mainWindow() else {
             problems.append("no window")
@@ -358,6 +388,10 @@ private final class PerfBenchRunner {
             await openBrowserTabs()
         case .codexSwitch:
             await switchTasks()
+        case .memoryCycle:
+            await memoryCycles()
+        case .composerInput:
+            await composerInput()
         }
         finish()
     }
@@ -461,18 +495,7 @@ private final class PerfBenchRunner {
     /// the window keeps were opened (`switch`), and the time each opening took of the main thread is
     /// noted; then tasks stream new turns as the window goes on switching (`stream-switch`).
     private func switchTasks() async {
-        let tasks = (0..<PerfBenchFixture.switchTaskCount).map(PerfBenchFixture.switchTaskID)
-        for task in tasks { await send("perf stream 1", to: task) }
-        let loaded = await waitUntil(.seconds(60)) {
-            tasks.allSatisfy { self.codexItems($0) > 500 && !self.isRunning($0) }
-        }
-        if !loaded { problems.append("threads loaded: \(tasks.map(codexItems))") }
-        for task in tasks {
-            model.splits.activate(.session(task))
-            try? await Task.sleep(for: .milliseconds(500))
-        }
-        note("threads loaded: \(tasks.map(codexItems))")
-        try? await Task.sleep(for: .seconds(2))
+        let tasks = await loadSwitchTasks()
         var opened: [Double] = []
         var longest: [Double] = []
         await phase("switch", seconds: 30, driving: { deadline in
@@ -494,9 +517,7 @@ private final class PerfBenchRunner {
             phases.append(entry)
         }
 
-        // A working session: each round three of the tasks stream an answer for 30 seconds while the
-        // window goes from task to task every 2 seconds. What the app holds after it, beside what it held
-        // before, is what each streamed turn left behind.
+        // Three tasks stream each round, while the window keeps switching.
         let rounds = 3
         await phase("stream-switch", seconds: Double(rounds * 40), driving: { deadline in
             var index = 0
@@ -510,6 +531,165 @@ private final class PerfBenchRunner {
                 }
             }
         })
+    }
+
+    private func loadSwitchTasks() async -> [UUID] {
+        let tasks = (0..<PerfBenchFixture.switchTaskCount).map(PerfBenchFixture.switchTaskID)
+        for task in tasks { await send("perf stream 1", to: task) }
+        let loaded = await waitUntil(.seconds(60)) {
+            tasks.allSatisfy { self.codexItems($0) > 500 && !self.isRunning($0) }
+        }
+        if !loaded { problems.append("threads loaded: \(tasks.map(codexItems))") }
+        for task in tasks {
+            model.splits.activate(.session(task))
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        note("threads loaded: \(tasks.map(codexItems))")
+        try? await Task.sleep(for: .seconds(2))
+        return tasks
+    }
+
+    private func memoryCycles() async {
+        let tasks = await loadSwitchTasks()
+        let pulse = PerfBenchFixture.eventPulseEnabled ? BenchEventPulse() : nil
+        defer { pulse?.stop() }
+        let itemsBefore = tasks.map(codexItems)
+        var switches = 0
+        var measuredFrom = ContinuousClock.now
+        var memoryPoints: [[String: Double]] = []
+        var objectPoints: [[String: Any]] = []
+        let revisit: (ContinuousClock.Instant) async -> Void = { deadline in
+            var index = 0
+            while ContinuousClock.now + .seconds(1) <= deadline {
+                self.model.splits.activate(.session(tasks[index % tasks.count]))
+                try? await Task.sleep(for: .seconds(1))
+                pulse?.post()
+                index += 1
+                switches += 1
+                if switches.isMultiple(of: 30) {
+                    let elapsed = (ContinuousClock.now - measuredFrom) / .seconds(1)
+                    if PerfMemoryCensus.isEnabled {
+                        objectPoints.append(["seconds": round2(elapsed), "objects": PerfMemoryCensus.snapshot()])
+                    }
+                    let footprint = ProcessClock.footprintMiB()
+                    memoryPoints.append(["seconds": round2(elapsed), "footprintMiB": round2(footprint)])
+                    self.note("memory cycle \(switches) revisits, \(round2(footprint)) MiB")
+                }
+            }
+        }
+        await phase("warm", seconds: 30, driving: revisit)
+        model.splits.activate(.session(tasks[0]))
+        try? await Task.sleep(for: .seconds(3))
+        if let pulse {
+            pulse.post()
+            if !(await waitUntil(.seconds(2), poll: .milliseconds(10), { pulse.received == pulse.posted })) {
+                problems.append("AppKit did not consume the baseline event pulse")
+            }
+            await Task.yield()
+        }
+        if PerfMemoryCensus.isEnabled { objectPoints = [["seconds": 0, "objects": PerfMemoryCensus.snapshot()]] }
+        let baseline = ProcessClock.footprintMiB()
+        switches = 0
+        measuredFrom = ContinuousClock.now
+        memoryPoints = [["seconds": 0, "footprintMiB": round2(baseline)]]
+        await phase("revisit", seconds: PerfBenchFixture.cycleSeconds, driving: revisit)
+        guard let revisitEnd = (phases.last?["memory"] as? [String: Double])?["footprintEndMiB"],
+              let revisitSeconds = phases.last?["seconds"] as? Double else {
+            problems.append("memory cycle has no final revisit reading"); return
+        }
+        memoryPoints.append(["seconds": round2(revisitSeconds), "footprintMiB": revisitEnd])
+        model.splits.activate(.session(tasks[0]))
+        await phase("recovered", seconds: PerfBenchFixture.cycleRestSeconds, driving: { _ in
+            guard let pulse else { return }
+            try? await Task.sleep(for: .seconds(1))
+            pulse.post()
+            if !(await self.waitUntil(.seconds(2), poll: .milliseconds(10), { pulse.received == pulse.posted })) {
+                self.problems.append("AppKit did not consume the recovery event pulse")
+            }
+        })
+        guard let recoveredEnd = (phases.last?["memory"] as? [String: Double])?["footprintEndMiB"] else {
+            problems.append("memory cycle has no recovered reading"); return
+        }
+        let retained = recoveredEnd - baseline
+        record["memoryCycle"] = ["seconds": PerfBenchFixture.cycleSeconds, "restSeconds": PerfBenchFixture.cycleRestSeconds, "samples": memoryPoints,
+                                  "itemsPerTask": itemsBefore, "revisits": switches, "objects": objectPoints,
+                                  "eventsPosted": pulse?.posted ?? 0, "eventsReceived": pulse?.received ?? 0] as [String: Any]
+        if let pulse, pulse.posted != pulse.received { problems.append("unconsumed AppKit event pulses") }
+        if let pulse, pulse.failedPosts > 0 { problems.append("AppKit event pulse creation failed") }
+        if var entry = phases.popLast() {
+            var memory = entry["memory"] as? [String: Double] ?? [:]
+            memory["retainedGrowthMiB"] = round2(retained)
+            entry["memory"] = memory
+            entry["switches"] = ["completedCount": switches]
+            phases.append(entry)
+        }
+        if itemsBefore != tasks.map(codexItems) { problems.append("history changed during the fixed working-set memory cycle") }
+        if switches < 5 { problems.append("too few memory-cycle revisits") }
+    }
+
+    /// Application-side dispatch and edit/layout latency. The window stays off screen: this does not
+    /// measure hardware input, an input-method service, WindowServer, or display presentation.
+    private func composerInput() async {
+        guard let window, let content = window.contentView else { problems.append("no composer window"); return }
+        func all(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(all) }
+        guard let field = all(content).compactMap({ $0 as? NSTextField }).filter({
+            let frame = $0.convert($0.bounds, to: nil)
+            return $0.isEditable && frame.width > 300 && frame.minY < 400
+        }).min(by: { $0.convert($0.bounds, to: nil).minY < $1.convert($1.bounds, to: nil).minY }),
+              window.makeFirstResponder(field) else { problems.append("composer field could not take its window's first responder"); return }
+        let before = model.publicationCounts.transcripts
+        await send("perf stream 50", to: PerfBenchFixture.shownTaskID)
+        let running = await waitUntil(.seconds(20)) { self.model.publicationCounts.transcripts > before + 10 }
+        if !running { problems.append("composer scene did not start streaming"); return }
+        try? await Task.sleep(for: .seconds(2))
+        guard let editor = window.firstResponder as? NSTextView, editor.isEditable else {
+            problems.append("composer field editor missing"); return
+        }
+        var queueTimes: [Double] = [], layoutTimes: [Double] = [], responseTimes: [Double] = []
+        await phase("typing", seconds: 20, frames: true, driving: { deadline in
+            while ContinuousClock.now + .milliseconds(200) <= deadline {
+                let useMarkedText = queueTimes.count.isMultiple(of: 2)
+                let costs = await withCheckedContinuation { (continuation: CheckedContinuation<(Double, Double, Double), Never>) in
+                    DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.1) {
+                        let queued = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+                        DispatchQueue.main.async {
+                            let entered = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+                            let range = editor.string.utf16.count > 300 ? NSRange(location: 0, length: editor.string.utf16.count)
+                                : NSRange(location: editor.string.utf16.count, length: 0)
+                            if useMarkedText {
+                                editor.setMarkedText("한", selectedRange: NSRange(location: 1, length: 0), replacementRange: range)
+                                editor.insertText("한글 ", replacementRange: NSRange(location: NSNotFound, length: 0))
+                            } else {
+                                editor.insertText("edit ", replacementRange: range)
+                            }
+                            content.layoutSubtreeIfNeeded()
+                            window.displayIfNeeded()
+                            let finished = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+                            continuation.resume(returning: (Double(entered - queued) / 1e6, Double(finished - entered) / 1e6,
+                                                            Double(finished - queued) / 1e6))
+                        }
+                    }
+                }
+                queueTimes.append(costs.0); layoutTimes.append(costs.1); responseTimes.append(costs.2)
+            }
+        })
+        if queueTimes.count < 20 || editor.string.isEmpty { problems.append("composer scene did not apply enough edits") }
+        if model.composerDrafts.tasks.draft(for: PerfBenchFixture.shownTaskID).text != editor.string {
+            problems.append("composer edits did not reach the task draft")
+        }
+        func percentile(_ values: [Double], _ fraction: Double) -> Double {
+            let sorted = values.sorted()
+            return sorted.isEmpty ? 0 : round2(sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * fraction))])
+        }
+        if var entry = phases.popLast() {
+            if (entry["published"] as? [String: Int])?["transcripts"] ?? 0 <= 0 {
+                problems.append("no transcript was published during composer edits")
+            }
+            entry["input"] = ["editCount": Double(queueTimes.count), "queueP95Ms": percentile(queueTimes, 0.95),
+                              "layoutP95Ms": percentile(layoutTimes, 0.95), "responseMedianMs": percentile(responseTimes, 0.5),
+                              "responseP95Ms": percentile(responseTimes, 0.95), "responseMaxMs": round2(responseTimes.max() ?? 0)]
+            phases.append(entry)
+        }
     }
 
     // MARK: Phases
@@ -543,6 +723,7 @@ private final class PerfBenchRunner {
         EventCostLog.reset()
         ViewBodyCensus.isEnabled = true
         ViewBodyCensus.reset()
+        let objectsAtStart = PerfMemoryCensus.isEnabled ? PerfMemoryCensus.snapshot() : nil
         let started = ContinuousClock.now
         let cpu = ProcessClock.threadCPUSeconds()
         let footprint = ProcessClock.footprintMiB()
@@ -552,6 +733,7 @@ private final class PerfBenchRunner {
         probe?.stop()
         let elapsed = (ContinuousClock.now - started) / .seconds(1)
         let threadCPU = ProcessClock.threadCPUSeconds() - cpu
+        let objectsAtEnd = PerfMemoryCensus.isEnabled ? PerfMemoryCensus.snapshot() : nil
         let footprintAtEnd = ProcessClock.footprintMiB()
         var entry: [String: Any] = [
             "name": name, "seconds": elapsed, "sampled": sampled,
@@ -568,6 +750,7 @@ private final class PerfBenchRunner {
             "bodies": Dictionary(uniqueKeysWithValues: Self.countedBodies.map { ("\($0)Count", ViewBodyCensus[$0]) })
         ]
         if let probe { entry["frames"] = probe.summary(seconds: elapsed) }
+        if let objectsAtStart, let objectsAtEnd { entry["objectsAtStart"] = objectsAtStart; entry["objectsAtEnd"] = objectsAtEnd }
         phases.append(entry)
         // What the window held at the phase's end, for a person to look at; AppKit draws it, the browser's
         // pages included, so it needs no screen recording and nothing measured waits for it.
@@ -663,6 +846,42 @@ private final class PerfBenchRunner {
 }
 
 // MARK: - Probes
+
+/// A process-local application event, never a keyboard, mouse or system-wide event. This diagnostic
+/// control lets AppKit finish an event-loop iteration after a programmatic fixture interaction.
+@MainActor
+private final class BenchEventPulse {
+    private static let subtype: Int16 = 0x594C
+    private var monitor: Any?
+    private(set) var posted = 0
+    private(set) var received = 0
+    private(set) var failedPosts = 0
+
+    init() {
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .applicationDefined) { [weak self] event in
+            MainActor.assumeIsolated {
+                if event.subtype.rawValue == Self.subtype { self?.received += 1 }
+            }
+            return event
+        }
+    }
+
+    func post() {
+        guard let event = NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [],
+                                            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0,
+                                            context: nil, subtype: Self.subtype, data1: posted + 1, data2: 0) else {
+            failedPosts += 1
+            return
+        }
+        posted += 1
+        NSApp.postEvent(event, atStart: false)
+    }
+
+    func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+}
 
 /// Each pass of the main run loop from waking to going back to sleep: what the thread spent on one
 /// event, timer, frame or block before it could take the next.

@@ -6,6 +6,7 @@
 # (.github/workflows/full-tests.yml); some of them open windows or menus of their own.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+python3 -B scripts/perf-bench/test_report.py
 excluded='(Rendering|Render|QA|Snapshot|Visual|Performance|BlankFrame|Hitch|Pixel|MenuWindow|WindowRedraw)Tests'
 selection=(--skip "$excluded")
 if [[ "${1:-}" == --excluded ]]; then
