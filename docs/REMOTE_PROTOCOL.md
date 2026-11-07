@@ -657,8 +657,9 @@ Every revision of protocol 2 only adds optional fields or states a rule, except 
 ### 11.1 Paths
 
 Every v2 connection is a WebSocket that carries **binary frames only**, one Noise message per frame
-(§13). A text frame closes the connection (1003); a frame over 65,535 bytes closes it (1009). The same
-handshake and encryption run on every path:
+(§13). A text frame closes the connection (1003); a frame over 65,535 bytes closes it (1009). Neither side
+offers WebSocket compression: Noise output does not compress, and a compressed full-size frame arrives larger than
+any Noise message. The same handshake and encryption run on every path:
 
 | path | phone connects to | notes |
 |---|---|---|

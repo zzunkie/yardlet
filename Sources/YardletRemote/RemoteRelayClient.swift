@@ -139,7 +139,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
         heldStream = nil
         update(.connecting)
         racing = ([baseURL] + [alternateURL].compactMap { $0 }).map { address in
-            let task = session.webSocketTask(with: Self.hostURL(base: address, room: identity.room))
+            let task = session.remoteWebSocketTask(with: Self.hostURL(base: address, room: identity.room))
             task.maximumMessageSize = RemoteNoise.maxMessageLength + 4 + 64 * 1024
             task.resume()
             return Entrant(task: task, address: address, text: RemoteFramePieces(limit: Self.textLimit, joinsPieces: joinsPieces))

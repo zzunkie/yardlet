@@ -752,6 +752,49 @@ final class RemoteSecureTests: XCTestCase {
         XCTAssertEqual(closed, Int(RemoteCloseCode.revoked.rawValue))
     }
 
+    /// A message that takes full-size frames reaches a client's own socket through the relay, which a compressed frame
+    /// would be too large for (§11.1). Runs only with `YARDLET_REMOTE_RELAY_TEST` set to a relay.
+    func testALargeMessageReachesAClientThroughARelay() async throws {
+        guard let relay = ProcessInfo.processInfo.environment["YARDLET_REMOTE_RELAY_TEST"].flatMap(URL.init(string:)) else {
+            throw XCTSkip("Set YARDLET_REMOTE_RELAY_TEST to a relay")
+        }
+        let harness = try await SecureHarness()
+        var snapshot = FakeBridge.snapshot
+        snapshot.tasks = (0..<400).map { index in
+            var task = FakeBridge.snapshot.tasks[0]
+            task.id = "task-\(index)"
+            task.title = String(repeating: "x", count: 400)
+            return task
+        }
+        await harness.bridge.setSnapshot(snapshot)
+        let client = RemoteRelayClient(server: harness.server, identity: harness.identity, baseURL: relay)
+        client.start()
+        defer { client.stop() }
+        try await waitUntil { client.currentState == .connected }
+
+        let ticket = await harness.server.openPairing()
+        let (socket, reply) = try await RemoteClientSocket.open(
+            url: try XCTUnwrap(RemoteHostTarget.relayURL(base: relay.absoluteString, room: harness.identity.room)),
+            clientKey: .generate(), hostKey: harness.identity.noise.publicKey,
+            hello: RemoteHandshakeHello(name: "Phone", pair: RemoteEncoding.base64url(ticket.secret)), timeout: 10)
+        defer { socket.close() }
+        XCTAssertEqual(reply.ok, true)
+        let (messages, continuation) = AsyncStream.makeStream(of: Data.self)
+        socket.start(onMessage: { continuation.yield($0) }, onClose: { closing in
+            print("RemoteSecureTests: the socket closed: \(closing)")
+            continuation.finish()
+        })
+        socket.send(Data(#"{"id":"1","type":"snapshot"}"#.utf8))
+        var answer: Data?
+        for await message in messages {
+            guard (try? JSONDecoder().decode(RemoteResponse.self, from: message))?.re == "1" else { continue }
+            answer = message
+            break
+        }
+        let size = try XCTUnwrap(answer, "The socket closed before the answer").count
+        XCTAssertGreaterThan(size, RemoteNoise.maxChunkLength)
+    }
+
     /// With a second address of the relay, each attempt opens the room on both and keeps the socket that brings the
     /// challenge first; the other closes before it answers, so it never replaces the room (§14.2). A reconnect races again.
     func testTheRelayClientKeepsTheAddressThatAnswersFirst() async throws {
@@ -776,6 +819,25 @@ final class RemoteSecureTests: XCTestCase {
         try await waitUntil { client.currentState == .connected }
         XCTAssertEqual(alternate.counts.auths, 2)
         XCTAssertEqual(current.counts.auths, 0)
+    }
+
+    /// The relay takes an offer of WebSocket compression, which makes a full-size Noise frame larger than a client's
+    /// socket accepts (§11.1), so neither the Mac's socket nor a client's offers it.
+    func testNoRemoteSocketOffersCompression() async throws {
+        let relay = try FakeRelayHost()
+        defer { relay.stop() }
+        try await waitUntil { relay.url != nil }
+        let url = try XCTUnwrap(relay.url)
+        let harness = try await SecureHarness()
+        let client = RemoteRelayClient(server: harness.server, identity: harness.identity, baseURL: url)
+        client.start()
+        defer { client.stop() }
+        try await waitUntil { client.currentState == .connected }
+        // The stand-in answers with text, which ends the client's handshake: only its opening request counts here.
+        _ = try? await RemoteClientSocket.open(url: url, clientKey: .generate(), hostKey: harness.identity.noise.publicKey,
+                                               hello: RemoteHandshakeHello(name: "Phone"), timeout: 5)
+        try await waitUntil { relay.counts.sockets == 2 }
+        XCTAssertFalse(relay.offeredExtensions.contains { $0.contains("deflate") }, "\(relay.offeredExtensions)")
     }
 
     /// Where Foundation hands a relay message over in pieces, each socket of the race joins its own: a socket that
@@ -1230,7 +1292,7 @@ final class SocketPhone: @unchecked Sendable {
 /// The relay's side of the Mac's socket on loopback (§14.2), without its checks: it sends the challenge
 /// `challengeDelay` after a socket opens, answers any `auth` with `ready` and `ping` with `pong`, and counts both.
 /// `challenge` sends it as those messages, `pieceDelay` apart, as Foundation outside Apple's platforms would hand
-/// over one message's pieces.
+/// over one message's pieces. `offeredExtensions` is what each socket's opening request offered.
 final class FakeRelayHost: @unchecked Sendable {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "yardlet.test.fake-relay")
@@ -1240,16 +1302,26 @@ final class FakeRelayHost: @unchecked Sendable {
     private var connections: [NWConnection] = []
     private var sockets = 0
     private var auths = 0
+    private var offers: [String] = []
 
     init(challengeDelay: TimeInterval = 0, challenge: [String] = [#"{"nonce":"n","t":"challenge"}"#],
          pieceDelay: TimeInterval = 0) throws {
         let parameters = NWParameters.tcp
-        parameters.defaultProtocolStack.applicationProtocols.insert(NWProtocolWebSocket.Options(), at: 0)
+        let websocket = NWProtocolWebSocket.Options()
+        var record: @Sendable ([(name: String, value: String)]) -> Void = { _ in }
+        websocket.setClientRequestHandler(queue) { _, headers in
+            record(headers)
+            return NWProtocolWebSocket.Response(status: .accept, subprotocol: nil)
+        }
+        parameters.defaultProtocolStack.applicationProtocols.insert(websocket, at: 0)
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         listener = try NWListener(using: parameters)
         self.challengeDelay = challengeDelay
         self.challenge = challenge
         self.pieceDelay = pieceDelay
+        record = { [weak self] headers in
+            self?.offers += headers.filter { $0.name.caseInsensitiveCompare("Sec-WebSocket-Extensions") == .orderedSame }.map(\.value)
+        }
         listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
         listener.start(queue: queue)
     }
@@ -1260,6 +1332,7 @@ final class FakeRelayHost: @unchecked Sendable {
         return URL(string: "ws://127.0.0.1:\(port)")
     }
     var counts: (sockets: Int, auths: Int) { queue.sync { (sockets, auths) } }
+    var offeredExtensions: [String] { queue.sync { offers } }
 
     /// Closes every socket, as the relay does when it restarts.
     func closeAll() {

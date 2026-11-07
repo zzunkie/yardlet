@@ -3,6 +3,20 @@ import Foundation
 import FoundationNetworking
 #endif
 
+extension URLSession {
+    /// A WebSocket for v2 frames that offers no compression (§11.1). URLSession on Apple's platforms offers
+    /// `permessage-deflate` unless the request names its own extensions. Noise output does not compress, and
+    /// `maximumMessageSize` limits a message as it arrives, so a relay that takes the offer makes a full-size frame
+    /// larger than the socket accepts and the socket closes with 1009. Foundation elsewhere offers no extensions.
+    func remoteWebSocketTask(with url: URL, timeoutInterval: TimeInterval = 60) -> URLSessionWebSocketTask {
+        var request = URLRequest(url: url, timeoutInterval: timeoutInterval)
+        #if !canImport(FoundationNetworking)
+        request.setValue("", forHTTPHeaderField: "Sec-WebSocket-Extensions")
+        #endif
+        return webSocketTask(with: request)
+    }
+}
+
 /// The client's side of one v2 connection (docs/REMOTE_PROTOCOL.md §11–§13), as a phone has it: a
 /// WebSocket to the host, directly or through the relay, the Noise IK handshake as the initiator, then
 /// JSON messages encrypted and cut into chunks both ways. Yardlet on another computer uses it to follow
@@ -64,7 +78,7 @@ public final class RemoteClientSocket: @unchecked Sendable {
     /// refuses (`Failure.error`).
     public static func open(url: URL, clientKey: RemoteKeyPair, hostKey: Data, hello: RemoteHandshakeHello,
                             session: URLSession = .shared, timeout: TimeInterval) async throws -> (RemoteClientSocket, RemoteHandshakeReply) {
-        let task = session.webSocketTask(with: URLRequest(url: url, timeoutInterval: timeout))
+        let task = session.remoteWebSocketTask(with: url, timeoutInterval: timeout)
         task.maximumMessageSize = RemoteNoise.maxMessageLength + 1
         task.resume()
         let deadline = Task {
