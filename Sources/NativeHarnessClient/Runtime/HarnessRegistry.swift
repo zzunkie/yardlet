@@ -234,7 +234,8 @@ actor HarnessRegistry {
             let legacy = ACPAdapter(kind: harness, executableURL: executableURL,
                 launchArguments: ACPLaunchConfiguration.arguments(for: harness, connection: connection),
                 launchEnvironmentOverrides: connection?.environment,
-                schemaCopies: harness == .antigravityCLI ? antigravitySchemaCopies?.counting(executableURL) : nil)
+                schemaCopies: harness == .antigravityCLI ? antigravitySchemaCopies?.counting(executableURL) : nil,
+                conversationStore: harness == .antigravityCLI ? .live : nil)
             switch routingPolicy.route(for: harness) {
             case .legacy:
                 return legacy
