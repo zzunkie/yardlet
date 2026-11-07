@@ -34,7 +34,7 @@ Maintainers keep working notes outside this repository, in the ignored folder `d
   a Mac. A sleep is only for checking that something did not happen.
 - Run `swift test --build-system native --filter <test>` for the contract you changed and
   `scripts/test-fast.sh` before a pull request. CI runs the build and `scripts/test-fast.sh` on every
-  pull request.
+  pull request that changes more than documents.
 - Launch and bundle commands are in the [README](README.md#development). Building, opening a
   development bundle and replacing the installed app are different actions; use only the ones the
   task needs.

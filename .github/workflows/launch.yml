@@ -13,11 +13,21 @@ name: Launch on macOS 15 and Intel
 # on which Chromium's GPU process fails to start; Chromium draws there only when its fallback takes
 # over in time, and otherwise ends the browser host ("GPU process isn't usable"). So on Intel the
 # browser check reports without failing the job, and it shows nothing of what an Intel Mac's own
-# graphics draw. It runs on `main`, by hand, and on a pull request that changes how the bundle is built.
+# graphics draw. It runs when a push to `main` or a pull request changes how the bundle is built, by
+# hand, and every night on `main` for what those paths miss, such as an API in Sources that macOS 15
+# lacks. A failed scheduled run emails whoever last changed the schedule.
 on:
   push:
     branches: [main]
-  workflow_dispatch:
+    paths:
+      - .github/workflows/launch.yml
+      - Package.swift
+      - Package.resolved
+      - Packaging/**
+      - scripts/build-app.sh
+      - scripts/check-macos-symbols.sh
+      - scripts/sign-app.sh
+      - scripts/browser-host-qa/**
   pull_request:
     paths:
       - .github/workflows/launch.yml
@@ -28,6 +38,9 @@ on:
       - scripts/check-macos-symbols.sh
       - scripts/sign-app.sh
       - scripts/browser-host-qa/**
+  schedule:
+    - cron: "30 19 * * *" # 04:30 in Korea, after Full tests
+  workflow_dispatch:
 
 permissions:
   contents: read

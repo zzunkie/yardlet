@@ -1,13 +1,21 @@
 name: Windows engine
 
 # The engine built on its own on Windows (docs/PLATFORM_PORTABILITY.md, "Building the engine on its
-# own"), and the Windows app built on it ("The Windows app"), for every pull request, main and the
-# branches that port it. They inform and are not required checks: a pull request that breaks them can
-# still be merged.
+# own"), and the Windows app built on it ("The Windows app"), for every pull request that changes more
+# than documents, main and the branches that port it. They inform and are not required checks: a pull
+# request that breaks them can still be merged.
 on:
   push:
     branches: [main, 'windows-*']
+    paths-ignore:
+      - docs/**
+      - '**/*.md'
+      - LICENSE
   pull_request:
+    paths-ignore:
+      - docs/**
+      - '**/*.md'
+      - LICENSE
   workflow_dispatch:
 
 permissions:
@@ -18,8 +26,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # As in ci.yml: a commit a pull request's run already built is not built again when it lands.
+  tested-in-pull-request:
+    name: Look for a passing pull request run
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      passed: ${{ steps.find.outputs.passed }}
+    steps:
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/windows-engine.yml/runs?event=pull_request&status=success&head_sha=$GITHUB_SHA&per_page=1" --jq .total_count) || runs=0
+          if [[ $runs -gt 0 ]]; then echo "passed=true" >> "$GITHUB_OUTPUT"; fi
+
   build:
     name: Build the engine
+    needs: tested-in-pull-request
+    if: ${{ !cancelled() && needs.tested-in-pull-request.outputs.passed != 'true' }}
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -96,6 +124,8 @@ jobs:
   # first. A debug build, which shows whether the app compiles without a release's optimizer time.
   app:
     name: Build the Windows app
+    needs: tested-in-pull-request
+    if: ${{ !cancelled() && needs.tested-in-pull-request.outputs.passed != 'true' }}
     runs-on: windows-latest
     timeout-minutes: 90
     steps:

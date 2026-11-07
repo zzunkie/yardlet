@@ -223,7 +223,8 @@ swift run --build-system native NativeHarnessClient
 
 The default build system also compiles SwiftTerm's Metal shaders and stops when the Metal toolchain
 is not installed; `--build-system native` builds without it. `scripts/test-fast.sh` runs every test
-except renders, QA fixtures and performance runs, as CI does for each pull request;
+except renders, QA fixtures and performance runs, as CI does for each pull request that changes more
+than documents;
 `scripts/test-fast.sh --excluded` runs only those, as CI does every night on `main`, and
 `swift test --build-system native` runs them all.
 
@@ -283,8 +284,8 @@ the Intel CEF build. `YARDLET_ARCHS="arm64 x86_64"` builds a universal bundle, e
 with `lipo`; it is a debug bundle built with `YARDLET_WITHOUT_CEF=1`, since each CEF build has one
 architecture. CI builds the release bundle of each architecture in a disk image, starts it on macOS 15
 on Apple silicon and on Intel and on macOS 26 on Intel, and opens the browser panel there with a debug
-bundle of the same architecture (`.github/workflows/launch.yml`): on `main`, by hand, and on pull
-requests that change how the bundle is built. On Intel the browser check only reports: GitHub's Intel
+bundle of the same architecture (`.github/workflows/launch.yml`): every night on `main`, by hand, and
+on pushes and pull requests that change how the bundle is built. On Intel the browser check only reports: GitHub's Intel
 Macs have a virtual GPU on which Chromium often cannot start drawing.
 
 An API that a newer SDK adds without marking it newer than macOS 15 links strongly, and the app stops

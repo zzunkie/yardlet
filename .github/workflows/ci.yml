@@ -1,9 +1,19 @@
 name: CI
 
+# Documents alone run nothing: no test reads them, and `main` requires no check for a pull request to
+# wait on.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - docs/**
+      - '**/*.md'
+      - LICENSE
   pull_request:
+    paths-ignore:
+      - docs/**
+      - '**/*.md'
+      - LICENSE
   workflow_dispatch:
 
 permissions:
@@ -14,8 +24,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A pull request lands by fast-forwarding `main` to the commit its run tested, so building that commit
+  # again here repeats the run. The same commit means the same tree: `main` never rewinds, so the commit
+  # contains the `main` that run merged it with. Anything that reaches `main` another way (a merge button,
+  # a rebase, a direct push) has a new SHA, finds no run and is built. With the build skipped the run
+  # still passes, so the README's badge goes on saying whether `main` passed.
+  tested-in-pull-request:
+    name: Look for a passing pull request run
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      passed: ${{ steps.find.outputs.passed }}
+    steps:
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=pull_request&status=success&head_sha=$GITHUB_SHA&per_page=1" --jq .total_count) || runs=0
+          if [[ $runs -gt 0 ]]; then echo "passed=true" >> "$GITHUB_OUTPUT"; fi
+
   build-and-test:
     name: Build and test
+    needs: tested-in-pull-request
+    # `!cancelled()` lets this run when the job above is skipped, as on a pull request.
+    if: ${{ !cancelled() && needs.tested-in-pull-request.outputs.passed != 'true' }}
     # Yardlet builds with Xcode 27.1 (Swift 6.4); Xcode 26 cannot compile it.
     runs-on: xcode-27
     timeout-minutes: 60

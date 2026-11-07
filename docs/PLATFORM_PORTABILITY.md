@@ -106,7 +106,8 @@ tar --exclude ./.build --exclude ./.git --exclude ./docs -cf - . | docker run -i
 ```
 
 On Windows (x64, Swift 6.4.1 from swift.org's installer) in GitHub Actions (confirmed, 2026-10-31):
-`.github/workflows/windows-engine.yml` makes the same build for every pull request, `main` and `windows-*` branches.
+`.github/workflows/windows-engine.yml` makes the same build for every pull request that changes more than documents,
+`main` and `windows-*` branches; a commit a pull request's run built is not built again when it lands on `main`.
 It is a check to read, not a required one. A run's logs need a GitHub sign-in, so a failed run also reports its
 compiler errors in the check run's annotations, which the API gives without one. The macOS engine-only build cannot
 stand in for it: Apple's platforms have names the others lack (Combine's `objectWillChange`, for one).
@@ -197,7 +198,7 @@ swift build --product NativeHarnessClient --force-resolved-versions
 Windows/scripts/place-bootstrapper.ps1 -Binaries (swift build --show-bin-path)
 ```
 
-`windows-engine.yml` builds the Windows app for every pull request, `main` and `windows-*` branches, beside the
+`windows-engine.yml` builds the Windows app for the same pull requests and branches, beside the
 engine, as a check to read. `windows-app.yml`, for `windows-*` branches only, builds a release, opens it on the
 runner, measures it and types Korean into its composer through the Microsoft Korean IME
 (`Windows/scripts/check-window.ps1`). It then starts the relay (`relay/`) and the fixture host on it
@@ -283,7 +284,8 @@ step with its cipher's nonce and has to connect again.
 - A violation in a file that is not on the allow list, or a new kind of violation in an allowed file, fails.
 - Path assumptions and `Process` semantics (below) are string and behavior problems, so they are not in the check.
 - The engine-only build is the stronger check: it fails on any engine reference to a screen or macOS-layer name, which
-  the scan cannot see. Every pull request makes it on Windows (`windows-engine.yml`), as a check to read.
+  the scan cannot see. Every pull request that changes code makes it on Windows (`windows-engine.yml`), as a check to
+  read.
 
 ## What a Windows layer needs
 
