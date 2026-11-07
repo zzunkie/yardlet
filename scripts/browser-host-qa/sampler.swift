@@ -108,13 +108,17 @@ repeat {
 } while true
 let elapsed = (ContinuousClock.now - started).components
 let actualSeconds = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
-let processes: [[String: Any]] = stats.map { key, stat in
-    ["pid": key.pid, "startEpochUs": key.start, "path": stat.path, "isRunning": alive.contains(key),
-     "footprintMiB": alive.contains(key) ? Double(stat.previous.footprint) / 1_048_576 : 0,
-     "residentMiB": alive.contains(key) ? Double(stat.previous.resident) / 1_048_576 : 0,
-     "footprintPeakMiB": Double(stat.peak) / 1_048_576,
-     "cpuPercent": Double(stat.cpu) / (actualSeconds * 1e9) * 100,
-     "wakeupsPerSecond": Double(stat.wakeups) / actualSeconds]
+// Each number has its own line and type: GitHub's macOS 15 image gave up type-checking them inside the literal.
+let processes: [[String: Any]] = stats.map { key, stat -> [String: Any] in
+    let isRunning = alive.contains(key)
+    let footprintMiB: Double = isRunning ? Double(stat.previous.footprint) / 1_048_576 : 0
+    let residentMiB: Double = isRunning ? Double(stat.previous.resident) / 1_048_576 : 0
+    let footprintPeakMiB: Double = Double(stat.peak) / 1_048_576
+    let cpuPercent: Double = Double(stat.cpu) / (actualSeconds * 1e9) * 100
+    let wakeupsPerSecond: Double = Double(stat.wakeups) / actualSeconds
+    return ["pid": key.pid, "startEpochUs": key.start, "path": stat.path, "isRunning": isRunning,
+            "footprintMiB": footprintMiB, "residentMiB": residentMiB, "footprintPeakMiB": footprintPeakMiB,
+            "cpuPercent": cpuPercent, "wakeupsPerSecond": wakeupsPerSecond]
 }.sorted { ($0["pid"] as! pid_t) < ($1["pid"] as! pid_t) }
 let totalFootprint = stats.filter { alive.contains($0.key) }.values.reduce(UInt64(0)) { $0 + $1.previous.footprint }
 let output: [String: Any] = [
