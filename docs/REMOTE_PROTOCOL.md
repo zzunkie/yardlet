@@ -847,9 +847,9 @@ and times, and a push's token (FCM's registration token or APNs' device token) w
 A relay may be reachable at a second address that reaches the same rooms (`relay/pages/` hands every request to the
 Worker, and its `*.pages.dev` address is often served from a nearer location than the Worker's own domain). The Mac
 then opens its socket to both at once on every attempt, keeps the one whose challenge arrives first, and closes the
-other before answering it: an answered socket would replace the room's (step 4). When one address is refused or never
-answers, the other opens the room. Sign-in and the account API (§14.4) stay on the first address, whose callbacks the
-providers know.
+other before answering it: an answered socket would replace the room's (step 4). When one address is refused, never
+answers or answers with anything but the challenge, the other opens the room. Sign-in and the account API (§14.4) stay
+on the first address, whose callbacks the providers know.
 
 1. The relay sends `{"t": "challenge", "nonce": "<32 random bytes>"}` as soon as it accepts.
 2. The Mac answers `{"t": "auth", "key": "<relay public key>", "sig": "<signature>"}`: an Ed25519

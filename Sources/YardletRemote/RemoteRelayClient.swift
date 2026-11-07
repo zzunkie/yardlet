@@ -190,9 +190,9 @@ public final class RemoteRelayClient: @unchecked Sendable {
                             return
                         case .holding:
                             break
-                        case let .won(text):
+                        case let .won(challenge):
                             self.lastHeard = Date()
-                            if let text { self.handleRelayText(text, on: task) } else { self.handle(message, on: task) }
+                            self.handleRelayText(challenge, on: task)
                         }
                     }
                     if current == self.generation { self.receive(on: task, generation: current) }
@@ -240,6 +240,11 @@ public final class RemoteRelayClient: @unchecked Sendable {
     /// `pong`, or a JSON object: what the relay sends as text.
     static func readsAsRelayMessage(_ bytes: Data) -> Bool {
         bytes == Data("pong".utf8) || (try? JSONSerialization.jsonObject(with: bytes)) is [String: Any]
+    }
+
+    /// The first thing the relay sends on a socket (§14.2).
+    static func readsAsChallenge(_ bytes: Data) -> Bool {
+        ((try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any])?["t"] as? String == "challenge"
     }
 
     /// A whole relay message the room's socket brought.
@@ -290,22 +295,34 @@ public final class RemoteRelayClient: @unchecked Sendable {
         case gone
         /// It holds a piece of a message and is read on.
         case holding
-        /// It is the room's socket now, with the whole message it brought when that was text.
-        case won(String?)
+        /// It is the room's socket now, with the challenge it brought.
+        case won(String)
     }
 
-    /// A message one of the attempt's sockets brought. The first socket whose message reads (the relay's challenge,
-    /// pieces of it joined on that socket alone) becomes the room's socket and the others close.
+    /// A socket of the attempt brought something other than the relay's challenge.
+    private struct NotTheRelay: LocalizedError {
+        var errorDescription: String? { "The relay's address answered with something else" }
+    }
+
+    /// A message one of the attempt's sockets brought. The first socket to bring the relay's challenge, pieces of it
+    /// joined on that socket alone, becomes the room's socket and the others close. A socket that brings anything else
+    /// leaves the race, so what answers at an address but is not the relay cannot end the socket that is.
     private func race(_ task: RemoteClientWebSocket, _ message: RemoteClientWebSocket.Message) -> RaceStep {
         guard let index = racing.firstIndex(where: { $0.task === task }) else { return .gone }
-        var text: String?
+        var challenge: String?
+        var outcome: RemoteFramePieces.Outcome?
         if case let .string(piece) = message {
-            let outcome = try? racing[index].text.add(Data(piece.utf8)) { bytes in
-                guard Self.readsAsRelayMessage(bytes) else { return false }
-                text = String(decoding: bytes, as: UTF8.self)
+            outcome = try? racing[index].text.add(Data(piece.utf8)) { bytes in
+                guard Self.readsAsChallenge(bytes) else { return false }
+                challenge = String(decoding: bytes, as: UTF8.self)
                 return true
             }
-            if outcome == .held { return .holding }
+        }
+        if outcome == .held { return .holding }
+        guard let challenge else {
+            task.cancel(with: .goingAway, reason: nil)
+            leaveRace(task, error: NotTheRelay())
+            return .gone
         }
         let address = racing[index].address
         for other in racing where other.task !== task { other.task.cancel(with: .goingAway, reason: nil) }
@@ -313,7 +330,7 @@ public final class RemoteRelayClient: @unchecked Sendable {
         raceFailure = nil
         self.task = task
         if alternateURL != nil { RemoteLog.notice("Relay: \(address.host ?? address.absoluteString) answered first") }
-        return .won(text)
+        return .won(challenge)
     }
 
     /// One of the attempt's sockets ended. Once all have ended the attempt failed, for `baseURL`'s reason when it

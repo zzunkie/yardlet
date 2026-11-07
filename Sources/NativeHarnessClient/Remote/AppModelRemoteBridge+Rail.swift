@@ -146,7 +146,7 @@ extension AppModelRemoteBridge {
             var row = RemoteRailFacts.Agent(id: agent.id, kind: kind, targetID: target, title: Self.safeRailText(agent.title, roots: roots),
                          harnessLabel: agent.harnessLabel, model: agent.model, status: String(describing: agent.status),
                          startedAt: milliseconds(agent.startedAt), depth: agent.depth, canStop: agent.canStop)
-            row.waitingFor = agent.waitingFor == .input ? "input" : "approval"
+            if agent.status == .waiting { row.waitingFor = agent.waitingFor == .input ? "input" : "approval" }
             return row
         } ?? []
         result.background = content.backgroundTasks?.rows.map { row in

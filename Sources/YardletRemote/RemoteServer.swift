@@ -638,6 +638,11 @@ public actor RemoteServer {
     public func closed(_ id: UUID) {
         guard let connection = connections.removeValue(forKey: id) else { return }
         RemoteLog.notice("Remote: \(Self.describe(connection)) ended with its transport after \(lifetime(of: connection))")
+        wrapUp(connection, id)
+    }
+
+    /// What a connection held ends with it, whichever side ended it.
+    private func wrapUp(_ connection: Connection, _ id: UUID) {
         forgetLink(on: id)
         if connection.isPresent { Task { await self.releaseHeldPushes() } }
         endTabWatch(on: id)
@@ -2469,13 +2474,8 @@ public actor RemoteServer {
     private func close(_ id: UUID, _ code: RemoteCloseCode) {
         guard let connection = connections.removeValue(forKey: id) else { return }
         RemoteLog.notice("Remote: closing \(Self.describe(connection)) with code \(code.rawValue) after \(lifetime(of: connection))")
-        forgetLink(on: id)
-        endTabWatch(on: id)
-        endTerminals(on: id, reason: "disconnected")
-        revokeFileWrites(on: id)
         connection.channel.close(code)
-        Task { await self.updateWatched() }
-        publishStatus()
+        wrapUp(connection, id)
     }
 
     /// A connection as the log names it: its device and path.

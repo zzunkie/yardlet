@@ -496,6 +496,19 @@ final class RemoteSecureTests: XCTestCase {
         _ = try await sent.count(2)
         let malformed = try await harness.pairedPhone().request(#"{"id":"5","type":"presence"}"#)
         XCTAssertEqual(malformed.error?.code, .badRequest)
+
+        // So does one the Mac closes itself, as it does when the desktop goes quiet.
+        let quiet = try await harness.pairedPhone()
+        _ = try await quiet.request(#"{"id":"6","type":"snapshot"}"#)
+        _ = try await quiet.request(#"{"id":"7","type":"presence","active":true}"#)
+        try await harness.change(task: "A", to: .waiting, request: "r3")
+        try await Task.sleep(for: .milliseconds(150))
+        let whileQuiet = await sent.requests
+        XCTAssertEqual(whileQuiet.count, 2)
+        harness.clock.advance(by: 3600)
+        await harness.server.sweep()
+        try await quiet.waitUntilClosed(.idle)
+        _ = try await sent.count(3)
     }
 
     func testOnlyWorthwhileChangesArePushed() {
@@ -861,7 +874,8 @@ final class RemoteSecureTests: XCTestCase {
             if case .failed = room.currentState { return true }
             return false
         }
-        XCTAssertEqual(server.counts.requests, 2)
+        // The room tries again within a quarter of a second, so more than one attempt may have ended by now.
+        XCTAssertGreaterThanOrEqual(server.counts.requests, 2)
         XCTAssertEqual(server.counts.framesFromClients, 0)
     }
 
@@ -891,6 +905,31 @@ final class RemoteSecureTests: XCTestCase {
         defer { single.stop() }
         try await waitUntil { single.currentState == .connected }
         XCTAssertEqual(split.counts.auths, 1)
+    }
+
+    /// Whatever answers at an address with something other than the relay's challenge leaves the race and does not end
+    /// the socket of the address that is the relay; with nothing else to wait for, the attempt fails at once.
+    func testASocketThatBringsNoChallengeLeavesTheRace() async throws {
+        let wrong = try FakeRelayHost(challenge: ["<html>Bad gateway</html>"])
+        let relay = try FakeRelayHost(challengeDelay: 0.5)
+        defer { wrong.stop(); relay.stop() }
+        try await waitUntil { wrong.url != nil && relay.url != nil }
+        let harness = try await SecureHarness()
+        let racing = RemoteRelayClient(server: harness.server, identity: harness.identity, baseURL: try XCTUnwrap(wrong.url),
+                                       alternateURL: try XCTUnwrap(relay.url))
+        racing.start()
+        try await waitUntil { racing.currentState == .connected }
+        XCTAssertEqual(relay.counts.auths, 1)
+        XCTAssertEqual(wrong.counts.auths, 0)
+        racing.stop()
+
+        let alone = RemoteRelayClient(server: harness.server, identity: harness.identity, baseURL: try XCTUnwrap(wrong.url))
+        alone.start()
+        defer { alone.stop() }
+        try await waitUntil {
+            if case .failed = alone.currentState { return true }
+            return false
+        }
     }
 
     /// The current address keeps the room when the second one is refused or never answers, and without a second one
