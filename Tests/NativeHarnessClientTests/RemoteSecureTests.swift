@@ -254,6 +254,51 @@ final class RemoteSecureTests: XCTestCase {
         try await elsewhere.waitUntilClosed(.unauthenticated)
     }
 
+    /// What the server sent while message 2 was being decided, as the link request a paired phone is asked about, goes
+    /// right after message 2, ahead of whatever is sent as the connection opens.
+    func testWhatWaitedForMessage2GoesAheadOfWhatComesNext() async throws {
+        let harness = try await SecureHarness()
+        await harness.server.setAcceptsLinks(true)
+        _ = try await PipePhone.link(server: harness.server, macStatic: harness.identity.noise, name: "Tablet")
+        let pipe = FramePipe()
+        let connection = RemoteSecureConnection(transport: pipe, server: harness.server, staticKey: harness.identity.noise, path: .local)
+        pipe.onFirstFrame = {
+            DispatchQueue.global().async { connection.send("next") }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        let ticket = await harness.server.openPairing()
+        var noise = try RemoteNoiseHandshake(role: .initiator, localStatic: .generate(), remoteStatic: harness.identity.noise.publicKey)
+        let hello = RemoteHandshakeHello(name: "Phone", pair: RemoteEncoding.base64url(ticket.secret))
+        connection.receive(try noise.writeMessage1(payload: Data(RemoteJSON.string(hello).utf8)))
+        try await waitUntil { pipe.count == 3 }
+        let frames = pipe.take()
+        _ = try noise.readMessage2(frames[0])
+        var cipher = noise.split().receive
+        var joiner = RemoteNoiseFraming.Joiner(limit: RemoteProtocol.maxServerMessageBytes)
+        let held = try XCTUnwrap(joiner.add(frames[1], with: &cipher))
+        XCTAssertEqual(try JSONDecoder().decode(RemoteEvent.self, from: held).event, .linkRequest)
+        XCTAssertEqual(try joiner.add(frames[2], with: &cipher), Data("next".utf8))
+    }
+
+    /// While it waits a link request may send only what keeps it alive: a longer message ends it as it comes, before
+    /// its last chunk. Approved, it sends what any paired phone may, at once.
+    func testAWaitingLinkRequestIsHeldToTheSmallLimit() async throws {
+        let harness = try await SecureHarness()
+        await harness.server.setAcceptsLinks(true)
+        let refused = try await PipePhone.link(server: harness.server, macStatic: harness.identity.noise, name: "Tablet").phone
+        try refused.sendAllButTheLastChunk(of: Data(repeating: 0x20, count: 3 * RemoteNoise.maxChunkLength))
+        try await refused.waitUntilClosed(.messageTooBig)
+
+        let approved = try await PipePhone.link(server: harness.server, macStatic: harness.identity.noise, name: "Tablet").phone
+        let waiting = await harness.server.status.linkRequest
+        let answered = await harness.server.answerLink(try XCTUnwrap(waiting?.id), approve: true)
+        XCTAssertTrue(answered)
+        _ = try await approved.event(.linked)
+        let padding = String(repeating: "x", count: 2 * RemoteProtocol.maxClientFrameBytes)
+        let large = try await approved.request(#"{"id":"1","type":"snapshot","padding":"\#(padding)"}"#)
+        XCTAssertTrue(large.ok)
+    }
+
     func testALinkRequestWaitsForAPairedPhonesApproval() async throws {
         let harness = try await SecureHarness()
         let paired = try await harness.pairedPhone()
@@ -1122,8 +1167,17 @@ final class FramePipe: RemoteFrameChannel, @unchecked Sendable {
     private let lock = NSLock()
     private var frames: [Data] = []
     private(set) var closeCode: RemoteCloseCode?
+    /// Runs once, as the first frame leaves.
+    var onFirstFrame: (@Sendable () -> Void)?
 
-    func sendFrame(_ frame: Data) { lock.withLock { frames.append(frame) } }
+    func sendFrame(_ frame: Data) {
+        let first = lock.withLock {
+            frames.append(frame)
+            defer { onFirstFrame = nil }
+            return onFirstFrame
+        }
+        first?()
+    }
     func close(_ code: RemoteCloseCode) { lock.withLock { if closeCode == nil { closeCode = code } } }
 
     func take() -> [Data] {
@@ -1134,6 +1188,7 @@ final class FramePipe: RemoteFrameChannel, @unchecked Sendable {
     }
 
     var closed: RemoteCloseCode? { lock.withLock { closeCode } }
+    var count: Int { lock.withLock { frames.count } }
 }
 
 /// A phone over a `FramePipe`: the initiator's handshake, then encrypted JSON both ways.
@@ -1208,6 +1263,13 @@ final class PipePhone: @unchecked Sendable {
             }
             self.receive = receive
         }
+    }
+
+    /// A long message that never ends.
+    func sendAllButTheLastChunk(of message: Data) throws {
+        guard var send else { throw TestChannel.TimedOut(description: "Not connected") }
+        for frame in try RemoteNoiseFraming.seal(message, with: &send).dropLast() { connection.receive(frame) }
+        self.send = send
     }
 
     func request(_ json: String) async throws -> RemoteResponse {

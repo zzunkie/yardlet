@@ -50,21 +50,13 @@ extension AppModelRemoteBridge {
 
     private func safeFiles(_ files: [String]?, session: SessionRecord) -> Bool {
         guard let files else { return true }
-        let root = session.workspaceURL.resolvingSymlinksInPath().standardizedFileURL.path
-        return files.count <= 500 && files.allSatisfy { file in
-            let url = file.hasPrefix("/") ? URL(fileURLWithPath: file) : session.workspaceURL.appendingPathComponent(file)
-            return url.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(root + "/")
-        }
+        return files.count <= 500 && files.allSatisfy { RemoteFileReader.relativePath($0, in: session.workspaceURL) != nil }
     }
 
     private func remoteRewindResult(_ result: HarnessFileRewindResult, session: SessionRecord) -> RemoteFileRewind {
         var value = RemoteFileRewind()
         value.canRewind = result.canRewind
-        value.files = result.filesChanged?.map { path in
-            let root = session.workspaceURL.resolvingSymlinksInPath().standardizedFileURL.path + "/"
-            let url = path.hasPrefix("/") ? URL(fileURLWithPath: path) : session.workspaceURL.appendingPathComponent(path)
-            return String(url.resolvingSymlinksInPath().standardizedFileURL.path.dropFirst(root.count))
-        }
+        value.files = result.filesChanged?.compactMap { RemoteFileReader.relativePath($0, in: session.workspaceURL) }
         value.insertions = result.insertions; value.deletions = result.deletions
         value.skippedLinks = result.skippedLinks; value.inFlight = result.inFlight
         return value

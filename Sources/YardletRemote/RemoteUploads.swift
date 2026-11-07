@@ -2,9 +2,9 @@ import Foundation
 
 /// Files a phone sends in parts (docs/REMOTE_PROTOCOL.md §15.20), each in a folder of its own under the Mac's
 /// temporary folder, never a task's folder: the parts land in a hidden file that becomes the named file once the
-/// last one arrives, readable by the person only and never executable. A message takes finished files by their
-/// upload IDs and marks their folders taken; an unfinished or untaken upload is removed 30 minutes after its last
-/// part, and one an earlier run left untaken when this one starts.
+/// last one arrives, readable by the person only and never executable. A message claims finished files by their
+/// upload IDs while it is being sent and marks their folders taken once it went; an unfinished or untaken upload is
+/// removed 30 minutes after its last part, and one an earlier run left untaken when this one starts.
 struct RemoteUploadStore {
     struct Upload {
         let deviceID: String
@@ -14,6 +14,8 @@ struct RemoteUploadStore {
         var received: Int
         var lastPartAt: Date
         let folder: URL
+        /// A message on its way names this file: it stays until the message went or failed.
+        var isClaimed = false
 
         var isFinished: Bool { received == size }
         var file: URL { folder.appending(path: name) }
@@ -23,6 +25,9 @@ struct RemoteUploadStore {
 
     static let idleLimit: TimeInterval = 30 * 60
     static let openPerDevice = 4
+    /// Finished files a device may leave waiting for a message: what a message can take, twice over for one being
+    /// written while files of another wait.
+    static let finishedPerDevice = 2 * RemoteProtocol.maxFiles
     /// The disk an upload must leave free.
     static let diskFloor: Int64 = 2_000_000_000
 
@@ -88,12 +93,11 @@ struct RemoteUploadStore {
             return .failure(RemoteError(.badRequest, "That upload ID was used already"))
         }
         // A phone does not say when it gave up on a file (the attachment removed, the file started again under a new
-        // ID), so a fifth upload makes room by dropping the device's unfinished one that went longest without a part,
-        // rather than every later file being refused until that one expires.
-        let open = uploads.filter { $0.value.deviceID == deviceID && !$0.value.isFinished }
-        if open.count >= Self.openPerDevice, let stalest = open.min(by: { $0.value.lastPartAt < $1.value.lastPartAt }) {
-            drop(stalest.key)
-        }
+        // ID), so a new upload makes room by dropping the device's uploads of the same kind that went longest without a
+        // part, rather than every later file being refused until those expire.
+        let mine = uploads.filter { $0.value.deviceID == deviceID && !$0.value.isClaimed }
+        dropStalest(mine.filter { !$0.value.isFinished }, keeping: Self.openPerDevice - 1)
+        dropStalest(mine.filter { $0.value.isFinished }, keeping: Self.finishedPerDevice - 1)
         let upload = Upload(deviceID: deviceID, name: Self.safeName(name), mediaType: part.mediaType, size: size,
                             received: part.data.count, lastPartAt: now, folder: folder)
         let owner: [FileAttributeKey: Any] = [.posixPermissions: 0o700]
@@ -126,17 +130,29 @@ struct RemoteUploadStore {
         return .success(upload.received)
     }
 
-    /// The finished files the device sent under these IDs, in that order, or why one cannot be taken.
-    func files(_ ids: [String], from deviceID: String) -> Result<[RemoteFile], RemoteError> {
+    /// Claims the finished files the device sent under these IDs for one message and returns them in that order, or
+    /// says why one cannot be taken, claiming none. A claimed file is neither dropped nor expired, and no other message
+    /// takes it, until `release` or `unclaim`.
+    mutating func claim(_ ids: [String], from deviceID: String) -> Result<[RemoteFile], RemoteError> {
         guard ids.count <= RemoteProtocol.maxFiles else { return .failure(RemoteError(.tooLarge, "At most 20 files")) }
         var files: [RemoteFile] = []
         for id in ids {
             guard let upload = uploads[id.uppercased()], upload.deviceID == deviceID, upload.isFinished else {
                 return .failure(RemoteError(.notFound, "An upload is not finished or has expired"))
             }
+            guard !upload.isClaimed else { return .failure(RemoteError(.busy, "Another message is sending this file")) }
             files.append(RemoteFile(url: upload.file, name: upload.name, mediaType: upload.mediaType))
         }
+        for id in ids { uploads[id.uppercased()]?.isClaimed = true }
         return .success(files)
+    }
+
+    /// The message did not go: its files wait for the next one, as long as after a last part.
+    mutating func unclaim(_ ids: [String], now: Date) {
+        for id in ids.map({ $0.uppercased() }) where uploads[id] != nil {
+            uploads[id]?.isClaimed = false
+            uploads[id]?.lastPartAt = now
+        }
     }
 
     /// A message took these files: they stay on disk for the task to read, marked taken, and the store lets them go.
@@ -153,9 +169,17 @@ struct RemoteUploadStore {
         try? FileManager.default.removeItem(at: upload.folder)
     }
 
-    /// Removes uploads idle for 30 minutes, finished or not, with their folders.
+    /// Drops these uploads but for the `count` with the latest parts.
+    private mutating func dropStalest(_ candidates: [String: Upload], keeping count: Int) {
+        let stalestFirst = candidates.sorted { $0.value.lastPartAt < $1.value.lastPartAt }
+        for (id, _) in stalestFirst.dropLast(count) { drop(id) }
+    }
+
+    /// Removes uploads idle for 30 minutes, finished or not, with their folders, but for those a message is sending.
     mutating func sweep(now: Date) {
-        for (id, upload) in uploads where now.timeIntervalSince(upload.lastPartAt) >= Self.idleLimit { drop(id) }
+        for (id, upload) in uploads where !upload.isClaimed && now.timeIntervalSince(upload.lastPartAt) >= Self.idleLimit {
+            drop(id)
+        }
     }
 
     /// The file's own name without any path, control characters or leading dots, at most 120 characters and 200

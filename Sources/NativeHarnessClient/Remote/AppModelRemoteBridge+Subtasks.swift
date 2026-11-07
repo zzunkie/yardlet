@@ -20,14 +20,16 @@ extension AppModelRemoteBridge {
             for turn in presentation.turns.suffix(10).reversed() {
                 var full = RemoteConversationProjection.Full()
                 if let make = subtaskPreviewMaker {
-                    let root = session.workspaceURL.resolvingSymlinksInPath().path + "/"
                     let urls = (turn.prompt + turn.notices + turn.work + turn.answers).flatMap { item -> [URL] in
                         switch item.kind {
                         case let .userMessage(_, images): return images.compactMap(\.url)
                         case .tool: return RemoteConversationProjection.bodyImages(item, workspaceURL: session.workspaceURL)
                         default: return []
                         }
-                    }.filter { $0.scheme == "data" || ($0.isFileURL && $0.resolvingSymlinksInPath().path.hasPrefix(root)) }
+                    }.filter { url in
+                        url.scheme == "data" || (url.isFileURL
+                            && RemoteFileReader.relativePath(url.path(percentEncoded: false), in: session.workspaceURL) != nil)
+                    }
                     for url in Set(urls).prefix(8) {
                         if let data = await make(url, RemoteImagePreviews.maximumSide) { full.previews[url] = data }
                     }

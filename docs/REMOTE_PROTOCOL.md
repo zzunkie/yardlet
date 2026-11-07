@@ -499,8 +499,9 @@ The provider's notices beside the turn (a model reroute, a warning) and context 
 - Pairing: 5 wrong codes close the open pairing.
 - The Mac holds at most 64 messages and 16 MiB of a connection's that it has not handled yet, and 64 MiB of all
   connections'; a message past that closes its connection (4429), whatever it is, rather than wait in memory. Before
-  they are decrypted, at most 512 frames and 16 MiB of a connection's wait, past which it closes (4429) too. A browser
-  tab's input waiting behind a slow page counts apart: at most 32 per connection (§15.25).
+  they are decrypted, at most 512 frames and 16 MiB of a connection's wait, past which it closes (4429) too; 128 KiB
+  while the connection waits for its link request to be answered (§12.1). A browser tab's input waiting behind a slow
+  page counts apart: at most 32 per connection (§15.25).
 
 ## 8. Error codes
 
@@ -523,7 +524,7 @@ The provider's notices beside the turn (a model reroute, a warning) and context 
 | `emptyMessage` | `sendMessage.text` is empty |
 | `tooLarge` | `sendMessage.text` is too long, or a file is over 100 MiB (§15.22) |
 | `unsupportedCommand` | a slash command |
-| `busy` | the task cannot take it now (editing, switching account, held by another app), or a run of the schedule is starting |
+| `busy` | the task cannot take it now (editing, switching account, held by another app), a run of the schedule is starting, or a message still being sent names the file (§15.20) |
 | `rateLimited` | over the rate limit, or a device's file budget (§15.22) |
 | `internal` | anything else |
 | `unknownDevice` | v2 handshake: the phone's key is not paired, or the device was removed (§13.1) |
@@ -578,6 +579,8 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
 
 Every revision of protocol 2 only adds optional fields or states a rule, except where it says otherwise.
 
+- 2026-11-08: a connection waiting on a link request is held to 65,536 bytes a message (§7, §13.2). At most 40 finished
+  files wait per device, and a message being sent keeps its files, which another message then finds `busy` (§15.20).
 - 2026-11-05: a second address of the same relay, `a` in the pairing link (§12) and `alternate` in message 2's `relay`
   (§13.1); the Mac races it against the first for its room and answers only the socket whose challenge came first
   (§14.2). The account API stays on the first.
@@ -815,7 +818,8 @@ more Noise transport messages:
   byte (`0x01` the last chunk, `0x00` more follow) and the chunk; encrypted with the sender's cipher,
   empty associated data, one transport message per binary frame (≤ 65,535 bytes).
 - The receiver decrypts in order and joins the chunks. A message that fails to decrypt closes the
-  connection (4401). A message from the phone over 8 MiB closes it (1009), as do the Mac's over 8 MiB. Before
+  connection (4401). A message from the phone over 8 MiB closes it (1009), as do the Mac's over 8 MiB; while a link
+  request waits for its answer (§12.1), anything over 65,536 bytes does, as soon as that much of it has arrived. Before
   2026-10-27 a Mac closed a phone message over 65,536 bytes; a phone sends a larger one (images, §15.14) only to
   a Mac that offers images.
 - Nonces start at 0 in each direction and grow by one per message (Noise).
@@ -1341,16 +1345,18 @@ in parts first, then a message or a new task names it.
   sends from `received` again. The Mac keeps an unfinished upload for 30 minutes after its last part, and a finished
   one until a message takes it or 30 minutes pass; when Yardlet starts again it removes whatever no message took.
   An `uploadId` is used once: a first part under an ID used before is refused. A part the Mac fails to write ends
-  the upload, and the phone starts the file again under a new ID. Not a command. At most 4 uploads are open per device: a
-  phone does not say when it gives up on a file, so a fifth first part drops the device's unfinished upload that went
-  longest without a part, which then answers `notFound`. Errors: `badRequest` (also a used ID), `tooLarge` (over 500 MiB, or the Mac's disk would keep less than
+  the upload, and the phone starts the file again under a new ID. Not a command. At most 4 uploads are open per device
+  and 40 finished files wait for a message: a phone does not say when it gives up on a file, so a first part past
+  either drops the device's upload of that kind that went longest without a part, which then answers `notFound`. Errors: `badRequest` (also a used ID), `tooLarge` (over 500 MiB, or the Mac's disk would keep less than
   2 GB free), `notFound` (an unknown, expired or dropped upload at an offset after 0).
 - `sendMessage` and `createTask` take `files: ["<uploadId>", …]`, at most 20, each finished and named once. The Mac writes each
   file in a folder of its own under its temporary folder (never the task's folder), named as the phone named it
   without any path, readable only by the person and never executable, and sends it as its composer sends a dropped
   file: an image the harness can carry as an image, any other file as a reference to its path (Claude Code's `@`
-  path, a Codex mention). Nothing on the Mac opens or runs it. Errors: `notFound` (an upload that is not finished
-  or has expired), `notAllowed` (the harness takes no files).
+  path, a Codex mention). Nothing on the Mac opens or runs it. A file stays through the message that names it, past the
+  30 minutes if need be, and when that message fails it waits for the next one for another 30 minutes. Errors: `notFound`
+  (an upload that is not finished or has expired), `busy` (a message still being sent names the file), `notAllowed`
+  (the harness takes no files).
 - Over the relay each part is ordinary encrypted chunks (§13.2): the relay sees only their size and timing.
 
 ### 15.21 Scheduled tasks
@@ -2043,7 +2049,9 @@ file-change rows, MCP result blocks and shell-message output. The existing `imag
 apply to tool lines. `body` can contain `output`, `hasOutput`, `reasoning`, `command`, `headBytes`,
 `background`, `files` and `mcp`. File rows carry relative `path`, `kind`, `state`, `preview`, line counts,
 `lines`, `hidden` and `firstChangedLine`; MCP blocks carry `kind`, `text`, `image`, `name`, `title`, `uri`
-and `mimeType`. No host file URL is handed to the client's filesystem. File rows open through the
+and `mimeType`. No host file URL is handed to the client's filesystem. A tool's file picture or `resource_link`
+is carried only when its file lies inside the task's working folder as §15.22 holds it, a link's path relative to
+that folder. File rows open through the
 host's existing scoped `readFile` path. Open in Changes selects that file in the existing remote
 Review panel using its host repository metadata; it adds no mutation request. Output is capped at 64,000 characters (the provider's already bounded live head/tail buffer is kept intact), reasoning and commands
 at 200,000; at most 50 files share 100,000 preview characters, and at most 50 MCP blocks share 64,000
@@ -2077,8 +2085,8 @@ missing worktree remains on the host; the client keeps that notice's action disa
 `fileRewind: true` advertises `fileRewind(taskId, action, pointId?, receipt?, confirmed?)`, with actions
 `points`, `preview` and `restore`. Points and preview are scoped reads without an additional device
 permission. Preview returns an opaque receipt retained by the host, tied to the provider checkpoint
-and the file fingerprints the local restore path records. All reported files must resolve inside
-the task's workspace; names on the wire are relative. Restore requires the device's `fileWrites`
+and the file fingerprints the local restore path records. All reported files must lie inside the task's
+workspace as §15.22 holds it; names on the wire are relative. Restore requires the device's `fileWrites`
 permission (§15.28), that receipt and `confirmed: true`. The client uses the local restore sheet and
 asks once more before submitting. The host revalidates the receipt and current file state through
 its normal restore method, consumes the receipt and audits the command without file content.

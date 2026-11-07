@@ -279,7 +279,7 @@ public enum RemoteNoiseFraming {
     /// Joins chunks as they arrive.
     public struct Joiner: Sendable {
         private var pending = Data()
-        public let limit: Int
+        public var limit: Int
 
         public init(limit: Int) {
             self.limit = limit

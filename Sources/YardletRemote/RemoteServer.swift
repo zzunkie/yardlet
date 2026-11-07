@@ -5,6 +5,12 @@ public protocol RemoteChannel: AnyObject, Sendable {
     func send(_ text: String)
     /// Closes after everything sent so far.
     func close(_ code: RemoteCloseCode)
+    /// A connection that waited as a link request is its device's now, and may send what a device may (§13.2).
+    func becameDevice()
+}
+
+extension RemoteChannel {
+    public func becameDevice() {}
 }
 
 public enum RemoteBridgeChange: Equatable, Sendable {
@@ -841,6 +847,7 @@ public actor RemoteServer {
             guard connections[pending.connection] != nil, link?.request?.id == requestID else { return false }
             link = nil
             connections[pending.connection]?.deviceID = device.id
+            connections[pending.connection]?.channel.becameDevice()
             var linked = RemoteEvent(.linked)
             linked.deviceId = device.id
             send(linked, to: pending.connection)
@@ -1338,6 +1345,7 @@ public actor RemoteServer {
                     self.uploads.release(start.files)
                     return nil
                 case let .failure(error):
+                    self.uploads.unclaim(start.files, now: self.now())
                     return error
                 }
             } answer: { response in
@@ -1981,7 +1989,7 @@ public actor RemoteServer {
                 let error = await self.bridge.perform(.sendMessage(taskID: taskID,
                                                                    text: text.trimmingCharacters(in: .whitespacesAndNewlines),
                                                                    images: images, followUp: followUp, files: files))
-                if error == nil { self.uploads.release(ids) }
+                if error == nil { self.uploads.release(ids) } else { self.uploads.unclaim(ids, now: self.now()) }
                 return error
             }
         case let .answerApproval(taskID, requestID, answer, note):
@@ -2105,7 +2113,7 @@ public actor RemoteServer {
         guard Set(ids.map { $0.uppercased() }).count == ids.count else {
             return .failure(RemoteError(.badRequest, "A file is named twice"))
         }
-        return uploads.files(ids, from: deviceID)
+        return uploads.claim(ids, from: deviceID)
     }
 
     /// `sendMessage` text and images the Mac would not send (§4.4, §15.14). With images or files the

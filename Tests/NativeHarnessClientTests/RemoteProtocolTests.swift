@@ -516,8 +516,8 @@ final class RemoteProtocolTests: XCTestCase {
             XCTAssertEqual(try store.receive(RemoteUploadPart(uploadID: id, name: "a.txt", size: 2, offset: 0, data: Data("hi".utf8)),
                                              from: "phone", now: now).get(), 2)
         }
-        let file = try store.files([taken], from: "phone").get()[0]
-        XCTAssertEqual(store.files([taken], from: "other").map { _ in true }, .failure(RemoteError(.notFound, "An upload is not finished or has expired")))
+        let file = try store.claim([taken], from: "phone").get()[0]
+        XCTAssertEqual(store.claim([taken], from: "other").map { _ in true }, .failure(RemoteError(.notFound, "An upload is not finished or has expired")))
         store.release([taken])
         // The same ID again, from any device, is refused and leaves the taken file alone.
         let reuse = store.receive(RemoteUploadPart(uploadID: taken, name: "a.txt", size: 2, offset: 0, data: Data("no".utf8)),
@@ -556,6 +556,45 @@ final class RemoteProtocolTests: XCTestCase {
         // Another device's uploads are not its to drop.
         XCTAssertEqual(try first(ids[5], at: 13, device: "other").get(), 2)
         XCTAssertEqual(store.uploads.values.filter { $0.deviceID == "phone" }.count, 4)
+    }
+
+    /// Finished files no message took are limited as well, past what one message can carry, and the stalest makes room.
+    /// A file a message claimed stays through that, and through the idle limit, until the message went or failed.
+    func testFinishedFilesAreLimitedAndAClaimedOneStaysUntilItsMessageEnds() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "remote-store-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var store = RemoteUploadStore(directory: directory)
+        let start = Date()
+        func finished(_ device: String = "phone", at seconds: TimeInterval) throws -> String {
+            let id = UUID().uuidString
+            XCTAssertEqual(try store.receive(RemoteUploadPart(uploadID: id, name: "a.txt", size: 2, offset: 0, data: Data("hi".utf8)),
+                                             from: device, now: start.addingTimeInterval(seconds)).get(), 2)
+            return id
+        }
+        XCTAssertGreaterThan(RemoteUploadStore.finishedPerDevice, RemoteProtocol.maxFiles)
+        let claimed = try finished(at: 0)
+        let stalest = try finished(at: 1)
+        let another = try finished("other", at: 2)
+        XCTAssertEqual(try store.claim([claimed], from: "phone").get().count, 1)
+        var ids: [String] = []
+        for index in 0..<RemoteUploadStore.finishedPerDevice { ids.append(try finished(at: Double(3 + index))) }
+        XCTAssertNil(store.uploads[stalest], "The last file made room")
+        XCTAssertEqual(ids.filter { store.uploads[$0] != nil }.count, RemoteUploadStore.finishedPerDevice)
+        XCTAssertNotNil(store.uploads[claimed])
+        XCTAssertNotNil(store.uploads[another], "Another device's files are not its to drop")
+
+        guard case let .failure(busy) = store.claim([claimed], from: "phone") else { return XCTFail("Claimed twice") }
+        XCTAssertEqual(busy.code, .busy)
+        let name = try XCTUnwrap(store.uploads[claimed]).file.path(percentEncoded: false)
+        store.sweep(now: start.addingTimeInterval(RemoteUploadStore.idleLimit + 3600))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: name), "A message on its way keeps its file")
+        XCTAssertEqual(store.uploads.keys.sorted(), [claimed])
+
+        // Its message failed: the file waits for the next one, for a whole idle time.
+        let failed = start.addingTimeInterval(RemoteUploadStore.idleLimit + 3700)
+        store.unclaim([claimed], now: failed)
+        store.sweep(now: failed.addingTimeInterval(RemoteUploadStore.idleLimit - 1))
+        XCTAssertEqual(try store.claim([claimed], from: "phone").get().count, 1)
     }
 
     func testMessagesTheMacWouldNotSendAreRefused() {

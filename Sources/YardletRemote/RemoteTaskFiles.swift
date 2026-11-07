@@ -101,17 +101,7 @@ public enum RemoteFileReader {
             written.append(raw)
             roots.append(real)
         }
-        // Each output as written and as placed: its folder's links resolved, its own name kept.
-        var named: Set<[UInt8]> = []
-        var placedOutputs: Set<[UInt8]> = []
-        for output in scope.outputs {
-            let raw = lexical(output.path(percentEncoded: false))
-            named.insert(Array(raw.utf8))
-            if let placed = placed(raw) {
-                named.insert(Array(placed.utf8))
-                placedOutputs.insert(Array(placed.utf8))
-            }
-        }
+        let (named, placedOutputs) = outputNames(scope.outputs)
         let isOutput = named.contains(Array(requested.utf8))
         let isUnderRoot = (written + roots).contains { isInside(requested, $0) }
         guard isOutput || isUnderRoot else { return .failure(refused()) }
@@ -148,8 +138,7 @@ public enum RemoteFileReader {
         // As `read`: nothing is looked up before the path, by its text, is under one of the folders or is an output.
         if (written + roots).contains(where: { isInside(requested, $0) }),
            let real = realPath(requested), roots.contains(where: { isInside(real, $0) }) { return true }
-        let outputs = Set(scope.outputs.map { lexical($0.path(percentEncoded: false)) })
-        guard outputs.contains(requested) || placed(requested).map(outputs.contains) == true else { return false }
+        guard outputNames(scope.outputs).named.contains(Array(requested.utf8)) else { return false }
         if case .success = read(requested, offset: max(0, (fileSize(requested) ?? 1) - 1), in: scope, home: home) { return true }
         return false
         #else
@@ -157,7 +146,48 @@ public enum RemoteFileReader {
         #endif
     }
 
+    /// `path`, absolute or relative to `folder`, as a path inside `folder` with every link resolved; nil when it lies
+    /// anywhere else. This is `read`'s boundary for what names a task's file to a phone, previews it, or writes it back
+    /// at a phone's word (§15.31). A file that is not there is judged by where it would land, through the links in the
+    /// folders above it, since writing it back would follow them. A `..` is refused: what it leads to depends on who
+    /// reads the path, the kernel through a link or a provider by its text. A folder that is the home folder or holds
+    /// it gives nothing.
+    public static func relativePath(_ path: String, in folder: URL, home: String = NSHomeDirectory()) -> String? {
+        guard !path.isEmpty, path.utf8.count <= maxPathBytes, !path.utf8.contains(0) else { return nil }
+        #if canImport(Darwin)
+        let written = lexical(folder.path(percentEncoded: false))
+        guard !path.split(separator: "/").contains(".."),
+              let root = realPath(written), !holdsHome(root, home: realPath(home) ?? lexical(home)),
+              let resolved = landing(path.hasPrefix("/") ? path : written + "/" + path) else { return nil }
+        #else
+        // No `realpath` here, and no reads of a task's files either: Foundation's own resolving, by whole components.
+        func clean(_ url: URL) -> String {
+            lexical(url.resolvingSymlinksInPath().standardizedFileURL.path(percentEncoded: false))
+        }
+        let root = clean(folder)
+        let resolved = clean(NSString(string: path).isAbsolutePath ? URL(filePath: path) : folder.appending(path: path))
+        guard !isInside(clean(URL(filePath: home)), root) else { return nil }
+        #endif
+        guard resolved != root, isInside(resolved, root) else { return nil }
+        return String(decoding: resolved.utf8.dropFirst(root.utf8.count + 1), as: UTF8.self)
+    }
+
     #if canImport(Darwin)
+    /// Each output as written and as placed: its folder's links resolved, its own name kept. `placed` holds the second.
+    private static func outputNames(_ outputs: [URL]) -> (named: Set<[UInt8]>, placed: Set<[UInt8]>) {
+        var named: Set<[UInt8]> = []
+        var placedOutputs: Set<[UInt8]> = []
+        for output in outputs {
+            let raw = lexical(output.path(percentEncoded: false))
+            named.insert(Array(raw.utf8))
+            if let placed = placed(raw) {
+                named.insert(Array(placed.utf8))
+                placedOutputs.insert(Array(placed.utf8))
+            }
+        }
+        return (named, placedOutputs)
+    }
+
     /// `target` holds no link but in its folders, which are resolved, so a link put into any part of it since is
     /// refused (O_NOFOLLOW_ANY), and the descriptor is checked again: what is read is what was checked.
     private static func serve(_ target: String, from offset: Int) -> Result<RemoteFilePart, RemoteError> {
@@ -239,6 +269,23 @@ public enum RemoteFileReader {
         let name = path[path.index(after: slash)...]
         guard !name.isEmpty, let folder = realPath(slash == path.startIndex ? "/" : String(path[..<slash])) else { return nil }
         return (folder == "/" ? "" : folder) + "/" + name
+    }
+
+    /// Where a path without `..` leads: the deepest part of it that exists with every link resolved, then the names
+    /// below that, which no link can change yet. Nil when what is there leads nowhere, as a link to nothing does.
+    private static func landing(_ path: String) -> String? {
+        var existing = lexical(path)
+        var missing: [String] = []
+        while true {
+            var info = stat()
+            if lstat(existing, &info) == 0 {
+                guard let real = realPath(existing) else { return nil }
+                return lexical(([real] + missing.reversed()).joined(separator: "/"))
+            }
+            guard errno == ENOENT, let slash = existing.lastIndex(of: "/"), existing != "/" else { return nil }
+            missing.append(String(existing[existing.index(after: slash)...]))
+            existing = slash == existing.startIndex ? "/" : String(existing[..<slash])
+        }
     }
 
     /// The folder is the home folder or holds it: by its path, in the form `realpath` gives and the form the data

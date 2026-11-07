@@ -28,18 +28,22 @@ public final class RemoteSecureConnection: RemoteChannel, @unchecked Sendable {
     private var sender: RemoteNoiseCipher?
     private var receiver: RemoteNoiseCipher?
     private var joiner = RemoteNoiseFraming.Joiner(limit: RemoteProtocol.maxSecureClientMessageBytes)
-    /// What the server sent before message 2 went out (it should not, but order is kept if it does).
+    /// What the server sent before message 2 went out, as a request a phone must answer when another waits to link;
+    /// it goes right after message 2, ahead of anything sent later.
     private var held: [String] = []
     /// Message 1, then the messages decrypted from the phone's frames, handled one at a time, in order; at most
-    /// `maxInboxFrames` and `maxInboxBytes` wait (§7).
+    /// `maxInboxFrames` and `inboxLimit` wait (§7).
     private enum Inbound {
         case hello(Data)
         case message(Data, UUID)
     }
     private var inbox: [Inbound] = []
     private var inboxBytes = 0
+    private var inboxLimit = maxInboxBytes
     static let maxInboxFrames = 512
     static let maxInboxBytes = 16 * 1024 * 1024
+    /// What a connection that waits for its link request to be answered may send: it only keeps the connection alive.
+    static let maxWaitingInboxBytes = 2 * RemoteProtocol.maxClientFrameBytes
     private var isDraining = false
     private var helloTimer: Task<Void, Never>?
 
@@ -95,7 +99,7 @@ public final class RemoteSecureConnection: RemoteChannel, @unchecked Sendable {
             switch item {
             case let .hello(data), let .message(data, _): bytes = data.count
             }
-            guard inbox.count < Self.maxInboxFrames, inboxBytes + bytes <= Self.maxInboxBytes else { return .refuse(.rateLimited) }
+            guard inbox.count < Self.maxInboxFrames, inboxBytes + bytes <= inboxLimit else { return .refuse(.rateLimited) }
             inbox.append(item)
             inboxBytes += bytes
             guard !isDraining else { return .wait }
@@ -181,10 +185,15 @@ public final class RemoteSecureConnection: RemoteChannel, @unchecked Sendable {
         let reply: RemoteHandshakeReply
         var opened: UUID?
         var closing: RemoteCloseCode?
+        var isWaiting = false
         switch outcome {
-        case let .accepted(id, answer), let .pending(id, answer):
+        case let .accepted(id, answer):
             reply = answer
             opened = id
+        case let .pending(id, answer):
+            reply = answer
+            opened = id
+            isWaiting = true
         case let .refused(answer, code):
             reply = answer
             closing = code
@@ -198,23 +207,22 @@ public final class RemoteSecureConnection: RemoteChannel, @unchecked Sendable {
             return
         }
         let (outgoing, incoming) = noise.split()
-        let pending = lock.withLock { () -> [String] in
+        lock.withLock {
             helloTimer?.cancel()
             sender = outgoing
             receiver = incoming
             transport.sendFrame(message2)
-            if let opened, closing == nil {
-                state = .open(opened)
-                defer { held = [] }
-                return held
+            guard let opened, closing == nil else { return }
+            if isWaiting {
+                joiner.limit = RemoteProtocol.maxClientFrameBytes
+                inboxLimit = Self.maxWaitingInboxBytes
             }
-            return []
+            state = .open(opened)
+            // Under the same lock as opening, or a message sent from now on could go ahead of these.
+            for text in held { seal(text) }
+            held = []
         }
-        if let closing {
-            fail(closing)
-            return
-        }
-        for text in pending { send(text) }
+        if let closing { fail(closing) }
     }
 
     private func expireHello() {
@@ -244,12 +252,7 @@ public final class RemoteSecureConnection: RemoteChannel, @unchecked Sendable {
         lock.withLock {
             switch state {
             case .open:
-                guard var sender else { return }
-                defer { self.sender = sender }
-                let message = Data(text.utf8)
-                guard message.count <= RemoteProtocol.maxServerMessageBytes,
-                      let frames = try? RemoteNoiseFraming.seal(message, with: &sender) else { return }
-                for frame in frames { transport.sendFrame(frame) }
+                seal(text)
             case .awaitingHello, .deciding:
                 held.append(text)
             case .closed:
@@ -265,5 +268,22 @@ public final class RemoteSecureConnection: RemoteChannel, @unchecked Sendable {
             inbox = []
         }
         transport.close(code)
+    }
+
+    public func becameDevice() {
+        lock.withLock {
+            joiner.limit = RemoteProtocol.maxSecureClientMessageBytes
+            inboxLimit = Self.maxInboxBytes
+        }
+    }
+
+    /// Encrypts one message and hands its frames to the transport. `lock` is held, so frames leave in sealing order.
+    private func seal(_ text: String) {
+        guard var sender else { return }
+        defer { self.sender = sender }
+        let message = Data(text.utf8)
+        guard message.count <= RemoteProtocol.maxServerMessageBytes,
+              let frames = try? RemoteNoiseFraming.seal(message, with: &sender) else { return }
+        for frame in frames { transport.sendFrame(frame) }
     }
 }

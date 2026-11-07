@@ -1214,6 +1214,36 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertEqual(RemoteFileReader.sized([RemoteOutput(path: viaLink, name: "summary.pdf"),
                                                RemoteOutput(path: swapped, name: "report.txt")]).map(\.size),
                        [9, nil], "Sizes follow no link in an output's place either")
+        XCTAssertTrue(RemoteFileReader.allowsPage(viaLink, in: scope))
+        XCTAssertTrue(RemoteFileReader.allowsPage(files.summary, in: scope), "A page by the place `read` serves it from")
+        XCTAssertFalse(RemoteFileReader.allowsPage(swapped, in: scope))
+    }
+
+    /// `relativePath` keeps what names, previews or writes back a task's file to `read`'s boundary: a file that is not
+    /// there is judged by where it would land, and a folder that holds the home folder has none.
+    func testARelativePathStaysInsideTheTasksFolder() throws {
+        let files = try TaskFiles()
+        defer { files.remove() }
+        let manager = FileManager.default
+        try manager.createSymbolicLink(atPath: files.folder + "/away", withDestinationPath: "../outside")
+        try manager.createSymbolicLink(atPath: files.folder + "/dangling", withDestinationPath: "../outside/gone.txt")
+        try manager.createSymbolicLink(atPath: files.folder + "/here", withDestinationPath: "docs")
+        let folder = URL(filePath: files.folder, directoryHint: .isDirectory)
+        func relative(_ path: String) -> String? { RemoteFileReader.relativePath(path, in: folder) }
+
+        XCTAssertEqual(relative("docs/report.md"), "docs/report.md")
+        XCTAssertEqual(relative(files.folder + "/docs/report.md"), "docs/report.md")
+        XCTAssertEqual(relative("latest.md"), "docs/report.md", "A link that stays inside")
+        XCTAssertEqual(relative("deleted.txt"), "deleted.txt", "A file that is not there")
+        XCTAssertEqual(relative("gone/with/its/folders.txt"), "gone/with/its/folders.txt")
+        XCTAssertEqual(relative("here/new.txt"), "docs/new.txt", "Through a link that stays inside")
+        for outside in ["escape.txt", "away/secret.txt", "away/deleted.txt", "away/gone/deleted.txt", "dangling", "docs/../notes.txt",
+                        "", ".", files.folder, files.root + "/project2/x.txt", files.root + "/outside/secret.txt"] {
+            XCTAssertNil(relative(outside), outside)
+        }
+        XCTAssertNil(RemoteFileReader.relativePath("notes.txt", in: folder, home: files.folder), "The home folder itself")
+        XCTAssertNil(RemoteFileReader.relativePath(files.folder + "/notes.txt", in: URL(filePath: files.root, directoryHint: .isDirectory),
+                                                   home: files.folder), "A folder above the home folder")
     }
 
     // MARK: - Browser tabs (§15.25)

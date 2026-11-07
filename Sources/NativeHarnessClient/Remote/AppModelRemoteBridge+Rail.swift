@@ -78,10 +78,7 @@ extension AppModelRemoteBridge {
             .first { $0.connection?.id == session.connection?.id }.map(SessionRailAccount.init(choice:))
         let roots = [session.workspaceURL] + session.additionalRoots.map { URL(filePath: $0) }
         var sources = instructionSources ?? TaskInstructionSources(origin: .detected, paths: [])
-        sources.paths = sources.paths.filter { path in
-            let path = URL(filePath: path).resolvingSymlinksInPath().standardizedFileURL.path
-            return roots.contains { path.hasPrefix($0.resolvingSymlinksInPath().standardizedFileURL.path + "/") }
-        }
+        sources.paths = sources.paths.filter { path in roots.contains { RemoteFileReader.relativePath(path, in: $0) != nil } }
         let content = SessionRailContent.make(
             session: session, projectName: model.project(for: session)?.name ?? session.workspaceURL.lastPathComponent,
             instructionSources: sources, git: git, options: options, connectors: nil, account: account,

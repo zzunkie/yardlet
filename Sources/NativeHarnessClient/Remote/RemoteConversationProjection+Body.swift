@@ -60,11 +60,8 @@ extension RemoteConversationProjection {
                     guard let url = link.openableURL, url.user == nil, url.password == nil else { return nil }
                     var uri = link.uri
                     if url.isFileURL {
-                        guard let workspaceURL,
-                              url.resolvingSymlinksInPath().path.hasPrefix(workspaceURL.resolvingSymlinksInPath().path + "/") else { return nil }
-                        let root = workspaceURL.resolvingSymlinksInPath().path + "/"
-                        let relative = String(url.resolvingSymlinksInPath().path.dropFirst(root.count))
-                        guard let remoteURL = RemoteConversationFileLink.url(relative) else { return nil }
+                        guard let workspaceURL, let relative = RemoteFileReader.relativePath(url.path(percentEncoded: false), in: workspaceURL),
+                              let remoteURL = RemoteConversationFileLink.url(relative) else { return nil }
                         uri = remoteURL.absoluteString
                     }
                     return .init(kind: "resource_link", text: RemoteText.short(link.description, RemoteText.detailLimit),
@@ -96,7 +93,7 @@ extension RemoteConversationProjection {
         return urls.filter { url in
             if url.scheme == "data" { return true }
             guard url.isFileURL, let workspaceURL else { return false }
-            return url.resolvingSymlinksInPath().path.hasPrefix(workspaceURL.resolvingSymlinksInPath().path + "/")
+            return RemoteFileReader.relativePath(url.path(percentEncoded: false), in: workspaceURL) != nil
         }
     }
 }

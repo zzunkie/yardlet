@@ -56,6 +56,33 @@ final class RemoteHostModelTests: XCTestCase {
         XCTAssertGreaterThan(RemoteConversationWindow.estimatedBytes(projected), 160)
     }
 
+    /// A tool's file link and picture reach a client only from the task's folder, with their links resolved, and a task
+    /// in the home folder has none to give.
+    func testAToolsFilesReachAClientOnlyFromTheTasksFolder() throws {
+        let files = try TaskFiles()
+        defer { files.remove() }
+        try FileManager.default.createSymbolicLink(atPath: files.folder + "/away", withDestinationPath: "../outside")
+        let urls = [files.folder + "/docs/report.md", files.root + "/outside/secret.txt", files.folder + "/away/secret.txt",
+                    files.folder + "/escape.txt", NSHomeDirectory() + "/no-such-file.png"].map { URL(filePath: $0) }
+        var tool = ConversationTool(kind: .mcp, name: "preview")
+        tool.images = Array(urls.prefix(4)).map(TranscriptImageAttachment.init(url:))
+        tool.mcpResult = CodexMCPResultProjection(result: .array(urls.map {
+            .object(["type": .string("resource_link"), "uri": .string($0.absoluteString), "name": .string("File")])
+        }))
+        let record = ConversationItemSource.transcript(TranscriptEntry(id: UUID(), createdAt: .distantPast, content: .user(text: "")))
+        let item = ConversationItem(id: "mcp", kind: .tool(tool), phase: .completed, source: record)
+        let folder = URL(filePath: files.folder, directoryHint: .isDirectory)
+        XCTAssertEqual(RemoteConversationProjection.bodyImages(item, workspaceURL: folder), [urls[0]])
+        XCTAssertEqual(RemoteConversationProjection.body(item, full: .init(), workspaceURL: folder)?.mcp?.compactMap(\.uri),
+                       [try XCTUnwrap(RemoteConversationFileLink.url("docs/report.md")).absoluteString])
+
+        tool.images = [TranscriptImageAttachment(url: urls[4])]
+        let inHome = ConversationItem(id: "home", kind: .tool(tool), phase: .completed, source: record)
+        let home = URL(filePath: NSHomeDirectory(), directoryHint: .isDirectory)
+        XCTAssertEqual(RemoteConversationProjection.bodyImages(inHome, workspaceURL: home), [])
+        XCTAssertEqual(RemoteConversationProjection.body(inHome, full: .init(), workspaceURL: home)?.mcp?.count, 0)
+    }
+
     func testFullBodiesRoundTripThroughTheSharedCards() throws {
         let record = ConversationItemSource.transcript(TranscriptEntry(id: UUID(), createdAt: .distantPast, content: .user(text: "")))
         let output = String(repeating: "h", count: CodexLiveCommandOutput.headLimit)
