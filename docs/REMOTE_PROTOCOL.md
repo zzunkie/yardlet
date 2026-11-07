@@ -1666,7 +1666,7 @@ tab closes within the watched task (§15.30); browsing outside a task stays on t
   (optional) is the size the phone asks the tab to be drawn at while it watches, in CSS pixels: `width` 200 to 1,920,
   `height` 200 to 2,560 (another is `badRequest`), and `mobile` (when absent, true under 768 wide) draws it as a phone:
   a mobile viewport, touch, and a phone's user agent and client hints, as the agent's `browser_resize` does. Without
-  it the tab keeps the size it has (Yardlet on another computer sends none). One watch per connection: watching another
+  it the tab keeps the size it has (Yardlet on another computer asks for its panel's size, with `mobile` false). One watch per connection: watching another
   tab or task replaces it. With `listOnly: true` (hosts advertising `tabLists`; no `tabId` or `viewport`, else
   `badRequest`) the watch follows the task's list alone, as for a task with no tab, whatever tabs it has: `tabId` is
   absent, no tab paints, takes a size or sends frames or input for it, and tabs saved before Yardlet restarted, or lost
@@ -1734,11 +1734,12 @@ tab closes within the watched task (§15.30); browsing outside a task stays on t
   turning off and the tab closing stop it too, input under way included. Not a command.
 - **What the Mac does:** only the listed task's own tabs, as its side panel and the agent's browser tools see them;
   never another task's or the Mac's own browsing. A watched tab paints while it is watched, as one a panel shows on
-  screen, and goes back to how it was (hidden, and later let go by the memory saver) when no one watches it. A phone's
-  `viewport` draws it at that size while the phone watches (the smaller when two ask; sizes asked while another change
-  of the tab's size runs make one change, the latest), and after the last such watch the tab takes the size and
-  emulation it had before: the person's from the panel, the agent's while its turn goes on, else its own. The tab the
-  Mac's panel shows does not change. Input counts as the person's in that tab, as the panel's does: the memory saver
+  screen, and goes back to how it was (hidden, and later let go by the memory saver) when no one watches it. A client's
+  `viewport` draws it at that size while the client watches (the smaller when two ask; sizes asked while another change
+  of the tab's size runs make one change, the latest), over a size the person or the agent set; a size they set during
+  the watch holds until the next size is asked, and when theirs goes the tab takes the watch's again. After the last
+  such watch the tab takes the size and emulation it had before: the person's from the panel, the agent's while its
+  turn goes on, else its own. The tab the Mac's panel shows does not change. Input counts as the person's in that tab, as the panel's does: the memory saver
   keeps a page they typed in, and a character typed into a password field, as text or as a key, first marks the page as
   one that holds a secret, so the agent's scripts and pictures stay off it while the password manager is on, as for one
   typed in the panel; when the page cannot be marked, nothing is typed. Which field has the keyboard is read from the
@@ -2518,8 +2519,9 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   shows in a side panel where the host's window has the task's browser panel: the task's tabs in the panel's strip,
   Back, Forward and Reload, the handoff's bar, and the watched tab's page, which takes clicks, drags, the trackpad,
   keys and the input method's committed text (what it is still composing shows on the client until committed; ⌘V
-  types the client's own clipboard; secure keyboard entry is on while the page's password field has the keyboard); it
-  sends no `viewport`, so the tab keeps its size. From a host advertising `tabLists`, the window follows the list of the
+  types the client's own clipboard; secure keyboard entry is on while the page's password field has the keyboard). The
+  page lays out at the panel's size (`viewport`, never as a phone), and follows the panel once it rests 200 ms at a new
+  size. From a host advertising `tabLists`, the window follows the list of the
   task it shows (`listOnly`) whenever its panel shows none of the task's tabs, so the host's tabs are the panel's tabs
   from the start, as the local task's engine tabs are its panel's: the title bar's side-panel button and ⌘4 reopen
   them as they reopen the local task's tabs, the host's front tab first. A tab listed as `file://`

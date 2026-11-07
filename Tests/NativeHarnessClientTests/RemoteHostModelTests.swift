@@ -1103,6 +1103,31 @@ final class RemoteHostModelTests: XCTestCase {
         XCTAssertEqual(browser.tabID, "third")
     }
 
+    /// The tab lays out at the panel's size, a desktop page at any width, and takes a new size once the panel rests.
+    func testTheBrowserPanelAsksForItsOwnSize() async throws {
+        let browser = RemoteBrowserModel()
+        var viewports: [RemoteTabViewport?] = []
+        browser.send = { request, _ in
+            if case let .watchTab(_, _, _, _, viewport, _) = request { viewports.append(viewport) }
+        }
+        browser.setPanelSize(width: 687, height: 827, scale: 2)
+        browser.show(taskID: "task", tabID: "tab")
+        let panel = RemoteTabViewport(width: 687, height: 827, mobile: false)
+        XCTAssertEqual(viewports, [panel], "a size is no watch of its own before the panel watches")
+        XCTAssertEqual(browser.pictureSize.width, 1_374)
+
+        for width in stride(from: 700.0, to: 760, by: 10) { browser.setPanelSize(width: width, height: 827, scale: 2) }
+        browser.setPanelSize(width: 3_000, height: 100, scale: 2)
+        XCTAssertEqual(viewports.count, 1, "a panel on the move asks for nothing yet")
+        try await waitUntil { viewports.count == 2 }
+        XCTAssertEqual(viewports.last, RemoteTabViewport(width: 1_920, height: 200, mobile: false), "within what a host takes")
+
+        browser.setPanelSize(width: 800, height: 600, scale: 2)
+        browser.hide()
+        try await Task.sleep(for: RemoteBrowserModel.panelRest * 2)
+        XCTAssertEqual(viewports.count, 2, "a closed panel watches nothing")
+    }
+
     func testRunsKeepTheHostsOrderThroughMovesAndRemovals() {
         func item(_ id: String, _ turn: String) -> RemoteItem { RemoteItem(id: id, turnId: turn, kind: .activity) }
         var items = RemoteConversationItems([item("a1", "A"), item("a2", "A"), item("b1", "B")])

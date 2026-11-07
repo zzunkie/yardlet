@@ -1454,6 +1454,8 @@ final class BrowserTab {
     private var refusesDownloads = false
     /// What the tab's emulation was before a phone's (`sizeForRemote`); nil while no phone's holds.
     private var emulationBeforeRemote: BrowserViewportEmulation??
+    /// The size a remote device's watch asks for now: what the tab goes back to when another size set meanwhile goes.
+    private var heldForRemote: BrowserViewportEmulation?
     /// The phone's size asked for last and not yet applied (`.some(nil)`: no phone's), which the queued change takes.
     private var remoteSize: BrowserViewportEmulation??
     /// The last change of the emulation, which the next waits for (`inEmulationOrder`).
@@ -1743,6 +1745,7 @@ final class BrowserTab {
             try? await self?.inEmulationOrder { [weak self] in
                 guard let self, let asked = self.remoteSize else { return }
                 self.remoteSize = nil
+                self.heldForRemote = asked
                 if let asked {
                     if self.emulation?.owner != .remote { self.emulationBeforeRemote = .some(self.emulation) }
                     try await self.applyEmulation(asked)
@@ -1823,9 +1826,10 @@ final class BrowserTab {
     /// Shows the page at `emulation`'s size, or at its view's own again for nil, as the Claude app's Browser pane
     /// does over CDP: the page lays out at the size (a phone also gets touch and Android Chrome's user agent), and
     /// the tab is drawn at it, so a panel shows it scaled down and the page's coordinates stay the agent's. It holds
-    /// across reloads and navigations, since the tab's DevTools session keeps it.
+    /// across reloads and navigations, since the tab's DevTools session keeps it. While a remote device's watch asks
+    /// for a size, the tab's own is that size.
     func emulate(_ emulation: BrowserViewportEmulation?) async throws {
-        try await inEmulationOrder { try await self.applyEmulation(emulation) }
+        try await inEmulationOrder { try await self.applyEmulation(emulation ?? self.heldForRemote) }
     }
 
     /// Runs one change of the emulation after those before it have done all their steps: the agent's, the panel's and a
