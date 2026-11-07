@@ -938,6 +938,141 @@ final class ACPAdapterTests: XCTestCase {
         return { queue.withLock { $0.isEmpty ? FakeACPTransport() : $0.removeFirst() } }
     }
 
+    /// `agy acp` streams a conversation only while a prompt runs. When a subagent finished after the
+    /// prompt's answer, the CLI woke the agent with a system message and it answered with no client
+    /// hearing of it, and sent that answer ahead of the next prompt's own steps. Those are the real
+    /// session's records and order, with other words. On the route the app ships, the agent's turn
+    /// runs, answers and ends from the log with nothing sent, and the repeat shows nothing twice.
+    func testAntigravityTurnTheAgentStartsBetweenPromptsIsShownFromItsLogAndNotAgainOnTheNextPrompt() async throws {
+        let log = try AntigravityLogFixture()
+        defer { log.remove() }
+        let transport = FakeACPTransport(exposesAntigravity: true)
+        let adapter = YHPProviderCompatibilityAdapter(
+            adapter: log.adapter(transport: transport),
+            manifest: HarnessProtocolCompatibilityManifest.acp(.antigravityCLI)
+        )
+        let handle = try await adapter.createSession(log.sessionRequest)
+        let recorder = ACPPayloadRecorder()
+        let collector = Task { for await event in await adapter.events(for: handle) { await recorder.append(event.payload) } }
+        defer { collector.cancel() }
+        func ready() async -> Int { await recorder.payloads.filter { $0 == .sessionStatusChanged(.ready) }.count }
+        try await waitUntil { await ready() == 1 }
+
+        try await adapter.send("Make an image", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        try log.append(.response(158, tools: ["invoke_subagent"]), .tool(159), .response(160, answer: "A subagent is on it."))
+        await transport.emit(log.answer("A subagent is on it."))
+        try await waitUntil { await recorder.payloads.contains(.assistantDelta("A subagent is on it.")) }
+        await transport.completePrompt()
+        try await waitUntil { await ready() == 2 }
+
+        // Nothing is the agent's own until it wakes, and a late line of the turn that ended is not.
+        try log.append(.tool(161))
+        try await Task.sleep(for: .milliseconds(100))
+        let beforeWake = await recorder.payloads
+        XCTAssertEqual(beforeWake.last, .sessionStatusChanged(.ready))
+
+        try log.append(.systemMessage(162))
+        try await waitUntil { await recorder.payloads.last == .sessionStatusChanged(.running) }
+        try log.append(.response(163, answer: "The image is ready."))
+        try await waitUntil { await ready() == 3 }
+        let afterWake = await recorder.payloads.dropFirst(beforeWake.count)
+        XCTAssertEqual(Array(afterWake), [.sessionStatusChanged(.running), .assistantMessageCompleted("The image is ready."),
+                                          .turnCompleted, .sessionStatusChanged(.ready)])
+        let prompts = await transport.requestMethodsWithoutTimeout
+        XCTAssertEqual(prompts, ["session/prompt"])
+
+        try await adapter.send("Still working?", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        await transport.emit(log.answer("The image is ready."))
+        await transport.emit(log.answer("No, it is done."))
+        try await waitUntil { await recorder.payloads.contains(.assistantDelta("No, it is done.")) }
+        await transport.completePrompt()
+        try await waitUntil { await ready() == 4 }
+        let payloads = await recorder.payloads
+        XCTAssertFalse(payloads.contains(.assistantDelta("The image is ready.")))
+        XCTAssertEqual(payloads.filter { $0 == .assistantMessageCompleted("The image is ready.") }.count, 1)
+        await adapter.close(handle)
+    }
+
+    /// A prompt that arrives while the agent's own turn runs takes the conversation over: no ready in
+    /// between, its stream repeats what the log showed, tool calls under IDs the log does not have,
+    /// and goes on with what the log had not shown, which the log does not show as well.
+    func testAPromptDuringAnAgentsOwnTurnTakesOverFromTheLog() async throws {
+        let log = try AntigravityLogFixture()
+        defer { log.remove() }
+        let transport = FakeACPTransport(exposesAntigravity: true)
+        let adapter = log.adapter(transport: transport)
+        let handle = try await adapter.createSession(log.sessionRequest)
+        let recorder = ACPPayloadRecorder()
+        let collector = Task { for await event in await adapter.events(for: handle) { await recorder.append(event.payload) } }
+        defer { collector.cancel() }
+        try await adapter.send("Start", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        await transport.completePrompt()
+        try await waitUntil { await recorder.payloads.contains(.turnCompleted) }
+
+        try log.append(.systemMessage(10), .response(11, thinking: "Reading it.", tools: ["read_file"]), .tool(12))
+        try await waitUntil { await recorder.payloads.contains(.reasoningCompleted("Reading it.")) }
+        let shown = await recorder.payloads.count
+        let toolCalls = await recorder.payloads.filter { if case .activityCompleted = $0 { true } else { false } }.count
+        XCTAssertEqual(toolCalls, 1)
+
+        try await adapter.send("And now?", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        try log.append(.response(13, answer: "Not from the log."))
+        await transport.emit(log.update(["sessionUpdate": .string("agent_thought_chunk"),
+                                         "content": .object(["type": .string("text"), "text": .string("Reading it.")])]))
+        await transport.emit(log.update(["sessionUpdate": .string("tool_call"), "toolCallId": .string("call_1"),
+                                         "kind": .string("read"), "title": .string("File")]))
+        await transport.emit(log.update(["sessionUpdate": .string("tool_call_update"), "toolCallId": .string("call_1"),
+                                         "status": .string("completed")]))
+        await transport.emit(log.answer("Not from the log."))
+        try await waitUntil { await recorder.payloads.contains(.assistantDelta("Not from the log.")) }
+        await transport.completePrompt()
+        try await waitUntil { await recorder.payloads.last == .sessionStatusChanged(.ready) }
+        let payloads = await recorder.payloads.dropFirst(shown)
+        XCTAssertEqual(Array(payloads), [.sessionStatusChanged(.running), .assistantDelta("Not from the log."),
+                                         .assistantMessageCompleted("Not from the log."), .turnCompleted,
+                                         .sessionStatusChanged(.ready)])
+        await adapter.close(handle)
+    }
+
+    /// Stopping the agent's own turn cancels it as any turn, with no prompt to answer for it, and a
+    /// turn that adds nothing to the log for too long leaves the task ready, not stuck behind a step
+    /// no client can answer between prompts.
+    func testAnAgentsOwnTurnEndsWhenStoppedOrWhenItsLogGoesQuiet() async throws {
+        let log = try AntigravityLogFixture()
+        defer { log.remove() }
+        let transport = FakeACPTransport(exposesAntigravity: true)
+        let adapter = log.adapter(transport: transport)
+        let handle = try await adapter.createSession(log.sessionRequest)
+        let recorder = ACPPayloadRecorder()
+        let collector = Task { for await event in await adapter.events(for: handle) { await recorder.append(event.payload) } }
+        defer { collector.cancel() }
+        try await adapter.send("Start", to: handle)
+        try await waitUntil { await transport.pendingPromptCount == 1 }
+        await transport.completePrompt()
+        try await waitUntil { await recorder.payloads.contains(.turnCompleted) }
+        try log.append(.systemMessage(10))
+        try await waitUntil { await recorder.payloads.last == .sessionStatusChanged(.running) }
+        try await adapter.interrupt(handle)
+        let cancels = await transport.sentMessages.filter { $0["method"]?.stringValue == "session/cancel" }.count
+        XCTAssertEqual(cancels, 1)
+        try await waitUntil { await recorder.payloads.last == .sessionStatusChanged(.ready) }
+        await adapter.close(handle)
+
+        var follower = AntigravityAgentTurnFollower(store: log.store, conversationID: log.conversationID,
+                                                    quietLimit: .seconds(60))
+        try log.append(.systemMessage(20), .response(21, tools: ["run_command"]))
+        let start = ContinuousClock.now
+        XCTAssertEqual(follower.read(at: start), [.sessionStatusChanged(.running), .activityCompleted(HarnessActivity(
+            id: "\(log.conversationID)-21-0", kind: "run_command", title: "run command"))])
+        XCTAssertEqual(follower.read(at: start + .seconds(59)), [])
+        XCTAssertEqual(follower.read(at: start + .seconds(60)), [.sessionStatusChanged(.ready)])
+        XCTAssertEqual(follower.read(at: start + .seconds(120)), [])
+    }
+
     private func permissionOption(_ id: String, _ name: String, _ kind: String) -> JSONValue {
         .object([
             "optionId": .string(id),
@@ -945,6 +1080,83 @@ final class ACPAdapterTests: XCTestCase {
             "kind": .string(kind)
         ])
     }
+}
+
+/// A conversation's log in a folder of its own, written as `agy` writes it, line by line.
+private struct AntigravityLogFixture {
+    enum Record {
+        case response(Int, thinking: String? = nil, tools: [String] = [], answer: String? = nil)
+        case tool(Int)
+        case systemMessage(Int)
+
+        var json: JSONValue {
+            switch self {
+            case let .response(step, thinking, tools, answer):
+                var record = Self.record(step, source: "MODEL", type: "PLANNER_RESPONSE")
+                if let thinking { record["thinking"] = .string(thinking) }
+                if !tools.isEmpty {
+                    record["tool_calls"] = .array(tools.map { .object(["name": .string($0), "args": .object([:])]) })
+                }
+                if let answer { record["content"] = .string(answer) }
+                return .object(record)
+            case let .tool(step):
+                return .object(Self.record(step, source: "MODEL", type: "GENERIC"))
+            case let .systemMessage(step):
+                var record = Self.record(step, source: "SYSTEM", type: "SYSTEM_MESSAGE")
+                record["content"] = .string("<SYSTEM_MESSAGE>\n[Message] content=Done.\n</SYSTEM_MESSAGE>")
+                return .object(record)
+            }
+        }
+
+        private static func record(_ step: Int, source: String, type: String) -> [String: JSONValue] {
+            ["step_index": .integer(Int64(step)), "source": .string(source), "type": .string(type),
+             "status": .string("DONE"), "created_at": .string("2026-11-07T13:33:14Z")]
+        }
+    }
+
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "nhc-agy-log-\(UUID().uuidString)", directoryHint: .isDirectory)
+    let conversationID = "acp-session-1"
+    private let logURL: URL
+
+    init() throws {
+        let logs = root.appending(path: "brain/\(conversationID)/.system_generated/logs", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        logURL = logs.appending(path: "transcript_full.jsonl")
+        try Data().write(to: logURL)
+    }
+
+    var store: AntigravityConversationStore { AntigravityConversationStore(root: root) }
+
+    var sessionRequest: CreateHarnessSessionRequest {
+        CreateHarnessSessionRequest(localSessionID: UUID(), workspaceURL: URL(filePath: "/tmp/project"), initialPrompt: nil)
+    }
+
+    func adapter(transport: FakeACPTransport) -> ACPAdapter {
+        ACPAdapter(kind: .antigravityCLI, executableURL: URL(filePath: "/tmp/agy"), launchArguments: ["acp"],
+                   conversationStore: store, agentTurnReadInterval: .milliseconds(5), transportFactory: { transport })
+    }
+
+    func append(_ records: Record...) throws {
+        let handle = try FileHandle(forWritingTo: logURL)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        for record in records {
+            try handle.write(contentsOf: JSONEncoder().encode(record.json) + Data([0x0A]))
+        }
+    }
+
+    func update(_ update: [String: JSONValue]) -> JSONValue {
+        .object(["jsonrpc": .string("2.0"), "method": .string("session/update"),
+                 "params": .object(["sessionId": .string(conversationID), "update": .object(update)])])
+    }
+
+    func answer(_ text: String) -> JSONValue {
+        update(["sessionUpdate": .string("agent_message_chunk"),
+                "content": .object(["type": .string("text"), "text": .string(text)])])
+    }
+
+    func remove() { try? FileManager.default.removeItem(at: root) }
 }
 
 private actor ACPPayloadRecorder {

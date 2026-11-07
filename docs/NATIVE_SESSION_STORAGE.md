@@ -800,6 +800,18 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
   until the log has more requests. If the cache is empty (import, unarchive) or the log has more requests, the view
   switches to the log and then rereads it on every change. When the task attaches (a turn is sent), this state is
   forgotten and decided again from scratch. A failed read leaves the cache and ID as they are.
+- **Turns the agent starts itself:** when a subagent or background task ends, the CLI writes a system message into the
+  conversation and the agent answers it with no request from anyone. `agy acp` streams a conversation only while a
+  `session/prompt` runs, so such a turn reaches no client until the next prompt, whose stream first sends the steps it
+  held. Between prompts the adapter reads what is added to the log (`AntigravityAgentTurnFollower`: the log's size every
+  2 seconds, the new lines when it has grown, nothing of what was there when the prompt ended). The first
+  `SYSTEM_MESSAGE` starts a turn: the task runs, the thinking, tool calls and answers show as the log has them, and a
+  response with no tool calls ends the turn, with the unread mark and notification of any turn. Stop sends
+  `session/cancel`; a message sent meanwhile is a prompt that takes over. A step waiting for an approval reaches no
+  client between prompts either, so a turn that adds nothing to the log for 5 minutes leaves the task ready, and the next
+  prompt delivers that step. The next prompt's stream repeats what the log showed; that is dropped
+  (`AntigravityRedelivery`), texts by their words, which are the log's exactly, and tool calls by their order, since the
+  log has no call IDs. A repeat that is not recognised shows twice rather than dropping the turn's own steps.
 - **Title:** the pull path for task titles (`ProviderSessionTitleResolver`) reads `title` from the index. It is not read
   before a print-mode task's first turn (local placeholder ID).
 - **Model list:** the collapsed model list a task read is kept in `antigravity` of `model-catalogs.json` (an optional
