@@ -175,6 +175,8 @@ struct SessionRailContent: Equatable {
     ///   - codexPlan: a Codex task's latest plan (`turn/plan/updated`).
     ///   - suggestionResolution: what became of each of the task's suggestions, as its chips read it;
     ///     nil where nothing can start one (the rail then lists none).
+    ///   - generatedFiles: what the task's tools reported making beyond its transcript
+    ///     (`AppModel.generatedFilesBySessionID`).
     ///   - agentCalls: the `run_agent` calls this rail read before, kept between its draws.
     static func make(
         session: SessionRecord,
@@ -192,6 +194,7 @@ struct SessionRailContent: Equatable {
         autoFixPrompt: PullRequestAutoFixPrompt = .ask,
         codexChanges: [CodexChangeHandoff] = [],
         codexState: CodexTaskState? = nil,
+        generatedFiles: [Output] = [],
         agentRuns: [SessionRailAgents.Run] = [],
         agentCalls: SessionRailAgents.Calls = SessionRailAgents.Calls(),
         childTasks: [SessionRailAgents.Child] = [],
@@ -247,7 +250,9 @@ struct SessionRailContent: Equatable {
             backgroundTerminals: backgroundTerminals,
             sessionJobs: sessionJobs,
             preview: preview,
-            outputs: outputs(entries: entries, codexChanges: codexChanges, workspaceURL: session.workspaceURL))
+            outputs: outputs(entries: entries, codexChanges: codexChanges,
+                             generatedFiles: generatedFiles + generatedImages(in: codexState),
+                             workspaceURL: session.workspaceURL))
     }
 
     /// Whether the rail, the composer or its line of background tasks reads the entry: a plan, a
@@ -274,21 +279,23 @@ struct SessionRailContent: Equatable {
     }
 
     /// Whether the rail reads a Codex thread's item: the agents a turn spawned and their activity, MCP
-    /// calls (Yardlet's subagents, task suggestions, computer use's screens) and file changes. Whatever
-    /// `make`, the rail's preview and its Changes and Outputs read of a Codex thread is among these, with
-    /// each turn's identity, status, start, plan and token usage (`CodexRailStates`).
+    /// calls (Yardlet's subagents, task suggestions, computer use's screens), file changes and generated
+    /// pictures. Whatever `make`, the rail's preview and its Changes and Outputs read of a Codex thread is
+    /// among these, with each turn's identity, status, start, plan and token usage (`CodexRailStates`).
     static func reads(_ item: CodexItemState) -> Bool {
         switch item.content {
-        case .collaboration, .subagentActivity, .mcpToolCall, .fileChange: true
+        case .collaboration, .subagentActivity, .mcpToolCall, .fileChange, .imageGeneration: true
         default: false
         }
     }
 
     /// The files the task wrote, newest first, each once: completed calls that wrote a whole file
-    /// (Claude Code's `Write`, an ACP or Pi diff with no old text) and the files Codex added, once the
-    /// patch that added them was applied (a declined or failed one never wrote them).
+    /// (Claude Code's `Write`, an ACP or Pi diff with no old text), the files Codex added, once the
+    /// patch that added them was applied (a declined or failed one never wrote them), and `generatedFiles`,
+    /// newest first, the files a tool reported making that the transcript does not carry
+    /// (`generatedImages(in:)`, `AppModel.generatedFilesBySessionID`). A path only a message names is none of these.
     static func outputs(entries: [TranscriptEntry], codexChanges: [CodexChangeHandoff],
-                        workspaceURL: URL) -> [Output] {
+                        generatedFiles: [Output] = [], workspaceURL: URL) -> [Output] {
         let root = workspaceURL.standardizedFileURL.path(percentEncoded: false)
         let folder = root.hasSuffix("/") ? root : root + "/"
         var seen = Set<String>()
@@ -301,7 +308,7 @@ struct SessionRailContent: Equatable {
             result.append(Output(url: url, writtenAt: date))
         }
         for entry in entries.reversed() {
-            guard result.count < outputLimit else { return result }
+            guard result.count < outputLimit else { break }
             guard case let .activity(activity, .completed) = entry.content, let diff = activity.diff,
                   diff.oldText == nil, diff.newText != nil, !diff.path.isEmpty else { continue }
             let url = diff.path.hasPrefix("/") ? URL(filePath: diff.path)
@@ -312,7 +319,27 @@ struct SessionRailContent: Equatable {
             guard result.count < outputLimit else { break }
             if let url = change.verifiedURL { add(url, at: nil) }
         }
-        return result
+        // By its date among the others, so the newest are the ones kept; one without a date goes last.
+        for file in generatedFiles.prefix(outputLimit) {
+            let url = file.url.standardizedFileURL
+            guard seen.insert(url.path(percentEncoded: false)).inserted else { continue }
+            let place = result.firstIndex { ($0.writtenAt ?? .distantPast) < (file.writtenAt ?? .distantPast) }
+            result.insert(Output(url: url, writtenAt: file.writtenAt), at: place ?? result.count)
+        }
+        return Array(result.prefix(outputLimit))
+    }
+
+    /// The pictures a Codex thread's `imageGeneration` items saved, newest first: where the item itself says, once
+    /// it completed without a failure.
+    static func generatedImages(in state: CodexTaskState?) -> [Output] {
+        (state?.thread?.turns ?? []).reversed().flatMap { turn in
+            turn.items.reversed().compactMap { item -> Output? in
+                guard case let .imageGeneration(image) = item.content, image.status == "completed",
+                      image.failure == nil || image.failure == .null, let path = image.savedPath,
+                      path.hasPrefix("/") else { return nil }
+                return Output(url: URL(filePath: path), writtenAt: item.completedAt ?? turn.completedAt)
+            }
+        }
     }
 
     /// Whether the card has something to show.

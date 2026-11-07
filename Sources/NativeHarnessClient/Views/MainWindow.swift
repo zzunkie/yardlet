@@ -2402,6 +2402,7 @@ struct MainWindow: View {
             } : nil,
             pullRequest: model.pullRequests.pullRequest(for: session.id),
             details: model.pullRequestDetails,
+            generatedFiles: { model.generatedFilesBySessionID[session.id] ?? [] },
             agents: railAgentServices(for: session))
     }
 

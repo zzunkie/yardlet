@@ -1077,6 +1077,90 @@ final class RemoteBridgeTests: XCTestCase {
 
     // MARK: - Files (§15.22)
 
+    /// What a tool reported making opens from another device, wherever the provider keeps it. The proof is the tool's
+    /// own result in the provider's log: a path a message names, another tool's `media`, a result for another
+    /// conversation's folder, a failed call and a log no subagent record leads to open nothing.
+    func testAToolsPictureOpensAndAPathOnlyNamedDoesNot() async throws {
+        let made = FileManager.default.temporaryDirectory.appending(path: "remote-tool-files-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: made, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: made) }
+        let root = try XCTUnwrap(RemoteFileReader.realPath(made.path(percentEncoded: false)))
+        let conversation = "c88eb9e7-0000-4000-8000-000000000001"
+        let subagent = "73eeaba8-0000-4000-8000-000000000002"
+        let stranger = "aaaaaaaa-0000-4000-8000-000000000003"
+        let own = root + "/brain/" + conversation
+        func write(_ path: String, _ text: String) throws {
+            let url = URL(filePath: path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: url)
+        }
+        func log(_ id: String, _ records: [String]) throws {
+            try write(root + "/brain/\(id)/.system_generated/logs/transcript_full.jsonl", records.joined(separator: "\n") + "\n")
+        }
+        func response(_ step: Int, calls: [String], content: String = "") -> String {
+            let list = calls.map { #"{"name":"\#($0)","args":{}}"# }.joined(separator: ",")
+            return #"{"step_index":\#(step),"type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-07T13:32:46Z","content":"\#(content)","tool_calls":[\#(list)]}"#
+        }
+        func result(_ step: Int, status: String = "DONE", path: String) -> String {
+            #"{"step_index":\#(step),"type":"GENERIC","status":"\#(status)","created_at":"2026-11-07T13:32:53Z","content":"Saved","media":[{"mime_type":"image/jpeg","uri":"file://\#(path)"}]}"#
+        }
+        let picture = own + "/cozy_orca_desk_1.jpg"
+        let renamed = own + "/first_try_2.jpg"
+        let named = own + "/named_in_an_answer.jpg"
+        let read = own + "/read_by_a_tool.jpg"
+        let failed = own + "/failed_3.jpg"
+        let log_ = own + "/.system_generated/logs/transcript_full.jsonl"
+        let foreign = root + "/brain/\(stranger)/theirs.jpg"
+        for path in [picture, renamed, named, read, failed, foreign] { try write(path, "jpeg") }
+        try write(own + "/.system_generated/subagents/\(subagent).json", #"{"conversationId":"\#(subagent)"}"#)
+        try log(conversation, [
+            response(1, calls: ["invoke_subagent"], content: "See file://\(named) and \(log_)"),
+            result(3, path: named)
+        ])
+        try log(subagent, [
+            response(1, calls: ["generate_image"]), result(2, path: picture),
+            // Each call's result is the step after the response, in call order.
+            response(3, calls: ["read_file", "generate_image"]), result(4, path: read), result(5, path: renamed),
+            response(6, calls: ["generate_image"]), result(7, status: "ERROR", path: failed),
+            response(8, calls: ["generate_image"]), result(9, path: foreign)
+        ])
+        // A log with the same shape that nothing ties to this conversation.
+        try log(stranger, [response(1, calls: ["generate_image"]), result(2, path: named)])
+
+        let folder = URL(filePath: root + "/project", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let session = SessionRecord(harness: .antigravityCLI, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/agy"),
+                                    title: "Make a picture", providerSessionID: conversation)
+        let answer = TranscriptEntry(createdAt: Date(timeIntervalSince1970: 100), content: .assistant(
+            text: "[named](file://\(named)) and [the picture](file://\(picture))", isStreaming: false))
+        let model = try Self.model(sessions: [session], transcripts: [session.id: [answer]])
+        model.antigravityConversationStore = AntigravityConversationStore(root: URL(filePath: root, directoryHint: .isDirectory))
+        let bridge = AppModelRemoteBridge(model: model)
+        let id = session.id.uuidString
+
+        let served = try RemoteFileReader.read(picture, offset: 0, in: await bridge.fileScope(taskID: id).get()).get()
+        XCTAssertEqual(served.data, Data("jpeg".utf8))
+        XCTAssertEqual(served.mediaType, "image/jpeg")
+        let scope = try await bridge.fileScope(taskID: id).get()
+        XCTAssertEqual(Set(scope.outputs.map(\.lastPathComponent)), ["cozy_orca_desk_1.jpg", "first_try_2.jpg"])
+        for path in [named, read, failed, foreign, log_] {
+            guard case let .failure(error) = RemoteFileReader.read(path, offset: 0, in: scope) else {
+                return XCTFail("\(path) is no file a tool reported making")
+            }
+            XCTAssertEqual(error.code, .notFound)
+        }
+        let outputs = try await bridge.taskOutputs(taskID: id).get()
+        XCTAssertEqual(Set(outputs.map(\.name)), ["cozy_orca_desk_1.jpg", "first_try_2.jpg"])
+        XCTAssertEqual(model.generatedFilesBySessionID[session.id]?.count, 2, "The Mac's Outputs card reads the same list")
+
+        // A picture saved between turns, with nothing to tell the Mac, is there the moment a device asks.
+        let later = own + "/later_4.jpg"
+        try write(later, "later")
+        try log(subagent, [response(1, calls: ["generate_image"]), result(2, path: later)])
+        let again = try await bridge.fileScope(taskID: id).get()
+        XCTAssertEqual(try RemoteFileReader.read(later, offset: 0, in: again).get().data, Data("later".utf8))
+    }
+
     /// A task's outputs are its Outputs card, in its order, and a phone's reads are checked against the folders the task
     /// was given and those outputs.
     func testATasksOutputsAreItsOutputsCardAndItsFoldersAreItsOwn() async throws {

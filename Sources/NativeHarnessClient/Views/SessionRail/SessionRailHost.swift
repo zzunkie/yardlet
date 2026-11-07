@@ -25,6 +25,8 @@ struct SessionRailServices {
         await SessionRailGitInfo.read(folder: folder, knownBranch: branch)
     }
     var git: SessionRailGitInfo? = nil
+    /// What the task's tools reported making beyond its conversation (`AppModel.generatedFilesBySessionID`).
+    var generatedFiles: @MainActor () -> [SessionRailContent.Output] = { [] }
     /// What the Agents, Background tasks and Preview cards read beyond the conversation.
     var agents = SessionRailAgentServices()
 }
@@ -125,6 +127,7 @@ struct SessionRailHost: View {
             autoFixPrompt: PullRequestAutoFixPrompt(rawValue: autoFixPrompt) ?? .ask,
             codexChanges: codexChanges,
             codexState: codexState,
+            generatedFiles: services.generatedFiles(),
             agentRuns: services.agents.agentRuns(),
             agentCalls: agentCalls,
             childTasks: services.agents.childTasks(),

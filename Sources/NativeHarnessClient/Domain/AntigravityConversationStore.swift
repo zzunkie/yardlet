@@ -12,6 +12,8 @@ import Foundation
 ///   recorded without a folder.
 /// - `brain/<id>/.system_generated/logs/transcript_full.jsonl` (else `transcript.jsonl`), the
 ///   conversation's readable log: requests, answers, thinking and tool calls.
+/// - `brain/<id>/.system_generated/subagents/<subagent's conversation ID>.json`, the subagents the
+///   conversation started. Each has its own `brain/<id>/` and log.
 ///
 /// The index is a SQLite file in WAL mode that `agy` may be writing; opening it read-only could still
 /// create its `-wal`/`-shm` files, so it is read from a private copy that is removed at once.
@@ -199,17 +201,54 @@ struct AntigravityConversationStore: Sendable {
             throw AntigravityConversationStoreError.missingTranscript
         }
         let stamp = DetachedConversationStamp(file: url)
+        return AntigravityTranscript(
+            entries: AntigravityTranscriptParser.entries(conversationID: conversationID, jsonl: try Self.newestLines(of: url)),
+            stamp: stamp)
+    }
+
+    /// The whole lines of the newest `maximumTranscriptBytes` of a log.
+    private static func newestLines(of url: URL) throws -> Data {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         let size = try handle.seekToEnd()
-        let start = size > UInt64(Self.maximumTranscriptBytes) ? size - UInt64(Self.maximumTranscriptBytes) : 0
+        let start = size > UInt64(maximumTranscriptBytes) ? size - UInt64(maximumTranscriptBytes) : 0
         try handle.seek(toOffset: start)
         var data = try handle.readToEnd() ?? Data()
         // A cut first line is dropped.
         if start > 0, let newline = data.firstIndex(of: 0x0A) { data = Data(data[data.index(after: newline)...]) }
-        return AntigravityTranscript(
-            entries: AntigravityTranscriptParser.entries(conversationID: conversationID, jsonl: data),
-            stamp: stamp)
+        return data
+    }
+
+    // MARK: - What its tools made
+
+    /// A picture `generate_image` saved.
+    struct GeneratedImage: Equatable, Sendable {
+        let url: URL
+        let createdAt: Date?
+    }
+
+    /// The pictures the conversation's `generate_image` calls saved, oldest first. The CLI runs that tool in an
+    /// `image-generator` subagent whose activity reaches no ACP update, so the record is the log of the conversation
+    /// or of a subagent it started. Only the tool's own result counts, and only for a file directly in the
+    /// conversation's own folder, where the CLI saves them. A path in a message is the model's word, and the rest of
+    /// that folder (its logs and the tools' full output) is not the task's to hand out.
+    func generatedImages(conversationID: String) -> [GeneratedImage] {
+        guard Self.isSafeComponent(conversationID) else { return [] }
+        let folder = root.appending(path: "brain/\(conversationID)", directoryHint: .isDirectory)
+        let subagents = (try? FileManager.default.contentsOfDirectory(
+            at: folder.appending(path: ".system_generated/subagents", directoryHint: .isDirectory),
+            includingPropertiesForKeys: nil)) ?? []
+        let conversations = [conversationID] + subagents.filter { $0.pathExtension == "json" }
+            .map { $0.deletingPathExtension().lastPathComponent }
+        var images: [GeneratedImage] = []
+        for conversation in conversations {
+            guard let log = transcriptURL(conversationID: conversation),
+                  let lines = try? Self.newestLines(of: log) else { continue }
+            images += AntigravityTranscriptParser.generatedImages(jsonl: lines).filter {
+                Self.path($0.url.deletingLastPathComponent()) == Self.path(folder)
+            }
+        }
+        return images.sorted { ($0.createdAt ?? .distantPast) < ($1.createdAt ?? .distantPast) }
     }
 
     // MARK: - Files
@@ -338,6 +377,38 @@ enum AntigravityTranscriptParser {
             }
         }
         return entries
+    }
+
+    /// What the log's `generate_image` calls saved, by their own results: the record the CLI gives a call, the step
+    /// after the response in call order (as in `entries`), when it finished, names the file in its `media`
+    /// (`{mime_type, uri}`). Other tools' `media` is what they read, not what they made.
+    static func generatedImages(jsonl: Data) -> [AntigravityConversationStore.GeneratedImage] {
+        let markers = [Data("generate_image".utf8), Data("\"media\"".utf8)]
+        var resultSteps = Set<Int64>()
+        var images: [AntigravityConversationStore.GeneratedImage] = []
+        for raw in jsonl.split(separator: 0x0A, omittingEmptySubsequences: true) {
+            // Most of a long log is neither, and is not decoded.
+            guard markers.contains(where: { raw.range(of: $0) != nil }),
+                  let record = try? JSONDecoder().decode(JSONValue.self, from: Data(raw)),
+                  let step = record["step_index"]?.integerValue else { continue }
+            switch record["type"]?.stringValue {
+            case "PLANNER_RESPONSE":
+                for (index, call) in (record["tool_calls"]?.arrayValue ?? []).enumerated()
+                where call["name"]?.stringValue == "generate_image" {
+                    resultSteps.insert(step + 1 + Int64(index))
+                }
+            case "GENERIC":
+                guard resultSteps.remove(step) != nil, record["status"]?.stringValue?.uppercased() == "DONE" else { continue }
+                for media in record["media"]?.arrayValue ?? [] {
+                    guard let uri = media["uri"]?.stringValue.flatMap(URL.init(string:)), uri.isFileURL else { continue }
+                    images.append(.init(url: URL(filePath: uri.path(percentEncoded: false)),
+                                        createdAt: record["created_at"]?.stringValue.flatMap(isoDate)))
+                }
+            default:
+                continue
+            }
+        }
+        return images
     }
 
     /// The person's request: what `<USER_REQUEST>` holds, without the CLI's own sections after it.

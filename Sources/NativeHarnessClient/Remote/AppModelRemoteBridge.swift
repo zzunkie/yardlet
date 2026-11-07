@@ -1265,6 +1265,7 @@ final class AppModelRemoteBridge: RemoteBridge {
 
     func taskOutputs(taskID: String) async -> Result<[RemoteOutput], RemoteError> {
         guard let model, let session = session(taskID) else { return .failure(RemoteError(.notFound)) }
+        await refreshGeneratedFiles(of: session, in: model)
         return .success(outputs(of: session, in: model).map { output in
             RemoteOutput(path: output.url.path(percentEncoded: false), name: output.name,
                          writtenAt: output.writtenAt.map(RemoteJSON.milliseconds))
@@ -1285,8 +1286,15 @@ final class AppModelRemoteBridge: RemoteBridge {
 
     func fileScope(taskID: String) async -> Result<RemoteFileScope, RemoteError> {
         guard let model, let session = session(taskID) else { return .failure(RemoteError(.notFound)) }
+        await refreshGeneratedFiles(of: session, in: model)
         return .success(RemoteFileScope(folder: session.workspaceURL, otherFolders: session.additionalRootURLs,
                                         outputs: outputs(of: session, in: model).map(\.url)))
+    }
+
+    /// A subagent can finish between turns, with nothing to say so: what a device asks for is read from the provider's
+    /// log first. The kept outputs go at once, so this request sees the new list.
+    private func refreshGeneratedFiles(of session: SessionRecord, in model: AppModel) async {
+        if await model.refreshGeneratedFiles(for: session) { cachedOutputs[session.id] = nil }
     }
 
     /// The task's outputs, read once and kept until what they are read from changes.
@@ -1302,15 +1310,18 @@ final class AppModelRemoteBridge: RemoteBridge {
         return outputs
     }
 
-    /// The task's Outputs card, from what the task's rail reads: its transcript, and a Codex task's file changes.
+    /// The task's Outputs card, from what the task's rail reads: its transcript, a Codex task's file changes and
+    /// pictures, and what the task's tools reported beyond those.
     static func outputs(of session: SessionRecord, in model: AppModel) -> [SessionRailContent.Output] {
         var codexChanges: [CodexChangeHandoff] = []
+        var generatedFiles = model.generatedFilesBySessionID[session.id] ?? []
         if HarnessPresentationPolicy(harness: session.harness).usesCodexTimeline,
            let state = model.codexPresentationBySessionID[session.id] {
             codexChanges = CodexWorkSurfaceProjection.changes(from: state, workspaceURL: session.workspaceURL)
+            generatedFiles += SessionRailContent.generatedImages(in: state)
         }
         return SessionRailContent.outputs(entries: model.transcriptBySessionID[session.id] ?? [], codexChanges: codexChanges,
-                                          workspaceURL: session.workspaceURL)
+                                          generatedFiles: generatedFiles, workspaceURL: session.workspaceURL)
     }
 
     func itemDetail(taskID: String, itemID: String) async -> Result<RemoteItemDetail, RemoteError> {

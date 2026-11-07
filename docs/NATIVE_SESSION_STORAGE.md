@@ -732,8 +732,9 @@ keeps only what happened after that, next to the task.
 
 Antigravity CLI keeps its conversations in `~/.gemini/antigravity-cli` (`conversations/<id>.db`, `brain/<id>/` and the
 index `conversation_summaries.db`). Yardlet itself writes nothing there; the CLI does as tasks run, and Yardlet reads the
-index and logs (`AntigravityConversationStore`). The one thing Yardlet removes there is the CLI's extra copies of Yardlet's
-tool schemas, described below.
+index and logs (`AntigravityConversationStore`), and, for the pictures a conversation's `generate_image` saved, the logs
+of the subagents it started (`.system_generated/subagents/`), since no ACP update carries a subagent's work. The one thing
+Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, described below.
 
 - **How Yardlet runs it:** from 1.4.11 the CLI serves the Agent Client Protocol (`agy acp`, documented by `agy help acp`),
   and Yardlet runs it as it runs the other ACP agents: one `agy acp` process per account and storage, `session/new` for a

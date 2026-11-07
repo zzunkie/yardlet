@@ -48,6 +48,10 @@ final class AppModel {
     var codexRailStateBySessionID: TaskStateReader<CodexTaskState> { codexRailStates.reader }
     private let codexRailStates = TaskStateTable<CodexTaskState>()
     private let codexRailReads = CodexRailStates()
+    /// What each task's tools reported making that its transcript does not carry, newest first
+    /// (`refreshGeneratedFiles`).
+    var generatedFilesBySessionID: TaskStateReader<[SessionRailContent.Output]> { generatedFiles.reader }
+    private let generatedFiles = TaskStateTable<[SessionRailContent.Output]>()
     /// How many reads of each task's saved conversation from the provider's own history are under
     /// way (`isReadingSavedConversation`).
     private let savedConversationReads = TaskStateTable<Int>()
@@ -3057,6 +3061,7 @@ final class AppModel {
             latestTurns.removeValue(forKey: session.id)
             claudeTranscriptTails.removeValue(forKey: session.id)
             antigravityHistoryShown.removeValue(forKey: session.id)
+            generatedFiles.removeValue(forKey: session.id)
             acpConversationsReplayed.removeValue(forKey: session.id)
             errorBySessionID.removeValue(forKey: session.id)
             codexCapabilitiesBySessionID.removeValue(forKey: session.id)
@@ -3633,9 +3638,30 @@ final class AppModel {
     /// went on in `agy` or another client), and, once it has, on every later change. Nothing is
     /// sent, resumed, attached or written.
     func refreshNativeAntigravityConversation(for source: SessionRecord, afterChange: Bool = false) async {
+        await refreshGeneratedFiles(for: source)
         await readSavedConversationOnce("antigravity|\(source.id)", afterChange: afterChange) {
             await self.readNativeAntigravityConversation(for: source)
         }
+    }
+
+    /// Reads again what the task's tools reported making beyond its transcript: the pictures Antigravity's
+    /// `generate_image` saved, which only the log of the subagent that ran it records
+    /// (`AntigravityConversationStore.generatedImages`). Says whether the list changed. Nothing is sent, resumed or
+    /// written.
+    @discardableResult
+    func refreshGeneratedFiles(for source: SessionRecord) async -> Bool {
+        guard source.harness == .antigravityCLI, !isVisualFixture, let session = matchingSession(source),
+              let providerID = session.providerSessionID,
+              // A task still on its local stand-in identity has no conversation of its own yet.
+              UUID(uuidString: providerID) != session.id else { return false }
+        let conversations = antigravityConversationStore
+        let images = await Task.detached(priority: .userInitiated) {
+            conversations.generatedImages(conversationID: providerID)
+        }.value
+        let files = images.reversed().map { SessionRailContent.Output(url: $0.url, writtenAt: $0.createdAt) }
+        guard matchingSession(session) != nil, (generatedFiles[session.id] ?? []) != files else { return false }
+        generatedFiles[session.id] = files
+        return true
     }
 
     private func readNativeAntigravityConversation(for source: SessionRecord) async {
@@ -7249,9 +7275,9 @@ final class AppModel {
                 )
             }
             scheduleSessionTitleResolution(for: event.localSessionID)
-            if let session = store.sessions.first(where: { $0.id == event.localSessionID }),
-               session.harness == .grokBuild {
-                await refreshPersistedGrokSessionMetadata(for: session)
+            if let session = store.sessions.first(where: { $0.id == event.localSessionID }) {
+                if session.harness == .grokBuild { await refreshPersistedGrokSessionMetadata(for: session) }
+                await refreshGeneratedFiles(for: session)
             }
             await reloadAttachedProviderCapabilities(for: event.localSessionID)
         case .providerCapabilitiesChanged:

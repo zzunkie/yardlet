@@ -410,6 +410,30 @@ final class SessionRailTests: XCTestCase {
                                           verifiedURL: URL(filePath: "/Users/example/Documents/passport.pdf"), line: nil, column: nil)
         XCTAssertEqual(SessionRailContent.outputs(entries: [], codexChanges: [added, updated, declined], workspaceURL: folder)
             .map(\.name), ["plan.md"])
+
+        // A picture counts as the tool's own item says, by its date among the others, and the rail's state keeps it.
+        func picture(_ id: String, status: String, saved: String?, failure: JSONValue? = nil, at seconds: TimeInterval) -> CodexItemState {
+            CodexItemState(id: id, lifecycle: .completed, completedAt: Date(timeIntervalSince1970: seconds),
+                           content: .imageGeneration(CodexImageGenerationItem(status: status, result: "", revisedPrompt: nil,
+                                                                              savedPath: saved, failure: failure)), raw: .null)
+        }
+        let codex = CodexTaskState(thread: CodexThreadState(id: "thread", preview: "", status: .notLoaded, turns: [CodexTurnState(
+            id: "turn", status: .completed, startedAt: nil, itemsView: .full, items: [
+                picture("p1", status: "completed", saved: "/tmp/generated/old.png", at: 100),
+                picture("p2", status: "generating", saved: "/tmp/generated/running.png", at: 200),
+                picture("p3", status: "failed", saved: "/tmp/generated/failed.png", failure: .string("no"), at: 300),
+                picture("p4", status: "completed", saved: nil, at: 400),
+                picture("p5", status: "completed", saved: "/tmp/generated/new.png", at: 500)
+            ], plan: nil, tokenUsage: nil, raw: .null)], raw: .null))
+        let railState = try XCTUnwrap(CodexRailStates().state(of: codex, for: UUID()))
+        let pictures = SessionRailContent.generatedImages(in: railState)
+        XCTAssertEqual(pictures.map(\.name), ["new.png", "old.png"])
+        let written = TranscriptEntry(createdAt: Date(timeIntervalSince1970: 300), content: .activity(HarnessActivity(
+            id: "w", kind: "Write", title: "Write", diff: HarnessActivityDiff(path: "/tmp/elsewhere/between.pdf", newText: "x")),
+            state: .completed))
+        XCTAssertEqual(SessionRailContent.outputs(entries: [written], codexChanges: [added], generatedFiles: pictures,
+                                                  workspaceURL: folder).map(\.name),
+                       ["new.png", "between.pdf", "old.png", "plan.md"])
     }
 
     /// The rail, the composer and its line of background tasks read a transcript's few entries they read

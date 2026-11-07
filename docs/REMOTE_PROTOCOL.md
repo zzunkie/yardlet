@@ -1423,7 +1423,11 @@ task's own folders that the conversation names. Until now files went only from t
 
   The files the Mac's Outputs card shows for the task, in its order (newest first, at most 50): files the task
   wrote whole, outside its folder of any kind and inside it only documents and media; a Codex addition counts once
-  its patch was applied, not while it waits or when it was declined or failed. `size` is absent for a file that is
+  its patch was applied, not while it waits or when it was declined or failed; and pictures a tool reported saving:
+  a Codex `imageGeneration` item's `savedPath` once it completed, and the file an Antigravity `generate_image` result
+  names, in the log of the conversation or of a subagent it started, when that file lies directly in the
+  conversation's own folder (`brain/<id>/`). A path a message or another tool's result names is none of these, and
+  the rest of that folder is not served. `size` is absent for a file that is
   gone or whose place now holds a symbolic link; `writtenAt` (milliseconds since 1970) when the Mac knows it. Not a
   command. Errors: `notFound` (no such task).
 - ```json
