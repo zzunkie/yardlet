@@ -47,7 +47,7 @@ final class RemoteHostCache {
     private var lastChange: ContinuousClock.Instant?
 
     /// Reads, writes and removals, in the order they were asked for.
-    private nonisolated static let disk = DispatchQueue(label: "yardlet.remote.host-cache", qos: .utility)
+    nonisolated static let disk = DispatchQueue(label: "yardlet.remote.host-cache", qos: .utility)
     private nonisolated static let listName = "list.json"
 
     init(folder: URL, quiet: Duration = .seconds(1.5), longestWait: Duration = .seconds(10)) {
@@ -79,15 +79,21 @@ final class RemoteHostCache {
 
     private func restore(_ read: (list: List, pages: [String: Page])?) {
         guard !isClosed else { return }
-        isRead = true
+        adopt(read)
         guard let read, let model else { return }
-        written = read.list
-        saved = read.pages
-        writtenRevisions = [:]
         model.showCached(read.list)
         for (taskID, conversation) in model.conversations where !conversation.isLoaded {
             show(taskID, in: conversation)
         }
+    }
+
+    /// What the folder holds, which a write keeps beside what the window shows.
+    private func adopt(_ read: (list: List, pages: [String: Page])?) {
+        isRead = true
+        guard let read else { return }
+        written = read.list
+        saved = read.pages
+        writtenRevisions = [:]
     }
 
     /// A conversation the window just opened: its saved page, until the host's own arrives.
@@ -113,9 +119,11 @@ final class RemoteHostCache {
         }
     }
 
-    /// The window closed: what changed is written now, and nothing after.
+    /// The window closed: what changed is written now, and nothing after. A window closed before the folder's first read
+    /// came back waits for it here, or what it showed would be lost or would replace what the folder holds.
     func close() {
         guard !isClosed else { return }
+        if !isRead { adopt(Self.disk.sync { [folder] in Self.read(folder) }) }
         write()
         isClosed = true
         model = nil

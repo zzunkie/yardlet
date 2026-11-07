@@ -575,6 +575,31 @@ final class RemoteHostModelTests: XCTestCase {
         await host.shutdown()
     }
 
+    /// The disk can be slower than the host: a window closed before its first read of the cache came back still keeps
+    /// what it showed.
+    func testAWindowClosedBeforeItsCacheIsReadKeepsWhatItShowed() async throws {
+        let stack = try await LoopbackStack(bridge: RemoteFixtureBridge(speed: 0.01))
+        defer { stack.stop() }
+        let root = FileManager.default.temporaryDirectory.appending(path: "remote-cache-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
+                                                        name: "Loopback", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let directory = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+                                            hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"),
+                                            cacheRoot: root, discovery: FakeDiscovery().discovery)
+        let host = try await directory.pair(link: link.absoluteString)
+        let disk = DispatchSemaphore(value: 0)
+        RemoteHostCache.disk.async { disk.wait() }
+        let window = try XCTUnwrap(directory.model(for: host.id))
+        try await waitUntil { window.hasSnapshot }
+        // Nothing suspends between these: the read can't have reached this actor when the window closes.
+        disk.signal()
+        directory.close(host.id)
+        let list = root.appending(path: host.id, directoryHint: .isDirectory).appending(path: "list.json")
+        try await waitUntil { FileManager.default.fileExists(atPath: list.path) }
+    }
+
     /// What a window last showed stays for its next opening (docs/REMOTE_PROTOCOL.md §18): the list and an open
     /// conversation show before the host is reached, the host's own replace them once it is, here found on a
     /// new port by a stand-in for Bonjour, and removing the host removes them.
