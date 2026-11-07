@@ -402,7 +402,8 @@ struct AccountRow: View {
                 }
             }
             if let onConnect {
-                Button(choice.needsProvider ? L10n.string("Choose provider") : L10n.string("Connect"), action: onConnect)
+                Button(L10n.string(choice.needsProvider ? "Choose provider"
+                    : AccountConnectionPresentation.usesProviderLanguage(choice.harness) ? "Connect" : "Sign in"), action: onConnect)
                     .controlSize(.small)
             }
         }
@@ -500,7 +501,9 @@ struct AccountRow: View {
                 }
             }
         } else {
-            Text(usage == nil ? choice.status : (usage?.usageUnavailableText ?? choice.usageUnavailableText))
+            let status = usage == nil ? choice.status : (usage?.usageUnavailableText ?? choice.usageUnavailableText)
+            // A login named by its state says it once, in its title.
+            Text(status == title ? "" : status)
                 .font(.system(size: 11)).foregroundStyle(.secondary)
                 .frame(width: 190, alignment: .trailing)
                 .help(choice.snapshot?.detail ?? choice.status)

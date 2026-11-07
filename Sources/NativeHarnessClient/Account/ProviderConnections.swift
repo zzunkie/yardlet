@@ -309,6 +309,8 @@ final class ProviderConnectionStore {
     @ObservationIgnored private let defaults: UserDefaults?
     /// The environment default logins are found in (`CLAUDE_CONFIG_DIR`); tests give their own.
     @ObservationIgnored var defaultLoginEnvironment = ProcessInfo.processInfo.environment
+    /// A login was just read signed in after being read as anything else.
+    @ObservationIgnored var onSignedIn: ((HarnessKind, ProviderConnection?) -> Void)?
     /// Where Yardlet makes the folders of accounts added with a new sign-in; tests give their own.
     @ObservationIgnored var accountsRoot = CodexEnvironmentPaths.live().yardletRootURL.appending(path: "connections")
     /// The home folder discovery looks in; tests give their own.
@@ -444,7 +446,8 @@ final class ProviderConnectionStore {
             readingStatus[key] = .current
             shown = snapshot
         }
-        confirmedAt[key] = readingStatus[key] == .current ? Date() : nil
+        // A runtime found a moment later (the login shell's `PATH` is read after launch) is checked at once.
+        confirmedAt[key] = readingStatus[key] == .current && snapshot.state != .unavailable ? Date() : nil
         return shown
     }
 
@@ -746,7 +749,9 @@ final class ProviderConnectionStore {
     }
 
     private func apply(_ snapshot: HarnessAccountSnapshot, for connection: ProviderConnection) {
+        let before = snapshots[connection.id]?.state
         snapshots[connection.id] = accept(snapshot, key: connection.id, current: snapshots[connection.id])
+        announceSignIn(of: connection, harness: connection.harness, before: before, reading: snapshots[connection.id])
     }
 
     /// A Claude session's own plan-limit report, applied to the account it runs under so the
@@ -891,7 +896,19 @@ final class ProviderConnectionStore {
 
     private func applyDefault(_ snapshot: HarnessAccountSnapshot) {
         let key = AccountSnapshotCache.defaultKey(for: snapshot.harness)
+        let before = defaultSnapshots[snapshot.harness]?.state
         defaultSnapshots[snapshot.harness] = accept(snapshot, key: key, current: defaultSnapshots[snapshot.harness])
+        announceSignIn(of: nil, harness: snapshot.harness, before: before, reading: defaultSnapshots[snapshot.harness])
+    }
+
+    /// A login read signed in after it was read as anything else: the tasks that failed without it can go on.
+    private func announceSignIn(of connection: ProviderConnection?, harness: HarnessKind,
+                                before: AccountAuthState?, reading: HarnessAccountSnapshot?) {
+        guard reading?.state == .signedIn else { return }
+        // The sign-in is the next task's at once, not after the next check of the list.
+        replaceSignedOutDefaultSelection(for: harness)
+        guard let before, before != .signedIn else { return }
+        onSignedIn?(harness, connection)
     }
 
     /// Ends the check running for `key` as far as the shown reading goes, and returns the
@@ -1253,10 +1270,13 @@ final class ProviderConnectionStore {
     }
 
     /// New tasks must not start on a default login the runtime reports as signed out while a saved
-    /// account is signed in. The saved account with the most limit left becomes the choice; an
-    /// explicit choice is never replaced.
+    /// account is signed in, nor on a Claude default login whose status could not be confirmed:
+    /// `claude auth status` covers every way the CLI can sign in, so a default login it cannot vouch
+    /// for is no account to prefer over one it can. The saved account with the most limit left
+    /// becomes the choice; an explicit choice is never replaced.
     func replaceSignedOutDefaultSelection(for harness: HarnessKind) {
-        guard selection[harness] == nil, defaultSnapshots[harness]?.state == .signedOut else { return }
+        guard selection[harness] == nil, let state = defaultSnapshots[harness]?.state,
+              state == .signedOut || (state == .unknown && harness == .claudeCode) else { return }
         var best: (connection: ProviderConnection, left: Double)?
         // Only a sign-in a check confirmed in this run counts; a remembered one may have ended since.
         for connection in connections(for: harness) where snapshots[connection.id]?.state == .signedIn

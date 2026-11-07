@@ -1144,7 +1144,6 @@
 "Choose provider" = "제공자 선택";
 
 /* Account selection UX */
-"Current connection" = "현재 연결";
 "Checking account…" = "계정 확인 중…";
 "Sign-in required" = "로그인 필요";
 "Account needs attention" = "계정 확인 필요";
@@ -3849,3 +3848,10 @@
 "Cloud" = "클라우드";
 "Codex Cloud" = "Codex Cloud";
 "Applied" = "적용됨";
+"Not signed in. Sign in, then send your message again." = "로그인되어 있지 않습니다. 로그인한 뒤 메시지를 다시 보내세요.";
+"Claude Code needs a one-time sign-in here. The Claude app keeps its own sign-in." = "여기서 Claude Code에 한 번 로그인해야 합니다. Claude 앱의 로그인은 따로 유지됩니다.";
+"Your shell sets CLAUDE_CONFIG_DIR, so Claude Code in Terminal uses another folder. Add that folder in Accounts, or sign in here." = "셸 설정의 CLAUDE_CONFIG_DIR 때문에 터미널의 Claude Code는 다른 폴더를 씁니다. 그 폴더를 계정에 추가하거나 여기서 로그인하세요.";
+"Claude Code in Terminal signs in with %@ from your shell setup, which apps don't get. Sign in here once to use it in Yardlet." = "터미널의 Claude Code는 셸 설정의 %@ 값으로 로그인합니다. 이 값은 앱에 전달되지 않으니, Yardlet에서 쓰려면 여기서 한 번 로그인하세요.";
+"%@ isn't signed in" = "%@에 로그인되어 있지 않습니다";
+"Continue with %@" = "%@(으)로 계속";
+"Sign in, then send your message again." = "로그인한 뒤 메시지를 다시 보내세요.";

@@ -453,6 +453,57 @@ import XCTest
         XCTAssertNil(defaults.object(forKey: ProviderConnectionStore.taskMovesKey), "A finished move leaves nothing behind")
     }
 
+    /// A CLI that found no login stays running on that answer, so a task on it would go on failing
+    /// until Yardlet quit. Once the login reads signed in, the task's CLI ends and its next message
+    /// resumes the same conversation; while it reads signed out, a message starts no CLI at all.
+    func testASignInLetsATaskThatFailedForItGoOnWithoutQuitting() async throws {
+        let shared = try directory()
+        let cli = try script(shared, "echo '{\"loggedIn\":true}'")
+        let connections = ProviderConnectionStore()
+        connections.usesFixtureSnapshots = true
+        let adapters = AdapterLog()
+        let model = AppModel(store: SessionStore(repository: InMemorySessionRepository()),
+            runtimeSelections: RuntimeSelectionStore(discoversRuntimes: false),
+            registry: HarnessRegistry { kind, _ in adapters.make(kind) }, connections: connections,
+            restoresIndexOnLaunch: false)
+        addTeardownBlock { await model.shutdown() }
+        let created = await model.createSession(harness: .claudeCode, workspaceURL: shared, runtimeExecutableURL: cli,
+            title: "Imported")
+        let task = try XCTUnwrap(created, model.errorBySessionID.values.first ?? "Missing task")
+        let providerID = try XCTUnwrap(task.providerSessionID)
+
+        func reading(_ state: AccountAuthState) -> HarnessAccountSnapshot {
+            HarnessAccountSnapshot(id: "claudeCode", harness: .claudeCode, providerID: nil, state: state, accountLabel: nil,
+                detail: "", credentialOwner: "Claude Code", checkedAt: Date(), usage: [], canLogin: true, canLogout: false)
+        }
+        connections.publishDefaults([reading(.signedOut)])
+        // The task's event stream opens in its own time, and an event sent before that goes nowhere.
+        try await waitUntil {
+            await adapters.emit(.error(message: "Not logged in · Please run /login", recoverable: true, transient: nil), in: task.id)
+            return model.store.sessions.first?.status == .failed
+        }
+        XCTAssertTrue(model.isAttached(task.id), "The CLI that found no login is still running")
+
+        connections.publishDefaults([reading(.signedIn)])
+        try await waitUntil { !model.isAttached(task.id) && model.store.sessions.first?.status == .ready }
+        XCTAssertNil(model.errorBySessionID[task.id])
+        XCTAssertEqual(model.store.sessions.first?.connection, nil, "Only the process changes: the task keeps its login")
+
+        connections.publishDefaults([reading(.signedOut)])
+        var current = try XCTUnwrap(model.store.sessions.first)
+        await model.send(HarnessUserInput(text: "Signed out"), to: current)
+        XCTAssertEqual(model.errorBySessionID[task.id], ProviderSignIn.prompt)
+        var resumed = await adapters.resumedIDs()
+        XCTAssertEqual(resumed, [], "A login read as signed out starts no CLI and no turn")
+
+        connections.publishDefaults([reading(.signedIn)])
+        try await waitUntil { model.store.sessions.first?.status == .ready }
+        current = try XCTUnwrap(model.store.sessions.first)
+        await model.send(HarnessUserInput(text: "Signed in"), to: current)
+        resumed = await adapters.resumedIDs()
+        XCTAssertEqual(resumed, [providerID], "The conversation goes on under its own ID")
+    }
+
     /// Opt-in: `NHC_CLAUDE_ACCOUNT_LIVE=<config folder>` checks a real login's plan limits through the
     /// installed CLI, that it shares history with `~/.claude`, and (with `NHC_CLAUDE_ACCOUNT_LIVE_SESSION`)
     /// that a saved conversation reads through it. No model request is sent and nothing is written.

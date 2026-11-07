@@ -23,7 +23,9 @@ enum AccountCommandRunner {
         environment: [String: String] = [:],
         timeout: Duration = .seconds(12)
     ) async throws -> AccountCommandResult {
-        try await Task.detached(priority: .utility) {
+        // A CLI installed as a Node script finds `node` through the login shell's `PATH`.
+        await LoginShellPath.ready()
+        return try await Task.detached(priority: .utility) {
             let process = Process()
             let pipe = Pipe()
             process.executableURL = executableURL

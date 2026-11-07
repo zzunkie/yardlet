@@ -39,12 +39,15 @@ actor HarnessAccountBroker {
                 executableURL: executableURL
             )
         } catch {
+            // A status check that did not finish still knows whose login it is.
+            let known = descriptor.id == .claudeCode ? claudeConfigIdentity() : nil
             return HarnessAccountSnapshot(
                 id: descriptor.id == .pi ? "pi:openai-codex" : descriptor.id.rawValue,
                 harness: descriptor.id,
                 providerID: connection?.providerID ?? (descriptor.id == .pi ? Self.piConfiguredProvider(homePath: connection?.homePath) : nil),
                 state: .unknown,
-                accountLabel: nil,
+                accountLabel: known?.displayLabel,
+                accountOrganization: known?.groupingOrganization,
                 detail: error.localizedDescription,
                 credentialOwner: descriptor.displayName,
                 checkedAt: Date(),
@@ -368,11 +371,24 @@ actor HarnessAccountBroker {
             )
         }
 
-        let result = try await AccountCommandRunner.run(
-            executableURL: executableURL,
-            arguments: arguments,
-            environment: connection?.environment ?? [:]
-        )
+        let started = ContinuousClock.now
+        let result: AccountCommandResult
+        do {
+            result = try await AccountCommandRunner.run(
+                executableURL: executableURL,
+                arguments: arguments,
+                environment: connection?.environment ?? [:],
+                // Claude Code reads its login from the Keychain, which can answer slowly. A check
+                // cut off here reads as "not verified", which says less than the answer it waits for.
+                timeout: descriptor.id == .claudeCode ? Self.claudeStatusTimeout : .seconds(12)
+            )
+        } catch {
+            if descriptor.id == .claudeCode {
+                logClaudeCheck(runtime: executableURL, state: nil, result: nil, started: started,
+                               failure: error.localizedDescription)
+            }
+            throw error
+        }
         let state = Self.commandAccountState(
             for: descriptor.id,
             result: result
@@ -398,6 +414,11 @@ actor HarnessAccountBroker {
             detail = L10n.string("OpenCode has at least one configured model provider.")
         } else if descriptor.id == .openCode {
             detail = L10n.string("OpenCode provider status could not be confirmed.")
+        } else if descriptor.id == .claudeCode, state == .signedOut {
+            // A folder of its own is signed in to on purpose, whatever the shell sets for the default login.
+            detail = connection?.homePath == nil
+                ? ProviderSignIn.claudeSignedOutDetail(shellVariables: LoginShellPath.claudeSignInVariables)
+                : ProviderSignIn.neededHere(.claudeCode)
         } else if state == .signedOut {
             detail = L10n.string("No usable runtime-owned account was found.")
         } else if state == .signedIn {
@@ -407,9 +428,21 @@ actor HarnessAccountBroker {
         }
         // Claude publishes the signed-in identity in the same structured payload
         // that proves the session. Read only those fields; never the credential.
-        let claudeIdentity = descriptor.id == .claudeCode && state == .signedIn
+        var claudeIdentity = descriptor.id == .claudeCode && state == .signedIn
             ? Self.claudeAccountIdentity(from: result.output)
             : nil
+        // A CLI that named no address, or answered in a way this source cannot read, still keeps
+        // the account's name in its config file, which needs no prompt. A key or a token the CLI got
+        // from elsewhere is no account, so a name left there from an earlier sign-in is not used.
+        if descriptor.id == .claudeCode, state != .signedOut, claudeIdentity?.email == nil,
+           ["claude.ai", nil].contains(Self.claudeStatusFields(from: result.output).authMethod),
+           let known = claudeConfigIdentity() {
+            claudeIdentity = ClaudeAccountIdentity(email: known.email, organization: known.organization,
+                                                   subscription: claudeIdentity?.subscription)
+        }
+        if descriptor.id == .claudeCode {
+            logClaudeCheck(runtime: executableURL, state: state, result: result, started: started, failure: nil)
+        }
         var usage = [notExposedUsage()]
         if descriptor.id == .claudeCode, state == .signedIn {
             let metrics = try? await ClaudeUsageProbe.read(executableURL: executableURL,
@@ -438,6 +471,58 @@ actor HarnessAccountBroker {
                 : supportsLogin(descriptor.id) && state != .signedIn,
             canLogout: canLogout
         )
+    }
+
+    /// How long a Claude status check may take, past a Keychain that answers slowly.
+    static let claudeStatusTimeout: Duration = .seconds(30)
+
+    /// The account the login's `.claude.json` names, read from the file with no process and no
+    /// prompt; the credential is elsewhere. Nil for a config folder with no account in it.
+    private func claudeConfigIdentity() -> ClaudeAccountIdentity? {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let folder = connection?.homePath.map { URL(filePath: $0) } ?? home.appending(path: ".claude")
+        return Self.claudeConfigIdentity(file: NativeMCPHome.claudeConfigFile(configDirectory: folder, homeURL: home))
+    }
+
+    static func claudeConfigIdentity(file: URL) -> ClaudeAccountIdentity? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path(percentEncoded: false)),
+              let size = attributes[.size] as? Int, size <= 64 * 1_048_576,
+              let data = try? Data(contentsOf: file),
+              let account = (try? JSONDecoder().decode(JSONValue.self, from: data))?["oauthAccount"] else { return nil }
+        func text(_ key: String) -> String? {
+            account[key]?.stringValue.flatMap { $0.isEmpty ? nil : $0 }
+        }
+        guard let email = text("emailAddress") else { return nil }
+        return ClaudeAccountIdentity(email: email, organization: text("organizationName"), subscription: nil)
+    }
+
+    /// The two facts of `claude auth status` that say how the CLI signs in.
+    static func claudeStatusFields(from output: String) -> (authMethod: String?, apiProvider: String?) {
+        let payload = structuredAccountPayload(from: output)
+        return (payload?["authMethod"]?.stringValue, payload?["apiProvider"]?.stringValue)
+    }
+
+    /// One Claude status check, for `AccountCheckLog`. The Keychain item is looked at only when the
+    /// CLI found no login, which is when it tells "no login here" from "a login it could not read".
+    private func logClaudeCheck(runtime: URL, state: AccountAuthState?, result: AccountCommandResult?,
+                                started: ContinuousClock.Instant, failure: String?) {
+        guard AccountCheckLog.fileURL != nil else { return }
+        let milliseconds = AccountCheckLog.milliseconds(since: started)
+        var entry = AccountCheckLog.Entry(harness: HarnessKind.claudeCode.rawValue, account: connection?.id ?? "default",
+            runtime: runtime.path(percentEncoded: false), configHome: connection?.homePath ?? "default",
+            state: state?.rawValue, exitCode: result?.exitCode, milliseconds: milliseconds, failure: failure)
+        if let result {
+            let fields = Self.claudeStatusFields(from: result.output)
+            entry.authMethod = fields.authMethod
+            entry.apiProvider = fields.apiProvider
+        }
+        if state != .signedIn {
+            let looked = ContinuousClock.now
+            entry.credentialItem = Self.claudeCredentialItem(configDirectory: connection?.homePath)
+            entry.credentialItemMilliseconds = AccountCheckLog.milliseconds(since: looked)
+            entry.shellVariables = LoginShellPath.claudeSignInVariables
+        }
+        AccountCheckLog.record(entry)
     }
 
     /// Read in the environment the account's Grok runs in: a saved account's `GROK_HOME`, without

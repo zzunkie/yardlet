@@ -1144,7 +1144,6 @@
 "Choose provider" = "Choose provider";
 
 /* Account selection UX */
-"Current connection" = "Current connection";
 "Checking account…" = "Checking account…";
 "Sign-in required" = "Sign-in required";
 "Account needs attention" = "Account needs attention";
@@ -3849,3 +3848,10 @@
 "Cloud" = "Cloud";
 "Codex Cloud" = "Codex Cloud";
 "Applied" = "Applied";
+"Not signed in. Sign in, then send your message again." = "Not signed in. Sign in, then send your message again.";
+"Claude Code needs a one-time sign-in here. The Claude app keeps its own sign-in." = "Claude Code needs a one-time sign-in here. The Claude app keeps its own sign-in.";
+"Your shell sets CLAUDE_CONFIG_DIR, so Claude Code in Terminal uses another folder. Add that folder in Accounts, or sign in here." = "Your shell sets CLAUDE_CONFIG_DIR, so Claude Code in Terminal uses another folder. Add that folder in Accounts, or sign in here.";
+"Claude Code in Terminal signs in with %@ from your shell setup, which apps don't get. Sign in here once to use it in Yardlet." = "Claude Code in Terminal signs in with %@ from your shell setup, which apps don't get. Sign in here once to use it in Yardlet.";
+"%@ isn't signed in" = "%@ isn't signed in";
+"Continue with %@" = "Continue with %@";
+"Sign in, then send your message again." = "Sign in, then send your message again.";

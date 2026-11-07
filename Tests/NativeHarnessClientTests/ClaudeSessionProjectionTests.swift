@@ -115,6 +115,23 @@ final class ClaudeSessionProjectionTests: XCTestCase {
         XCTAssertEqual(activity("bg", in: builder)?.state, .stopped)
     }
 
+    /// Claude Code 2.1.318 refuses a turn with no login as a synthetic assistant message and an error
+    /// `result` in the same words: the card that offers the sign-in, not an answer as well.
+    func testATurnRefusedForItsSignInIsTheErrorCardAlone() throws {
+        var projection = ClaudeSessionProjection()
+        var builder = TranscriptBuilder()
+        try apply(#"{"type":"assistant","error":"authentication_failed","isApiErrorMessage":true,"message":{"id":"m","role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"Not logged in · Please run /login"}]}}"#,
+                  to: &projection, builder: &builder)
+        try apply(#"{"type":"result","subtype":"success","is_error":true,"result":"Not logged in · Please run /login"}"#,
+                  to: &projection, builder: &builder)
+        XCTAssertEqual(builder.entries.count, 1)
+        guard case let .error(message, _, _)? = builder.entries.first?.content else {
+            return XCTFail("\(builder.entries)")
+        }
+        XCTAssertEqual(TranscriptRecoveryProjection.errorSummary(message), ProviderSignIn.prompt)
+        XCTAssertEqual(message, "Not logged in · Please run /login", "Details keep the CLI's words")
+    }
+
     func testLateLaunchAcknowledgementDoesNotEraseFailure() throws {
         var projection = ClaudeSessionProjection()
         var builder = TranscriptBuilder()

@@ -79,17 +79,19 @@ enum RuntimeProcessEnvironment {
 
     /// Where Yardlet looks for a program a GUI app's `PATH` does not have, as a person's shell
     /// would find it: the package managers' own folders, Homebrew, nvm's Node versions newest
-    /// first, Docker Desktop, then `path` and the system. Harness runtimes and connector programs
+    /// first, Docker Desktop, then `path` (with the login shell's folders once read) and the system. Harness runtimes and connector programs
     /// are both looked for here. Windows has its own folders (`windowsSearchDirectories`).
     static func searchDirectories(home: URL,
-                                  path: String = ExecutableLookup.current.searchPath(in: ProcessInfo.processInfo.environment),
+                                  path: String = ExecutableLookup.current.searchPath(in: RuntimeProcessEnvironment.app),
                                   fileManager: FileManager = .default, lookup: ExecutableLookup = .current) -> [URL] {
         if lookup.isWindows {
             return windowsSearchDirectories(home: home, path: path, environment: ProcessInfo.processInfo.environment,
                                             lookup: lookup)
         }
+        // `.claude/local` is Claude Code's older local install, which a shell alias alone reaches.
         var directories = [".local/bin", ".bun/bin", ".volta/bin", ".cargo/bin", ".deno/bin", ".npm-global/bin",
-                           "Library/pnpm"].map { home.appending(path: $0) }
+                           "Library/pnpm", ".asdf/shims", ".local/share/mise/shims", ".claude/local"]
+            .map { home.appending(path: $0) }
         directories += ["/opt/homebrew/bin", "/usr/local/bin"].map { URL(filePath: $0) }
         let nvm = home.appending(path: ".nvm/versions/node", directoryHint: .isDirectory)
         let versions = ((try? fileManager.contentsOfDirectory(atPath: nvm.path(percentEncoded: false))) ?? [])

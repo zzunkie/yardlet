@@ -161,6 +161,13 @@ final class RuntimeProcessEnvironmentTests: XCTestCase {
         XCTAssertTrue(folders.contains("/from/profile"), path ?? "nil")
         XCTAssertTrue(folders.contains("/usr/bin"), path ?? "nil")
 
+        // A sign-in only the shell has is named, never read: the value stays in the shell.
+        try "export PATH=/from/rc:$PATH\nexport ANTHROPIC_API_KEY=value-of-the-key\n"
+            .write(to: folder.appending(path: ".zshrc"), atomically: true, encoding: .utf8)
+        let reading = await LoginShellPath.reading(shell: URL(filePath: "/bin/zsh"), environment: environment)
+        XCTAssertEqual(reading.claudeSignInVariables, ["ANTHROPIC_API_KEY"])
+        XCTAssertEqual(reading.path?.split(separator: ":").first, "/from/rc")
+
         try "sleep 30\n".write(to: folder.appending(path: ".zshrc"), atomically: true, encoding: .utf8)
         let started = ContinuousClock.now
         let hung = await LoginShellPath.read(shell: URL(filePath: "/bin/zsh"), environment: environment,

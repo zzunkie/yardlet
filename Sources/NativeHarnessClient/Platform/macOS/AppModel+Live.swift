@@ -15,6 +15,8 @@ extension AppModel {
         }
         #endif
         LoginShellPath.startReading(shell: ShellLaunchEnvironment.loginShellPath())
+        AccountCheckLog.fileURL = FileManager.default.homeDirectoryForCurrentUser
+            .appending(path: YardletProduct.storageDirectoryName).appending(path: "logs/account-checks.log")
         let supportRootURL = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask

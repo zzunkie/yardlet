@@ -22,6 +22,29 @@ final class AccountCommandRunnerTests: XCTestCase {
         XCTAssertEqual(result.output, "fixture account status\n")
     }
 
+    /// A CLI read for its limits may be renewing the login. It is never stopped first: the end of its
+    /// input ends it, and what it was saving gets saved, after the answer and after a timeout alike.
+    func testTheUsageProbeLetsTheCLIFinishInsteadOfStoppingIt() async throws {
+        let script = """
+        #!/bin/sh
+        while read -r line; do
+          case "$line" in *get_usage*)
+            [ -n "$ANSWERS" ] && printf '%s\\n' '{"type":"control_response","response":{"request_id":"usage","subtype":"success","response":{}}}';;
+          esac
+        done
+        sleep 1
+        touch "$0.saved"
+        """
+        for answers in [true, false] {
+            let fixture = try makeExecutable(script)
+            defer { try? FileManager.default.removeItem(at: fixture.root) }
+            _ = try? await ClaudeUsageProbe.read(executableURL: fixture.executable,
+                environment: answers ? ["ANSWERS": "1"] : [:], timeout: .milliseconds(500), exitGrace: .seconds(30))
+            let saved = fixture.executable.path(percentEncoded: false) + ".saved"
+            try await waitUntil(timeout: .seconds(20)) { FileManager.default.fileExists(atPath: saved) }
+        }
+    }
+
     /// A stalled probe is stopped with its children and reaped by Foundation. Neither a
     /// wrapper that exits zero once its child is stopped nor a stolen exit status may read
     /// as the command's answer.

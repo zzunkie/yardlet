@@ -71,6 +71,11 @@ final class SidebarTaskIndicatorProjectionTests: XCTestCase {
         XCTAssertEqual(SidebarTaskStatus.failed(message: "Stream closed\n  at reader.swift:12").help,
                        L10n.string("Task encountered a system error") + "\nStream closed")
         XCTAssertEqual(SidebarTaskStatus.failed(message: nil).help, L10n.string("Task encountered a system error"))
+        // A turn the CLI could not sign in for is no system error, and `/login` is no way out here.
+        let signedOut = SidebarTaskStatus.failed(message: "Not logged in · Please run /login")
+        XCTAssertEqual(signedOut.accessibilityName, L10n.string("Not signed in"))
+        XCTAssertEqual(signedOut.help, ProviderSignIn.prompt)
+        XCTAssertFalse(ProviderSignIn.asksToSignIn("Invalid API key · Fix external API key"))
         XCTAssertEqual(SidebarTaskStatus.usageLimit(limit).help,
                        L10n.string("Session limit reached") + "\n" + (ProviderNoticeText.limitReset(limit) ?? ""))
         XCTAssertEqual(SidebarTaskStatus.running.help, L10n.string("Running"))

@@ -155,7 +155,8 @@ enum AccountListProjection {
             parts.append(ProviderConnection.providerDisplayName(provider))
         }
         let identity = choice.identity
-        if !identity.isIdentified, choice.snapshot != nil, choice.knownLabel == nil {
+        // A login with no account is not an unknown one.
+        if !identity.isIdentified, choice.snapshot != nil, choice.knownLabel == nil, choice.snapshot?.state != .signedOut {
             parts.append(L10n.string("Unknown account"))
         }
         if let plan = choice.snapshot?.accountPlan?.trimmingCharacters(in: .whitespacesAndNewlines), !plan.isEmpty {
@@ -170,7 +171,7 @@ enum AccountListProjection {
         var parts: [String] = []
         if let provider = group.identity.providerDisplayName { parts.append(provider) }
         // Before its first answer a connection is not yet an unknown account, only an unchecked one.
-        let hasReading = group.choices.contains { $0.snapshot != nil }
+        let hasReading = group.choices.contains { $0.snapshot != nil && $0.snapshot?.state != .signedOut }
         if !group.identity.isIdentified, hasReading { parts.append(L10n.string("Unknown account")) }
         if let plan = group.identity.planLabel, !plan.isEmpty { parts.append(plan) }
         if parts.isEmpty { parts.append(group.harnesses.map(\.displayName).joined(separator: ", ")) }

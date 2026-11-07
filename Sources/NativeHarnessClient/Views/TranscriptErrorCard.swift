@@ -9,17 +9,23 @@ struct TranscriptErrorCard: View {
     var onRetry: (() -> Void)? = nil
     var onEditRequest: (() -> Void)? = nil
     var onShowHarnessSettings: (() -> Void)? = nil
+    /// The sign-in a card for a missing sign-in offers, in place of the harness's settings.
+    var signIn: ConversationSignIn? = nil
     @State private var showsDetails = false
 
+    private var asksToSignIn: Bool { ProviderSignIn.asksToSignIn(message) }
+    private var offeredSignIn: ConversationSignIn? { asksToSignIn ? signIn : nil }
+
     var body: some View {
-        let summary = TranscriptRecoveryProjection.errorSummary(message)
+        let summary = asksToSignIn ? ProviderSignIn.nextStep : TranscriptRecoveryProjection.errorSummary(message)
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(.red)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(title ?? L10n.format("%@ could not complete the request", harness.displayName))
+                    Text(title ?? (asksToSignIn ? L10n.format("%@ isn't signed in", harness.displayName)
+                        : L10n.format("%@ could not complete the request", harness.displayName)))
                         .font(.callout.weight(.semibold))
                     Text(summary)
                         .font(.callout)
@@ -29,7 +35,7 @@ struct TranscriptErrorCard: View {
                 }
             }
             // Buttons, as the Codex app draws its Retry: a bare label here read as a heading.
-            if onRetry != nil || onEditRequest != nil || onShowHarnessSettings != nil {
+            if onRetry != nil || onEditRequest != nil || onShowHarnessSettings != nil || offeredSignIn != nil {
                 ControlRowLayout(spacing: 8, rowSpacing: 8) {
                     recoveryActions
                 }
@@ -62,6 +68,15 @@ struct TranscriptErrorCard: View {
 
     @ViewBuilder
     private var recoveryActions: some View {
+        if let offeredSignIn {
+            Button(L10n.string("Sign in"), action: offeredSignIn.signIn)
+                .parityProminentButton()
+                .parityPointer()
+            if let target = offeredSignIn.moveTo {
+                Button(L10n.format("Continue with %@", target.name), action: target.action)
+                    .parityPointer()
+            }
+        }
         if let onRetry {
             Button(L10n.string("Retry"), action: onRetry)
                 .parityPointer()
@@ -71,7 +86,7 @@ struct TranscriptErrorCard: View {
                 .parityPointer()
                 .help(L10n.string("Restore this request to the composer without sending"))
         }
-        if let onShowHarnessSettings {
+        if let onShowHarnessSettings, offeredSignIn == nil {
             Button(L10n.string("Harness settings"), action: onShowHarnessSettings)
                 .parityPointer()
         }

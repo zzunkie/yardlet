@@ -14,7 +14,10 @@ enum HostSessionEnvironment {
     private static let names: Set<String> = [
         "CLAUDECODE", "CLAUDE_PID", "CLAUDE_CONFIG_DIR", "CLAUDE_EFFORT", "ENABLE_CLAUDEAI_MCP_SERVERS",
         "DISABLE_AUTOUPDATER", "DISABLE_MICROCOMPACT", "MCP_CONNECTION_NONBLOCKING", "MCP_SERVER_CONNECTION_BATCH_SIZE",
-        "USE_STAGING_OAUTH", "USE_LOCAL_OAUTH", "AI_AGENT", "API_TIMEOUT_MS"
+        "USE_STAGING_OAUTH", "USE_LOCAL_OAUTH", "AI_AGENT", "API_TIMEOUT_MS",
+        // The Claude app sets these for the CLI it runs (empty keys, its own API host); an API key
+        // or base URL the parent session used is that session's, as a Dock launch shows.
+        "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_HEADERS"
     ]
     private static let prefixes = ["CLAUDE_CODE_", "CLAUDE_AGENT_SDK_", "CLAUDE_PREVIEW_"]
     private static let remoteShellNames: Set<String> = ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]

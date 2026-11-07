@@ -151,7 +151,7 @@ import XCTest
         XCTAssertEqual(choice.connectionTitle, "Work laptop", "Under an account the row names its connection")
 
         let unread = AccountChoice(harness: .hermes, connection: nil, snapshot: nil)
-        XCTAssertEqual(unread.title, L10n.string("Current connection"))
+        XCTAssertEqual(unread.title, L10n.string("Checking account…"))
         XCTAssertEqual(unread.connectionTitle, HarnessKind.hermes.displayName)
 
         // One Claude account signed in through two Session Switch folders, read at different times:

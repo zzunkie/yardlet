@@ -27,10 +27,14 @@ import XCTest
     func testAHostClaudeSessionsVariablesAreNotInheritedButOrdinaryOnesAre() {
         let host = ["CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "claude-desktop", "CLAUDE_CODE_SESSION_ID": "x",
                     "CLAUDE_CONFIG_DIR": "/accounts/a", "ENABLE_CLAUDEAI_MCP_SERVERS": "false", "CLAUDE_AGENT_SDK_VERSION": "1",
+                    "CLAUDE_CODE_OAUTH_TOKEN": "host", "ANTHROPIC_API_KEY": "", "ANTHROPIC_BASE_URL": "https://host.example",
                     "HOME": "/Users/me", "PATH": "/usr/bin", "SSH_AUTH_SOCK": "/tmp/agent"]
-        XCTAssertEqual(HostSessionEnvironment.hostVariables(in: host), ["CLAUDECODE", "CLAUDE_AGENT_SDK_VERSION",
-            "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CONFIG_DIR", "ENABLE_CLAUDEAI_MCP_SERVERS"])
-        XCTAssertEqual(HostSessionEnvironment.hostVariables(in: ["CLAUDE_CONFIG_DIR": "/mine", "HOME": "/Users/me"]), [],
+        XCTAssertEqual(HostSessionEnvironment.hostVariables(in: host), ["ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL",
+            "CLAUDECODE", "CLAUDE_AGENT_SDK_VERSION", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_SESSION_ID", "CLAUDE_CONFIG_DIR", "ENABLE_CLAUDEAI_MCP_SERVERS"],
+            "The Claude app's token and API host for the CLI it runs stay with that session")
+        XCTAssertEqual(HostSessionEnvironment.hostVariables(in: ["CLAUDE_CONFIG_DIR": "/mine", "ANTHROPIC_API_KEY": "mine",
+                                                                 "HOME": "/Users/me"]), [],
             "Without a host session a person's own setting is kept")
         // Opened with `open` from an SSH shell: the connection's variables would send Antigravity CLI
         // away from the keychain, so it found no sign-in.

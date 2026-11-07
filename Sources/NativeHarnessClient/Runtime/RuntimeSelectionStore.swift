@@ -155,6 +155,9 @@ final class RuntimeSelectionStore {
     /// choice stays. Called at launch and when Settings › CLI Updates opens.
     func findNewest() async {
         guard discoversRuntimes else { return }
+        // An install only the person's shell finds (asdf, mise, a custom folder) is in the login
+        // shell's `PATH`, read in the background at launch.
+        await LoginShellPath.ready()
         // Each harness's installs, the chosen runtime first where the person chose one.
         var lookups: [HarnessKind: (installs: [URL], chosen: Bool)] = [:]
         for harness in HarnessCatalog.builtIns.map(\.id) {
@@ -273,7 +276,7 @@ final class RuntimeSelectionStore {
     /// newest version wins and this order only breaks a tie (product document 13.100).
     nonisolated static func codexCandidates(
         home: URL,
-        searchPath: String = ExecutableLookup.current.searchPath(in: ProcessInfo.processInfo.environment)
+        searchPath: String = ExecutableLookup.current.searchPath(in: RuntimeProcessEnvironment.app)
     ) -> [URL] {
         installedPrograms(named: "codex", home: home, searchPath: searchPath)
             + RuntimeRelocation.chatGPTCodexLayouts(inAppAt: URL(filePath: "/Applications/ChatGPT.app"))
@@ -297,7 +300,7 @@ final class RuntimeSelectionStore {
     nonisolated private static func installedPrograms(
         named executable: String,
         home: URL,
-        searchPath: String = ExecutableLookup.current.searchPath(in: ProcessInfo.processInfo.environment)
+        searchPath: String = ExecutableLookup.current.searchPath(in: RuntimeProcessEnvironment.app)
     ) -> [URL] {
         RuntimeProcessEnvironment.searchDirectories(home: home, path: searchPath)
             .map { $0.appending(path: executable) }
