@@ -39,10 +39,11 @@ final class CEFBrowserHostProcess: BrowserHostConnection {
         )
     }
 
-    /// True in bundles built with CEF; plain `swift run` builds use the WebKit preview instead.
-    nonisolated static var isAvailable: Bool {
-        FileManager.default.isExecutableFile(atPath: executableURL.path(percentEncoded: false))
-    }
+    /// True in bundles built with CEF; plain `swift run` builds use the WebKit preview instead. The
+    /// build puts the host in the bundle and nothing adds or removes it while the app runs, so the
+    /// disk is asked once: views ask this on every draw. `AppModel.live` reads it off the main thread.
+    nonisolated static let isAvailable = FileManager.default.isExecutableFile(
+        atPath: executableURL.path(percentEncoded: false))
 
     var eventHandler: ((BrowserHostEvent) -> Void)?
     private(set) var processIdentifier: Int32 = 0
