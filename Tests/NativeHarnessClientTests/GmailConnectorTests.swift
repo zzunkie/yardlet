@@ -764,6 +764,8 @@ final class GmailConnectorTests: XCTestCase {
         let sent = google.requests.count
         let unnamed = try await call(center, "gmail_list_labels")
         XCTAssertEqual(unnamed.failure?.kind, .invalidArguments, unnamed.text)
+        XCTAssertTrue(unnamed.text.contains("account takes one of: person@example.test, developer@company.test."),
+                      "A resumed Claude Code task may hold the schema from before `account`: \(unnamed.text)")
         let unknown = try await call(center, "gmail_list_labels", ["account": .string("someone@elsewhere.test")])
         XCTAssertEqual(unknown.failure?.kind, .invalidArguments, unknown.text)
         XCTAssertTrue(unknown.text.contains("person@example.test, developer@company.test"), unknown.text)

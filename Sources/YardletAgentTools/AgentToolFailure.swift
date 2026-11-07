@@ -79,9 +79,11 @@ extension AgentToolResult {
 /// every property the schema requires must be there. As the MCP SDKs' own checks do, a property the schema does
 /// not name does not stop a call that has what the tool needs. When something is missing, the failure also names
 /// what the call gave that the tool does not take, most often the missing one misspelt (`task_id` for `task_ids`,
-/// `script` for `function`), and every argument the tool takes. Values are left to the tool, which reads some more
-/// leniently than JSON Schema would (an integer written as a string, one string for a list). A connector's own
-/// server checks the calls to its tools itself.
+/// `script` for `function`), every argument the tool takes, and the values of a missing property that takes only
+/// certain ones: a client may hold an older copy of the schema (Claude Code keeps the definitions a conversation
+/// loaded and uses them when it resumes), and then the failure is all it has to go on. Values are left to the tool,
+/// which reads some more leniently than JSON Schema would (an integer written as a string, one string for a list). A
+/// connector's own server checks the calls to its tools itself.
 package enum AgentToolArgumentCheck {
     package static func failure(tool: String, arguments: ToolJSON, schema: ToolJSON) -> AgentToolResult? {
         guard let given = arguments.objectValue else { return nil }
@@ -92,6 +94,10 @@ package enum AgentToolArgumentCheck {
         let unexpected = given.keys.filter { properties[$0] == nil }.sorted()
         let optional = properties.keys.filter { !required.contains($0) }.sorted()
         var message = "\(tool) was not run: it needs \(AgentToolNames.phrase(missing, "and"))."
+        for name in missing {
+            let values = properties[name]?["enum"]?.arrayValue?.compactMap(\.stringValue) ?? []
+            if !values.isEmpty { message += " \(name) takes one of: \(values.joined(separator: ", "))." }
+        }
         if !unexpected.isEmpty { message += " It takes no \(AgentToolNames.phrase(unexpected, "or"))." }
         message += " Its arguments: " + (required.map { "\($0) (required)" } + optional).joined(separator: ", ") + "."
         return .failure(message, .invalidArguments, retry: .withChanges, details: [
