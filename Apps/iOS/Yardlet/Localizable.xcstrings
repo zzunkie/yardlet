@@ -21,6 +21,26 @@
         }
       }
     },
+    "%@ doesn't take these photos.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@는 이 사진을 받지 않습니다."
+          }
+        }
+      }
+    },
+    "%@ doesn't take this %@ choice now. Pick again.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@에서 지금 이 %2$@ 선택지를 받지 않습니다. 다시 고르세요."
+          }
+        }
+      }
+    },
     "%@ is changing this task. Try again in a moment.": {
       "localizations": {
         "ko": {
@@ -1533,6 +1553,16 @@
         }
       }
     },
+    "Sign in to %@ on %@ to start a task.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@에서 %1$@에 로그인해야 작업을 시작할 수 있습니다."
+          }
+        }
+      }
+    },
     "Skip this question": {
       "localizations": {
         "ko": {
@@ -1799,6 +1829,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "이 휴대폰에서 그 Mac의 작업을 더 보지 않고, Mac도 이 휴대폰을 잊습니다. 다시 쓰려면 새로 연결하세요."
+          }
+        }
+      }
+    },
+    "This project isn't in a Git repository, so it can't start in a new worktree.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 프로젝트는 Git 저장소가 아니어서 새 worktree에서 시작할 수 없습니다."
           }
         }
       }

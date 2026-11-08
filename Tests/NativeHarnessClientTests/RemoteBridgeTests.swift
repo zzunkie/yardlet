@@ -447,7 +447,7 @@ final class RemoteBridgeTests: XCTestCase {
 
     func testANewTaskFromThePhoneOffersTheNewTaskScreensChoicesButNotThoseTheMacConfirms() {
         // Claude Code launches in a permission mode; Bypass permissions asks first on the Mac, so the
-        // phone is not offered it (§15.16), and a createTask naming it finds no such choice.
+        // phone is not offered it (§15.16), and a createTask naming it is refused until confirmed.
         let options = ComposerSessionOptionsProjection.newTask(harness: .claudeCode, choice: nil, catalogs: HarnessModelCatalogStore(),
                                                                connection: nil, workspaceURL: nil)
         let settings = AppModelRemoteBridge.settings(options)
@@ -469,10 +469,18 @@ final class RemoteBridgeTests: XCTestCase {
     }
 
     func testNewTaskComposerChecksConfirmationAndKeepsTheHostsChoices() async throws {
-        let model = try Self.model(sessions: [], transcripts: [:])
+        // The harnesses' settings files are this test's own, empty ones.
+        let root = FileManager.default.temporaryDirectory.appending(path: "remote-new-task-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = try Self.model(sessions: [], transcripts: [:], modelCatalogs: HarnessModelCatalogStore(
+            locations: HarnessModelSettingsLocations(claudeConfigDirectory: root, codexHome: root.appending(path: "codex"),
+                                                     codexYardletHome: root.appending(path: "other")), environment: [:]))
         model.connections.usesFixtureSnapshots = true
         model.runtimeSelections.select(URL(filePath: "/usr/bin/true"), for: .claudeCode)
         let bridge = AppModelRemoteBridge(model: model)
+        // The Mac's new-task screen remembers Bypass permissions, which a phone that cannot confirm may not start in.
+        model.composerDrafts.home.modelChoices[.claudeCode] = NewTaskModelChoice(
+            model: nil, permissionMode: ClaudePermissionMode.bypassPermissions)
         let beforeSelection = model.connections.selection
         let beforeChoice = model.composerDrafts.home.modelChoices[.claudeCode]
         let accountID = AccountChoice.nativeID(for: .claudeCode)
@@ -492,6 +500,45 @@ final class RemoteBridgeTests: XCTestCase {
             settings: [ClaudeLaunchOption.permissionMode: ClaudePermissionMode.bypassPermissions], accountID: accountID))
         guard case let .failure(error) = refusal else { return XCTFail("Unconfirmed elevation must not start a task") }
         XCTAssertEqual(error.code, .notAllowed)
+        XCTAssertEqual(error.reason, .confirmation)
+        XCTAssertEqual(error.setting, ClaudeLaunchOption.permissionMode)
+        // The composer catalog shows the Mac's own choice, to confirm; the phone's is the permission it would start on.
+        XCTAssertEqual(options.settings.first { $0.role == "permission" }?.value, ClaudePermissionMode.bypassPermissions)
+        let phone = try await bridge.newTaskOptions(projectID: RemoteTaskProjection.chatsProjectID,
+                                                    harness: HarnessKind.claudeCode.rawValue, settings: [:]).get()
+        let phonePermission = try XCTUnwrap(phone.settings.first { $0.id == ClaudeLaunchOption.permissionMode })
+        XCTAssertEqual(phonePermission.value, ClaudePermissionMode.manual)
+        XCTAssertTrue(phonePermission.choices.contains { $0.value == phonePermission.value })
+        // An unconfirmed start that names no permission passes the confirmation check on that one; asking for a worktree
+        // in Chats is what refuses it here, so no task starts.
+        let unnamed = await bridge.createTask(RemoteTaskStart(projectID: RemoteTaskProjection.chatsProjectID,
+            text: "Run", harness: HarnessKind.claudeCode.rawValue, worktree: true))
+        guard case let .failure(later) = unnamed else { return XCTFail("A worktree in Chats is refused") }
+        XCTAssertEqual(later.reason, .worktree)
+        // The desktop sends every setting its composer showed, Codex's speed among them, and none of them asks; a
+        // model the settings file names before the list has it is shown, so it is taken back too.
+        try FileManager.default.createDirectory(at: root.appending(path: "codex"), withIntermediateDirectories: true)
+        try Data(#"model = "gpt-next""#.utf8).write(to: root.appending(path: "codex/config.toml"))
+        model.runtimeSelections.select(URL(filePath: "/usr/bin/true"), for: .codex)
+        model.modelCatalogs.recordCodex([CodexModelOption(id: "gpt-test", model: "gpt-test", displayName: "GPT-Test",
+            defaultReasoningEffort: "low", supportedReasoningEfforts: ["low", "high"], isDefault: true,
+            serviceTiers: [CodexServiceTier(id: "priority", name: "Fast", description: "")])], for: nil)
+        let codex = try await bridge.newTaskComposerOptions(projectID: RemoteTaskProjection.chatsProjectID,
+            harness: HarnessKind.codex.rawValue, settings: [:], accountID: nil).get()
+        XCTAssertEqual(codex.settings.first { $0.role == "model" }?.value, "gpt-next")
+        let shown = Dictionary(uniqueKeysWithValues: codex.settings.map { ($0.id, $0.value) })
+        let everySetting = await bridge.createTask(RemoteTaskStart(projectID: RemoteTaskProjection.chatsProjectID,
+            text: "Run", harness: HarnessKind.codex.rawValue, settings: shown, worktree: true))
+        guard case let .failure(past) = everySetting else { return XCTFail("A worktree in Chats is refused") }
+        XCTAssertEqual(past.reason, .worktree, "Each setting the composer showed is one the Mac takes")
+        let listed = try await bridge.newTaskComposerOptions(projectID: RemoteTaskProjection.chatsProjectID,
+            harness: HarnessKind.codex.rawValue, settings: ["model": "gpt-test"], accountID: nil).get()
+        XCTAssertTrue(listed.settings.contains { $0.role == "speed" })
+        let fast = await bridge.createTask(RemoteTaskStart(projectID: RemoteTaskProjection.chatsProjectID,
+            text: "Run", harness: HarnessKind.codex.rawValue,
+            settings: Dictionary(uniqueKeysWithValues: listed.settings.map { ($0.id, $0.value) }), worktree: true))
+        guard case let .failure(speed) = fast else { return XCTFail("A worktree in Chats is refused") }
+        XCTAssertEqual(speed.reason, .worktree)
         XCTAssertEqual(model.connections.selection, beforeSelection)
         XCTAssertEqual(model.composerDrafts.home.modelChoices[.claudeCode], beforeChoice)
         XCTAssertTrue(model.store.sessions.isEmpty)
@@ -2237,12 +2284,13 @@ final class RemoteBridgeTests: XCTestCase {
 
     private static func model(sessions: [SessionRecord], transcripts: [UUID: [TranscriptEntry]],
                               queues: [UUID: [QueuedFollowUp]] = [:], schedules: [ScheduledTask] = [],
-                              archived: [SessionRecord] = []) throws -> AppModel {
+                              archived: [SessionRecord] = [], modelCatalogs: HarnessModelCatalogStore? = nil) throws -> AppModel {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteBridgeTests")))
         let repository = InMemorySessionRepository(sessions: sessions + archived, archived: archived.map(\.id))
         return AppModel(
             store: SessionStore(sessions: sessions, repository: repository),
             runtimeSelections: RuntimeSelectionStore(defaults: defaults),
+            modelCatalogs: modelCatalogs,
             initialTranscripts: transcripts,
             initialCodexQueues: queues,
             codexQueueRepository: InMemoryRemoteQueueRepository(),

@@ -2020,8 +2020,8 @@ public actor RemoteServer {
         respond(error.map { .failure(requestID, $0) } ?? response, to: id)
         audit?.record(device: connections[id]?.deviceID, type: request.type, task: request.taskID,
                       schedule: request.scheduleID ?? response.scheduleId, project: request.projectID,
-                      setting: request.settingID, input: request.auditTarget,
-                      result: error?.code.rawValue ?? "ok", at: now())
+                      setting: request.settingID ?? error?.setting, input: request.auditTarget,
+                      result: error?.code.rawValue ?? "ok", reason: error?.reason?.rawValue, at: now())
         if case let .deleteScheduledTasks(ids, _, _) = request {
             for scheduleID in ids.dropFirst() {
                 audit?.record(device: connections[id]?.deviceID, type: request.type, task: nil, schedule: scheduleID,

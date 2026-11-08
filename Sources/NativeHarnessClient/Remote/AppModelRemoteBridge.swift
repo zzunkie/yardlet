@@ -860,7 +860,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         let offered = model.runtimeSelections.connectedDescriptors.map(\.id)
         if let named {
             guard let harness = offered.first(where: { $0.rawValue == named }) else {
-                return .failure(RemoteError(.notAllowed, "The Mac does not offer \(named)"))
+                return .failure(RemoteError(.notAllowed, "The Mac does not offer \(named)", reason: .harness))
             }
             return .success(harness)
         }
@@ -887,8 +887,9 @@ final class AppModelRemoteBridge: RemoteBridge {
         }
     }
 
-    /// The new-task choice after the phone's picks, each as the menus take it, in the order they list their
-    /// settings (§15.16); refused when one names a setting or value the menus do not offer then.
+    /// The new-task choice after the client's picks, each as the menus take it, in the order the composer lists its
+    /// settings (§15.16, §15.33); refused when one names a setting or value the menus do not offer then, or, unless
+    /// `allowsConfirmed`, a value the Mac asks to confirm.
     private static func choosing(_ picks: [String: String], harness: HarnessKind, from start: NewTaskModelChoice?,
                                  model: AppModel, connection: ProviderConnection?,
                                  folder: URL?, allowsConfirmed: Bool = false) -> Result<NewTaskModelChoice?, RemoteError> {
@@ -897,17 +898,43 @@ final class AppModelRemoteBridge: RemoteBridge {
         while !left.isEmpty {
             let projected = ComposerSessionOptionsProjection.newTask(
                 harness: harness, choice: choice, catalogs: model.modelCatalogs, connection: connection, workspaceURL: folder)
-            let settings = allowsConfirmed ? Self.taskSettings(projected) : Self.settings(projected)
-            guard let setting = settings.first(where: { left[$0.id] != nil }), let value = left.removeValue(forKey: setting.id),
-                  setting.choices.contains(where: { $0.value == value }),
-                  let chosen = NewTaskModelProjection.choosing(setting.id, value: value, harness: harness, choice: choice,
+            // Every setting the composer has: a phone's short list is part of it, and the desktop's sends them all.
+            let settings = Self.taskSettings(projected)
+            guard let setting = settings.first(where: { left[$0.id] != nil }), let value = left.removeValue(forKey: setting.id) else {
+                return .failure(RemoteError(.notAllowed, "The new-task menus have no such setting now", reason: .setting))
+            }
+            let offered = setting.choices.first { $0.value == value }
+            // The value the menu shows now is taken back as it is, also before its list has it (a default model).
+            guard offered != nil || value == setting.value else {
+                return .failure(RemoteError(.notAllowed, "\(setting.id) has no such choice now", reason: .setting,
+                                            setting: setting.id))
+            }
+            guard allowsConfirmed || offered?.confirm == nil else {
+                return .failure(RemoteError(.notAllowed, "\(setting.id) \(value) is confirmed first",
+                                            reason: .confirmation, setting: setting.id))
+            }
+            if value == setting.value { continue }
+            guard let chosen = NewTaskModelProjection.choosing(setting.id, value: value, harness: harness, choice: choice,
                                                                catalogs: model.modelCatalogs, connection: connection,
                                                                workspaceURL: folder) else {
-                return .failure(RemoteError(.notAllowed, "The Mac does not offer that choice now"))
+                return .failure(RemoteError(.notAllowed, "\(setting.id) has no such choice now", reason: .setting,
+                                            setting: setting.id))
             }
             choice = chosen
         }
         return .success(choice)
+    }
+
+    /// The choice a task starts on without the person's confirmation (§15.16): the Mac's own when its permission
+    /// does not ask, else the same with the harness's default permission, as a task that names none starts. A
+    /// phone that cannot confirm is offered, and starts on, this one.
+    static func unconfirmed(_ choice: NewTaskModelChoice?, harness: HarnessKind, model: AppModel,
+                            connection: ProviderConnection?, folder: URL?) -> NewTaskModelChoice? {
+        let options = ComposerSessionOptionsProjection.newTask(harness: harness, choice: choice, catalogs: model.modelCatalogs,
+                                                               connection: connection, workspaceURL: folder)
+        guard var choice, newTaskRequiresConfirmation(options) else { return choice }
+        choice.permissionMode = nil
+        return choice
     }
 
     static func option(_ harness: HarnessKind) -> RemoteHarnessOption {
@@ -949,7 +976,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         }
         let accountChoices = model.connections.choices(for: [harness])
         if let accountID, accountID != "automatic", !accountChoices.contains(where: { $0.id == accountID && $0.canSelect }) {
-            return .failure(RemoteError(.notAllowed, "The account is unavailable"))
+            return .failure(RemoteError(.notAllowed, "The account is unavailable", reason: .account))
         }
         let connection = accountID.flatMap { id in accountChoices.first { $0.id == id } }?.connection
             ?? model.connections.selected(for: harness)
@@ -975,6 +1002,10 @@ final class AppModelRemoteBridge: RemoteBridge {
         switch Self.choosing(picked, harness: harness, from: choice, model: model, connection: binding, folder: place.folder, allowsConfirmed: composer) {
         case let .success(chosen): choice = chosen
         case let .failure(error): return .failure(error)
+        }
+        // A phone that is not offered the choices that ask is shown the permission it would start on.
+        if !composer {
+            choice = Self.unconfirmed(choice, harness: harness, model: model, connection: binding, folder: place.folder)
         }
         let worktree = place.project.flatMap { project in
             place.folder.map(SuggestedTaskPlace.isInRepository) == true
@@ -1056,38 +1087,44 @@ final class AppModelRemoteBridge: RemoteBridge {
         let accountChoices = model.connections.choices(for: [harness])
         let explicitAccount = start.accountID.flatMap { id in accountChoices.first { $0.id == id && $0.canSelect } }
         if let accountID = start.accountID, accountID != "automatic", explicitAccount == nil {
-            return .failure(RemoteError(.notAllowed, "The account is unavailable"))
+            return .failure(RemoteError(.notAllowed, "The account is unavailable", reason: .account))
         }
         let connection = explicitAccount.map { $0.connection } ?? model.connections.selected(for: harness)
-        let choice: NewTaskModelChoice?
+        var choice: NewTaskModelChoice?
         switch Self.choosing(start.settings, harness: harness, from: draft.modelChoices[harness], model: model,
                              connection: connection, folder: folder, allowsConfirmed: start.confirmed) {
         case let .success(chosen): choice = chosen
         case let .failure(error): return .failure(error)
         }
+        // Without the person's confirmation the task starts on what a phone that cannot confirm was shown.
+        if !start.confirmed {
+            choice = Self.unconfirmed(choice, harness: harness, model: model, connection: connection, folder: folder)
+        }
         let chosenOptions = ComposerSessionOptionsProjection.newTask(harness: harness, choice: choice,
             catalogs: model.modelCatalogs, connection: connection, workspaceURL: folder)
         guard start.confirmed || !Self.newTaskRequiresConfirmation(chosenOptions) else {
-            return .failure(RemoteError(.notAllowed, "Confirm the permission choice before starting the task"))
+            let setting = chosenOptions.permission?.selector?.id
+            return .failure(RemoteError(.notAllowed, "\(setting ?? "The permission") is confirmed first",
+                                        reason: .confirmation, setting: setting))
         }
         var worktree = folder != nil && draft.startsInNewWorktree(projectID: project?.id)
         if let asked = start.worktree {
             guard !asked || (project != nil && folder.map(SuggestedTaskPlace.isInRepository) == true) else {
-                return .failure(RemoteError(.notAllowed, "The project is not in a Git repository"))
+                return .failure(RemoteError(.notAllowed, "The project is not in a Git repository", reason: .worktree))
             }
             worktree = asked
         }
         var stored: [HarnessUserInput.ImageAttachment] = []
         if !start.images.isEmpty {
             guard HarnessComposerInputPolicy(harness: harness).carriesImages else {
-                return .failure(RemoteError(.notAllowed, "\(harness.displayName) takes no images"))
+                return .failure(RemoteError(.notAllowed, "\(harness.displayName) takes no images", reason: .attachments))
             }
             guard let written = Self.store(start.images) else { return .failure(RemoteError(.internal, "The images could not be saved")) }
             stored = written
         }
         guard let fileInputs = Self.inputs(for: start.attachedFiles, policy: HarnessComposerInputPolicy(harness: harness)) else {
             Self.discard(stored)
-            return .failure(RemoteError(.notAllowed, "\(harness.displayName) takes no such files"))
+            return .failure(RemoteError(.notAllowed, "\(harness.displayName) takes no such files", reason: .attachments))
         }
         let attachments = stored.compactMap { CodexUserInput.localAttachment(for: $0.url) } + fileInputs
         let text = start.text
@@ -1116,7 +1153,7 @@ final class AppModelRemoteBridge: RemoteBridge {
             return .success(created.id.uuidString)
         } catch let signIn as HarnessSignInRequired {
             Self.discard(stored)
-            return .failure(RemoteError(.notAllowed, signIn.localizedDescription))
+            return .failure(RemoteError(.notAllowed, signIn.localizedDescription, reason: .signIn))
         } catch {
             Self.discard(stored)
             return .failure(RemoteError(.internal, error.localizedDescription))

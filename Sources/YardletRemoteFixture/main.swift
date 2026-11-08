@@ -13,13 +13,14 @@ import YardletRemoteFixtureSupport
 //
 //   swift run --build-system native yardlet-remote-fixture [--single-use-pairing] [--secure-port 47616]
 //       [--host 10.0.2.2:47616]… [--relay ws://127.0.0.1:8787] [--relay-public ws://10.0.2.2:8787]
-//       [--approve-links]
+//       [--approve-links] [--signed-out HARNESS]…
 //   swift run --build-system native yardlet-remote-fixture --pair LINK --task TITLE --send TEXT
 //
 // It serves the protocol (§11–§17) with a fixed fixture Mac key and prints the pairing URL (its secret is
 // fixed and reusable unless --single-use-pairing). --relay opens the fixture's room on a local relay
 // (`relay/`, `wrangler dev`); --relay-public is the address phones are told for it. --approve-links
-// approves a link request (§12.1) three seconds after it arrives. `--v2`, from when protocol 1 was served
+// approves a link request (§12.1) three seconds after it arrives. --signed-out (`claude-code`, `codex`, `opencode`)
+// refuses new tasks on that harness as a Mac whose login for it is signed out (§15.16). `--v2`, from when protocol 1 was served
 // too, is accepted and changes nothing. Where Network.framework is missing (Windows, Linux) it has no listener of
 // its own and is reached only through --relay, which it then needs. With --pair it is a phone instead
 // (`FixturePhone`).
@@ -38,7 +39,7 @@ func value(after flag: String) -> String? {
 }
 if arguments.contains("--help") || arguments.contains("-h") {
     print("usage: yardlet-remote-fixture [--single-use-pairing] [--secure-port PORT] [--host HOST:PORT]… "
-          + "[--relay URL] [--relay-public URL] [--approve-links]\n"
+          + "[--relay URL] [--relay-public URL] [--approve-links] [--signed-out HARNESS]…\n"
           + "       yardlet-remote-fixture --pair LINK --task TITLE --send TEXT")
     exit(0)
 }
@@ -60,7 +61,14 @@ func fixtureKey(_ label: String) -> Data { Data(SHA256.hash(data: Data(label.utf
 let identity = try RemoteIdentity(noisePrivateKey: fixtureKey("yardlet-fixture-noise"),
                                   relayPrivateKey: fixtureKey("yardlet-fixture-relay"))
 
-let bridge = RemoteFixtureBridge(filesFolder: folder.appending(path: "files", directoryHint: .isDirectory))
+func values(after flag: String) -> [String] {
+    arguments.indices.filter { arguments[$0] == flag }.compactMap { index in
+        let next = arguments.index(after: index)
+        return next < arguments.endIndex ? arguments[next] : nil
+    }
+}
+let bridge = RemoteFixtureBridge(filesFolder: folder.appending(path: "files", directoryHint: .isDirectory),
+                                 signedOut: Set(values(after: "--signed-out")))
 var configuration = RemoteServer.Configuration(server: RemoteServerInfo(name: "Yardlet fixture", appVersion: "fixture"),
                                                macKey: identity.noise.publicKey)
 // Files a phone sends stay in this run's own folder, apart from the app's (§15.20).
@@ -99,10 +107,7 @@ do {
     }
     retainedSecure = secure
     #endif
-    var hosts = arguments.indices.filter { arguments[$0] == "--host" }.compactMap { index -> String? in
-        let next = arguments.index(after: index)
-        return next < arguments.endIndex ? arguments[next] : nil
-    }
+    var hosts = values(after: "--host")
     if hosts.isEmpty, let boundSecure { hosts = ["10.0.2.2:\(boundSecure)", "127.0.0.1:\(boundSecure)"] }
     var relayInfo: RemoteHandshakeReply.Relay?
     if let relay = value(after: "--relay").flatMap(URL.init(string:)) {

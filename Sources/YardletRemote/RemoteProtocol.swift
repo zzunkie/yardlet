@@ -91,11 +91,44 @@ public struct RemoteError: Error, Codable, Equatable, Sendable {
     public var code: RemoteErrorCode
     /// An English diagnostic for logs, not for the phone's UI.
     public var message: String
+    /// What a refusal is about, for the client's own words and the audit log (§15.16). A client treats a reason
+    /// it does not know as absent.
+    public var reason: RemoteRefusal?
+    /// The setting the refusal is about, by the id the host's menus gave it; never a value.
+    public var setting: String?
 
-    public init(_ code: RemoteErrorCode, _ message: String = "") {
+    public init(_ code: RemoteErrorCode, _ message: String = "", reason: RemoteRefusal? = nil, setting: String? = nil) {
         self.code = code
         self.message = message.isEmpty ? code.rawValue : message
+        self.reason = reason
+        self.setting = setting
     }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        code = try container.decode(RemoteErrorCode.self, forKey: .code)
+        message = try container.decode(String.self, forKey: .message)
+        reason = (try? container.decodeIfPresent(String.self, forKey: .reason)).flatMap(RemoteRefusal.init(rawValue:))
+        setting = try? container.decodeIfPresent(String.self, forKey: .setting)
+    }
+}
+
+/// Why the host refused a new task or its options (§15.16).
+public enum RemoteRefusal: String, Codable, Sendable, CaseIterable {
+    /// The host does not offer the harness now.
+    case harness
+    /// A setting, or a value of it, the host's menus do not offer now.
+    case setting
+    /// The value is one the host asks to confirm first, and the request did not say it was confirmed.
+    case confirmation
+    /// The account is not one the host can start this harness on now.
+    case account
+    /// A new worktree was asked for in a project that is not in a Git repository.
+    case worktree
+    /// The harness takes no images, or no such files.
+    case attachments
+    /// The harness's login needs signing in on the host first.
+    case signIn
 }
 
 /// WebSocket close codes the server uses (§8).
@@ -1262,7 +1295,11 @@ public enum RemoteRequest: Equatable, Sendable {
     }
 
     public var projectID: String? {
-        if case let .projectAction(id, _, _) = self { return id }; return nil
+        switch self {
+        case let .projectAction(id, _, _): id
+        case let .createTask(start): start.projectID
+        default: nil
+        }
     }
 
     /// The schedule a request names (§15.21).

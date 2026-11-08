@@ -931,6 +931,16 @@ final class RemoteServerTests: XCTestCase {
         await harness.send(#"{"id":"6","type":"stopTurn","taskId":"B"}"#, on: phone)
         let awaited18 = try await phone.response("6").error?.code
         XCTAssertEqual(awaited18, .notRunning)
+        // A refusal says what it is about, to the phone and in the audit line, never with the value or the words.
+        await harness.bridge.failNext(RemoteError(.notAllowed, "permissionMode bypassPermissions is confirmed first",
+                                                  reason: .confirmation, setting: "permissionMode"))
+        await harness.send(#"{"id":"7","type":"createTask","projectId":"P","text":"Secret start","settings":{"permissionMode":"bypassPermissions"}}"#, on: phone)
+        let refused = try await phone.response("7").error
+        XCTAssertEqual(refused?.code, .notAllowed)
+        XCTAssertEqual(refused?.reason, .confirmation)
+        XCTAssertEqual(refused?.setting, "permissionMode")
+        let unknownReason = try JSONDecoder().decode(RemoteError.self, from: Data(#"{"code":"notAllowed","message":"m","reason":"later"}"#.utf8))
+        XCTAssertNil(unknownReason.reason, "A reason from a newer Mac is read as none")
 
         let commands = await harness.bridge.commands
         XCTAssertEqual(commands, [
@@ -941,12 +951,17 @@ final class RemoteServerTests: XCTestCase {
             .stopTurn(taskID: "B")
         ])
         let audit = harness.audit.entries().filter { $0.type != "pair" && $0.type != "hello" }
-        XCTAssertEqual(audit.map(\.type), ["sendMessage", "answerApproval", "stopTurn", "markRead", "sendMessage", "stopTurn"])
-        XCTAssertEqual(audit.map(\.result), ["ok", "ok", "ok", "ok", "unsupportedCommand", "notRunning"])
-        XCTAssertEqual(audit.map(\.task), ["A", "A", "A", "B", "A", "B"])
+        XCTAssertEqual(audit.map(\.type), ["sendMessage", "answerApproval", "stopTurn", "markRead", "sendMessage", "stopTurn",
+                                           "createTask"])
+        XCTAssertEqual(audit.map(\.result), ["ok", "ok", "ok", "ok", "unsupportedCommand", "notRunning", "notAllowed"])
+        XCTAssertEqual(audit.map(\.task), ["A", "A", "A", "B", "A", "B", nil])
+        XCTAssertEqual(audit.last?.reason, "confirmation")
+        XCTAssertEqual(audit.last?.setting, "permissionMode")
+        XCTAssertEqual(audit.last?.project, "P")
         let log = try String(contentsOf: harness.auditURL, encoding: .utf8)
         XCTAssertFalse(log.contains("Secret"))
         XCTAssertFalse(log.contains("clear"))
+        XCTAssertFalse(log.contains("bypassPermissions"))
     }
 
     func testScheduleEditingAuditsEveryScheduleWithoutItsDefinition() async throws {
@@ -1959,6 +1974,7 @@ actor FakeBridge: RemoteBridge {
     }
 
     func createTask(_ start: RemoteTaskStart) -> Result<String, RemoteError> {
+        if let nextFailure { self.nextFailure = nil; return .failure(nextFailure) }
         createdTasks.append((start.projectID, start.text))
         return .success("NEW-\(createdTasks.count)")
     }

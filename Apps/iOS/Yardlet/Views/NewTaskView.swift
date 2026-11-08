@@ -39,6 +39,9 @@ struct NewTaskView: View {
                             Label(count == 0 ? "Add Photos" : "\(count) photos", systemImage: "photo")
                         }
                     }
+                } footer: {
+                    // Under the words, where it is seen: Start is at the top and the keyboard covers the end of the form.
+                    if let error { Text(error).foregroundStyle(.red) }
                 }
                 Section {
                     Picker("Project", selection: $projectID) {
@@ -63,9 +66,6 @@ struct NewTaskView: View {
                 } footer: {
                     if isLoading { Text("Reading what \(session.name) offers…") }
                 }
-                if let error {
-                    Section { Text(error).foregroundStyle(.red) }
-                }
             }
             .navigationTitle("New Task")
             .navigationBarTitleDisplayMode(.inline)
@@ -83,6 +83,8 @@ struct NewTaskView: View {
                 isWriting = true
             }
             .task(id: projectID) { await readOptions() }
+            .onChange(of: text) { error = nil }
+            .onChange(of: projectID) { error = nil }
             .onChange(of: pickerItems) { _, items in
                 guard !items.isEmpty else { return }
                 pickerItems = []
@@ -101,11 +103,13 @@ struct NewTaskView: View {
     private func choose(harness: String) {
         self.harness = harness
         picks = [:]
+        error = nil
         Task { await readOptions() }
     }
 
     private func pick(_ setting: String, _ value: String) {
         picks[setting] = value
+        error = nil
         // A setting may depend on another (an effort on its model): read the menus again after the pick.
         Task { await readOptions() }
     }
@@ -138,11 +142,30 @@ struct NewTaskView: View {
             if response.ok, let taskID = response.taskId {
                 onStarted(taskID)
             } else {
-                error = response.error?.code == .notAllowed
-                    ? String(localized: "\(session.name) doesn't offer that choice now. Pick again.")
-                    : HostSession.message(for: response.error, host: session.name)
+                error = message(for: response.error)
                 if response.error?.code == .notAllowed { await readOptions() }
             }
+        }
+    }
+
+    /// What the Mac refused, in the words of what it said it was about (§15.16).
+    private func message(for refusal: RemoteError?) -> String {
+        guard let refusal, refusal.code == .notAllowed else { return HostSession.message(for: refusal, host: session.name) }
+        let harnessName = harnesses.first { $0.harness == harness }?.harnessName ?? session.name
+        switch refusal.reason {
+        case .signIn?:
+            return String(localized: "Sign in to \(harnessName) on \(session.name) to start a task.")
+        case .worktree?:
+            return String(localized: "This project isn't in a Git repository, so it can't start in a new worktree.")
+        case .attachments?:
+            return String(localized: "\(harnessName) doesn't take these photos.")
+        case .setting?, .confirmation?:
+            if let name = settings.first(where: { $0.id == refusal.setting })?.name {
+                return String(localized: "\(session.name) doesn't take this \(name) choice now. Pick again.")
+            }
+            return String(localized: "\(session.name) doesn't offer that choice now. Pick again.")
+        default:
+            return String(localized: "\(session.name) doesn't offer that choice now. Pick again.")
         }
     }
 }

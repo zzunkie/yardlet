@@ -46,7 +46,8 @@ relative to events):
 
 - `re`: the request's `id`. `ok`: whether it succeeded. On success the message's result fields sit
   beside `ok`; on failure `error.code` is one of §8 and `error.message` is an English diagnostic for
-  logs, not for the UI.
+  logs, not for the UI. A refusal may also say what it is about: `error.reason` (§15.16) and `error.setting`, the
+  id of the setting it concerns, never a value. A client treats a reason it does not know as absent.
 - A frame whose `id` cannot be read (not JSON, not an object, `id` missing, not a string or longer
   than 64 characters) gets `{"re": "", "ok": false, "error": {"code": "badRequest", …}}`.
 
@@ -188,7 +189,8 @@ badge read (`TaskAttentionProjection`, `SidebarTaskIndicatorProjection`).
 ### 4.4 Commands
 
 Commands act through the same paths as the Mac's own controls. Every command is written to the Mac's
-local audit log with its type, task ID (or schedule ID, §15.21), device and result — never the message text. `ok: true`
+local audit log with its type, task ID (or schedule ID, §15.21), device and result, and a refusal's `reason` and
+`setting` — never the message text or a setting's value. `ok: true`
 means the Mac accepted the command; what happens next arrives as events.
 
 #### `sendMessage`
@@ -1194,15 +1196,23 @@ that does not know them ignores them.
 - `settings`: the new-task screen's model menu (model, effort) and, where the harness starts in one, its
   permission (Claude Code's `permissionMode`, Codex's `runLocation`), each with its value now and its choices. Choices
   the Mac asks to confirm (Bypass permissions, full access) are left out unless the client requests
-  the extended composer catalog (§15.33). When the Mac has not read the harness's model list for this account yet it reads it
-  first, as opening the menu does (up to about 10 s); until then the menu holds only the value now.
+  the extended composer catalog (§15.33). When the Mac's new-task screen has one of those chosen, this answer's
+  permission value is the harness's default instead, the one such a task starts in without confirmation. When the
+  Mac has not read the harness's model list for this account yet it reads it first, as opening the menu does (up to
+  about 10 s); until then the menu holds only the value now.
 - `worktree`: present for a project in a Git repository, whether the Mac starts its tasks there in a new
   worktree now.
 - `createTask` takes `harness`, `settings` (`{"model": "gpt-6", "reasoningEffort": "high"}`, ids and values from
-  this answer; the Mac applies them in the order its answer lists them, as picking them in its menus would),
+  this answer or the composer catalog's; the Mac applies them in the order its composer lists them, as picking them
+  in its menus would, and takes a setting's value now back as it is, also one its list does not hold yet),
   `worktree` and `images` (§15.14). They apply to
-  this task only; the Mac's new-task composer keeps its own choices. Errors: `notAllowed` (a harness, setting or
-  value the Mac does not offer now).
+  this task only; the Mac's new-task composer keeps its own choices. Without `confirmed: true` (§15.33) a task never
+  starts in a choice the Mac asks to confirm: one the request names is refused, and one only the Mac's new-task
+  screen has chosen gives way to the harness's default, as `newTaskOptions` showed. Errors: `notAllowed`, with
+  `reason`: `harness` (not offered now), `setting` (a setting or value the menus do not offer now; `setting` names it
+  when it is one of theirs), `confirmation` (a choice that asks, without `confirmed`), `account` (§15.33),
+  `worktree` (asked for outside a Git repository), `attachments` (the harness takes no images or no such files), or
+  `signIn` (the harness's login on the Mac needs signing in first).
 
 ### 15.17 Plan limits
 
@@ -2447,6 +2457,8 @@ device's push key, associated data the UTF-8 bytes of `yardlet-push/1`, over the
   given. `--relay ws://127.0.0.1:8787` also opens the fixture's room on a local relay (`relay/`,
   `npx wrangler dev --local --port 8787`, no sign-in); `--relay-public ws://10.0.2.2:8787` is the relay address
   phones are told. `--approve-links` approves a link request (§12.1) three seconds after it arrives.
+  `--signed-out HARNESS` (`claude-code`, `codex`, `opencode`; repeatable) refuses `createTask` on that harness with
+  `reason` `signIn` (§15.16), as a Mac whose login for it is signed out.
 - The fixture's v2 tasks add a plan review, an answerable question, a suggested task, lines with details,
   and taking `createTask`, `setPinned` and `archiveTask`. It does not announce `fullConversation` (§15.24) and
   answers every subscription in §6's shape.

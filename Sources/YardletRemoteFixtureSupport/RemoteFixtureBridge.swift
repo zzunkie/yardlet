@@ -137,9 +137,13 @@ public actor RemoteFixtureBridge: RemoteBridge {
     private var browser = RemoteFixtureTabs()
     private var watchedTabs: Set<RemoteTabWatch> = []
 
+    /// Harnesses (by id) whose login the fixture Mac has signed out: a new task on one is refused (§15.16).
+    private let signedOut: Set<String>
+
     /// `filesFolder` holds the tasks' folders and files; by default a new folder in the temporary folder.
-    public init(speed: Double = 1, filesFolder: URL? = nil) {
+    public init(speed: Double = 1, filesFolder: URL? = nil, signedOut: Set<String> = []) {
         self.speed = max(0.01, speed)
+        self.signedOut = signedOut
         self.filesFolder = filesFolder ?? FileManager.default.temporaryDirectory
             .appending(path: "yardlet-remote-fixture-files-\(UUID().uuidString)", directoryHint: .isDirectory)
         projects = [
@@ -830,15 +834,25 @@ public actor RemoteFixtureBridge: RemoteBridge {
 
     public func createTask(_ start: RemoteTaskStart) async -> Result<String, RemoteError> {
         guard projects.contains(where: { $0.id == start.projectID }) else { return .failure(RemoteError(.notFound)) }
-        guard let harness = start.harness.map(Harness.init(id:)) ?? .claude else { return .failure(RemoteError(.notAllowed)) }
+        guard let harness = start.harness.map(Harness.init(id:)) ?? .claude else {
+            return .failure(RemoteError(.notAllowed, reason: .harness))
+        }
         let offered = Self.settings(for: harness)
         for (id, value) in start.settings {
-            guard offered.first(where: { $0.id == id })?.choices.contains(where: { $0.value == value }) == true else {
-                return .failure(RemoteError(.notAllowed, "\(id) has no choice \(value)"))
+            guard let setting = offered.first(where: { $0.id == id }) else {
+                return .failure(RemoteError(.notAllowed, "No such setting", reason: .setting))
+            }
+            guard setting.choices.contains(where: { $0.value == value }) else {
+                return .failure(RemoteError(.notAllowed, "\(id) has no choice \(value)", reason: .setting, setting: id))
             }
         }
-        guard start.images.isEmpty || harness.acceptsImages else { return .failure(RemoteError(.notAllowed)) }
-        guard start.attachedFiles.isEmpty || harness.acceptsImages else { return .failure(RemoteError(.notAllowed)) }
+        guard start.images.isEmpty || harness.acceptsImages else { return .failure(RemoteError(.notAllowed, reason: .attachments)) }
+        guard start.attachedFiles.isEmpty || harness.acceptsImages else {
+            return .failure(RemoteError(.notAllowed, reason: .attachments))
+        }
+        guard !signedOut.contains(harness.id) else {
+            return .failure(RemoteError(.notAllowed, "\(harness.name) needs signing in on the Mac", reason: .signIn))
+        }
         let title = String((start.text.split(separator: "\n").first.map(String.init) ?? "New task").prefix(60))
         let model = start.settings["model"].flatMap { value in
             offered.first { $0.id == "model" }?.choices.first { $0.value == value }?.name
@@ -851,7 +865,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
 
     public func newTaskOptions(projectID: String?, harness: String?, settings: [String: String] = [:]) async -> Result<RemoteNewTaskOptions, RemoteError> {
         if let projectID, !projects.contains(where: { $0.id == projectID }) { return .failure(RemoteError(.notFound)) }
-        guard let chosen = harness.map(Harness.init(id:)) ?? .claude else { return .failure(RemoteError(.notAllowed)) }
+        guard let chosen = harness.map(Harness.init(id:)) ?? .claude else { return .failure(RemoteError(.notAllowed, reason: .harness)) }
         // As the Mac reads a model list it has not read yet.
         await pause(0.4)
         return .success(RemoteNewTaskOptions(
