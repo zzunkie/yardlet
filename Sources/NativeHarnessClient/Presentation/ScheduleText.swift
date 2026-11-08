@@ -34,41 +34,28 @@ enum ScheduleText {
     static func timeText(_ time: ScheduleTime, calendar: Calendar = .autoupdatingCurrent) -> String {
         let date = calendar.date(bySettingHour: time.hour, minute: time.minute, second: 0,
                                  of: calendar.startOfDay(for: Date())) ?? Date()
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
-        formatter.dateStyle = .none
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
+        return ScheduleDateFormatters.shared.formatter(.time, calendar: calendar).string(from: date)
     }
 
     /// "Today at 9:00 AM", "Tomorrow at 9:00 AM", "Sat 9:00 AM" within the week, else the date.
     static func moment(_ date: Date, relativeTo now: Date = Date(), calendar: Calendar = .autoupdatingCurrent) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
         let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now),
                                            to: calendar.startOfDay(for: date)).day ?? 0
-        if (-1...1).contains(days) {
-            formatter.doesRelativeDateFormatting = true
-            formatter.dateStyle = .medium
-            formatter.timeStyle = .short
+        let style: ScheduleDateFormatters.Style = if (-1...1).contains(days) {
+            .relativeDay
         } else if (2...6).contains(days) {
-            formatter.setLocalizedDateFormatFromTemplate("EEE jmm")
+            .template("EEE jmm")
         } else if calendar.isDate(date, equalTo: now, toGranularity: .year) {
-            formatter.setLocalizedDateFormatFromTemplate("MMMd EEE jmm")
+            .template("MMMd EEE jmm")
         } else {
-            formatter.setLocalizedDateFormatFromTemplate("yMMMd jmm")
+            .template("yMMMd jmm")
         }
-        return formatter.string(from: date)
+        return ScheduleDateFormatters.shared.formatter(style, calendar: calendar).string(from: date)
     }
 
     /// A run's task title: the schedule's name and when it was due.
     static func runTitle(_ name: String, at date: Date, calendar: Calendar = .autoupdatingCurrent) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
-        formatter.setLocalizedDateFormatFromTemplate("MMMd jmm")
+        let formatter = ScheduleDateFormatters.shared.formatter(.template("MMMd jmm"), calendar: calendar)
         return "\(name) · \(formatter.string(from: date))"
     }
 
@@ -180,6 +167,71 @@ enum ScheduleText {
         switch origin.app {
         case .claudeApp: L10n.string("Imported from the Claude app.")
         case .codexApp: L10n.string("Imported from the Codex app.")
+        }
+    }
+}
+
+/// The date formatters schedule text shares. Making one costs far more than formatting with it, and a list
+/// formats each schedule's times again on every read, so one is kept for each style, calendar, time zone and
+/// locale. All of them are dropped when the person's locale or the system time zone changes: an
+/// auto-updating calendar compares equal across either change, and a change such as the 24-hour setting
+/// leaves the locale's identifier as it was.
+final class ScheduleDateFormatters: @unchecked Sendable {
+    enum Style: Hashable {
+        /// "9:00 AM".
+        case time
+        /// "Today at 9:00 AM", "Tomorrow at 9:00 AM": the day word as of when the text is made.
+        case relativeDay
+        /// A localized date format template, such as "MMMd jmm".
+        case template(String)
+    }
+
+    private struct Key: Hashable {
+        let style: Style
+        let calendar: Calendar
+        let timeZone: TimeZone
+        let locale: Locale
+    }
+
+    static let shared = ScheduleDateFormatters()
+
+    private let lock = NSLock()
+    private var formatters: [Key: DateFormatter] = [:]
+    private var observers: [NSObjectProtocol] = []
+
+    private init() {
+        observers = [NSLocale.currentLocaleDidChangeNotification, .NSSystemTimeZoneDidChange].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
+                self?.removeAll()
+            }
+        }
+    }
+
+    private func removeAll() {
+        lock.withLock { formatters.removeAll() }
+    }
+
+    func formatter(_ style: Style, calendar: Calendar) -> DateFormatter {
+        let key = Key(style: style, calendar: calendar, timeZone: calendar.timeZone, locale: .current)
+        return lock.withLock {
+            if let kept = formatters[key] { return kept }
+            let formatter = DateFormatter()
+            formatter.locale = key.locale
+            formatter.calendar = calendar
+            formatter.timeZone = key.timeZone
+            switch style {
+            case .time:
+                formatter.dateStyle = .none
+                formatter.timeStyle = .short
+            case .relativeDay:
+                formatter.doesRelativeDateFormatting = true
+                formatter.dateStyle = .medium
+                formatter.timeStyle = .short
+            case let .template(template):
+                formatter.setLocalizedDateFormatFromTemplate(template)
+            }
+            formatters[key] = formatter
+            return formatter
         }
     }
 }

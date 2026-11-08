@@ -760,6 +760,36 @@ final class ScheduledTaskTests: XCTestCase {
         XCTAssertFalse(QuitConfirmation(active: [running], continuing: []).message.contains(line))
     }
 
+    /// Schedule text keeps its date formatters between reads, and still reads in the Mac's time zone and locale
+    /// once either changes: an auto-updating calendar compares equal across the change, and a locale change such
+    /// as the 24-hour setting can keep the locale's identifier.
+    func testScheduleTimesReadInTheTimeZoneAndLocaleOfNow() throws {
+        let original = NSTimeZone.default
+        defer { NSTimeZone.default = original }
+        func calendar(in zone: String) throws -> Calendar {
+            var calendar = Calendar.current
+            calendar.timeZone = try XCTUnwrap(TimeZone(identifier: zone))
+            return calendar
+        }
+        // Years before `now`, so both zones use the same form.
+        let date = Date(timeIntervalSince1970: 1_600_000_000)
+        let now = Date(timeIntervalSince1970: 1_792_158_000)
+        NSTimeZone.default = try XCTUnwrap(TimeZone(identifier: "Asia/Seoul"))
+        let inSeoul = ScheduleText.moment(date, relativeTo: now, calendar: .autoupdatingCurrent)
+        XCTAssertEqual(inSeoul, ScheduleText.moment(date, relativeTo: now, calendar: try calendar(in: "Asia/Seoul")))
+        NSTimeZone.default = try XCTUnwrap(TimeZone(identifier: "America/New_York"))
+        let inNewYork = ScheduleText.moment(date, relativeTo: now, calendar: .autoupdatingCurrent)
+        XCTAssertNotEqual(inNewYork, inSeoul)
+        XCTAssertEqual(inNewYork, ScheduleText.moment(date, relativeTo: now, calendar: try calendar(in: "America/New_York")))
+
+        let formatters = ScheduleDateFormatters.shared
+        let kept = formatters.formatter(.time, calendar: .autoupdatingCurrent)
+        XCTAssertTrue(kept === formatters.formatter(.time, calendar: .autoupdatingCurrent))
+        NotificationCenter.default.post(name: NSLocale.currentLocaleDidChangeNotification, object: nil)
+        XCTAssertFalse(kept === formatters.formatter(.time, calendar: .autoupdatingCurrent),
+                       "A locale change makes the formatters again")
+    }
+
     func testImportingTheSameScheduleTwiceAddsItOnce() {
         let clock = Clock(date(16, 20))
         let center = ScheduledTaskCenter()
