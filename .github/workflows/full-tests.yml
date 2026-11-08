@@ -30,6 +30,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Launch Services knows the app's own types, such as a dragged task's, only from a registered
+      # bundle that declares them, as an installed Yardlet does; without one a drop cannot read the
+      # task it carries. The runner has no Yardlet, so register a bundle holding only those declarations.
+      - name: Declare the app's types
+        run: |
+          mkdir -p .build/ci/AppTypes.app/Contents
+          python3 -I - .build/ci/AppTypes.app/Contents/Info.plist <<'EOF'
+          import plistlib, sys
+          with open("Packaging/Info.plist", "rb") as source:
+              types = plistlib.load(source)["UTExportedTypeDeclarations"]
+          with open(sys.argv[1], "wb") as target:
+              plistlib.dump({"CFBundleIdentifier": "com.zzunkie.yardlet.ci-types", "CFBundlePackageType": "APPL",
+                             "UTExportedTypeDeclarations": types}, target)
+          EOF
+          /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+            -f "$PWD/.build/ci/AppTypes.app"
       - name: Test
         run: |
           set -o pipefail

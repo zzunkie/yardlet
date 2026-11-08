@@ -339,7 +339,13 @@ final class SidebarDotsRenderingTests: XCTestCase {
         }
         XCTAssertEqual(SidebarNesting.draggedTaskID, notes.id, "a row passed over reads the task dragged")
 
-        // A drop on "Tag the build" moves the task where the row showed.
+        // A drop on "Tag the build" moves the task where the row showed. SwiftUI reads a dropped item only
+        // in a type Launch Services knows as data, from a registered bundle that declares it: an
+        // installed Yardlet, or the bundle the nightly run registers (.github/workflows/full-tests.yml).
+        guard UTType.yardletTaskReference.conforms(to: .data) else {
+            return XCTFail("No registered bundle declares \(UTType.yardletTaskReference.identifier), "
+                           + "so a drop cannot read the task")
+        }
         let host = WindowlessRender.Host(view(.light), size: size, appearance: .light)
         defer { host.close() }
         host.settle()

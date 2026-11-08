@@ -226,7 +226,8 @@ is not installed; `--build-system native` builds without it. `scripts/test-fast.
 except renders, QA fixtures and performance runs, as CI does for each pull request that changes more
 than documents;
 `scripts/test-fast.sh --excluded` runs only those, as CI does every night on `main`, and
-`swift test --build-system native` runs them all.
+`swift test --build-system native` runs them all. A drop test among the excluded ones reads Yardlet's
+task type, which Launch Services knows once a Yardlet app has been opened on the Mac.
 
 For a normal registered macOS application bundle during development:
 
