@@ -40,7 +40,7 @@ final class AppModel {
     let transcripts = TaskStateTable<[TranscriptEntry]>()
     /// The turns of the transcripts the window draws, kept between publications (`transcript(for:)`).
     private let transcriptTurns = TranscriptTurnsCache()
-    private(set) var errorBySessionID: [UUID: String] = [:]
+    var errorBySessionID: [UUID: String] = [:]
     var codexPresentationBySessionID: TaskStateReader<CodexTaskState> { codexPresentations.reader }
     let codexPresentations = TaskStateTable<CodexTaskState>()
     /// What the session rail reads of each task's Codex state (`CodexRailStates`), set only when that
@@ -104,7 +104,7 @@ final class AppModel {
     private(set) var runningShellCommandBySessionID: [UUID: UUID] = [:]
     /// Finished commands whose message waits for the task to be idle, oldest first, by task. Saved
     /// with the task's queued follow-ups, so output not yet sent survives quitting.
-    @ObservationIgnored private var pendingShellDeliveries: [UUID: [ClaudeShellDelivery]] = [:]
+    @ObservationIgnored private(set) var pendingShellDeliveries: [UUID: [ClaudeShellDelivery]] = [:]
     @ObservationIgnored private var shellProcesses: [UUID: any ShellCommandRunning] = [:]
     @ObservationIgnored private var shellDeliveryTasks: [UUID: Task<Void, Never>] = [:]
     /// Each Claude task's bash-mode shell, kept between its commands.
@@ -135,40 +135,10 @@ final class AppModel {
     private(set) var providerRetryBySessionID: [UUID: HarnessProviderRetry] = [:]
     /// A plan limit the provider warned a task is close to, for the line above its composer.
     private(set) var rateLimitWarningBySessionID: [UUID: HarnessRateLimit] = [:]
-    /// Limit cards whose task sends the continue message once the limit resets. Kept in memory
-    /// only; a restart forgets them.
-    private(set) var usageLimitAutoContinue: [UUID: UsageLimitAutoContinue] = [:]
-    /// Why continuing a limited task under another account was refused, for its limit card.
-    private(set) var usageLimitSwitchErrorBySessionID: [UUID: String] = [:]
-    @ObservationIgnored private var usageLimitAutoContinueTasks: [UUID: Task<Void, Never>] = [:]
-    /// Follows `UsageLimitAutoContinuePreference` once the setting has armed a continue.
-    @ObservationIgnored private var usageLimitAutoContinuePreferenceObserver: (any NSObjectProtocol)?
-    /// The armed continue the person's message took over, until the turn it started ends: a card that
-    /// turn ends on is armed in its place.
-    @ObservationIgnored private var usageLimitAutoContinueHandedOver: [UUID: UsageLimitAutoContinue] = [:]
-    /// How long after a limit's reset the continue message waits, so the provider's own clock
-    /// has passed it too.
-    @ObservationIgnored var usageLimitResumeGrace: Duration = .seconds(10)
-    /// Tasks Yardlet continued after the last restart, for the line above their composer. Kept in
-    /// memory only and cleared once the person sends to or stops the task.
-    private(set) var restartResumeNoticeSessionIDs = Set<UUID>()
-    /// Cut-off turns that continue once their task is opened, with the last moment they may.
-    @ObservationIgnored private var restartResumesWhenOpened: [UUID: Date] = [:]
-    /// Cut-off turns continuing from launch, a few starting at a time (`RestartResumeLine`).
-    @ObservationIgnored private(set) var restartResumeLine = RestartResumeLine()
-    /// Starting continuations Yardlet has asked for, until their provider shows work.
-    @ObservationIgnored private var restartResumesAwaitingWork = Set<UUID>()
-    /// The wait after which a starting continuation gives up its place in line.
-    @ObservationIgnored private var restartResumeStartWaits: [UUID: Task<Void, Never>] = [:]
-    @ObservationIgnored private var continuesRestartResumeLine = false
-    /// The record's entry for each cut-off turn not continued yet, in line or until opened, for a
-    /// quit before then to carry over.
-    @ObservationIgnored private var restartResumesToContinue: [UUID: RestartResumeRecord.Entry] = [:]
-    /// Idle Claude Code tasks in line whose CLI starts again, with nothing sent, for the session jobs
-    /// it brings back (`ClaudeSessionJobs`).
-    @ObservationIgnored private var sessionJobRelaunches = Set<UUID>()
-    /// The launch's read of saved conversations for those jobs, which quitting cancels.
-    @ObservationIgnored private var sessionJobScan: Task<[UUID], Never>?
+    /// What continues a task's work that a lost connection, a restart, a usage limit, a sign-in or
+    /// a context limit cut off or put off, and the account a working task moves to after its turn,
+    /// with everything it keeps for each task (`TaskContinuationCoordinator`).
+    let continuations = TaskContinuationCoordinator()
     /// The session jobs each Claude Code task's CLI holds (`ClaudeSessionJobs.held`), read from its saved
     /// conversation when it starts and after a turn that made, ended or listed one (`sessionJobs(of:)`).
     private(set) var sessionJobsBySessionID: [UUID: [ClaudeSessionJob]] = [:]
@@ -187,21 +157,6 @@ final class AppModel {
     /// The tasks the phone shows now (`AppModelRemoteBridge`), which the memory saver counts as on screen.
     @ObservationIgnored var remoteWatchedTaskIDs = Set<UUID>()
     @ObservationIgnored private var sessionJobReads: [UUID: Task<Void, Never>] = [:]
-    /// The cards of the questions a restart cut off, asked again until the person answers in their
-    /// next message, sends anything else, or a turn starts (`RestartResumePolicy.Plan.questions`).
-    /// A quit before then carries them over with their entry in `restartResumesToContinue`.
-    private(set) var restartQuestions: [UUID: ConversationRequest] = [:]
-    /// Whether this Mac's network path is up, as the system last reported it (`NetworkWatch`); up
-    /// until it says otherwise.
-    private(set) var isNetworkAvailable = true
-    /// Tasks whose turn a lost connection cut off, until their continuation has run or the person
-    /// takes over (`ConnectionResumePolicy`).
-    private(set) var connectionResumes: [UUID: ConnectionResume] = [:]
-    @ObservationIgnored private var connectionResumeWaits: [UUID: Task<Void, Never>] = [:]
-    /// Waits out a connection resume's delay; tests hand it a clock of their own.
-    @ObservationIgnored var connectionResumeSleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
-    /// Waits out `RestartResumePolicy.startWindow`; tests hand it a clock of their own.
-    @ObservationIgnored var restartResumeSleep: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     /// Waits before moving an account's tasks looks again at the ones still working (`moveTasks`); tests
     /// hand it a clock of their own.
     @ObservationIgnored var accountMoveSleep: @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(1)) }
@@ -209,12 +164,6 @@ final class AppModel {
     @ObservationIgnored private var movingAccounts = Set<String>()
     /// Each account move's wait for its tasks still working; one of them ending its turn cuts it short.
     @ObservationIgnored private var accountMoveWaits: [String: Task<Void, Never>] = [:]
-    /// Tasks whose running turn Yardlet continued after a restart while nobody had them open, with
-    /// how many times in a row it has. A quit writes one down again until
-    /// `RestartResumePolicy.unseenContinuationLimit`.
-    @ObservationIgnored private var unseenRestartResumes: [UUID: Int] = [:]
-    /// Tasks whose turn the person stopped, until their next turn starts.
-    @ObservationIgnored var stoppedByPerson = Set<UUID>()
     /// Instruction files the provider itself reported for a task. Harnesses that report nothing
     /// stay absent here and fall back to a plain existence check.
     private(set) var instructionSourcesBySessionID: [UUID: [String]] = [:]
@@ -229,23 +178,9 @@ final class AppModel {
     private(set) var sessionMutations = Set<UUID>()
     private var reviewedFileRewinds: [UUID: FileRewindPreview] = [:]
     var pendingCodexReview: CodexReviewRequest?
-    private(set) var switchingAccounts = Set<UUID>()
-    /// Tasks whose running CLI still has the context limit it started with, which is kept here until
-    /// the chosen one reaches it (`chooseContextLimit`).
-    private(set) var contextLimitRestarts: [UUID: String] = [:]
-    /// The account each task moves to when its turn ends, chosen while it worked (`chooseAccount`).
-    private(set) var accountSwitchesAfterTurn: [UUID: ProviderConnection] = [:]
-    /// Tasks moving to the account chosen during their turn now that it ended, and the wait of each
-    /// for what else keeps it busy; the end of another turn cuts the wait short.
-    @ObservationIgnored private var switchingAfterTurn = Set<UUID>()
-    @ObservationIgnored private var accountSwitchWaits: [UUID: Task<Void, Never>] = [:]
+    var switchingAccounts = Set<UUID>()
     /// How long a new task waits for the first reading of its login; tests give their own.
     @ObservationIgnored var firstReadingWait: Duration = .seconds(3)
-    /// The moves in `accountSwitchesAfterTurn` Yardlet made itself, to an account with room
-    /// (AppModel+AccountMoves.swift), and the state each was made for.
-    @ObservationIgnored var automaticAccountMoves: [UUID: AutomaticAccountMove] = [:]
-    /// Tasks whose automatic move the person cancelled: they stay until they work again.
-    @ObservationIgnored var declinedAccountMoves = Set<UUID>()
     /// The next look for tasks to move, at the moment one could (`lookForAccountMoves`).
     @ObservationIgnored var accountMoveLook: (at: Date, task: Task<Void, Never>)?
     @ObservationIgnored var isLookingForAccountMoves = false
@@ -437,8 +372,8 @@ final class AppModel {
     private let restoresIndexOnLaunch: Bool
     @ObservationIgnored private let legacyFolderPreferences: LegacyProjectFolderPreferences
     private var notifiedBackgroundStates = Set<String>()
-    private var adaptersBySessionID: [UUID: any HarnessAdapter] = [:]
-    private var handlesBySessionID: [UUID: HarnessSessionHandle] = [:]
+    private(set) var adaptersBySessionID: [UUID: any HarnessAdapter] = [:]
+    private(set) var handlesBySessionID: [UUID: HarnessSessionHandle] = [:]
     private var eventTasksBySessionID: [UUID: Task<Void, Never>] = [:]
     /// Issues the Yardlet MCP server (agent browser tools) for a task's next start. The platform
     /// layer sets it; nil, as in tests and fixtures, starts every session without it.
@@ -601,6 +536,7 @@ final class AppModel {
         self.initialCodexHistoryQuery = initialCodexHistoryQuery
         self.initialSettingsSection = initialSettingsSection
         self.bootstrapError = bootstrapError
+        continuations.model = self
         transcripts.didSet = { [weak self] id in
             self?.transcriptTurns.transcriptChanged(id)
             self?.refreshAttentionDetail(for: id)
@@ -652,12 +588,12 @@ final class AppModel {
         splits.onFocusedSessionChange = { [weak store] id in store?.selectedSessionID = id }
         store.onSelectionChange = { [weak splits, weak self] id in
             splits?.focusSession(id)
-            self?.taskOpened(id)
+            self?.continuations.taskOpened(id)
             self?.noteMemorySaverScreen()
         }
         taskWorkspaces.onSideChatClose = { [weak self] id in self?.endSideChat(of: id) }
         self.connections.onSignedIn = { [weak self] harness, connection, isFirstReading in
-            Task { await self?.continueTasks(afterSignInOf: harness, connection: connection, isFirstReading: isFirstReading) }
+            Task { await self?.continuations.continueTasks(afterSignInOf: harness, connection: connection, isFirstReading: isFirstReading) }
         }
         resourceMonitor.request = { [weak self] in self?.taskResourceRequest() ?? TaskResourceRequest() }
         resourceMonitor.describe = { [weak self] in self?.taskResourceDescription($0) }
@@ -1193,10 +1129,10 @@ final class AppModel {
             return
         }
         // Anything sent to the task takes over from a pending automatic continue.
-        handOverUsageLimitAutoContinue(for: session.id)
-        personActed(on: session.id)
-        if usageLimitSwitchErrorBySessionID[session.id] != nil {
-            usageLimitSwitchErrorBySessionID.removeValue(forKey: session.id)
+        continuations.handOverUsageLimitAutoContinue(for: session.id)
+        continuations.personActed(on: session.id)
+        if continuations.usageLimitSwitchErrorBySessionID[session.id] != nil {
+            continuations.usageLimitSwitchErrorBySessionID.removeValue(forKey: session.id)
         }
         var input = input
         input.text = input.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1259,7 +1195,7 @@ final class AppModel {
         }
         // A task whose turn ended but that still waits to move to another account (its background
         // work runs on) sends this after the move, on the new account.
-        if accountSwitchesAfterTurn[session.id] != nil {
+        if continuations.accountSwitchesAfterTurn[session.id] != nil {
             followUps.append(QueuedFollowUp(draft: CodexComposerDraft(input)), to: session.id)
             return
         }
@@ -1332,7 +1268,7 @@ final class AppModel {
     var followUpMode: FollowUpMode { FollowUpMode.current(in: preferences) }
 
     func submitFollowUp(_ input: HarnessUserInput, action: CodexComposerAction, to source: SessionRecord) async {
-        personActed(on: source.id)
+        continuations.personActed(on: source.id)
         switch FollowUpPolicy(harness: source.harness) {
         case .codex?:
             var input = input
@@ -1362,7 +1298,7 @@ final class AppModel {
         action: CodexComposerAction,
         to session: SessionRecord
     ) async {
-        personActed(on: session.id)
+        continuations.personActed(on: session.id)
         if session.harness == .codex, CodexComposerCommands.isBuiltin(draft.text) {
             await submitCodexCommand(draft, action: action, to: session)
             return
@@ -1508,11 +1444,11 @@ final class AppModel {
             composerDrafts.tasks.draft(for: session.id).notice = L10n.string("Edited messages cannot be queued or steered.")
             return
         }
-        handOverUsageLimitAutoContinue(for: session.id)
+        continuations.handOverUsageLimitAutoContinue(for: session.id)
         let target = await runningFollowUpTarget(for: session)
         let mode: FollowUpMode = switch action {
         // While the task waits to move to another account, what is sent goes after the move.
-        case .automatic: accountSwitchesAfterTurn[session.id] == nil ? FollowUpMode.current(in: preferences) : .queue
+        case .automatic: continuations.accountSwitchesAfterTurn[session.id] == nil ? FollowUpMode.current(in: preferences) : .queue
         case .queue: .queue
         case .steer: .steer
         }
@@ -1692,7 +1628,7 @@ final class AppModel {
     }
 
     /// Whether the task's own status says a turn is running.
-    private func isRunning(_ sessionID: UUID) -> Bool {
+    func isRunning(_ sessionID: UUID) -> Bool {
         let status = store.sessions.first(where: { $0.id == sessionID })?.status
         return status == .running || status == .waitingForApproval
     }
@@ -1771,7 +1707,7 @@ final class AppModel {
         }
     }
 
-    private func scheduleFollowUpDrain(for sessionID: UUID) {
+    func scheduleFollowUpDrain(for sessionID: UUID) {
         guard followUpDrainTasks[sessionID] == nil, !followUps.queue(for: sessionID).isEmpty else { return }
         followUpDrainTasks[sessionID] = Task { [weak self] in
             defer { self?.followUpDrainTasks[sessionID] = nil }
@@ -1783,7 +1719,7 @@ final class AppModel {
     /// (Claude Code), it starts that turn itself, so the queue waits for it.
     private func drainFollowUps(for sessionID: UUID) async {
         guard let session = store.sessions.first(where: { $0.id == sessionID }), !followUps.isPaused(sessionID),
-              accountSwitchesAfterTurn[sessionID] == nil, usageLimitHold(of: sessionID) == nil,
+              continuations.accountSwitchesAfterTurn[sessionID] == nil, continuations.usageLimitHold(of: sessionID) == nil,
               let delivery = followUpDelivery(for: session),
               case let queue = followUps.queue(for: sessionID),
               !queue.contains(where: { $0.state == .sent || followUps.isClaimed($0.id) }),
@@ -1981,17 +1917,8 @@ final class AppModel {
         var detail = codexPresentations[id].map { TaskAttentionDetail.reading($0).merged(over: transcript) } ?? transcript
         // A session tool's own approval, or one its subagent waits on, is an approval the task waits on.
         if sessionToolWaits ?? sessionToolWaitsForPerson(in: id) { detail.pendingRequest = .approval }
-        if restartQuestions[id] != nil {
-            if restartQuestion(in: id) != nil {
-                detail.idleRequest = .input
-            } else {
-                // The provider's record went on past the question (another app continued the
-                // conversation): it no longer waits, here or after a later quit.
-                restartQuestions.removeValue(forKey: id)
-                restartResumesToContinue.removeValue(forKey: id)
-            }
-        }
-        if connectionResumes[id]?.isWaiting == true { detail.isReconnecting = true }
+        if continuations.asksRestartQuestion(in: id) { detail.idleRequest = .input }
+        if continuations.connectionResumes[id]?.isWaiting == true { detail.isReconnecting = true }
         if let wait = browserWaits[id] { detail.browserWait = wait.wait }
         if detail == .none {
             if taskAttentionDetails[id] != nil { taskAttentionDetails.removeValue(forKey: id) }
@@ -2035,8 +1962,8 @@ final class AppModel {
             return
         }
         // Anything sent to the task takes over from a pending automatic continue.
-        cancelUsageLimitAutoContinue(for: session.id)
-        personActed(on: session.id)
+        continuations.cancelUsageLimitAutoContinue(for: session.id)
+        continuations.personActed(on: session.id)
         var entryID = UUID()
         mutateTranscript(for: session.id, publishImmediately: true) { builder in
             entryID = builder.appendUser(ClaudeBashMessage.inputText(command: command))
@@ -2087,7 +2014,7 @@ final class AppModel {
         followUps.saveShellDeliveries(pendingShellDeliveries[sessionID] ?? [], for: sessionID)
     }
 
-    private func scheduleShellDelivery(for sessionID: UUID) {
+    func scheduleShellDelivery(for sessionID: UUID) {
         guard shellDeliveryTasks[sessionID] == nil, pendingShellDeliveries[sessionID]?.isEmpty == false else { return }
         shellDeliveryTasks[sessionID] = Task { [weak self] in
             defer { self?.shellDeliveryTasks[sessionID] = nil }
@@ -2102,7 +2029,7 @@ final class AppModel {
         guard let session = store.sessions.first(where: { $0.id == sessionID }), session.harness == .claudeCode,
               session.status != .running, session.status != .waitingForApproval,
               !sessionMutations.contains(sessionID), !switchingAccounts.contains(sessionID),
-              accountSwitchesAfterTurn[sessionID] == nil,
+              continuations.accountSwitchesAfterTurn[sessionID] == nil,
               !followUps.queue(for: sessionID).contains(where: { $0.state != .failed }),
               let delivery = pendingShellDeliveries[sessionID]?.first else { return }
         pendingShellDeliveries[sessionID]?.removeFirst()
@@ -2484,10 +2411,10 @@ final class AppModel {
         }
     }
 
-    private func markSubmissionStarted(for sessionID: UUID) async {
+    func markSubmissionStarted(for sessionID: UUID) async {
         guard store.sessions.contains(where: { $0.id == sessionID }) else { return }
-        stoppedByPerson.remove(sessionID)
-        unseenRestartResumes.removeValue(forKey: sessionID)
+        continuations.stoppedByPerson.remove(sessionID)
+        continuations.unseenRestartResumes.removeValue(forKey: sessionID)
         submissionStartedAt[sessionID] = Date()
         errorBySessionID.removeValue(forKey: sessionID)
         composerDrafts.tasks.existingDraft(for: sessionID)?.nextMessageSuggestion = nil
@@ -2504,11 +2431,11 @@ final class AppModel {
         guard let current = store.sessions.first(where: { $0.id == session.id }),
               let adapter = adaptersBySessionID[session.id],
               let handle = handlesBySessionID[session.id] else { return }
-        personActed(on: session.id)
+        continuations.personActed(on: session.id)
         // As in the Codex app, stopping a turn also holds what is queued behind it until Resume.
         // The pause is in place before the interrupt so the turn's end cannot send the next one.
         let isRunning = current.status == .running || current.status == .waitingForApproval
-        if isRunning { stoppedByPerson.insert(session.id) }
+        if isRunning { continuations.stoppedByPerson.insert(session.id) }
         let pausesQueue = isRunning && followUps.pause(session.id)
         // Claude Code keeps what it holds through an interrupt and runs it next, so those messages
         // come back first and wait with the rest.
@@ -2572,7 +2499,7 @@ final class AppModel {
         // A session tool's own approval, or a request its subagent waits on, is answered there.
         if await answerSessionToolRequest(permissionRequestID, action: action, answer: answer, decision: decision,
                                           in: session.id) { return }
-        if await answerRestartQuestion(permissionRequestID, answer: answer, in: session) { return }
+        if await continuations.answerRestartQuestion(permissionRequestID, answer: answer, in: session) { return }
         guard store.sessions.contains(where: { $0.id == session.id }),
               let adapter = adaptersBySessionID[session.id],
               let handle = handlesBySessionID[session.id] else { return }
@@ -2623,7 +2550,7 @@ final class AppModel {
     ) async {
         // A Codex subagent's request is answered in its own thread.
         if await answerSessionToolCodexRequest(serverRequestID, response: response, in: session.id) { return }
-        if await answerRestartQuestion(serverRequestID, codexResponse: response, in: session) { return }
+        if await continuations.answerRestartQuestion(serverRequestID, codexResponse: response, in: session) { return }
         guard session.harness == .codex,
               store.sessions.contains(where: { $0.id == session.id }) else { return }
         guard let adapter = adaptersBySessionID[session.id],
@@ -3038,7 +2965,9 @@ final class AppModel {
         sessionTitleRefreshes.removeValue(forKey: session.id)
         // Before anything below waits: a timer that fired meanwhile would send to the task going away,
         // or to it again once it is unarchived.
-        forgetContinuations(of: session.id)
+        continuations.removeSession(session.id)
+        sessionJobReads.removeValue(forKey: session.id)?.cancel()
+        sessionJobsBySessionID.removeValue(forKey: session.id)
         clearBackgroundNotificationDeduplication(for: session.id)
         agentTools?.releaseAgentTools(for: session.id)
         if let adapter = adaptersBySessionID.removeValue(forKey: session.id),
@@ -3559,7 +3488,7 @@ final class AppModel {
     /// surface has been built and its composer asks (`refreshConversationStatus`, which then waits for
     /// this read or finds it done), so the conversation arrives that much sooner. Reading resumes
     /// nothing and starts no turn.
-    private func readSavedConversation(of id: UUID) {
+    func readSavedConversation(of id: UUID) {
         guard !isVisualFixture, let session = store.sessions.first(where: { $0.id == id }),
               Self.readsSavedConversation(of: session.harness),
               handlesBySessionID[id] == nil, session.providerSessionID != nil else { return }
@@ -5129,7 +5058,7 @@ final class AppModel {
 
     func setProviderOption(_ id: String, value: String, for session: SessionRecord) async {
         if session.harness == .claudeCode, id == ClaudeLaunchOption.contextLimit {
-            await chooseContextLimit(value, for: session)
+            await continuations.chooseContextLimit(value, for: session)
             return
         }
         if session.harness == .claudeCode, !isAttached(session.id),
@@ -5188,7 +5117,7 @@ final class AppModel {
     func composerProviderCapabilities(for session: SessionRecord) -> ProviderCapabilityState? {
         var state = composerCapabilities(for: session)
         if session.harness == .claudeCode, !store.isTemporary(session.id) { state?.offersContextLimit = true }
-        if contextLimitRestarts[session.id] != nil { state?.contextLimitAppliesLater = true }
+        if continuations.contextLimitRestarts[session.id] != nil { state?.contextLimitAppliesLater = true }
         return state
     }
 
@@ -5370,18 +5299,9 @@ final class AppModel {
         // Before their runtimes close: the subagents the quit cuts off, kept for their callers.
         interruptAgentRunsForQuit()
         await endSideChatsForQuit()
-        // The quit has written down what was still in line; nothing more begins.
-        restartResumeLine = RestartResumeLine()
-        sessionJobScan?.cancel()
-        sessionJobRelaunches.removeAll()
-        restartResumeStartWaits.values.forEach { $0.cancel() }
-        restartResumeStartWaits.removeAll()
-        // The timers that would continue a task stop with the quit. An account move's wait is left:
-        // cancelling it means "look again now".
-        usageLimitAutoContinueTasks.values.forEach { $0.cancel() }
-        usageLimitAutoContinueTasks.removeAll()
-        connectionResumeWaits.values.forEach { $0.cancel() }
-        connectionResumeWaits.removeAll()
+        // The quit has written down what was still in line; nothing more begins, and the timers
+        // that would continue a task stop.
+        continuations.shutdown()
         sessionJobReads.values.forEach { $0.cancel() }
         sessionJobReads.removeAll()
         routingEvaluationLoop?.cancel()
@@ -5451,109 +5371,6 @@ final class AppModel {
         await registry.invalidateAll()
     }
 
-    /// Choose account for a task. An idle task moves now. One in a turn or waiting for an answer keeps
-    /// the choice and moves once that is over, as an account's tasks move when it leaves the list
-    /// (`settlesForAccountMove`); what is sent meanwhile goes after the move. Choosing its own account
-    /// again forgets the choice.
-    func chooseAccount(_ connection: ProviderConnection, for session: SessionRecord) async {
-        guard let current = store.sessions.first(where: { $0.id == session.id }) else { return }
-        // The person's choice takes the place of one Yardlet made.
-        automaticAccountMoves.removeValue(forKey: current.id)
-        guard Self.isWorking(current) else {
-            cancelAccountSwitchAfterTurn(for: current.id)
-            await switchAccount(to: connection, for: current)
-            return
-        }
-        guard connection != current.connection else {
-            cancelAccountSwitchAfterTurn(for: current.id)
-            return
-        }
-        guard TaskAccountSwitch.allows(connection, for: current) else { return }
-        accountSwitchesAfterTurn[current.id] = connection
-    }
-
-    /// Moves a task Yardlet chose to move itself, as a choice made in its turn moves: now if nothing
-    /// keeps it busy, else once that is over, with the line above the composer and its Cancel.
-    func moveAutomatically(_ id: UUID, to connection: ProviderConnection, as move: AutomaticAccountMove) {
-        guard accountSwitchesAfterTurn[id] == nil, !switchingAccounts.contains(id) else { return }
-        accountSwitchesAfterTurn[id] = connection
-        automaticAccountMoves[id] = move
-        switchAccountAfterTurn(id)
-    }
-
-    /// Keeps a working task on its account after all. An automatic move the person cancels is not
-    /// made again until the task works again.
-    func cancelAccountSwitchAfterTurn(for sessionID: UUID, declined: Bool = true) {
-        guard accountSwitchesAfterTurn.removeValue(forKey: sessionID) != nil else { return }
-        if automaticAccountMoves.removeValue(forKey: sessionID) != nil, declined {
-            declinedAccountMoves.insert(sessionID)
-        }
-        accountSwitchWaits[sessionID]?.cancel()
-        // What was sent for the new account goes on this one.
-        if !isRunning(sessionID) { scheduleFollowUpDrain(for: sessionID) }
-        scheduleShellDelivery(for: sessionID)
-    }
-
-    /// A task whose account was chosen during its turn moves once the turn ends, before the messages
-    /// sent meanwhile go: they start its next turn on the new account. One still busy otherwise (a
-    /// message the provider holds, a background command) is looked at again, as an account move
-    /// looks again at its tasks; a turn that starts meanwhile looks again when it ends.
-    func switchAccountAfterTurn(_ id: UUID) {
-        guard accountSwitchesAfterTurn[id] != nil else { return }
-        guard switchingAfterTurn.insert(id).inserted else {
-            accountSwitchWaits[id]?.cancel()
-            return
-        }
-        Task {
-            defer { switchingAfterTurn.remove(id) }
-            while let target = accountSwitchesAfterTurn[id] {
-                guard let task = store.sessions.first(where: { $0.id == id }) else {
-                    accountSwitchesAfterTurn.removeValue(forKey: id)
-                    return
-                }
-                guard !Self.isWorking(task) else { return }
-                // One Yardlet made goes only while it still saves what it was made for.
-                if automaticAccountMoves[id].map({ !automaticAccountMoveHolds($0, for: task) }) ?? false {
-                    cancelAccountSwitchAfterTurn(for: id, declined: false)
-                    return
-                }
-                if settlesForAccountMove(task, heldMessagesGoAfter: true) {
-                    accountSwitchesAfterTurn.removeValue(forKey: id)
-                    await completeAccountSwitch(task, to: target, automatic: automaticAccountMoves.removeValue(forKey: id))
-                    return
-                }
-                let wait = Task { [accountMoveSleep] in _ = try? await accountMoveSleep() }
-                accountSwitchWaits[id] = wait
-                await wait.value
-                accountSwitchWaits[id] = nil
-            }
-        }
-    }
-
-    /// Moves a task whose turn ended to the account chosen during it, then sends what waited for the
-    /// move. A refusal shows as the immediate switch's does, and holds what the person queued for
-    /// the new account until they resume it; what was queued while Yardlet moved the task on its own
-    /// goes on its account instead.
-    private func completeAccountSwitch(_ task: SessionRecord, to target: ProviderConnection,
-                                       automatic: AutomaticAccountMove? = nil) async {
-        let target = connections.connections.first { $0.id == target.id } ?? target
-        if TaskAccountSwitch.allows(target, for: task) {
-            await switchAccount(to: target, for: task)
-        } else {
-            errorBySessionID[task.id] = L10n.format(
-                "%@ no longer shares this task's conversation history, so the task stays on its account.",
-                accountChoice(harness: task.harness, connection: target).title)
-        }
-        let moved = store.sessions.first(where: { $0.id == task.id })?.connection == target
-        if let automatic, moved {
-            await finishAutomaticAccountMove(automatic, of: task.id)
-        } else if !moved, automatic == nil {
-            followUps.pause(task.id)
-        }
-        scheduleFollowUpDrain(for: task.id)
-        scheduleShellDelivery(for: task.id)
-    }
-
     func switchAccount(to connection: ProviderConnection, for session: SessionRecord) async {
         guard let current = store.sessions.first(where: { $0.id == session.id }),
               !switchingAccounts.contains(session.id),
@@ -5572,7 +5389,7 @@ final class AppModel {
             try await rebind(current, to: connection)
             // The task goes on under the new account, not at the old one's reset; a switch refused
             // above leaves it waiting there, with what waits for that continue.
-            cancelUsageLimitAutoContinue(for: current.id)
+            continuations.cancelUsageLimitAutoContinue(for: current.id)
             // The previous account's warning and limits say nothing about the next one.
             rateLimitWarningBySessionID.removeValue(forKey: current.id)
             codexStatusBySessionID.removeValue(forKey: current.id)
@@ -5603,56 +5420,11 @@ final class AppModel {
         try await store.updateConnection(id: current.id, connection: connection)
     }
 
-    private func closeIdleRuntime(of id: UUID) async {
+    func closeIdleRuntime(of id: UUID) async {
         eventTasksBySessionID.removeValue(forKey: id)?.cancel()
         flushTranscriptDeltas(for: id)
         if let adapter = adaptersBySessionID.removeValue(forKey: id),
            let handle = handlesBySessionID.removeValue(forKey: id) { await adapter.close(handle) }
-    }
-
-    // MARK: A task's context limit
-
-    /// Keeps a Claude task's context limit with the task. Claude Code reads the limit when it starts and
-    /// nothing changes it in a running process, so a task with a runtime gets it back on the same
-    /// conversation, as Choose account does: now if nothing keeps the task busy, else when its turn
-    /// ends (`restartForContextLimit`). No turn starts, and a task with no runtime takes the limit when
-    /// it next starts.
-    private func chooseContextLimit(_ value: String, for session: SessionRecord) async {
-        guard let current = store.sessions.first(where: { $0.id == session.id }), current.harness == .claudeCode,
-              !store.isTemporary(current.id) else { return }
-        let isDefault = value == ClaudeLaunchOption.defaultContextLimit
-        guard isDefault || ClaudeLaunchOption.contextLimitTokens(value) != nil else { return }
-        let saved = current.providerOptions[ClaudeLaunchOption.contextLimit] ?? ClaudeLaunchOption.defaultContextLimit
-        guard value != saved else { return }
-        do {
-            if isDefault {
-                try await store.removeProviderOption(id: current.id, optionID: ClaudeLaunchOption.contextLimit)
-            } else {
-                try await store.updateProviderOption(id: current.id, optionID: ClaudeLaunchOption.contextLimit, value: value)
-            }
-        } catch {
-            updateProviderActionError(error, for: current.id)
-            return
-        }
-        guard handlesBySessionID[current.id] != nil else { return }
-        // Choosing again what the runtime started with leaves nothing to do.
-        let running = contextLimitRestarts[current.id] ?? saved
-        contextLimitRestarts[current.id] = value == running ? nil : running
-        await restartForContextLimit(current.id)
-    }
-
-    /// Gives a task with a waiting context limit its runtime back, once the task settles as an account
-    /// move waits for it to. One that stays busy, with a background command say, takes the limit
-    /// the next time it starts.
-    func restartForContextLimit(_ id: UUID) async {
-        guard contextLimitRestarts[id] != nil, let task = store.sessions.first(where: { $0.id == id }),
-              settlesForAccountMove(task), switchingAccounts.insert(id).inserted else { return }
-        defer { switchingAccounts.remove(id) }
-        contextLimitRestarts[id] = nil
-        await closeIdleRuntime(of: id)
-        guard let current = store.sessions.first(where: { $0.id == id }) else { return }
-        do { try await attach(current, resumesExistingSession: current.providerSessionID != nil) }
-        catch { errorBySessionID[id] = error.localizedDescription }
     }
 
     /// Moves every task on a saved Claude account, archived ones included, to another of the same
@@ -5780,9 +5552,7 @@ final class AppModel {
             && !sessionMutations.contains(id) && !switchingAccounts.contains(id) && !forkingSessions.contains(id)
             && !restartingSessions.contains(id) && !openingSideChats.contains(id) && !unarchivingSessionIDs.contains(id)
             && !recreatingTaskWorktrees.contains(id)
-            && restartResumesToContinue[id] == nil && restartResumesWhenOpened[id] == nil
-            && !restartResumeLine.waiting.contains(id) && !restartResumeLine.starting.contains(id)
-            && connectionResumes[id] == nil
+            && !continuations.continuesCutOffTurn(id)
     }
 
     /// Moves one settled task to another folder of its account. It keeps a runtime only if it had one,
@@ -5791,11 +5561,11 @@ final class AppModel {
         guard switchingAccounts.insert(current.id).inserted else { throw ProviderConnectionError.invalidBinding }
         defer { switchingAccounts.remove(current.id) }
         let hadRuntime = handlesBySessionID[current.id] != nil
-        let armed = usageLimitAutoContinue[current.id]
+        let armed = continuations.usageLimitAutoContinue[current.id]
         try await rebind(current, to: connection)
         guard let updated = store.sessions.first(where: { $0.id == current.id }) else { return }
         if let armed {
-            setUsageLimitAutoContinue(true, resetsAt: armed.resetsAt, armedBy: armed.armedBy, for: updated)
+            continuations.setUsageLimitAutoContinue(true, resetsAt: armed.resetsAt, armedBy: armed.armedBy, for: updated)
         }
         guard hadRuntime else { return }
         do { try await attach(updated, resumesExistingSession: updated.providerSessionID != nil) }
@@ -5824,337 +5594,6 @@ final class AppModel {
         guard !offered.isEmpty else { return }
         await connections.check(defaultsOf: [], savedOf: [session.harness], connectionIDs: Set(offered.map(\.id)),
             runtimeSelections: runtimeSelections)
-    }
-
-    /// Moves a task a plan limit stopped to another account that shares its history, then asks
-    /// Claude to pick up where it stopped. Nothing is sent unless the switch completed.
-    func continueAfterUsageLimit(using connection: ProviderConnection, for session: SessionRecord) async {
-        // An earlier failure is superseded by this attempt, so one left afterwards is its own.
-        usageLimitSwitchErrorBySessionID.removeValue(forKey: session.id)
-        errorBySessionID.removeValue(forKey: session.id)
-        await switchAccount(to: connection, for: session)
-        guard let updated = store.sessions.first(where: { $0.id == session.id }),
-              updated.connection == connection, handlesBySessionID[updated.id] != nil,
-              errorBySessionID[updated.id] == nil else {
-            // A refusal such as a signed-out account shows on the limit card that asked for it.
-            if let message = errorBySessionID[session.id] { usageLimitSwitchErrorBySessionID[session.id] = message }
-            return
-        }
-        await send(HarnessUserInput(text: UsageLimitContinuation.afterAccountSwitch), to: updated)
-    }
-
-    /// Arms or disarms the automatic continue for the task's limit card, the one naming `resetsAt`.
-    /// Armed, the task sends the continue message once the limit has reset, unless it changed in the
-    /// meantime. A relaunch arms it again (`restoreUsageLimitAutoContinues`). `armedBy` is nil for the
-    /// person's own choice on the card.
-    func setUsageLimitAutoContinue(_ enabled: Bool, resetsAt: Date, armedBy: UsageLimitAutoContinue.ArmedBy? = nil,
-                                   for session: SessionRecord) {
-        cancelUsageLimitAutoContinue(for: session.id)
-        guard enabled, let current = store.sessions.first(where: { $0.id == session.id }),
-              current.harness == .claudeCode else {
-            // What waited for the continue goes now, as it would have without it.
-            scheduleFollowUpDrain(for: session.id)
-            return
-        }
-        arm(UsageLimitAutoContinue(resetsAt: resetsAt, providerSessionID: current.providerSessionID,
-            connection: current.connection, armedBy: armedBy), for: current.id)
-    }
-
-    /// A limit that stopped a Claude Code task's turn arms its card's automatic continue as it comes:
-    /// the continue the person's message took over, when the turn it started hit the limit again, as
-    /// Claude Code keeps its wait when a message typed during it hits the limit again; else, while
-    /// the setting is on (`UsageLimitAutoContinuePreference`), one for a reset within a day. Not when
-    /// one waits for that reset already, and not for a card read back from saved history.
-    private func armAtUsageLimit(_ limit: HarnessRateLimit, for id: UUID) {
-        guard let resetsAt = limit.resetsAt, resetsAt > Date(), usageLimitAutoContinue[id]?.waits(for: resetsAt) != true,
-              let session = store.sessions.first(where: { $0.id == id }) else { return }
-        let settingArms = UsageLimitAutoContinuePreference.isOn(in: preferences)
-        if let previous = usageLimitAutoContinueHandedOver.removeValue(forKey: id),
-           settingArms || previous.armedBy != .setting {
-            setUsageLimitAutoContinue(true, resetsAt: resetsAt, armedBy: previous.armedBy, for: session)
-        } else if settingArms, resetsAt.timeIntervalSinceNow <= UsageLimitAutoContinuePreference.horizon {
-            setUsageLimitAutoContinue(true, resetsAt: resetsAt, armedBy: .setting, for: session)
-        }
-    }
-
-    /// The person's message takes over from an armed continue, which the turn it starts hands to
-    /// the card it ends on if it hits the limit again (`armAtUsageLimit`).
-    private func handOverUsageLimitAutoContinue(for sessionID: UUID) {
-        if let armed = usageLimitAutoContinue[sessionID] { usageLimitAutoContinueHandedOver[sessionID] = armed }
-        cancelUsageLimitAutoContinue(for: sessionID)
-    }
-
-    /// The reset a task waits for with its automatic continue armed, while it is ahead. What another
-    /// task, a schedule or auto-fix sends meanwhile waits in the task's queue and goes after the
-    /// continue, as Claude Code keeps what is queued during its wait for its continue: a turn started
-    /// now would only hit the limit again. The person's own message goes at once.
-    func usageLimitHold(of id: UUID) -> Date? {
-        usageLimitAutoContinue[id].map(\.resetsAt).flatMap { $0 > Date() ? $0 : nil }
-    }
-
-    /// Puts a message in the task's queue for after the continue while the task waits for its reset
-    /// (`usageLimitHold`), and says until when; nil when it does not wait.
-    func holdUntilUsageLimitResets(_ input: HarnessUserInput, for id: UUID) -> Date? {
-        guard let resetsAt = usageLimitHold(of: id) else { return nil }
-        followUps.append(QueuedFollowUp(draft: CodexComposerDraft(input)), to: id)
-        return resetsAt
-    }
-
-    /// Disarms the continues the setting armed once it is turned off, so that nothing it did is left
-    /// but the setting. Any setting's change posts the notification; only this one acts.
-    private func followUsageLimitAutoContinuePreference() {
-        guard usageLimitAutoContinuePreferenceObserver == nil else { return }
-        nonisolated(unsafe) let watched = preferences
-        usageLimitAutoContinuePreferenceObserver = NotificationCenter.default.addObserver(
-            forName: UserDefaults.didChangeNotification, object: preferences, queue: nil
-        ) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, !UsageLimitAutoContinuePreference.isOn(in: watched) else { return }
-                for (id, armed) in self.usageLimitAutoContinue where armed.armedBy == .setting {
-                    self.cancelUsageLimitAutoContinue(for: id)
-                    self.scheduleFollowUpDrain(for: id)
-                }
-            }
-        }
-    }
-
-    private func arm(_ armed: UsageLimitAutoContinue, for sessionID: UUID) {
-        usageLimitAutoContinue[sessionID] = armed
-        saveUsageLimitAutoContinues()
-        if armed.armedBy == .setting { followUsageLimitAutoContinuePreference() }
-        let wait = Duration.seconds(max(0, armed.resetsAt.timeIntervalSinceNow)) + usageLimitResumeGrace
-        usageLimitAutoContinueTasks[sessionID] = Task { [weak self] in
-            // The continuous clock keeps counting while the Mac sleeps, so a reset that passed
-            // during sleep is acted on at wake.
-            try? await Task.sleep(for: wait)
-            guard !Task.isCancelled else { return }
-            await self?.continueAfterUsageLimitReset(sessionID, armed: armed)
-        }
-    }
-
-    private func cancelUsageLimitAutoContinue(for sessionID: UUID) {
-        usageLimitAutoContinueTasks.removeValue(forKey: sessionID)?.cancel()
-        if usageLimitAutoContinue[sessionID] != nil {
-            usageLimitAutoContinue.removeValue(forKey: sessionID)
-            saveUsageLimitAutoContinues()
-        }
-    }
-
-    private func continueAfterUsageLimitReset(_ sessionID: UUID, armed: UsageLimitAutoContinue) async {
-        guard usageLimitAutoContinue[sessionID] == armed else { return }
-        usageLimitAutoContinue.removeValue(forKey: sessionID)
-        usageLimitAutoContinueTasks.removeValue(forKey: sessionID)
-        saveUsageLimitAutoContinues()
-        await sendContinueAfterReset(to: sessionID, leftAs: armed)
-        // What waited for the reset goes after the continue, or now if the task had moved on.
-        scheduleFollowUpDrain(for: sessionID)
-    }
-
-    /// The armed continues, written as they change, so that one armed before a quit, a crash or an
-    /// update still waits for its reset after the relaunch (Claude Code itself drops its wait when it
-    /// relaunches).
-    private func saveUsageLimitAutoContinues() {
-        guard !isVisualFixture else { return }
-        UsageLimitAutoContinue.save(usageLimitAutoContinue, to: preferences)
-    }
-
-    /// Arms again, at launch, the continues armed before the last quit, for the tasks still on the same
-    /// conversation and account; a reset that passed meanwhile continues the task now, within the day
-    /// a cut-off turn continues in (`RestartResumePolicy.maxAge`). Whether the task still stands at
-    /// the card is checked when the message would go. Those a setting armed wait only while it is on.
-    private func restoreUsageLimitAutoContinues(now: Date) {
-        let settingArms = UsageLimitAutoContinuePreference.isOn(in: preferences)
-        let movesArm = AccountMovePreference.isOn(in: preferences)
-        for (id, armed) in UsageLimitAutoContinue.load(from: preferences)
-        where now < armed.resetsAt.addingTimeInterval(RestartResumePolicy.maxAge)
-            && (settingArms || armed.armedBy != .setting) && (movesArm || armed.armedBy != .accountMove) {
-            guard let session = store.sessions.first(where: { $0.id == id }), session.harness == .claudeCode,
-                  session.providerSessionID == armed.providerSessionID, session.connection == armed.connection,
-                  usageLimitAutoContinue[id] == nil else { continue }
-            arm(armed, for: id)
-        }
-        saveUsageLimitAutoContinues()
-    }
-
-    /// A limit card's Resume once its limit has reset, for a task the person comes back to: the
-    /// message the armed continue sends at the reset, sent now under the task's own account. The
-    /// card must still be the one the task continues from (`UsageLimitContinuation.card`) and its
-    /// reset time past.
-    func continueAfterUsageLimitReset(entryID: UUID, for session: SessionRecord) async {
-        flushTranscriptDeltas(for: session.id)
-        guard let current = store.sessions.first(where: { $0.id == session.id }), current.harness == .claudeCode,
-              let card = UsageLimitContinuation.card(in: transcriptBuilders[current.id]?.entries ?? []), card.id == entryID,
-              case let .usageLimit(limit) = card.content, let resetsAt = limit.resetsAt, resetsAt <= Date() else { return }
-        await sendContinueAfterReset(to: current.id, leftAs: UsageLimitAutoContinue(
-            resetsAt: resetsAt, providerSessionID: current.providerSessionID, connection: current.connection))
-    }
-
-    /// The continue message goes only to the task exactly as it was left: the same conversation
-    /// and account, idle, still at the limit card naming that reset, and no message being edited.
-    private func sendContinueAfterReset(to sessionID: UUID, leftAs left: UsageLimitAutoContinue) async {
-        flushTranscriptDeltas(for: sessionID)
-        guard let session = store.sessions.first(where: { $0.id == sessionID }),
-              session.providerSessionID == left.providerSessionID, session.connection == left.connection,
-              session.status != .running, session.status != .waitingForApproval,
-              let card = UsageLimitContinuation.card(in: transcriptBuilders[sessionID]?.entries ?? []),
-              case let .usageLimit(limit) = card.content, left.waits(for: limit.resetsAt),
-              composerDrafts.tasks.draft(for: sessionID).editState == nil,
-              !switchingAccounts.contains(sessionID), !sessionMutations.contains(sessionID) else { return }
-        await send(HarnessUserInput(text: UsageLimitContinuation.afterReset), to: session)
-    }
-
-    // MARK: - Continuing after a restart
-
-    /// Writes down, while Yardlet quits, the tasks whose turn the quit cuts off and that their own
-    /// app would continue (`RestartResumePolicy`), and those the last launch had not continued yet.
-    /// With the setting off, or nothing to continue, any earlier record goes.
-    func recordWorkForRestart(trigger: RestartTrigger, now: Date = Date()) {
-        guard !isVisualFixture else { return }
-        RestartResumeRecord(trigger: trigger, recordedAt: now, entries: restartResumeEntries(now: now)).save(to: preferences)
-    }
-
-    /// The tasks that continue when Yardlet opens again if it quit now, for the quit confirmation
-    /// to say which of the running ones do. Empty with the setting off.
-    func tasksContinuingAfterRestart() -> Set<UUID> {
-        guard !isVisualFixture else { return [] }
-        return Set(restartResumeEntries(now: Date()).map(\.sessionID))
-    }
-
-    private func restartResumeEntries(now: Date) -> [RestartResumeRecord.Entry] {
-        let candidates = store.sessions.map { session in
-            RestartResumePolicy.Candidate(
-                session: session,
-                hasQueuedMessages: !followUps.queue(for: session.id).isEmpty,
-                stoppedByPerson: stoppedByPerson.contains(session.id),
-                unseenContinuations: isSessionVisible(session.id) ? 0 : unseenRestartResumes[session.id] ?? 0,
-                isSubagentThread: codexPresentationBySessionID[session.id]?.thread?.parentThreadID != nil,
-                waitingQuestion: Self.waitingQuestion(in: transcriptBySessionID[session.id] ?? [],
-                                                      codex: codexPresentationBySessionID[session.id])
-            )
-        }
-        let stillToContinue = restartResumesToContinue.values.sorted { $0.sessionID.uuidString < $1.sessionID.uuidString }
-        return RestartResumePolicy.entries(for: candidates, stillToContinue: stillToContinue, now: now,
-            isOn: RestartResumePreference.isOn(in: preferences))
-    }
-
-    /// The question a task's latest turn waits on the person to answer, when it waits on nothing
-    /// else: its one open request asks questions, in the shared transcript (Claude Code's
-    /// `AskUserQuestion`) or among the Codex thread's requests (`item/tool/requestUserInput`). A Codex
-    /// question with a secret answer is left out: its answer would go as a message anyone reads.
-    nonisolated static func waitingQuestion(in transcript: [TranscriptEntry], codex: CodexTaskState?) -> RestartQuestion? {
-        // Every open request by its ID (a Codex approval shows in both records), with its question.
-        var open: [String: RestartQuestion] = [:]
-        var others = Set<String>()
-        for entry in transcript.reversed() {
-            if case .user = entry.content, entry.joinsRunningTurn != true { break }
-            guard case let .permission(request, .pending) = entry.content else { continue }
-            if case .questions = request.structured { open[request.id] = .request(request) } else { others.insert(request.id) }
-        }
-        if let codex {
-            // As the Codex row reads them (`TaskAttentionDetail.reading`): those of the running turn.
-            func isOpen(_ turnID: String?) -> Bool { turnID == nil || turnID == codex.activeTurnID }
-            for approval in codex.approvalsByID.values where approval.resolution == .pending && isOpen(approval.turnID) {
-                others.insert(approval.id)
-            }
-            for request in codex.serverRequestsByID.values where request.resolution == .pending && isOpen(request.turnID) {
-                if request.kind == .toolUserInput,
-                   !CodexRequestResponseProjection.questions(request.params).contains(where: \.isSecret) {
-                    open[request.id] = .codex(CodexPendingServerRequest(request))
-                } else {
-                    others.insert(request.id)
-                }
-            }
-        }
-        guard open.count == 1, others.subtracting(open.keys).isEmpty else { return nil }
-        return open.values.first
-    }
-
-    /// Reads the record the last quit wrote, once, after the task index is back, and continues
-    /// what it allows: the most recent first, a few starting at a time, and those that waited on
-    /// the person once they are opened. The subagents it cut off cannot continue; the callers that
-    /// waited for them are told.
-    /// Then the idle Claude Code tasks whose CLI brings session jobs back start again, after them.
-    func continueWorkInterruptedByRestart(now: Date = Date()) async {
-        guard !isVisualFixture else { return }
-        // These start once the cut-off turns below are planned, and their tasks wait for them.
-        continueAccountTaskMoves()
-        restoreUsageLimitAutoContinues(now: now)
-        // Before any turn continues, so that a caller asking after its subagents finds them.
-        let waitedFor = restoreAgentRunsCutOffByQuit()
-        await continueTurnsCutOffByRestart(now: now)
-        await tellCallersOfAgentRunsCutOffByQuit(waitedFor, now: now)
-        await relaunchForSessionJobs()
-    }
-
-    private func continueTurnsCutOffByRestart(now: Date) async {
-        guard let record = RestartResumeRecord.load(from: preferences) else { return }
-        RestartResumeRecord.remove(from: preferences)
-        let plan = RestartResumePolicy.plan(for: record, sessions: store.sessions, now: now,
-            isOn: RestartResumePreference.isOn(in: preferences))
-        restartResumesToContinue.merge(plan.entries) { _, new in new }
-        restartResumesWhenOpened.merge(plan.whenOpened) { _, new in new }
-        // A question the quit cut off waits for the person on the card it was asked on.
-        for (id, question) in plan.questions {
-            restartQuestions[id] = switch question {
-            case let .request(request):
-                TranscriptConversationProjection.conversationRequest(
-                    request, state: .pending, entry: TranscriptEntry(content: .permission(request, state: .pending)))
-            case let .codex(request):
-                CodexRequestResponseProjection.request(request.state)
-            }
-            refreshAttentionDetail(for: id)
-        }
-        restartResumeLine.append(plan.atLaunch)
-        await continueRestartResumeLine()
-        // A task already open counts as opened.
-        taskOpened(store.selectedSessionID, now: now)
-    }
-
-    /// Tells each caller that waited for a subagent the last quit cut off, as `notify` tells it of one
-    /// that ended, with its answer so far: a foreground call's caller holds no ID to ask with. Only
-    /// under the restart setting and within its day, as a cut-off turn continues; the message starts
-    /// a turn in an idle caller.
-    private func tellCallersOfAgentRunsCutOffByQuit(_ interrupted: [SessionToolCenter.InterruptedRun], now: Date) async {
-        guard RestartResumePreference.isOn(in: preferences) else { return }
-        for run in interrupted where now < run.interruptedAt.addingTimeInterval(RestartResumePolicy.maxAge) {
-            await notifyCaller(of: run.id, hostTaskID: run.hostTaskID)
-        }
-    }
-
-    /// Whether a cut-off turn waits for its task to be opened before it continues.
-    func continuesWhenOpened(_ id: UUID) -> Bool {
-        restartResumesWhenOpened[id] != nil
-    }
-
-    /// Starts again, with nothing sent, the CLI of each idle Claude Code task whose saved conversation
-    /// holds a session job the CLI brings back on resuming it (`ClaudeSessionJobs`):
-    /// the jobs ran only in the CLI the quit ended. They take their turn in the restart line behind
-    /// the cut-off turns, and only under the restart setting.
-    private func relaunchForSessionJobs() async {
-        guard RestartResumePreference.isOn(in: preferences) else { return }
-        let now = Date()
-        // Whether another app holds a conversation is asked only of those found to have jobs.
-        let candidates = store.sessions.filter { relaunchesForSessionJobs($0, now: now, askingRefusal: false) }
-            .sorted { $0.updatedAt > $1.updatedAt }
-            .compactMap { session in session.providerSessionID.map { (session.id, claudeSessionReader(for: session), $0) } }
-        guard !candidates.isEmpty else { return }
-        let scan = Task.detached(priority: .utility) { () -> [UUID] in
-            candidates.filter { _, reader, conversation in
-                guard !Task.isCancelled else { return false }
-                let records = (try? reader.recordsNamingSessionJobs(sessionID: conversation)) ?? []
-                return !ClaudeSessionJobs.broughtBack(from: records, now: Date()).isEmpty
-            }.map(\.0)
-        }
-        sessionJobScan = scan
-        let found = await scan.value
-        guard !scan.isCancelled else { return }
-        sessionJobScan = nil
-        let relaunching = found.filter { id in
-            store.sessions.first { $0.id == id }.map { relaunchesForSessionJobs($0, now: Date()) } ?? false
-        }
-        sessionJobRelaunches.formUnion(relaunching)
-        restartResumeLine.append(relaunching)
-        await continueRestartResumeLine()
     }
 
     // MARK: Session jobs a running CLI holds
@@ -6206,22 +5645,6 @@ final class AppModel {
             if entry.opensTurn { return false }
         }
         return false
-    }
-
-    /// Whether a task's CLI may start again for its session jobs: an idle Claude Code task touched
-    /// within a recurring job's lifetime, with no runtime, nothing the restart already continues or
-    /// keeps waiting for the person (its turn, an approval, a question), no message waiting to go, and
-    /// nothing being edited, moved or refused. The rest start when the person comes to them.
-    private func relaunchesForSessionJobs(_ session: SessionRecord, now: Date, askingRefusal: Bool = true) -> Bool {
-        session.harness == .claudeCode && session.providerSessionID != nil
-            && now.timeIntervalSince(session.updatedAt) < ClaudeSessionJobs.recurringMaxAge
-            && handlesBySessionID[session.id] == nil
-            && session.status != .running && session.status != .waitingForApproval
-            && restartResumesToContinue[session.id] == nil && connectionResumes[session.id] == nil
-            && followUps.queue(for: session.id).isEmpty && pendingShellDeliveries[session.id]?.isEmpty != false
-            && !switchingAccounts.contains(session.id) && !sessionMutations.contains(session.id)
-            && composerDrafts.tasks.existingDraft(for: session.id)?.editState == nil
-            && (!askingRefusal || sendRefusal(for: session) == nil)
     }
 
     // MARK: Memory saver (HarnessMemorySaver)
@@ -6325,9 +5748,8 @@ final class AppModel {
             || openingSideChats.contains(id) || unarchivingSessionIDs.contains(id) || recreatingTaskWorktrees.contains(id) {
             return "changing"
         }
-        if restartResumesToContinue[id] != nil || restartResumesWhenOpened[id] != nil || sessionJobRelaunches.contains(id)
-            || restartResumeLine.waiting.contains(id) || restartResumeLine.starting.contains(id)
-            || connectionResumes[id] != nil || usageLimitAutoContinue[id] != nil {
+        if continuations.continuesCutOffTurn(id) || continuations.sessionJobRelaunches.contains(id)
+            || continuations.usageLimitAutoContinue[id] != nil {
             return "continuing"
         }
         return nil
@@ -6384,315 +5806,6 @@ final class AppModel {
         memorySaverClosings[id] = closing
         await closing.value
         memorySaverClosings[id] = nil
-    }
-
-    /// Begins the continuations in line while fewer than `RestartResumePolicy.launchLimit` are
-    /// starting. One Yardlet asked for keeps its place until its provider shows work or
-    /// `RestartResumePolicy.startWindow` passes; one with nothing to continue gives it up at once.
-    private func continueRestartResumeLine() async {
-        guard !continuesRestartResumeLine else { return }
-        continuesRestartResumeLine = true
-        defer { continuesRestartResumeLine = false }
-        while let id = restartResumeLine.next() {
-            let asked = await continueAfterRestart(id)
-            // Its provider may have shown work already.
-            guard restartResumeLine.starting.contains(id) else { continue }
-            guard asked else {
-                restartResumeStarted(id)
-                continue
-            }
-            let sleep = restartResumeSleep
-            restartResumeStartWaits[id] = Task { [weak self] in
-                do { try await sleep(RestartResumePolicy.startWindow) } catch { return }
-                guard !Task.isCancelled else { return }
-                self?.restartResumeStarted(id)
-            }
-        }
-    }
-
-    /// A starting continuation showed work, waited out its window, or had nothing to start: the
-    /// next one in line may begin.
-    private func restartResumeStarted(_ id: UUID) {
-        restartResumesAwaitingWork.remove(id)
-        restartResumeStartWaits.removeValue(forKey: id)?.cancel()
-        // A line already running picks up the free place itself.
-        guard restartResumeLine.finishStarting(id), !continuesRestartResumeLine else { return }
-        Task { await continueRestartResumeLine() }
-    }
-
-    /// The person opened a task: a turn that waits for that, in line or until opened, continues now.
-    private func taskOpened(_ id: UUID?, now: Date = Date()) {
-        guard let id else { return }
-        readSavedConversation(of: id)
-        unseenRestartResumes.removeValue(forKey: id)
-        if restartResumeLine.removeWaiting(id) {
-            Task { await continueAfterRestart(id) }
-            return
-        }
-        guard let deadline = restartResumesWhenOpened.removeValue(forKey: id) else { return }
-        guard now < deadline else {
-            restartResumesToContinue.removeValue(forKey: id)
-            return
-        }
-        Task { await continueAfterRestart(id) }
-    }
-
-    /// Whatever the person does in a task takes over from continuing it, and from the line saying
-    /// it was continued.
-    private func personActed(on id: UUID) {
-        restartResumesWhenOpened.removeValue(forKey: id)
-        restartResumeLine.removeWaiting(id)
-        sessionJobRelaunches.remove(id)
-        restartResumesToContinue.removeValue(forKey: id)
-        if restartResumeNoticeSessionIDs.contains(id) { restartResumeNoticeSessionIDs.remove(id) }
-        stopAskingRestartQuestion(id)
-        forgetConnectionResume(id)
-    }
-
-    /// A task leaving the list (archived or deleted) takes along every continuation waiting for it: a
-    /// cut-off turn, a lost connection's resume, the continue armed for its limit's reset, the account
-    /// it was to move to, and the reads of its session jobs. Nothing of them fires afterwards, nor
-    /// once the task is unarchived; its next limit or move arms them again.
-    private func forgetContinuations(of id: UUID) {
-        personActed(on: id)
-        cancelUsageLimitAutoContinue(for: id)
-        usageLimitAutoContinueHandedOver.removeValue(forKey: id)
-        usageLimitSwitchErrorBySessionID.removeValue(forKey: id)
-        accountSwitchesAfterTurn.removeValue(forKey: id)
-        automaticAccountMoves.removeValue(forKey: id)
-        declinedAccountMoves.remove(id)
-        accountSwitchWaits.removeValue(forKey: id)?.cancel()
-        contextLimitRestarts.removeValue(forKey: id)
-        sessionJobReads.removeValue(forKey: id)?.cancel()
-        sessionJobsBySessionID.removeValue(forKey: id)
-    }
-
-    // MARK: Continuing after a lost connection
-
-    /// The system reported the network path: once it is up again, every task whose cut-off turn is due
-    /// continues.
-    func networkPathChanged(isSatisfied: Bool) {
-        guard isNetworkAvailable != isSatisfied else { return }
-        isNetworkAvailable = isSatisfied
-        if isSatisfied { continueDueConnectionResumes() }
-    }
-
-    /// The provider ended a turn on its own connection error: the task waits for the network and the
-    /// Claude app's time after the cut, then continues, as many times in a row as the policy allows.
-    /// A turn the person stopped, or a task the setting leaves alone, does not.
-    private func acceptTurnCut(_ cut: TurnCut, for id: UUID, at date: Date) {
-        guard cut != .quit, RestartResumePreference.isOn(in: preferences), !stoppedByPerson.contains(id),
-              store.sessions.contains(where: { $0.id == id }) else { return }
-        let continued = connectionResumes[id]?.continuations ?? 0
-        guard continued < ConnectionResumePolicy.limit else {
-            forgetConnectionResume(id)
-            return
-        }
-        connectionResumes[id] = ConnectionResume(cut: cut, cutAt: date, continuations: continued, isWaiting: true)
-        refreshAttentionDetail(for: id)
-        connectionResumeWaits.removeValue(forKey: id)?.cancel()
-        let delay = max(0, connectionResumes[id]?.dueAt.timeIntervalSinceNow ?? 0)
-        let sleep = connectionResumeSleep
-        connectionResumeWaits[id] = Task { [weak self] in
-            do { try await sleep(.milliseconds(Int64(delay * 1_000))) } catch { return }
-            guard !Task.isCancelled else { return }
-            self?.connectionResumeIsDue(id)
-        }
-    }
-
-    private func connectionResumeIsDue(_ id: UUID) {
-        connectionResumeWaits.removeValue(forKey: id)
-        guard connectionResumes[id]?.isWaiting == true else { return }
-        connectionResumes[id]?.isDue = true
-        if isNetworkAvailable { continueDueConnectionResumes() }
-    }
-
-    /// Continues every waiting task whose time has come, in the order their turns were cut off, a few
-    /// starting at once (`RestartResumeLine`), while the network is up.
-    private func continueDueConnectionResumes() {
-        let due = connectionResumes.filter { $0.value.isWaiting && $0.value.isDue }
-            .sorted { $0.value.cutAt < $1.value.cutAt }.map(\.key)
-        guard isNetworkAvailable, !due.isEmpty else { return }
-        restartResumeLine.append(due)
-        Task { await continueRestartResumeLine() }
-    }
-
-    /// The task no longer waits to continue after a lost connection: it continued and ended, someone
-    /// else started a turn, or the person took over.
-    private func forgetConnectionResume(_ id: UUID) {
-        connectionResumeWaits.removeValue(forKey: id)?.cancel()
-        guard connectionResumes.removeValue(forKey: id) != nil else { return }
-        restartResumeLine.removeWaiting(id)
-        refreshAttentionDetail(for: id)
-    }
-
-    /// Continues a turn a lost connection cut off, the way its provider's app does: Claude Code is sent
-    /// the Claude app's "Try again" (or its sleep message), Codex the Codex app's Resume. A message
-    /// waiting in the queue goes instead, as the next turn. True once the provider was asked.
-    private func continueAfterConnectionCut(_ id: UUID) async -> Bool {
-        guard var record = connectionResumes[id], record.isWaiting, isNetworkAvailable,
-              RestartResumePreference.isOn(in: preferences),
-              let session = store.sessions.first(where: { $0.id == id }),
-              session.status != .running, session.status != .waitingForApproval,
-              !switchingAccounts.contains(id), !sessionMutations.contains(id),
-              composerDrafts.tasks.draft(for: id).editState == nil else { return false }
-        let inLine = restartResumeLine.starting.contains(id)
-        if !followUps.queue(for: id).isEmpty {
-            forgetConnectionResume(id)
-            if inLine { restartResumesAwaitingWork.insert(id) }
-            scheduleFollowUpDrain(for: id)
-            return true
-        }
-        if handlesBySessionID[id] == nil { await resume(session) }
-        guard connectionResumes[id]?.isWaiting == true, let current = matchingSession(session),
-              current.status != .running, current.status != .waitingForApproval,
-              let adapter = adaptersBySessionID[id] as? any HarnessInterruptedTurnContinuing,
-              let handle = handlesBySessionID[id] else {
-            forgetConnectionResume(id)
-            return false
-        }
-        record.isWaiting = false
-        record.isDue = false
-        record.continuations += 1
-        connectionResumes[id] = record
-        refreshAttentionDetail(for: id)
-        // The continuation is a turn of its own after the error that ended the last one, with no
-        // request of the person's to show (the provider's message is the app speaking).
-        if !HarnessPresentationPolicy(harness: current.harness).usesCodexTimeline {
-            mutateTranscript(for: id, publishImmediately: true) { builder in
-                builder.appendUser("", origin: .provider)
-            }
-        }
-        await markSubmissionStarted(for: id)
-        if inLine { restartResumesAwaitingWork.insert(id) }
-        do {
-            let started = try await adapter.continueInterruptedTurn(in: handle, after: record.cut)
-            guard store.sessions.contains(where: { $0.id == id }) else { return false }
-            if !started {
-                forgetConnectionResume(id)
-                if store.sessions.first(where: { $0.id == id })?.status == .running {
-                    try? await store.updateSession(id: id, status: .ready)
-                }
-            }
-            return started
-        } catch {
-            guard store.sessions.contains(where: { $0.id == id }) else { return false }
-            forgetConnectionResume(id)
-            try? await store.updateSession(id: id, status: .failed)
-            errorBySessionID[id] = error.localizedDescription
-            return false
-        }
-    }
-
-    /// The question a restart cut off in this task, while the provider's record shows nothing asked
-    /// after its call: the card drawn at the end of the latest turn.
-    func restartQuestion(in id: UUID) -> ConversationRequest? {
-        guard let card = restartQuestions[id] else { return nil }
-        // A Codex thread with a turn after the one that asked.
-        if case let .codexServerRequest(request) = card.source, let turns = codexPresentationBySessionID[id]?.thread?.turns,
-           let asked = turns.firstIndex(where: { $0.id == request.turnID }), asked < turns.count - 1 {
-            return nil
-        }
-        // A transcript with a request after the call that asked.
-        guard let callID = card.toolCallID, let transcript = transcriptBySessionID[id],
-              let call = transcript.lastIndex(where: { entry in
-                  if case let .activity(activity, _) = entry.content { activity.id == callID } else { false }
-              }) else { return card }
-        return transcript[(call + 1)...].contains(where: \.opensTurn) ? nil : card
-    }
-
-    /// The question stops waiting: the person answered it or sent something else, or a turn began.
-    /// A later quit no longer carries it over.
-    private func stopAskingRestartQuestion(_ id: UUID) {
-        guard restartQuestions.removeValue(forKey: id) != nil else { return }
-        restartResumesToContinue.removeValue(forKey: id)
-        refreshAttentionDetail(for: id)
-    }
-
-    /// The person's answers to a question a restart cut off go as their next message, which names
-    /// the questions it answers (`RestartQuestionAnswer`): the call that asked them is gone. False
-    /// when the request is not that question.
-    /// Its card's route brings the answers in the provider's own shape: Claude Code's per-question
-    /// picks, or Codex's answers under each question's ID.
-    private func answerRestartQuestion(_ requestID: String, answer: PermissionStructuredAnswer? = nil,
-                                       codexResponse: CodexServerRequestResponse? = nil,
-                                       in session: SessionRecord) async -> Bool {
-        guard let card = restartQuestions[session.id], card.id == requestID else { return false }
-        stopAskingRestartQuestion(session.id)
-        let text: String
-        switch (card.form, answer, codexResponse) {
-        case let (.choices(questions)?, .questions(answers)?, _):
-            text = RestartQuestionAnswer.message(questions: questions, answers: answers)
-        case let (.freeText(questions)?, _, .toolUserInput(answers)?):
-            // The words Codex sent for each question, not the card's stand-in for a question without any.
-            var params: JSONValue?
-            if case let .codexServerRequest(request) = card.source { params = request.params }
-            let asked = params?["questions"]?.arrayValue ?? []
-            text = RestartQuestionAnswer.message(questions.map { question in
-                let sent = asked.first { $0["id"]?.stringValue == question.id }
-                return (sent?["text"]?.stringValue ?? sent?["question"]?.stringValue, answers[question.id] ?? [])
-            })
-        default:
-            return true
-        }
-        guard !text.isEmpty, let current = store.sessions.first(where: { $0.id == session.id }) else { return true }
-        await send(HarnessUserInput(text: text), to: current)
-        return true
-    }
-
-    /// Resumes the task's conversation and asks its provider to continue, only while the task is
-    /// as the record left it: idle, nothing being edited or moved. A task whose queue holds messages
-    /// sends the first of them instead, as the next turn. True once the provider was asked. A task in
-    /// line because a lost connection cut its turn off continues that way instead.
-    /// A task in line for its session jobs only starts its CLI again, as long as it still may; nothing
-    /// is asked, so its place frees at once.
-    @discardableResult
-    private func continueAfterRestart(_ id: UUID) async -> Bool {
-        if connectionResumes[id]?.isWaiting == true { return await continueAfterConnectionCut(id) }
-        if sessionJobRelaunches.remove(id) != nil {
-            if let session = store.sessions.first(where: { $0.id == id }), relaunchesForSessionJobs(session, now: Date()) {
-                await resume(session)
-            }
-            return false
-        }
-        let unseenBefore = restartResumesToContinue[id]?.unseenContinuations ?? 0
-        // Until it is asked, a quit still carries it over.
-        defer { restartResumesToContinue.removeValue(forKey: id) }
-        guard let session = store.sessions.first(where: { $0.id == id }),
-              session.status != .running, session.status != .waitingForApproval,
-              !switchingAccounts.contains(id), !sessionMutations.contains(id),
-              composerDrafts.tasks.draft(for: id).editState == nil else { return false }
-        if handlesBySessionID[id] == nil { await resume(session) }
-        let inLine = restartResumeLine.starting.contains(id)
-        if !followUps.queue(for: id).isEmpty {
-            if inLine { restartResumesAwaitingWork.insert(id) }
-            scheduleFollowUpDrain(for: id)
-            return true
-        }
-        guard let current = matchingSession(session), current.status != .running,
-              current.status != .waitingForApproval, current.status != .failed,
-              let adapter = adaptersBySessionID[id] as? any HarnessInterruptedTurnContinuing,
-              let handle = handlesBySessionID[id] else { return false }
-        await markSubmissionStarted(for: id)
-        // Work the provider shows from here on is this continuation's.
-        if inLine { restartResumesAwaitingWork.insert(id) }
-        do {
-            let started = try await adapter.continueInterruptedTurn(in: handle, after: .quit)
-            guard store.sessions.contains(where: { $0.id == id }) else { return false }
-            if started {
-                restartResumeNoticeSessionIDs.insert(id)
-                if !isSessionVisible(id) { unseenRestartResumes[id] = unseenBefore + 1 }
-                return true
-            } else if store.sessions.first(where: { $0.id == id })?.status == .running {
-                // The provider's record says the turn had ended; it stays as it ended.
-                try? await store.updateSession(id: id, status: .ready)
-            }
-        } catch {
-            guard store.sessions.contains(where: { $0.id == id }) else { return false }
-            try? await store.updateSession(id: id, status: .failed)
-            errorBySessionID[id] = error.localizedDescription
-        }
-        return false
     }
 
     /// Hands the adapter Yardlet instructions for this launch or session request — the global text, then
@@ -6760,7 +5873,7 @@ final class AppModel {
         }
     }
 
-    private func attach(
+    func attach(
         _ session: SessionRecord,
         resumesExistingSession: Bool
     ) async throws {
@@ -6776,7 +5889,7 @@ final class AppModel {
         // process load it; that one ends before the task's loads the same conversation.
         if let replay = savedConversationReadTasks["acp|\(session.id)"] { await replay.value }
         if handlesBySessionID[session.id] != nil { return }
-        if contextLimitRestarts[session.id] != nil { contextLimitRestarts[session.id] = nil }
+        if continuations.contextLimitRestarts[session.id] != nil { continuations.contextLimitRestarts[session.id] = nil }
         // Two processes must not continue one Claude conversation: one another app still holds
         // is followed read-only until it lets the conversation go, and one a gone Yardlet left is ended.
         if resumesExistingSession {
@@ -7224,16 +6337,16 @@ final class AppModel {
                 // The next turn has begun; what was suggested after the last one no longer fits, and a
                 // question a restart cut off is no longer what the task waits on.
                 composerDrafts.tasks.existingDraft(for: event.localSessionID)?.nextMessageSuggestion = nil
-                stopAskingRestartQuestion(event.localSessionID)
+                continuations.stopAskingRestartQuestion(event.localSessionID)
                 // A turn someone else started takes over from one a lost connection cut off.
-                if connectionResumes[event.localSessionID]?.isWaiting == true {
-                    forgetConnectionResume(event.localSessionID)
+                if continuations.connectionResumes[event.localSessionID]?.isWaiting == true {
+                    continuations.forgetConnectionResume(event.localSessionID)
                 }
                 // Its cache is written again on this account: a move Yardlet chose would lose it.
-                if automaticAccountMoves[event.localSessionID] != nil {
-                    cancelAccountSwitchAfterTurn(for: event.localSessionID, declined: false)
+                if continuations.automaticAccountMoves[event.localSessionID] != nil {
+                    continuations.cancelAccountSwitchAfterTurn(for: event.localSessionID, declined: false)
                 }
-                declinedAccountMoves.remove(event.localSessionID)
+                continuations.declinedAccountMoves.remove(event.localSessionID)
             } else {
                 // The rail's browser preview goes with the turn, as the Codex app's at `turn/completed`.
                 BrowserAgentUse.shared.endTurn(session: event.localSessionID)
@@ -7242,8 +6355,8 @@ final class AppModel {
                     readSessionJobs(of: event.localSessionID)
                 }
                 // A continuation that ended without its connection being cut again is done.
-                if let resume = connectionResumes[event.localSessionID], !resume.isWaiting {
-                    forgetConnectionResume(event.localSessionID)
+                if let resume = continuations.connectionResumes[event.localSessionID], !resume.isWaiting {
+                    continuations.forgetConnectionResume(event.localSessionID)
                 }
             }
             let shouldMarkUnread = !isSessionVisible(event.localSessionID)
@@ -7291,10 +6404,10 @@ final class AppModel {
                 pullRequestDetails.taskBecameIdle(event.localSessionID)
                 agentTools?.taskTurnEnded(event.localSessionID)
                 wakeAccountMove(for: event.localSessionID)
-                switchAccountAfterTurn(event.localSessionID)
+                continuations.switchAccountAfterTurn(event.localSessionID)
                 considerAccountMoveAfterTurn(event.localSessionID)
-                if contextLimitRestarts[event.localSessionID] != nil {
-                    Task { await restartForContextLimit(event.localSessionID) }
+                if continuations.contextLimitRestarts[event.localSessionID] != nil {
+                    Task { await continuations.restartForContextLimit(event.localSessionID) }
                 }
             }
             // A shell command's output waits for the turn to end, however it ended.
@@ -7303,19 +6416,19 @@ final class AppModel {
             }
             // A provider says a lost connection cut its turn before the turn ends, so the network may come
             // back while the task still runs: a cut-off turn already due continues once the turn has ended.
-            if status != .running, status != .waitingForApproval, connectionResumes[event.localSessionID]?.isDue == true {
-                continueDueConnectionResumes()
+            if status != .running, status != .waitingForApproval, continuations.connectionResumes[event.localSessionID]?.isDue == true {
+                continuations.continueDueConnectionResumes()
             }
         case let .followUpDelivery(delivery):
             acceptFollowUpDelivery(delivery, for: event.localSessionID)
         case let .providerStartedTurn(messageID):
             openProviderTurn(messageID, for: event.localSessionID)
         case let .turnCutOff(cut):
-            acceptTurnCut(cut, for: event.localSessionID, at: event.timestamp)
+            continuations.acceptTurnCut(cut, for: event.localSessionID, at: event.timestamp)
         case let .nextMessageSuggestion(text):
             acceptNextMessageSuggestion(text, for: event.localSessionID)
         case .turnCompleted:
-            usageLimitAutoContinueHandedOver.removeValue(forKey: event.localSessionID)
+            continuations.usageLimitAutoContinueHandedOver.removeValue(forKey: event.localSessionID)
             // A turn that ended on its final error already failed and notified; it did not complete.
             let failed = store.sessions.first(where: { $0.id == event.localSessionID })?.status == .failed
             let shouldMarkUnread = !isSessionVisible(event.localSessionID)
@@ -7345,7 +6458,7 @@ final class AppModel {
             recordRateLimit(limit, for: event.localSessionID)
         case let .usageLimitReached(limit):
             recordRateLimit(limit, for: event.localSessionID)
-            armAtUsageLimit(limit, for: event.localSessionID)
+            continuations.armAtUsageLimit(limit, for: event.localSessionID)
         case let .providerRetrying(retry):
             providerRetryBySessionID[event.localSessionID] = retry
         case let .usageUpdated(usage):
@@ -7357,7 +6470,7 @@ final class AppModel {
         case let .error(message, _, _):
             errorBySessionID[event.localSessionID] = message
             let asksToSignIn = ProviderSignIn.asksToSignIn(message)
-            if asksToSignIn { noteSignInRefused(message, for: event.localSessionID) }
+            if asksToSignIn { continuations.noteSignInRefused(message, for: event.localSessionID) }
             let shouldMarkUnread = !isSessionVisible(event.localSessionID)
             try? await store.updateSession(
                 id: event.localSessionID,
@@ -7488,7 +6601,7 @@ final class AppModel {
         ))
     }
 
-    private func mutateTranscript(
+    func mutateTranscript(
         for sessionID: UUID,
         publishImmediately: Bool,
         _ mutation: (inout TranscriptBuilder) -> Void
@@ -7515,7 +6628,7 @@ final class AppModel {
     /// Whether `TranscriptBuilder.apply` can change the transcript for this payload.
     private func noteProviderActivity(_ sessionID: UUID, at date: Date) {
         // A continuation after a restart has started: the next in line may begin.
-        if restartResumesAwaitingWork.contains(sessionID) { restartResumeStarted(sessionID) }
+        if continuations.restartResumesAwaitingWork.contains(sessionID) { continuations.restartResumeStarted(sessionID) }
         if let known = providerActivityBySessionID[sessionID], known >= date { return }
         providerActivityBySessionID[sessionID] = date
     }
@@ -7550,7 +6663,7 @@ final class AppModel {
         return transcriptBuilders[sessionID]?.entries
     }
 
-    private func flushTranscriptDeltas(for sessionID: UUID) {
+    func flushTranscriptDeltas(for sessionID: UUID) {
         guard let chunks = pendingTranscriptDeltas.removeValue(forKey: sessionID),
               !chunks.isEmpty else { return }
         var builder = transcriptBuilders.removeValue(forKey: sessionID) ?? TranscriptBuilder()
@@ -8137,35 +7250,6 @@ final class AppModel {
         }
     }
 
-    /// A turn the CLI refused for its sign-in, which the account's reading may not know yet.
-    private func noteSignInRefused(_ message: String, for sessionID: UUID) {
-        guard let session = store.sessions.first(where: { $0.id == sessionID }) else { return }
-        AccountCheckLog.record(AccountCheckLog.Entry(event: "turn-refused", harness: session.harness.rawValue,
-            account: session.connection?.id ?? "default", runtime: session.runtimeExecutableURL.path(percentEncoded: false),
-            configHome: session.connection?.homePath ?? "default", failure: message))
-        let account = connections.choice(for: session.harness, connection: session.connection)
-        Task { await connections.check(account, policy: .refresh, runtimeSelections: runtimeSelections) }
-    }
-
-    /// A login was just read signed in. A CLI that found none keeps running on that answer, so each
-    /// idle one on this login ends and the task's next message starts one that reads it. The
-    /// provider ID, history and binding stay, and a task that failed for it reads ready again. The
-    /// first reading of a login says nothing about the CLIs running on it, so only a task that
-    /// failed for its sign-in is touched then.
-    func continueTasks(afterSignInOf harness: HarnessKind, connection: ProviderConnection?,
-                       isFirstReading: Bool = false) async {
-        for session in store.sessions where session.harness == harness && session.connection == connection {
-            guard session.status != .running, session.status != .waitingForApproval else { continue }
-            let failedForSignIn = errorBySessionID[session.id].map(ProviderSignIn.asksToSignIn) == true
-            guard failedForSignIn || !isFirstReading else { continue }
-            if handlesBySessionID[session.id] != nil { await endRuntimeToSaveMemory(session.id, evenOnScreen: true) }
-            if failedForSignIn {
-                errorBySessionID.removeValue(forKey: session.id)
-                try? await store.updateSession(id: session.id, status: .ready)
-            }
-        }
-    }
-
     private func recordLocalError(_ message: String, for sessionID: UUID) {
         #if DEBUG
         if CommandLine.arguments.contains("--ui-fixture=lifecycle") {
@@ -8246,7 +7330,7 @@ final class AppModel {
         return next
     }
 
-    private func updateProviderActionError(_ error: Error, for sessionID: UUID) {
+    func updateProviderActionError(_ error: Error, for sessionID: UUID) {
         guard store.sessions.contains(where: { $0.id == sessionID }) else { return }
         var state = providerCapabilitiesBySessionID[sessionID] ?? .empty
         state.actionMessage = error.localizedDescription

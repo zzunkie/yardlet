@@ -357,7 +357,7 @@ cache has expired, the next request does that anyway, wherever the task is. So (
 3. A task whose cache lives stays on a nearly spent account until a limit stops it or its cache expires.
 
 A task waiting for its reset that moves under rule 1 continues on the new account at once. A move never cuts into a
-turn: it goes through the path of an account chosen during one (`AppModel.moveAutomatically`), so a task with
+turn: it goes through the path of an account chosen during one (`TaskContinuationCoordinator.moveAutomatically`), so a task with
 background work or a message on its way moves once that is over, with the line "Moving to <account> when its
 background work ends" and Cancel above the composer. The card a move continues from is the one a stopped task
 continues from (`UsageLimitContinuation.card`). A turn that starts meanwhile cancels the move, since it writes

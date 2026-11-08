@@ -208,12 +208,15 @@ import XCTest
         XCTAssertNil(model.usageLimitAutoContinue[task.id]?.armedBy, "The person's own choice carries over")
 
         // Archiving the task takes its armed continue along, the saved one too, so nothing is sent at
-        // the reset, nor after the task is unarchived or Yardlet relaunched.
+        // the reset, nor after the task is unarchived or Yardlet relaunched; nothing else its
+        // continuations kept for it stays either.
         XCTAssertNotNil(UsageLimitAutoContinue.load(from: fixture.defaults)[task.id])
+        XCTAssertFalse(continuationState(of: task.id, in: model.continuations).isEmpty)
         await model.archive(try XCTUnwrap(model.store.sessions.first { $0.id == task.id }))
         XCTAssertFalse(model.store.sessions.contains { $0.id == task.id })
         XCTAssertNil(model.usageLimitAutoContinue[task.id])
         XCTAssertNil(UsageLimitAutoContinue.load(from: fixture.defaults)[task.id])
+        XCTAssertEqual(continuationState(of: task.id, in: model.continuations), [])
     }
 
     /// An armed continue outlasts a relaunch, which Claude Code's own wait does not, and goes once the
@@ -255,8 +258,10 @@ import XCTest
         let before = fixture.makeModel(SessionStore(sessions: [task], repository: repository))
         before.usageLimitResumeGrace = .seconds(3_600)
         before.setUsageLimitAutoContinue(true, resetsAt: resetsAt, for: task)
+        XCTAssertFalse(continuationTimers(in: before.continuations).isEmpty)
         await before.shutdown()
         XCTAssertEqual(UsageLimitAutoContinue.load(from: fixture.defaults)[task.id]?.resetsAt, resetsAt)
+        XCTAssertEqual(continuationTimers(in: before.continuations), [], "The quit stops the timer; the record waits")
 
         let store = SessionStore(repository: repository)
         try await store.restore()
@@ -631,6 +636,29 @@ import XCTest
         return try XCTUnwrap(card)
     }
 
+
+    /// The coordinator's per-task collections that still hold the task, by name: whatever a
+    /// continuation keeps for a task is keyed or listed by its ID.
+    private func continuationState(of id: UUID, in continuations: TaskContinuationCoordinator) -> [String] {
+        Mirror(reflecting: continuations).children.compactMap { child in
+            let holds = switch child.value {
+            case let keyed as [UUID: Any]: keyed[id] != nil
+            case let listed as Set<UUID>: listed.contains(id)
+            case let line as RestartResumeLine: line.waiting.contains(id) || line.starting.contains(id)
+            default: false
+            }
+            return holds ? child.label : nil
+        }
+    }
+
+    /// The coordinator's timers still waiting to continue a task, by the name of what holds them.
+    private func continuationTimers(in continuations: TaskContinuationCoordinator) -> [String] {
+        Mirror(reflecting: continuations).children.compactMap { child in
+            guard let timers = child.value as? [UUID: Task<Void, Never>],
+                  timers.values.contains(where: { !$0.isCancelled }) else { return nil }
+            return child.label
+        }
+    }
 
     private func directory() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appending(path: "claude-limit-\(UUID().uuidString)")

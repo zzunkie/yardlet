@@ -44,7 +44,7 @@ enum TaskMessageDelivery: Equatable {
     /// The task waits for room to start; it follows the task's first message.
     case afterStart
     /// A usage limit stopped the task, which continues once it resets at this time; the message goes
-    /// after that continue (`AppModel.usageLimitHold`).
+    /// after that continue (`TaskContinuationCoordinator.usageLimitHold`).
     case afterReset(Date)
     case undelivered(String)
 }
@@ -466,7 +466,7 @@ extension AppModel: SessionToolHandling {
         let text = text(target)
         // A child task that waits for room gets it after its first message, when it starts.
         if sessionTools.appendMessage(text, toQueued: target.id) { return .afterStart }
-        if let resetsAt = holdUntilUsageLimitResets(HarnessUserInput(text: text), for: target.id) {
+        if let resetsAt = continuations.holdUntilUsageLimitResets(HarnessUserInput(text: text), for: target.id) {
             return .afterReset(resetsAt)
         }
         let isRunning = target.status == .running || target.status == .waitingForApproval
@@ -1664,7 +1664,7 @@ extension AppModel: SessionToolHandling {
     /// rail, notifications and the phone draw them at the end of the latest turn, answered by the
     /// same routes as the provider's own.
     func heldRequests(in taskID: UUID) -> [ConversationRequest] {
-        sessionToolRequests(in: taskID) + (restartQuestion(in: taskID).map { [$0] } ?? [])
+        sessionToolRequests(in: taskID) + (continuations.restartQuestion(in: taskID).map { [$0] } ?? [])
     }
 
     /// The task's state follows what its session tools wait on, as a provider's own request moves it.

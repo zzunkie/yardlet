@@ -8,7 +8,7 @@ extension AppModel {
         guard let evaluation = routingEvaluation, evaluation.isEnabled,
               let session = store.sessions.first(where: { $0.id == sessionID }) else { return }
         let outcome: RoutingLedgerEntry.Outcome
-        if stoppedByPerson.contains(sessionID) {
+        if continuations.stoppedByPerson.contains(sessionID) {
             outcome = .stopped
         } else if taskAttentionDetails[sessionID]?.usageLimit != nil {
             outcome = .usageLimit

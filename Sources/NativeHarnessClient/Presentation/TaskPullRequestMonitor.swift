@@ -354,7 +354,7 @@ extension AppModel {
         guard canTakeAutoFix(taskID), let session = store.sessions.first(where: { $0.id == taskID }) else {
             return false
         }
-        if holdUntilUsageLimitResets(HarnessUserInput(text: message), for: taskID) != nil { return true }
+        if continuations.holdUntilUsageLimitResets(HarnessUserInput(text: message), for: taskID) != nil { return true }
         let previousError = errorBySessionID[taskID]
         if session.harness == .codex {
             await submitCodex(CodexComposerDraft(inputs: [.text(message)]), action: .automatic, to: session)

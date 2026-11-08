@@ -10,7 +10,7 @@ enum AccountMovePreference {
     }
 }
 
-/// A move to another account Yardlet chose for a task itself (`AppModel.moveAutomatically`).
+/// A move to another account Yardlet chose for a task itself (`TaskContinuationCoordinator.moveAutomatically`).
 struct AutomaticAccountMove: Equatable {
     /// The limit card the task continues from once it has moved, when a limit stopped it; the move
     /// goes only while the task still continues from that card (`UsageLimitContinuation.card`).
@@ -57,12 +57,14 @@ extension AppModel {
             accountReadingsChanged()
         } else {
             endAccountMoveLooks()
-            for id in Array(automaticAccountMoves.keys) { cancelAccountSwitchAfterTurn(for: id, declined: false) }
-            for (id, armed) in usageLimitAutoContinue where armed.armedBy == .accountMove {
-                guard let task = store.sessions.first(where: { $0.id == id }) else { continue }
-                setUsageLimitAutoContinue(false, resetsAt: armed.resetsAt, for: task)
+            for id in Array(continuations.automaticAccountMoves.keys) {
+                continuations.cancelAccountSwitchAfterTurn(for: id, declined: false)
             }
-            declinedAccountMoves.removeAll()
+            for (id, armed) in continuations.usageLimitAutoContinue where armed.armedBy == .accountMove {
+                guard let task = store.sessions.first(where: { $0.id == id }) else { continue }
+                continuations.setUsageLimitAutoContinue(false, resetsAt: armed.resetsAt, for: task)
+            }
+            continuations.declinedAccountMoves.removeAll()
             claudeAccountsWithRoom = nil
         }
     }
@@ -99,7 +101,7 @@ extension AppModel {
     /// A Claude Code task's turn ended. One a limit stopped moves to an account with room or waits for
     /// the reset; one on a nearly spent account is looked at again once its cache has expired.
     func considerAccountMoveAfterTurn(_ id: UUID) {
-        guard movesTasksToAccountsWithRoom, accountSwitchesAfterTurn[id] == nil,
+        guard movesTasksToAccountsWithRoom, continuations.accountSwitchesAfterTurn[id] == nil,
               let task = store.sessions.first(where: { $0.id == id }), task.harness == .claudeCode else { return }
         if let card = limitCard(of: id), case let .usageLimit(limit) = card.content {
             Task { await moveOrWaitAfterLimit(id, card: card.id, limit: limit) }
@@ -164,7 +166,7 @@ extension AppModel {
                     continue
                 }
                 // A task waiting for its limit to reset continues on the account with room at once.
-                let card = usageLimitAutoContinue[task.id].flatMap { armed in
+                let card = continuations.usageLimitAutoContinue[task.id].flatMap { armed in
                     limitCard(of: task.id).flatMap { card -> UUID? in
                         guard case let .usageLimit(limit) = card.content, armed.waits(for: limit.resetsAt) else { return nil }
                         return card.id
@@ -184,7 +186,7 @@ extension AppModel {
         await refreshAccountReadings(of: .claudeCode)
         guard movesTasksToAccountsWithRoom, let task = store.sessions.first(where: { $0.id == id }),
               canMoveAutomatically(task), limitCard(of: id)?.id == card,
-              usageLimitAutoContinue[id].map({ $0.armedBy != nil }) ?? true else { return }
+              continuations.usageLimitAutoContinue[id].map({ $0.armedBy != nil }) ?? true else { return }
         let now = Date()
         let start = accountWithRoom(for: task, now: now)
         let lastRequest = lastRequest(beforeLimit: card, in: id) ?? task.updatedAt
@@ -194,9 +196,9 @@ extension AppModel {
         case .waitForReset:
             // Waiting only for a reset within a day, as Claude Code waits; the setting's continue may
             // already wait for it.
-            guard let resetsAt = limit.resetsAt, usageLimitAutoContinue[id]?.waits(for: resetsAt) != true,
+            guard let resetsAt = limit.resetsAt, continuations.usageLimitAutoContinue[id]?.waits(for: resetsAt) != true,
                   resetsAt.timeIntervalSinceNow <= UsageLimitAutoContinuePreference.horizon else { return }
-            setUsageLimitAutoContinue(true, resetsAt: resetsAt, armedBy: .accountMove, for: task)
+            continuations.setUsageLimitAutoContinue(true, resetsAt: resetsAt, armedBy: .accountMove, for: task)
         case .move:
             guard let start, let target = start.connection else { return }
             await moveTask(task, to: target, as: AutomaticAccountMove(continuesFrom: card, assignment: start.assignment))
@@ -209,7 +211,7 @@ extension AppModel {
     /// list, without starting its CLI; any other goes through the move after a turn.
     private func moveTask(_ task: SessionRecord, to target: ProviderConnection, as move: AutomaticAccountMove) async {
         guard move.continuesFrom == nil, settlesForAccountMove(task) else {
-            moveAutomatically(task.id, to: target, as: move)
+            continuations.moveAutomatically(task.id, to: target, as: move)
             return
         }
         do {
@@ -306,8 +308,8 @@ extension AppModel {
     /// A task Yardlet may move now: a Claude Code task that is idle, has no move of its own coming,
     /// and whose last automatic move the person did not cancel since it last worked.
     private func canMoveAutomatically(_ task: SessionRecord) -> Bool {
-        task.harness == .claudeCode && !Self.isWorking(task) && accountSwitchesAfterTurn[task.id] == nil
-            && !switchingAccounts.contains(task.id) && !declinedAccountMoves.contains(task.id)
+        task.harness == .claudeCode && !Self.isWorking(task) && continuations.accountSwitchesAfterTurn[task.id] == nil
+            && !switchingAccounts.contains(task.id) && !continuations.declinedAccountMoves.contains(task.id)
     }
 
     /// Each Claude Code account's last reading, by `AccountChoice.id`.
