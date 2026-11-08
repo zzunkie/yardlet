@@ -11,6 +11,10 @@
 "You can edit the request before sending it again." = "요청을 수정한 뒤 다시 보낼 수 있습니다.";
 "Error details" = "오류 상세";
 "Copy error details" = "오류 상세 복사";
+"Report a Problem…" = "문제 신고…";
+"Show Diagnostic Logs" = "진단 로그 보기";
+"Yardlet has not written any diagnostic logs yet." = "Yardlet이 아직 진단 로그를 남기지 않았습니다.";
+"They appear in ~/.yardlet/logs and ~/Library/Logs/Yardlet once something is recorded." = "기록할 내용이 생기면 로그가 ~/.yardlet/logs와 ~/Library/Logs/Yardlet에 만들어집니다.";
 "Edit request" = "요청 수정";
 "Restore this request to the composer without sending" = "요청을 전송하지 않고 입력창에 복원";
 "Harness settings" = "하네스 설정";

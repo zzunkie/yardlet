@@ -11,6 +11,10 @@
 "You can edit the request before sending it again." = "You can edit the request before sending it again.";
 "Error details" = "Error details";
 "Copy error details" = "Copy error details";
+"Report a Problem…" = "Report a Problem…";
+"Show Diagnostic Logs" = "Show Diagnostic Logs";
+"Yardlet has not written any diagnostic logs yet." = "Yardlet has not written any diagnostic logs yet.";
+"They appear in ~/.yardlet/logs and ~/Library/Logs/Yardlet once something is recorded." = "They appear in ~/.yardlet/logs and ~/Library/Logs/Yardlet once something is recorded.";
 "Edit request" = "Edit request";
 "Restore this request to the composer without sending" = "Restore this request to the composer without sending";
 "Harness settings" = "Harness settings";

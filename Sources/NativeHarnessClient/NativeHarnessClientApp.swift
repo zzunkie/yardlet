@@ -486,6 +486,7 @@ struct NativeHarnessClientApp: App {
                 .environment(\.yardletUpdateWait, appDelegate.updateWait)
                 .environment(\.yardletSparkle, appDelegate.sparkle)
                 .environment(\.yardletStagedUpdate, appDelegate.stagedUpdate)
+                .environment(\.yardletReportProblem, reportProblem)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                     model.resourceMonitor.setApplicationActive(true)
                     model.pullRequests.setApplicationActive(true)
@@ -677,6 +678,7 @@ struct NativeHarnessClientApp: App {
             YardletConversationFindCommands()
             TaskResourceUsageCommands()
             RemoteHostCommands(directory: remoteHosts)
+            YardletHelpCommands(report: reportProblem)
         }
 
         // Another Mac's Yardlet, one window per host (File › Connect to Mac…).
@@ -714,6 +716,11 @@ struct NativeHarnessClientApp: App {
         .defaultSize(width: 720, height: 360)
         .handlesExternalEvents(matching: [])
         .commandsRemoved()
+    }
+
+    /// Help › Report a Problem…, and the same form from an error card.
+    private var reportProblem: YardletReportProblemAction {
+        .opening(runtimeSelections: model.runtimeSelections)
     }
 
     @ViewBuilder

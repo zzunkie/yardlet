@@ -5,8 +5,9 @@ requests are both welcome.
 
 ## Issues
 
-- **Bugs:** open a [bug report](../../issues/new?template=bug_report.yml). Include the Yardlet version
-  (Yardlet > About Yardlet), your macOS version, the agent and its CLI version, and the steps that lead to the problem.
+- **Bugs:** open a [bug report](../../issues/new?template=bug_report.yml), or choose Help > Report a Problem… in
+  Yardlet, which fills in the versions. Include the Yardlet version (Yardlet > About Yardlet), your macOS version, the
+  agent and its CLI version, and the steps that lead to the problem.
 - **Ideas:** open a [feature request](../../issues/new?template=feature_request.yml) and describe the problem first,
   then what you would like Yardlet to do.
 - **Questions:** ask in [Discussions](../../discussions).

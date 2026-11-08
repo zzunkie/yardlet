@@ -12,6 +12,7 @@ struct TranscriptErrorCard: View {
     /// The sign-in a card for a missing sign-in offers, in place of the harness's settings.
     var signIn: ConversationSignIn? = nil
     @State private var showsDetails = false
+    @Environment(\.yardletReportProblem) private var reportProblem
 
     private var asksToSignIn: Bool { ProviderSignIn.asksToSignIn(message) }
     private var offeredSignIn: ConversationSignIn? { asksToSignIn ? signIn : nil }
@@ -54,7 +55,21 @@ struct TranscriptErrorCard: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxHeight: 180)
-                    TranscriptCopyButton(title: L10n.string("Copy error details")) { message }
+                    HStack(spacing: 14) {
+                        TranscriptCopyButton(title: L10n.string("Copy error details")) { message }
+                        if let reportProblem {
+                            // GitHub's bug report form with this message, for the person to read and submit.
+                            Button {
+                                reportProblem(harness: harness, message: message)
+                            } label: {
+                                Label(L10n.string("Report a Problem…"), systemImage: "exclamationmark.bubble")
+                            }
+                            .buttonStyle(.borderless)
+                            .parityPointer()
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 .padding(.top, 8)
             }

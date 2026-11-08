@@ -67,4 +67,4 @@ body:
     id: logs
     attributes:
       label: Logs or screenshots
-      description: Optional. Paste text logs as text.
+      description: Optional. Help > Show Diagnostic Logs in Yardlet opens its log folders; for a sign-in problem, `account-checks.log` helps most. Paste text logs as text.

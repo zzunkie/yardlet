@@ -697,6 +697,7 @@ struct NewTaskAccountExplanation: View {
 
 private struct NewTaskComposer: View {
     @Environment(\.yardletInterfaceScale) private var interfaceScale
+    @Environment(\.yardletReportProblem) private var reportProblem
     @Bindable var draft: NewTaskDraft
     let projects: [Project]
     @Bindable var runtimeSelections: RuntimeSelectionStore
@@ -837,11 +838,22 @@ private struct NewTaskComposer: View {
             onCommandQueryChange: { _, query in showsTypedCommands = query != nil }
         ) {
             if draft.creationFailed {
-                Text(draft.creationError ?? L10n.string("The task could not start. Your draft is still here."))
-                    .font(.caption).foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16).padding(.bottom, 10)
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(draft.creationError ?? L10n.string("The task could not start. Your draft is still here."))
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let reportProblem {
+                        Button(L10n.string("Report a Problem…")) {
+                            reportProblem(harness: draft.harness, message: draft.creationError)
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(ParityTheme.accent)
+                        .parityPointer()
+                    }
+                }
+                .font(.caption)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16).padding(.bottom, 10)
             }
             // Where the task starts is the title's project menu (`NewTaskHeroTitle`), and the
             // same-folder warning is a row under the composer (`NewTaskFolderRow.runningHere`).

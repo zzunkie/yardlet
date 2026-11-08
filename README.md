@@ -203,7 +203,10 @@ What's being worked on and what comes next is on the [roadmap](https://github.co
 and each release gathers its work in a [milestone](https://github.com/zzunkie/yardlet/milestones).
 Report bugs and ideas in [issues](https://github.com/zzunkie/yardlet/issues/new/choose), ask questions in
 [Discussions](https://github.com/zzunkie/yardlet/discussions), and see [CONTRIBUTING.md](CONTRIBUTING.md)
-to send a pull request.
+to send a pull request. **Help > Report a Problem…**, and the same item in an error's details, opens the bug
+report form in your browser with the Yardlet, macOS and agent CLI versions filled in, and an error's
+message with your home folder, user name and email addresses taken out. Nothing is sent until you submit
+the form on GitHub. **Help > Show Diagnostic Logs** opens Yardlet's log folders for you to choose what to attach.
 
 ## License
 

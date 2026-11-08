@@ -130,6 +130,12 @@ install_executable() {
 
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$PROJECT_ROOT/Packaging/Info.plist" "$CONTENTS_DIR/Info.plist"
+# The commit the bundle is built from, which Help > Report a Problem… puts beside the version; "-dirty"
+# marks changes to tracked files that were not committed. None outside a git checkout.
+if SOURCE_COMMIT=$(git -C "$PROJECT_ROOT" rev-parse --short=8 HEAD 2>/dev/null); then
+    [[ -z "$(git -C "$PROJECT_ROOT" status --porcelain --untracked-files=no 2>/dev/null)" ]] || SOURCE_COMMIT+="-dirty"
+    /usr/libexec/PlistBuddy -c "Add :YardletSourceCommit string $SOURCE_COMMIT" "$CONTENTS_DIR/Info.plist"
+fi
 
 # Yardlet's own Google OAuth app (a Desktop client), so a person only signs in to connect Gmail,
 # Calendar, and Drive (docs/CONNECTORS.md, "Google"). The client stays out of git: the environment's
