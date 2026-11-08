@@ -31,7 +31,8 @@ scaled twice. SF system text provides Korean fallback; code uses the system mono
 | `type.title` | 24 / semibold | No shared token. Home/title literals 20, 22, 26, 30, 34 and 38 are candidates for 24 after checking hierarchy. |
 
 This is a role migration, not a numeric search-and-replace. An 8 pt disclosure glyph is an icon,
-not caption text. Keep platform menu fonts and user-selected editor/terminal sizes. Do not impose
+not caption text. Keep platform menu fonts and the existing interface-size preference. The terminal
+currently uses 12 pt multiplied by that scale; leave it out of a chrome-only font migration. Do not impose
 a fixed line-height on Korean text: validate its actual line boxes and wrapping.
 
 | Proposed token | Values | Current mapping and consolidation |
@@ -97,7 +98,7 @@ These are consolidation targets; provider differences in meaning remain intact.
 | Composer | `PromptComposer`, 14 pt editor, 13 pt controls, 12 pt corner, 28 pt send target, 24 pt auxiliary controls. Controls wrap before the send action clips. Shared 32 pt outer conversation gutter; preserve provider-specific options. |
 | Panel header | `paneToolbarHeight` 40, 13 pt label, shared toolbar buttons and 8 pt content gaps. One header per panel; focus belongs to the pane whose control was used. |
 | Empty state | 18 pt title, 14 pt explanation, one primary next action, 16 pt vertical gap and 24/32 pt outer inset. Keep the real task composer available when useful. No large decorative badge or enclosure. |
-| Terminal/review | Native monospaced text, existing user font settings, shared header/selection colors. Preserve ANSI/diff meaning and horizontal scrolling; never clip code to achieve a tidy silhouette. |
+| Terminal/review | Native monospaced text, existing interface-size scaling, shared header/selection colors. Preserve ANSI/diff meaning and horizontal scrolling; never clip code to achieve a tidy silhouette. |
 
 ## Reference measurements
 
