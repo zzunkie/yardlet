@@ -111,6 +111,40 @@ final class SessionRailAgentsTests: XCTestCase {
         XCTAssertEqual(after.agents.filter { $0.status == .running }.count, 1)
         XCTAssertEqual(after.agents.filter { $0.status == .completed }.count, 1)
 
+        // A call the tool turned down started nothing; its retry with the same prompt names the agent it ran,
+        // and only the retry is that agent.
+        let ranID = UUID()
+        var retried = TranscriptBuilder()
+        retried.appendUser("Check the disk")
+        let turnedDown = HarnessActivity(id: "turned-down", kind: "mcp__yardlet__run_agent", title: "run_agent",
+                                         input: #"{"harness":"codex","effort":"high","prompt":"Check the disk"}"#)
+        retried.apply(.activityStarted(turnedDown))
+        retried.apply(.activityCompleted(HarnessActivity(
+            id: turnedDown.id, kind: turnedDown.kind, title: turnedDown.title, outcome: .failed, input: turnedDown.input,
+            output: "Not started: Codex takes an effort only with its model.")))
+        let retry = HarnessActivity(id: "retry", kind: "mcp__yardlet__run_agent", title: "run_agent",
+                                    input: #"{"harness":"codex","prompt":"Check the disk"}"#)
+        retried.apply(.activityStarted(retry))
+        var ran = SessionRailAgents.Run(id: ranID, harness: .codex, prompt: "Check the disk", state: .running,
+                                        startedAt: Date(timeIntervalSince1970: 300))
+        let running = try XCTUnwrap(SessionRailAgents.make(harness: .claudeCode, entries: retried.entries, codexState: nil,
+                                                           runs: [ran])).agents
+        XCTAssertEqual(running.map(\.status), [.running, .failed], "While the retry runs, it is the agent")
+        XCTAssertEqual(running.map(\.canStop), [true, false])
+        retried.apply(.activityCompleted(HarnessActivity(
+            id: retry.id, kind: retry.kind, title: retry.title, input: retry.input,
+            output: "agent_id: \(ranID.uuidString)\nharness: codex · state: completed\n\nPlenty of room.")))
+        ran.state = .completed
+        for runs in [[ran], []] {
+            let rows = try XCTUnwrap(SessionRailAgents.make(harness: .claudeCode, entries: retried.entries, codexState: nil,
+                                                            runs: runs)).agents
+            XCTAssertEqual(rows.count, 2)
+            XCTAssertEqual(Set(rows.map(\.id)).count, 2, "Each row has its own identity")
+            XCTAssertEqual(rows.filter { $0.kind == .yardletAgent(agentID: ranID, prompt: "Check the disk") }.map(\.status),
+                           [.completed])
+            XCTAssertEqual(rows.filter { $0.status == .failed }.map(\.opensPanel), [false], "The turned-down call started nothing")
+        }
+
         // A rail draws on every publication of a task that handed out thousands of calls: each draw
         // reads only the calls that changed, and draws what reading them all would.
         var long = TranscriptBuilder(limit: 10_000)

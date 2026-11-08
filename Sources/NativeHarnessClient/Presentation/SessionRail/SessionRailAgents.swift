@@ -463,14 +463,20 @@ struct SessionRailAgents: Equatable {
             }
         }
 
+        // A call that names its agent is that agent. One that names none yet (it runs, or ran in the background) takes
+        // a run with its prompt that no call names, a failed one last: a call the tool turned down started nothing,
+        // and its retry with the same prompt did.
         var unmatched = runs
-        var agents: [Agent] = []
-        for call in calls {
-            let index = call.agentID.flatMap { id in unmatched.firstIndex { $0.id == id } }
-                ?? unmatched.firstIndex { $0.prompt == call.prompt }
-            let run = index.map { unmatched.remove(at: $0) }
-            agents.append(agent(harness: harness, run: run, call: (call.id, call.agentID, call.prompt, call.harness, call.model,
-                                                                    call.phase, call.startedAt)))
+        var matched = calls.map { call in
+            call.agentID.flatMap { id in unmatched.firstIndex { $0.id == id }.map { unmatched.remove(at: $0) } }
+        }
+        let unnamed = calls.indices.filter { calls[$0].agentID == nil }
+        for index in unnamed.filter({ calls[$0].phase != .failed }) + unnamed.filter({ calls[$0].phase == .failed }) {
+            matched[index] = unmatched.firstIndex { $0.prompt == calls[index].prompt }.map { unmatched.remove(at: $0) }
+        }
+        var agents = zip(calls, matched).map { call, run in
+            agent(harness: harness, run: run, call: (call.id, call.agentID, call.prompt, call.harness, call.model,
+                                                     call.phase, call.startedAt))
         }
         // Subagents its own subagents ran, which its transcript does not show.
         for run in unmatched {
