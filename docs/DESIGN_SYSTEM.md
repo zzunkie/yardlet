@@ -51,7 +51,8 @@ independent messages from grouped work.
 
 ### Semantic colors
 
-Keep `ParityTheme`'s adaptive palette. The RGB figures below are its nominal calibrated components,
+Keep `ParityTheme`'s adaptive surface palette. Accent follows the migration contract below.
+The RGB figures below are the current palette's nominal calibrated components,
 rounded to 8-bit notation for reading, not measured display pixels. They are neutral, not beige.
 
 | Role / existing name | Light | Dark | Use |
@@ -60,7 +61,7 @@ rounded to 8-bit notation for reading, not measured display pixels. They are neu
 | Sidebar / `sidebar` | #F6F6F6 | #1B1B1B | Project navigation |
 | Elevated / `elevated` | #FFFFFF | #222222 | Popover/panel surface |
 | Input / `input` | #FFFFFF | #282828 | Composer and editable field |
-| Accent / `accent`, AppKit `accentColor` | #143B6B | #8CB8FA | Links and selected emphasis; current palette, identity choice still open |
+| Accent / `accent`, AppKit `accentColor` | System by default; preset light value | System by default; preset dark value | One semantic accent for every accent use; see below |
 | Signal / `signal` | #6B8505 | #D1ED2B | Existing signal only; never a default text or background color |
 | Primary action / `primaryActionFill` | #333333 | #E0E0E0 | Send/action fill |
 | On action / `primaryActionForeground` | #FFFFFF | #1F1F1F | Action glyph |
@@ -73,6 +74,33 @@ rounded to 8-bit notation for reading, not measured display pixels. They are neu
 Secondary is not disabled. Essential instructions use primary or secondary text, never tertiary text
 or a status color alone. Check normal text against 4.5:1 and essential control indicators against 3:1
 on their actual composite background; the table alone does not establish contrast compliance.
+
+### Accent
+
+Accent is one semantic token, independent of the home/sidebar composition. Route all accent-colored
+links, selection details and custom controls through `ParityTheme.accent`; AppKit reads `accentColor`
+as the same token's bridge, not a second palette. Status colors retain their semantic meaning.
+
+The migration defaults to **System**, resolved dynamically from
+[`NSColor.controlAccentColor`](https://developer.apple.com/documentation/appkit/nscolor/controlaccentcolor),
+which follows the person's macOS accent preference. Do not cache it as a fixed RGB value or assume
+its color space. **Ink**, **Grove** and **Iris** are the preset choices for the migration, each with a light/dark pair.
+Today the implementation is the fixed Ink-like pair; the System default and
+**Settings > Appearance > Accent** belong to the later token migration, not this documentation change.
+
+| Preset | Light | Dark | Minimum text contrast, light / dark |
+| --- | --- | --- | --- |
+| Ink | #143B6B | #8CB8FA | 10.40:1 / 7.27:1 |
+| Grove | #14664A | #7AD1AD | 6.41:1 / 8.11:1 |
+| Iris | #5C45AB | #B8A6FA | 6.71:1 / 6.93:1 |
+
+These ratios use opaque sRGB values over the four canvas/sidebar/elevated/input backgrounds above;
+all three pairs exceed 4.5:1 in both themes. White text on each light accent and black text on each
+dark accent also exceed 4.5:1. Recheck hover, selection, disabled and increased-contrast appearances
+on implementation. System is dynamic, so no fixed ratio is claimed for it: retain native control
+rendering, and do not use an accent alone to communicate essential state. If accent text does not
+meet contrast, retain primary text and put the accent in a supporting detail rather than inventing
+a second accent color. Composition options must work with any preset; color is not an identity vote.
 
 ### Motion and geometry
 
