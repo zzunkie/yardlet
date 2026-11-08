@@ -278,6 +278,39 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
         hosts.close(host.id)
     }
 
+    /// Match the production scene's hidden title bar; the older recovery fixture also draws a
+    /// native window title, which would overlap this view's own title bar in a design review.
+    func testDesignAuditRemoteWindowWithHiddenTitleBar() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["YARDLET_DESIGN_AUDIT"] == "1")
+        let stack = try await LoopbackStack(name: "Mac Studio", bridge: RemoteFixtureBridge())
+        defer { stack.stop() }
+        let ticket = await stack.server.openPairing()
+        let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey,
+            secret: ticket.secret, name: "Mac Studio", hosts: ["127.0.0.1:\(stack.port)"]).url)
+        let hosts = RemoteHostDirectory(store: RemoteHostStore(fileURL: nil), keys: RemoteMemoryClientKeys(),
+            hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
+        let paired = try await hosts.pair(link: link.absoluteString)
+        let model = try XCTUnwrap(hosts.model(for: paired.id))
+        try await waitUntil { model.hasSnapshot }
+        model.select(.task(RemoteFixtureBridge.ID.history))
+        try await waitUntil { model.conversations[RemoteFixtureBridge.ID.history]?.isLoaded == true }
+        let directory = try WindowlessRender.directory("design-audit/remote")
+        let size = NSSize(width: 1280, height: 820)
+        for appearance in WindowlessRender.Appearance.allCases {
+            let host = WindowlessRender.Host(RemoteHostView(model: model, directory: hosts)
+                .environment(\.colorScheme, appearance.colorScheme)
+                .environment(\.controlActiveState, .active), size: size,
+                appearance: appearance, titled: true)
+            defer { host.close() }
+            host.settle(passes: 12)
+            XCTAssertFalse(host.window.isVisible)
+            XCTAssertFalse(host.window.isKeyWindow)
+            try WindowlessRender.writePNG(host.capture().bitmap,
+                to: directory.appending(path: "window-\(appearance.suffix).png"))
+        }
+        hosts.close(paired.id)
+    }
+
     func testAHostsOwnCardsDrawAsTheLocalOnesDo() async throws {
         let folder = URL(filePath: "/tmp/remote-render/yardlet", directoryHint: .isDirectory)
         let claude = URL(filePath: "/tmp/claude")

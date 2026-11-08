@@ -391,6 +391,28 @@ final class NewTaskHomeRenderingTests: XCTestCase {
         XCTAssertTrue(shows("home-empty", L10n.string("Recent tasks")), report["home-empty"]!)
     }
 
+    /// Compare active controls without making the test window key or visible. An unshown window's
+    /// inactive borderless buttons are not evidence of the foreground app's text contrast.
+    func testDesignAuditHomeWithActiveControls() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["YARDLET_DESIGN_AUDIT"] == "1")
+        let directory = try WindowlessRender.directory("design-audit/home-active")
+        let runtimes = try runtimes()
+        for width in [CGFloat(640), 1240] {
+            let size = NSSize(width: width, height: 860)
+            for appearance in WindowlessRender.Appearance.allCases {
+                let view = home(.full, size: size, scheme: appearance.colorScheme, runtimes: runtimes, chat: false)
+                    .environment(\.controlActiveState, .active)
+                let host = WindowlessRender.Host(view, size: size, appearance: appearance)
+                defer { host.close() }
+                host.settle(passes: 10)
+                XCTAssertFalse(host.window.isVisible)
+                XCTAssertFalse(host.window.isKeyWindow)
+                try WindowlessRender.writePNG(host.capture().bitmap,
+                    to: directory.appending(path: "home-\(Int(width))-\(appearance.suffix).png"))
+            }
+        }
+    }
+
     // MARK: - In a window
 
     func testClicksAndTheKeyboardChooseAProjectOpenTasksAndReachTheFolderRows() throws {

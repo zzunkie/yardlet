@@ -265,6 +265,26 @@ final class BrowserPanelTabsQATests: XCTestCase {
 
     // MARK: - States
 
+    /// Browser chrome with an in-memory host; no page is loaded and no window is shown.
+    func testDesignAuditBrowserWithoutOrderingWindows() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["YARDLET_DESIGN_AUDIT"] == "1")
+        let directory = try WindowlessRender.directory("design-audit/browser")
+        for appearance in WindowlessRender.Appearance.allCases {
+            let fixture = try makeFixture()
+            fixture.model.splits.activate(.session(fixture.task.id))
+            let workspace = fixture.model.taskWorkspaces.state(for: fixture.task.id)
+            _ = workspace.openBrowserTab(address: "https://example.test/docs/long-page-title")
+            let host = WindowlessRender.Host(window(fixture, appearance), size: Self.size,
+                                             appearance: appearance)
+            defer { host.close() }
+            host.settle(passes: 20)
+            XCTAssertFalse(host.window.isVisible)
+            XCTAssertFalse(host.window.isKeyWindow)
+            try WindowlessRender.writePNG(host.capture().bitmap,
+                to: directory.appending(path: "panel-\(appearance.suffix).png"))
+        }
+    }
+
     func testEachBrowserTabIsASidePanelTab() throws {
         for appearance in [WindowlessRender.Appearance.light, .dark] {
             recordsReport = appearance == .light

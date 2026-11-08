@@ -252,6 +252,37 @@ final class WindowStructureQATests: XCTestCase {
 
     // MARK: - States
 
+    /// Design review only: mount each shell state without ordering any window on screen.
+    func testDesignAuditShellWithoutOrderingWindows() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["YARDLET_DESIGN_AUDIT"] == "1")
+        let directory = try WindowlessRender.directory("design-audit/shell")
+        for appearance in WindowlessRender.Appearance.allCases {
+            let fixture = try makeFixture()
+            let model = fixture.model
+            func drawState(_ name: String, size: NSSize = Self.size) throws {
+                let host = WindowlessRender.Host(window(model, appearance, size: size), size: size,
+                                                 appearance: appearance)
+                defer { host.close() }
+                host.settle(passes: 20)
+                XCTAssertFalse(host.window.isVisible)
+                XCTAssertFalse(host.window.isKeyWindow)
+                try WindowlessRender.writePNG(host.capture().bitmap,
+                    to: directory.appending(path: "\(name)-\(appearance.suffix).png"))
+            }
+            model.splits.activate(.session(fixture.running.id))
+            try drawState("task")
+            model.taskWorkspaces.state(for: fixture.running.id).setPanels(
+                .init(trailingSurfaceID: "diff", isTerminalPresented: true,
+                      trailingTabs: ["diff"], recentTrailingTabs: ["diff"]))
+            try drawState("review-terminal")
+            model.taskWorkspaces.state(for: fixture.running.id).setPanels(.init())
+            model.splits.openInNewTab(.session(fixture.left.id))
+            model.splits.combine(fixture.right.id, with: fixture.left.id)
+            try drawState("split")
+            try drawState("split-narrow", size: NSSize(width: 980, height: 760))
+        }
+    }
+
     func testEachWindowStatesHeadersAndWhatTheirButtonsActOn() throws {
         let fixture = try makeFixture()
         let model = fixture.model
