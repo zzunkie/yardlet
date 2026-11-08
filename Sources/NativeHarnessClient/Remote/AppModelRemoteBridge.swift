@@ -39,6 +39,11 @@ final class AppModelRemoteBridge: RemoteBridge {
     private(set) var projectedTurnCount = 0
     private(set) var watched: Set<UUID> = []
     private var cachedSchedules: [RemoteSchedule]?
+    /// Each listed schedule's masked definition and name, kept while the schedule and the project its text may
+    /// name stay the same: any task change rereads the list, and masking every prompt again was most of its cost.
+    private var maskedSchedules: [UUID: MaskedSchedule] = [:]
+    /// How many schedules' texts were masked anew, for the main thread's budget checks.
+    private(set) var scheduleMaskings = 0
     private var homeCommandCache: [String: (Date, [RemoteComposerCommand])] = [:]
     private var cachedOutputs: [UUID: [SessionRailContent.Output]] = [:]
     /// A read of the schedules is watched until they change; one watch at a time, since every read
@@ -1165,6 +1170,9 @@ final class AppModelRemoteBridge: RemoteBridge {
     /// Yardlet's own schedules as the Scheduled tasks list shows them, in its order and words. The session
     /// schedules a CLI holds are not Yardlet's and are not listed.
     func scheduledTasks() async -> Result<[RemoteSchedule], RemoteError> {
+        guard self.model != nil else { return .failure(RemoteError(.unavailable, "Yardlet is closing")) }
+        if let cachedSchedules { return .success(cachedSchedules) }
+        await maskChangedSchedules()
         guard let model else { return .failure(RemoteError(.unavailable, "Yardlet is closing")) }
         if let cachedSchedules { return .success(cachedSchedules) }
         // The runs' tasks as the snapshot lists them. Reading the snapshot watches the tasks, and their
@@ -1172,11 +1180,11 @@ final class AppModelRemoteBridge: RemoteBridge {
         let snapshot = snapshot()
         let schedules: [RemoteSchedule]
         if watchesSchedules {
-            schedules = Self.schedules(in: model, snapshot: snapshot)
+            schedules = self.schedules(in: model, snapshot: snapshot)
         } else {
             watchesSchedules = true
             schedules = withObservationTracking {
-                Self.schedules(in: model, snapshot: snapshot)
+                self.schedules(in: model, snapshot: snapshot)
             } onChange: { [weak self] in
                 Task { @MainActor in self?.schedulesChanged() }
             }
@@ -1187,7 +1195,7 @@ final class AppModelRemoteBridge: RemoteBridge {
 
     /// Reads the schedules, their starting runs, the projects they start in, and the time the list redraws by
     /// (each look of the schedule loop), so "tomorrow" becomes "today" on the phone as on the Mac.
-    static func schedules(in model: AppModel, snapshot: RemoteSnapshot) -> [RemoteSchedule] {
+    private func schedules(in model: AppModel, snapshot: RemoteSnapshot) -> [RemoteSchedule] {
         _ = model.scheduledSessionJobs
         let center = model.scheduledTasks
         let now = center.displayNow
@@ -1197,7 +1205,10 @@ final class AppModelRemoteBridge: RemoteBridge {
         let tasks = Dictionary(snapshot.tasks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let taskProjects = Dictionary(snapshot.projects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         // In the Mac's list order: the ones that will run, soonest first, then those that are off, then the one-offs that ran.
-        return center.sections.all.map { entry in
+        let entries = center.sections.all
+        let listed = Set(entries.map(\.schedule.id))
+        maskedSchedules = maskedSchedules.filter { listed.contains($0.key) }
+        return entries.map { entry in
             let schedule = entry.schedule
             let destination = schedule.destination
             let projectName: String?
@@ -1213,9 +1224,10 @@ final class AppModelRemoteBridge: RemoteBridge {
             }
             var remote = Self.schedule(schedule, nextRun: entry.nextRun, isStarting: starting.contains(schedule.id),
                                        now: now, calendar: calendar, projectName: projectName, tasks: tasks)
-            remote.definition = Self.scheduleDefinition(schedule, model: model)
-            let root = Self.sharedRoot(destination, model: model)
-            remote.name = Self.scheduleText(remote.name, root: root)
+            let masked = maskedSchedule(schedule, model: model)
+            let root = masked.root
+            remote.definition = masked.definition
+            remote.name = masked.name
             remote.status = remote.status.map { Self.scheduleText($0, root: root) }
             if let line = remote.lastRun?.line { remote.lastRun?.line = Self.scheduleText(line, root: root) }
             let accountID = destination.accountID ?? model.connections.selection[destination.harness]
@@ -1223,6 +1235,38 @@ final class AppModelRemoteBridge: RemoteBridge {
             remote.accountName = model.connections.choices(for: [destination.harness], includingMoving: true)
                 .first { $0.id == accountID }.map { Self.scheduleText($0.title, root: nil) }
             return remote
+        }
+    }
+
+    /// A schedule's definition and listed name as other devices see them, masked again only when it or the
+    /// project its text may name changed.
+    private func maskedSchedule(_ schedule: ScheduledTask, model: AppModel) -> MaskedSchedule {
+        let projectID = Self.sharedProjectID(schedule.destination, model: model)
+        let root = projectID.flatMap { model.projects.project(id: $0)?.primaryRoot }
+        if let kept = maskedSchedules[schedule.id], kept.masks(schedule, projectID: projectID, root: root) { return kept }
+        let masked = MaskedSchedule(schedule, projectID: projectID, root: root)
+        maskedSchedules[schedule.id] = masked
+        scheduleMaskings += 1
+        return masked
+    }
+
+    /// Masks the schedules whose text is not kept off the main actor, before a list read finds them kept: long
+    /// prompts made the first read hang the window.
+    private func maskChangedSchedules() async {
+        guard let model else { return }
+        let pending = model.scheduledTasks.schedules.compactMap { schedule -> (ScheduledTask, UUID?, URL?)? in
+            let projectID = Self.sharedProjectID(schedule.destination, model: model)
+            let root = projectID.flatMap { model.projects.project(id: $0)?.primaryRoot }
+            let kept = maskedSchedules[schedule.id]?.masks(schedule, projectID: projectID, root: root) == true
+            return kept ? nil : (schedule, projectID, root)
+        }
+        guard !pending.isEmpty else { return }
+        let masked = await Task.detached(priority: .userInitiated) {
+            pending.map { MaskedSchedule($0.0, projectID: $0.1, root: $0.2) }
+        }.value
+        for item in masked {
+            maskedSchedules[item.schedule.id] = item
+            scheduleMaskings += 1
         }
     }
 

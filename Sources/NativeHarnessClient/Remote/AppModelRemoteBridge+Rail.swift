@@ -186,20 +186,19 @@ extension AppModelRemoteBridge {
     /// Rail text is descriptive, never a transport for command environment values or unrelated paths.
     static func safeRailText(_ text: String, roots: [URL]) -> String {
         var result = RemoteSummary.masked(text)
-        if let expression = try? NSRegularExpression(pattern: #"\b[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s]+)"#) {
-            result = expression.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "•••")
-        }
-        if let expression = try? NSRegularExpression(pattern: #"(?<![:/A-Za-z0-9])/(?:[^\s"'<>`]+)"#) {
-            for match in expression.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed() {
-                guard let range = Range(match.range, in: result) else { continue }
-                let path = String(result[range])
-                if !roots.contains(where: { path == $0.path || path.hasPrefix($0.path + "/") }) {
-                    result.replaceSubrange(range, with: "…/" + URL(filePath: path).lastPathComponent)
-                }
+        result = railAssignment.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "•••")
+        for match in railPath.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed() {
+            guard let range = Range(match.range, in: result) else { continue }
+            let path = String(result[range])
+            if !roots.contains(where: { path == $0.path || path.hasPrefix($0.path + "/") }) {
+                result.replaceSubrange(range, with: "…/" + URL(filePath: path).lastPathComponent)
             }
         }
         return result
     }
+
+    private static let railAssignment = try! NSRegularExpression(pattern: #"\b[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s]+)"#)
+    private static let railPath = try! NSRegularExpression(pattern: #"(?<![:/A-Za-z0-9])/(?:[^\s"'<>`]+)"#)
 
     private static func milliseconds(_ date: Date?) -> Int64? { date.map { Int64($0.timeIntervalSince1970 * 1000) } }
     private static func mergeName(_ kind: PullRequestMergeRequest.Kind) -> String {

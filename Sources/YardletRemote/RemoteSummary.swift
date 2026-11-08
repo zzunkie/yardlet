@@ -27,8 +27,7 @@ public enum RemoteSummary {
     /// names, `user:password@` in URLs, and long runs of letters and digits that look like keys.
     public static func masked(_ text: String) -> String {
         var result = text
-        for (pattern, template) in rules {
-            guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+        for (expression, template) in rules {
             result = expression.stringByReplacingMatches(
                 in: result, range: NSRange(result.startIndex..., in: result), withTemplate: template)
         }
@@ -37,11 +36,13 @@ public enum RemoteSummary {
 
     private static let secretName = #"[A-Za-z0-9_.-]*(?:token|secret|passw(?:or)?d|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credential|auth)[A-Za-z0-9_.-]*"#
 
-    private static let rules: [(String, String)] = [
+    /// Compiled once: a phone's schedule list masks every schedule's name and prompt. A match starts only where the
+    /// leftmost one could, at the start of a scheme or a name, so long text is not rescanned from inside every word.
+    private static let rules: [(NSRegularExpression, String)] = [
         (#"\b(bearer|basic|token)\s+[A-Za-z0-9._~+/=-]{6,}"#, "$1 " + mask),
-        (#"([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@"#, "$1" + mask + "@"),
-        ("(\(secretName))(\\s*[=:]\\s*)(\"[^\"]*\"|'[^']*'|\\S+)", "$1$2" + mask),
+        (#"(?<![a-z])([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@"#, "$1" + mask + "@"),
+        ("(?<![A-Za-z0-9_.-])(\(secretName))(\\s*[=:]\\s*)(\"[^\"]*\"|'[^']*'|\\S+)", "$1$2" + mask),
         ("(--?\(secretName)[ =])(\"[^\"]*\"|'[^']*'|\\S+)", "$1" + mask),
         (#"(?<![A-Za-z0-9_+=-])(?=[A-Za-z0-9_+=-]*[0-9])(?=[A-Za-z0-9_+=-]*[A-Za-z])[A-Za-z0-9_+=-]{32,}"#, mask)
-    ]
+    ].map { pattern, template in (try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive]), template) }
 }

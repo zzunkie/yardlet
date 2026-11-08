@@ -1134,9 +1134,11 @@ final class RemoteBridgeTests: XCTestCase {
         try await waitUntil { (try? await bridge.scheduledTasks().get().first?.lastRun?.outcome) == .skipped }
         XCTAssertEqual(center.schedule(id: morning.id)?.state.runs.first?.skipReason, .previousRunActive)
 
-        // The run's task finishes: the list follows the task.
+        // The run's task finishes: the list follows the task, and masks no schedule's text again.
+        let maskings = bridge.scheduleMaskings
         try await model.store.updateSession(id: working.id, status: .completed)
         try await waitUntil { (try? await bridge.scheduledTasks().get().first?.running) == false }
+        XCTAssertEqual(bridge.scheduleMaskings, maskings, "A task change rereads the list, not its schedules' prompts")
         await model.shutdown()
     }
 

@@ -652,6 +652,9 @@ final class RemoteProtocolTests: XCTestCase {
         let assignments = RemoteSummary.masked("export GITHUB_TOKEN=ghp_abc123 API_KEY: \"s3cr3t\" --password hunter2 ls")
         XCTAssertFalse(assignments.contains("ghp_abc123") || assignments.contains("s3cr3t") || assignments.contains("hunter2"), assignments)
         XCTAssertTrue(assignments.hasSuffix("ls"))
+        // A scheme or a name joined to what precedes it is still found.
+        XCTAssertEqual(RemoteSummary.masked(#"1git+ssh://deploy:hunter2@host my.db_password="a"next_token=b"#),
+                       #"1git+ssh://•••@host my.db_password=•••next_token=•••"#)
         XCTAssertEqual(RemoteSummary.masked("key 9f8e7d6c5b4a39281706f5e4d3c2b1a0ffeeddcc"), "key •••")
         XCTAssertEqual(RemoteSummary.masked("swift test --filter RemoteServerTests"), "swift test --filter RemoteServerTests")
         XCTAssertEqual(RemoteSummary.masked("cat /Users/me/project2/Sources/Remote/RemoteServer.swift"),

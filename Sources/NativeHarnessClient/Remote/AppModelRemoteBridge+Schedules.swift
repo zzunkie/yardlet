@@ -4,15 +4,37 @@ import YardletRemote
 /// Schedule editing stays on the host's center. The wire definition is a presentation value;
 /// identity, history, account and filesystem authority always come from the host (§15.35).
 extension AppModelRemoteBridge {
-    static func scheduleDefinition(_ schedule: ScheduledTask, model: AppModel) -> Data? {
+    /// A schedule's wire definition and listed name, and what they were masked from. Masking reads nothing but
+    /// its inputs, so a list read can do it off the main actor.
+    struct MaskedSchedule: Sendable {
+        let schedule: ScheduledTask
+        let projectID: UUID?
+        let root: URL?
+        let definition: Data?
+        let name: String
+
+        init(_ schedule: ScheduledTask, projectID: UUID?, root: URL?) {
+            self.schedule = schedule
+            self.projectID = projectID
+            self.root = root
+            definition = AppModelRemoteBridge.scheduleDefinition(schedule, projectID: projectID, root: root)
+            name = AppModelRemoteBridge.scheduleText(RemoteText.capped(schedule.name, RemoteText.titleLimit).text, root: root)
+        }
+
+        func masks(_ schedule: ScheduledTask, projectID: UUID?, root: URL?) -> Bool {
+            self.schedule == schedule && self.projectID == projectID && self.root == root
+        }
+    }
+
+    /// `projectID` and `root` are the schedule's `sharedProjectID` and `sharedRoot`.
+    nonisolated static func scheduleDefinition(_ schedule: ScheduledTask, projectID: UUID?, root: URL?) -> Data? {
         var copy = schedule
         copy.origin = nil
-        let root = sharedRoot(schedule.destination, model: model)
         copy.name = Self.scheduleText(copy.name, root: root)
         copy.prompt = Self.scheduleText(copy.prompt, root: root)
         copy.destination.accountID = nil
         // A project travels by ID; the host folder itself never does (§15.35).
-        copy.destination.projectID = sharedProjectID(schedule.destination, model: model)
+        copy.destination.projectID = projectID
         copy.destination.workspacePath = schedule.destination.workspacePath == nil ? nil : hostFolder
         for index in copy.state.runs.indices {
             if let account = copy.state.runs[index].account {
@@ -48,7 +70,7 @@ extension AppModelRemoteBridge {
     }
 
     /// What a schedule's unregistered or hidden folder is called on the wire.
-    static let hostFolder = "yardlet-host-folder"
+    nonisolated static let hostFolder = "yardlet-host-folder"
 
     /// The project other devices see a schedule start in: none when the host hides it or it is gone,
     /// so the schedule reads like one in an unregistered folder and keeps its place when saved back.
@@ -63,10 +85,9 @@ extension AppModelRemoteBridge {
 
     /// Secrets and absolute paths outside the schedule's project are presentation-only masks.
     /// Unchanged masked instructions are resolved back to the host's original on save.
-    static func scheduleText(_ text: String, root: URL?) -> String {
+    nonisolated static func scheduleText(_ text: String, root: URL?) -> String {
         var result = RemoteSummary.masked(text)
-        guard let expression = try? NSRegularExpression(pattern: #"(?<![A-Za-z0-9:/])(?:/|~/)[^\s\"'<>]+"#) else { return result }
-        for match in expression.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed() {
+        for match in absolutePath.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed() {
             guard let range = Range(match.range, in: result) else { continue }
             let path = String(result[range])
             let normalized = URL(filePath: path).standardizedFileURL.path(percentEncoded: false)
@@ -76,6 +97,8 @@ extension AppModelRemoteBridge {
         }
         return result
     }
+
+    nonisolated private static let absolutePath = try! NSRegularExpression(pattern: #"(?<![A-Za-z0-9:/])(?:/|~/)[^\s\"'<>]+"#)
 
     /// The same selectors as a new task, including the permission choices the local menu confirms.
     static func scheduleSettings(_ options: ComposerSessionOptions) -> [RemoteSetting] {
