@@ -106,7 +106,15 @@ separate from the harness's native conversations and session IDs.
   state with the restored tasks (continuing cut-off turns, armed continues, schedules, following the session list) does
   not run, and the window says why until Yardlet is restarted. None of those records on disk change, so the next launch
   that opens the index finds them as they were. Settings and sign-ins are used as usual.
-- **Codex read cache:** `~/.yardlet/transcripts/<task UUID>.json` keeps `[TranscriptEntry]`. Entry IDs are name-based
+- **Read cache:** `~/.yardlet/transcripts/<task UUID>.json` keeps the newest 500 `[TranscriptEntry]` of every harness's
+  task. A save while the task streams (about once a second) adds only the entries that are new or changed to
+  `<task UUID>.jsonl`, one `{"entry":…}` a line after a first line `{"snapshot":<bytes>}` naming the size of the `.json`
+  it follows, and `{"from":<entry ID>}` when older entries drop out. Reading applies the lines to the `.json`, and
+  ignores the `.jsonl` when the size differs (an older Yardlet rewrote the `.json`, which it reads alone) and from an
+  unfinished line on. The `.json` is written whole again, and the `.jsonl` removed, once the `.jsonl` is as large
+  (at least 64 KiB), or when entries other than the oldest are removed or reordered (a rewound conversation).
+  Deleting the task deletes both files.
+- **Codex read cache entries:** Entry IDs are name-based
   UUIDs (v5) made from the thread, turn and item IDs, so they are the same at every checkpoint; the message that opened a
   turn is named from the turn ID alone. A reading position saved while the task was detached therefore connects to the
   Codex turn ID once it attaches (`ConversationAnchorResolver`). Random IDs in older caches are still read, and are
