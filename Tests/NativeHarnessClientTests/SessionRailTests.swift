@@ -190,7 +190,7 @@ final class SessionRailTests: XCTestCase {
         XCTAssertEqual(state.toggleTitle(for: task), L10n.string("Hide session rail"))
         state.toggle(for: task)
         XCTAssertEqual(state.toggleTitle(for: task), L10n.string("Show session rail"))
-        XCTAssertEqual(L10n.string("Show session rail", languageCode: "ko"), "세션 레일 표시")
+        XCTAssertEqual(L10n.string("Show session rail", languageCode: "ko"), "세션 레일 보기")
         XCTAssertEqual(L10n.string("Hide session rail", languageCode: "ko"), "세션 레일 숨기기")
         XCTAssertEqual(TaskCommandShortcut.toggleSessionRail.key, KeyEquivalent("i"))
         XCTAssertEqual(TaskCommandShortcut.toggleSessionRail.modifiers, [.command, .control])

@@ -263,7 +263,7 @@ final class NewTaskHomeTests: XCTestCase {
         XCTAssertEqual(english.after, "?")
         let korean = Kind.split(L10n.string("What should we build in %@?", languageCode: "ko"), around: "yardlet")
         XCTAssertEqual(korean.before, "")
-        XCTAssertEqual(korean.after, "에서 무엇을 만들어볼까요?")
+        XCTAssertEqual(korean.after, "에서 무엇을 만들어 볼까요?")
         XCTAssertEqual(Kind.build(project: "yardlet").sentence, L10n.format("What should we build in %@?", "yardlet"))
         XCTAssertEqual(Kind.workOn(project: "notes").sentence, L10n.format("What should we work on in %@?", "notes"))
         XCTAssertEqual(Kind.noProject.sentence, L10n.string("What should we build?"))
@@ -271,7 +271,7 @@ final class NewTaskHomeTests: XCTestCase {
         XCTAssertEqual(Kind.shortened(String(repeating: "a", count: 30)), String(repeating: "a", count: 30))
         XCTAssertEqual(Kind.shortened(String(repeating: "a", count: 30) + String(repeating: "b", count: 30)).count, 40)
 
-        XCTAssertEqual(L10n.string("What should we build in %@?", languageCode: "ko"), "%@에서 무엇을 만들어볼까요?")
+        XCTAssertEqual(L10n.string("What should we build in %@?", languageCode: "ko"), "%@에서 무엇을 만들어 볼까요?")
         XCTAssertEqual(L10n.string("What should we work on in %@?", languageCode: "ko"), "%@에서 무엇을 작업할까요?")
         XCTAssertEqual(String(format: L10n.string("Ask %@ to do anything", languageCode: "ko"), "Codex"), "Codex에게 뭐든 부탁해 보세요")
     }

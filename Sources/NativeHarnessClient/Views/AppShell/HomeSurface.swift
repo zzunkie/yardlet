@@ -720,7 +720,10 @@ private struct NewTaskComposer: View {
     @State private var commandSearch = ""
     @State private var commandError: String?
     @State private var isLoadingCommands = false
-    @State private var isShowingCommands = false
+    /// The "+" menu's open page: what can be added, or the slash commands it leads to.
+    @State private var addMenuPage: AddMenuPage?
+    /// The "+" menu was opened from the keyboard: its first row starts highlighted.
+    @State private var addMenuOpenedFromKeyboard = false
     /// The editor's typed `/` list is showing; Start waits until it closes.
     @State private var showsTypedCommands = false
     @State private var commandLoad: Task<Void, Never>?
@@ -833,7 +836,7 @@ private struct NewTaskComposer: View {
         ComposerEditor(
             draft: draft, placeholder: placeholder, metrics: .newTask,
             input: inputPolicy, mentionRoots: mentionRoots, commands: editorCommands,
-            isCommandMenuOpen: isShowingCommands, isMenuOpen: isShowingCommands,
+            isCommandMenuOpen: addMenuPage == .commands, isMenuOpen: addMenuPage != nil,
             isFocused: isPromptFocused, onSubmit: create, onTab: onTab,
             onCommandQueryChange: { _, query in showsTypedCommands = query != nil }
         ) {
@@ -876,7 +879,7 @@ private struct NewTaskComposer: View {
             }
 
             NewTaskComposerControlRow {
-                commandMenu
+                addMenu
                 primaryRootMenu
                 worktreeMenu
                 harnessMenu
@@ -901,7 +904,7 @@ private struct NewTaskComposer: View {
             commands = []
             commandError = nil
             isLoadingCommands = false
-            isShowingCommands = false
+            if addMenuPage == .commands { addMenuPage = nil }
         }
         .onDisappear { commandRequestID = nil; commandLoad?.cancel() }
         .shadow(color: .black.opacity(0.055), radius: 12, y: 4)
@@ -1030,7 +1033,7 @@ private struct NewTaskComposer: View {
 
     private var startAction: some View {
         NewTaskStartControl(canStart: canCreate, isStarting: draft.isCreating,
-            commandMenuOpen: showsTypedCommands || isShowingCommands, onStart: create)
+            commandMenuOpen: showsTypedCommands || addMenuPage != nil, onStart: create)
     }
 
     private func create() {
@@ -1089,33 +1092,71 @@ private struct NewTaskComposer: View {
             })
     }
 
-    @ViewBuilder private var commandMenu: some View {
-        if sessionOptions?.commands != nil, onReadCommands != nil {
+    private enum AddMenuPage { case additions, commands }
+
+    /// One "+" for everything that is added to a message, as the task composer has it and as the
+    /// Codex and Claude apps have it in a new chat: files or photos and a folder, then the slash
+    /// commands where the harness lists them. A typed `@` still searches the project's files.
+    @ViewBuilder private var addMenu: some View {
+        if let input = inputPolicy, input.showsMentionControl {
             Button {
-                commandSearch = ""
-                isShowingCommands = true
-                loadCommands()
+                addMenuOpenedFromKeyboard = ParityInteraction.currentEventIsKeyboard
+                addMenuPage = .additions
             } label: {
                 Image(systemName: "plus").font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary).frame(width: 28, height: 28)
             }
             .buttonStyle(.borderless).parityPointer()
-            .accessibilityLabel(L10n.string("Slash commands"))
-            .disabled(commandContext == nil || draft.isCreating)
-            .popover(isPresented: $isShowingCommands) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(L10n.string("Slash commands")).font(.callout.weight(.semibold))
-                    TextField(L10n.string("Search commands"), text: $commandSearch).textFieldStyle(.roundedBorder)
-                        .onSubmit {
-                            if let command = ComposerCommands.matching(commands, query: commandSearch).first { insertCommand(command) }
-                        }
-                    ComposerCommandPicker(commands: commands, query: commandSearch, isLoading: isLoadingCommands,
-                                          error: commandError, onSelect: insertCommand)
+            .accessibilityLabel(L10n.string("Add files and more"))
+            .help(L10n.string("Add files and more · Type @ to mention a file"))
+            .disabled(draft.isCreating)
+            .popover(isPresented: Binding(get: { addMenuPage != nil }, set: { if !$0 { addMenuPage = nil } })) {
+                switch addMenuPage {
+                case .commands?:
+                    commandsPage
+                default:
+                    ComposerMenuList(
+                        entries: ComposerPlusMenu.entries(carriesImages: input.carriesImages, connectors: nil,
+                                                          actions: addMenuActions(input)),
+                        highlightsFirstRow: addMenuOpenedFromKeyboard,
+                        onDismiss: { addMenuPage = nil })
                 }
-                .padding(8).frame(width: 340)
-                .onExitCommand { isShowingCommands = false }
             }
         }
+    }
+
+    private func addMenuActions(_ input: HarnessComposerInputPolicy) -> ComposerPlusMenu.Actions {
+        ComposerPlusMenu.Actions(
+            addFiles: {
+                addMenuPage = nil
+                if let chosen = ComposerFilePicker.chooseFiles(policy: input) { draft.add(chosen: chosen) }
+            },
+            addFolder: {
+                addMenuPage = nil
+                if let chosen = ComposerFilePicker.chooseFolders() { draft.add(chosen: chosen) }
+            },
+            openCommands: commandContext == nil || onReadCommands == nil ? nil : {
+                commandSearch = ""
+                addMenuPage = .commands
+                loadCommands()
+            },
+            openConnectors: nil)
+    }
+
+    /// "+" → "Slash commands": the search and the list, with the way back.
+    private var commandsPage: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ComposerMenuBackHeader(title: L10n.string("Slash commands")) { addMenuPage = .additions }
+            TextField(L10n.string("Search commands"), text: $commandSearch).textFieldStyle(.roundedBorder)
+                .onSubmit {
+                    if let command = ComposerCommands.matching(commands, query: commandSearch).first { insertCommand(command) }
+                }
+                .padding(.horizontal, 3)
+            ComposerCommandPicker(commands: commands, query: commandSearch, isLoading: isLoadingCommands,
+                                  error: commandError, onSelect: insertCommand)
+        }
+        .padding(5).frame(width: 340)
+        .onExitCommand { addMenuPage = nil }
     }
 
     private func loadCommands() {
@@ -1139,7 +1180,7 @@ private struct NewTaskComposer: View {
     }
 
     private func insertCommand(_ command: ProviderComposerCommand) {
-        isShowingCommands = false
+        addMenuPage = nil
         ComposerFieldEditor.insert(command, into: draft, isFocused: isPromptFocused)
     }
 

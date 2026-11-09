@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// One row of the composer's "+" menu and the lists it opens, drawn as the Claude app draws its
@@ -320,6 +321,31 @@ enum ComposerPlusMenu {
         }
         if entries.count > additions { entries[additions].startsGroup = true }
         return entries
+    }
+}
+
+/// The pickers behind the "+" menu's first rows, for the task composer and the new-task composer.
+/// Each returns nil when the person cancels.
+@MainActor
+enum ComposerFilePicker {
+    /// "Add files or photos": an image (or, for Codex, audio) the harness carries joins as an
+    /// attachment; any other file joins as context, a path the agent can read.
+    static func chooseFiles(policy: HarnessComposerInputPolicy) -> [CodexUserInput]? {
+        choose(folders: false).map { PromptComposer.addedInputs($0, policy: policy) }
+    }
+
+    /// "Add folder": folders join as context.
+    static func chooseFolders() -> [CodexUserInput]? {
+        choose(folders: true).map { $0.compactMap(CodexUserInput.localMention(for:)) }
+    }
+
+    private static func choose(folders: Bool) -> [URL]? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = !folders
+        panel.canChooseDirectories = folders
+        panel.allowsMultipleSelection = true
+        panel.prompt = L10n.string("Add")
+        return panel.runModal() == .OK ? panel.urls : nil
     }
 }
 

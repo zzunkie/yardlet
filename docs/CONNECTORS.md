@@ -525,12 +525,13 @@ name's tool schemas in `~/.gemini/antigravity-cli/mcp/<name>/` and does not remo
   - Your connectors: connected first, then in progress, needs sign-in and error (with a red reason line). The state is a
     dot and one word (`ConnectorSettingsState`), and there is one action button (Reconnect, Connect, Set up…, Try again
     or Cancel). A line under the list says when changes reach tasks (the "Tool lists of running tasks" section).
-  - The row's `…`: Reload tools, Reconnect, Disconnect and Remove. Connecting with an access token or with your own
-    OAuth client is there only when the service accepts it (the directory's token and client services, or servers
-    outside the directory). For Google services, "Google accounts and services…" opens the Google page instead of
-    Disconnect. For App Store Connect, "App Store Connect keys…" opens the keys page, and for the three Mac services,
-    "Open Privacy & Security…" opens that pane of System Settings. Google and Apple services, whose tools are built into
-    the app, have no Reload tools (Xcode has it).
+  - The row's `…`: Reload tools, Reconnect, Disconnect and Remove…, which asks first, naming the connector and its
+    account, because it signs out (unless another service of the same account still uses the sign-in). Connecting with
+    an access token or with your own OAuth client is there only when the service accepts it (the directory's token and
+    client services, or servers outside the directory). For Google services, "Google accounts and services…" opens
+    the Google page instead of Disconnect. For App Store Connect, "App Store Connect keys…" opens the keys page, and for
+    the three Mac services, "Open Privacy & Security…" opens that pane of System Settings. Google and Apple services,
+    whose tools are built into the app, have no Reload tools (Xcode has it).
   - A connected connector keeps its place while it signs in again or reloads its tools. If that attempt fails, it stays
     "Connected", and the reason is one gray line (`ConnectorSettingsState.note`, with a help tooltip when it does not
     fit). The Codex app and the Claude app also leave the row as it is in this case. The account rows on the Google page
@@ -727,7 +728,8 @@ also provides tools that read and edit the structure inside Docs, Sheets and Sli
   and the composer show "Reconnect", and calls return a tool error saying to sign in again. A network failure is only
   that call's error and does not change the state.
 - **Reconnect and remove:** reconnecting a Google service signs in the whole account again. Remove removes only that
-  service, and "Remove this Google account" removes the whole account. Yardlet does not ask Google to revoke tokens.
+  service, and "Remove this Google account…" removes the whole account after asking. Yardlet does not ask Google to
+  revoke tokens.
 - The mailbox (docs/MAILBOX.md) shows the inbox of each connected Gmail account with the same sign-in and session,
   and asks for no other scope.
 - Google account row: the address, five service chips (on or off, and state), and Reconnect and `…` when needed. Below

@@ -20,7 +20,7 @@ final class LocalizationTests: XCTestCase {
                 "Approval expired because the provider runtime stopped.",
                 languageCode: "ko"
             ),
-            "프로바이더 런타임이 종료되어 승인 요청이 만료되었습니다."
+            "제공자 런타임이 종료되어 승인 요청이 만료되었습니다."
         )
         XCTAssertEqual(L10n.string("Allow for session", languageCode: "ko"), "세션 동안 허용")
         XCTAssertEqual(
@@ -98,9 +98,9 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(L10n.string("Browser", languageCode: "ko"), "브라우저")
         XCTAssertEqual(L10n.string("On demand", languageCode: "ko"), "필요할 때만")
         XCTAssertEqual(L10n.string("Codex features", languageCode: "ko"), "Codex 기능")
-        XCTAssertEqual(L10n.string("Review working tree", languageCode: "ko"), "작업 트리 리뷰")
+        XCTAssertEqual(L10n.string("Review working tree", languageCode: "ko"), "작업 트리 검토")
         XCTAssertEqual(L10n.string("Worktree %@", languageCode: "en"), "Worktree %@")
-        XCTAssertEqual(L10n.string("Worktree %@", languageCode: "ko"), "작업 트리 %@")
+        XCTAssertEqual(L10n.string("Worktree %@", languageCode: "ko"), "워크트리 %@")
         XCTAssertEqual(L10n.string("Task title", languageCode: "ko"), "작업 제목")
         XCTAssertEqual(L10n.string("Rename task", languageCode: "ko"), "작업 이름 변경")
         XCTAssertEqual(L10n.string("New session", languageCode: "ko"), "새 세션")
@@ -113,7 +113,7 @@ final class LocalizationTests: XCTestCase {
             "다음 Codex 턴이 작업에 접근하는 방식을 선택합니다."
         )
         XCTAssertEqual(L10n.string("Fork task", languageCode: "ko"), "작업 포크")
-        XCTAssertEqual(L10n.string("Review working tree", languageCode: "ko"), "작업 트리 리뷰")
+        XCTAssertEqual(L10n.string("Review working tree", languageCode: "ko"), "작업 트리 검토")
         XCTAssertEqual(L10n.string("Harnesses", languageCode: "ko"), "하네스")
         XCTAssertEqual(L10n.string("Close panel", languageCode: "ko"), "패널 닫기")
         XCTAssertEqual(
@@ -158,7 +158,7 @@ final class LocalizationTests: XCTestCase {
         )
         XCTAssertEqual(
             L10n.string("Connect provider", languageCode: "ko"),
-            "프로바이더 연결"
+            "제공자 연결"
         )
         XCTAssertEqual(
             L10n.string("Use arrow keys and Enter for CLI-owned choices.", languageCode: "ko"),
@@ -181,7 +181,7 @@ final class LocalizationTests: XCTestCase {
             "코딩 에이전트를 둘러싼 루프를 직접 소유하세요."
         )
         XCTAssertEqual(L10n.string("What should we build?", languageCode: "ko"), "무엇을 만들까요?")
-        XCTAssertEqual(L10n.string("What should we build in %@?", languageCode: "ko"), "%@에서 무엇을 만들어볼까요?")
+        XCTAssertEqual(L10n.string("What should we build in %@?", languageCode: "ko"), "%@에서 무엇을 만들어 볼까요?")
         XCTAssertEqual(L10n.string("Local", languageCode: "ko"), "로컬")
         XCTAssertEqual(L10n.string("Load more history", languageCode: "ko"), "기록 더 불러오기")
         XCTAssertEqual(L10n.string("Search Codex history", languageCode: "ko"), "Codex 기록 검색")
@@ -319,6 +319,29 @@ final class LocalizationTests: XCTestCase {
         XCTAssertTrue(english.allSatisfy { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         XCTAssertTrue(korean.allSatisfy { !$0.key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         XCTAssertTrue(korean.allSatisfy { !$0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+
+        // A key missing from the catalogs shows its English on every other language's screen.
+        let sources = URL(filePath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Sources/NativeHarnessClient")
+        let literal = try NSRegularExpression(pattern: #"L10n\.(?:string|format)\(\s*"((?:[^"\\]|\\.)*)""#)
+        var missing: [String] = []
+        var checked = 0
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
+        for case let file as URL in files where file.pathExtension == "swift" {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for match in literal.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+                guard let range = Range(match.range(at: 1), in: text) else { continue }
+                let written = String(text[range])
+                guard !written.contains("\\(") else { continue }
+                let key = written.replacingOccurrences(of: "\\n", with: "\n")
+                    .replacingOccurrences(of: "\\\"", with: "\"").replacingOccurrences(of: "\\\\", with: "\\")
+                checked += 1
+                if english[key] == nil { missing.append("\(file.lastPathComponent): \(written)") }
+            }
+        }
+        XCTAssertGreaterThan(checked, 1_000, "the scan found the sources")
+        XCTAssertEqual(missing, [])
     }
 
     /// The app's own `AppleLanguages`, as System Settings writes it per app: a language puts that one

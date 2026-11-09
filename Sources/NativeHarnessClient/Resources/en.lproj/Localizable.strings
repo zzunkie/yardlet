@@ -65,7 +65,10 @@
 "ACP session is not attached" = "ACP session is not attached";
 "ACP session/new response is missing sessionId" = "ACP session/new response is missing sessionId";
 "ACP transport cannot restart after being stopped" = "ACP transport cannot restart after being stopped";
+"ACP permission action is not available" = "ACP permission action is not available";
+"Claude Code transport ended unexpectedly" = "Claude Code transport ended unexpectedly";
 "Agent Client Protocol" = "Agent Client Protocol";
+"Muse Session Protocol" = "Muse Session Protocol";
 "Allow" = "Allow";
 "Allow for session" = "Allow for session";
 "Allow once" = "Allow once";
@@ -152,6 +155,7 @@
 "Available" = "Available";
 "Cancel" = "Cancel";
 "Changes" = "Changes";
+"Review changes" = "Review changes";
 "Chat" = "Chat";
 "Choose project" = "Choose project";
 "Choose project…" = "Choose project…";
@@ -331,6 +335,7 @@
 "Approve for me" = "Approve for me";
 "Custom (config.toml)" = "Custom (config.toml)";
 "Custom" = "Custom";
+"Custom runtime" = "Custom runtime";
 "Always ask to edit external files and use the internet" = "Always ask to edit external files and use the internet";
 "Only ask for actions detected as potentially unsafe" = "Only ask for actions detected as potentially unsafe";
 "Unrestricted access to the internet and any file on your computer" = "Unrestricted access to the internet and any file on your computer";
@@ -434,6 +439,9 @@
 "Cursor did not create a chat in time" = "Cursor did not create a chat in time";
 "Show in Finder" = "Show in Finder";
 "No provider session" = "No provider session";
+"Codex history is unavailable for this task" = "Codex history is unavailable for this task";
+"Task was deleted during harness attach" = "Task was deleted during harness attach";
+"Task title cannot be empty" = "Task title cannot be empty";
 "Approval required" = "Approval required";
 "In progress" = "In progress";
 "Plan" = "Plan";
@@ -1881,7 +1889,7 @@
 "claude.skill.failed" = "Failed to run skill";
 "claude.todos.running" = "Updating todos";
 "claude.todos.done" = "Updated todos";
-"claude.todos.failed" = "Updated todos";
+"claude.todos.failed" = "Failed to update todos";
 "claude.todos.cleared" = "Cleared todos";
 "claude.using" = "<verb>Using</verb> %@";
 "claude.used" = "<verb>Used</verb> %@";
@@ -2082,7 +2090,15 @@
 "Reconnecting…" = "Reconnecting…";
 "Remote Mac" = "Remote Mac";
 "Remove from This Mac" = "Remove from This Mac";
+"Remove %@ from this Mac?" = "Remove %@ from this Mac?";
+"To connect again, pair with a new link from %@'s Settings › Remote." = "To connect again, pair with a new link from %@'s Settings › Remote.";
+"%@, %@" = "%@, %@";
+"Load more" = "Load more";
+"Continue" = "Continue";
+"Change" = "Change";
 "Remove…" = "Remove…";
+"Tasks stop using it. The account stays signed in for its other services." = "Tasks stop using it. The account stays signed in for its other services.";
+"Tasks stop using it, and the sign-in and settings Yardlet saved for it are deleted." = "Tasks stop using it, and the sign-in and settings Yardlet saved for it are deleted.";
 "Slash commands run on %@." = "Slash commands run on %@.";
 "That isn't offered for this task now." = "That isn't offered for this task now.";
 "The file is too large to send." = "The file is too large to send.";
@@ -2640,7 +2656,8 @@
 "Publish the app (External only)" = "Publish the app (External only)";
 "Range: %@" = "Range: %@";
 "Register one Google OAuth app in your own Google Cloud project, then sign in once with each account; Yardlet runs its own Gmail, Calendar, and Drive servers with it. For Claude tasks you can instead turn on “Use claude.ai account connectors”, and each Claude account's tasks use what it connected on claude.ai." = "Register one Google OAuth app in your own Google Cloud project, then sign in once with each account; Yardlet runs its own Gmail, Calendar, and Drive servers with it. For Claude tasks you can instead turn on “Use claude.ai account connectors”, and each Claude account's tasks use what it connected on claude.ai.";
-"Remove this Google account" = "Remove this Google account";
+"Remove this Google account…" = "Remove this Google account…";
+"Tasks stop using its services, and Yardlet signs out of the account." = "Tasks stop using its services, and Yardlet signs out of the account.";
 "Save your Google OAuth app first: Settings → Connectors → Set up Google." = "Save your Google OAuth app first: Settings → Connectors → Set up Google.";
 "Scopes" = "Scopes";
 "Set up %@" = "Set up %@";
@@ -3286,7 +3303,7 @@
 "Sign in with Microsoft" = "Sign in with Microsoft";
 "Microsoft account" = "Microsoft account";
 "Save the Microsoft app first." = "Save the Microsoft app first.";
-"Remove this Microsoft account" = "Remove this Microsoft account";
+"Remove this Microsoft account…" = "Remove this Microsoft account…";
 "Yardlet uses Zoom's own MCP servers with a Zoom app of yours. One app serves Meetings, Team Chat, and Docs; Yardlet asks Zoom only to read." = "Yardlet uses Zoom's own MCP servers with a Zoom app of yours. One app serves Meetings, Team Chat, and Docs; Yardlet asks Zoom only to read.";
 "Set up Zoom" = "Set up Zoom";
 "Each Zoom product needs its license on your account. A product your plan lacks connects but its tools answer with Zoom's reason." = "Each Zoom product needs its license on your account. A product your plan lacks connects but its tools answer with Zoom's reason.";

@@ -51,6 +51,16 @@ extension ComposerDraftEditing {
         attachments.remove(at: index)
     }
 
+    /// What "+" → "Add files or photos" or "Add folder" chose joins the draft. A choice with nothing
+    /// the harness can take says so beside the text.
+    func add(chosen inputs: [CodexUserInput]) {
+        guard !inputs.isEmpty else {
+            notice = L10n.string("Context unavailable")
+            return
+        }
+        attachments.append(contentsOf: inputs)
+    }
+
     /// An attached image's marked-up copy takes its place; the original file stays where it was.
     func replaceAttachment(at index: Int, withMarkedUp copy: URL) {
         guard attachments.indices.contains(index), case .localImage = attachments[index],

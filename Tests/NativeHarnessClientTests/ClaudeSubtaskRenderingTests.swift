@@ -31,7 +31,7 @@ final class ClaudeSubtaskRenderingTests: XCTestCase {
             try WindowlessRender.writePNG(bitmap,
                 to: directory.appending(path: appearance == .dark ? "controls-dark.png" : "controls-light.png"))
         }
-        XCTAssertEqual(L10n.string("Stop task", languageCode: "ko"), "이 작업 중단")
+        XCTAssertEqual(L10n.string("Stop task", languageCode: "ko"), "작업 중지")
         XCTAssertEqual(L10n.string("Open child task", languageCode: "ko"), "하위 작업 열기")
     }
 
