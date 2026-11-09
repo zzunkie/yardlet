@@ -2825,6 +2825,8 @@
 "Two-factor setup key" = "2단계 인증 설정 키";
 "Setup key or otpauth:// address" = "설정 키 또는 otpauth:// 주소";
 "Unchanged" = "바꾸지 않음";
+"Removed when you save" = "저장하면 지워집니다";
+"This item has only its code. Delete it instead." = "코드만 있는 항목입니다. 항목을 삭제하세요.";
 "Agent use" = "에이전트 사용";
 "Always" = "항상";
 "While unlocked" = "잠금이 풀린 동안";

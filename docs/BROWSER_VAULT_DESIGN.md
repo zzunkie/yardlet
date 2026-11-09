@@ -797,9 +797,12 @@ apps, and backup and restore work only between devices of the same kind
   with only a code and no password (the Apple column name was confirmed from community sources).
 - **Vault screen:** Settings → Vault has a "Two-factor codes" list with a row for each item that has a code (name,
   account or site, the code split into two groups, a ring showing the seconds left, copy). The item sheet has the same
-  row. Copying adds `org.nspasteboard.ConcealedType` so clipboard history apps do not keep it. Viewing a code does not
-  ask for Touch ID (the same level as the person's key button fill, and phone authenticator apps do not ask by default
-  either). The keychain is read only while this list is visible.
+  row, with Remove, which takes the code out of the item and its keychain secret when the sheet saves (Cancel keeps it),
+  as Apple's Passwords app deletes an entry's verification code. An item that holds no password or passkey beside the
+  code is deleted with Delete instead, and the row says so rather than saving an empty item. Copying adds
+  `org.nspasteboard.ConcealedType` so clipboard history apps do not keep it. Viewing a code does not ask for Touch ID
+  (the same level as the person's key button fill, and phone authenticator apps do not ask by default either). The
+  keychain is read only while this list is visible.
 - **Items without a site:** like an authenticator app's entries, they show and copy the code, and an import saves them
   without a site, since an issuer such as "Amazon Web Services" names no domain. A name names a site when the name, or
   its first word, is the own label of the site's registrable domain apart from case, spaces and punctuation (`Vercel`
