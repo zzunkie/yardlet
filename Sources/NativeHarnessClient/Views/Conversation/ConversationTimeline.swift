@@ -113,6 +113,8 @@ struct ConversationTimeline: View {
         // (`ConversationTurnRows`), each a row the window counts.
         let rows = rendering.parts.rows(of: project())
         let whole = rows.presentation
+        // What the closures below read of the whole conversation, by reference (`LoadedConversation`).
+        let loaded = LoadedConversation(rows: rows, threadID: threadID)
         let window = turnWindow
         let windowed = window?.apply(to: whole) ?? whole
         let revealed = reveal.apply(to: windowed)
@@ -127,8 +129,7 @@ struct ConversationTimeline: View {
         // card comes or the task moves past it, not with each entry added, so a turn is not drawn
         // again for each of them.
         let context = itemContext(presentation)
-        let wholeAnchors = ConversationAnchorResolver(presentation: whole, threadID: threadID)
-        let latestRequestID = latestRequest.id(latestTurnID: railTurns.last?.id) { wholeAnchors.isRenamed($0, as: $1) }
+        let latestRequestID = latestRequest.id(latestTurnID: railTurns.last?.id) { loaded.anchors.isRenamed($0, as: $1) }
         HStack(spacing: 0) {
             if railTurns.count > 1 || hasEarlierTurns {
                 CodexTurnRail(
@@ -139,13 +140,13 @@ struct ConversationTimeline: View {
                         focusedTurnID = turnID
                         scrollState.isFollowing = false
                         // A turn whose start the window leaves out is drawn from its start, then gone to.
-                        if let window, window.hides(turnID, in: whole) { earliestReadTurnID = turnID }
+                        if let window, window.hides(turnID, in: loaded.whole) { earliestReadTurnID = turnID }
                         turnFocusRequest += 1
                     },
                     hasMoreTurns: hasEarlierTurns,
                     moreTurns: "\(presentation.earlier)",
                     onLoadMore: {
-                        loadEarlierTurns(windowed.earlier, loadedTurnCount: whole.turns.count,
+                        loadEarlierTurns(windowed.earlier, loadedTurnCount: loaded.whole.turns.count,
                                          before: windowed.turns.first?.id, revealing: revealed.progress, asksForMore: true)
                     }
                 )
@@ -159,10 +160,10 @@ struct ConversationTimeline: View {
                         emptyState
                     }
                     ForEach(turns) { turn in
-                        let part = rows.part(of: turn.id)
+                        let part = loaded.rows.part(of: turn.id)
                         let host = ConversationTurnHost(
                             turn: turn, part: part, context: context,
-                            handlers: handlers(for: turn, turnID: rows.turnID(of: turn.id)), renderState: rendering
+                            handlers: handlers(for: turn, turnID: loaded.rows.turnID(of: turn.id)), renderState: rendering
                         ).equatable()
                         // A part goes on from the one before as the items of one turn do. Only a part
                         // takes the padding: around every turn, it cost a streaming conversation of 300
@@ -183,10 +184,10 @@ struct ConversationTimeline: View {
                     readingPosition: readingPosition, readingTracker: readingTracker,
                     readingItemIDs: turns.map(\.id),
                     pendingRequestIDs: presentation.pendingRequestIDs,
-                    readingAnchors: readingAnchors(wholeAnchors, whole: whole, window: window),
+                    readingAnchors: readingAnchors(loaded, window: window),
                     pinsGrowthToBottom: true,
                     loadEarlier: presentation.earlier == .none ? nil : {
-                        loadEarlierTurns(windowed.earlier, loadedTurnCount: whole.turns.count,
+                        loadEarlierTurns(windowed.earlier, loadedTurnCount: loaded.whole.turns.count,
                                          before: windowed.turns.first?.id, revealing: revealed.progress, asksForMore: false)
                     },
                     earlierKey: presentation.earlier == .none ? nil
@@ -202,14 +203,14 @@ struct ConversationTimeline: View {
                         if scrollState.isFollowing { scrollState.isFollowing = false }
                     }
                     if let find, find.isPresented {
-                        ConversationFindFeeder(find: find, source: .conversation(whole))
+                        ConversationFindFeeder(find: find, source: .conversation(loaded.whole))
                     }
                 }
                 // A match in a turn the window leaves out widens the window to it first (plan A5.2),
                 // then goes there once the turn is drawn.
                 .onChange(of: find?.scrollRequest) { _, request in
                     if request != nil { reveal.end() }
-                    guard let request, let window, window.hides(request.scrollID, in: whole) else { return }
+                    guard let request, let window, window.hides(request.scrollID, in: loaded.whole) else { return }
                     earliestReadTurnID = request.scrollID
                     Task { @MainActor in
                         await Task.yield()
@@ -232,17 +233,17 @@ struct ConversationTimeline: View {
                     }
                 }
                 .onChange(of: readingTracker.visibleAnchorID) { _, id in
-                    if !scrollState.isFollowing, let id { focusedTurnID = rows.turnID(of: id) }
+                    if !scrollState.isFollowing, let id { focusedTurnID = loaded.rows.turnID(of: id) }
                 }
                 .task(id: historySelection) {
                     let restoresReading = !handledInitialSearch && readingPosition?.bookmark.followsLatest == false
                     handledInitialSearch = true
                     guard !restoresReading else { return }
-                    guard historySelection != nil, let targetTurnID = Self.firstHistoryMatch(in: whole)
+                    guard historySelection != nil, let targetTurnID = Self.firstHistoryMatch(in: loaded.whole)
                     else { return }
                     reveal.end()
                     // A match in a turn the window leaves out widens the window to it first.
-                    if let window, window.hides(targetTurnID, in: whole) { earliestReadTurnID = targetTurnID }
+                    if let window, window.hides(targetTurnID, in: loaded.whole) { earliestReadTurnID = targetTurnID }
                     await Task.yield()
                     guard !Task.isCancelled else { return }
                     readingTracker.cancelRestoration()
@@ -257,12 +258,12 @@ struct ConversationTimeline: View {
                 .task(id: place?.request.id) {
                     guard placement == .task, let place else { return }
                     defer { place.done() }
-                    guard let targetTurnID = Self.turn(holding: place.request.callID, in: whole) else { return }
+                    guard let targetTurnID = Self.turn(holding: place.request.callID, in: loaded.whole) else { return }
                     reveal.end()
                     readingTracker.cancelRestoration()
                     scrollState.isFollowing = false
                     focusedTurnID = targetTurnID
-                    if let window, window.hides(targetTurnID, in: whole) { earliestReadTurnID = targetTurnID }
+                    if let window, window.hides(targetTurnID, in: loaded.whole) { earliestReadTurnID = targetTurnID }
                     // Once the widened window is drawn, and again once the place kept as its turns arrived
                     // above has settled, as find goes to a match.
                     for delay in [30, 120] {
@@ -327,11 +328,10 @@ struct ConversationTimeline: View {
 
     /// Saved places read against the whole conversation. A place in a turn the window leaves out
     /// widens the window to it; the tracker keeps the place until the turn is drawn.
-    private func readingAnchors(
-        _ anchors: ConversationAnchorResolver, whole: ConversationPresentation, window: ConversationTurnWindow?
-    ) -> TranscriptReadingAnchors {
+    private func readingAnchors(_ loaded: LoadedConversation, window: ConversationTurnWindow?) -> TranscriptReadingAnchors {
         TranscriptReadingAnchors(
             start: { [readingPosition, earlierReadingPosition, $earliestReadTurnID] in
+                let anchors = loaded.anchors
                 let saved = readingPosition?.bookmark ?? .init()
                 let earlier = earlierReadingPosition?.bookmark
                 if let earlierReadingPosition, earlier != TranscriptReadingBookmark() {
@@ -339,12 +339,12 @@ struct ConversationTimeline: View {
                 }
                 let bookmark = anchors.startingBookmark(saved: saved, earlier: earlier)
                 if !bookmark.followsLatest, let turnID = bookmark.anchorID, let window,
-                   window.hides(turnID, in: whole) {
+                   window.hides(turnID, in: loaded.whole) {
                     $earliestReadTurnID.wrappedValue = turnID
                 }
                 return bookmark
             },
-            resolve: { anchors.resolve($0) }
+            resolve: { loaded.anchors.resolve($0) }
         )
     }
 
@@ -562,6 +562,24 @@ struct ConversationTimeline: View {
             .frame(maxWidth: .infinity)
             .padding(.top, 96)
         }
+    }
+}
+
+/// The whole conversation as the timeline's closures read it when they run: going to a turn, find,
+/// saved places, loading earlier turns. SwiftUI compares what a view's stored closures captured each
+/// time the view updates, value by value, and a closure that captured the whole conversation made every
+/// update compare each turn's items with the update before's, a pass over the whole history on the main
+/// thread for each streamed word (a third of an update at 3,200 turns). A reference is compared by
+/// identity; the closures read through one made with each update, what they captured before.
+private final class LoadedConversation {
+    let rows: ConversationTurnRows
+    let anchors: ConversationAnchorResolver
+
+    var whole: ConversationPresentation { rows.presentation }
+
+    init(rows: ConversationTurnRows, threadID: String?) {
+        self.rows = rows
+        anchors = ConversationAnchorResolver(presentation: rows.presentation, threadID: threadID)
     }
 }
 
