@@ -6,7 +6,7 @@ loading the whole test bundle, and each one that uses AppKit checking in with th
 which works out focus again as it exits. This runs the same tests in batches, each batch in one
 xctest process, `--workers` processes at a time. Batches follow the list's order and get smaller
 toward the end of the run, so the last ones are short and the workers finish together; a run of
-about 3,000 tests takes some 70 processes.
+about 3,000 tests takes some 90 processes.
 
 A batch whose process crashes or ends before its last test reports the test it was in as failed and
 runs the rest of its tests again in a new process, so every test still gets a result of its own, as
@@ -40,7 +40,7 @@ RUN_END = re.compile(r"^Test Suite 'Selected tests' (passed|failed) at ")
 # window leaves behind, so the largest is kept small enough that one process's memory stays near what
 # one such test takes alone.
 LARGEST_BATCH = 64
-SMALLEST_BATCH = 16
+SMALLEST_BATCH = 4
 
 
 def main():
