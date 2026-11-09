@@ -10,6 +10,8 @@ import XCTest
 /// - `settings-vault-unsigned-*`: an ad-hoc build with an empty vault: the switch off and disabled.
 /// - `vault-item-*`: a saved item's sheet with its previous passwords, recent uses and passkey line.
 /// - `vault-item-new-*`: a new item from a page, with its site and username filled in.
+/// - `vault-item-code-removed-*`, `vault-item-code-only-removed-*`: Remove pressed beside a saved code, in a sign-in and
+///   in an item that holds only the code.
 /// - `settings-vault-unlinked-*`: codes with no site, with the sites suggested for them and one left to type.
 /// - `settings-vault-search-*`: the lists narrowed by a search.
 /// - `settings-vault-accounts-*`, `vault-item-account-*`: two accounts of one username, and one's item sheet.
@@ -280,6 +282,41 @@ final class VaultSettingsRenderingTests: XCTestCase {
             appearance in
             draft.environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas)
         }
+
+        // Remove beside the saved code takes it out on Save, as Apple's Passwords app deletes a verification code: the
+        // item keeps its password and passkey, and neither it nor its keychain secret holds a code. An item that holds
+        // only its code points to Delete and saves nothing.
+        let codeOnly = VaultItem(name: "Fabrikam", sites: [], username: "ada", hasOneTimeCode: true)
+        try vault.save(codeOnly, secret: VaultSecret(oneTimeCode: OneTimeCodeSecret(key: Data("12345678901234567890".utf8))))
+        for (name, item, note) in [("vault-item-code-removed", Self.github, "Removed when you save"),
+                                   ("vault-item-code-only-removed", codeOnly,
+                                    "This item has only its code. Delete it instead.")] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let removing = WindowlessRender.Host(
+                    VaultItemSheet(vault: vault, item: item, onDone: {})
+                        .frame(width: size.width, height: size.height, alignment: .top)
+                        .environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas),
+                    size: size, appearance: appearance)
+                defer { removing.close() }
+                removing.settle()
+                XCTAssertTrue(removing.hosting.pressAccessibilityElement(labelled: L10n.string("Remove")), name)
+                removing.settle()
+                try WindowlessRender.writePNG(removing.capture().bitmap,
+                                              to: directory.appending(path: "\(name)-\(appearance.suffix).png"))
+                let shown = removing.accessibilityElements().map { "\($0.label) \($0.value)" }
+                XCTAssertTrue(shown.contains { $0.contains(L10n.string(note)) }, "\(name): \(shown)")
+                XCTAssertFalse(shown.contains { $0.contains(L10n.string("Copy Code")) }, "\(name): \(shown)")
+                if appearance == .dark { _ = removing.hosting.pressAccessibilityElement(labelled: L10n.string("Save")) }
+            }
+        }
+        let saved = try XCTUnwrap(vault.items.first { $0.id == Self.github.id })
+        XCTAssertEqual([saved.hasPassword, saved.hasOneTimeCode, saved.hasPasskey], [true, false, true])
+        let secret = try XCTUnwrap(vault.secret(of: Self.github.id))
+        XCTAssertNil(secret.oneTimeCode)
+        XCTAssertEqual(secret.password, "not-a-real-password")
+        XCTAssertNotNil(secret.passkey)
+        XCTAssertEqual(vault.items.first { $0.id == codeOnly.id }?.hasOneTimeCode, true)
+        XCTAssertNotNil(vault.secret(of: codeOnly.id)?.oneTimeCode)
     }
 
     /// Two AWS accounts with one IAM username (design §17): the list shows each one's username and account beside its

@@ -7,8 +7,9 @@ import SwiftUI
 /// with the page's site filled in. Secrets the person leaves blank stay as saved; the saved password
 /// shows only after Touch ID or the login password, as Chrome's and Safari's password pages do. An
 /// item may hold a two-factor code alone, without a site or password, as an authenticator app's
-/// entry (§14); its current code shows here to copy. The passwords a saved one replaced are kept and
-/// show the same way (§15), so a change a site did not take loses nothing.
+/// entry (§14); its current code shows here to copy, and Remove takes the code out when the sheet saves, as Apple's
+/// Passwords app deletes an entry's verification code. The passwords a saved one replaced are kept and show the same way
+/// (§15), so a change a site did not take loses nothing.
 struct VaultItemSheet: View {
     let vault: VaultCenter
     private let original: VaultItem?
@@ -29,6 +30,8 @@ struct VaultItemSheet: View {
     @State private var failure: String?
     /// The saved item's code secret, for its current code.
     @State private var savedCode: OneTimeCodeSecret?
+    /// Whether Save takes the saved code out of the item; Cancel keeps it.
+    @State private var removesCode = false
     /// How many passwords the saved one replaced, and those passwords once the person confirmed.
     @State private var previousCount = 0
     @State private var previousPasswords: [VaultPreviousPassword]?
@@ -156,14 +159,25 @@ struct VaultItemSheet: View {
             GridRow {
                 label(L10n.string("Two-factor setup key"))
                 TextField(L10n.string("Two-factor setup key"), text: $setupKey,
-                          prompt: unchangedPrompt(original?.hasOneTimeCode)
+                          prompt: unchangedPrompt(original?.hasOneTimeCode == true && !removesCode)
                             ?? Text(L10n.string("Setup key or otpauth:// address")))
                     .foregroundColor(oneTimeCode == nil ? .red : nil)
             }
             if let savedCode, setupKey.isEmpty {
                 GridRow {
                     label(L10n.string("Code"))
-                    VaultLiveCode(vault: vault, secret: savedCode)
+                    HStack(spacing: 10) {
+                        if removesCode {
+                            Text(holdsMoreThanCode ? L10n.string("Removed when you save")
+                                 : L10n.string("This item has only its code. Delete it instead."))
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                            Button(L10n.string("Undo")) { removesCode = false }
+                        } else {
+                            VaultLiveCode(vault: vault, secret: savedCode)
+                            Button(L10n.string("Remove")) { removesCode = true }
+                        }
+                    }
                 }
             }
             GridRow {
@@ -317,11 +331,18 @@ struct VaultItemSheet: View {
         return OneTimeCodeSecret(setupText: text).map { .some($0) }
     }
 
+    /// Whether the item keeps a password or passkey without its code.
+    private var holdsMoreThanCode: Bool {
+        !password.isEmpty || original?.hasPassword == true || original?.hasPasskey == true
+    }
+
     /// A name, and sites unless the item is a two-factor code alone (an authenticator app's entry, shown
-    /// and copied in Settings but filled nowhere).
+    /// and copied in Settings but filled nowhere). An item that held only the code it loses is deleted, not saved empty.
     private var canSave: Bool {
         guard !trimmedName.isEmpty, let sites, let code = oneTimeCode else { return false }
-        return !sites.isEmpty || code != nil || original?.hasOneTimeCode == true
+        let keepsCode = code != nil || (original?.hasOneTimeCode == true && !removesCode)
+        guard keepsCode || !removesCode || holdsMoreThanCode else { return false }
+        return !sites.isEmpty || keepsCode
     }
 
     private func togglePassword() {
@@ -358,7 +379,11 @@ struct VaultItemSheet: View {
             secret = saved
         }
         if !password.isEmpty { secret.password = password }
-        if let code { secret.oneTimeCode = code }
+        if let code {
+            secret.oneTimeCode = code
+        } else if removesCode {
+            secret.oneTimeCode = nil
+        }
         var item = original ?? VaultItem(name: trimmedName, sites: sites, username: "", policy: .always)
         item.name = trimmedName
         item.sites = sites

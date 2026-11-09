@@ -2825,6 +2825,8 @@
 "Two-factor setup key" = "Two-factor setup key";
 "Setup key or otpauth:// address" = "Setup key or otpauth:// address";
 "Unchanged" = "Unchanged";
+"Removed when you save" = "Removed when you save";
+"This item has only its code. Delete it instead." = "This item has only its code. Delete it instead.";
 "Agent use" = "Agent use";
 "Always" = "Always";
 "While unlocked" = "While unlocked";
