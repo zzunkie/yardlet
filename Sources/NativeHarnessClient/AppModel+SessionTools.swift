@@ -126,10 +126,8 @@ extension AppModel: SessionToolHandling {
     /// run of an agent's schedule started, one below the task that made the schedule.
     func sessionToolDepth(of taskID: UUID, seen: Set<UUID> = []) -> Int {
         let recorded = sessionTools.depth(of: taskID)
-        guard let maker = scheduledTasks.schedules.first(where: { schedule in
-            schedule.destination.mode == .newTask
-                && schedule.state.runs.contains { $0.outcome == .started && $0.taskID == taskID }
-        })?.agentTaskID, maker != taskID, !seen.contains(maker) else { return recorded }
+        guard let maker = scheduledTasks.schedule(startedTask: taskID)?.agentTaskID, maker != taskID,
+              !seen.contains(maker) else { return recorded }
         return max(recorded, sessionToolDepth(of: maker, seen: seen.union([taskID])) + 1)
     }
 

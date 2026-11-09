@@ -36,7 +36,7 @@ extension AppModel {
             }
             return canTakeAutoFix(id) && followUps.queue(for: id).isEmpty ? nil : .targetBusy
         case .newTask:
-            guard let taskID = schedule.latestStartedRun?.taskID,
+            guard let taskID = schedule.state.runs.first(where: schedule.startedNewTask)?.taskID,
                   let task = store.sessions.first(where: { $0.id == taskID }) else { return nil }
             return Self.isWorking(task) ? .previousRunActive : nil
         }

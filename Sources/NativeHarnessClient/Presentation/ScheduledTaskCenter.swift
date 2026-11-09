@@ -51,17 +51,17 @@ final class ScheduledTaskCenter {
         schedules.first { $0.id == id }
     }
 
-    /// The schedule whose run started this task, for the sidebar's clock and the run history.
+    /// The schedule whose run started this task as a task of its own (`ScheduledTask.startedNewTask`): the
+    /// Claude app's unattended session, which the sidebar marks with a clock. A task a run only continued is
+    /// not one.
     func schedule(startedTask taskID: UUID) -> ScheduledTask? {
-        schedules.first { $0.state.runs.contains { $0.taskID == taskID && $0.outcome == .started } }
+        schedules.first { $0.startedTask(taskID) }
     }
 
     /// The tasks schedules started, for the sidebar's clock mark.
     var scheduledTaskIDs: Set<UUID> {
         Set(schedules.flatMap { schedule in
-            schedule.state.runs.compactMap { run in
-                run.outcome == .started && schedule.destination.mode == .newTask ? run.taskID : nil
-            }
+            schedule.state.runs.compactMap { run in schedule.startedNewTask(run) ? run.taskID : nil }
         })
     }
 
@@ -200,7 +200,7 @@ final class ScheduledTaskCenter {
         switch result {
         case let .started(taskID, account):
             record(ScheduledTaskRun(slot: slot, at: at, trigger: trigger, outcome: .started, taskID: taskID,
-                                    account: account), for: schedule.id)
+                                    mode: schedule.destination.mode, account: account), for: schedule.id)
         case let .failed(message):
             record(ScheduledTaskRun(slot: slot, at: at, trigger: trigger, outcome: .failed, failure: message),
                    for: schedule.id)
