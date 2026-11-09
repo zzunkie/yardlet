@@ -108,7 +108,8 @@ private struct ComposerPlanIndicator: View {
         .buttonStyle(.borderless)
         .parityPointer()
         .onHover { isHovered = $0 }
-        .help(L10n.string("Create a plan"))
+        // A click turns plan mode off, which the tooltip says.
+        .help(L10n.string("Turn plan mode off"))
         .accessibilityLabel(L10n.string("Plan mode indicator"))
         .accessibilityHint(L10n.string("Turn plan mode off"))
     }
@@ -150,6 +151,7 @@ struct ComposerModeControl: View {
         .focused($isTriggerFocused)
         .accessibilityLabel(selector.name)
         .accessibilityValue(title)
+        .help(selector.name)
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             ComposerProviderOptionMenu(selector: selector, isEnabled: canChoose, onSelect: onSelect,
                                        onDismiss: { isPresented = false })
@@ -204,7 +206,8 @@ struct ComposerPermissionControl: View {
         .accessibilityLabel(L10n.string("Permissions"))
         .accessibilityValue(slot.title)
         .accessibilityHint(slot.accessibilityHint)
-        .modifier(ComposerControlHelp(text: slot.help))
+        // The slot's own tooltip where it has one, otherwise what a click does.
+        .help(slot.help ?? slot.accessibilityHint)
         .popover(isPresented: $isPresented, arrowEdge: .bottom) { menu }
         .onChange(of: isPresented) { _, shown in
             guard !shown else { return }
@@ -375,11 +378,3 @@ private struct ComposerSkillsControl: View {
     }
 }
 
-/// A tooltip only where the provider's control has one.
-private struct ComposerControlHelp: ViewModifier {
-    let text: String?
-
-    func body(content: Content) -> some View {
-        if let text { content.help(text) } else { content }
-    }
-}

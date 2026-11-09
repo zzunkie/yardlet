@@ -60,8 +60,8 @@ struct SessionRailAgentRow: View {
                             .frame(width: 22, height: 22)
                     }
                     .disabled(isStopping)
-                    .help(L10n.string("Stop this task"))
-                    .accessibilityLabel(L10n.string("Stop this task"))
+                    .help(L10n.string("Stop agent"))
+                    .accessibilityLabel(L10n.string("Stop agent"))
                 }
             }
             .frame(minHeight: 24)

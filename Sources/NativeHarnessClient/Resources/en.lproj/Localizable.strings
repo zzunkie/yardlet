@@ -11,6 +11,7 @@
 "You can edit the request before sending it again." = "You can edit the request before sending it again.";
 "Error details" = "Error details";
 "Copy error details" = "Copy error details";
+"Yardlet Help" = "Yardlet Help";
 "Report a Problem…" = "Report a Problem…";
 "Show Diagnostic Logs" = "Show Diagnostic Logs";
 "Yardlet has not written any diagnostic logs yet." = "Yardlet has not written any diagnostic logs yet.";
@@ -168,6 +169,7 @@
 "Diff loading timed out. Try Refresh again." = "Diff loading timed out. Try Refresh again.";
 "Diff unavailable" = "Diff unavailable";
 "Done" = "Done";
+"Finish or cancel the sign-in first" = "Finish or cancel the sign-in first";
 "Failed" = "Failed";
 "Failed to start terminal: %@\n" = "Failed to start terminal: %@\n";
 "Harness" = "Harness";
@@ -177,7 +179,6 @@
 "Connect harnesses and check account status." = "Connect harnesses and check account status.";
 "Harness process exited (%d): %@" = "Harness process exited (%d): %@";
 "Hide sidebar" = "Hide sidebar";
-"Interrupt" = "Interrupt";
 "Loading diff…" = "Loading diff…";
 "Local AI workbench" = "Local AI workbench";
 "Messages from either harness appear in this native transcript." = "Messages from any harness appear in this native transcript.";
@@ -200,7 +201,6 @@
 "Choose a project and harness to start a task." = "Choose a project and harness to start a task.";
 "Change the task navigation layout." = "Change the task navigation layout.";
 "Manage features for this task’s harness." = "Manage features for this task’s harness.";
-"Stop active task" = "Stop active task";
 "Resume task" = "Resume task";
 "Mark task as read" = "Mark task as read";
 "Mark task as unread" = "Mark task as unread";
@@ -1642,7 +1642,6 @@
 "Side" = "Side";
 "Start a temporary side chat" = "Start a temporary side chat";
 "Plan mode indicator" = "Plan";
-"Create a plan" = "Create a plan";
 "Find" = "Find";
 "Next result" = "Next result";
 "Previous result" = "Previous result";
@@ -1801,6 +1800,7 @@
 "See chats that are unread, active, or awaiting a response" = "See chats that are unread, active, or awaiting a response";
 /* The task list grouped by state: the Claude app's "Group by" menu and state groups. */
 "Group by" = "Group by";
+"Turn off the activity view to group tasks" = "Turn off the activity view to group tasks";
 "State" = "State";
 "Idle" = "Idle";
 
@@ -1918,6 +1918,8 @@
 "%lldm %llds" = "%lldm %llds";
 "%lldh %lldm" = "%lldh %lldm";
 "Stop this task" = "Stop this task";
+"Stop agent" = "Stop agent";
+"Stop process" = "Stop process";
 "Stopping…" = "Stopping…";
 /* A task's pull request (title bar badge) and the new-task folder warning. Claude app wording. */
 "Pull request" = "Pull request";
@@ -1988,7 +1990,6 @@
 "Show in menu bar" = "Show in menu bar";
 "Keep Yardlet in the macOS menu bar when the main window is closed" = "Keep Yardlet in the macOS menu bar when the main window is closed";
 "Show Yardlet in the menu bar" = "Show Yardlet in the menu bar";
-"Toggle activity view" = "Toggle activity view";
 "Turn the sidebar activity view on or off" = "Turn the sidebar activity view on or off";
 "5h" = "5h";
 "Weekly" = "Weekly";

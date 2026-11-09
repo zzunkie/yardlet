@@ -226,12 +226,17 @@ enum DiagnosticLogFolders {
     }
 }
 
-/// Help › Report a Problem… and Show Diagnostic Logs, after the app's own help item.
+/// The Help menu: Yardlet Help opens the repository's README, which says how to use the app (the app has
+/// no help book, so the system's own item only said help isn't available), then Report a Problem… and
+/// Show Diagnostic Logs.
 struct YardletHelpCommands: Commands {
+    static let helpURL = URL(string: "https://github.com/zzunkie/yardlet#readme")!
     let report: YardletReportProblemAction
 
     var body: some Commands {
-        CommandGroup(after: .help) {
+        CommandGroup(replacing: .help) {
+            Button(L10n.string("Yardlet Help")) { NSWorkspace.shared.open(Self.helpURL) }
+                .keyboardShortcut("?", modifiers: .command)
             Divider()
             Button(L10n.string("Report a Problem…")) { report() }
             Button(L10n.string("Show Diagnostic Logs")) { DiagnosticLogFolders.show() }

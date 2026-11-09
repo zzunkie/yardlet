@@ -584,7 +584,11 @@ struct RemoteHostView: View {
         commands.isSidebarVisible = shell.isSidebarVisible
         commands.activate = activate
         commands.toggleSidebar = toggleSidebar
+        commands.isActivityShown = isActivityShown
         commands.toggleActivity = toggleActivity
+        if let shown, shown.status == .running || shown.status == .waitingForApproval {
+            commands.stop = { model.send(.stopTurn(taskID: shown.id.uuidString)) }
+        }
         commands.togglePinned = { target in
             if case let .session(id, isPinned) = target { model.send(.setPinned(taskID: id.uuidString, pinned: !isPinned)) }
         }

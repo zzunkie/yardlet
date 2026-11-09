@@ -250,7 +250,7 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                                              followUp: .queue))
         try await waitUntil { !approval.queued.isEmpty }
         try await render("remote-host-running", size: size, model: model, hosts: hosts) { elements in
-            XCTAssertTrue(elements.contains { $0.label == L10n.string("Interrupt") }, elements.description)
+            XCTAssertTrue(elements.contains { $0.label == L10n.string("Stop") }, elements.description)
             XCTAssertTrue(elements.contains { $0.label == L10n.string("Queue or steer") }, elements.description)
         }
         model.select(.task(RemoteFixtureBridge.ID.history))

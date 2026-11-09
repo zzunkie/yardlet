@@ -29,6 +29,9 @@ struct ComposerModelControl: View {
         .taskFocus(.intelligence, isFocused: $isTriggerFocused, enabled: registersTaskFocus)
         .accessibilityLabel(L10n.string("Model"))
         .accessibilityValue(menu.accessibilityValue)
+        // Task › Select model opens the composer's menu, not the session rail's copy.
+        .help(ShortcutHelp.text(L10n.string("Select model"),
+                                registersTaskFocus ? TaskCommandShortcut.openModelMenu : nil))
         // Above the control, over the conversation: the composer sits at the window's bottom, and
         // a menu asked to open below it was pushed back up over the composer's own row.
         .popover(isPresented: $isPresented, arrowEdge: .top) {

@@ -7,6 +7,8 @@ struct CommandPaletteItem: Identifiable {
     let systemName: String
     /// A task the palette opens, which shows its project (`subtitle`) beside its title.
     var isTask = false
+    /// The menu bar's key for the same command, shown at the row's end as both apps' palettes do.
+    var shortcut: KeyboardShortcut? = nil
     let action: () -> Void
 }
 
@@ -122,6 +124,12 @@ struct CommandPaletteView: View {
                                                 .foregroundStyle(.secondary)
                                                 .lineLimit(1)
                                                 .truncationMode(.middle)
+                                        } else if let shortcut = item.shortcut {
+                                            Text(shortcut.displayText)
+                                                .font(.callout)
+                                                .foregroundStyle(.secondary)
+                                                .fixedSize()
+                                                .accessibilityHidden(true)
                                         }
                                     }
                                     .padding(.horizontal, 12)

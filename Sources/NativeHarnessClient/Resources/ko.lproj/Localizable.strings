@@ -11,6 +11,7 @@
 "You can edit the request before sending it again." = "요청을 수정한 뒤 다시 보낼 수 있습니다.";
 "Error details" = "오류 상세";
 "Copy error details" = "오류 상세 복사";
+"Yardlet Help" = "Yardlet 도움말";
 "Report a Problem…" = "문제 신고…";
 "Show Diagnostic Logs" = "진단 로그 보기";
 "Yardlet has not written any diagnostic logs yet." = "Yardlet이 아직 진단 로그를 남기지 않았습니다.";
@@ -168,6 +169,7 @@
 "Diff loading timed out. Try Refresh again." = "변경 사항을 불러오는 시간이 초과되었습니다. 새로 고침을 다시 시도하세요.";
 "Diff unavailable" = "변경 사항을 볼 수 없음";
 "Done" = "완료";
+"Finish or cancel the sign-in first" = "먼저 로그인을 마치거나 취소하세요";
 "Failed" = "실패";
 "Failed to start terminal: %@\n" = "터미널을 시작할 수 없습니다: %@\n";
 "Harness" = "하네스";
@@ -177,7 +179,6 @@
 "Connect harnesses and check account status." = "하네스를 연결하고 계정 상태를 확인합니다.";
 "Harness process exited (%d): %@" = "하네스 프로세스가 종료되었습니다(%d): %@";
 "Hide sidebar" = "사이드바 숨기기";
-"Interrupt" = "중단";
 "Loading diff…" = "변경 사항 불러오는 중…";
 "Local AI workbench" = "로컬 AI 워크벤치";
 "Messages from either harness appear in this native transcript." = "모든 하네스의 메시지가 이 네이티브 대화 화면에 표시됩니다.";
@@ -200,7 +201,6 @@
 "Choose a project and harness to start a task." = "프로젝트와 하네스를 선택해 작업을 시작합니다.";
 "Change the task navigation layout." = "작업 탐색 레이아웃을 바꿉니다.";
 "Manage features for this task’s harness." = "이 작업의 하네스 기능을 관리합니다.";
-"Stop active task" = "활성 작업 중단";
 "Resume task" = "작업 재개";
 "Mark task as read" = "작업을 읽음으로 표시";
 "Mark task as unread" = "작업을 읽지 않음으로 표시";
@@ -1642,7 +1642,6 @@
 "Side" = "사이드";
 "Start a temporary side chat" = "임시 별도 채팅을 시작합니다";
 "Plan mode indicator" = "플랜";
-"Create a plan" = "플랜 생성";
 "Find" = "찾기";
 "Next result" = "다음 결과";
 "Previous result" = "이전 결과";
@@ -1799,6 +1798,7 @@
 "See chats that are unread, active, or awaiting a response" = "읽지 않았거나 활성 상태이거나 응답해야 하는 채팅을 확인합니다";
 /* 상태별로 묶은 작업 목록. Claude 앱(ion-dist i18n ko-KR)의 "그룹화 기준" 메뉴와 상태 그룹 이름. */
 "Group by" = "그룹화 기준";
+"Turn off the activity view to group tasks" = "작업을 묶으려면 활동 보기를 끄세요";
 "State" = "상태";
 "Idle" = "유휴";
 "Used a tool" = "도구 사용함";
@@ -1918,6 +1918,8 @@
 "%lldm %llds" = "%lld분 %lld초";
 "%lldh %lldm" = "%lld시간 %lld분";
 "Stop this task" = "이 작업 중지";
+"Stop agent" = "에이전트 중지";
+"Stop process" = "프로세스 중지";
 "Stopping…" = "중지 중…";
 /* A task's pull request (title bar badge) and the new-task folder warning. Claude app wording. */
 "Pull request" = "풀 리퀘스트";
@@ -1988,7 +1990,6 @@
 "Show in menu bar" = "메뉴 막대에 표시";
 "Keep Yardlet in the macOS menu bar when the main window is closed" = "메인 창을 닫아도 Yardlet을 macOS 메뉴 막대에 유지합니다.";
 "Show Yardlet in the menu bar" = "메뉴 막대에 Yardlet 표시";
-"Toggle activity view" = "활동 보기 전환";
 "Turn the sidebar activity view on or off" = "사이드바 활동 보기를 켜거나 끕니다";
 "5h" = "5시간";
 "Weekly" = "주간";

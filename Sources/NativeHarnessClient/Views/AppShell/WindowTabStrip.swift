@@ -244,14 +244,16 @@ private struct WindowTabButton<SelectedTitle: View>: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 18, height: 18)
                         .background(Circle().fill(isHovering ? ParityTheme.hoverFill : .clear))
-                        .contentShape(Circle())
+                        // The circle stays small in the tab; the click takes a 22 pt square around it.
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
                 .parityPointer()
                 // ⌘W closes the shown tab only.
                 .help(ShortcutHelp.text(L10n.string("Close tab"), isSelected ? TabCommandShortcut.closeTab : nil))
                 .accessibilityLabel(L10n.format("Close tab %@", tab.title))
-                .padding(.trailing, 5)
+                .padding(.trailing, 3)
             }
         }
         .frame(height: 28)

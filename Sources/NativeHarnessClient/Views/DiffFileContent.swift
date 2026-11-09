@@ -167,6 +167,7 @@ struct DiffFileContent: View {
                     .buttonStyle(.plain)
                     .parityPointer()
                     .padding(.leading, 3)
+                    .help(L10n.string("Request changes"))
                     .accessibilityLabel(L10n.string("Request changes"))
                 }
             }

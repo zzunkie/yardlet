@@ -72,6 +72,7 @@ private struct MailBrowserLayout<Thread: View>: View {
             closeTab: { id in closeTabs([id]) },
             closeTabs: { ids in closeTabs(ids) },
             closePanel: closePanel,
+            kind: .sidePanel,
             browserMenu: .make(for: panel),
             newTab: WorkSurfaceNewTab(help: L10n.string("New tab"), action: openNewTab)
         )

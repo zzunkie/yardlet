@@ -18,7 +18,7 @@ struct AgentRunPane: View {
             WorkSurfaceHeader(title: title, systemName: "person.2", workspaceURL: workspaceURL,
                               onClose: onClose) {
                 if let run, !run.state.isFinished, let onStop {
-                    ParityIconButton(systemName: "stop.circle", help: L10n.string("Stop task")) { onStop(run) }
+                    ParityIconButton(systemName: "stop.circle", help: L10n.string("Stop agent")) { onStop(run) }
                 }
             }
             if let run {

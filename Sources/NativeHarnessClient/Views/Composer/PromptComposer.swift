@@ -450,6 +450,7 @@ struct PromptComposer: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                         .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
                 .parityPointer()
@@ -523,16 +524,18 @@ struct PromptComposer: View {
                             }
                         }
                         .foregroundStyle(.secondary)
-                        .frame(width: 30, height: 30)
+                        .frame(width: 28, height: 28)
                         .background(ParityTheme.subtleFill, in: Circle())
+                        .contentShape(Circle())
                     }
                     .buttonStyle(.borderless)
                     .parityPointer()
                     .focused($focusedComposerControl, equals: .queueOrSteerTrigger)
                     .accessibilityLabel(L10n.string("Queue or steer"))
                     .accessibilityHint(followUp.returnHint(preferred: followUpMode))
-                    // The keys stay in view once the draft has text and the placeholder is gone.
-                    .help(followUp.runningPlaceholder(preferred: followUpMode))
+                    // Its name, then the keys, which stay in view once the draft has text and the
+                    // placeholder is gone.
+                    .help("\(L10n.string("Queue or steer")) · \(followUp.runningPlaceholder(preferred: followUpMode))")
                     .popover(isPresented: composerMenuBinding(.queueOrSteer)) {
                         VStack(alignment: .leading, spacing: 4) {
                             // Each row says where the message goes, as the placeholder does.
@@ -574,22 +577,26 @@ struct PromptComposer: View {
                 Button {
                     if isShellCommandRunning { shellCommands?.stop() } else { actions.interrupt() }
                 } label: {
+                    // Send's size, so the button keeps its place when one replaces the other.
                     Image(systemName: "stop.fill")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
+                        .frame(width: 28, height: 28)
                         .background(.red, in: Circle())
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.borderless)
                 .parityPointer()
-                .accessibilityLabel(isShellCommandRunning ? L10n.string("Stop shell command") : L10n.string("Interrupt"))
+                .accessibilityLabel(isShellCommandRunning ? L10n.string("Stop shell command") : L10n.string("Stop"))
                 .accessibilityHint(L10n.string("Press Escape to stop the active task"))
-                .help(isShellCommandRunning ? L10n.string("Stop shell command") : L10n.string("Interrupt"))
+                .help(ShortcutHelp.text(isShellCommandRunning ? L10n.string("Stop shell command") : L10n.string("Stop"),
+                                        ComposerShortcut.stop))
             } else {
                 ParityIconButton(
                     systemName: "arrow.up",
                     help: L10n.string("Send"),
                     isProminent: true,
+                    shortcut: ComposerShortcut.send,
                     action: { submit(.automatic) }
                 )
                 .disabled(currentDraft.isEmpty)

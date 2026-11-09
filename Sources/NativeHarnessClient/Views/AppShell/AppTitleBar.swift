@@ -260,7 +260,7 @@ struct ActivityViewToggle {
         return L10n.string(needsAttention ? "View activity, needs attention" : "View activity")
     }
 
-    var help: String { L10n.string(isOn ? "Turn off activity view" : "View activity") }
+    var help: String { TaskCommandTitle.activity(isShown: isOn) }
 }
 
 /// The Codex sidebar header's activity button: a bell, with a blue badge while a task needs

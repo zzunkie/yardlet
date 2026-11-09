@@ -179,6 +179,7 @@ struct SettingsCenterView: View {
                 Button(L10n.string("Done")) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                     .disabled(accountCenter.loginController.isRunning)
+                    .help(accountCenter.loginController.isRunning ? L10n.string("Finish or cancel the sign-in first") : "")
                     .controlSize(.small)
             }
             .padding(.horizontal, 14)
