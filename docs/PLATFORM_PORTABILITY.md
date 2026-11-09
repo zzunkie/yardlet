@@ -97,8 +97,11 @@ WebSocket frame over in the pieces libcurl reads it in, each as a message of its
 decrypt, a relay message that is not JSON) to the next one before reading it again, up to the frame's limit
 (`RemoteFramePieces`); with Apple's Foundation a frame that does not read is refused at once.
 
-**Where it has been built.** On Linux in the `swift:6.4-bookworm` image (confirmed, 2026-10-31). A folder on the Mac's
-desktop cannot be mounted into Docker, so the sources go in as an archive:
+**Where it has been built.** On Linux in the `swift:6.4-bookworm` image (confirmed, 2026-10-31), and since 2026-11-09
+in GitHub Actions: `.github/workflows/linux-engine.yml` makes the build in that image, pinned by digest, for the same
+pull requests and `main` as the Windows build below, as a check to read. Without it a name only Darwin has went
+unnoticed (`memmem`, which Glibc's module leaves out). On a Mac, a folder on the desktop cannot be mounted into Docker,
+so the sources go in as an archive:
 
 ```sh
 tar --exclude ./.build --exclude ./.git --exclude ./docs -cf - . | docker run -i --rm swift:6.4-bookworm bash -c \

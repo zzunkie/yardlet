@@ -55,13 +55,14 @@ enum TokenUsageLines {
     }
 
     static func contains(_ line: Data, _ needle: [UInt8]) -> Bool {
-        #if os(Windows)
-        line.range(of: Data(needle)) != nil
-        #else
+        // memmem comes with Darwin; Glibc's module leaves it out, and Windows has none.
+        #if canImport(Darwin)
         line.withUnsafeBytes { buffer in
             guard buffer.count >= needle.count else { return false }
             return memmem(buffer.baseAddress, buffer.count, needle, needle.count) != nil
         }
+        #else
+        line.range(of: Data(needle)) != nil
         #endif
     }
 }
