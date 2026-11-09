@@ -733,12 +733,13 @@ final class RemoteBridgeTests: XCTestCase {
         }
         bridge.setChangeHandler { change in if case .conversation = change { changes.add() } }
         let taskID = session.id.uuidString
-        bridge.setWatchedTasks([taskID])
+        // The server reads the conversation a phone subscribes to before it tells the bridge the task is watched.
         let first = try XCTUnwrap(bridge.conversation(of: taskID, detail: .full))
         XCTAssertEqual(bridge.projectedTurnCount, 300)
         XCTAssertTrue(first.turns.allSatisfy { $0.items.first?.images == nil })
-        // Each preview tells its own turn once it is made.
+        // Each preview tells its own turn once it is made, also when it is made before the task is watched.
         try await waitUntil { made.value == 3 && changes.value >= 3 }
+        bridge.setWatchedTasks([taskID])
         let previewed = try XCTUnwrap(bridge.conversation(of: taskID, detail: .full))
         XCTAssertEqual(bridge.projectedTurnCount, 303)
         XCTAssertEqual(previewed.turns.suffix(3).map { $0.items.first?.images?.first?.data },

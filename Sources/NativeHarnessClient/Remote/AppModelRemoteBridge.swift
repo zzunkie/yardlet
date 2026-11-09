@@ -431,13 +431,15 @@ final class AppModelRemoteBridge: RemoteBridge {
     }
 
     /// Previews made since a turn asked for them: those turns are projected again, and their tasks' phones told.
+    /// Every asker's task is told, watched or not: the server reads a conversation it subscribes to before it
+    /// says the task is watched, and itself tells only the phones subscribed to a task.
     private func previewsReady(_ askers: Set<RemoteImagePreviews.Asker>) {
         for asker in askers {
             let key = ConversationKey(id: asker.taskID, detail: .full)
             turnMemos[key]?[asker.turnID] = nil
             cachedConversations[key] = nil
         }
-        for id in Set(askers.map(\.taskID)) where watched.contains(id) {
+        for id in Set(askers.map(\.taskID)) {
             changeHandler?(.conversation(id.uuidString))
         }
     }
