@@ -25,6 +25,8 @@ final class SessionStore {
         }
     }
     @ObservationIgnored var onSelectionChange: ((SessionRecord.ID?) -> Void)?
+    /// A task's status changed (`updateSession`): a turn started, waits, ended or failed.
+    @ObservationIgnored var onStatusChange: ((SessionRecord.ID) -> Void)?
     /// Side chats, which are temporary as the Codex app's: listed here while they are open and never
     /// written to the index, so none is there after a restart.
     @ObservationIgnored private var temporaryIDs: Set<UUID> = []
@@ -200,6 +202,7 @@ final class SessionStore {
         updatesRecency: Bool = true
     ) async throws {
         let now = Date()
+        let statusBefore = sessions.first { $0.id == id }?.status
         try await modify(id) { updated in
             if setInheritedContext { updated.inheritedContext = inheritedContext }
             if let inheritedContextDelivered { updated.inheritedContext?.isDelivered = inheritedContextDelivered }
@@ -223,6 +226,7 @@ final class SessionStore {
             }
             if updatesRecency { updated.updatedAt = now }
         }
+        if let status, let statusBefore, status != statusBefore { onStatusChange?(id) }
     }
 
     func renameSession(

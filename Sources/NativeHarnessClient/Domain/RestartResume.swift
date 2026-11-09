@@ -18,8 +18,9 @@ enum RestartTrigger: String, Codable, Equatable, Sendable {
     case update
 }
 
-/// What Yardlet wrote down while quitting about the tasks whose turn the quit cuts off. It lives
-/// in Yardlet's own preferences, is read once at the next launch and then removed.
+/// What Yardlet wrote down about the tasks whose turn its quit cuts off: while it runs, as a quit
+/// then would write it, and once more as it quits. It lives in Yardlet's own preferences; the next
+/// launch reads it once and keeps its own in its place.
 struct RestartResumeRecord: Codable, Equatable, Sendable {
     struct Entry: Codable, Equatable, Sendable {
         let sessionID: UUID
@@ -95,7 +96,14 @@ struct RestartResumeRecord: Codable, Equatable, Sendable {
 ///   cut-off turn continues from launch, the most recent first, with at most `launchLimit` starting
 ///   at once (`RestartResumeLine`); one waiting on the person still waits to be opened. A quit
 ///   writes down a turn Yardlet continued unseen too, up to `unseenContinuationLimit` times in a
-///   row, and carries over what it had not continued yet. A crash writes nothing, as before.
+///   row, and carries over what it had not continued yet.
+/// - A force quit, a crash or a kill (2026-11-09, after Yardlet froze and was force quit, every task
+///   that had been mid-turn stayed stopped) continues by the same rules: Yardlet keeps the record as a
+///   quit would write it while it runs, written a moment after a turn starts, waits, asks, ends or is
+///   stopped, and the next launch reads whichever record is there. A turn whose continuation was
+///   starting is left out, since it may be what stopped Yardlet. Neither app continues after a crash:
+///   the Claude app marks a session only in its quit handler (4.4212), the Codex app only after an
+///   update; the person asked for it, and the limits above keep it from going further.
 /// - A turn that waited only on a question (2026-10-24: three tasks waiting on their questions read
 ///   as unread after an update, with no card) is not continued: the task waits for the person and
 ///   shows the question again (`Plan.questions`), and their answer goes as their next message, which

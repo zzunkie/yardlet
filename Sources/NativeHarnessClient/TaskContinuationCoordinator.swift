@@ -48,7 +48,17 @@ final class TaskContinuationCoordinator {
     @ObservationIgnored private var continuesRestartResumeLine = false
     /// The record's entry for each cut-off turn not continued yet, in line or until opened, for a
     /// quit before then to carry over.
-    @ObservationIgnored private var restartResumesToContinue: [UUID: RestartResumeRecord.Entry] = [:]
+    @ObservationIgnored private var restartResumesToContinue: [UUID: RestartResumeRecord.Entry] = [:] {
+        didSet { restartRecordMayHaveChanged() }
+    }
+    /// Whether the record a quit writes is kept as it would be written now, so that an exit that
+    /// writes nothing (a force quit, a crash, a kill) leaves it too (`RestartResumePolicy`): from the
+    /// launch's reading of the last record, which it would otherwise overwrite, until the quit writes
+    /// its own.
+    @ObservationIgnored private var keepsRestartRecordCurrent = false
+    @ObservationIgnored private var restartRecordWrite: Task<Void, Never>?
+    /// How long a change waits before the kept record is written, so that a burst of them writes once.
+    @ObservationIgnored var restartRecordDelay: Duration = .seconds(1)
     /// Idle Claude Code tasks in line whose CLI starts again, with nothing sent, for the session jobs
     /// it brings back (`ClaudeSessionJobs`).
     @ObservationIgnored private(set) var sessionJobRelaunches = Set<UUID>()
@@ -72,9 +82,13 @@ final class TaskContinuationCoordinator {
     /// Tasks whose running turn Yardlet continued after a restart while nobody had them open, with
     /// how many times in a row it has. A quit writes one down again until
     /// `RestartResumePolicy.unseenContinuationLimit`.
-    @ObservationIgnored var unseenRestartResumes: [UUID: Int] = [:]
+    @ObservationIgnored var unseenRestartResumes: [UUID: Int] = [:] {
+        didSet { restartRecordMayHaveChanged() }
+    }
     /// Tasks whose turn the person stopped, until their next turn starts.
-    @ObservationIgnored var stoppedByPerson = Set<UUID>()
+    @ObservationIgnored var stoppedByPerson = Set<UUID>() {
+        didSet { restartRecordMayHaveChanged() }
+    }
     /// Tasks whose running CLI still has the context limit it started with, which is kept here until
     /// the chosen one reaches it (`chooseContextLimit`).
     var contextLimitRestarts: [UUID: String] = [:]
@@ -112,6 +126,7 @@ final class TaskContinuationCoordinator {
     /// the timers that would continue a task stop. An account move's wait is left: cancelling it
     /// means "look again now".
     func shutdown() {
+        stopKeepingRestartRecord()
         restartResumeLine = RestartResumeLine()
         sessionJobScan?.cancel()
         sessionJobRelaunches.removeAll()
@@ -474,7 +489,38 @@ final class TaskContinuationCoordinator {
     /// With the setting off, or nothing to continue, any earlier record goes.
     func recordWorkForRestart(trigger: RestartTrigger, now: Date = Date()) {
         guard let model, !model.isVisualFixture else { return }
+        // The quit's own record: nothing kept while running writes over it.
+        stopKeepingRestartRecord()
         RestartResumeRecord(trigger: trigger, recordedAt: now, entries: restartResumeEntries(now: now)).save(to: model.preferences)
+    }
+
+    /// What runs, waits or is still to continue may have changed: a moment later the record is written
+    /// again as a quit now would write it, while Yardlet keeps it (`keepsRestartRecordCurrent`).
+    func restartRecordMayHaveChanged() {
+        guard keepsRestartRecordCurrent, restartRecordWrite == nil else { return }
+        let delay = restartRecordDelay
+        restartRecordWrite = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else { return }
+            restartRecordWrite = nil
+            writeRestartRecord()
+        }
+    }
+
+    /// Writes the record an exit that writes nothing leaves: what a quit now would write, less the
+    /// tasks whose continuation is starting (`RestartResumeLine.starting`). One that stopped Yardlet
+    /// as it started is not started again by the next launch; the Claude app likewise clears a
+    /// session's mark before it continues it.
+    private func writeRestartRecord(now: Date = Date()) {
+        guard keepsRestartRecordCurrent, let model else { return }
+        let entries = restartResumeEntries(now: now, leavingOut: restartResumeLine.starting)
+        RestartResumeRecord(trigger: .quit, recordedAt: now, entries: entries).save(to: model.preferences)
+    }
+
+    private func stopKeepingRestartRecord() {
+        keepsRestartRecordCurrent = false
+        restartRecordWrite?.cancel()
+        restartRecordWrite = nil
     }
 
     /// The tasks that continue when Yardlet opens again if it quit now, for the quit confirmation
@@ -484,20 +530,24 @@ final class TaskContinuationCoordinator {
         return Set(restartResumeEntries(now: Date()).map(\.sessionID))
     }
 
-    private func restartResumeEntries(now: Date) -> [RestartResumeRecord.Entry] {
+    /// `leavingOut` names tasks that are not written down.
+    private func restartResumeEntries(now: Date, leavingOut: Set<UUID> = []) -> [RestartResumeRecord.Entry] {
         guard let model else { return [] }
-        let candidates = model.store.sessions.map { session in
-            RestartResumePolicy.Candidate(
+        let candidates = model.store.sessions.filter { !leavingOut.contains($0.id) }.map { session in
+            // Only a turn that runs or waits is written down, so only its transcript is read.
+            let holdsTurn = session.status == .running || session.status == .waitingForApproval
+            return RestartResumePolicy.Candidate(
                 session: session,
                 hasQueuedMessages: !model.followUps.queue(for: session.id).isEmpty,
                 stoppedByPerson: stoppedByPerson.contains(session.id),
                 unseenContinuations: model.isSessionVisible(session.id) ? 0 : unseenRestartResumes[session.id] ?? 0,
                 isSubagentThread: model.codexPresentationBySessionID[session.id]?.thread?.parentThreadID != nil,
-                waitingQuestion: Self.waitingQuestion(in: model.transcriptBySessionID[session.id] ?? [],
-                                                      codex: model.codexPresentationBySessionID[session.id])
+                waitingQuestion: holdsTurn ? Self.waitingQuestion(in: model.transcriptBySessionID[session.id] ?? [],
+                                                                  codex: model.codexPresentationBySessionID[session.id]) : nil
             )
         }
-        let stillToContinue = restartResumesToContinue.values.sorted { $0.sessionID.uuidString < $1.sessionID.uuidString }
+        let stillToContinue = restartResumesToContinue.values.filter { !leavingOut.contains($0.sessionID) }
+            .sorted { $0.sessionID.uuidString < $1.sessionID.uuidString }
         return RestartResumePolicy.entries(for: candidates, stillToContinue: stillToContinue, now: now,
             isOn: RestartResumePreference.isOn(in: model.preferences))
     }
@@ -534,9 +584,10 @@ final class TaskContinuationCoordinator {
         return open.values.first
     }
 
-    /// Reads the record the last quit wrote, once, after the task index is back, and continues
-    /// what it allows: the most recent first, a few starting at a time, and those that waited on
-    /// the person once they are opened. The subagents it cut off cannot continue; the callers that
+    /// Reads the record the last run left, once, after the task index is back, and continues what
+    /// it allows: the most recent first, a few starting at a time, and those that waited on the
+    /// person once they are opened. The record is the last quit's, or, after an exit that wrote
+    /// nothing, the one the last run kept. The subagents it cut off cannot continue; the callers that
     /// waited for them are told.
     /// Then the idle Claude Code tasks whose CLI brings session jobs back start again, after them.
     func continueWorkInterruptedByRestart(now: Date = Date()) async {
@@ -552,8 +603,14 @@ final class TaskContinuationCoordinator {
     }
 
     private func continueTurnsCutOffByRestart(now: Date) async {
-        guard let model, let record = RestartResumeRecord.load(from: model.preferences) else { return }
-        RestartResumeRecord.remove(from: model.preferences)
+        guard let model else { return }
+        let record = RestartResumeRecord.load(from: model.preferences)
+        // From here on the record is kept as a quit would write it, and replaces the one just read.
+        keepsRestartRecordCurrent = true
+        guard let record else {
+            writeRestartRecord(now: now)
+            return
+        }
         let plan = RestartResumePolicy.plan(for: record, sessions: model.store.sessions, now: now,
             isOn: RestartResumePreference.isOn(in: model.preferences))
         restartResumesToContinue.merge(plan.entries) { _, new in new }
@@ -570,6 +627,8 @@ final class TaskContinuationCoordinator {
             model.refreshAttentionDetail(for: id)
         }
         restartResumeLine.append(plan.atLaunch)
+        // What this launch has still to continue, which an exit before then carries over.
+        writeRestartRecord(now: now)
         await continueRestartResumeLine()
         // A task already open counts as opened.
         taskOpened(model.store.selectedSessionID, now: now)
@@ -647,6 +706,8 @@ final class TaskContinuationCoordinator {
         continuesRestartResumeLine = true
         defer { continuesRestartResumeLine = false }
         while let id = restartResumeLine.next() {
+            // Written down without it at once: Yardlet may stop as it starts.
+            if restartResumesToContinue[id] != nil { writeRestartRecord() }
             let asked = await continueAfterRestart(id)
             // Its provider may have shown work already.
             guard restartResumeLine.starting.contains(id) else { continue }
@@ -668,6 +729,8 @@ final class TaskContinuationCoordinator {
     func restartResumeStarted(_ id: UUID) {
         restartResumesAwaitingWork.remove(id)
         restartResumeStartWaits.removeValue(forKey: id)?.cancel()
+        // No longer starting, it is written down as any running turn is.
+        restartRecordMayHaveChanged()
         // A line already running picks up the free place itself.
         guard restartResumeLine.finishStarting(id), !continuesRestartResumeLine else { return }
         Task { await continueRestartResumeLine() }
