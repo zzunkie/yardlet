@@ -161,8 +161,19 @@ final class StreamingWindowRedrawTests: XCTestCase {
             return LongConversationFixture.codex(threadID: "thread-0", turns: turns)
         }
         window.emitCodex(0, streamed(calls: 0, paragraphs: 0))
-        window.send(0, request)
+        // The send attaches the task, whose model list then arrives and changes the views around the
+        // conversation. Both are done before counting: a slow runner can take longer than any fixed wait.
+        var sent = false
+        Task {
+            await window.model.send(HarnessUserInput(text: request), to: window.tasks[0])
+            sent = true
+        }
+        window.probe.run("send", for: 0.15)
         window.emitCodex(0, streamed(calls: 0, paragraphs: 1))
+        let attached = { sent && !window.model.composerCodexCapabilities(for: window.tasks[0]).modelCatalog.models.isEmpty }
+        let deadline = Date().addingTimeInterval(testWaitLimitSeconds)
+        while !attached(), Date() < deadline { window.probe.run("attach", for: 0.01) }
+        XCTAssertTrue(attached(), "The request was sent and the task's model list arrived")
         window.probe.run("settle", for: 0.5)
         ViewBodyCensus.isEnabled = true
         ViewBodyCensus.reset()

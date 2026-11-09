@@ -748,7 +748,9 @@ final class PersonalAgentRenderingTests: XCTestCase {
             editor.insertText(text, replacementRange: editor.selectedRange())
             host.settle(passes: 6)
         }
-        await host.settle(until: { field(noteName) != nil })
+        // The form takes answers once the request's status is read, which comes after the form shows: a
+        // disabled field becomes first responder without an editor.
+        await host.settle(until: { field(noteName)?.isEnabled == true })
         try type("Share the draft on Monday.", into: try XCTUnwrap(field(noteName)))
         // Files the draft holds: one uploaded, one still uploading. Nothing is picked or sent.
         let draft = try XCTUnwrap(drafts.opened.first)
