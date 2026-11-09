@@ -641,14 +641,11 @@ final class AppModel {
     /// Reads the index at launch, when a turn it shows running is one the last run cut off
     /// (`SessionStore.restore`). Once it has loaded, the tasks are the store's: read again, it would take
     /// every turn running now for one cut off and put the saved transcripts over the live ones.
+    /// The list shows once what is kept beside the index is read; it returns once the titles the
+    /// harnesses stored are read too.
     func restoreIndex() async {
         guard restoresIndexOnLaunch, !hasRestoredIndex else { return }
         isRestoringIndex = true
-        defer {
-            isRestoringIndex = false
-            handlePendingNotificationResponses()
-            handlePendingExternalLinks()
-        }
         do {
             try await store.restore()
             await relocateMissingRuntimes()
@@ -662,7 +659,6 @@ final class AppModel {
             loadPersistedTranscripts()
             await loadSavedContextUsage()
             await loadPersistedGrokSessionMetadata()
-            await reconcilePersistedProviderTitles()
             loadPersistedFollowUps()
             restoreQueuedSessionToolStarts()
             loadPersistedCodexHistorySelections()
@@ -674,6 +670,12 @@ final class AppModel {
                 error.localizedDescription
             )
         }
+        isRestoringIndex = false
+        handlePendingNotificationResponses()
+        handlePendingExternalLinks()
+        // The list shows the titles the index keeps; those the harnesses stored are read after it,
+        // one task at a time off the main thread, which on a busy Mac took seconds for a hundred tasks.
+        if hasRestoredIndex { await reconcilePersistedProviderTitles() }
     }
 
     /// The project a task about to start in this folder belongs to. The stored choice wins, then
