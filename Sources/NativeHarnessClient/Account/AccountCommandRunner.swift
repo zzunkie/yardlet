@@ -39,7 +39,7 @@ enum AccountCommandRunner {
                 "PAGER": "cat"
                 ].merging(environment) { _, new in new }
             )
-            try NativeProcessTree.run(process)
+            let exit = try ProcessExit(running: process)
 
             // Foundation owns this child, so the timeout stops its tree and lets `Process`
             // reap it. A wrapper can still exit zero once its stalled child is stopped, so a
@@ -51,9 +51,12 @@ enum AccountCommandRunner {
                 return true
             }
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
+            let ended = await exit.wait(timeout: timeout)
             timeoutTask.cancel()
-            if await timeoutTask.value { throw AccountCommandError.timedOut }
+            if await timeoutTask.value || !ended {
+                NativeProcessTree.terminate(process: process)
+                throw AccountCommandError.timedOut
+            }
             return AccountCommandResult(
                 exitCode: process.terminationStatus,
                 output: String(decoding: data, as: UTF8.self)

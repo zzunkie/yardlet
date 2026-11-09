@@ -64,8 +64,9 @@ struct LocalGitHubCLI: GitHubCLIRunning {
             process.standardInput = FileHandle.nullDevice
             process.standardOutput = output
             process.standardError = error
+            let exit: ProcessExit
             do {
-                try NativeProcessTree.run(process)
+                exit = try ProcessExit(running: process)
             } catch {
                 throw GitHubCLIFailure.couldNotStart
             }
@@ -79,9 +80,12 @@ struct LocalGitHubCLI: GitHubCLIRunning {
             let errorRead = Task.detached { error.fileHandleForReading.readDataToEndOfFile() }
             let data = output.fileHandleForReading.readDataToEndOfFile()
             let errorData = await errorRead.value
-            process.waitUntilExit()
+            let ended = await exit.wait(timeout: timeout)
             timeoutTask.cancel()
-            if await timeoutTask.value { throw GitHubCLIFailure.timedOut }
+            if await timeoutTask.value || !ended {
+                NativeProcessTree.terminate(process: process)
+                throw GitHubCLIFailure.timedOut
+            }
             return GitHubCLIOutput(status: process.terminationStatus, output: data,
                                    errorText: String(decoding: errorData.prefix(16 * 1024), as: UTF8.self))
         }.value

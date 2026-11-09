@@ -16,11 +16,8 @@ enum CLIProcess {
             if let currentDirectory { process.currentDirectoryURL = currentDirectory }
             process.environment = RuntimeProcessEnvironment.values(executableURL: command.executable,
                 overrides: ["NO_COLOR": "1", "PAGER": "cat"].merging(command.environment) { _, new in new })
-            // `waitUntilExit` can wait on the wrong run loop after an await (`NativeProcessTree`), so
-            // the end is taken from the termination handler.
-            let exited = DispatchSemaphore(value: 0)
-            process.terminationHandler = { _ in exited.signal() }
-            do { try NativeProcessTree.run(process) } catch {
+            let exit: ProcessExit
+            do { exit = try ProcessExit(running: process) } catch {
                 return CLICommandResult(exitCode: -1, stdout: "", stderr: error.localizedDescription)
             }
             let timeout = command.timeout
@@ -34,13 +31,13 @@ enum CLIProcess {
             let errorData = Task.detached { error.fileHandleForReading.readDataToEndOfFile() }
             let outputData = output.fileHandleForReading.readDataToEndOfFile()
             let stderr = await errorData.value
-            waitForExit(exited, seconds: 10)
+            let ended = await exit.wait(timeout: .seconds(10))
             timer.cancel()
             if await timer.value {
                 return CLICommandResult(exitCode: -1, stdout: String(decoding: outputData, as: UTF8.self),
                     stderr: L10n.string("Timed out"))
             }
-            return CLICommandResult(exitCode: process.isRunning ? -1 : process.terminationStatus,
+            return CLICommandResult(exitCode: ended ? process.terminationStatus : -1,
                 stdout: String(decoding: outputData, as: UTF8.self),
                 stderr: String(decoding: stderr, as: UTF8.self))
         }.value
@@ -81,9 +78,8 @@ enum CLIProcess {
             process.standardOutput = output
             process.standardError = FileHandle.nullDevice
             process.environment = environment
-            let exited = DispatchSemaphore(value: 0)
-            process.terminationHandler = { _ in exited.signal() }
-            do { try NativeProcessTree.run(process) } catch { return .failed(error.localizedDescription) }
+            let exit: ProcessExit
+            do { exit = try ProcessExit(running: process) } catch { return .failed(error.localizedDescription) }
             let timer = Task {
                 do { try await Task.sleep(for: timeout) } catch { return false }
                 guard process.isRunning else { return false }
@@ -94,7 +90,7 @@ enum CLIProcess {
                 timer.cancel()
                 try? input.fileHandleForWriting.close()
                 if process.isRunning { NativeProcessTree.terminate(process: process) }
-                waitForExit(exited, seconds: 5)
+                _ = exit.waitBlockingThread(timeout: .seconds(5))
             }
 
             var buffer = Data()
@@ -123,13 +119,6 @@ enum CLIProcess {
             }
             return .passed
         }.value
-    }
-}
-
-extension CLIProcess {
-    /// Blocks this worker thread until the termination handler ran, for at most `seconds`.
-    fileprivate static func waitForExit(_ exited: DispatchSemaphore, seconds: Double) {
-        _ = exited.wait(timeout: .now() + seconds)
     }
 }
 

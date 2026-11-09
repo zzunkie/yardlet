@@ -857,12 +857,16 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
         // A listing command left holding an inherited input waits on it (CLI 1.1.23).
         process.standardInput = FileHandle.nullDevice
         process.environment = RuntimeProcessEnvironment.values(executableURL: executableURL, overrides: environment)
-        try NativeProcessTree.run(process)
+        let exit = try ProcessExit(running: process)
         let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
         let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        let ended = exit.waitBlockingThread(timeout: .seconds(10))
         let output = String(decoding: outputData, as: UTF8.self)
         let error = String(decoding: errorData, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard ended else {
+            NativeProcessTree.terminate(process: process)
+            throw HarnessAdapterError.processExited(code: -1, message: error.isEmpty ? output : error)
+        }
         guard process.terminationStatus == 0 else {
             throw HarnessAdapterError.processExited(
                 code: process.terminationStatus,
@@ -905,20 +909,7 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
     }
 
     private func readVersion() throws -> String {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = executableURL
-        process.arguments = ["--version"]
-        process.standardOutput = pipe
-        process.standardError = pipe
-        try NativeProcessTree.run(process)
-        process.waitUntilExit()
-        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard process.terminationStatus == 0 else {
-            throw HarnessAdapterError.processExited(code: process.terminationStatus, message: output)
-        }
-        return output
+        try HarnessRuntimeVersionProbe.output(executableURL: executableURL, inheritsAppEnvironment: true)
     }
 
     private func emit(

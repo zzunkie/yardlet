@@ -37,7 +37,7 @@ enum ClaudeTitleRequest {
             process.environment = ClaudeProcessTransport.environment(
                 base: RuntimeProcessEnvironment.values(executableURL: executableURL),
                 overrides: environment.merging([thinkingBudget: "0"]) { _, new in new })
-            try NativeProcessTree.run(process)
+            let exit = try ProcessExit(running: process)
 
             let timeoutTask = Task {
                 do { try await Task.sleep(for: timeout) } catch { return false }
@@ -52,9 +52,9 @@ enum ClaudeTitleRequest {
             try? input.fileHandleForWriting.close()
             let stderr = Task.detached { errors.fileHandleForReading.readDataToEndOfFile() }
             let stdout = output.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
+            let ended = await exit.wait(timeout: timeout)
             timeoutTask.cancel()
-            if await timeoutTask.value {
+            if await timeoutTask.value || !ended {
                 throw HarnessAdapterError.capabilityUnavailable(
                     L10n.format("%@ did not answer in time.", HarnessKind.claudeCode.displayName))
             }
