@@ -1179,6 +1179,8 @@ final class RestartResumeTests: XCTestCase {
 
         await after.continueWorkInterruptedByRestart()
         let transport = try XCTUnwrap(transports.all.last)
+        // The prompt goes out from a task of its own, which may not have run yet (`ACPAdapterTests`).
+        try await waitUntil { await transport.pendingPromptCount == 1 }
         let requests = await transport.requestValues
         XCTAssertEqual(requests.map { $0["method"]?.stringValue }, ["initialize", "session/load", "session/prompt"],
             "The same conversation is loaded, never a new one, and the continuation is a prompt on it")

@@ -35,23 +35,26 @@ final class MainThreadHangLogTests: XCTestCase {
     /// A main thread that stays busy past the last sample is written then, before it runs again: a
     /// deadlock, which never ends, is in the log too.
     func testAHangStillGoingAfterItsLastSampleIsWrittenBeforeItEnds() async throws {
-        let hangs = Mutex<[(hang: MainThreadHang, at: ContinuousClock.Instant)]>([])
+        let hangs = Mutex<[MainThreadHang]>([])
+        let written = Atomic<Bool>(false)
         let watchdog = MainThreadWatchdog(threshold: .milliseconds(100), resampleInterval: .milliseconds(50),
                                           maximumSamples: 2) { hang in
-            hangs.withLock { $0.append((hang, ContinuousClock.now)) }
+            hangs.withLock { $0.append(hang) }
+            written.store(true, ordering: .sequentiallyConsistent)
         }
+        // `start()` begins a busy period, which the hold below carries on: no hang before it.
         watchdog.start()
         defer { watchdog.stop() }
-        try await Task.sleep(for: .milliseconds(50))
-        hangs.withLock { $0.removeAll() }
 
-        Self.holdMainThread(for: .seconds(1))
-        let released = ContinuousClock.now
-        try await waitUntil { hangs.withLock { !$0.isEmpty } }
+        // Busy until the hang is written, however late the watchdog's thread gets a core: a hold
+        // of fixed length can end first on a loaded machine, and the hang is then written as ended.
+        let writtenWhileBusy = Self.holdMainThread(atMost: testWaitLimit) {
+            written.load(ordering: .sequentiallyConsistent)
+        }
 
-        let (hang, writtenAt) = try XCTUnwrap(hangs.withLock { $0.first })
+        XCTAssertTrue(writtenWhileBusy, "The hang was written only once it ended")
+        let hang = try XCTUnwrap(hangs.withLock { $0.first })
         XCTAssertTrue(hang.isOngoing)
-        XCTAssertLessThan(writtenAt, released, "The hang was written only once it ended")
         XCTAssertEqual(hang.samples.count, 2)
         XCTAssertTrue(hang.description.contains("still busy"))
     }
@@ -72,5 +75,15 @@ final class MainThreadHangLogTests: XCTestCase {
     private static func holdMainThread(for duration: Duration) {
         let end = ContinuousClock.now + duration
         while ContinuousClock.now < end {}
+    }
+
+    /// Keeps the main thread busy until `done` holds, for at most `limit`; returns whether it held.
+    @inline(never)
+    private static func holdMainThread(atMost limit: Duration, until done: () -> Bool) -> Bool {
+        let end = ContinuousClock.now + limit
+        while ContinuousClock.now < end {
+            if done() { return true }
+        }
+        return done()
     }
 }
