@@ -357,14 +357,15 @@ struct RemoteComposer: View {
             Image(systemName: "stop.fill")
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(.white)
-                .frame(width: 30, height: 30)
+                .frame(width: 28, height: 28)
                 .background(.red, in: Circle())
+                .contentShape(Circle())
         }
         .buttonStyle(.borderless)
         .parityPointer()
         .disabled(!model.isConnected)
-        .accessibilityLabel(L10n.string("Interrupt"))
-        .help(L10n.string("Interrupt"))
+        .accessibilityLabel(L10n.string("Stop"))
+        .help(L10n.string("Stop"))
     }
 
     /// One queued message, as the local composer's row: what it says, where it goes, and the actions the

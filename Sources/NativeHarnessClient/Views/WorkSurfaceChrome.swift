@@ -89,8 +89,9 @@ enum TaskSidePanelTabs {
     static func choices(canOpenSideChat: Bool, offersReview: Bool? = nil) -> [WorkSurfaceTab] {
         let review = WorkSurfaceTab(id: "diff", title: L10n.string("Review"), systemName: "plus.rectangle",
                                     shortcut: "⌘2")
+        // The View menu's key for the terminal, which the title bar's button names too (⌘3 also opens it).
         let terminal = WorkSurfaceTab(id: "terminal", title: L10n.string("Terminal"), systemName: "terminal",
-                                      shortcut: "⌘3")
+                                      shortcut: TaskCommandShortcut.toggleTerminal.displayText)
         let browser = WorkSurfaceTab(id: "browser", title: L10n.string("Browser"), systemName: "globe",
                                      shortcut: "⌘4")
         let files = WorkSurfaceTab(id: "files", title: L10n.string("Files"), systemName: "folder")
@@ -129,6 +130,8 @@ struct WorkSurfaceNavigation: Sendable {
     /// Closes several tabs at once: a tab menu's Close Other Tabs and Close Tabs to the Right.
     var closeTabs: @MainActor @Sendable ([String]) -> Void = { _ in }
     var closePanel: @MainActor @Sendable () -> Void
+    /// What `closePanel` hides, which the panel's close button names.
+    var kind: WorkSurfacePanelKind = .taskSidePanel
     /// A browser tab's own items in its tab menu; nil leaves them out.
     var browserMenu: BrowserTabMenuActions? = nil
     /// A + that opens another tab of the same kind at once, in place of the menu of `choices`: the
@@ -140,6 +143,32 @@ struct WorkSurfaceNavigation: Sendable {
     /// along the strip, and another task's conversation drags out to a pane or the window's tabs
     /// (`WindowDragState`). Nil where the tabs do not drag.
     var owner: UUID? = nil
+}
+
+/// The panel a header's close button hides, named as the View menu and the title bar's toggle for that
+/// panel name it, with the same key.
+enum WorkSurfacePanelKind: Sendable {
+    /// A task's or the new-task screen's side panel: View › Hide side panel (⌥⌘B).
+    case taskSidePanel
+    /// The terminal below the conversation: View › Hide terminal (⌘J).
+    case terminal
+    /// A side panel no View menu item hides, as Mail's.
+    case sidePanel
+
+    var title: String {
+        self == .terminal ? TaskCommandTitle.terminal(isShown: true) : TaskCommandTitle.sidePanel(isShown: true)
+    }
+
+    var shortcut: KeyboardShortcut? {
+        switch self {
+        case .taskSidePanel: TaskCommandShortcut.toggleSidePanel
+        case .terminal: TaskCommandShortcut.toggleTerminal
+        case .sidePanel: nil
+        }
+    }
+
+    /// The close button's tooltip.
+    var help: String { ShortcutHelp.text(title, shortcut) }
 }
 
 /// The strip's + for another tab of its kind, and what it says.
@@ -165,6 +194,8 @@ extension EnvironmentValues {
 
 struct WorkSurfacePanelControls: View {
     @Environment(\.workSurfaceExpansion) private var expansion
+    /// The panel the close button hides; nil where the header has no panel around it and closes its own view.
+    let kind: WorkSurfacePanelKind?
     let onClose: () -> Void
 
     var body: some View {
@@ -175,7 +206,11 @@ struct WorkSurfacePanelControls: View {
                     help: L10n.string(expansion.wrappedValue ? "Restore split view" : "Expand panel")
                 ) { expansion.wrappedValue.toggle() }
             }
-            ParityIconButton(systemName: "xmark", help: L10n.string("Close panel"), action: onClose)
+            if let kind {
+                ParityIconButton(systemName: "xmark", help: kind.title, shortcut: kind.shortcut, action: onClose)
+            } else {
+                ParityIconButton(systemName: "xmark", help: L10n.string("Close panel"), action: onClose)
+            }
         }
     }
 }
@@ -256,7 +291,9 @@ struct WorkSurfaceHeader<Trailing: View>: View {
                     .layoutPriority(-1)
             }
             trailing().fixedSize(horizontal: true, vertical: false)
-            if showsPanelControls { WorkSurfacePanelControls(onClose: navigation?.closePanel ?? onClose) }
+            if showsPanelControls {
+                WorkSurfacePanelControls(kind: navigation?.kind, onClose: navigation?.closePanel ?? onClose)
+            }
         }
         .padding(.horizontal, 8)
         .frame(height: row?.height ?? 42)

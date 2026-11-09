@@ -54,7 +54,7 @@ final class CodexComposerCommandTests: XCTestCase {
             ("Create an AGENTS.md file with instructions for Codex", "Create an AGENTS.md file with instructions for Codex",
              "Codex용 지침이 담긴 AGENTS.md 파일을 작성합니다"),
             ("Side", "Side", "사이드"), ("Start a temporary side chat", "Start a temporary side chat", "임시 별도 채팅을 시작합니다"),
-            ("Plan mode indicator", "Plan", "플랜"), ("Create a plan", "Create a plan", "플랜 생성")
+            ("Plan mode indicator", "Plan", "플랜")
         ]
         for (key, english, korean) in wording {
             XCTAssertEqual(L10n.string(key, languageCode: "en"), english, key)

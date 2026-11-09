@@ -157,19 +157,34 @@ enum SplitCommandTitle {
 
 /// `⌘1`–`⌘4` stay bound to the session-layer surfaces, so the window layer uses `⌘⇧D`,
 /// `⌘⌥⇧D`, `⌘⌃W`, `⌘⌥` arrows, and `⌃1`–`⌃9` for pinned rows.
+/// The Split View menu's keys, which the command palette and the pane header's close button name too.
+enum SplitCommandShortcut {
+    static let splitRight = KeyboardShortcut("d", modifiers: [.command, .shift])
+    static let splitDown = KeyboardShortcut("d", modifiers: [.command, .shift, .option])
+    static let closePane = KeyboardShortcut("w", modifiers: [.command, .control])
+
+    static func split(_ direction: SplitDirection) -> KeyboardShortcut {
+        direction == .right ? splitRight : splitDown
+    }
+
+    static func focusPane(_ direction: PaneFocusDirection) -> KeyboardShortcut {
+        KeyboardShortcut(SplitCommandTitle.focusShortcut(direction), modifiers: [.command, .option])
+    }
+}
+
 struct YardletWindowLayerCommands: Commands {
     @FocusedValue(\.yardletSplitCommands) private var split
 
     var body: some Commands {
         CommandMenu(Text(L10n.string("Split View"))) {
             Button(SplitCommandTitle.split(.right)) { split?.splitRight() }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .keyboardShortcut(SplitCommandShortcut.splitRight)
                 .disabled(!(split?.canSplitRight ?? false))
             Button(SplitCommandTitle.split(.down)) { split?.splitDown() }
-                .keyboardShortcut("d", modifiers: [.command, .shift, .option])
+                .keyboardShortcut(SplitCommandShortcut.splitDown)
                 .disabled(!(split?.canSplitDown ?? false))
             Button(L10n.string("Close pane")) { split?.closePane() }
-                .keyboardShortcut("w", modifiers: [.command, .control])
+                .keyboardShortcut(SplitCommandShortcut.closePane)
                 .disabled(!(split?.canClosePane ?? false))
             Button(L10n.string("End split view")) { split?.dissolve() }
                 .disabled(!(split?.canClosePane ?? false))
@@ -189,10 +204,7 @@ struct YardletWindowLayerCommands: Commands {
 
             ForEach(PaneFocusDirection.allCases, id: \.self) { direction in
                 Button(SplitCommandTitle.focus(direction)) { split?.focusPane(direction) }
-                    .keyboardShortcut(
-                        SplitCommandTitle.focusShortcut(direction),
-                        modifiers: [.command, .option]
-                    )
+                    .keyboardShortcut(SplitCommandShortcut.focusPane(direction))
                     .disabled(!(split?.canClosePane ?? false))
             }
 

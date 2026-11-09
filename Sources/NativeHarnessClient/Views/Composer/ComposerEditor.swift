@@ -550,6 +550,14 @@ enum ComposerReturnKey: Equatable {
     }
 }
 
+/// The composer's keys its buttons name in their tooltips (`ShortcutHelp`): Return sends from the
+/// field, Escape stops what runs, and ⌘Return starts a new task from anywhere on its screen.
+enum ComposerShortcut {
+    static let send = KeyboardShortcut(.return, modifiers: [])
+    static let stop = KeyboardShortcut(.escape, modifiers: [])
+    static let start = KeyboardShortcut(.return, modifiers: .command)
+}
+
 /// The composer field's window and the Return an input method took while composing: a reference
 /// the key handlers share, so noting a key redraws nothing.
 @MainActor

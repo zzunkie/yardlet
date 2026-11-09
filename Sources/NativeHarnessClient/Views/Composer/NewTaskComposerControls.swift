@@ -25,9 +25,17 @@ struct NewTaskHarnessControl<Items: View>: View {
             }
             .font(.system(size: 13 * interfaceScale, weight: .medium))
             .padding(.horizontal, 7)
-            .frame(height: 28 * interfaceScale)
+            // The other composer controls' height (`ParityComposerControl`).
+            .frame(height: 24 * interfaceScale)
+            .contentShape(Rectangle())
+            // One control for VoiceOver, named below, not one for each of its symbols and words.
+            .accessibilityElement(children: .ignore)
         }
-        .menuStyle(.borderlessButton)
+        // SwiftUI draws the label, so the control keeps the height above and its accessibility name: as an
+        // AppKit pop-up button it took its symbol's description ("hdr") for a name.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
         .parityPointer()
         .layoutPriority(1)
         .help(harness?.displayName ?? L10n.string("No available harnesses"))
@@ -75,10 +83,9 @@ struct NewTaskStartControl: View {
     var body: some View {
         if isStarting { ProgressView().controlSize(.small) }
         ParityIconButton(systemName: "arrow.up", help: L10n.string(isStarting ? "Starting task…" : "Start task"),
-                         isProminent: true, action: onStart)
+                         isProminent: true, shortcut: ComposerShortcut.start, action: onStart)
             .disabled(!canStart || commandMenuOpen)
-            .opacity(canStart ? 1 : 0.4)
-            .keyboardShortcut(.return, modifiers: .command)
+            .keyboardShortcut(ComposerShortcut.start)
     }
 }
 

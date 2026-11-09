@@ -17,14 +17,9 @@ struct FilesPane: View {
                 title: state.preferences.selectedPath.map { URL(filePath: $0).lastPathComponent } ?? L10n.string("Files"),
                 systemName: state.preferences.selectedPath == nil ? "folder" : "doc.text",
                 workspaceURL: state.preferences.selectedPath.map(fileURL) ?? workspaceURL,
-                onClose: {
-                    if state.preferences.selectedPath != nil || state.fileError != nil { showPicker() }
-                    else { onClose() }
-                }
+                // Closes the tab as every tab's close does; the folder button goes back to the list.
+                onClose: onClose
             ) {
-                if !state.isLocal {
-                    Button(L10n.string("Save")) {}.disabled(true)
-                }
                 if state.isDirty {
                     Button(L10n.string("Save")) { Task { await state.save(in: workspaceURL) } }.disabled(state.isSaving)
                     ParityIconButton(systemName: "arrow.uturn.backward", help: L10n.string("Discard changes")) { confirmsDiscard = true }

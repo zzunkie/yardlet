@@ -555,8 +555,6 @@ final class MenuBarMenuTests: XCTestCase {
 
     func testToggleActivityViewIsOptionCommandUAndClashesWithNoOtherShortcut() {
         XCTAssertEqual(key(TaskCommandShortcut.toggleActivityView), key(KeyboardShortcut("u", modifiers: [.command, .option])))
-        XCTAssertEqual(L10n.string("Toggle activity view", languageCode: "en"), "Toggle activity view")
-        XCTAssertEqual(L10n.string("Toggle activity view", languageCode: "ko"), "활동 보기 전환")
 
         // Every other shortcut the menu bar and the window bind (Settings, the command palette, New
         // task, Find, Split View, pinned rows, the task surfaces).

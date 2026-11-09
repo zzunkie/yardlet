@@ -388,13 +388,14 @@ struct SplitPaneHeader<Identity: View, Controls: View>: View {
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .semibold))
-                    .frame(width: 18, height: 18)
+                    .frame(width: 22, height: 22)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .parityPointer()
             .foregroundStyle(.secondary)
-            .help(L10n.string("Close pane"))
+            // ⌃⌘W closes the focused pane only.
+            .help(ShortcutHelp.text(L10n.string("Close pane"), isFocused ? SplitCommandShortcut.closePane : nil))
             .accessibilityLabel(L10n.string("Close pane"))
         }
         .padding(.horizontal, 8)

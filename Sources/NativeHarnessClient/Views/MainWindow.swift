@@ -1262,6 +1262,7 @@ struct MainWindow: View {
             isSidebarVisible: isSidebarVisible,
             activate: activateRow,
             toggleSidebar: toggleSidebar,
+            isActivityShown: isActivityShown,
             toggleActivity: toggleActivity,
             togglePinned: { target in
                 switch target {
@@ -1287,6 +1288,7 @@ struct MainWindow: View {
         )
         if !hasPresentedModal {
             commands.newTask = { showNewTask() }
+            commands.stop = stopShownTask
             commands.goBack = goBack
             commands.goForward = goForward
             commands.openModelMenu = sidebarSection == .tasks ? {
@@ -1951,6 +1953,14 @@ struct MainWindow: View {
     /// (the focused pane's in a split view), none while scheduled tasks are shown in its place.
     private var commandTaskID: UUID? {
         schedulesWindow.isShowing || sidebarSection != .tasks ? nil : model.store.selectedSessionID
+    }
+
+    /// Task › Stop: the shown task's turn, as the composer's Stop and the palette's Stop stop it. Nil
+    /// while that task does not run.
+    private var stopShownTask: (() -> Void)? {
+        guard commandTaskID != nil, let session = model.store.selectedSession,
+              session.status == .running || session.status == .waitingForApproval else { return nil }
+        return { Task { await model.interrupt(session) } }
     }
 
     /// The panels the View menu's ⌘J and ⌘⌥B, the palette and "Open in Side Panel" act on: the shown
@@ -2889,6 +2899,7 @@ struct MainWindow: View {
                     systemName: direction == .right
                         ? "rectangle.righthalf.inset.filled"
                         : "rectangle.bottomhalf.inset.filled",
+                    shortcut: SplitCommandShortcut.split(direction),
                     action: { splitFocusedPane(direction) }
                 )
             )
@@ -2900,6 +2911,7 @@ struct MainWindow: View {
                     title: L10n.string("Close pane"),
                     subtitle: L10n.string("Take the task out of the split view; it keeps its own row."),
                     systemName: "rectangle.badge.xmark",
+                    shortcut: SplitCommandShortcut.closePane,
                     action: { model.splits.closePane() }
                 )
             )
@@ -2910,6 +2922,7 @@ struct MainWindow: View {
                         title: SplitCommandTitle.focus(direction),
                         subtitle: L10n.string("Move the pane focus inside this split view."),
                         systemName: SplitCommandTitle.focusSymbol(direction),
+                        shortcut: SplitCommandShortcut.focusPane(direction),
                         action: { model.splits.moveFocus(direction) }
                     )
                 )
@@ -2979,6 +2992,7 @@ struct MainWindow: View {
                 title: L10n.string("New task"),
                 subtitle: L10n.string("Choose a project and harness to start a task."),
                 systemName: "square.and.pencil",
+                shortcut: TaskCommandShortcut.newTask,
                 action: showNewTask
             ),
             CommandPaletteItem(
@@ -2988,13 +3002,15 @@ struct MainWindow: View {
                     : L10n.string("Show sidebar"),
                 subtitle: L10n.string("Change the task navigation layout."),
                 systemName: "sidebar.left",
+                shortcut: TaskCommandShortcut.toggleSidebar,
                 action: toggleSidebar
             ),
             CommandPaletteItem(
                 id: "toggle-activity",
-                title: L10n.string("Toggle activity view"),
+                title: TaskCommandTitle.activity(isShown: isActivityShown),
                 subtitle: L10n.string("Turn the sidebar activity view on or off"),
                 systemName: "bell",
+                shortcut: TaskCommandShortcut.toggleActivityView,
                 action: toggleActivity
             ),
             CommandPaletteItem(
@@ -3037,6 +3053,7 @@ struct MainWindow: View {
                 title: L10n.string("Settings"),
                 subtitle: L10n.string("Change appearance, notifications, and app preferences."),
                 systemName: "gearshape.2",
+                shortcut: YardletAppShortcut.settings,
                 action: { presentSettings() }
             )
         ]
@@ -3049,6 +3066,7 @@ struct MainWindow: View {
                     title: TaskCommandTitle.sidePanel(isShown: panels.trailingSurfaceID != nil),
                     subtitle: L10n.string("Review, browser, files and side chat beside the conversation."),
                     systemName: TaskPanelSymbol.sidePanel,
+                    shortcut: TaskCommandShortcut.toggleSidePanel,
                     action: { toggleTaskPanel(TaskSurfaceNavigationProjection.sidePanelToggleID) }
                 ),
                 CommandPaletteItem(
@@ -3057,6 +3075,7 @@ struct MainWindow: View {
                     subtitle: L10n.string(TerminalLocation.current() == .right ? "A shell in the task's folder in the side panel."
                                                                                : "A shell in the task's folder below the conversation."),
                     systemName: TaskPanelSymbol.terminal,
+                    shortcut: TaskCommandShortcut.toggleTerminal,
                     action: { toggleTaskPanel(TaskSurface.terminal.rawValue) }
                 )
             ]
@@ -3067,6 +3086,7 @@ struct MainWindow: View {
                     title: sessionRail.toggleTitle(for: model.store.selectedSessionID),
                     subtitle: L10n.string("The task's environment, settings, context, changes and progress beside the conversation."),
                     systemName: TaskPanelSymbol.sessionRail,
+                    shortcut: TaskCommandShortcut.toggleSessionRail,
                     action: toggleSessionRail
                 ), at: 0)
             }
@@ -3074,10 +3094,11 @@ struct MainWindow: View {
         }
         if let session = model.store.selectedSession {
             if session.status == .running || session.status == .waitingForApproval {
+                // Task › Stop's words.
                 items.append(
                     CommandPaletteItem(
                         id: "interrupt-\(session.id)",
-                        title: L10n.string("Stop active task"),
+                        title: L10n.string("Stop"),
                         subtitle: session.title,
                         systemName: "stop.circle",
                         action: { Task { await model.interrupt(session) } }
@@ -3110,6 +3131,7 @@ struct MainWindow: View {
                         title: L10n.string("Mark task as unread"),
                         subtitle: session.title,
                         systemName: "circlebadge",
+                        shortcut: TaskCommandShortcut.markUnread,
                         action: { Task { await model.store.markUnread(id: session.id) } }
                     )
                 )

@@ -634,7 +634,9 @@ final class WindowStructureQATests: XCTestCase {
             try draw(host, "header-single-panel", appearance)
             if light {
                 let all = controls(in: host)
-                XCTAssertTrue(inTitleBar(all.first { $0.label == L10n.string("Close panel") }),
+                // The panel's close is the rightmost of the two "Hide side panel" buttons; the header's toggle is the other.
+                XCTAssertTrue(inTitleBar(all.filter { $0.label == WorkSurfacePanelKind.taskSidePanel.title }
+                                         .max { $0.frame.maxX < $1.frame.maxX }),
                               "the side panel's strip is in the title bar's row")
                 XCTAssertTrue(inTitleBar(all.first { $0.label == fixture.left.title && $0.frame.minX > ParityTheme.sidebarWidth }),
                               "the window's tabs are in the title bar")
@@ -658,7 +660,8 @@ final class WindowStructureQATests: XCTestCase {
             if light {
                 let all = controls(in: host)
                 let paneLine = try XCTUnwrap(all.last { $0.label == L10n.string("Close pane") }).frame.midY
-                let closePanel = try XCTUnwrap(all.first { $0.label == L10n.string("Close panel") })
+                let closePanel = try XCTUnwrap(all.filter { $0.label == WorkSurfacePanelKind.taskSidePanel.title }
+                    .max { $0.frame.maxX < $1.frame.maxX })
                 XCTAssertEqual(closePanel.frame.midY, paneLine, accuracy: 3, "the pane's panel strip is in its header's row")
                 let top = try XCTUnwrap(pageTop(host))
                 XCTAssertEqual(top, ParityTheme.titleBarHeight + 41, accuracy: 2)
@@ -842,7 +845,8 @@ final class WindowStructureQATests: XCTestCase {
         model.taskWorkspaces.state(for: fixture.running.id).setPanels(panel)
         host.settle(passes: 30, interval: 0.03)
         let files = try XCTUnwrap(controls(in: host).first { $0.label == L10n.string("Files") && $0.frame.midY < ParityTheme.titleBarHeight })
-        let closePanel = try XCTUnwrap(controls(in: host).first { $0.label == L10n.string("Close panel") })
+        let closePanel = try XCTUnwrap(controls(in: host).filter { $0.label == WorkSurfacePanelKind.taskSidePanel.title }
+            .max { $0.frame.maxX < $1.frame.maxX })
         let end = NSPoint(x: closePanel.frame.minX - 60, y: files.frame.midY)
         hold(from: NSPoint(x: files.frame.midX, y: files.frame.midY), to: end)
         try snapshot("drag-panel-tab")

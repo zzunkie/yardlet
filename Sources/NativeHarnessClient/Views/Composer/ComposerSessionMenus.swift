@@ -54,8 +54,10 @@ struct ComposerContextRing: View {
                 .fill(isActive ? ParityTheme.selectedFill : .clear)
                 .frame(width: 24, height: 24)
             ZStack {
+                // The Claude app's track is its strong border colour, so an empty ring reads as a
+                // gauge and not as a spinner that has not started.
                 Circle()
-                    .stroke(.secondary.opacity(0.22), lineWidth: 2)
+                    .stroke(Color.primary.opacity(0.22), lineWidth: 2)
                 Circle()
                     .trim(from: 0, to: summary.fraction ?? 0)
                     .stroke(ComposerContextUsageDetails.tint(summary.severity),

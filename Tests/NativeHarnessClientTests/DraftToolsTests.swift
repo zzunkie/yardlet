@@ -251,7 +251,7 @@ final class DraftToolsTests: XCTestCase {
 
     func testTheNewTaskScreenOffersTheTerminalBrowserAndFiles() {
         XCTAssertEqual(TaskSidePanelTabs.draftChoices.map(\.id), ["terminal", "browser", "files"])
-        XCTAssertEqual(TaskSidePanelTabs.draftChoices.map(\.shortcut), ["⌘3", "⌘4", nil])
+        XCTAssertEqual(TaskSidePanelTabs.draftChoices.map(\.shortcut), ["⌘J", "⌘4", nil])
         let folder = URL(filePath: "/tmp/project")
         let context = TerminalFolderContext(folders: [folder, URL(filePath: "/tmp/other")], restart: {})
         XCTAssertTrue(context.contains(URL(filePath: "/tmp/project/")))

@@ -8,8 +8,12 @@ struct YardletTaskCommandSet {
     var isSidebarVisible = true
     var activate: (WindowItem) -> Void = { _ in }
     var toggleSidebar: () -> Void = {}
+    /// Whether the sidebar shows the activity view, which the Task menu's item names.
+    var isActivityShown = false
     /// Turns the sidebar's activity view on or off, as its bell button does.
     var toggleActivity: () -> Void = {}
+    /// Task › Stop: stops the shown task's turn, as the composer's Stop does. Nil while nothing runs.
+    var stop: (() -> Void)? = nil
     var togglePinned: (TaskCommandTargets.PinTarget) -> Void = { _ in }
     var markUnread: (UUID) -> Void = { _ in }
     var archive: (UUID) -> Void = { _ in }
@@ -62,6 +66,12 @@ enum TaskCommandTitle {
 
     static func sidebar(isVisible: Bool) -> String {
         L10n.string(isVisible ? "Hide sidebar" : "Show sidebar")
+    }
+
+    /// The bell's tooltip, the Task menu and the command palette name the activity view the same
+    /// way, in the Codex app's words (`sidebarElectron.priorityThreads.*`).
+    static func activity(isShown: Bool) -> String {
+        L10n.string(isShown ? "Turn off activity view" : "View activity")
     }
 
     /// The title bar's button, the View menu and the command palette name the side panel and the
@@ -220,12 +230,15 @@ struct YardletTaskCommands: Commands {
             }
             .keyboardShortcut(TaskCommandShortcut.nextTaskNeedingAttention)
             .disabled(task?.targets.sessionNeedingAttention == nil)
-            Button(L10n.string("Toggle activity view")) { task?.toggleActivity() }
+            Button(TaskCommandTitle.activity(isShown: task?.isActivityShown ?? false)) { task?.toggleActivity() }
                 .keyboardShortcut(TaskCommandShortcut.toggleActivityView)
                 .disabled(task == nil)
             Button(L10n.string("Select model")) { task?.openModelMenu?() }
                 .keyboardShortcut(TaskCommandShortcut.openModelMenu)
                 .disabled(task?.openModelMenu == nil)
+            // No key: Escape stops a turn from the composer, and the window's other views keep theirs.
+            Button(L10n.string("Stop")) { task?.stop?() }
+                .disabled(task?.stop == nil)
 
             Divider()
 

@@ -1450,7 +1450,7 @@ private final class BrowserHostQARunner {
                   "not shown \(missing) (tooltip-probe.txt)")
         }
         let toolbar = ["Back", "Forward", "Reload", "Open", "Select an element to attach to your message"].map(L10n.string)
-        let header = ["Close tab", "Open externally", "Close panel"].map(L10n.string)
+        let header = [L10n.string("Close tab"), L10n.string("Open externally"), WorkSurfacePanelKind.taskSidePanel.help]
         var page = view.convert(view.bounds, to: nil)
         expect("beside the conversation", toolbar + header + [L10n.string("Expand panel")],
                in: names(above: page, from: page.minX, to: page.maxX))
@@ -1459,7 +1459,7 @@ private final class BrowserHostQARunner {
         // A scroll AppKit never saw end (an animated scroll the person's own scrolling interrupted, or one whose view
         // left the window) holds the window's names back, as it does while a scroll runs: none shows, however long
         // the pointer rests. The pointer moving over the window once the hold has outlasted any scroll ends it.
-        let closePanel = L10n.string("Close panel")
+        let closePanel = WorkSurfacePanelKind.taskSidePanel.help
         _ = window.perform(NSSelectorFromString("_disableToolTipCreationAndDisplay"))
         let whileHeld = await display("held by a scroll that never ended", [closePanel], wait: .seconds(2))
         let moved = ContinuousClock.now
@@ -1493,7 +1493,7 @@ private final class BrowserHostQARunner {
         try? await Task.sleep(for: .seconds(2))
         // Review's own header sits at the top of the panel, where the page was.
         let panel = NSRect(x: page.minX, y: page.maxY - 60, width: page.width, height: 0)
-        expect("Review", [L10n.string("Close tab"), L10n.string("Close panel")],
+        expect("Review", [L10n.string("Close tab"), WorkSurfacePanelKind.taskSidePanel.help],
                in: names(above: panel, from: panel.minX, to: panel.maxX))
 
         // How long AppKit waits before it shows a name (`NSToolTipManager`'s own reading of its delay).

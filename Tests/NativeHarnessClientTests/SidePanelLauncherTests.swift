@@ -11,7 +11,7 @@ final class SidePanelLauncherTests: XCTestCase {
     func testTheLauncherOffersReviewOnlyWhereARepositoryOrATurnHasChangesInTheCodexAppsOrder() {
         let inRepository = TaskSidePanelTabs.choices(canOpenSideChat: true, offersReview: true)
         XCTAssertEqual(inRepository.map(\.id), ["diff", "terminal", "browser", "files", "sideChat"])
-        XCTAssertEqual(inRepository.map(\.shortcut), ["⌘2", "⌘3", "⌘4", nil, nil])
+        XCTAssertEqual(inRepository.map(\.shortcut), ["⌘2", "⌘J", "⌘4", nil, nil])
         // Not known yet: as in a repository, so nothing moves once it is.
         XCTAssertEqual(TaskSidePanelTabs.choices(canOpenSideChat: true).map(\.id), inRepository.map(\.id))
         let elsewhere = TaskSidePanelTabs.choices(canOpenSideChat: false, offersReview: false)

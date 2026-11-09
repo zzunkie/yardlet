@@ -69,12 +69,15 @@ struct CodexTurnRail: View, Equatable {
                 Button {
                     onLoadMore()
                 } label: {
+                    // The rail's whole width takes the click, not the small chevron alone.
                     Image(systemName: "chevron.up")
                         .font(.system(size: 7, weight: .semibold))
-                        .frame(width: 18, height: 14)
+                        .frame(width: 24, height: 20)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .parityPointer()
+                .help(L10n.string("Load more history"))
                 .accessibilityLabel(L10n.string("Load more history"))
             }
 

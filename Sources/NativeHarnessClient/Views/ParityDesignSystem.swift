@@ -229,6 +229,9 @@ struct ParityIconButton: View {
 
     @State private var isHovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// A borderless button draws its label as given, so a disabled one dims here: send on an empty
+    /// draft, Back with no history.
+    @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         Button(action: action) {
@@ -239,14 +242,18 @@ struct ParityIconButton: View {
                     .foregroundStyle(ParityTheme.primaryActionForeground)
                     .frame(width: 28, height: 28)
                     .background(ParityTheme.primaryActionFill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .opacity(isEnabled ? 1 : 0.4)
+                    .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             } else {
                 Image(systemName: systemName)
                     .font(.system(size: 13, weight: .semibold))
                     .frame(width: 30, height: 30)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(isEnabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
                     .background {
-                        Circle().fill(isHovering ? ParityTheme.hoverFill : .clear)
+                        Circle().fill(isHovering && isEnabled ? ParityTheme.hoverFill : .clear)
                     }
+                    // The whole circle takes the click, not only the symbol's strokes.
+                    .contentShape(Circle())
             }
         }
         .buttonStyle(.borderless)
@@ -275,6 +282,7 @@ struct ParitySectionTitle: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
                 .parityPointer()

@@ -866,7 +866,8 @@ private struct SidebarGroupingMenu: View {
         .fixedSize()
         .parityPointer()
         .onHover { isHovering = $0 }
-        .help(L10n.string("Group by"))
+        // Only the activity view turns it off (`TaskSidebar`), which lists its tasks ungrouped.
+        .help(L10n.string(isEnabled ? "Group by" : "Turn off the activity view to group tasks"))
         .accessibilityLabel(L10n.string("Group by"))
         .accessibilityValue(Self.title(grouping))
     }
@@ -1622,6 +1623,7 @@ struct SidebarSearchField: View {
             TextField(placeholder, text: $text)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13 * interfaceScale))
+                .accessibilityLabel(placeholder)
             if !text.isEmpty {
                 Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -1629,6 +1631,7 @@ struct SidebarSearchField: View {
                 }
                 .buttonStyle(.borderless)
                 .parityPointer()
+                .help(L10n.string("Clear search"))
                 .accessibilityLabel(L10n.string("Clear search"))
             }
         }
@@ -2078,14 +2081,17 @@ private struct TaskRow: View {
 
             if showsHoverActions {
                 HStack(spacing: 1) {
+                    // The Task menu's keys act on the shown task, so only its row names them.
                     TaskRowActionButton(
                         systemName: session.isPinned ? "pin.fill" : "pin",
                         label: session.isPinned ? L10n.string("Unpin") : L10n.string("Pin"),
+                        shortcut: isSelected ? TaskCommandShortcut.togglePinned : nil,
                         action: { hoverCard?.dismiss(); onTogglePinned() }
                     )
                     TaskRowActionButton(
                         systemName: "archivebox",
                         label: L10n.string("Archive"),
+                        shortcut: isSelected ? TaskCommandShortcut.archive : nil,
                         action: { hoverCard?.dismiss(); onArchive() }
                     )
                 }
@@ -2148,6 +2154,7 @@ private final class SidebarRowPlace {
 private struct TaskRowActionButton: View {
     let systemName: String
     let label: String
+    var shortcut: KeyboardShortcut? = nil
     let action: () -> Void
     @State private var isHovering = false
 
@@ -2166,7 +2173,7 @@ private struct TaskRowActionButton: View {
         .buttonStyle(.borderless)
         .parityPointer()
         .onHover { isHovering = $0 }
-        .help(label)
+        .help(ShortcutHelp.text(label, shortcut))
         .accessibilityLabel(label)
     }
 }

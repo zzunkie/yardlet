@@ -334,6 +334,7 @@ struct TerminalPane: View {
             closeTab: { id in if let shell = byID[id] { close([shell]) } },
             closeTabs: { ids in close(ids.compactMap { byID[$0] }) },
             closePanel: { onClose() },
+            kind: .terminal,
             newTab: WorkSurfaceNewTab(help: L10n.string("New terminal")) {
                 tabs.workspace.openTerminalTab(in: tabs.folder, launch: tabs.launch, taskID: tabs.taskID)
                 keyboardFocus?.move(to: .terminal)
