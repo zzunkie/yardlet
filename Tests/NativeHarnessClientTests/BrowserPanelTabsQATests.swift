@@ -1036,7 +1036,9 @@ final class BrowserPanelTabsQATests: XCTestCase {
     /// the window's shown tab, as the tabs not shown, which are buttons. The strip's room between its tabs still moves
     /// the window. The window has the app's title bar and is not the active app's, as a test's never is; there a press
     /// on a shown tab's own content moved the window every time (`TabDragHandle`). The window's moves are counted, not
-    /// made.
+    /// made. The window server moves the main window by any press dragged in its title bar's height, the key window's
+    /// too, before the press reaches the app, so while the pointer is on a tab, shown or not, the window is not movable
+    /// (`WindowMoveExclusion`), and it is again on the room between them and once the pointer has left.
     func testATabDragsFromTheTitleBarWithoutMovingTheWindow() throws {
         let fixture = try makeFixture()
         let model = fixture.model, task = fixture.task, client = fixture.client
@@ -1094,6 +1096,17 @@ final class BrowserPanelTabsQATests: XCTestCase {
         let y: CGFloat = 16
         XCTAssertLessThan(y, host.window.frame.height - host.window.contentLayoutRect.height, "in the title bar's height")
 
+        func isMovable(at point: CGPoint) throws -> Bool { try host.isMovable(withPointerAt: point) }
+        let shownWindowTabFrame = otherWindowTab.frame.offsetBy(dx: -otherWindowTab.frame.width - WindowTabMetrics.spacing,
+                                                                dy: 0)
+        XCTAssertFalse(try isMovable(at: CGPoint(x: close.frame.midX - 21, y: y)), "on the shown browser tab")
+        XCTAssertFalse(try isMovable(at: CGPoint(x: statusTab.frame.midX, y: y)), "on the browser tab not shown")
+        XCTAssertTrue(try isMovable(at: CGPoint(x: statusTab.frame.minX - PanelTabMetrics.spacing / 2, y: y)),
+                      "on the room between two tabs")
+        XCTAssertFalse(try isMovable(at: CGPoint(x: shownWindowTabFrame.minX + 17, y: y)), "on the window's shown tab")
+        XCTAssertFalse(try isMovable(at: CGPoint(x: otherWindowTab.frame.midX, y: y)), "on the window's tab not shown")
+        XCTAssertTrue(try isMovable(at: CGPoint(x: statusTab.frame.maxX + 60, y: y)), "on the room after the tabs")
+
         try drag(from: CGPoint(x: statusTab.frame.minX - PanelTabMetrics.spacing / 2, y: y), by: 40)
         XCTAssertEqual(moves, 1, "the room between two tabs moves the window")
 
@@ -1104,8 +1117,7 @@ final class BrowserPanelTabsQATests: XCTestCase {
         XCTAssertEqual(Navigation.browserKeys(in: workspace.panels), [status.key, docs.key], "the shown browser tab moved")
 
         // The window's shown tab, by its mark (the window's two tabs are as wide), past the middle of the other.
-        let shownWindowTab = otherWindowTab.frame.offsetBy(dx: -otherWindowTab.frame.width - WindowTabMetrics.spacing, dy: 0)
-        let markStart = CGPoint(x: shownWindowTab.minX + 17, y: y)
+        let markStart = CGPoint(x: shownWindowTabFrame.minX + 17, y: y)
         try drag(from: markStart, by: otherWindowTab.frame.midX + 10 - markStart.x)
         XCTAssertEqual(moves, 1, "the window's shown tab moved the window")
         XCTAssertEqual(model.splits.tabs, [.session(fixture.legacy.id), .session(task.id)], "the window's shown tab moved")

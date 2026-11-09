@@ -862,7 +862,9 @@ final class WindowStructureQATests: XCTestCase {
     /// With one tab a split view's panes reach the window's top: a top pane's header moves the window by its empty
     /// part, which focuses the pane as a press on the header does, and the pane still drags by the harness beside its
     /// title. The window has the app's title bar and is not the active app's, as a test's never is. The window's moves
-    /// are counted, not made.
+    /// are counted, not made. The window server moves the window by any press dragged in the title bar's height, so
+    /// while the pointer is on the harness the window is not movable (`WindowMoveExclusion`), and it is on the header's
+    /// empty part.
     func testATopPanesHeaderMovesTheWindowByItsEmptyPart() throws {
         let fixture = try makeFixture()
         let splits = fixture.model.splits
@@ -923,12 +925,14 @@ final class WindowStructureQATests: XCTestCase {
         XCTAssertLessThan(y, host.window.frame.height - host.window.contentLayoutRect.height, "in the title bar's height")
 
         let empty = CGPoint(x: header.firstButton.frame.minX - 10, y: y)
+        let harness = CGPoint(x: header.title.frame.maxX + 16, y: y)
+        XCTAssertFalse(try host.isMovable(withPointerAt: harness), "on the pane's harness")
+        XCTAssertTrue(try host.isMovable(withPointerAt: empty), "on the header's empty part")
         try drag(from: empty, to: CGPoint(x: empty.x + 40, y: y))
         XCTAssertEqual(moves, 1, "a top pane's empty header moves the window")
         XCTAssertEqual(splits.activeSplit?.focusedPaneID, left.id, "and focuses the pane")
 
         // By the harness beside the title, onto the other pane's middle: they swap, and the window stays.
-        let harness = CGPoint(x: header.title.frame.maxX + 16, y: y)
         let other = try XCTUnwrap(paneFrame(1))
         try drag(from: harness, to: CGPoint(x: other.midX, y: other.midY))
         XCTAssertEqual(moves, 1, "the pane's drag moved the window")

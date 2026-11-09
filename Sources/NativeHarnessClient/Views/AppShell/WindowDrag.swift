@@ -21,6 +21,14 @@ enum WindowDragSubject: Equatable {
         case let .panelTab(_, tab): TaskSurfaceNavigationProjection.taskID(inTab: tab)
         }
     }
+
+    /// A tab of a strip, which the window keeps still under while the pointer is on it (`WindowMoveExclusion`).
+    var isTab: Bool {
+        switch self {
+        case .windowTab, .panelTab: true
+        case .pane: false
+        }
+    }
 }
 
 /// Where a drag would land.
@@ -284,6 +292,7 @@ struct WindowDraggable: ViewModifier {
     func body(content: Content) -> some View {
         if let drag {
             content
+                .background { if subject.isTab { WindowMoveExclusion() } }
                 // Dragged along its own strip it moves itself; dragged anywhere else, a label follows the pointer.
                 .opacity(drag.subject == subject && !drag.slidesInStrip ? 0.45 : 1)
                 .simultaneousGesture(
@@ -325,7 +334,8 @@ extension View {
 /// strip's other tabs are buttons. In the title bar's height AppKit takes a press on SwiftUI content that no button
 /// takes to move the window, at every press while the window is not the active app's key window, so the window moved
 /// in place of the tab. What the tab shows over the handle lets presses through to it. A split pane at the window's
-/// top has one over its harness, for the same reason.
+/// top has one over its harness, for the same reason. The window server's own moves are kept off them by
+/// `WindowMoveExclusion`.
 struct TabDragHandle: View {
     var body: some View {
         Button {} label: { Color.clear.contentShape(Rectangle()) }
@@ -338,6 +348,104 @@ struct TabDragHandle: View {
 /// The tab looks the same while it is pressed and dragged.
 private struct TabDragHandleStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View { configuration.label }
+}
+
+/// Keeps the window server from moving the window by what lies over it while the pointer is on it: a tab of a
+/// strip (`WindowDraggable`) and a split pane's harness at the window's top. A window with a hidden title bar
+/// tells the window server it moves by any press dragged in the title bar's height but its window buttons,
+/// whatever SwiftUI draws there, so a tab dragged there moved the whole window, the active app's key window
+/// too. The window is not movable while the pointer is on one of these (`NSWindow.isMovable`, which the
+/// window server reads before the press reaches the app), so the press drags the tab; the room between and
+/// beside them still moves the window. Presses pass through to what lies over it.
+struct WindowMoveExclusion: View {
+    var body: some View {
+        WindowMoveExclusionRepresentable().allowsHitTesting(false).accessibilityHidden(true)
+    }
+}
+
+private struct WindowMoveExclusionRepresentable: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { WindowMoveExclusionView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+final class WindowMoveExclusionView: NSView {
+    /// The window kept still while the pointer is on this view.
+    private var held: NSWindow?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        track()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        track()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        track()
+    }
+
+    /// Tracks the pointer over the view's bounds: a view in SwiftUI's hierarchy does not clip to its bounds, so its
+    /// visible rectangle can take in the whole panel around it. Whether or not the window is key or the app active,
+    /// as the window server moves any window by its title bar.
+    private func track() {
+        if let area = trackingAreas.first, area.rect == bounds { return }
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self))
+        // A new area starts outside; one that no longer has the pointer lets the window go.
+        if held != nil, let window, !bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil)) {
+            hold(nil)
+        }
+    }
+
+    override func mouseEntered(with event: NSEvent) { hold(window) }
+    override func mouseExited(with event: NSEvent) { hold(nil) }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        hold(nil)
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    private func hold(_ window: NSWindow?) {
+        guard window !== held else { return }
+        if let held { WindowMoveHolds.release(held) }
+        held = window
+        if let window { WindowMoveHolds.take(window) }
+    }
+}
+
+/// The exclusions the pointer is on in each window; the window moves again once it has left them all.
+@MainActor
+enum WindowMoveHolds {
+    private static var holds: [ObjectIdentifier: (count: Int, wasMovable: Bool)] = [:]
+
+    static func take(_ window: NSWindow) {
+        let id = ObjectIdentifier(window)
+        if let hold = holds[id] {
+            holds[id] = (hold.count + 1, hold.wasMovable)
+        } else {
+            holds[id] = (1, window.isMovable)
+            window.isMovable = false
+        }
+    }
+
+    static func release(_ window: NSWindow) {
+        let id = ObjectIdentifier(window)
+        guard let hold = holds[id] else { return }
+        if hold.count > 1 {
+            holds[id] = (hold.count - 1, hold.wasMovable)
+        } else {
+            holds[id] = nil
+            window.isMovable = hold.wasMovable
+        }
+    }
 }
 
 /// A sidebar task dragged over a tab strip (the window's tab bar, a side panel's tabs): the gap it would

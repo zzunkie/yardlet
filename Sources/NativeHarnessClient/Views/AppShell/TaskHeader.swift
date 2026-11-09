@@ -164,7 +164,11 @@ struct TaskHeaderStatus: View {
                     .font(.system(size: compact ? 11 : 11.5))
                     .foregroundStyle(.secondary)
                     .fixedSize()
-                    .overlay { if dragsByHarness { TabDragHandle().help(session.harness.displayName) } }
+                    .overlay {
+                        if dragsByHarness {
+                            TabDragHandle().background(WindowMoveExclusion()).help(session.harness.displayName)
+                        }
+                    }
             }
             if let pullRequest = actions.pullRequest(session) {
                 TaskPullRequestBadgeView(badge: TaskPullRequestBadge(pullRequest), onOpen: actions.onOpenPullRequest)

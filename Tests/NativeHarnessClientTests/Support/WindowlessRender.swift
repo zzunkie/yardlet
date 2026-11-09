@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import XCTest
+@testable import NativeHarnessClient
 
 /// The rendering tests' one way to draw the app's real SwiftUI views without showing anything:
 /// no app launch, no visible window, no screen capture and no provider.
@@ -106,6 +107,40 @@ enum WindowlessRender {
         }
 
         var backingScaleFactor: CGFloat { window.backingScaleFactor }
+
+        /// The exclusions the pointer is on (`isMovable(withPointerAt:)`).
+        private var enteredExclusions = Set<ObjectIdentifier>()
+
+        /// Whether the window server may move the window with the pointer resting at `point`, from the window's
+        /// top-left: the pointer enters the tracking areas of the window-move exclusions there and leaves the
+        /// others', whose owners AppKit tells (a test's events do not move AppKit's pointer). In the app the window
+        /// server moves the window by any press dragged in its title bar's height that these do not keep it from.
+        func isMovable(withPointerAt point: CGPoint) throws -> Bool {
+            func exclusions(in view: NSView) -> [WindowMoveExclusionView] {
+                (view as? WindowMoveExclusionView).map { [$0] } ?? view.subviews.flatMap(exclusions)
+            }
+            let location = NSPoint(x: point.x, y: window.frame.height - point.y)
+            for exclusion in exclusions(in: hosting) {
+                let area = try XCTUnwrap(exclusion.trackingAreas.first)
+                let tracked = area.options.contains(.inVisibleRect) ? exclusion.visibleRect : area.rect
+                let isIn = exclusion.convert(tracked, to: nil).contains(location)
+                guard isIn != enteredExclusions.contains(ObjectIdentifier(exclusion)) else { continue }
+                if isIn {
+                    enteredExclusions.insert(ObjectIdentifier(exclusion))
+                } else {
+                    enteredExclusions.remove(ObjectIdentifier(exclusion))
+                }
+                let event = try XCTUnwrap(NSEvent.enterExitEvent(
+                    with: isIn ? .mouseEntered : .mouseExited, location: location, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
+                    eventNumber: 0, trackingNumber: Int(bitPattern: Unmanaged.passUnretained(area).toOpaque()),
+                    userData: nil))
+                let owner = try XCTUnwrap(area.owner as? NSResponder)
+                if isIn { owner.mouseEntered(with: event) } else { owner.mouseExited(with: event) }
+            }
+            settle(passes: 1, interval: 0.01)
+            return window.isMovable
+        }
 
         /// Lays the view out and turns the main run loop for `interval`, `passes` times, so state
         /// changes, tasks and AppKit-backed content settle before the view is drawn.
