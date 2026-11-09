@@ -6270,9 +6270,10 @@ final class AppModel {
                         settledTurns: &self.codexSettledTurns[handle.localSessionID, default: CodexSettledTurns()]
                     )
                     let prior = self.codexPresentationBySessionID[handle.localSessionID]
+                    let activeTurnID = merged.activeTurnID, priorActiveTurnID = prior?.activeTurnID
                     // A state the runtime sends while a turn runs (or as it ends) is the turn's work;
                     // the states it sends on connecting are not.
-                    if merged.activeTurnID != nil || prior?.activeTurnID != nil {
+                    if activeTurnID != nil || priorActiveTurnID != nil {
                         self.noteProviderActivity(handle.localSessionID, at: Date())
                     }
                     self.codexPresentations[handle.localSessionID] = merged
@@ -6282,8 +6283,12 @@ final class AppModel {
                     }
                     self.persistCodexServerRequests(merged, for: handle.localSessionID)
                     self.persistCodexTimelineItems(merged, for: handle.localSessionID, deferringStreamedContent: true)
-                    let lifecycleChanged = prior?.activeTurnID != merged.activeTurnID
-                        || prior?.thread?.turns.map(\.status) != merged.thread?.turns.map(\.status)
+                    // A turn started or ended, or turns came or went: read from the newest turn, as
+                    // a state streams many times a second however long the thread. An older turn
+                    // that settles while a newer one runs is written with the next checkpoint.
+                    let priorTurns = prior?.thread?.turns, turns = merged.thread?.turns
+                    let lifecycleChanged = priorActiveTurnID != activeTurnID || priorTurns?.count != turns?.count
+                        || priorTurns?.last?.status != turns?.last?.status
                     self.checkpointCodexTranscript(merged, for: handle.localSessionID, immediately: lifecycleChanged)
                 }
                 await self?.adoptProviderTitle(
@@ -7126,8 +7131,8 @@ final class AppModel {
 
     private func checkpointCodexTranscript(_ state: CodexTaskState, for id: UUID, immediately: Bool) {
         if immediately || state.activeTurnID == nil {
-            // Written in the background too: the snapshot queue keeps the order, and the main
-            // thread does not wait while a long conversation is encoded and written.
+            // Made and written in the background too: the snapshot queue keeps the order, and the
+            // main thread does not wait while a long conversation is flattened, encoded and written.
             codexSnapshotCheckpointTasks.removeValue(forKey: id)?.cancel()
             persistCodexTranscriptSnapshot(state, for: id, inBackground: true)
         } else if codexSnapshotCheckpointTasks[id] == nil {
@@ -7142,16 +7147,19 @@ final class AppModel {
         }
     }
 
-    /// `inBackground` is for the streaming checkpoint: it returns before the snapshot is written.
+    /// `inBackground` is for the streaming checkpoint: it returns before the snapshot is made and
+    /// written.
     private func persistCodexTranscriptSnapshot(_ state: CodexTaskState, for sessionID: UUID, inBackground: Bool = false) {
         // An absent thread is a transient presentation bootstrap and must not erase a previously
         // hydrated detached snapshot. A present empty thread is authoritative and clears it.
         guard state.thread != nil, !store.isTemporary(sessionID) else { return }
+        if inBackground {
+            transcriptSnapshots.saveSoon(for: sessionID) { CodexTranscriptSnapshotProjection.entries(from: state) }
+            return
+        }
         let entries = CodexTranscriptSnapshotProjection.entries(from: state)
         if entries.isEmpty {
-            if inBackground { transcriptSnapshots.removeSoon(for: sessionID) } else { transcriptSnapshots.remove(for: sessionID) }
-        } else if inBackground {
-            transcriptSnapshots.saveSoon(entries, for: sessionID)
+            transcriptSnapshots.remove(for: sessionID)
         } else {
             transcriptSnapshots.saveNow(entries, for: sessionID)
         }

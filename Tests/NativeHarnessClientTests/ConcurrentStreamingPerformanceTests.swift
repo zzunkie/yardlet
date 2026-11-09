@@ -1169,6 +1169,19 @@ private enum LongCodexScenario {
             try await Task.sleep(for: .milliseconds(50))
         }
         try await Task.sleep(for: .seconds(1))
+        // The app takes every provider event but only the newest state, so a long history still has
+        // thousands of events queued once its turns show; measured then, they would count against
+        // the measured turn's updates. The newest turn's commands (from its third item on) come
+        // among its last events.
+        if let model, historyTurns > 0, itemsPerTurn > 2 {
+            let newestTurn = "history-\(historyTurns - 1)-"
+            try await waitUntil(timeout: .seconds(600)) {
+                (model.eventsBySessionID.values.first ?? []).suffix(20).contains { event in
+                    guard case let .activityCompleted(activity) = event.payload else { return false }
+                    return activity.id.hasPrefix(newestTurn)
+                }
+            }
+        }
         let setupSeconds = (ContinuousClock.now - setupStart).seconds
 
         let frames = FrameCounter()
