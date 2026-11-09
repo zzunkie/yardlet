@@ -1,4 +1,7 @@
 import Foundation
+#if os(Windows)
+import WinSDK
+#endif
 
 enum L10n {
     /// Any packaged app owns these resources, including separately identified QA builds.
@@ -14,6 +17,56 @@ enum L10n {
         return .module
     }()
 
+    #if os(Windows)
+    /// Windows' display languages and the localization they prefer, with its words read from its strings file.
+    /// Foundation outside Apple's platforms looks for the preferred languages only in `AppleLanguages`, which nothing
+    /// writes on Windows, so the bundle answers in its development language whatever Windows shows, beside WinUI's
+    /// own controls in Windows' language; a bundle made from a `.lproj` folder searches that same list. No words while
+    /// Yardlet's own defaults name a language, or when Windows prefers the development language.
+    private static let windowsLocalization: (languages: [String], chosen: String?, words: [String: String]) = {
+        let languages = windowsDisplayLanguages()
+        guard (UserDefaults.standard.array(forKey: AppLanguagePreference.key) ?? []).isEmpty else {
+            return (languages, nil, [:])
+        }
+        // The resource bundle keeps its `.lproj` folders at its root on Windows; the resources folder, where a bundle
+        // has one, is asked first.
+        let lists = [activeBundle.resourceURL, activeBundle.bundleURL].compactMap { $0 }.map { folder in
+            (folder, ((try? FileManager.default.contentsOfDirectory(atPath: folder.path(percentEncoded: false))) ?? [])
+                .filter { $0.hasSuffix(".lproj") }
+                .map { String($0.dropLast(".lproj".count)) })
+        }
+        guard let found = lists.first(where: { !$0.1.isEmpty }) else { return (languages, nil, [:]) }
+        let (folder, available) = found
+        // A language as Windows names it ("ko-KR"), else its language alone ("ko").
+        let chosen = languages.lazy.compactMap { tag in
+            available.first { $0.caseInsensitiveCompare(tag) == .orderedSame }
+                ?? available.first { $0.caseInsensitiveCompare(String(tag.prefix { $0 != "-" })) == .orderedSame }
+        }.first
+        guard let chosen, chosen != activeBundle.developmentLocalization,
+              let data = FileManager.default.contents(
+                atPath: folder.appending(path: "\(chosen).lproj/Localizable.strings").path(percentEncoded: false)),
+              let words = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: String]
+        else { return (languages, chosen, [:]) }
+        return (languages, chosen, words)
+    }()
+
+    /// For the QA event log: the localization the words come from and the display languages it was chosen from.
+    static var windowsLanguageNote: String {
+        let localization = windowsLocalization
+        return "\(localization.chosen ?? "none") (\(localization.words.count) words) from \(localization.languages.joined(separator: ", "))"
+    }
+
+    /// This user's Windows display languages, most preferred first, as BCP 47 names ("ko-KR", "en-US").
+    private static func windowsDisplayLanguages() -> [String] {
+        var count: ULONG = 0
+        var length: ULONG = 0
+        guard GetUserPreferredUILanguages(DWORD(MUI_LANGUAGE_NAME), &count, nil, &length), length > 0 else { return [] }
+        var buffer = [WCHAR](repeating: 0, count: Int(length))
+        guard GetUserPreferredUILanguages(DWORD(MUI_LANGUAGE_NAME), &count, &buffer, &length) else { return [] }
+        return buffer.split(separator: 0).map { String(decoding: $0, as: UTF16.self) }
+    }
+    #endif
+
     #if canImport(Darwin)
     static func string(_ key: String.LocalizationValue) -> String {
         String(localized: key, bundle: activeBundle)
@@ -21,12 +74,18 @@ enum L10n {
     #endif
 
     static func string(_ key: String) -> String {
-        activeBundle.localizedString(forKey: key, value: key, table: nil)
+        #if os(Windows)
+        if let words = windowsLocalization.words[key] { return words }
+        #endif
+        return activeBundle.localizedString(forKey: key, value: key, table: nil)
     }
 
     /// The key's words, or `fallback` when the catalog does not have the key.
     static func string(_ key: String, fallback: String) -> String {
-        activeBundle.localizedString(forKey: key, value: fallback, table: nil)
+        #if os(Windows)
+        if let words = windowsLocalization.words[key] { return words }
+        #endif
+        return activeBundle.localizedString(forKey: key, value: fallback, table: nil)
     }
 
     static func string(_ key: String, languageCode: String) -> String {

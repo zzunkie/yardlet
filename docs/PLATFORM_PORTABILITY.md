@@ -140,6 +140,13 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   update compares and draws in the window is bounded by those turns however long the history. Answers draw their
   Markdown from the engine's reading of it (`WinUI/MarkdownView.swift`, `TranscriptMarkdownDocument`): bold,
   italic, code, struck and linked words, lists, quotes, code blocks, tables and rules.
+- **Language.** The app's words follow Windows' display language, as WinUI's own controls do. Foundation outside
+  Apple's platforms looks for the preferred languages only in `AppleLanguages`, which nothing writes on Windows, so
+  it answered in English on a Korean Windows while WinUI drew Settings and its switches in Korean (seen on a PC).
+  A bundle made from a `.lproj` folder searches the same list, so `L10n` (`Localization.swift`) asks Windows for the
+  user's display languages (`GetUserPreferredUILanguages`), chooses the bundle's localization they name, and reads its
+  `Localizable.strings` itself, unless Yardlet's own defaults name a language. The QA event log's `language:` line says
+  which it chose.
 - **No console windows.** The release app is a windowed program with no console, and Foundation's `Process` passes
   `CreateProcessW` no `CREATE_NO_WINDOW` (confirmed in its source), so each console program the app started, a
   harness's node or Git, opened a console window of its own, in Windows Terminal where that is the default terminal

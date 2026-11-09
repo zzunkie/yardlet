@@ -24,6 +24,7 @@ final class YardletApp: XamlApplication {
             let window = MainWindow(model: model, directory: RemoteHostDirectory.live())
             window.open()
             QAEventLog.shared.write(console)
+            QAEventLog.shared.write("language: \(L10n.windowsLanguageNote)")
             QAHarnessCheck.runIfAsked(model: model)
             return window
         }
