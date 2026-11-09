@@ -5,15 +5,17 @@ import Foundation
 /// sent, no conversation is written, and Yardlet never handles a credential.
 enum ClaudeUsageProbe {
     /// Waits off this path for a CLI whose input ended, and stops it only past `grace`. Its output
-    /// stays open and read meanwhile, as a closed one would end the CLI at its next write.
+    /// stays open and read meanwhile, as a closed one would end the CLI at its next write. Reading
+    /// stops where the output ends (`readChunks`). A reader left on the ended pipe runs again at
+    /// once; this one stayed until `waitUntilExit()` returned, which off the main thread can be long
+    /// after the CLI has gone (`NativeProcessTree.terminate(process:)`), and kept a core busy for
+    /// over a minute after an account check (2026-11-09).
     private static func endWhenDone(_ process: Process, output: Pipe, grace: Duration) {
-        output.fileHandleForReading.readabilityHandler = { _ = $0.availableData }
+        output.fileHandleForReading.readChunks { _ in }
         Task.detached(priority: .utility) {
             let deadline = ContinuousClock.now + grace
             while process.isRunning, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(100)) }
             if process.isRunning { NativeProcessTree.terminate(process: process) }
-            process.waitUntilExit()
-            output.fileHandleForReading.readabilityHandler = nil
         }
     }
 

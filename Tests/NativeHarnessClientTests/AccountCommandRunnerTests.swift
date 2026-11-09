@@ -24,6 +24,8 @@ final class AccountCommandRunnerTests: XCTestCase {
 
     /// A CLI read for its limits may be renewing the login. It is never stopped first: the end of its
     /// input ends it, and what it was saving gets saved, after the answer and after a timeout alike.
+    /// Waiting for it costs nothing, also once it has closed its output and goes on (2026-11-09: a
+    /// reader left on the ended pipe kept a core busy).
     func testTheUsageProbeLetsTheCLIFinishInsteadOfStoppingIt() async throws {
         let script = """
         #!/bin/sh
@@ -32,16 +34,25 @@ final class AccountCommandRunnerTests: XCTestCase {
             [ -n "$ANSWERS" ] && printf '%s\\n' '{"type":"control_response","response":{"request_id":"usage","subtype":"success","response":{}}}';;
           esac
         done
-        sleep 1
+        exec >&-
+        sleep 2
         touch "$0.saved"
         """
+        func cpuSeconds() -> Double {
+            var usage = rusage()
+            getrusage(RUSAGE_SELF, &usage)
+            return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec)
+                + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1_000_000
+        }
         for answers in [true, false] {
             let fixture = try makeExecutable(script)
             defer { try? FileManager.default.removeItem(at: fixture.root) }
+            let cpu = cpuSeconds()
             _ = try? await ClaudeUsageProbe.read(executableURL: fixture.executable,
                 environment: answers ? ["ANSWERS": "1"] : [:], timeout: .milliseconds(500), exitGrace: .seconds(30))
             let saved = fixture.executable.path(percentEncoded: false) + ".saved"
             try await waitUntil(timeout: .seconds(20)) { FileManager.default.fileExists(atPath: saved) }
+            XCTAssertLessThan(cpuSeconds() - cpu, 0.5, "The probe spent CPU while the CLI finished")
         }
     }
 
