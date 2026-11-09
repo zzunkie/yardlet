@@ -10,11 +10,20 @@ final class ProviderTitleRefreshTests: XCTestCase {
         session.hasUnreadUpdate = true
         session.providerOptions = ["model": "selected-model"]
         let repository = TitleRefreshRepository([session])
-        let model = try makeModel(repository: repository, resolver: { _ in "Updated provider title" })
-        await model.restoreIndex()
+        let source = DelayedTitleSource()
+        let model = try makeModel(repository: repository, resolver: { _ in source.read() })
+        let restore = Task { await model.restoreIndex() }
+        // The list shows the index's titles while the harness's are read: a hundred long Claude Code
+        // histories kept "Restoring tasks…" up for about 15 seconds.
+        try await waitUntil { source.readCount == 1 }
+        XCTAssertFalse(model.isRestoringIndex)
+        XCTAssertTrue(model.hasRestoredIndex)
+        XCTAssertEqual(model.store.sessions.first?.title, session.title)
+        source.release.signal()
+        await restore.value
 
         var expected = session
-        expected.title = "Updated provider title"
+        expected.title = "Older provider title"
         XCTAssertEqual(model.store.sessions, [expected])
         let persisted = try await repository.loadSessions()
         XCTAssertEqual(persisted, [expected])

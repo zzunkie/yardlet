@@ -108,19 +108,25 @@ enum ProviderSessionTitleResolver {
     /// the person gave the session (`custom-title`) and the one it generated from the first
     /// request (`ai-title`). For each, the latest record wins, so a cleared name stays cleared;
     /// like Claude's own session list, the name comes before the generated title.
+    /// The file is searched from its end for the lines that name a title, so a long history is read
+    /// only back to its latest titles: decoding and splitting all of it took about 15 seconds of the
+    /// launch for a hundred tasks.
     private static func claudeTitle(providerSessionID: String, root: URL) -> String? {
         guard let historyURL = uniqueProviderFile(
             root: root,
             relativePath: "\(providerSessionID).jsonl"
         ),
-        let data = boundedData(at: historyURL, maximumBytes: 32 * 1_048_576),
-        let contents = String(data: data, encoding: .utf8) else { return nil }
+        let data = boundedData(at: historyURL, maximumBytes: 32 * 1_048_576) else { return nil }
         var customTitle: String??
         var generatedTitle: String??
-        for line in contents.split(separator: "\n", omittingEmptySubsequences: true).reversed()
-            where line.contains("-title\"") {
-            guard let lineData = line.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+        let marker = Data("-title\"".utf8)
+        let newline = UInt8(ascii: "\n")
+        var searchEnd = data.endIndex
+        while let match = data.range(of: marker, options: .backwards, in: data.startIndex..<searchEnd) {
+            let lineStart = data[..<match.lowerBound].lastIndex(of: newline).map { $0 + 1 } ?? data.startIndex
+            let lineEnd = data[match.upperBound...].firstIndex(of: newline) ?? data.endIndex
+            searchEnd = lineStart
+            guard let object = try? JSONSerialization.jsonObject(with: data[lineStart..<lineEnd]) as? [String: Any],
                   object["sessionId"] as? String == providerSessionID else { continue }
             switch object["type"] as? String {
             case "custom-title" where customTitle == nil:
