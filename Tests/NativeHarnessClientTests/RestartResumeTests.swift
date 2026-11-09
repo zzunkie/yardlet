@@ -482,7 +482,6 @@ final class RestartResumeTests: XCTestCase {
         let after = try await fixture.relaunch(repository: repository)
         XCTAssertEqual(after.store.sessions.first { $0.id == cut.id }?.status, .ready, "A relaunch leaves no turn running")
         await after.continueWorkInterruptedByRestart()
-        XCTAssertNil(RestartResumeRecord.load(from: fixture.defaults), "The record is read once")
         let transport = try XCTUnwrap(fixture.transports.all.last)
         let sent = await transport.sentValues
         XCTAssertEqual(sent.count, 1)
@@ -831,6 +830,9 @@ final class RestartResumeTests: XCTestCase {
         var continued = await fixture.continuedConversations()
         XCTAssertEqual(continued, Array(conversations[0..<4]), "The four most recent start at once")
         XCTAssertEqual(after.restartResumeLine.waiting, Array(tasks[4...].map(\.id)), "The rest wait their turn, not to be opened")
+        XCTAssertEqual(RestartResumeRecord.load(from: fixture.defaults)?.entries.map(\.sessionID).sorted { $0.uuidString < $1.uuidString },
+                       tasks[4...].map(\.id).sorted { $0.uuidString < $1.uuidString },
+                       "An exit now carries over those waiting, not those starting: one may be what stopped Yardlet")
         try await waitUntil { clock.waiting == 4 }
         XCTAssertEqual(clock.requested.first, RestartResumePolicy.startWindow)
 
@@ -962,27 +964,40 @@ final class RestartResumeTests: XCTestCase {
         await last.shutdown()
     }
 
-    /// The record is written only on the way out of a quit or an update, and the launch that reads it
-    /// removes it. A crash or a forced quit never writes one, so nothing continues after it.
-    func testNothingContinuesAfterACrash() async throws {
+    /// An exit that writes nothing (2026-11-09: Yardlet froze and was force quit, and every task that
+    /// had been mid-turn stayed stopped) continues what ran, as a quit does: from the launch on, the
+    /// record is kept as a quit would write it. A turn continued unseen counts each time, and one that
+    /// ended leaves the record.
+    func testAForceQuitContinuesWhatRanAsAQuitWould() async throws {
         let fixture = try ClaudeFixture()
         let cut = fixture.session(title: "Cut off", status: .running, updatedAt: Date())
-        let repository = InMemorySessionRepository(sessions: [cut])
+        let shown = fixture.session(title: "Shown", status: .ready, updatedAt: Date().addingTimeInterval(-3_600))
+        let repository = InMemorySessionRepository(sessions: [shown, cut])
         RestartResumeRecord(trigger: .quit, recordedAt: Date(), entries: [entry(for: cut)]).save(to: fixture.defaults)
-        let first = try await fixture.relaunch(repository: repository)
-        await first.continueWorkInterruptedByRestart()
-        XCTAssertEqual(fixture.transports.all.count, 1)
-        XCTAssertEqual(first.store.sessions.first?.status, .running)
-        XCTAssertNil(RestartResumeRecord.load(from: fixture.defaults), "Read once at launch")
-        // Yardlet crashes here: `recordWorkForRestart` never runs. (Shut down only to release the fixture.)
-        await first.shutdown()
+        func keptCounts() -> [Int?]? { RestartResumeRecord.load(from: fixture.defaults)?.entries.map(\.unseenContinuations) }
 
-        let next = try await fixture.relaunch(repository: repository)
-        await next.continueWorkInterruptedByRestart()
-        XCTAssertEqual(fixture.transports.all.count, 1, "No provider is started")
-        XCTAssertEqual(next.store.sessions.first?.status, .ready)
-        XCTAssertTrue(next.restartResumeNoticeSessionIDs.isEmpty)
-        await next.shutdown()
+        for launch in 1...2 {
+            let model = try await fixture.relaunch(repository: repository, selecting: shown.id)
+            model.continuations.restartRecordDelay = .milliseconds(10)
+            await model.continueWorkInterruptedByRestart()
+            XCTAssertEqual(fixture.transports.all.count, launch, "Continued after force quit \(launch)")
+            XCTAssertEqual(model.store.sessions.first { $0.id == cut.id }?.status, .running)
+            // Kept once its provider shows work, counted as continued unseen.
+            await fixture.transports.all.last?.emit(textDelta("Picking up where I left off."))
+            try await waitUntil { keptCounts() == [launch] }
+            if launch == 2 {
+                try await finishTurn(on: try XCTUnwrap(fixture.transports.all.last), calling: "Read", input: ["file_path": "README.md"])
+                try await waitUntil { RestartResumeRecord.load(from: fixture.defaults) == nil }
+            }
+            // Yardlet is force quit here: `recordWorkForRestart` never runs. (Shut down only to release the fixture.)
+            await model.shutdown()
+        }
+
+        let last = try await fixture.relaunch(repository: repository, selecting: shown.id)
+        await last.continueWorkInterruptedByRestart()
+        XCTAssertEqual(fixture.transports.all.count, 2, "A turn that ended is not continued")
+        XCTAssertTrue(last.restartResumeNoticeSessionIDs.isEmpty)
+        await last.shutdown()
     }
 
     func testACodexThreadCutByAnyQuitContinuesWithTheAppsEmptyTurnUnlessStoppedOrAsking() async throws {

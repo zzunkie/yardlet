@@ -755,7 +755,7 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
   message, as the CLI does for any ACP client; a task removed without a message leaves an empty conversation, which
   `/resume` does not list. Each `agy acp` process writes a small file in `implicit/`, and a session given the Yardlet MCP
   server keeps that server's tool schemas in `mcp/<server>/`, as the CLI does for its own servers. A turn that Yardlet's
-  quit or update cut off continues at the next launch, under the restart setting, as a Claude Code turn does: the task
+  quit, update or crash cut off continues at the next launch, under the restart setting, as a Claude Code turn does: the task
   loads the same conversation again (`session/load`) and sends the Claude app's continuation words as its next prompt,
   which the CLI keeps as a user step of the conversation (`RestartResumePolicy`); the CLI's own clients continue nothing,
   and its server only tells the model at that prompt that its subagents stopped with the restart. Turning Yardlet off or

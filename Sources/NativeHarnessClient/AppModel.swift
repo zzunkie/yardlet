@@ -591,6 +591,7 @@ final class AppModel {
             self?.continuations.taskOpened(id)
             self?.noteMemorySaverScreen()
         }
+        store.onStatusChange = { [weak self] _ in self?.continuations.restartRecordMayHaveChanged() }
         taskWorkspaces.onSideChatClose = { [weak self] id in self?.endSideChat(of: id) }
         self.connections.onSignedIn = { [weak self] harness, connection, isFirstReading in
             Task { await self?.continuations.continueTasks(afterSignInOf: harness, connection: connection, isFirstReading: isFirstReading) }
@@ -1923,6 +1924,8 @@ final class AppModel {
         if continuations.asksRestartQuestion(in: id) { detail.idleRequest = .input }
         if continuations.connectionResumes[id]?.isWaiting == true { detail.isReconnecting = true }
         if let wait = browserWaits[id] { detail.browserWait = wait.wait }
+        // A question asked while a Codex turn runs leaves its status as it was.
+        if taskAttentionDetails[id]?.pendingRequest != detail.pendingRequest { continuations.restartRecordMayHaveChanged() }
         if detail == .none {
             if taskAttentionDetails[id] != nil { taskAttentionDetails.removeValue(forKey: id) }
         } else if taskAttentionDetails[id] != detail {
