@@ -876,9 +876,11 @@ the person chose, once; following adds and updates the rest, read-only (`Session
     comes from the history).
   - Codex: `thread/list` on the App Server of the default Codex sign-in, as in the import sheet (the same `sourceKinds`;
     exec, subAgent, threads with a parent and ephemeral threads dropped from the response; at most 20 pages of 100),
-    once with `archived: false` and once with `archived: true`. The parameters of YHP
-    `yardlet.codex.history.interactive` have an optional field `archived` (without it, open threads, so older peers stay
-    compatible). A thread in both lists counts as open. If the archived list cannot be read, archiving is not followed.
+    once with `archived: false` and once with `archived: true`. Like every `thread/list` Yardlet sends, and as the Codex
+    app lists threads, it asks for the App Server's state database only (`useStateDbOnly`); without it the App Server
+    reads every listed thread's rollout file again, which took it about 35 seconds of CPU for 900 threads. The
+    parameters of YHP `yardlet.codex.history.interactive` have an optional field `archived` (without it, open threads,
+    so older peers stay compatible). A thread in both lists counts as open. If the archived list cannot be read, archiving is not followed.
     If the Codex side cannot be read (not installed, App Server failure), that round follows only Claude. Starting the
     App Server is the same as for the import sheet, with no model turn or authentication change.
   - Last activity: for Claude, the app's `lastActivityAt` (or else the history file's modification time, as in import).

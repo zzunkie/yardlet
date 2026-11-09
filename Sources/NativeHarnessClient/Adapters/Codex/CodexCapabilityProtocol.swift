@@ -31,6 +31,11 @@ extension CodexProtocol {
         )
     }
 
+    /// A folder's latest threads. Like every `thread/list` Yardlet sends, and as the Codex app lists
+    /// threads, it is answered from the App Server's state database (`useStateDbOnly`): without it the
+    /// App Server reads each listed thread's rollout file again to repair what it keeps of the thread,
+    /// which took it about 35 seconds of CPU for the 900 open and archived threads Yardlet follows at
+    /// launch. A runtime that predates the field ignores it and reads the rollouts as before.
     static func recentThreads(
         id: Int64,
         workspaceURL: URL,
@@ -42,7 +47,8 @@ extension CodexProtocol {
             "cwd": .string(workspaceURL.standardizedFileURL.path),
             "limit": .integer(limit),
             "sortDirection": .string("desc"),
-            "sortKey": .string("updated_at")
+            "sortKey": .string("updated_at"),
+            "useStateDbOnly": .bool(true)
         ]
         if let cursor {
             params["cursor"] = .string(cursor)
@@ -56,7 +62,7 @@ extension CodexProtocol {
     static let interactiveSourceKinds = ["cli", "vscode", "appServer"]
 
     /// Every folder's threads a person started, not archived (or, with `archived`, only the
-    /// archived ones), the most recently updated first.
+    /// archived ones), the most recently updated first, from the state database (`recentThreads`).
     static func interactiveThreads(
         id: Int64,
         cursor: String? = nil,
@@ -68,7 +74,8 @@ extension CodexProtocol {
             "limit": .integer(limit),
             "sortDirection": .string("desc"),
             "sortKey": .string("updated_at"),
-            "sourceKinds": .array(interactiveSourceKinds.map(JSONValue.string))
+            "sourceKinds": .array(interactiveSourceKinds.map(JSONValue.string)),
+            "useStateDbOnly": .bool(true)
         ]
         if let cursor {
             params["cursor"] = .string(cursor)

@@ -327,6 +327,8 @@ final class SessionListFollowTests: XCTestCase {
         let lists = await fixture.codex.requests.filter { $0.method == "thread/list" }
         XCTAssertEqual(lists.map { $0.params["archived"] }, [.bool(false), .bool(true)])
         XCTAssertEqual(lists[1].params["sourceKinds"], .array([.string("cli"), .string("vscode"), .string("appServer")]))
+        XCTAssertEqual(lists.map { $0.params["useStateDbOnly"] }, [.bool(true), .bool(true)],
+                       "Read from Codex's state database, as the Codex app lists threads, not from every rollout")
         XCTAssertEqual(try desktopFiles(fixture.desktop), filesBefore, "The Claude app's files are only read")
         XCTAssertEqual(try transcripts.map { try Data(contentsOf: $0) }, transcriptsBefore)
 
