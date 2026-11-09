@@ -268,7 +268,7 @@ numbers to the file as a JSON line (`PerfBenchRecord`), which the bench collects
 |---|---|
 | `CodexTimelineMergeCostTests` | merging 500 saved Codex cards into one streamed state |
 | `ConcurrentStreamingPerformanceTests/testBenchmarkTenConcurrentStreamingTasks` | ten tasks streaming at once through the adapters, one shown |
-| `LongCodexThreadPerformanceTests/testBenchmarkLongCodexThreadStreaming` | one Codex update against a 300-turn thread, by route |
+| `LongCodexThreadPerformanceTests/testBenchmarkLongCodexThreadStreaming` | one Codex update against a 300-turn thread, by route, and on the app's route the provider events that wake the main actor each second |
 | `ConversationStreamingCostTests` | a Codex fragment in a turn of 3 and of 72 calls, and beside a scrolling list |
 | `ConversationBlankFrameTests/testBenchmarkSwitchingToALongConversation` | opening a 20- and a 300-turn task |
 | `ConversationBlankFrameTests/testBenchmarkStreamingInTheWholeWindow` | what drawing one publication costs the window under 1, 9 and 300 turns |

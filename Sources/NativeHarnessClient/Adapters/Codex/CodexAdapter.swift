@@ -56,6 +56,9 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
     private var pendingPresentationPublicationByLocalSessionID: [UUID: CodexTaskState] = [:]
     /// The publication each task's pending state waits for, and when it is due.
     private var presentationFlushes: [UUID: (due: ContinuousClock.Instant, task: Task<Void, Never>)] = [:]
+    /// Answer text streamed since each task's last event, which goes as one `.assistantDelta` with the
+    /// task's next event or when its presentation's text would be published (`holdAnswerText`).
+    private var heldAnswerText: [UUID: (text: String, rawData: Data?, send: Task<Void, Never>)] = [:]
 
     private let namesNewThreads: Bool
     /// Threads this adapter started whose first request has not been sent yet.
@@ -1606,6 +1609,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         }
         // The task attached again hears only its new runtime: this one's events, such as a failed turn's
         // error, were handled once and are not replayed to it.
+        heldAnswerText.removeValue(forKey: session.localSessionID)?.send.cancel()
         eventChannel.close(session.localSessionID)
         presentationStateByLocalSessionID.removeValue(forKey: session.localSessionID)
         presentationSequenceByLocalSessionID.removeValue(forKey: session.localSessionID)
@@ -1644,6 +1648,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
             publish(state, for: id)
             activeTurnIDByLocalSessionID.removeValue(forKey: id)
             if interrupted { emit(.error(message: L10n.format("Connection to %@ ended.", "Codex"), recoverable: true), for: id) }
+            sendHeldAnswerText(for: id)
             eventChannel.finish(id)
             presentationContinuations[id]?.finish()
         }
@@ -1895,7 +1900,14 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
             }
         }
 
-        // A frame takes a number even when it projects to no event.
+        // A frame takes a number even when it projects to no event; answer text goes with what follows.
+        if message.method == "item/agentMessage/delta", let delta = message.params?["delta"]?.stringValue {
+            eventChannel.emit(for: localSessionID, projecting: { _ in nil })
+            holdAnswerText(delta, for: localSessionID, rawData: frame.data)
+            return
+        }
+        // Streamed thinking, plans and command output make no event of their own here.
+        if !CodexTaskReducer.streamingTextMethods.contains(message.method ?? "") { sendHeldAnswerText(for: localSessionID) }
         if eventChannel.emit(for: localSessionID, projecting: { sequence in
             projector.project(message, rawData: frame.data, localSessionID: localSessionID, sequence: sequence)
         }) != nil {
@@ -2245,7 +2257,35 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         for localSessionID: UUID,
         rawData: Data? = nil
     ) {
+        sendHeldAnswerText(for: localSessionID)
         eventChannel.emit(payload, for: localSessionID, rawProviderEvent: rawData)
+    }
+
+    /// Keeps a fragment of a streaming answer for the task's next event. The App Server sends an answer a
+    /// few characters a frame, and each event crosses the protocol bridge and wakes the main thread, which
+    /// publishes the transcript on a cadence of its own (`AppModel.transcriptPublicationInterval`) and,
+    /// while a turn runs, draws the conversation from the presentation, whose text waits as long. The text
+    /// goes when anything else for the task does, or when the presentation's would.
+    private func holdAnswerText(_ text: String, for localSessionID: UUID, rawData: Data) {
+        if var held = heldAnswerText[localSessionID] {
+            held.text += text
+            held.rawData = rawData
+            heldAnswerText[localSessionID] = held
+            return
+        }
+        let delay = Self.publicationDelay(for: "item/agentMessage/delta") ?? .zero
+        heldAnswerText[localSessionID] = (text, rawData, Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            await self?.sendHeldAnswerText(for: localSessionID)
+        })
+    }
+
+    /// Sends the task's held answer text, before anything that came after it.
+    private func sendHeldAnswerText(for localSessionID: UUID) {
+        guard let held = heldAnswerText.removeValue(forKey: localSessionID) else { return }
+        held.send.cancel()
+        eventChannel.emit(.assistantDelta(held.text), for: localSessionID, rawProviderEvent: held.rawData)
     }
 
     private func nextPresentationSequence(for localSessionID: UUID) -> UInt64 {

@@ -862,7 +862,8 @@ private struct Sample {
                 transcripts: publications.transcripts - other.publications.transcripts,
                 backgroundTranscripts: publications.backgroundTranscripts - other.publications.backgroundTranscripts,
                 codexStates: publications.codexStates - other.publications.codexStates,
-                backgroundCodexStates: publications.backgroundCodexStates - other.publications.backgroundCodexStates
+                backgroundCodexStates: publications.backgroundCodexStates - other.publications.backgroundCodexStates,
+                events: publications.events - other.publications.events
             ),
             persistence: persistence.minus(other.persistence)
         )
@@ -897,7 +898,7 @@ private struct StreamingReport {
             "[perf] main thread busy \(String(format: "%.1f%%", mainBusyFraction * 100)), whole process CPU \(String(format: "%.1f%%", processCPUFraction * 100))",
             "[perf] main-actor timer lateness p50 \(ms(lag.p50)) p99 \(ms(lag.p99)) max \(ms(lag.max)), >50 ms \(lag.over50ms)x",
             "[perf] view bodies/s (60 Hz model): window \(String(format: "%.1f", windowEvaluationsPerSecond)), shown task \(String(format: "%.1f", shownTaskViewEvaluationsPerSecond)), sidebar \(String(format: "%.1f", sidebarEvaluationsPerSecond))",
-            "[perf] transcript publications \(rate(publications.transcripts)) (background \(rate(publications.backgroundTranscripts))), codex states \(rate(publications.codexStates)) (background \(rate(publications.backgroundCodexStates)))",
+            "[perf] transcript publications \(rate(publications.transcripts)) (background \(rate(publications.backgroundTranscripts))), codex states \(rate(publications.codexStates)) (background \(rate(publications.backgroundCodexStates))), main-actor events \(rate(publications.events))",
             "[perf] sqlite upserts \(rate(persistence.calls["sqlite.upsert"] ?? 0)), notifications \(notifications)"
         ]
         for key in persistence.calls.keys.sorted() where key != "sqlite.upsert" {
@@ -1035,6 +1036,8 @@ private struct LongCodexReport {
     let processCPUSeconds: Double
     let mainThreadCPUSeconds: Double?
     let setupSeconds: Double
+    /// The provider events the app model's main actor took over the measured window, on the routes with one.
+    var mainActorEvents: Int? = nil
     /// The `projection` route's projections over the measured window.
     var projection: (seconds: Double, updates: Int, projected: Int, reused: Int)? = nil
 
@@ -1048,6 +1051,9 @@ private struct LongCodexReport {
             line += String(format: ", main thread %.1f%% (%.2f ms/update)",
                            mainThreadCPUSeconds / seconds * 100,
                            updates > 0 ? mainThreadCPUSeconds * 1_000 / Double(updates) : 0)
+        }
+        if let mainActorEvents {
+            line += String(format: ", %.1f main-actor events/s", Double(mainActorEvents) / seconds)
         }
         if let projection, projection.updates > 0 {
             let updates = Double(projection.updates)
@@ -1174,6 +1180,7 @@ private enum LongCodexScenario {
         let startCPU = ProcessMemory.processCPUSeconds()
         let startFrames = frames.value
         let startUpdates = model?.publicationCounts.codexStates ?? counter.value
+        let startEvents = model?.publicationCounts.events
         let startProjections = projections?.value
         let measureStart = ContinuousClock.now
         try await Task.sleep(until: end, clock: .continuous)
@@ -1181,6 +1188,7 @@ private enum LongCodexScenario {
         let mainBusy = mainThread.elapsedCPUSeconds()
         let cpu = ProcessMemory.processCPUSeconds() - startCPU
         let updates = (model?.publicationCounts.codexStates ?? counter.value) - startUpdates
+        let events = startEvents.flatMap { start in model.map { $0.publicationCounts.events - start } }
         let emitted = frames.value - startFrames
         let endProjections = projections?.value
         producer.cancel()
@@ -1189,7 +1197,7 @@ private enum LongCodexScenario {
             route: route, historyTurns: historyTurns, itemsPerTurn: itemsPerTurn, seconds: elapsed,
             frames: emitted, updates: updates, processCPUSeconds: cpu,
             mainThreadCPUSeconds: route == .app || route.mountsConversation ? mainBusy : nil,
-            setupSeconds: setupSeconds
+            setupSeconds: setupSeconds, mainActorEvents: events
         )
         if let startProjections, let endProjections {
             report.projection = (

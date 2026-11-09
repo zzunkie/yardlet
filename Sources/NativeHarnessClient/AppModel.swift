@@ -6296,6 +6296,7 @@ final class AppModel {
 
     func accept(_ event: HarnessEventEnvelope) async {
         guard store.sessions.contains(where: { $0.id == event.localSessionID }) else { return }
+        publicationCounts.events += 1
         eventsBySessionID[event.localSessionID, default: []].appendKeepingLast(event, limit: 1_000)
         if Self.changesTranscript(event.payload) { noteProviderActivity(event.localSessionID, at: event.timestamp) }
         switch event.payload {

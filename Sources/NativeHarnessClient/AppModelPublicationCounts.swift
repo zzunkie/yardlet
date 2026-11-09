@@ -9,4 +9,6 @@ struct AppModelPublicationCounts: Equatable, Sendable {
     /// Codex typed timeline states published for any task, and those for tasks not shown.
     var codexStates = 0
     var backgroundCodexStates = 0
+    /// Provider events the main actor took, each a wake of the main thread (`AppModel.accept`).
+    var events = 0
 }

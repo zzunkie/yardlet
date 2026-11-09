@@ -131,9 +131,10 @@ final class CodexAdapterTests: XCTestCase {
             return XCTFail("The newest snapshot must contain the complete answer")
         }
         XCTAssertEqual(message.text, "one\ntwo\nthree")
+        // Fragments that came together go as one event, before the turn's end.
         XCTAssertEqual(payloads.compactMap { payload -> String? in
             if case let .assistantDelta(text) = payload { return text }; return nil
-        }, ["one\n", "two\n", "three"])
+        }, ["one\ntwo\nthree"])
         XCTAssertTrue(payloads.contains(.turnCompleted))
         await adapter.close(handle)
     }
@@ -1360,8 +1361,9 @@ final class CodexAdapterTests: XCTestCase {
         XCTAssertEqual(occurrenceRequest.params["searchTerm"]?.stringValue, "approval")
     }
 
-    /// Every thread frame takes a number, so one that projects to no event leaves a gap. A late
-    /// subscriber reads the newest 500 events. Closing forgets them and the numbering, as in the
+    /// Every thread frame takes a number, so one that projects to no event leaves a gap; answer text
+    /// waits to go with the next event, under a number of its own. A late subscriber reads the newest
+    /// 500 events. Closing forgets them and the numbering, as in the
     /// other adapters: the task attached again hears only its new runtime, which a replay of the
     /// old one's error once contradicted.
     func testEventNumbersCountFramesWithoutAnEventAndAClosedSessionStartsOver() async throws {
@@ -1391,18 +1393,20 @@ final class CodexAdapterTests: XCTestCase {
             "itemId": .string("reasoning-replay"), "delta": .string("thinking"), "summaryIndex": .integer(0)
         ]))
         for index in 0..<600 {
-            await transport.emit(method: "item/agentMessage/delta", params: delta("\(index)"))
+            await transport.emit(method: "turn/plan/updated", params: .object([
+                "threadId": .string("thread-replay"), "turnId": .string("turn-replay"), "explanation": .string("\(index)")
+            ]))
         }
         var liveEvents: [HarnessEventEnvelope] = []
         while let event = await live.next() {
             liveEvents.append(event)
-            if event.payload == .assistantDelta("599") { break }
+            if event.payload == .planUpdated("599") { break }
         }
         XCTAssertEqual(liveEvents.prefix(4).map(\.payload), [
-            .sessionStarted(handle), .sessionStatusChanged(.ready), .assistantDelta("first"), .assistantDelta("0")
+            .sessionStarted(handle), .sessionStatusChanged(.ready), .assistantDelta("first"), .planUpdated("0")
         ])
-        XCTAssertEqual(liveEvents.prefix(4).map(\.sequence), [0, 1, 2, 4])
-        XCTAssertEqual(liveEvents.last?.sequence, 603)
+        XCTAssertEqual(liveEvents.prefix(4).map(\.sequence), [0, 1, 4, 5])
+        XCTAssertEqual(liveEvents.last?.sequence, 604)
 
         var late = await adapter.events(for: handle).makeAsyncIterator()
         let replacedEnd = await live.next()
