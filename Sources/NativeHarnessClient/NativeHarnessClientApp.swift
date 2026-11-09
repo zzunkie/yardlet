@@ -211,6 +211,9 @@ final class NativeHarnessClientAppDelegate: NSObject, NSApplicationDelegate {
     /// the native warning alert below; tests can exercise Cancel/Quit without presenting a modal.
     var terminationPrompt: (([SessionRecord]) -> Bool)?
     private var isShuttingDown = false
+    /// The first main window started the launch work (`NativeHarnessClientApp`'s window task). A main
+    /// window opened later, from the Dock once the last one closed or with File › New Window, finds it done.
+    var hasStartedLaunch = false
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         MainThreadHangLog.start()
@@ -499,6 +502,11 @@ struct NativeHarnessClientApp: App {
                     model.pullRequests.setApplicationActive(false)
                 }
                 .task {
+                    // Every main window runs this as it opens, and the launch is the first one's: run again,
+                    // it would read the index again and take every turn running now for one the last quit
+                    // cut off.
+                    guard !appDelegate.hasStartedLaunch else { return }
+                    appDelegate.hasStartedLaunch = true
                     // The agent tools' connector settings, read off the main thread, come first, so the
                     // wiring below still runs without a pause.
                     await MacAgentToolService.prepare()

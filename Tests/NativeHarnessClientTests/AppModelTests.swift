@@ -2952,6 +2952,14 @@ final class AppModelTests: XCTestCase {
             codexSession.providerSessionID
         )
 
+        // Asked again after launch (a main window opened later), the index is not read over a turn
+        // that runs now.
+        await restoredModel.send("codex again", to: restoredCodex)
+        await restoredModel.restoreIndex()
+        let running = try XCTUnwrap(restoredModel.store.sessions.first(where: { $0.id == restoredCodex.id }))
+        XCTAssertEqual(running.status, .running)
+        XCTAssertEqual(running.completionState, .none)
+
         await model.shutdown()
         let codexCloseCount = await codexAdapter.closeCount
         let claudeCloseCount = await claudeAdapter.closeCount

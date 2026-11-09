@@ -637,8 +637,11 @@ final class AppModel {
     /// was archived or deleted.
     private(set) var hasRestoredIndex = false
 
+    /// Reads the index at launch, when a turn it shows running is one the last run cut off
+    /// (`SessionStore.restore`). Once it has loaded, the tasks are the store's: read again, it would take
+    /// every turn running now for one cut off and put the saved transcripts over the live ones.
     func restoreIndex() async {
-        guard restoresIndexOnLaunch else { return }
+        guard restoresIndexOnLaunch, !hasRestoredIndex else { return }
         isRestoringIndex = true
         defer {
             isRestoringIndex = false
