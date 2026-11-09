@@ -2165,7 +2165,8 @@ final class SessionToolTests: XCTestCase {
     /// A child or subagent starts on the account automatic assignment picks among the signed-in accounts it
     /// may use, and the result says which and why. An account the agent names is taken
     /// only when it is one of those: one left out, one signed out and another harness's are refused.
-    /// The person's new task on Automatic starts on the same pick.
+    /// A task on a model only some accounts offer goes to one of those. The person's new task on
+    /// Automatic starts on the same pick.
     func testChildrenStartOnTheAccountWithMostHeadroomAndANamedAccountMustBeOneAutomaticAssignmentMayUse() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "session-accounts-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -2194,10 +2195,10 @@ final class SessionToolTests: XCTestCase {
             store.publish(snapshot(name, signedIn: signedIn, sessionUsed: sessionUsed), for: connection)
             return connection
         }
-        _ = try account("busy", sessionUsed: 0.7)
+        let busy = try account("busy", sessionUsed: 0.7)
         let roomy = try account("roomy", sessionUsed: 0.1)
         _ = try account("separate", linked: false, sessionUsed: 0)
-        _ = try account("old", signedIn: false, sessionUsed: 0)
+        let old = try account("old", signedIn: false, sessionUsed: 0)
         store.publishDefaults([HarnessAccountSnapshot(id: "claude-code", harness: .claudeCode, providerID: nil,
             state: .signedOut, accountLabel: nil, detail: "", credentialOwner: "", checkedAt: now, usage: [],
             canLogin: true, canLogout: false)])
@@ -2233,6 +2234,34 @@ final class SessionToolTests: XCTestCase {
             XCTAssertTrue(refused.isError, account)
             XCTAssertTrue(refused.text.contains(refusal), refused.text)
         }
+
+        // A model one plan offers is on that plan's accounts' lists alone (Claude Code lists Mythos only to
+        // the plans that have it). Such a task goes to an account whose own list names the model, however
+        // much room the others have; with none of those in automatic assignment and signed in, the agent
+        // is told rather than given a task the CLI refuses.
+        let mythos = "claude-mythos-5-1"
+        func offering(_ extra: String...) -> [HarnessModelOption] {
+            (["default", "opus"] + extra).map { HarnessModelOption(value: $0, name: $0) }
+        }
+        for other in store.connections(for: .claudeCode) where other != busy {
+            model.modelCatalogs.recordClaude(offering(), for: other)
+        }
+        model.modelCatalogs.recordClaude(offering(mythos), for: busy)
+        let onMythos = await call(model, "create_task", ["prompt": "Audit it", "model": mythos], from: fixture.caller)
+        XCTAssertTrue(onMythos.text.contains("Account: busy@example.test (chosen automatically"), onMythos.text)
+        let mythosAccounts = await call(model, "list_accounts", ["model": mythos], from: fixture.caller)
+        XCTAssertTrue(mythosAccounts.text.contains(#""automaticChoice":"busy""#), mythosAccounts.text)
+        XCTAssertTrue(mythosAccounts.text.contains(#""models":["default","opus","\#(mythos)"]"#), mythosAccounts.text)
+        XCTAssertTrue(mythosAccounts.text.contains(#""name":"busy@example.test","offersModel":true"#), mythosAccounts.text)
+        XCTAssertTrue(mythosAccounts.text.contains(#""name":"roomy@example.test","offersModel":false"#), mythosAccounts.text)
+        XCTAssertEqual(model.newTaskAccountPreview(harness: .claudeCode, model: mythos)?.accountID, "busy")
+        model.modelCatalogs.recordClaude(offering(), for: busy)
+        model.modelCatalogs.recordClaude(offering(mythos), for: old)
+        let nowhere = await call(model, "create_task", ["prompt": "Audit it", "model": mythos], from: fixture.caller)
+        XCTAssertTrue(nowhere.isError, nowhere.text)
+        XCTAssertTrue(nowhere.text.contains("no Claude Code account that offers \(mythos) is signed in"), nowhere.text)
+        let unlisted = await call(model, "list_accounts", ["model": "claude-opus-4-1"], from: fixture.caller)
+        XCTAssertTrue(unlisted.text.contains(#""automaticChoice":"roomy""#), "A model no list names is not judged: \(unlisted.text)")
 
         // The person's own new task, while the account menu says Automatic, starts on the same pick and
         // keeps why; an account the person chooses stands instead.

@@ -11,6 +11,8 @@ import Foundation
 /// without a harness or an account.
 ///
 /// The rule, in order:
+/// 0. An account that cannot run the task's model (`Candidate.offersModel`) is never chosen, however
+///    much room it has; when none can, there is no pick.
 /// 1. Each window that applies (every window without a model or a group of models, a model's own
 ///    window when the task's model is that model or is not known, and a group's window when the task's
 ///    model is in that group or in no group of the reading) gives its share left, or all of it once
@@ -66,6 +68,9 @@ enum AccountRouting {
         let runningTasks: Int
         /// The account new tasks of the harness start on.
         let isNewTaskAccount: Bool
+        /// Whether the account can run the task's model (`HarnessModelCatalogStore.offers`); nil when
+        /// Yardlet cannot tell.
+        var offersModel: Bool? = nil
     }
 
     enum Basis: String, Codable, Equatable, Sendable {
@@ -140,7 +145,7 @@ enum AccountRouting {
             let candidate: Candidate
             let headroom: Headroom?
         }
-        let read = candidates.enumerated().map { offset, candidate in
+        let read = candidates.filter { $0.offersModel != false }.enumerated().map { offset, candidate in
             Read(offset: offset, candidate: candidate,
                  headroom: candidate.choice.snapshot.flatMap { headroom(of: $0.usage, model: model, now: now) })
         }

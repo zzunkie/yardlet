@@ -329,7 +329,7 @@ import XCTest
         destination.accountID = connection(old).id
         model.scheduledTasks.create(ScheduledTask(name: "Nightly", prompt: "Check.",
             trigger: .daily(ScheduleTime(hour: 2, minute: 0)), destination: destination))
-        func automaticChoices() -> [String] { model.automaticAssignmentCandidates(harness: .claudeCode).map(\.choice.id) }
+        func automaticChoices() -> [String] { model.automaticAssignmentCandidates(harness: .claudeCode, model: nil).map(\.choice.id) }
 
         await model.moveTasks(from: connection(old), to: connection(impostor))
         XCTAssertNotNil(connections.taskMoves[connection(old).id]?.failure)
