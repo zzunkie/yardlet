@@ -77,9 +77,8 @@ final class AccessibilityForwarder: @unchecked Sendable {
         currentStatistics.reduceMilliseconds += elapsed
         currentStatistics.slowestReduceMilliseconds = max(currentStatistics.slowestReduceMilliseconds, elapsed)
         if json.count > 100_000 {
-            FileHandle.standardError.write(Data(String(
-                format: "accessibility tree change tab=%d raw=%d sent=%d reduceMs=%.1f\n", tab, json.count, sent, elapsed
-            ).utf8))
+            HostLog.write(String(format: "accessibility tree change tab=%d raw=%d sent=%d reduceMs=%.1f", tab, json.count,
+                                 sent, elapsed))
         }
     }
 

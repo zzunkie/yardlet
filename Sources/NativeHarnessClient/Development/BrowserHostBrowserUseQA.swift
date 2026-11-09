@@ -39,6 +39,7 @@ final class BrowserHostBrowserUseQA {
         await exerciseViewport()
         await exerciseFrames()
         await exerciseHandoff()
+        await exerciseAgentTabShownLater()
         await measureSnapshots()
         await finish()
     }
@@ -101,6 +102,88 @@ final class BrowserHostBrowserUseQA {
         check("viewport: a custom 1600×1000 size reaches the page", !large.isError && largeRead?["width"] == .integer(1600),
               large.text + " / " + Self.describe(largeRead))
         await exerciseViewportInPanel()
+    }
+
+    /// The agent uses a tab while no panel shows it (drawn at `BrowserViewport.offscreenDefault`), and the person opens
+    /// the panel once the agent's turn is over: the page lays out and is drawn at the panel's size and scale.
+    private func exerciseAgentTabShownLater() async {
+        await closePanel()
+        let before = Set(client.tabs(forSession: session).map(\.id))
+        let newTab = await call(AgentToolCatalog.tabNew, ["foreground": .bool(true)])
+        let agentTabID = newTab.text.range(of: #""tabId":"[^"]+""#, options: .regularExpression)
+            .map { String(newTab.text[$0].dropFirst(9).dropLast()) } ?? ""
+        _ = await call(AgentToolCatalog.navigate, ["url": .string(base + "viewport"), "tabId": .string(agentTabID)])
+        guard await waitUntilAsync(.seconds(10), { self.client.tabs(forSession: self.session).contains { !before.contains($0.id) } }),
+              let agentTab = client.tabs(forSession: session).first(where: { !before.contains($0.id) }) else {
+            return check("viewport: the agent's tab, shown later in the panel, takes the panel's size and scale", false,
+                         "no new tab: " + newTab.text)
+        }
+        func read(_ tab: BrowserTab?) async -> [Double] {
+            let value = try? await tab?.devTools.send("Runtime.evaluate", [
+                "expression": .string("[innerWidth, innerHeight, devicePixelRatio]"), "returnByValue": .bool(true)], timeout: .seconds(5))
+            return value?["result"]?["value"]?.arrayValue?.compactMap(\.doubleValue) ?? []
+        }
+        _ = await waitUntilAsync(.seconds(10)) { agentTab.currentURL?.contains("/viewport") == true && !agentTab.isLoading }
+        let steps: [(String, [String: ToolJSON])] = [
+            (AgentToolCatalog.screenshot, [:]), (AgentToolCatalog.screenshot, ["fullPage": .bool(true)]),
+            ("browser_resize", ["preset": .string("desktop")]), (AgentToolCatalog.snapshot, [:])
+        ]
+        var calls: [String] = []
+        for (tool, arguments) in steps {
+            let result = await call(tool, arguments.merging(["tabId": .string(agentTabID)]) { $1 })
+            calls.append("\(tool)\(arguments.isEmpty ? "" : " \(arguments.keys.sorted())") \(result.isError ? "error \(result.text.prefix(80))" : "ok")")
+        }
+        let offscreen = await read(agentTab)
+        broker.taskTurnEnded(session)
+        try? await Task.sleep(for: .seconds(2))
+        guard let controller = await openPanel(on: agentTab.key), let view = controller.view else { return }
+        let scale = view.window?.backingScaleFactor ?? 2
+        let fits = await waitUntilAsync(.seconds(10)) {
+            let inPanel = await read(controller.tab)
+            let width = view.viewSurface.map { IOSurfaceGetWidth($0) } ?? 0
+            return inPanel.count == 3 && abs(inPanel[0] - view.bounds.width) < 2 && abs(inPanel[1] - view.bounds.height) < 2
+                && inPanel[2] == Double(scale) && abs(width - Int(view.bounds.width * scale)) <= 2
+        }
+        let surface = view.viewSurface.map { "\(IOSurfaceGetWidth($0))×\(IOSurfaceGetHeight($0))" } ?? "none"
+        check("viewport: the agent's tab, shown later in the panel, takes the panel's size and scale",
+              fits && controller.tab === agentTab && offscreen.first == BrowserViewport.offscreenDefault.width,
+              "calls \(calls), offscreen \(offscreen), in panel \(await read(controller.tab)), same tab \(controller.tab === agentTab), "
+                + "surface \(surface) px, view \(view.bounds.size) at \(scale)")
+        capture(view, named: "agent-tab-shown-later.png")
+        await closePanel()
+
+        // The same for a tab a page opened in a new window from the agent's click.
+        await navigate("")
+        let tabsBefore = client.tabs(forSession: session).count
+        let snapshot = await call(AgentToolCatalog.snapshot)
+        let link = Self.ref(in: snapshot.text, role: "link", name: "Open in a new window")
+        let clicked = await call(AgentToolCatalog.click, ["ref": .string(link ?? "")])
+        let opened = await waitUntilAsync(.seconds(10)) { self.client.tabs(forSession: self.session).count > tabsBefore }
+        let popup = client.tabs(forSession: session).last
+        let popupOffscreen = try? await popup?.devTools.send("Runtime.evaluate", [
+            "expression": .string("[innerWidth, innerHeight, devicePixelRatio]"), "returnByValue": .bool(true)], timeout: .seconds(5))
+        broker.taskTurnEnded(session)
+        try? await Task.sleep(for: .seconds(2))
+        guard let popupController = await openPanel(), let popupView = popupController.view else { return }
+        let popupScale = popupView.window?.backingScaleFactor ?? 2
+        func popupRead() async -> [Double] {
+            let value = try? await popupController.tab?.devTools.send("Runtime.evaluate", [
+                "expression": .string("[innerWidth, innerHeight, devicePixelRatio]"), "returnByValue": .bool(true)], timeout: .seconds(5))
+            return value?["result"]?["value"]?.arrayValue?.compactMap(\.doubleValue) ?? []
+        }
+        let popupFits = await waitUntilAsync(.seconds(10)) {
+            let read = await popupRead()
+            let width = popupView.viewSurface.map { IOSurfaceGetWidth($0) } ?? 0
+            return read.count == 3 && abs(read[0] - popupView.bounds.width) < 2 && read[2] == Double(popupScale)
+                && abs(width - Int(popupView.bounds.width * popupScale)) <= 2
+        }
+        let popupSurface = popupView.viewSurface.map { "\(IOSurfaceGetWidth($0))×\(IOSurfaceGetHeight($0))" } ?? "none"
+        check("viewport: a tab the agent's click opened, shown later in the panel, takes the panel's size and scale",
+              opened && popupFits && popupController.tab === popup,
+              "link \(link ?? "none") \(clicked.isError ? "error" : "ok"), opened \(opened), offscreen \(Self.describe(popupOffscreen?["result"]?["value"])), "
+                + "in panel \(await popupRead()), same tab \(popupController.tab === popup), surface \(popupSurface) px, view \(popupView.bounds.size) at \(popupScale)")
+        capture(popupView, named: "agent-popup-shown-later.png")
+        await closePanel()
     }
 
     /// The panel shows the agent's 1600×1000 tab scaled down to fit and passes the person's click to where it
@@ -328,9 +411,9 @@ final class BrowserHostBrowserUseQA {
 
     // MARK: Panel
 
-    private func openPanel() async -> BrowserHostPaneController? {
+    private func openPanel(on key: UUID? = nil) async -> BrowserHostPaneController? {
         let previous = BrowserHostPaneController.current
-        NotificationCenter.default.post(name: BrowserHostQAFixture.openBrowserPanel, object: nil)
+        NotificationCenter.default.post(name: BrowserHostQAFixture.openBrowserPanel, object: key)
         guard await waitUntilAsync(.seconds(10), { BrowserHostPaneController.current !== previous
                 && BrowserHostPaneController.current?.view != nil }),
               let controller = BrowserHostPaneController.current else {

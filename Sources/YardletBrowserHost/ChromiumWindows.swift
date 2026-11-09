@@ -137,7 +137,7 @@ final class ChromiumWindows {
         }
         for window in unknown { owners[window.windowNumber] = -1 }
 #if DEBUG
-        FileHandle.standardError.write(Data("Chromium windows' tabs: \(owners) (shown tabs \(shownTabs.sorted()))\n".utf8))
+        HostLog.write("Chromium windows' tabs: \(owners) (shown tabs \(shownTabs.sorted()))")
 #endif
     }
 
@@ -220,7 +220,7 @@ final class ChromiumWindows {
 #if DEBUG
         if raising, !placements.isEmpty {
             let placed = placements.map { "\($0.key) over \($0.value.frame.map { "\($0)" } ?? "where it is") above \($0.value.above ?? 0)" }
-            FileHandle.standardError.write(Data("Chromium windows placed: \(placed.sorted().joined(separator: "; "))\n".utf8))
+            HostLog.write("Chromium windows placed: \(placed.sorted().joined(separator: "; "))")
         }
 #endif
     }

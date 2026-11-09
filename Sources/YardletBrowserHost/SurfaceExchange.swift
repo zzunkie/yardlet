@@ -92,7 +92,7 @@ final class SurfaceExchange {
             let result = yardlet_surface_port_send(remotePort, surface, token)
             let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
             if elapsed > 50 {
-                FileHandle.standardError.write(Data(String(format: "surface send took %.0f ms (result %d)\n", elapsed, result).utf8))
+                HostLog.write(String(format: "surface send took %.0f ms (result %d)", elapsed, result))
             }
             guard result == KERN_SUCCESS else {
                 sendFailures += 1
@@ -105,7 +105,7 @@ final class SurfaceExchange {
 
     private func record(since start: UInt64) {
         let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
-        if elapsed > 50 { FileHandle.standardError.write(Data(String(format: "frame copy took %.0f ms\n", elapsed).utf8)) }
+        if elapsed > 50 { HostLog.write(String(format: "frame copy took %.0f ms", elapsed)) }
         copyMilliseconds.append(elapsed)
         if copyMilliseconds.count > 5000 { copyMilliseconds.removeFirst(1000) }
     }

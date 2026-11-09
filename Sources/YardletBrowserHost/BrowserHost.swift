@@ -19,6 +19,8 @@ final class BrowserHost {
     private var sequence: UInt64 = 0
     private var popupRects: [Int: [String: Any]] = [:]
     private var frameCount = 0
+    /// Tabs shown to the engine that have not painted since, by when they were shown (`noteIfNoFrame`).
+    private var shownWithoutFrame: [Int: UInt64] = [:]
     /// Chromium's own windows (the passkey dialog) and the activation they need.
     private var chromiumWindows: ChromiumWindows?
     /// Where tasks' own request contexts keep their data (docs/BROWSER_SESSION_ISOLATION.md).
@@ -80,18 +82,12 @@ final class BrowserHost {
 #if DEBUG
         // QA runs (the fixture sets the recording folder) trace commands against Chromium's log.
         if !arguments.accessibilityRecordPath.isEmpty, name != "mouse" || (fields["input"] as? [String: Any])?["kind"] as? String != "move" {
-            var now = timeval()
-            gettimeofday(&now, nil)
-            var local = tm()
-            var seconds = now.tv_sec
-            localtime_r(&seconds, &local)
             var detail = ""
             if name == "devTools", let message = fields["message"] as? String,
                let method = message.range(of: #""method":"[A-Za-z.]+""#, options: .regularExpression) {
                 detail = String(message[method])
             }
-            FileHandle.standardError.write(Data(String(format: "[%02d%02d%02d.%06d] command %@ tab=%d %@\n", local.tm_hour, local.tm_min,
-                                                       local.tm_sec, now.tv_usec, name, tab, detail).utf8))
+            HostLog.write("command \(name) tab=\(tab) \(detail)")
         }
 #endif
         switch name {
@@ -171,6 +167,8 @@ final class BrowserHost {
         case "navigation":
             let actions = ["back": 0, "forward": 1, "reload": 2, "stop": 3]
             if let action = (fields["action"] as? String).flatMap({ actions[$0] }) {
+                // One line per reload (the person's, or the memory saver loading a discarded page), read with `noteIfNoFrame`'s.
+                if action == 2 { HostLog.write("reload tab=\(tab)") }
                 yardlet_cef_navigation(Int32(tab), Int32(action))
             }
         case "mouse":
@@ -225,7 +223,7 @@ final class BrowserHost {
             }
         case "javaScriptDialogResult":
 #if DEBUG
-            FileHandle.standardError.write(Data("javaScriptDialogResult id=\(fields["dialog"] ?? "") accepted=\(fields["accepted"] ?? "")\n".utf8))
+            HostLog.write("javaScriptDialogResult id=\(fields["dialog"] ?? "") accepted=\(fields["accepted"] ?? "")")
 #endif
             yardlet_cef_jsdialog_result(Int32(fields["dialog"] as? Int ?? -1), (fields["accepted"] as? Bool ?? false) ? 1 : 0,
                                         fields["text"] as? String ?? "")
@@ -244,7 +242,7 @@ final class BrowserHost {
             let results = ["allow": 0, "block": 1, "dismiss": 2]
             guard let prompt = fields["prompt"] as? Int, let result = (fields["result"] as? String).flatMap({ results[$0] })
             else { return }
-            FileHandle.standardError.write(Data("permission result id=\(prompt) \(fields["result"] ?? "")\n".utf8))
+            HostLog.write("permission result id=\(prompt) \(fields["result"] ?? "")")
             yardlet_cef_permission_result(UInt64(truncatingIfNeeded: prompt), Int32(result))
         case "edit":
             let actions = ["undo": 0, "redo": 1, "cut": 2, "copy": 3, "paste": 4, "delete": 5, "selectAll": 6]
@@ -262,7 +260,12 @@ final class BrowserHost {
             // Chromium's window over the tab goes and comes with it, which tells the host the window's tab.
             if let chromiumWindows { chromiumWindows.changeVisibility(of: tab, hidden: hidden) }
             else { yardlet_cef_set_hidden(Int32(tab), hidden ? 1 : 0) }
-            if !hidden { discarder.cancel(tab: tab) }
+            if !hidden {
+                discarder.cancel(tab: tab)
+                noteIfNoFrame(tab: tab)
+            } else {
+                shownWithoutFrame[tab] = nil
+            }
             if hidden {
                 // Nothing paints a hidden tab; its rings go, and Yardlet is told so it can let go of
                 // its references too (after every frame written so far). Showing it again paints
@@ -284,18 +287,19 @@ final class BrowserHost {
                 // The call fails at once for whoever made it (the agent's tools), as a DevTools error reply;
                 // it is no failure of the page any tab shows. Before 2026-10-23 a host-wide `failed` went to
                 // every tab and the panel's page showed "Unavailable".
-                FileHandle.standardError.write(Data("devtools message refused tab=\(tab)\n".utf8))
+                HostLog.write("devtools message refused tab=\(tab)")
                 refuse(message, tab: tab, because: "The browser tab is gone.")
             }
         case "unresponsive":
             let terminate = fields["action"] as? String == "terminate"
             if yardlet_cef_unresponsive_action(Int32(tab), terminate ? 1 : 0) == 1 {
-                FileHandle.standardError.write(Data("renderer \(terminate ? "ended" : "waited for") tab=\(tab)\n".utf8))
+                HostLog.write("renderer \(terminate ? "ended" : "waited for") tab=\(tab)")
             }
         case "discard":
             discarder.discard(tab: tab, urgent: fields["urgent"] as? Bool ?? false)
         case "close":
             discarder.cancel(tab: tab)
+            shownWithoutFrame[tab] = nil
             yardlet_cef_close_browser(Int32(tab))
             surfaces?.forget(key: "\(tab).view")
             surfaces?.forget(key: "\(tab).popup")
@@ -305,7 +309,7 @@ final class BrowserHost {
         case "allowExternalApp":
             guard let origin = fields["origin"] as? String, let scheme = fields["scheme"] as? String else { return }
             let kept = yardlet_cef_allow_external_scheme(Int32(tab), origin, scheme) == 1
-            FileHandle.standardError.write(Data("external app allowed tab=\(tab) scheme=\(scheme) kept=\(kept)\n".utf8))
+            HostLog.write("external app allowed tab=\(tab) scheme=\(scheme) kept=\(kept)")
         case "guardFilledValues":
             // The values are kept by the bridge only, for the document they went into; nothing writes them down.
             let values = (fields["values"] as? [String] ?? []).filter { !$0.isEmpty && !$0.contains("\0") }
@@ -379,7 +383,7 @@ final class BrowserHost {
         guard !isShuttingDown else { return }
         isShuttingDown = true
         DispatchQueue.global().asyncAfter(deadline: .now() + Self.shutdownDeadline) {
-            FileHandle.standardError.write(Data("Yardlet Browser Host: shutdown did not finish in time\n".utf8))
+            HostLog.write("Yardlet Browser Host: shutdown did not finish in time")
             if getpgrp() == getpid() { killpg(getpid(), SIGKILL) }
             _exit(1)
         }
@@ -407,7 +411,7 @@ final class BrowserHost {
     /// The tab has no browser and gets none: Yardlet shows why in that tab alone, and the DevTools calls that
     /// waited for it are answered with the reason. host.log says which of `kind` (limit, chromium, profile).
     private func notOpened(_ tab: Int, _ kind: String, _ message: String, limit: Int? = nil) {
-        FileHandle.standardError.write(Data("tab not opened tab=\(tab) reason=\(kind)\n".utf8))
+        HostLog.write("tab not opened tab=\(tab) reason=\(kind)")
         waitingTabs[tab] = nil
         for waiting in deferredDevTools.removeValue(forKey: tab) ?? [] {
             refuse(waiting, tab: tab, because: "This tab could not open: \(message).")
@@ -448,7 +452,7 @@ final class BrowserHost {
     }
 
     private func cookiesCopied(request: Int32, count: Int) {
-        FileHandle.standardError.write(Data("cookies copied request=\(request) count=\(count)\n".utf8))
+        HostLog.write("cookies copied request=\(request) count=\(count)")
         if let asked = cookieImports.removeValue(forKey: request) {
             return send(["cookiesImported": ["request": asked, "count": count]])
         }
@@ -510,7 +514,7 @@ final class BrowserHost {
     private func reportResponsiveness(tab: Int, isResponsive: Bool) {
         guard isResponsive == unresponsiveTabs.contains(tab) else { return }
         if isResponsive { unresponsiveTabs.remove(tab) } else { unresponsiveTabs.insert(tab) }
-        FileHandle.standardError.write(Data("renderer \(isResponsive ? "responsive" : "unresponsive") tab=\(tab)\n".utf8))
+        HostLog.write("renderer \(isResponsive ? "responsive" : "unresponsive") tab=\(tab)")
         send(["responsiveness": ["tab": tab, "isResponsive": isResponsive]])
     }
 
@@ -548,9 +552,10 @@ final class BrowserHost {
             chromiumWindows?.opened(tab)
         case YardletCEFEventBeforeClose.rawValue:
             // One line per browser that went, for reading host.log: a closed tab's page may outlive the close.
-            FileHandle.standardError.write(Data("browser closed tab=\(tab)\n".utf8))
+            HostLog.write("browser closed tab=\(tab)")
             blockedPopupSources = blockedPopupSources.filter { $0.value.opener != tab }
             openTabs.remove(tab)
+            shownWithoutFrame[tab] = nil
             chromiumWindows?.closed(tab)
             waitingTabs[tab] = nil
             refusedDownloadTabs.remove(tab)
@@ -571,8 +576,7 @@ final class BrowserHost {
         case YardletCEFEventLoadError.rawValue:
             // One line per main-frame load error, for reading a person's host.log: the code and the site,
             // never the path or query.
-            FileHandle.standardError.write(Data(
-                "load error tab=\(tab) code=\(value) host=\(URL(string: text ?? "")?.host() ?? "-")\n".utf8))
+            HostLog.write("load error tab=\(tab) code=\(value) host=\(URL(string: text ?? "")?.host() ?? "-")")
             send(["loadError": ["tab": tab, "url": text ?? "", "code": Int(value), "message": detail ?? ""]])
         case YardletCEFEventConsole.rawValue:
             send(["console": ["tab": tab, "level": Int(value >> 16), "message": text ?? "",
@@ -616,14 +620,14 @@ final class BrowserHost {
             send(["navigationBlocked": ["tab": tab, "url": text ?? ""]])
         case YardletCEFEventFilledValueBlocked.rawValue:
             // One line per refusal, for reading a person's host.log: never the address, which holds the value.
-            FileHandle.standardError.write(Data("filled value kept out of an address tab=\(tab) mainFrame=\(value)\n".utf8))
+            HostLog.write("filled value kept out of an address tab=\(tab) mainFrame=\(value)")
             send(["filledValueBlocked": ["tab": tab]])
         case YardletCEFEventResponsiveness.rawValue:
             reportResponsiveness(tab: tab, isResponsive: value != 0)
         case YardletCEFEventCookiesCopied.rawValue:
             cookiesCopied(request: value, count: Int(detail ?? "") ?? 0)
         case YardletCEFEventProfileReady.rawValue:
-            FileHandle.standardError.write(Data("profile loaded tab=\(tab) browser=\(value)\n".utf8))
+            HostLog.write("profile loaded tab=\(tab) browser=\(value)")
             if value == 1 { advance(tab) }
             else { notOpened(tab, "chromium", "Chromium could not create a browser for tab \(tab)") }
         case YardletCEFEventPageCrashed.rawValue:
@@ -631,7 +635,7 @@ final class BrowserHost {
             // One line per renderer that ended, for reading a person's host.log: how it ended and its exit code.
             let status = Self.terminationStatus(value)
             let code = Int(detail ?? "") ?? 0
-            FileHandle.standardError.write(Data("renderer ended tab=\(tab) status=\(status) code=\(code)\n".utf8))
+            HostLog.write("renderer ended tab=\(tab) status=\(status) code=\(code)")
             discarder.rendererEnded(tab: tab)
             send(["pageCrashed": ["tab": tab, "reason": Self.errorCode(status: status, code: code), "status": status,
                                   "code": code]])
@@ -660,7 +664,7 @@ final class BrowserHost {
         let origin = Self.origin(of: source)
         let scheme = String(url.prefix { $0 != ":" }).lowercased()
         let remembered = !origin.isEmpty && yardlet_cef_external_scheme_allowed(Int32(tab), origin, scheme) == 1
-        FileHandle.standardError.write(Data("external app tab=\(tab) scheme=\(scheme) remembered=\(remembered)\n".utf8))
+        HostLog.write("external app tab=\(tab) scheme=\(scheme) remembered=\(remembered)")
         send(["externalApp": ["tab": tab, "request": [
             "url": url, "origin": origin, "userGesture": userGesture, "remembered": remembered
         ] as [String: Any]]])
@@ -704,7 +708,7 @@ final class BrowserHost {
                           origin: String, isReload: Bool) {
         let kinds = ["alert", "confirm", "prompt", "beforeUnload"]
 #if DEBUG
-        FileHandle.standardError.write(Data("javaScriptDialog tab=\(tab) id=\(id) kind=\(kind) reload=\(isReload)\n".utf8))
+        HostLog.write("javaScriptDialog tab=\(tab) id=\(id) kind=\(kind) reload=\(isReload)")
 #endif
         send(["javaScriptDialog": ["tab": tab, "dialog": [
             "id": Int(id), "kind": kinds[max(0, min(3, Int(kind)))], "message": message,
@@ -723,7 +727,7 @@ final class BrowserHost {
 
     func permissionPrompt(tab: Int, id: UInt64, origin: String, permissions: UInt32) {
         let names = Self.permissionNames.indices.filter { permissions & (1 << $0) != 0 }.map { Self.permissionNames[$0] }
-        FileHandle.standardError.write(Data("permission prompt tab=\(tab) id=\(id) \(names.joined(separator: ","))\n".utf8))
+        HostLog.write("permission prompt tab=\(tab) id=\(id) \(names.joined(separator: ","))")
         send(["permissionPrompt": ["tab": tab, "prompt": [
             "id": Int(truncatingIfNeeded: id), "origin": origin, "permissions": names
         ] as [String: Any]]])
@@ -852,7 +856,29 @@ final class BrowserHost {
         send(["devTools": ["tab": tab, "message": message]])
     }
 
+    /// Showing a tab asks its engine for a frame (`yardlet_cef_set_hidden`), which comes at once; one line in host.log
+    /// says when none came within `frameWait`, and whether the page was loading, so that a panel left blank can be
+    /// read against the log.
+    private func noteIfNoFrame(tab: Int) {
+        // A tab whose browser is still being made paints once its page loads.
+        guard openTabs.contains(tab) else { return }
+        let shownAt = DispatchTime.now().uptimeNanoseconds
+        shownWithoutFrame[tab] = shownAt
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.frameWait) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.shownWithoutFrame[tab] == shownAt else { return }
+                self.shownWithoutFrame[tab] = nil
+                var signals = YardletCEFPageSignals()
+                let loading = yardlet_cef_page_signals(Int32(tab), &signals) == 1 ? "\(signals.loading)" : "-"
+                HostLog.write("tab shown without a frame tab=\(tab) loading=\(loading)")
+            }
+        }
+    }
+
+    static let frameWait: TimeInterval = 3
+
     private func sendFrame(tab: Int, layer: String, surface: IOSurfaceRef, paintedAt: UInt64, source: String) {
+        if layer == "view" { shownWithoutFrame[tab] = nil }
         sequence += 1
         frameCount += 1
         send(["frame": ["tab": tab, "frame": [
@@ -984,7 +1010,7 @@ enum QAWindowWatcher {
                     handle.write(data + Data("\n".utf8))
                     try? handle.close()
                 }
-                FileHandle.standardError.write(Data("QA host window \(type(of: window)) visible=\(window.isVisible) frame=\(frame)\n".utf8))
+                HostLog.write("QA host window \(type(of: window)) visible=\(window.isVisible) frame=\(frame)")
             }
             // What the window says, through its own accessibility (Views draws through the compositor,
             // which a drawing of the content view does not catch); written again whenever it changes.
@@ -998,7 +1024,7 @@ enum QAWindowWatcher {
                     textCount += 1
                     try? text.write(to: directory.appending(path: "window-text-\(textCount).txt"), atomically: true, encoding: .utf8)
                     let state = "key=\(window.isKeyWindow) appActive=\(NSApp.isActive) policy=\(NSApp.activationPolicy().rawValue)"
-                    FileHandle.standardError.write(Data("QA host window text \(textCount) \(state):\n\(text)\n".utf8))
+                    HostLog.write("QA host window text \(textCount) \(state):\n\(text)")
                 }
             }
             // Drawn once while visible, again if it was not drawn yet.

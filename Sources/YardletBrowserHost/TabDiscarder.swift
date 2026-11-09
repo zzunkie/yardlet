@@ -68,7 +68,7 @@ final class TabDiscarder {
     /// The tab's renderer ended for the discard (YardletCEFEventDiscarded).
     func discarded(tab: Int) {
         ending.remove(tab)
-        FileHandle.standardError.write(Data("tab discarded tab=\(tab)\n".utf8))
+        HostLog.write("tab discarded tab=\(tab)")
         send(["discarded": ["tab": tab]])
     }
 
@@ -121,7 +121,7 @@ final class TabDiscarder {
     }
 
     private func refuse(_ tab: Int, _ reason: String) {
-        FileHandle.standardError.write(Data("tab discard refused tab=\(tab) reason=\(reason)\n".utf8))
+        HostLog.write("tab discard refused tab=\(tab) reason=\(reason)")
         send(["discardRefused": ["tab": tab, "reason": reason]])
     }
 

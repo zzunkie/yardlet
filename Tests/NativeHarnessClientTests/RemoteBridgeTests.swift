@@ -1559,6 +1559,21 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(metrics().last, .integer(390))
         await bridge.setWatchedTabs([])
         try await waitUntilAsync { tab.emulation == nil && metrics().last == .string("cleared") }
+
+        // A change of the size Chromium did not take (a page that drew nothing let it time out) leaves the page at the
+        // old size until the tab is shown or used again, which applies the tab's own once more.
+        tab.noteAgentActivity()
+        try await tab.emulate(BrowserViewportEmulation(width: 1024, height: 768, owner: .agent))
+        connection.refuses = ["Emulation.clearDeviceMetricsOverride"]
+        await tab.endAgentEmulation()
+        XCTAssertNil(tab.emulation)
+        let sentBefore = metrics().count
+        connection.refuses = []
+        client.attachPanel(to: tab)
+        try await waitUntilAsync { metrics().count == sentBefore + 1 && metrics().last == .string("cleared") }
+        client.attachPanel(to: tab)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(metrics().count, sentBefore + 1, "settled metrics are not sent again")
     }
 
     /// The second and third reviews of §15.25's host: a page that moves while it is pictured or driven, even away and
@@ -2470,6 +2485,8 @@ final class AnsweringHostConnection: BrowserHostConnection {
     var focusedField = "other"
     /// Called with each DevTools method as it arrives, before it is answered.
     var onCall: ((String) -> Void)?
+    /// Methods answered with an error, as Chromium answers a call it cannot take.
+    var refuses: Set<String> = []
 
     func send(_ command: BrowserHostCommand) {
         sent.append(command)
@@ -2494,8 +2511,10 @@ final class AnsweringHostConnection: BrowserHostConnection {
         case "Page.getFrameTree": #"{"frameTree":{"frame":{}}}"#
         default: "{}"
         }
+        let answer = refuses.contains(method) ? #"{"id":\#(id),"error":{"code":-32000,"message":"refused"}}"#
+            : #"{"id":\#(id),"result":\#(result)}"#
         DispatchQueue.main.async { [weak self] in
-            MainActor.assumeIsolated { self?.eventHandler?(.devTools(tab: tab, message: #"{"id":\#(id),"result":\#(result)}"#)) }
+            MainActor.assumeIsolated { self?.eventHandler?(.devTools(tab: tab, message: answer)) }
         }
     }
 

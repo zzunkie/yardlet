@@ -194,8 +194,9 @@ struct TaskDetail: View {
             workspaceState.hasRepository = !found.isEmpty
         }
 #if DEBUG
-        .onReceive(NotificationCenter.default.publisher(for: BrowserHostQAFixture.openBrowserPanel)) { _ in
-            showBrowserTab(nil)
+        .onReceive(NotificationCenter.default.publisher(for: BrowserHostQAFixture.openBrowserPanel)) { note in
+            // The browser tab of the key given, as the person picks it in the side panel; else the latest.
+            showBrowserTab(note.object as? UUID)
         }
         .onReceive(NotificationCenter.default.publisher(for: BrowserHostQAFixture.closeBrowserPanel)) { _ in
             closeTrailingSurface()

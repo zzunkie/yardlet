@@ -279,6 +279,8 @@ final class BrowserAgentTabs: BrowserAgentTabDirectory {
         page.lastFrameAt = { [weak tab] in tab?.lastViewFrameAt }
         page.emulation = { [weak tab] in tab?.emulation }
         page.emulate = { [weak tab] in try await tab?.emulate($0) }
+        page.holdsLayout = { [weak tab] in try await tab?.holdLayout(width: $0, height: $1) }
+        page.releasesLayout = { [weak tab] in await tab?.releaseLayout() }
         page.emulateColorScheme = { [weak tab] in try await tab?.emulateColorScheme($0) }
         page.tabKey = tab.key
         page.isClosed = { [weak tab] in tab?.isClosed ?? true }

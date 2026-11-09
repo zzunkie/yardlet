@@ -585,6 +585,7 @@ final class BrowserHostClient {
     /// frame of it (a new view, or one that showed another tab), and a page that does not change draws none of its own;
     /// a discarded page loads again.
     private func panelComesOnScreen(_ tab: BrowserTab) {
+        tab.settleMetrics()
         tab.wasOnScreen = true
         tab.isShown = true
         connection?.send(.visibility(tab: tab.id, isHidden: false))
@@ -621,6 +622,7 @@ final class BrowserHostClient {
         guard tabs[tab.id] === tab else { return }
         tab.lastAgentActivity = .now
         tab.isInAgentTurn = true
+        tab.settleMetrics()
         // Shown before the agent's next command, which follows on the same connection.
         updateVisibility(of: tab, now: .now)
         tab.onAgentActivity?()
@@ -1460,6 +1462,12 @@ final class BrowserTab {
     private var remoteSize: BrowserViewportEmulation??
     /// The last change of the emulation, which the next waits for (`inEmulationOrder`).
     private var emulationChanges: Task<Void, Never>?
+    /// Chromium may hold other device metrics than `emulation` says: a change of them did not go through (a page that drew
+    /// nothing let it time out), or a capture holds the layout for a moment (`holdLayout`). The tab's own metrics are
+    /// applied again when it is next shown or used (`settleMetrics`), so no override outlives what set it.
+    private var metricsOwed = false
+    /// A capture holds the page's layout now (`holdLayout`), which its own end releases.
+    private var holdsLayout = false
     /// How many times the person brought the tab in front of its task (`BrowserHostClient.show`).
     fileprivate(set) var revisits = 0
     fileprivate(set) var lastAgentActivity: ContinuousClock.Instant?
@@ -1850,8 +1858,11 @@ final class BrowserTab {
         self.emulation = emulation
         onEmulationChange?()
         let timeout: Duration = .seconds(15)
+        // Recorded before Chromium answers, as the panel draws the new size at once: owed until the metrics went through.
+        metricsOwed = true
         if let emulation {
             _ = try await devTools.send("Emulation.setDeviceMetricsOverride", emulation.deviceMetrics, timeout: timeout)
+            metricsOwed = false
             _ = try await devTools.send("Emulation.setTouchEmulationEnabled", emulation.mobile
                 ? ["enabled": .bool(true), "maxTouchPoints": .integer(5)] : ["enabled": .bool(false)], timeout: timeout)
             if emulation.mobile {
@@ -1865,6 +1876,7 @@ final class BrowserTab {
             }
         } else {
             _ = try await devTools.send("Emulation.clearDeviceMetricsOverride", timeout: timeout)
+            metricsOwed = false
             _ = try await devTools.send("Emulation.setTouchEmulationEnabled", ["enabled": .bool(false)], timeout: timeout)
             _ = try await devTools.send("Emulation.setUserAgentOverride", ["userAgent": .string("")], timeout: timeout)
         }
@@ -1875,6 +1887,54 @@ final class BrowserTab {
             size.height = Double(emulation.height)
         }
         send(.resize(tab: id, viewport: size))
+    }
+
+    /// Holds the page's layout at `width`×`height` points while the tab is drawn larger for a capture (the agent's
+    /// full-page screenshot: CEF's windowless view keeps the size Yardlet gives it, so the tab is drawn at the page's
+    /// length). In the tab's order of emulation changes and on its own DevTools session.
+    func holdLayout(width: Double, height: Double) async throws {
+        try await inEmulationOrder {
+            self.metricsOwed = true
+            self.holdsLayout = true
+            do {
+                _ = try await self.devTools.send("Emulation.setDeviceMetricsOverride", [
+                    "width": .integer(Int64(width)), "height": .integer(Int64(height)),
+                    "deviceScaleFactor": .integer(0), "mobile": .bool(false)
+                ], timeout: .seconds(15))
+            } catch {
+                // No capture follows to end it; whether Chromium took it is not known, so it stays owed.
+                self.holdsLayout = false
+                throw error
+            }
+        }
+    }
+
+    /// Ends `holdLayout`: the page takes the tab's emulation, or its view's size, again. An end that does not go
+    /// through stays owed (`settleMetrics`).
+    func releaseLayout() async {
+        holdsLayout = false
+        try? await inEmulationOrder { try await self.applyOwnMetrics() }
+    }
+
+    /// Applies the tab's own device metrics again when Chromium may hold others (`metricsOwed`): a panel shows the tab,
+    /// or the agent uses it.
+    func settleMetrics() {
+        guard metricsOwed, !holdsLayout else { return }
+        Task { @MainActor [weak self] in
+            try? await self?.inEmulationOrder { [weak self] in
+                guard let self, self.metricsOwed, !self.holdsLayout else { return }
+                try await self.applyOwnMetrics()
+            }
+        }
+    }
+
+    private func applyOwnMetrics() async throws {
+        if let emulation {
+            _ = try await devTools.send("Emulation.setDeviceMetricsOverride", emulation.deviceMetrics, timeout: .seconds(15))
+        } else {
+            _ = try await devTools.send("Emulation.clearDeviceMetricsOverride", timeout: .seconds(15))
+        }
+        metricsOwed = false
     }
 
     /// Emulates `prefers-color-scheme` ("light" or "dark") on the page, or follows the Mac again for nil.

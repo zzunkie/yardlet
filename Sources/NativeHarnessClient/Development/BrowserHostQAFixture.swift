@@ -885,7 +885,7 @@ private final class BrowserHostQARunner {
         let crashed = await waitUntil(.seconds(10)) { controller.crash != nil }
         try? await Task.sleep(for: .milliseconds(500))
         let log = (try? String(contentsOf: MacBrowserHost.shared.paths.log, encoding: .utf8)) ?? ""
-        let line = log.split(separator: "\n").last { $0.hasPrefix("renderer ended tab=\(crashedTab?.id ?? -1) ") }
+        let line = log.split(separator: "\n").last { $0.contains("] renderer ended tab=\(crashedTab?.id ?? -1) ") }
         capturePanel(view, named: "renderer-ended.png")
         let shown = controller.crash?.errorCode ?? ""
         results["rendererEnded"] = .object(["panel": .string(shown), "log": .string(line.map(String.init) ?? "")])

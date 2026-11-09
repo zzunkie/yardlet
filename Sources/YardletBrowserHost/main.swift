@@ -21,7 +21,7 @@ application.setActivationPolicy(.prohibited)
 
 func fail(_ message: String) -> Never {
     output.write(["failed": ["message": message]])
-    FileHandle.standardError.write(Data("Yardlet Browser Host: \(message)\n".utf8))
+    HostLog.write("Yardlet Browser Host: \(message)")
     exit(1)
 }
 
@@ -160,8 +160,8 @@ MainActor.assumeIsolated { host.profiles = TaskProfiles(rootCache: rootCache, de
 try? FileManager.default.createDirectory(atPath: rootCache + "/Logs", withIntermediateDirectories: true)
 let usesLoginKeychain = CookieKeychain.usesLoginKeychain()
 let switches = CookieKeychain.switches(arguments.switches, usesLoginKeychain: usesLoginKeychain)
-FileHandle.standardError.write(Data(("Yardlet Browser Host: cookie key in "
-    + (usesLoginKeychain ? "the login keychain (Developer ID)\n" : "the mock keychain\n")).utf8))
+HostLog.write("Yardlet Browser Host: cookie key in "
+    + (usesLoginKeychain ? "the login keychain (Developer ID)" : "the mock keychain"))
 
 let initialized = layout.cefFramework.path(percentEncoded: false).withCString { framework in
     layout.hostBundle.path(percentEncoded: false).withCString { bundle in
@@ -213,6 +213,6 @@ terminationSignal.resume()
 yardlet_cef_run_message_loop()
 yardlet_cef_shutdown()
 let statistics = MainActor.assumeIsolated { BrowserHost.shared.statistics() }
-FileHandle.standardError.write(Data("Yardlet Browser Host statistics: \(statistics)\n".utf8))
+HostLog.write("Yardlet Browser Host statistics: \(statistics)")
 if arguments.rootCachePath.isEmpty { try? FileManager.default.removeItem(atPath: rootCache) }
 exit(0)

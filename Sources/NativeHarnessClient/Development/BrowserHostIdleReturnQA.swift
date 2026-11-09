@@ -7,14 +7,14 @@ import SwiftUI
 
 /// QA for a tab shown again after it was hidden (docs/BROWSER_HOST.md §3 "Drawing (power)" and "Memory saver"),
 /// against the real browser host and the real panel, run by `run-check.sh … --ui-fixture-browser-check-only=idle-return`.
-/// The task's panel shows a page in one color edge to edge (`/idle`), and the page is hidden and shown again the ways
+/// The task's panel shows a page striped edge to edge on a white page (`/idle`), and the page is hidden and shown again the ways
 /// an idle panel is: its window covered (the view hidden), resized meanwhile, the panel closed and opened again with a
 /// new view (the side panel showed another tab, or the task's views were built anew), at another size, the tab
 /// discarded by the memory saver meanwhile, the task's views out of the window while another task shows (and back
 /// before the window is on screen), Chromium's GPU process ended and started again (as after the Mac sleeps), and last
 /// a new panel opened off screen on a tab the agent used a moment ago, which its engine still draws. Chromium is told
 /// memory is critical while the tab is hidden, which drops what it kept of a hidden page's drawing. Each time a frame
-/// must reach the panel and show the page's color, not the panel's white. Checks land in `result.json`, and each shown
+/// must reach the panel and show the page's stripes, not white. Checks land in `result.json`, and each shown
 /// page as `<step>.png`.
 @MainActor
 final class BrowserHostIdleReturnQA {

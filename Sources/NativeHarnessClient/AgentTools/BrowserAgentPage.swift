@@ -66,6 +66,10 @@ final class BrowserAgentPage {
     var agentActFailed: () -> Void = {}
     /// The screen size the tab's page is shown at, and who chose it (`BrowserTab.emulation`).
     var emulation: () -> BrowserViewportEmulation? = { nil }
+    /// Holds the page's layout at a size while the tab is drawn larger for a capture, and ends the hold
+    /// (`BrowserTab.holdLayout`, `releaseLayout`); without them (tests) the page's own session does.
+    var holdsLayout: ((Double, Double) async throws -> Void)?
+    var releasesLayout: (() async -> Void)?
     /// Shows the page at a screen size, or its own again (`BrowserTab.emulate`).
     var emulate: (BrowserViewportEmulation?) async throws -> Void = { _ in
         throw BrowserAgentToolError("This browser cannot emulate a screen size.")
@@ -341,6 +345,19 @@ final class BrowserAgentPage {
     }
 
     /// Draws the tab at another size (the full-page screenshot, for the moment it captures).
+    func holdLayout(width: Double, height: Double) async throws {
+        if let holdsLayout { return try await holdsLayout(width, height) }
+        _ = try await cdp.send("Emulation.setDeviceMetricsOverride", [
+            "width": .integer(Int64(width)), "height": .integer(Int64(height)), "deviceScaleFactor": .integer(0),
+            "mobile": .bool(false)
+        ], timeout: .seconds(15))
+    }
+
+    func releaseLayout() async {
+        if let releasesLayout { return await releasesLayout() }
+        _ = try? await cdp.send("Emulation.clearDeviceMetricsOverride", [:], timeout: .seconds(15))
+    }
+
     func resize(to viewport: BrowserViewport) {
         sendCommand(.resize(tab: tabID, viewport: viewport))
     }

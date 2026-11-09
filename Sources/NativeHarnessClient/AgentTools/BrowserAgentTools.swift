@@ -1252,19 +1252,16 @@ final class BrowserAgentTools {
         drawn.width = max(viewport.width, (size.width * points).rounded(.up))
         drawn.height = max(viewport.height, (size.height * points).rounded(.up))
         guard drawn != viewport else { return try await capture() }
-        if !emulated {
-            _ = try await send(page, "Emulation.setDeviceMetricsOverride", [
-                "width": .integer(Int64(viewport.width)), "height": .integer(Int64(viewport.height)),
-                "deviceScaleFactor": .integer(0), "mobile": .bool(false)
-            ])
-        }
+        // The tab's own hold, outside the page's dialogs and in the order of its emulation changes: an end that does not
+        // go through is owed and applied when the tab is next shown or used, so the override never stays behind.
+        if !emulated { try await page.holdLayout(width: viewport.width, height: viewport.height) }
         page.resize(to: drawn)
         let result: Result<T, any Error>
         do { result = .success(try await capture()) } catch { result = .failure(error) }
         // The panel's size again, unless the panel resized the tab meanwhile; the view first, so the page
         // is never laid out at the drawn size.
         if page.viewport() == drawn { page.resize(to: viewport) }
-        if !emulated { _ = try? await send(page, "Emulation.clearDeviceMetricsOverride") }
+        if !emulated { await page.releaseLayout() }
         return try result.get()
     }
 

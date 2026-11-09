@@ -145,3 +145,18 @@ enum CommandReader {
         thread.start()
     }
 }
+
+/// The host's own lines in host.log (standard error), each after its local time in the form Chromium's lines carry it
+/// (`[MMDD/HHMMSS.mmm]`), so that a line reads against what the person saw and when.
+enum HostLog {
+    static func write(_ line: String) {
+        var now = timeval()
+        gettimeofday(&now, nil)
+        var local = tm()
+        var seconds = now.tv_sec
+        localtime_r(&seconds, &local)
+        let time = String(format: "[%02d%02d/%02d%02d%02d.%03d] ", local.tm_mon + 1, local.tm_mday, local.tm_hour,
+                          local.tm_min, local.tm_sec, Int32(now.tv_usec / 1000))
+        FileHandle.standardError.write(Data((time + line + "\n").utf8))
+    }
+}
