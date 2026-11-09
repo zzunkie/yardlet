@@ -60,8 +60,8 @@ struct MainWindow: View {
     /// How the task list groups its rows, the same in every window and kept across launches.
     @AppStorage(SidebarGrouping.defaultsKey, store: .yardlet) private var sidebarGrouping = SidebarGrouping.project
     @State private var searchText = ""
-    /// The sidebar search's matches, kept per task while its conversation is unchanged.
-    @State private var searchMemo = ConversationSearchMemo()
+    /// Whose conversation holds the sidebar search, which the model keeps up to date as tasks stream.
+    @State private var searchMemo: ConversationSearchMemo
     /// The sidebar shows archived tasks in place of the task list until Back.
     @State private var isShowingArchivedTasks = false
     @State private var archivedSearchText = ""
@@ -159,6 +159,7 @@ struct MainWindow: View {
          personalAgentReader: (() -> any PersonalAgentClient)? = nil) {
         self.model = model
         self.personalAgentReader = personalAgentReader
+        _searchMemo = State(initialValue: model.conversationSearch())
         // What the app's windows last read of the dots is shown while this one reads its own.
         _personalAgents = State(initialValue: personalAgentReader != nil
             ? PersonalAgentCenter(drafts: personalAgentDrafts ?? PersonalAgentDrafts(), readings: model.personalAgentReadings)
@@ -166,17 +167,38 @@ struct MainWindow: View {
                                   responses: DotsResponseJournalFiles.live, readings: model.personalAgentReadings))
     }
 
-    private var visibleGroups: [WorkspaceGroup] {
-        let groups = allVisibleGroups
-        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return groups }
-        return TaskNavigationProjection.filteredGroups(
-            in: groups,
-            query: searchText,
-            transcripts: model.transcriptBySessionID.dictionary,
-            codexPresentation: model.codexPresentationBySessionID.dictionary,
-            projectNames: projects.projectNames(for: groups),
-            memo: searchMemo
-        )
+    /// What the task list shows in one pass of the window's body, worked out once: the sidebar, the
+    /// Task menu's rows and the pinned rows' menu items read the same lists.
+    private struct SidebarLists {
+        /// Every project group and chat the task list can show, whatever a search shows.
+        let groups: [WorkspaceGroup]
+        let chats: [SessionRecord]
+        /// The rows the task list shows, while the window shows Tasks.
+        let layout: SidebarProjection.Layout?
+    }
+
+    private var sidebarLists: SidebarLists {
+        let groups = allVisibleGroups, chats = allChats
+        return SidebarLists(groups: groups, chats: chats,
+                            layout: sidebarSection == .tasks ? sidebarLayout(groups: groups, chats: chats) : nil)
+    }
+
+    /// The sidebar search's words, or nil while there is none.
+    private var searchQuery: String? {
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Whether a task's conversation holds the search, which the window reads without reading the
+    /// conversation: that would make it observe every task's and draw again whenever any task streams.
+    private func conversationMatches(_ id: SessionRecord.ID, _ query: String) -> Bool {
+        searchMemo.matches(id, query: query)
+    }
+
+    private func visibleGroups(in groups: [WorkspaceGroup]) -> [WorkspaceGroup] {
+        guard let query = searchQuery else { return groups }
+        return TaskNavigationProjection.filteredGroups(in: groups, query: query, projectNames: projects.projectNames(for: groups),
+                                                       conversationMatches: conversationMatches)
     }
 
     private var allVisibleGroups: [WorkspaceGroup] {
@@ -228,17 +250,9 @@ struct MainWindow: View {
         return { held[$0.id] ?? state($0) }
     }
 
-    private var visibleChats: [SessionRecord] {
-        // Without a search the conversations are not read: reading them would make the window
-        // observe every task's transcript and redraw whenever any task streams.
-        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return allChats }
-        return TaskNavigationProjection.filteredSessions(
-            allChats,
-            query: searchText,
-            transcripts: model.transcriptBySessionID.dictionary,
-            codexPresentation: model.codexPresentationBySessionID.dictionary,
-            memo: searchMemo
-        )
+    private func visibleChats(in chats: [SessionRecord]) -> [SessionRecord] {
+        guard let query = searchQuery else { return chats }
+        return TaskNavigationProjection.filteredSessions(chats, query: query, conversationMatches: conversationMatches)
     }
 
     /// Every task the sidebar can list, whatever a search shows: what `⌥⌘A`, the Dock badge and the
@@ -250,13 +264,8 @@ struct MainWindow: View {
         let listed = TaskAttentionProjection.activityList(
             in: sidebarSessions, details: model.taskAttentionDetails,
             shellBusy: model.shellBusySessionIDs, kept: activityPlaces)
-        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return listed }
-        return TaskNavigationProjection.filteredSessions(
-            listed, query: searchText,
-            transcripts: model.transcriptBySessionID.dictionary,
-            codexPresentation: model.codexPresentationBySessionID.dictionary,
-            memo: searchMemo
-        )
+        guard let query = searchQuery else { return listed }
+        return TaskNavigationProjection.filteredSessions(listed, query: query, conversationMatches: conversationMatches)
     }
 
     private var sidebarActivity: SidebarActivity? {
@@ -1075,14 +1084,14 @@ struct MainWindow: View {
         }
     }
 
-    private var sidebarLayout: SidebarProjection.Layout {
+    private func sidebarLayout(groups: [WorkspaceGroup], chats: [SessionRecord]) -> SidebarProjection.Layout {
         SidebarProjection.layout(
-            visibleGroups: visibleGroups,
-            allGroups: allVisibleGroups,
-            chats: visibleChats,
-            allChats: allChats,
+            visibleGroups: visibleGroups(in: groups),
+            allGroups: groups,
+            chats: visibleChats(in: chats),
+            allChats: chats,
             splits: model.splits.splits,
-            isFiltering: !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            isFiltering: searchQuery != nil,
             disclosure: sidebarDisclosure.disclosure,
             selection: model.splits.selection,
             waiting: waitingSessionIDs,
@@ -1099,11 +1108,11 @@ struct MainWindow: View {
     }
 
     /// Pinned rows in sidebar order, whatever the search shows, for `⌃1`–`⌃9`.
-    private var pinnedRows: [SidebarRow] {
+    private func pinnedRows(_ lists: SidebarLists) -> [SidebarRow] {
         SidebarProjection.layout(
-            visibleGroups: allVisibleGroups,
-            allGroups: allVisibleGroups,
-            chats: allChats,
+            visibleGroups: lists.groups,
+            allGroups: lists.groups,
+            chats: lists.chats,
             splits: model.splits.splits,
             isFiltering: false,
             archivedParents: model.store.archivedParentIDs
@@ -1116,12 +1125,12 @@ struct MainWindow: View {
         return { [model] in Task { await model.followSessionListsNow() } }
     }
 
-    private var splitCommands: YardletSplitCommandSet {
+    private func splitCommands(_ lists: SidebarLists) -> YardletSplitCommandSet {
         YardletSplitCommandSet(
             canSplitRight: sidebarSection == .tasks && canSplit(.right),
             canSplitDown: sidebarSection == .tasks && canSplit(.down),
             canClosePane: sidebarSection == .tasks && model.splits.canClosePane,
-            pinnedRows: pinnedRows.map { PinnedRowMenuItem(id: $0.id, title: $0.title) },
+            pinnedRows: pinnedRows(lists).map { PinnedRowMenuItem(id: $0.id, title: $0.title) },
             selection: sidebarSection == .tasks ? model.splits.selection : .home,
             splitRight: { splitFocusedPane(.right) },
             splitDown: { splitFocusedPane(.down) },
@@ -1248,17 +1257,21 @@ struct MainWindow: View {
 
     /// The Task menu follows the rows the sidebar lists, the same order arrow keys move through.
     /// While a sheet, alert, or the environment panel is up, the task commands wait for it.
-    private var taskCommands: YardletTaskCommandSet {
-        var commands = YardletTaskCommandSet(
-            targets: hasPresentedModal || sidebarSection != .tasks ? TaskCommandTargets() : TaskCommandTargets.make(
-                layout: sidebarActivity.map(\.layout) ?? sidebarLayout,
+    private func taskCommands(_ lists: SidebarLists) -> YardletTaskCommandSet {
+        var targets = TaskCommandTargets()
+        if !hasPresentedModal, let layout = lists.layout {
+            targets = TaskCommandTargets.make(
+                layout: sidebarActivity.map(\.layout) ?? layout,
                 selection: schedulesWindow.isShowing ? .home : model.splits.selection,
                 shownSession: schedulesWindow.isShowing ? nil : model.store.selectedSession,
                 sidebarSessions: sidebarSessions,
                 splits: model.splits.splits,
                 details: model.taskAttentionDetails,
                 shellBusy: model.shellBusySessionIDs
-            ),
+            )
+        }
+        var commands = YardletTaskCommandSet(
+            targets: targets,
             isSidebarVisible: isSidebarVisible,
             activate: activateRow,
             toggleSidebar: toggleSidebar,
@@ -1971,7 +1984,7 @@ struct MainWindow: View {
         return !schedulesWindow.isShowing && model.splits.selection == .home ? TaskWorkspaceStore.draftID : nil
     }
 
-    private var windowContent: some View {
+    private func windowContent(_ lists: SidebarLists) -> some View {
         HStack(spacing: 0) {
                 if isSidebarVisible, sidebarSection == .personalAgents {
                     SidebarColumn(state: sidebarWidth, windowWidth: knownWindowWidth) {
@@ -2031,10 +2044,10 @@ struct MainWindow: View {
                     SidebarColumn(state: sidebarWidth, windowWidth: knownWindowWidth) {
                     VStack(spacing: 0) {
                     sidebarTitleBar
-                    let layout = sidebarLayout
+                    let layout = lists.layout ?? SidebarProjection.Layout()
                     TaskSidebar(
                         layout: layout,
-                        allGroups: allVisibleGroups,
+                        allGroups: lists.groups,
                         isRestoring: model.isRestoringIndex,
                         selection: SidebarProjection.row(for: model.splits.selection, in: layout)
                             ?? model.splits.selection,
@@ -2510,8 +2523,8 @@ struct MainWindow: View {
         }
     }
 
-    private var draftManagedContent: some View {
-        windowContent
+    private func draftManagedContent(_ lists: SidebarLists) -> some View {
+        windowContent(lists)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if let failure = model.composerDrafts.storageFailure {
                 HStack(alignment: .top, spacing: 12) {
@@ -2533,8 +2546,8 @@ struct MainWindow: View {
         }
     }
 
-    private var shellPresentedContent: some View {
-        draftManagedContent
+    private func shellPresentedContent(_ lists: SidebarLists) -> some View {
+        draftManagedContent(lists)
         .environment(\.taskKeyboardFocus, model.store.selectedSessionID.map {
             model.taskWorkspaces.state(for: $0).keyboardFocus
         } ?? homeKeyboardFocus)
@@ -2630,8 +2643,8 @@ struct MainWindow: View {
         .focusedSceneValue(\.yardletImportPresented, modalBinding($isPresentingImport))
         .focusedSceneValue(\.yardletOtherAppImportPresented, modalBinding($isPresentingOtherAppImport))
         .focusedSceneValue(\.yardletRefreshFromOtherApps, refreshFromOtherApps)
-        .focusedSceneValue(\.yardletSplitCommands, splitCommands)
-        .focusedSceneValue(\.yardletTaskCommands, taskCommands)
+        .focusedSceneValue(\.yardletSplitCommands, splitCommands(lists))
+        .focusedSceneValue(\.yardletTaskCommands, taskCommands(lists))
         .background(TerminalToggleKey(isEnabled: !hasPresentedModal && panelOwnerID != nil) {
             toggleTaskPanel(TaskSurface.terminal.rawValue)
         })
@@ -2683,7 +2696,7 @@ struct MainWindow: View {
 #if DEBUG
         let _ = ViewBodyCensus.note(.mainWindow)
 #endif
-        shellPresentedContent
+        shellPresentedContent(sidebarLists)
         .environment(\.renamingTaskIDs, model.renamingFromConversationIDs)
         .sheet(item: Binding(
             get: { projectToEdit.map { ProjectEditPresentation(id: $0) } },

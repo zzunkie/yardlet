@@ -153,9 +153,12 @@ enum CodexHistorySearchProjection {
     static func contains(in state: CodexTaskState, query: String) -> Bool {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let thread = state.thread else { return false }
-        return thread.turns.contains { turn in
-            turn.items.contains { searchableText(for: $0).localizedCaseInsensitiveContains(trimmed) }
-        }
+        return thread.turns.contains { contains(in: $0, trimmedQuery: trimmed) }
+    }
+
+    /// One turn's part of `contains(in:query:)`, for a query already trimmed and not empty.
+    static func contains(in turn: CodexTurnState, trimmedQuery: String) -> Bool {
+        turn.items.contains { searchableText(for: $0).localizedCaseInsensitiveContains(trimmedQuery) }
     }
 
     static func matchingTurnIDs(in state: CodexTaskState, query: String) -> [String] {

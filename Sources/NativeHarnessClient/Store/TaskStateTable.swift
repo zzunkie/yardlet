@@ -21,6 +21,9 @@ final class TaskStateTable<Value> {
                 registrar.withMutation(of: self, keyPath: \.value) { storage = newValue }
             }
         }
+
+        /// The value, read without observing it.
+        var unobservedValue: Value? { storage }
     }
 
     /// Changes when a task gains or loses a value, for readers of the whole table.
@@ -62,6 +65,12 @@ final class TaskStateTable<Value> {
             if isPresent { presentIDs.insert(id) } else { presentIDs.remove(id) }
             membership.version &+= 1
         }
+    }
+
+    /// `id`'s value, read without observing it: for state kept outside the views that `didSet` tells
+    /// of each change, such as the sidebar search's answers (`ConversationSearchMemo`).
+    func unobservedValue(for id: UUID) -> Value? {
+        cells[id]?.unobservedValue
     }
 
     var isEmpty: Bool {

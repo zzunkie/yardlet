@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import XCTest
 @testable import NativeHarnessClient
 
@@ -246,6 +247,57 @@ final class TaskNavigationProjectionTests: XCTestCase {
         XCTAssertTrue(TaskNavigationProjection.filteredGroups(
             from: fixture.sessions, query: "Request 60"
         ).isEmpty)
+    }
+
+    /// The sidebar search's memo searches a task again from what its change did not keep, and tells its
+    /// reader only when the task comes to match or stops matching, as a task streams.
+    @MainActor
+    func testConversationSearchFollowsChangesAndTellsOnlyWhenAMatchComesOrGoes() {
+        final class Told: @unchecked Sendable { var count = 0 }
+        let id = UUID(), told = Told()
+        var conversation = ConversationSearchMemo.Conversation(transcript: LongConversationFixture.claude(turns: 40))
+        let memo = ConversationSearchMemo { _ in conversation }
+        func matches() -> Bool { memo.matches(id, query: "ledger") }
+        /// Reads the answers as the window does, until one changes.
+        func observe() { withObservationTracking { _ = matches() } onChange: { told.count += 1 } }
+        func stream(_ text: String, kept: Int? = nil) {
+            var entries = conversation.transcript ?? []
+            entries[entries.count - 1] = TranscriptEntry(content: .assistant(text: text, isStreaming: true))
+            conversation.transcript = entries
+            memo.transcriptChanged(id, change: TranscriptChange(dropped: 0, kept: kept ?? entries.count - 1))
+        }
+        XCTAssertFalse(matches())
+        observe()
+        stream("Still reading")
+        XCTAssertEqual(told.count, 0, "A change that matches nothing tells nothing")
+        stream("The ledger is balanced")
+        XCTAssertEqual(told.count, 1)
+        XCTAssertTrue(matches())
+        observe()
+        stream("The ledger is balanced", kept: 5)
+        XCTAssertTrue(matches(), "Searched again from the first entry the change did not keep")
+        XCTAssertEqual(told.count, 1)
+        conversation.transcript = Array(conversation.transcript!.prefix(10))
+        memo.transcriptChanged(id, change: .unknown)
+        XCTAssertEqual(told.count, 2)
+        XCTAssertFalse(matches())
+        observe()
+
+        let turns = (0..<20).map { LongConversationFixture.codexTurn($0) }
+        conversation.codex = LongConversationFixture.codex(threadID: "thread-search", turns: turns)
+        memo.codexStateChanged(id)
+        XCTAssertEqual(told.count, 2)
+        conversation.codex = LongConversationFixture.codex(
+            threadID: "thread-search", turns: turns.dropLast() + [LongConversationFixture.codexTurn(19, tag: "ledger ")])
+        memo.codexStateChanged(id)
+        XCTAssertEqual(told.count, 3, "The newest turn came to hold the search")
+        XCTAssertTrue(matches())
+        observe()
+        conversation.codex = LongConversationFixture.codex(
+            threadID: "thread-search", turns: [LongConversationFixture.codexTurn(0, tag: "edited ")] + turns.dropFirst())
+        memo.codexStateChanged(id)
+        XCTAssertEqual(told.count, 4, "The turn that held it went")
+        XCTAssertFalse(matches())
     }
 
     func testRenamedProjectSearchRetainsItsTasksAndWorkspaceIdentity() throws {

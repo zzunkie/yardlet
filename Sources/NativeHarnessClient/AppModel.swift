@@ -40,6 +40,11 @@ final class AppModel {
     let transcripts = TaskStateTable<[TranscriptEntry]>()
     /// The turns of the transcripts the window draws, kept between publications (`transcript(for:)`).
     private let transcriptTurns = TranscriptTurnsCache()
+    /// The windows' sidebar searches, told whose conversation was set (`conversationSearch()`).
+    @ObservationIgnored private var conversationSearches: [WeakConversationSearch] = []
+    private struct WeakConversationSearch {
+        weak var search: ConversationSearchMemo?
+    }
     var errorBySessionID: [UUID: String] = [:]
     var codexPresentationBySessionID: TaskStateReader<CodexTaskState> { codexPresentations.reader }
     let codexPresentations = TaskStateTable<CodexTaskState>()
@@ -538,10 +543,13 @@ final class AppModel {
         self.bootstrapError = bootstrapError
         continuations.model = self
         transcripts.didSet = { [weak self] id in
-            self?.transcriptTurns.transcriptChanged(id)
-            self?.refreshAttentionDetail(for: id)
+            guard let self else { return }
+            let change = self.transcriptTurns.transcriptChanged(id)
+            for entry in self.conversationSearches { entry.search?.transcriptChanged(id, change: change) }
+            self.refreshAttentionDetail(for: id)
         }
         codexPresentations.didSet = { [weak self] id in
+            for entry in self?.conversationSearches ?? [] { entry.search?.codexStateChanged(id) }
             self?.refreshCodexRailState(for: id)
             self?.refreshAttentionDetail(for: id)
             self?.linkCodexParentIfNeeded(for: id)
@@ -6743,6 +6751,19 @@ final class AppModel {
         guard !store.isTemporary(sessionID) else { return }
         // Streaming publishes many times a second; the reading snapshot keeps the newest one.
         transcriptSnapshots.scheduleSave(entries, for: sessionID)
+    }
+
+    /// A search of the tasks' conversations for a window's sidebar, which reads them without observing
+    /// them and is told whose conversation was set, so a task streaming while the sidebar searches is
+    /// searched again from what changed and does not draw the window again.
+    func conversationSearch() -> ConversationSearchMemo {
+        let search = ConversationSearchMemo { [weak self] id in
+            ConversationSearchMemo.Conversation(transcript: self?.transcripts.unobservedValue(for: id),
+                                                codex: self?.codexPresentations.unobservedValue(for: id))
+        }
+        conversationSearches.removeAll { $0.search == nil }
+        conversationSearches.append(WeakConversationSearch(search: search))
+        return search
     }
 
     /// A task's transcript in its turns, for the views that draw it: the conversation, the session rail

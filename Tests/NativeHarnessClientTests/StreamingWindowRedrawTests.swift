@@ -82,6 +82,33 @@ final class StreamingWindowRedrawTests: XCTestCase {
             }
         }
         XCTAssertEqual(scene[.mainWindow], 0)
+
+        // A search open in the sidebar while the shown task streams at the end of a long conversation, beside
+        // tasks with long conversations of their own. The window lists the tasks the search finds, which the
+        // stream leaves as they were, and is not drawn again for it (`ConversationSearchMemo`). Before, searching
+        // the conversations made the window observe every task's, so each publication drew the window again and
+        // searched the streaming task's whole conversation once more.
+        model.mutateTranscript(for: shown.id, publishImmediately: true) {
+            $0 = TranscriptBuilder(entries: LongConversationFixture.claude(turns: 1_000, seed: "shown"))
+        }
+        for (index, task) in window.tasks.enumerated().dropFirst() {
+            model.transcripts[task.id] = LongConversationFixture.claude(
+                turns: 100, seed: "task-\(index)", tag: index.isMultiple(of: 2) ? "ledger " : "")
+        }
+        window.search("ledger")
+        XCTAssertTrue(window.lists(window.tasks[2]), "The search finds a task by its conversation")
+        XCTAssertFalse(window.lists(shown), "The shown task's conversation does not hold the search")
+        let searching = await window.measure("12 tool calls with a search open") {
+            await ClaudeToolCallStream(emit: { await transport.emit($0) },
+                                       pause: { window.host.settle(passes: 1, interval: 0.004) }).run(calls: 12)
+        }
+        XCTAssertLessThanOrEqual(searching[.mainWindow], 2, "Streaming redrew the window while the sidebar searches")
+        // The shown task's conversation comes to hold the search: the window lists it.
+        let found = await window.measure("the shown task's answer comes to hold the search") {
+            model.mutateTranscript(for: shown.id, publishImmediately: true) { $0.apply(.assistantDelta(" The ledger")) }
+        }
+        XCTAssertGreaterThanOrEqual(found[.mainWindow], 1, "The window lists the task the search now finds")
+        XCTAssertTrue(window.lists(shown), "The search finds what streamed")
     }
 
     /// A task the window showed keeps its views out of the window while another task shows
@@ -312,6 +339,28 @@ final class StreamingWindowRedrawTests: XCTestCase {
                   + "composer \(counts[.composer]), surface \(counts[.taskSurface]), rail \(counts[.sessionRail]), "
                   + "main thread \(MainThreadClock.since(start))")
             return counts
+        }
+
+        /// Types `text` into the sidebar's search field, as the person does.
+        func search(_ text: String) {
+            guard let field = Self.textFields(in: host.hosting)
+                .first(where: { $0.placeholderString == L10n.string("Search tasks") }) else {
+                return XCTFail("The sidebar shows no search field")
+            }
+            field.stringValue = text
+            (field.delegate as? NSTextFieldDelegate)?.controlTextDidChange?(
+                Notification(name: NSControl.textDidChangeNotification, object: field))
+            host.settle(passes: 10)
+        }
+
+        /// Whether the sidebar lists `task`: its row is labelled with its title and harness.
+        func lists(_ task: SessionRecord) -> Bool {
+            let row = "\(task.title), \(task.harness.displayName)"
+            return host.accessibilityElements().contains { $0.label == row }
+        }
+
+        private static func textFields(in view: NSView) -> [NSTextField] {
+            ((view as? NSTextField).map { [$0] } ?? []) + view.subviews.flatMap { textFields(in: $0) }
         }
 
         func close() {

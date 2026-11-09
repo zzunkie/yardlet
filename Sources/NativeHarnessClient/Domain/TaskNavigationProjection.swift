@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 /// Pure task-index projection shared by the store and the SwiftUI sidebar. Keeping search and
 /// grouping deterministic makes selection/restart fixtures independent of provider processes.
@@ -85,8 +86,19 @@ enum TaskNavigationProjection {
         query: String,
         transcripts: [SessionRecord.ID: [TranscriptEntry]] = [:],
         codexPresentation: [SessionRecord.ID: CodexTaskState] = [:],
+        projectNames: [URL: String] = [:]
+    ) -> [WorkspaceGroup] {
+        filteredGroups(in: groups, query: query, projectNames: projectNames,
+                       conversationMatches: conversationMatches(transcripts: transcripts, codexPresentation: codexPresentation))
+    }
+
+    /// The groups with the tasks that match `query`; `conversationMatches` says whether a task's
+    /// conversation holds the trimmed query.
+    static func filteredGroups(
+        in groups: [WorkspaceGroup],
+        query: String,
         projectNames: [URL: String] = [:],
-        memo: ConversationSearchMemo? = nil
+        conversationMatches: (SessionRecord.ID, String) -> Bool
     ) -> [WorkspaceGroup] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return groups }
@@ -95,8 +107,7 @@ enum TaskNavigationProjection {
                 || group.workspaceURL.path(percentEncoded: false).localizedCaseInsensitiveContains(trimmed) {
                 return group
             }
-            let matches = filteredSessions(group.sessions, query: trimmed, transcripts: transcripts,
-                                           codexPresentation: codexPresentation, memo: memo)
+            let matches = filteredSessions(group.sessions, query: trimmed, conversationMatches: conversationMatches)
             guard !matches.isEmpty else { return nil }
             return WorkspaceGroup(workspaceURL: group.workspaceURL, sessions: matches)
         }
@@ -109,25 +120,42 @@ enum TaskNavigationProjection {
         _ sessions: [SessionRecord],
         query: String,
         transcripts: [SessionRecord.ID: [TranscriptEntry]] = [:],
-        codexPresentation: [SessionRecord.ID: CodexTaskState] = [:],
-        memo: ConversationSearchMemo? = nil
+        codexPresentation: [SessionRecord.ID: CodexTaskState] = [:]
+    ) -> [SessionRecord] {
+        filteredSessions(sessions, query: query,
+                         conversationMatches: conversationMatches(transcripts: transcripts, codexPresentation: codexPresentation))
+    }
+
+    /// The tasks that match `query`; `conversationMatches` says whether a task's conversation holds
+    /// the trimmed query, and is asked only of a task whose names do not.
+    static func filteredSessions(
+        _ sessions: [SessionRecord],
+        query: String,
+        conversationMatches: (SessionRecord.ID, String) -> Bool
     ) -> [SessionRecord] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return sessions }
         return sessions.filter { session in
-            if session.title.localizedCaseInsensitiveContains(trimmed)
+            session.title.localizedCaseInsensitiveContains(trimmed)
                 || session.previousTitles.contains(where: { $0.localizedCaseInsensitiveContains(trimmed) })
-                || session.harness.displayName.localizedCaseInsensitiveContains(trimmed) { return true }
-            let transcript = transcripts[session.id], codex = codexPresentation[session.id]
-            func search() -> Bool {
-                transcript?.contains(where: { entry in
-                    transcriptSearchText(for: entry).localizedCaseInsensitiveContains(trimmed)
-                }) == true
-                    || codex.map { CodexHistorySearchProjection.contains(in: $0, query: trimmed) } == true
-            }
-            return memo?.matches(session.id, query: trimmed, transcript: transcript, codex: codex, search: search)
-                ?? search()
+                || session.harness.displayName.localizedCaseInsensitiveContains(trimmed)
+                || conversationMatches(session.id, trimmed)
         }
+    }
+
+    private static func conversationMatches(
+        transcripts: [SessionRecord.ID: [TranscriptEntry]],
+        codexPresentation: [SessionRecord.ID: CodexTaskState]
+    ) -> (SessionRecord.ID, String) -> Bool {
+        { id, query in
+            transcripts[id]?.contains(where: { transcriptEntry($0, contains: query) }) == true
+                || codexPresentation[id].map { CodexHistorySearchProjection.contains(in: $0, query: query) } == true
+        }
+    }
+
+    /// Whether `entry`'s text holds `query`, trimmed and not empty.
+    fileprivate static func transcriptEntry(_ entry: TranscriptEntry, contains query: String) -> Bool {
+        transcriptSearchText(for: entry).localizedCaseInsensitiveContains(query)
     }
 
     private static func transcriptSearchText(for entry: TranscriptEntry) -> String {
@@ -159,44 +187,122 @@ enum TaskNavigationProjection {
     }
 }
 
-/// Whether each task's conversation holds a search, kept while the words and the conversation stay
-/// the same. A search reads every task's conversation, so the window draws again whenever any task
-/// streams; with this, only a task whose conversation changed is searched again. A conversation
-/// counts as the same when it is the very one searched: an unchanged array or Codex state shares its
-/// storage with the one kept here, which equality sees at once.
-final class ConversationSearchMemo {
-    private struct Result {
-        let transcript: [TranscriptEntry]?
-        let codex: CodexTaskState?
-        let matches: Bool
+/// Whether each task's conversation holds the sidebar search, for one window. The window reads these
+/// answers and not the conversations: reading every task's conversation would make it observe them all
+/// and draw again whenever any task streams. The model tells the memo whose conversation was set
+/// (`AppModel.conversationSearch()`), and the memo searches that task again from what changed; the
+/// window is told only when that changes whether the task matches.
+///
+/// A transcript is searched again from the first entry its change did not keep (`TranscriptChange`), and
+/// a Codex thread from its first turn that is not the one searched. A task that matched still matches
+/// while the entry or turn that matched stays as it was.
+@MainActor
+final class ConversationSearchMemo: Observable {
+    /// A task's conversation as the model holds it, read without observing it.
+    struct Conversation {
+        var transcript: [TranscriptEntry]?
+        var codex: CodexTaskState?
+
+        init(transcript: [TranscriptEntry]? = nil, codex: CodexTaskState? = nil) {
+            self.transcript = transcript
+            self.codex = codex
+        }
     }
 
+    /// What was searched of a task, and where it matched: the entries or turns before a match, or all
+    /// of them when none matched, do not hold the search.
+    private struct Result {
+        var entries: [TranscriptEntry] = []
+        var entryMatch: Int?
+        var turns: [CodexTurnState] = []
+        var turnMatch: Int?
+        var matches: Bool { entryMatch != nil || turnMatch != nil }
+    }
+
+    private let registrar = ObservationRegistrar()
+    private let read: (SessionRecord.ID) -> Conversation
     private var query = ""
     private var results: [SessionRecord.ID: Result] = [:]
+    /// Changes when a task searched comes to match or stops matching.
+    private var answers = 0
 
-    init() {}
+    init(read: @escaping (SessionRecord.ID) -> Conversation) {
+        self.read = read
+    }
 
-    func matches(
-        _ id: SessionRecord.ID,
-        query: String,
-        transcript: [TranscriptEntry]?,
-        codex: CodexTaskState?,
-        search: () -> Bool
-    ) -> Bool {
+    /// Whether `id`'s conversation holds `query`, trimmed and not empty. The caller observes the answers,
+    /// not the conversation.
+    func matches(_ id: SessionRecord.ID, query: String) -> Bool {
+        registrar.access(self, keyPath: \.answers)
         if query != self.query {
             self.query = query
             results.removeAll()
         }
-        if let kept = results[id], kept.transcript == transcript, kept.codex == codex { return kept.matches }
-        let matches = search()
-        results[id] = Result(transcript: transcript, codex: codex, matches: matches)
-        return matches
+        if let kept = results[id] { return kept.matches }
+        let conversation = read(id)
+        var result = Result()
+        (result.entries, result.entryMatch) = search(conversation.transcript ?? [], after: nil, change: .unknown)
+        (result.turns, result.turnMatch) = search(conversation.codex?.thread?.turns ?? [], after: nil)
+        results[id] = result
+        return result.matches
+    }
+
+    /// `id`'s transcript was set; `change` says what became of the entries searched.
+    func transcriptChanged(_ id: SessionRecord.ID, change: TranscriptChange) {
+        guard var result = results[id] else { return }
+        let before = result.matches
+        (result.entries, result.entryMatch) = search(read(id).transcript ?? [],
+                                                     after: (result.entries, result.entryMatch), change: change)
+        settle(result, for: id, matchedBefore: before)
+    }
+
+    /// `id`'s Codex state was set.
+    func codexStateChanged(_ id: SessionRecord.ID) {
+        guard var result = results[id] else { return }
+        let before = result.matches
+        (result.turns, result.turnMatch) = search(read(id).codex?.thread?.turns ?? [],
+                                                  after: (result.turns, result.turnMatch))
+        settle(result, for: id, matchedBefore: before)
     }
 
     /// Lets the conversations go once there is no search.
     func clear() {
         query = ""
         results.removeAll()
+    }
+
+    private func settle(_ result: Result, for id: SessionRecord.ID, matchedBefore: Bool) {
+        results[id] = result
+        guard result.matches != matchedBefore else { return }
+        registrar.withMutation(of: self, keyPath: \.answers) { answers &+= 1 }
+    }
+
+    /// The first entry of `entries` that holds the search, from the first one `change` did not keep of
+    /// the entries searched before.
+    private func search(
+        _ entries: [TranscriptEntry], after earlier: ([TranscriptEntry], Int?)?, change: TranscriptChange
+    ) -> ([TranscriptEntry], Int?) {
+        var start = 0
+        if let (searched, match) = earlier {
+            if let match, match - change.dropped >= 0, match - change.dropped < change.kept {
+                return (entries, match - change.dropped)
+            }
+            start = max(0, min((match ?? searched.count) - change.dropped, change.kept, entries.count))
+        }
+        let query = query
+        return (entries, entries[start...].firstIndex { TaskNavigationProjection.transcriptEntry($0, contains: query) })
+    }
+
+    /// The first turn of `turns` that holds the search, from the first one that is not as it was searched.
+    private func search(_ turns: [CodexTurnState], after earlier: ([CodexTurnState], Int?)?) -> ([CodexTurnState], Int?) {
+        var start = 0
+        if let (searched, match) = earlier {
+            if let match, match < turns.count, turns[match] == searched[match] { return (turns, match) }
+            let clean = min(match ?? searched.count, turns.count)
+            while start < clean, turns[start] == searched[start] { start += 1 }
+        }
+        let query = query
+        return (turns, turns[start...].firstIndex { CodexHistorySearchProjection.contains(in: $0, trimmedQuery: query) })
     }
 }
 

@@ -20,12 +20,13 @@ final class TranscriptTurnsCache {
     }
 
     /// `id`'s transcript was set: by a publication, which said what it changed, or by anything else,
-    /// which says nothing.
-    func transcriptChanged(_ id: UUID) {
+    /// which says nothing. Returns what the setting changed, for others that keep what they read of it.
+    @discardableResult
+    func transcriptChanged(_ id: UUID) -> TranscriptChange {
         let change = publishing?.id == id ? publishing?.change ?? .unknown : .unknown
         publishing = nil
-        guard let earlier = kept[id] else { return }
-        kept[id]?.change = earlier.change.then(change)
+        if let earlier = kept[id] { kept[id]?.change = earlier.change.then(change) }
+        return change
     }
 
     /// The turns of `entries`, `id`'s transcript as it is now.
