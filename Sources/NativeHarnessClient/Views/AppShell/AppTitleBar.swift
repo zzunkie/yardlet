@@ -60,7 +60,7 @@ struct TitleBarTabs {
 
 /// The title bar beside the sidebar: the header of the item the tab shows, with the window's tabs when it
 /// has two or more. For one task it is the task's header (its title, which opens its actions, harness,
-/// pull request, state, and the rail, terminal and side panel buttons); for a split view the split
+/// pull request, state, and the find, rail, terminal and side panel buttons); for a split view the split
 /// view's name and actions, its tasks' headers being in their panes; for the new-task screen its panel
 /// buttons. A task's area draws it over its conversation (`TaskAreaHeader`), so a side panel beside the
 /// conversation reaches the window's top with its tabs in this row.
@@ -97,6 +97,8 @@ struct IntegratedTitleBar: View {
     /// The ports the task's processes listen on, after its pull request (`TaskHeaderActions.servers`).
     var servers: (SessionRecord) -> [TaskServerPort] = { _ in [] }
     var onOpenServer: (SessionRecord, TaskServerPort) -> Void = { _, _ in }
+    /// The task's find in its conversation, for the header's Find button.
+    var conversationFind: ConversationFindModel? = nil
     /// The split view the window shows, whose name opens its actions in its window tab. The title bar
     /// stands over a split view only for the window's tabs: each pane's header heads its task.
     var splitTitle: SplitViewTitleMenu? = nil
@@ -224,7 +226,8 @@ struct IntegratedTitleBar: View {
         if let session {
             TaskSurfaceControls(showsSessionRail: sessionRail?.visibility.isOnScreen(session.id) ?? showsSessionRail,
                                 onToggleSessionRail: onToggleSessionRail,
-                                panelState: $panelState, focusedSurface: focusedSurface, isFolded: isFolded)
+                                panelState: $panelState, focusedSurface: focusedSurface, isFolded: isFolded,
+                                find: conversationFind)
                 // Native shortcut registrations must release the previous task's binding.
                 .id(session.id)
         } else if let draftPanels {

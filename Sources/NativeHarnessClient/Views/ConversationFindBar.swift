@@ -138,7 +138,7 @@ struct ConversationFindBar: View {
     }
 
     private func close() {
-        if !find.close() { keyboardFocus?.move(to: .chat) }
+        find.close(fallingBackTo: keyboardFocus)
     }
 
     private func iconButton(_ systemName: String, label: String, shortcut: KeyboardShortcut? = nil,
