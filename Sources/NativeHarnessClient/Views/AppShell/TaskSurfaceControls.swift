@@ -14,7 +14,7 @@ extension TaskSurface {
 /// The symbols of a task header's panel buttons, which the command palette's items for the same panels
 /// share. The terminal's is the one its tab and pane show.
 enum TaskPanelSymbol {
-    static let sessionRail = "checklist"
+    static let sessionRail = "list.bullet.rectangle"
     static let terminal = "terminal"
     static let sidePanel = "sidebar.right"
 }
