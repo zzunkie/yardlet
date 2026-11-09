@@ -622,6 +622,32 @@ final class ScheduleToolTests: XCTestCase {
         XCTAssertFalse(other.isError, other.text)
         XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id))
         await model.shutdown()
+
+        // A run that only continued a task leaves it the person's. The task that made a schedule continuing
+        // itself, which now starts new tasks, asks nothing more (a run kept before runs said which they did),
+        // and a run keeps what it did when the schedule's runs go elsewhere later.
+        let ownID = UUID(), runID = UUID()
+        var moved = ScheduledTask(name: "Check in", prompt: "Go.", trigger: .daily(ScheduleTime(hour: 12, minute: 0)),
+                                  destination: ScheduleDestination(harness: .codex), createdAt: date(16),
+                                  agentTaskID: ownID)
+        moved.destination.parentTaskID = ownID
+        moved.state.runs = [ScheduledTaskRun(slot: date(17, 12), at: date(17, 12), trigger: .scheduled,
+                                             outcome: .started, taskID: ownID)]
+        let own = try Fixture(root: root.appending(path: "own"), calendar: seoul, now: date(17, 20),
+                              claudeMode: "bypassPermissions", claudeID: ownID,
+                              repository: InMemoryScheduledTaskRepository(snapshot: ScheduleSnapshot(schedules: [moved])))
+        XCTAssertNil(own.model.scheduleThatStarted(ownID))
+        XCTAssertFalse(own.model.scheduledTasks.scheduledTaskIDs.contains(ownID))
+        let made = await call(own.model, "create_scheduled_task", arguments, from: own.claude)
+        XCTAssertFalse(made.isError, made.text)
+        XCTAssertTrue(own.model.approvalsAreEmpty(in: ownID))
+        await own.model.shutdown()
+        moved.destination = ScheduleDestination(mode: .continueTask, harness: .claudeCode)
+        moved.destination.targetTaskID = ownID
+        moved.state.runs.insert(ScheduledTaskRun(at: date(18, 12), trigger: .manual, outcome: .started, taskID: runID,
+                                                 mode: .newTask), at: 0)
+        XCTAssertTrue(moved.startedTask(runID))
+        XCTAssertFalse(moved.startedTask(ownID))
     }
 
     private func waitForApproval(in taskID: UUID, model: AppModel) async throws -> SessionToolApproval {

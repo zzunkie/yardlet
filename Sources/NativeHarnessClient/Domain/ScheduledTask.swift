@@ -57,6 +57,24 @@ struct ScheduledTask: Codable, Identifiable, Equatable, Sendable {
         state.runs.first { $0.outcome == .started && $0.taskID != nil }
     }
 
+    /// Whether the run started a task of its own, rather than sending the next message of a task that was
+    /// already there. A run keeps where it went (`ScheduledTaskRun.mode`), since the schedule may send its
+    /// runs elsewhere later. A run kept before that is read from where the runs go now, except that a task
+    /// new runs nest under was not started by one of them (an agent's schedule that continued its own task
+    /// and now starts new ones nests them under that task), and a run that continued a task went to the task
+    /// the schedule continues.
+    func startedNewTask(_ run: ScheduledTaskRun) -> Bool {
+        guard run.outcome == .started, let taskID = run.taskID else { return false }
+        if let mode = run.mode { return mode == .newTask }
+        return taskID != destination.parentTaskID
+            && (destination.mode == .newTask || taskID != destination.targetTaskID)
+    }
+
+    /// Whether one of its runs started this task as a task of its own.
+    func startedTask(_ taskID: UUID) -> Bool {
+        state.runs.contains { $0.taskID == taskID && startedNewTask($0) }
+    }
+
     /// It turned itself off without doing its work: its runs kept failing to start, or a one-off's
     /// time passed while it could not run. A schedule the person paused, or a one-off that ran, did not.
     var hasStoppedItself: Bool {
@@ -188,6 +206,9 @@ struct ScheduledTaskRun: Codable, Equatable, Identifiable, Sendable {
     var failure: String?
     /// The task it started or continued.
     var taskID: UUID?
+    /// Whether it started that task or continued it, as the schedule said when it ran; nil in a run
+    /// kept before this was (`ScheduledTask.startedNewTask`).
+    var mode: ScheduleDestination.Mode?
     /// The account it went to instead of the schedule's or the task's own, which was nearly spent.
     var account: AccountAssignment?
 }

@@ -42,12 +42,10 @@ extension AppModel: ScheduleToolHandling {
 
     // MARK: - From a scheduled run
 
-    /// The schedule whose run started this task as a new task, if one did.
+    /// The schedule whose run started this task as a new task, if one did. A task a run only continued, such
+    /// as the one that made a schedule continuing it, is the person's own and is not asked more for it.
     func scheduleThatStarted(_ taskID: UUID) -> ScheduledTask? {
-        scheduledTasks.schedules.first { schedule in
-            schedule.destination.mode == .newTask
-                && schedule.state.runs.contains { $0.outcome == .started && $0.taskID == taskID }
-        }
+        scheduledTasks.schedule(startedTask: taskID)
     }
 
     /// Why a change from a task a schedule started may not go ahead, or nil. As the Claude app refuses
