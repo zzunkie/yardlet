@@ -118,6 +118,38 @@ final class HarnessModelCatalogStore {
         Self.preferred(codex, scope: Self.scope(for: connection))
     }
 
+    /// Whether a task on `model` can run on this account, by the lists the harness reported for each
+    /// account: a plan that does not offer a model leaves it out of its list (Claude Code lists Mythos
+    /// only to the plans that have it). False when the account's own list leaves out a model another
+    /// account's list names. Nil when Yardlet cannot tell: no model is named, the account has not
+    /// reported a list of its own yet, or no list names the model (an alias or an ID the CLI resolves
+    /// itself). Antigravity CLI has one sign-in, so there is nothing to compare.
+    func offers(_ model: String?, harness: HarnessKind, connection: ProviderConnection?) -> Bool? {
+        guard let wanted = model.map(Self.comparableModel), !wanted.isEmpty else { return nil }
+        let scope = Self.scope(for: connection)
+        return switch harness {
+        case .claudeCode: Self.offers(wanted, in: claude, scope: scope) { [$0.value, $0.resolvedModel] }
+        case .codex: Self.offers(wanted, in: codex, scope: scope) { [$0.model, $0.id] }
+        default: nil
+        }
+    }
+
+    private static func offers<Option>(_ wanted: String, in lists: [String: [Option]], scope: String,
+                                       names: (Option) -> [String?]) -> Bool? {
+        func namesModel(_ list: [Option]) -> Bool {
+            list.contains { option in names(option).contains { $0.map(comparableModel) == wanted } }
+        }
+        guard let own = lists[scope] else { return nil }
+        if namesModel(own) { return true }
+        return lists.values.contains(where: namesModel) ? false : nil
+    }
+
+    /// A model's name as lists compare it; Claude Code's `[1m]` names the same model with a longer window.
+    private static func comparableModel(_ name: String) -> String {
+        let model = name.trimmingCharacters(in: .whitespaces).lowercased()
+        return model.hasSuffix("[1m]") ? String(model.dropLast(4)) : model
+    }
+
     func recordClaude(_ models: [HarnessModelOption], for connection: ProviderConnection?) {
         let scope = Self.scope(for: connection)
         guard !models.isEmpty, claude[scope] != models else { return }

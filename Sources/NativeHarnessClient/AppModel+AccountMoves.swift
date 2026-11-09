@@ -253,11 +253,7 @@ extension AppModel {
     /// room (or no reading yet). Nil when none has.
     func accountWithRoom(for task: SessionRecord, now: Date) -> AccountStart? {
         let model = Self.modelOption(task.providerOptions, harness: task.harness)
-        let newTaskAccount = connections.selected(for: task.harness)?.id
-        let candidates = automaticMoveTargets(for: task).map {
-            AccountRouting.Candidate(choice: $0, runningTasks: tasksRunning(on: $0.connection, harness: task.harness),
-                                     isNewTaskAccount: $0.connection?.id == newTaskAccount)
-        }
+        let candidates = automaticMoveTargets(for: task).map { routingCandidate($0, harness: task.harness, model: model) }
         guard let pick = AccountRouting.pick(candidates, model: model, now: now), pick.basis != .nearlySpent,
               pick.choice.connection != nil else { return nil }
         return AccountStart(connection: pick.choice.connection, assignment: AccountAssignment(

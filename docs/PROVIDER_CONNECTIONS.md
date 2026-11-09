@@ -338,7 +338,8 @@ Claude Code reports them.
 Claude Code account is saved besides the default login) lets Claude Code tasks leave an account that is nearly out of
 its limit on their own. Only Claude Code tasks move, to the accounts Continue with another account offers them
 (`TaskAccountSwitch`) that automatic assignment may use and that are signed in, and only when `AccountRouting.pick`
-picks one with room (`AppModel.accountWithRoom`); the provider session, scope and history stay.
+picks one with room that offers the task's model (`AppModel.accountWithRoom`); the provider session, scope and history
+stay. A task on a model only its own plan offers therefore waits for its reset as one with no room elsewhere does.
 
 What a move costs decides when one happens. Claude Code asks for a prompt cache that lives an hour after a
 conversation's last request (`AccountRouting.promptCacheLifetime`), and caches are kept per account; only Claude

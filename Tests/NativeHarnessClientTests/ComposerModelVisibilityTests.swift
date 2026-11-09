@@ -88,6 +88,19 @@ final class ComposerModelVisibilityTests: XCTestCase {
         XCTAssertEqual(reopened.claudeModels(for: nil), ModelVisibilityFixtures.claudeModels)
         XCTAssertEqual(reopened.claudeModels(for: account), ModelVisibilityFixtures.claudeModels, "Another account's list stands in")
         XCTAssertEqual(reopened.codexModels(for: nil).map(\.model), ["gpt-test"])
+
+        // A list that stands in for the menu says nothing of what the account offers: automatic assignment
+        // goes by each account's own list, and leaves alone a model no list names.
+        XCTAssertNil(reopened.offers("opus", harness: .claudeCode, connection: account), "No list of its own yet")
+        XCTAssertEqual(reopened.offers("opus", harness: .claudeCode, connection: nil), true)
+        let team = ProviderConnection(id: "team", name: "team@example.test", harness: .claudeCode,
+                                      providerID: nil, homePath: root.path, credentialSelector: nil)
+        reopened.recordClaude([.init(value: "opus", name: "Opus", resolvedModel: "claude-opus-5-5"),
+                               .init(value: "claude-mythos-5-1", name: "Mythos 5.1")], for: team)
+        XCTAssertEqual(reopened.offers("claude-mythos-5-1", harness: .claudeCode, connection: nil), false)
+        XCTAssertEqual(reopened.offers("Claude-Mythos-5-1[1m]", harness: .claudeCode, connection: team), true)
+        XCTAssertEqual(reopened.offers("claude-opus-5-5", harness: .claudeCode, connection: team), true, "The ID its alias resolves to")
+        XCTAssertNil(reopened.offers("claude-opus-4-1", harness: .claudeCode, connection: nil), "No list names it")
     }
 
     // MARK: Claude Code before it connects

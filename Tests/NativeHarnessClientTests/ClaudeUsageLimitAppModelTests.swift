@@ -318,19 +318,29 @@ import XCTest
     }
 
     /// A limit that resets before the task's cache expires keeps the task where it is, armed to
-    /// continue at the reset, as is one with no account with room to go to; turning the setting off
-    /// disarms what it armed and leaves the card as it was. The default continue is off here, so the
-    /// move's own wait is the one armed.
+    /// continue at the reset, as is one with no account with room to go to, or with room only on an
+    /// account whose model list leaves out the task's model (a model only the task's plan offers);
+    /// turning the setting off disarms what it armed and leaves the card as it was. The default
+    /// continue is off here, so the move's own wait is the one armed.
     func testALimitThatResetsBeforeTheCacheExpiresWaitsForTheReset() async throws {
-        for roomElsewhere in [true, false] {
+        let cases: [(nextUsed: Double, resetsIn: TimeInterval, taskModel: String?)] = [
+            (0.2, 20 * 60, nil), (0.95, 2 * 3_600, nil), (0.2, 2 * 3_600, "claude-mythos-5-1")
+        ]
+        for (nextUsed, resetsIn, taskModel) in cases {
             let fixture = try makeFixture()
             let model = fixture.model
             fixture.defaults.set(false, forKey: UsageLimitAutoContinuePreference.key)
             read(fixture.first, used: 0.5, in: model)
-            read(fixture.next, used: roomElsewhere ? 0.2 : 0.95, in: model)
+            read(fixture.next, used: nextUsed, in: model)
+            if let taskModel {
+                let opus = HarnessModelOption(value: "opus", name: "Opus")
+                model.modelCatalogs.recordClaude([opus, HarnessModelOption(value: taskModel, name: taskModel)], for: fixture.first)
+                model.modelCatalogs.recordClaude([opus], for: fixture.next)
+            }
             model.startAccountMoves()
-            let resetsAt = Date().addingTimeInterval(roomElsewhere ? 20 * 60 : 2 * 3_600)
-            let task = try await limitedTask(in: fixture, resetsAt: resetsAt)
+            let resetsAt = Date().addingTimeInterval(resetsIn)
+            let task = try await limitedTask(in: fixture, resetsAt: resetsAt,
+                                             options: taskModel.map { [ClaudeLaunchOption.model: $0] } ?? [:])
             let card = try await waitForLimitCard(in: model, task: task)
 
             try await waitUntil { model.usageLimitAutoContinue[task.id]?.waits(for: resetsAt) == true }
@@ -545,10 +555,10 @@ import XCTest
             first: connection(first), next: connection(next), signedOut: connection(signedOut), transports: transports)
     }
 
-    private func limitedTask(in fixture: Fixture, resetsAt: Date = Date().addingTimeInterval(3_600)) async throws
-        -> SessionRecord {
+    private func limitedTask(in fixture: Fixture, resetsAt: Date = Date().addingTimeInterval(3_600),
+                             options: [String: String] = [:]) async throws -> SessionRecord {
         let created = await fixture.model.createSession(harness: .claudeCode, workspaceURL: fixture.shared,
-            runtimeExecutableURL: fixture.cli, title: "Limit", connection: fixture.first)
+            runtimeExecutableURL: fixture.cli, title: "Limit", connection: fixture.first, providerOptions: options)
         _ = try XCTUnwrap(created, fixture.model.errorBySessionID.values.first ?? "Missing task")
         let transport = try XCTUnwrap(fixture.transports.all.first)
         for frame in limitFrames(resetsAt: resetsAt) { await transport.emit(frame) }

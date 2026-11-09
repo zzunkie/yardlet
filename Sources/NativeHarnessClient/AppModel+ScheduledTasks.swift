@@ -69,7 +69,7 @@ extension AppModel {
             let account = await accountReplacing(
                 submission.connection, harness: harness,
                 model: Self.modelOption(submission.providerOptions, harness: harness)) {
-                automaticAssignmentCandidates(harness: harness).map(\.choice)
+                automaticAssignmentCandidates(harness: harness, model: nil).map(\.choice)
             }
             if let account { submission.connection = account.connection }
             let previousError = bootstrapError

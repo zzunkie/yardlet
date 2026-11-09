@@ -64,6 +64,10 @@ started under a Claude account folder whose `projects` links to the default `~/.
 account folders do, therefore stays in the same history whichever account it uses, and the account switch above still
 works for it. A Codex, Kimi Code or Grok Build sign-in in a separate folder (`CODEX_HOME`, `KIMI_CODE_HOME`,
 `GROK_HOME`) has its own history, so it is not used until the person includes it. An account whose tasks are moving to another of its folders before it leaves the list is not used either.
+Of those, only an account that offers the task's model is picked: one whose own model list, as its CLI last reported
+it, leaves out a model another account's list names is passed over however much room it has (see
+[AGENT_BROWSER_TOOLS.md](AGENT_BROWSER_TOOLS.md), "Models one plan offers"); a schedule's run and a task moving off a
+spent account then keep their account rather than go to one that would refuse the model.
 No authentication or history files are copied and no account folder changes. The reason for each
 assignment is kept in the Yardlet file `~/.yardlet/account-assignments.json` (task ID → account ID, window and time).
 Assignment stays within the harness: when every account is nearly out, an agent's tool result names the other harnesses
