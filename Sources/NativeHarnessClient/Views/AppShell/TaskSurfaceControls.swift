@@ -11,6 +11,28 @@ extension TaskSurface {
     }
 }
 
+/// A header button's symbol on the selected fill while its panel shows, and on the hover fill under the
+/// pointer, as the title bar's other buttons (`ParityIconButton`) answer the pointer.
+private struct TaskSurfaceButtonLabel: View {
+    let symbol: String
+    let isActive: Bool
+    @State private var isHovering = false
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: 12))
+            .foregroundStyle(isActive ? Color.primary : Color.secondary)
+            .frame(minWidth: 28, minHeight: 28)
+            .background(isActive ? ParityTheme.selectedFill : (isHovering && isEnabled ? ParityTheme.hoverFill : .clear),
+                        in: RoundedRectangle(cornerRadius: 7))
+            .contentShape(Rectangle())
+            .onHover { isHovering = $0 }
+            .animation(ParityMotion.easeOut(reduceMotion: reduceMotion, duration: 0.1), value: isHovering)
+    }
+}
+
 /// The symbols of a task header's panel buttons, which the command palette's items for the same panels
 /// share. The terminal's is the one its tab and pane show.
 enum TaskPanelSymbol {
@@ -124,12 +146,7 @@ struct TaskSurfaceControls: View {
     }
 
     private func label(_ symbol: String, isActive: Bool) -> some View {
-        Image(systemName: symbol)
-            .font(.system(size: 12))
-            .foregroundStyle(isActive ? Color.primary : Color.secondary)
-            .frame(minWidth: 28, minHeight: 28)
-            .background(isActive ? ParityTheme.selectedFill : .clear, in: RoundedRectangle(cornerRadius: 7))
-            .contentShape(Rectangle())
+        TaskSurfaceButtonLabel(symbol: symbol, isActive: isActive)
     }
 
     /// The Claude app's overflow menu for a narrow header: the same buttons, by their titles.

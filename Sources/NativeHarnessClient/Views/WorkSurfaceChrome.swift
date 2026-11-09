@@ -159,6 +159,11 @@ enum WorkSurfacePanelKind: Sendable {
         self == .terminal ? TaskCommandTitle.terminal(isShown: true) : TaskCommandTitle.sidePanel(isShown: true)
     }
 
+    /// The title bar's toggle for the same panel, so the button does not read as the shown tab's ✕ beside it.
+    var symbol: String {
+        self == .terminal ? TaskPanelSymbol.terminal : TaskPanelSymbol.sidePanel
+    }
+
     var shortcut: KeyboardShortcut? {
         switch self {
         case .taskSidePanel: TaskCommandShortcut.toggleSidePanel
@@ -207,7 +212,7 @@ struct WorkSurfacePanelControls: View {
                 ) { expansion.wrappedValue.toggle() }
             }
             if let kind {
-                ParityIconButton(systemName: "xmark", help: kind.title, shortcut: kind.shortcut, action: onClose)
+                ParityIconButton(systemName: kind.symbol, help: kind.title, shortcut: kind.shortcut, action: onClose)
             } else {
                 ParityIconButton(systemName: "xmark", help: L10n.string("Close panel"), action: onClose)
             }
