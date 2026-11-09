@@ -24,6 +24,9 @@ work=${work:A}
 command -v git-lfs >/dev/null || { print -u2 "error: git-lfs is not on PATH (brew install git-lfs)"; exit 1; }
 xcodebuild -showComponent MetalToolchain 2>/dev/null | grep -q "Status: installed" ||
     { print -u2 "error: Xcode's Metal Toolchain is missing (xcodebuild -downloadComponent MetalToolchain)"; exit 1; }
+# The build takes every core for hours: wait for the heavy-build lock the other builds share
+# (scripts/heavy-lock.sh), so they wait for it in turn.
+source "${0:A:h}/heavy-lock.sh" && take_heavy_lock "${0:A}" "$@"
 
 cef_branch=8037
 cef_commit=564dd6c4aafff558154bd3176eb5d13551db6734

@@ -268,8 +268,18 @@ On toolchains that default to Swift Build, use `swift test --build-system native
 pipeline. Set `YARDLET_BUILD_SYSTEM` to override the engine used by the bundle script.
 
 For small changes, `./scripts/test-fast.sh` runs every test except the windowless renders, QA
-fixtures and performance runs, in four parallel processes (about 5 minutes; the whole suite takes
-about 15 minutes serially). Run the whole suite before a release.
+fixtures and performance runs (about 3 minutes after the build; the whole suite takes about 15
+minutes serially). It runs XCTest's tests in batches of up to 64, each batch in one xctest process
+and four processes at a time (`scripts/xctest-batches.py`), where `swift test --parallel` would
+start a process for every test. A test whose process crashes fails, and the rest of its batch runs
+again in a new process. Run the whole suite before a release.
+
+`scripts/test-fast.sh`, `scripts/build-app.sh`, `scripts/build-cef.sh` and the performance bench
+first wait for a lock that every checkout on the Mac shares, `~/Library/Caches/yardlet-heavy-build.lock`,
+so builds and test runs started together take turns instead of running side by side, and all but
+the bench run at low priority while they hold it (`scripts/heavy-lock.sh`). CI does not wait. To take turns
+with them, run a build of your own the same way:
+`nice -n 10 /usr/bin/lockf -t 21600 ~/Library/Caches/yardlet-heavy-build.lock swift build --build-system native`.
 
 `./scripts/perf-bench/run.sh --build` runs the performance bench: fixed scenes of the whole app (launch,
 idle, streaming, a long Codex history, a long sidebar, browser tabs) in a QA copy off the screen, and the

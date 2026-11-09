@@ -1,6 +1,8 @@
 #!/bin/zsh
 
 set -euo pipefail
+# On a Mac, wait for the heavy-build lock that builds, tests and the bench share (scripts/heavy-lock.sh).
+source "${0:A:h}/heavy-lock.sh" && take_heavy_lock "${0:A}" "$@"
 
 PROJECT_ROOT=${0:A:h:h}
 CONFIGURATION=${1:-debug}
