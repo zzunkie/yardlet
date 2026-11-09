@@ -1,12 +1,12 @@
 # Engine portability
 
 Yardlet runs on macOS. Windows is in progress: the engine is kept in cross-platform Swift, and each platform gets its
-own screens. The engine builds on its own on macOS, Linux and Windows, and the Windows app, the engine with WinUI 3
-screens, builds and opens its window on Windows ("The Windows app" below), follows another computer's Yardlet
-over the remote protocol, and finds, starts and ends harness CLIs by Windows' rules; its window does not start a
-task of its own yet. For
-dependencies and Foundation behavior on Windows, what was checked in the official source or a build is marked
-"confirmed"; the rest is "not confirmed".
+own screens. The engine builds on its own on macOS, Linux and Windows. The Windows app, the engine with WinUI 3
+screens ("The Windows app" below), builds and opens its window on Windows, finds, starts and ends harness CLIs by
+Windows' rules, starts tasks of its own as chats with them and reads their saved history, follows another computer's
+Yardlet over the remote protocol, and serves its own tasks to other devices from Settings › Remote; what it does not
+have yet is listed at the end of that section. For dependencies and Foundation behavior on Windows, what was checked
+in the official source or a build is marked "confirmed"; the rest is "not confirmed".
 
 ## Engine and platform layers
 
