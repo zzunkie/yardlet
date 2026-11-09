@@ -98,19 +98,9 @@ enum LoginShellPath {
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        let exited = AsyncStream<Void>.makeStream()
-        process.terminationHandler = { _ in exited.continuation.finish() }
-        do { try NativeProcessTree.run(process) } catch { return Reading() }
-        let finished = await withTaskGroup(of: Bool.self) { group in
-            group.addTask { for await _ in exited.stream {}; return true }
-            group.addTask {
-                try? await Task.sleep(for: timeout)
-                return false
-            }
-            defer { group.cancelAll() }
-            return await group.next() ?? false
-        }
-        guard finished else {
+        let exit: ProcessExit
+        do { exit = try ProcessExit(running: process) } catch { return Reading() }
+        guard await exit.wait(timeout: timeout) else {
             NativeProcessTree.terminate(process: process)
             return Reading()
         }

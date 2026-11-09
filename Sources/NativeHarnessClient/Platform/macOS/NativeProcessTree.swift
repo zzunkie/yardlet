@@ -49,9 +49,9 @@ enum NativeProcessTree {
         let rootPID = process.processIdentifier
         let descendants = descendantProcessIDs(of: rootPID)
         signalTermination(rootPID: rootPID, descendants: descendants)
-        // waitUntilExit can wait on the wrong thread's run loop after an async
-        // executor hop, even once the child has gone. Let Foundation reap it on
-        // its own queue while bounding the caller's wait. -1 means unconfirmed.
+        // Not `waitUntilExit`, which depends on a run loop (`ProcessExit`): Foundation
+        // reaps the child on its own queue while the caller's wait is bounded.
+        // -1 means unconfirmed.
         let deadline = ContinuousClock.now + .seconds(2)
         while process.isRunning, ContinuousClock.now < deadline {
             Darwin.usleep(10_000)

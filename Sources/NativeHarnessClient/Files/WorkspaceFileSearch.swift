@@ -56,7 +56,8 @@ enum WorkspaceFileListing {
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
-        do { try NativeProcessTree.run(process) } catch { return nil }
+        let exit: ProcessExit
+        do { exit = try ProcessExit(running: process) } catch { return nil }
         // Apple's Git can block while resolving a folder outside the app's file access.
         let watchdog = DispatchWorkItem { if process.isRunning { NativeProcessTree.terminate(process: process) } }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
@@ -68,8 +69,8 @@ enum WorkspaceFileListing {
         }
         let isTruncated = data.count >= gitOutputLimit
         if isTruncated, process.isRunning { process.terminate() }
-        process.waitUntilExit()
-        guard isTruncated || (process.terminationReason == .exit && process.terminationStatus == 0) else { return nil }
+        let ended = exit.waitBlockingThread(timeout: .seconds(timeout + 2))
+        guard isTruncated || (ended && process.terminationReason == .exit && process.terminationStatus == 0) else { return nil }
         var entries = data.split(separator: 0, omittingEmptySubsequences: true)
         if isTruncated, data.last != 0 { entries.removeLast() }
         return entries.prefix(fileLimit).map { String(decoding: $0, as: UTF8.self) }

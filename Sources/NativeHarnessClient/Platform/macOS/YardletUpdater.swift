@@ -114,9 +114,13 @@ enum YardletUpdater {
         let pipe = Pipe()
         process.standardOutput = stream == .output ? pipe : FileHandle.nullDevice
         process.standardError = stream == .error ? pipe : FileHandle.nullDevice
-        try process.run()
+        let exit = try ProcessExit(running: process)
         let data = stream == .none ? Data() : pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        // Verifying a whole bundle takes seconds; one that has not ended in minutes counts as failed.
+        guard exit.waitBlockingThread(timeout: .seconds(300)) else {
+            NativeProcessTree.terminate(process: process)
+            return (-1, String(decoding: data, as: UTF8.self))
+        }
         return (process.terminationStatus, String(decoding: data, as: UTF8.self))
     }
 

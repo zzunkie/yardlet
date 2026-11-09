@@ -651,22 +651,6 @@ actor PiRPCAdapter: HarnessAdapter, ProviderCapabilityProviding, HarnessWorkspac
     }
 
     private func readVersion() throws -> String {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = executableURL
-        process.arguments = ["--version"]
-        process.standardOutput = pipe
-        process.standardError = pipe
-        try NativeProcessTree.run(process)
-        process.waitUntilExit()
-        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard process.terminationStatus == 0 else {
-            throw HarnessAdapterError.processExited(
-                code: process.terminationStatus,
-                message: output
-            )
-        }
-        return output
+        try HarnessRuntimeVersionProbe.output(executableURL: executableURL, inheritsAppEnvironment: true)
     }
 }

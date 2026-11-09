@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+import os
 import SwiftTerm
 import XCTest
 @testable import NativeHarnessClient
@@ -284,6 +285,57 @@ final class NativeSurfaceRuntimeTests: XCTestCase {
         errno = 0
         XCTAssertEqual(Darwin.kill(descendantPID, 0), -1)
         XCTAssertEqual(errno, ESRCH)
+    }
+
+    /// Waiting for a child holds no thread. More waits than the concurrency pool has threads all
+    /// start while every child still runs, each returns once its child has ended, with the exit
+    /// status readable, and nothing keeps a core busy afterwards.
+    func testWaitingForChildProcessesHoldsNoThreadAndEndsWithThem() async throws {
+        let count = ProcessInfo.processInfo.activeProcessorCount * 2 + 2
+        var processes: [Process] = []
+        var inputs: [Pipe] = []
+        var exits: [ProcessExit] = []
+        defer { for process in processes where process.isRunning { NativeProcessTree.terminate(process: process) } }
+        for _ in 0..<count {
+            // `cat` runs until its input closes, so the test decides when each child ends.
+            let process = Process()
+            let input = Pipe()
+            process.executableURL = URL(filePath: "/bin/cat")
+            process.standardInput = input
+            process.standardOutput = FileHandle.nullDevice
+            exits.append(try ProcessExit(running: process))
+            processes.append(process)
+            inputs.append(input)
+        }
+
+        let waiting = OSAllocatedUnfairLock(initialState: 0)
+        let waits = exits.map { exit in
+            Task.detached {
+                waiting.withLock { $0 += 1 }
+                return await exit.wait(timeout: testWaitLimit)
+            }
+        }
+        try await waitUntil { waiting.withLock { $0 } == count }
+        let endedEarly = await exits[0].wait(timeout: .milliseconds(50))
+        XCTAssertFalse(endedEarly)
+        XCTAssertTrue(processes.allSatisfy(\.isRunning))
+
+        for input in inputs { try input.fileHandleForWriting.close() }
+        for (wait, process) in zip(waits, processes) {
+            let ended = await wait.value
+            XCTAssertTrue(ended)
+            XCTAssertFalse(process.isRunning)
+            XCTAssertEqual(process.terminationStatus, 0)
+        }
+
+        func cpuSeconds() -> Double {
+            var usage = rusage()
+            getrusage(RUSAGE_SELF, &usage)
+            return [usage.ru_utime, usage.ru_stime].reduce(0) { $0 + Double($1.tv_sec) + Double($1.tv_usec) / 1e6 }
+        }
+        let before = cpuSeconds()
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertLessThan(cpuSeconds() - before, 0.5)
     }
 
     private func runGit(_ arguments: [String], in directory: URL) throws {

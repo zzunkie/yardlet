@@ -77,20 +77,27 @@ extension HarnessRuntimeCompatibility {
 /// Runs `<runtime> --version` and returns its trimmed output. No home, account, or thread is
 /// touched, and no model turn is started.
 enum HarnessRuntimeVersionProbe {
-    static func output(executableURL: URL) throws -> String {
+    /// The CLI runs with the environment every other run of the runtime has: a CLI installed as a Node
+    /// script (npm's `claude` and `codex`) finds `node` beside it or on the login shell's `PATH`, not in
+    /// launchd's. `inheritsAppEnvironment` gives it the app's own instead, for an adapter whose
+    /// version check has always run that way.
+    static func output(executableURL: URL, inheritsAppEnvironment: Bool = false) throws -> String {
         let process = Process()
         let pipe = Pipe()
         process.executableURL = executableURL
         process.arguments = ["--version"]
-        // As every other run of the runtime: a CLI installed as a Node script (npm's `claude` and
-        // `codex`) finds `node` beside it or on the login shell's `PATH`, not in launchd's.
-        process.environment = RuntimeProcessEnvironment.values(executableURL: executableURL)
+        if !inheritsAppEnvironment {
+            process.environment = RuntimeProcessEnvironment.values(executableURL: executableURL)
+        }
         process.standardOutput = pipe
         process.standardError = pipe
-        try NativeProcessTree.run(process)
-        process.waitUntilExit()
+        let exit = try ProcessExit(running: process)
         let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard exit.waitBlockingThread(timeout: .seconds(10)) else {
+            NativeProcessTree.terminate(process: process)
+            throw HarnessAdapterError.processExited(code: -1, message: output)
+        }
         guard process.terminationStatus == 0 else {
             throw HarnessAdapterError.processExited(
                 code: process.terminationStatus,
