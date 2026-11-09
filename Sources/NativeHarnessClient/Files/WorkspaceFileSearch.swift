@@ -83,8 +83,6 @@ enum WorkspaceFileListing {
                 at: root, includingPropertiesForKeys: Array(keys),
                 options: [.skipsPackageDescendants], errorHandler: { _, _ in true }
               ) else { return nil }
-        let base = root.path(percentEncoded: false)
-        let prefix = base.hasSuffix("/") ? base : base + "/"
         var files: [String] = []
         var visited = 0
         while let url = enumerator.nextObject() as? URL, files.count < limit {
@@ -94,9 +92,8 @@ enum WorkspaceFileListing {
                 if skippedDirectories.contains(url.lastPathComponent) { enumerator.skipDescendants() }
                 continue
             }
-            let path = url.standardizedFileURL.path(percentEncoded: false)
-            guard path.hasPrefix(prefix), path.count > prefix.count else { continue }
-            files.append(String(path.dropFirst(prefix.count)))
+            guard let path = PathRules.current.relativePath(of: url.standardizedFileURL, in: root), !path.isEmpty else { continue }
+            files.append(path)
         }
         return files
     }

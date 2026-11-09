@@ -134,11 +134,7 @@ enum SessionListFollow {
         let temporary = URL(filePath: NSTemporaryDirectory(), directoryHint: .isDirectory)
             .standardizedFileURL.resolvingSymlinksInPath().path(percentEncoded: false)
         let roots = [temporary, "/private/var/folders/", "/var/folders/", "/private/tmp/", "/tmp/"]
-        let candidate = path.hasSuffix("/") ? path : path + "/"
-        return roots.contains { root in
-            let base = root.hasSuffix("/") ? root : root + "/"
-            return candidate.hasPrefix(base)
-        }
+        return roots.contains { PathRules.current.isInside(path, folder: $0) }
     }
 
     /// When a pass may start: one at a time, at most once per `interval` unless the person asked.

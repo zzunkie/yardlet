@@ -90,9 +90,9 @@ extension AppModelRemoteBridge {
         for match in absolutePath.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed() {
             guard let range = Range(match.range, in: result) else { continue }
             let path = String(result[range])
-            let normalized = URL(filePath: path).standardizedFileURL.path(percentEncoded: false)
-            let allowed = root?.standardizedFileURL.path(percentEncoded: false)
-            if let allowed, normalized == allowed || normalized.hasPrefix(allowed + "/") { continue }
+            if let root, PathRules.current.isInside(URL(filePath: path).standardizedFileURL, folder: root.standardizedFileURL) {
+                continue
+            }
             result.replaceSubrange(range, with: "•••")
         }
         return result

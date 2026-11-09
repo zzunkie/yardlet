@@ -51,7 +51,7 @@ struct CodexMCPResultProjection: Equatable, Sendable {
                 // A file on another host is not this Mac's file of the same path.
                 guard ["", "localhost"].contains(url.host()?.lowercased() ?? "") else { return nil }
                 let path = url.path(percentEncoded: false)
-                guard path.hasPrefix("/") else { return nil }
+                guard PathRules.current.isAbsolute(path) else { return nil }
                 // The same file URL without `localhost`, keeping a `#L12` or `#L12C3` the files
                 // panel opens the file at.
                 guard var local = URLComponents(url: URL(filePath: path), resolvingAgainstBaseURL: false)

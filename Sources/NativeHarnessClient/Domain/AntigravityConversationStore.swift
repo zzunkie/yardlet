@@ -143,7 +143,7 @@ struct AntigravityConversationStore: Sendable {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
         var folders: [String: URL] = [:]
         for (folder, value) in object {
-            guard let id = value as? String, folder.hasPrefix("/") else { continue }
+            guard let id = value as? String, PathRules.current.isAbsolute(folder) else { continue }
             folders[id] = URL(filePath: folder, directoryHint: .isDirectory).standardizedFileURL
         }
         return folders
@@ -162,7 +162,7 @@ struct AntigravityConversationStore: Sendable {
         guard let data = workspaceURIs.data(using: .utf8),
               let values = try? JSONSerialization.jsonObject(with: data) as? [String] else { return nil }
         for value in values {
-            guard let url = URL(string: value), url.isFileURL, url.path(percentEncoded: false).hasPrefix("/") else { continue }
+            guard let url = URL(string: value), url.isFileURL, PathRules.current.isAbsolute(url.path(percentEncoded: false)) else { continue }
             return URL(filePath: url.path(percentEncoded: false), directoryHint: .isDirectory).standardizedFileURL
         }
         return nil

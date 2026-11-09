@@ -48,14 +48,14 @@ enum ClaudeDesktopSessionCatalog {
         guard data.count <= maximumFileBytes,
               let value = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let id = text(value["cliSessionId"]), UUID(uuidString: id) != nil,
-              let cwd = text(value["cwd"]), cwd.hasPrefix("/") else { return nil }
+              let cwd = text(value["cwd"]), PathRules.current.isAbsolute(cwd) else { return nil }
         let workspace = URL(filePath: cwd, directoryHint: .isDirectory).standardizedFileURL
         let origin = text(value["originCwd"]).flatMap { path -> URL? in
-            guard path.hasPrefix("/") else { return nil }
+            guard PathRules.current.isAbsolute(path) else { return nil }
             let origin = URL(filePath: path, directoryHint: .isDirectory).standardizedFileURL
             let base = ProjectSidebarPresentation.normalizedPath(for: origin)
             let folder = ProjectSidebarPresentation.normalizedPath(for: workspace)
-            return folder.hasPrefix(base == "/" ? "/" : base + "/") && folder != base ? origin : nil
+            return PathRules.current.isStrictlyInside(folder, folder: base) ? origin : nil
         }
         let activity = (value["lastActivityAt"] as? NSNumber).flatMap { number -> Date? in
             // A JSON boolean is an NSNumber too; it is not a time.

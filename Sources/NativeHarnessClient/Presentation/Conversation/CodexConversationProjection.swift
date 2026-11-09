@@ -815,7 +815,7 @@ enum CodexConversationProjection {
     /// The image a Codex item names: a file by its absolute path, or a `data:`, file or web URL. A web
     /// image is shown by its name and never fetched; a relative path names no file Yardlet can find.
     private static func image(at reference: String) -> TranscriptImageAttachment? {
-        if reference.hasPrefix("/") { return TranscriptImageAttachment(url: URL(filePath: reference)) }
+        if PathRules.current.isAbsolute(reference) { return TranscriptImageAttachment(url: URL(filePath: reference)) }
         guard let url = URL(string: reference), let scheme = url.scheme?.lowercased(),
               ["data", "file", "http", "https"].contains(scheme) else { return nil }
         return TranscriptImageAttachment(url: url)

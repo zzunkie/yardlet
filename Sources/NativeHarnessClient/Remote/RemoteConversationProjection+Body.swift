@@ -24,7 +24,8 @@ extension RemoteConversationProjection {
             var budget = RemoteItemDetail.diffLimit
             body.files = rows.prefix(RemoteItemDetail.diffCount).compactMap { row in
                 // Never send an absolute path outside the task, even as a display label.
-                guard !row.displayPath.hasPrefix("/"), !row.displayPath.split(separator: "/").contains("..") else { return nil }
+                guard PathRules.current.isRelative(row.displayPath),
+                      !PathRules.current.names(row.displayPath).contains("..") else { return nil }
                 let preview = row.preview == .available ? row.previewLines : .empty
                 var lines: [RemoteConversationBody.Line] = []
                 for line in preview.lines {

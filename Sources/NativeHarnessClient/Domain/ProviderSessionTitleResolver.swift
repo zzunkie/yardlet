@@ -35,7 +35,7 @@ struct ProviderSessionTitlePaths: Sendable {
         // Build from `GROK_HOME` before `~/.grok`, and the runtime Yardlet launches inherits this
         // process's environment.
         func folder(_ variable: String, else fallback: String) -> URL {
-            environment[variable].flatMap { $0.hasPrefix("/") ? URL(filePath: $0, directoryHint: .isDirectory) : nil }
+            environment[variable].flatMap { PathRules.current.isAbsolute($0) ? URL(filePath: $0, directoryHint: .isDirectory) : nil }
                 ?? homeURL.appending(path: fallback, directoryHint: .isDirectory)
         }
         let kimiHome = folder("KIMI_CODE_HOME", else: ".kimi-code")

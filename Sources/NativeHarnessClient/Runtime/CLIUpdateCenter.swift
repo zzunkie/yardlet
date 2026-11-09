@@ -455,9 +455,8 @@ final class CLIUpdateCenter {
             .appending(path: harness.rawValue, directoryHint: .isDirectory)
             .appending(path: version, directoryHint: .isDirectory)
         let copy = folder.appending(path: root.lastPathComponent)
-        let target = CLIInstallDetector.executable(executable, inside: root).pathComponents
-            .dropFirst(root.pathComponents.count)
-            .reduce(copy) { $0.appending(path: $1) }
+        let target = PathRules.current.relativePath(of: CLIInstallDetector.executable(executable, inside: root), in: root)
+            .map { $0.isEmpty ? copy : copy.appending(path: $0) } ?? copy
         let copied = await Task.detached(priority: .utility) { () -> Bool in
             let manager = FileManager.default
             if manager.isExecutableFile(atPath: target.path(percentEncoded: false)) { return true }

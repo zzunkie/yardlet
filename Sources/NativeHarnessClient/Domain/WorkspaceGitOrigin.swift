@@ -235,10 +235,7 @@ enum GitWorktreeOriginResolver {
     }
 
     private static func resolved(_ path: String, relativeTo base: String) -> String {
-        let url = path.hasPrefix("/")
-            ? URL(filePath: path)
-            : URL(filePath: base, directoryHint: .isDirectory).appending(path: path)
-        return normalized(url)
+        normalized(PathRules.current.url(for: path, in: URL(filePath: base, directoryHint: .isDirectory)))
     }
 
     private static func normalized(_ url: URL) -> String {

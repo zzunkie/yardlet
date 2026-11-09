@@ -228,15 +228,10 @@ enum CodexFileChangeCardProjection {
     /// way the file must lie inside that folder.
     static func fileURL(for path: String, workspaceURL: URL) -> URL? {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !trimmed.split(separator: "/").contains("..") else { return nil }
+        guard !trimmed.isEmpty, !PathRules.current.names(trimmed).contains("..") else { return nil }
         let root = workspaceURL.standardizedFileURL
-        let candidate = (trimmed.hasPrefix("/") ? URL(filePath: trimmed) : root.appending(path: trimmed))
-            .standardizedFileURL
-        var rootPath = root.path(percentEncoded: false)
-        while rootPath.count > 1, rootPath.hasSuffix("/") { rootPath.removeLast() }
-        let candidatePath = candidate.path(percentEncoded: false)
-        guard !rootPath.isEmpty, candidatePath.hasPrefix(rootPath + "/") else { return nil }
-        return candidate
+        let candidate = PathRules.current.url(for: trimmed, in: root).standardizedFileURL
+        return PathRules.current.isStrictlyInside(candidate, folder: root) ? candidate : nil
     }
 
     /// The file a row's name opens for the person: inside the task's folder as `fileURL` reads it,
@@ -244,7 +239,7 @@ enum CodexFileChangeCardProjection {
     static func openableURL(for path: String, workspaceURL: URL) -> URL? {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         return fileURL(for: trimmed, workspaceURL: workspaceURL)
-            ?? (trimmed.hasPrefix("/") ? URL(filePath: trimmed).standardizedFileURL : nil)
+            ?? (PathRules.current.isAbsolute(trimmed) ? URL(filePath: trimmed).standardizedFileURL : nil)
     }
 
     private static func kind(of change: JSONValue) -> Kind {

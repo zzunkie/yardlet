@@ -163,8 +163,8 @@ extension AppModel {
             return .success(caller.workspaceURL)
         }
         let expanded = NSString(string: value).expandingTildeInPath
-        let folder = (expanded.hasPrefix("/") ? URL(filePath: expanded, directoryHint: .isDirectory)
-            : caller.workspaceURL.appending(path: expanded, directoryHint: .isDirectory)).standardizedFileURL
+        let folder = PathRules.current.url(for: expanded, in: caller.workspaceURL, directoryHint: .isDirectory)
+            .standardizedFileURL
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: folder.path(percentEncoded: false), isDirectory: &isDirectory),
               isDirectory.boolValue else {
@@ -174,11 +174,7 @@ extension AppModel {
     }
 
     static func folder(_ folder: URL, isInside root: URL) -> Bool {
-        let path = folder.standardizedFileURL.path(percentEncoded: false)
-        let rootPath = root.standardizedFileURL.path(percentEncoded: false)
-        let base = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
-        let candidate = path.hasSuffix("/") ? path : path + "/"
-        return candidate.hasPrefix(base)
+        PathRules.current.isInside(folder.standardizedFileURL, folder: root.standardizedFileURL)
     }
 
     // MARK: - Running

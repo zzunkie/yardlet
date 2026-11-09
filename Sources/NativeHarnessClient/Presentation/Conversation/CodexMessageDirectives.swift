@@ -219,7 +219,7 @@ struct CodexFileCitation: Equatable, Sendable {
         let hasPrefix = bracketPath.hasPrefix("F:")
         let raw = (hasPrefix ? String(bracketPath.dropFirst(2)) : bracketPath).trimmingCharacters(in: .whitespaces)
         let path = raw.removingPercentEncoding ?? raw
-        guard !path.isEmpty, hasPrefix || path.hasPrefix("/") else { return nil }
+        guard !path.isEmpty, hasPrefix || PathRules.current.isAbsolute(path) else { return nil }
         self.path = path
         target = .file
         label = nil
@@ -396,7 +396,7 @@ struct CodexReviewComment: Equatable, Sendable {
     /// task's folder, which may begin with the folder's own name.
     func link(relativeTo workspace: URL?) -> URL? {
         let url: URL
-        if file.hasPrefix("/") {
+        if PathRules.current.isAbsolute(file) {
             url = URL(filePath: file)
         } else if let workspace {
             url = workspace.appending(path: Self.pathInWorkspace(file, workspace: workspace))
@@ -416,10 +416,9 @@ struct CodexReviewComment: Equatable, Sendable {
 
     private static func displayPath(_ file: String, workspace: URL?) -> String {
         guard let workspace else { return file }
-        if file.hasPrefix("/") {
-            let root = workspace.standardizedFileURL.path(percentEncoded: false)
-            let prefix = root.hasSuffix("/") ? root : root + "/"
-            return file.hasPrefix(prefix) ? String(file.dropFirst(prefix.count)) : file
+        if PathRules.current.isAbsolute(file) {
+            let relative = PathRules.current.relativePath(of: file, in: PathRules.current.path(of: workspace.standardizedFileURL))
+            return relative.flatMap { $0.isEmpty ? nil : $0 } ?? file
         }
         return pathInWorkspace(file, workspace: workspace)
     }

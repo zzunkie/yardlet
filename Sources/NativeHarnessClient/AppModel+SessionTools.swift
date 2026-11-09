@@ -1580,9 +1580,8 @@ extension AppModel: SessionToolHandling {
 
     /// Whether `folder` is `root` or inside it, after `..` and links are resolved.
     static func folder(_ folder: URL, isWithin root: URL) -> Bool {
-        let inner = folder.resolvingSymlinksInPath().standardizedFileURL.pathComponents
-        let outer = root.resolvingSymlinksInPath().standardizedFileURL.pathComponents
-        return inner.count >= outer.count && Array(inner.prefix(outer.count)) == outer
+        PathRules.current.isInside(folder.resolvingSymlinksInPath().standardizedFileURL,
+                                   folder: root.resolvingSymlinksInPath().standardizedFileURL)
     }
 
     /// Where a child goes: a project by name or a folder by path, else the caller's folder.
@@ -1590,7 +1589,7 @@ extension AppModel: SessionToolHandling {
         guard let value = value?.trimmingCharacters(in: .whitespaces), !value.isEmpty else {
             return .success((caller.workspaceURL, projects.project(id: caller.projectID)))
         }
-        if value.hasPrefix("/") || value.hasPrefix("~") {
+        if PathRules.current.isAbsolute(value) || value.hasPrefix("~") {
             let folder = URL(filePath: NSString(string: value).expandingTildeInPath, directoryHint: .isDirectory)
                 .standardizedFileURL
             var isDirectory: ObjCBool = false

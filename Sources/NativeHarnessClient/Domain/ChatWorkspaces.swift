@@ -37,10 +37,7 @@ enum ChatWorkspaces {
     }
 
     private static func contains(_ root: URL, _ folder: URL) -> Bool {
-        let base = root.path(percentEncoded: false)
-        let prefix = base.hasSuffix("/") ? base : base + "/"
-        let path = folder.path(percentEncoded: false)
-        return path.hasPrefix(prefix) && path.count > prefix.count
+        PathRules.current.isStrictlyInside(folder, folder: root)
     }
 
     /// The name a new chat's folder starts from, as the Codex app names its chats' folders.

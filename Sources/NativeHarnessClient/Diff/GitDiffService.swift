@@ -270,8 +270,8 @@ actor GitDiffService {
         let root = try await repositoryRoot(of: workspaceURL, deadline: deadline)
         let paths = Array(Set(expected.files.flatMap { [$0.oldPath, $0.newPath].compactMap { $0 } })).sorted()
         for path in paths {
-            let parts = path.split(separator: "/", omittingEmptySubsequences: false)
-            guard !path.hasPrefix("/"), !path.contains("\0"), !parts.isEmpty,
+            let parts = PathRules.current.names(path)
+            guard PathRules.current.isRelative(path), !path.contains("\0"), !parts.isEmpty,
                   parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else { throw GitDiffServiceError.changedSinceReview }
             var parent = root
             for part in parts.dropLast() {

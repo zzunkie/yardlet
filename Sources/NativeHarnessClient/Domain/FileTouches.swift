@@ -186,7 +186,7 @@ enum ClaudeFileTouchScanner {
                   let name = block["name"] as? String, let input = block["input"] as? [String: Any] else { return nil }
             let kind: FileTouchKind
             if editTools.contains(name) { kind = .edit } else if readTools.contains(name) { kind = .read } else { return nil }
-            guard let path = (input["file_path"] ?? input["notebook_path"]) as? String, path.hasPrefix("/") else { return nil }
+            guard let path = (input["file_path"] ?? input["notebook_path"]) as? String, PathRules.current.isAbsolute(path) else { return nil }
             return FileTouch(path: path, kind: kind, at: at, callID: id)
         }
     }

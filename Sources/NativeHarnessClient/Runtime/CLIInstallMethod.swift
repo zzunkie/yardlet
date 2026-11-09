@@ -126,10 +126,8 @@ enum CLIInstallDetector {
 
     /// The executable inside a copy of `root`, for a cask's version directory or an npm package.
     static func executable(_ resolved: URL, inside root: URL) -> URL {
-        let rootComponents = root.pathComponents
-        let components = resolved.pathComponents
-        guard components.starts(with: rootComponents) else { return root }
-        return components.dropFirst(rootComponents.count).reduce(root) { $0.appending(path: $1) }
+        guard let relative = PathRules.current.relativePath(of: resolved, in: root) else { return root }
+        return relative.isEmpty ? root : root.appending(path: relative)
     }
 
     private static func selfUpdater(harness: HarnessKind, resolved: URL, components: [String]) -> CLISelfUpdater? {

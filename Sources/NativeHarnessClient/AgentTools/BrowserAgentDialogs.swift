@@ -31,7 +31,7 @@ enum BrowserAgentWorkspaceFile {
         guard let primary = roots.first else {
             throw BrowserAgentToolError("This task has no project folder, so no file can be uploaded.", outsideFolders(retry: .no))
         }
-        let requested = path.hasPrefix("/") ? URL(filePath: path) : primary.appending(path: path)
+        let requested = PathRules.current.url(for: path, in: primary)
         let standardized = requested.standardizedFileURL
         // A file to be saved need not exist yet; its folder must.
         let resolved = mode == .save
@@ -146,10 +146,8 @@ enum BrowserAgentWorkspaceFile {
         return roots.contains { contains($0.standardizedFileURL.resolvingSymlinksInPath(), candidate) }
     }
 
-    /// Compares whole path components, so `/work/app` does not contain `/work/application`.
+    /// Compares whole names, so `/work/app` does not contain `/work/application` (`PathRules`).
     static func contains(_ root: URL, _ candidate: URL) -> Bool {
-        let rootComponents = root.pathComponents
-        let components = candidate.pathComponents
-        return components.count >= rootComponents.count && Array(components.prefix(rootComponents.count)) == rootComponents
+        PathRules.current.isInside(candidate, folder: root)
     }
 }

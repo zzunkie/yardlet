@@ -60,7 +60,7 @@ final class BrowserSearchSuggestService {
         guard !value.isEmpty else { return false }
         if value.hasPrefix("?") { return true }
         guard BrowserURLPolicy.looksLikeAddress(value) else { return true }
-        if value.hasPrefix("/") || value.hasPrefix("~") || value.contains("@") || value.contains("?") || value.contains("#") {
+        if PathRules.current.isAbsolute(value) || value.hasPrefix("~") || value.contains("@") || value.contains("?") || value.contains("#") {
             return false
         }
         let scheme = BrowserURLPolicy.scheme(of: value)

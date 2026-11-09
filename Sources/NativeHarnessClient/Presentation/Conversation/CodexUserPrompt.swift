@@ -446,11 +446,9 @@ struct CodexPromptAttachments: Equatable, Sendable {
         return nil
     }
 
-    /// An absolute path (`VM`): `/…` but not `//…`, or a Windows drive or share.
+    /// An absolute path (`VM`) on either kind of computer: POSIX's, or a Windows drive or share.
     private static func isAbsolutePath(_ path: String) -> Bool {
-        let path = path.replacingOccurrences(of: "\\", with: "/")
-        return (path.hasPrefix("/") && !path.hasPrefix("//")) || path.firstMatch(of: /^[A-Za-z]:\//) != nil
-            || path.hasPrefix("//")
+        PathRules.posix.isAbsolute(path) || PathRules.windows.isAbsolute(path)
     }
 
     private struct ReadComment {

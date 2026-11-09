@@ -85,7 +85,7 @@ extension AppModel {
             return .failure(SessionToolError(message: "project is required."))
         }
         if let id = UUID(uuidString: value), let project = projects.project(id: id) { return .success(project) }
-        if value.hasPrefix("/") || value.hasPrefix("~") {
+        if PathRules.current.isAbsolute(value) || value.hasPrefix("~") {
             let folder = URL(filePath: NSString(string: value).expandingTildeInPath, directoryHint: .isDirectory)
             guard let project = projects.project(containingRoot: folder) else {
                 return .failure(SessionToolError(message: "no project holds the folder \(value); list_projects "

@@ -70,7 +70,7 @@ enum OtherAppScheduleImport {
                 return nil
             }
             let body = prompt(text(task["filePath"]), id).map(skillPrompt)
-            let cwd = text(task["cwd"]).flatMap { $0.hasPrefix("/") ? $0 : nil }
+            let cwd = text(task["cwd"]).flatMap { PathRules.current.isAbsolute($0) ? $0 : nil }
             return ImportableSchedule(
                 origin: ScheduleOrigin(app: .claudeApp, sourceID: id),
                 name: text(task["displayName"]) ?? body?.name ?? id,
@@ -189,7 +189,7 @@ enum OtherAppScheduleImport {
             link = .codexThread(thread)
         case "cron":
             guard let cwds = values["cwds"]?.array?.compactMap(\.string) else { return nil }
-            workspace = cwds.first { $0.hasPrefix("/") }
+            workspace = cwds.first { PathRules.current.isAbsolute($0) }
             link = .none
         default:
             return nil

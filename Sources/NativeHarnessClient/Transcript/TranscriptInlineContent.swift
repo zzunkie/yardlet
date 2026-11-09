@@ -117,7 +117,7 @@ enum TranscriptFileReference {
         // A path, not a word: it has a folder or an extension.
         guard path.contains("/") || path.contains(".") else { return nil }
         let file: URL
-        if path.hasPrefix("/") {
+        if PathRules.current.isAbsolute(path) {
             file = URL(filePath: path)
         } else if path.hasPrefix("~/") {
             file = FileManager.default.homeDirectoryForCurrentUser.appending(path: String(path.dropFirst(2)))

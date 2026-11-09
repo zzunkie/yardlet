@@ -74,10 +74,9 @@ enum CodexFileChangeDiff {
     /// Inside the task's folder a path is shown relative to it; elsewhere it stays absolute.
     static func displayPath(_ path: String, workspaceURL: URL?) -> String {
         guard let workspaceURL else { return path }
-        let root = workspaceURL.standardizedFileURL.path(percentEncoded: false)
-        let prefix = root.hasSuffix("/") ? root : root + "/"
-        let standardized = URL(filePath: path).standardizedFileURL.path(percentEncoded: false)
-        return standardized.hasPrefix(prefix) ? String(standardized.dropFirst(prefix.count)) : path
+        let relative = PathRules.current.relativePath(of: URL(filePath: path).standardizedFileURL,
+                                                      in: workspaceURL.standardizedFileURL)
+        return relative.flatMap { $0.isEmpty ? nil : $0 } ?? path
     }
 
     private static func isHunks(_ body: String) -> Bool {

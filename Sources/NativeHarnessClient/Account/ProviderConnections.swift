@@ -93,7 +93,7 @@ struct ProviderConnection: Identifiable, Codable, Hashable, Sendable {
         }
         if let homePath {
             guard HarnessConnectionCapabilities.capabilities(for: harness).supportsSeparateHome,
-                  homePath.hasPrefix("/"), !homePath.contains("\0") else {
+                  PathRules.current.isAbsolute(homePath), !homePath.contains("\0") else {
                 throw ProviderConnectionError.invalidBinding
             }
         }
@@ -504,7 +504,7 @@ final class ProviderConnectionStore {
     /// links current and remove the folder with the account.
     func isMadeByYardlet(_ connection: ProviderConnection) -> Bool {
         guard let path = connection.homePath else { return false }
-        return Self.folder(URL(filePath: path)).hasPrefix(Self.folder(accountsRoot) + "/")
+        return PathRules.current.isStrictlyInside(Self.folder(URL(filePath: path)), folder: Self.folder(accountsRoot))
     }
 
     /// One spelling of a folder's path, to compare two spellings of one folder.
@@ -716,8 +716,8 @@ final class ProviderConnectionStore {
     func canSignOutAndDelete(_ connection: ProviderConnection) -> Bool {
         guard Self.signOutArguments[connection.harness] != nil, isMadeByYardlet(connection),
               let path = connection.homePath else { return false }
-        return Self.folder(URL(filePath: path).deletingLastPathComponent().deletingLastPathComponent())
-            == Self.folder(accountsRoot)
+        let relative = PathRules.current.relativePath(of: Self.folder(URL(filePath: path)), in: Self.folder(accountsRoot))
+        return relative?.split(separator: "/").count == 2
     }
 
     /// Signs a Yardlet-made account out with its own CLI, then takes it off the list, removes the

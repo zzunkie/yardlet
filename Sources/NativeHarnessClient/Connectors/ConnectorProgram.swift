@@ -149,7 +149,7 @@ enum ConnectorPrograms {
     /// The program's executable on this Mac: a path as given, or a name found in the search
     /// directories (`RuntimeProcessEnvironment.searchDirectories`); nil when there is none.
     static func locate(_ program: String, home: URL, fileManager: FileManager = .default) -> URL? {
-        if program.hasPrefix("/") {
+        if PathRules.current.isAbsolute(program) {
             return fileManager.isExecutableFile(atPath: program) ? URL(filePath: program) : nil
         }
         if program.hasPrefix("~/") {

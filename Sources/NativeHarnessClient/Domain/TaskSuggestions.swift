@@ -347,8 +347,8 @@ enum TaskSuggestionToolCall {
         if chat, cwd != nil || parent != nil { return .failure(.chatAndPlace) }
         if let cwd {
             // The Claude app's checks, before Yardlet looks for the folder.
-            guard cwd.hasPrefix("/") else { return .failure(.cwdNotAbsolute(cwd)) }
-            guard !cwd.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) else {
+            guard PathRules.current.isAbsolute(cwd) else { return .failure(.cwdNotAbsolute(cwd)) }
+            guard !PathRules.current.names(cwd).contains(where: { $0 == "." || $0 == ".." }) else {
                 return .failure(.cwdDotSegment)
             }
         }

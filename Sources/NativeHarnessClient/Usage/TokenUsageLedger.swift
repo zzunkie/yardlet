@@ -32,8 +32,10 @@ actor TokenUsageLedger {
 
         func harness(of path: String) -> HarnessKind? {
             guard path.hasSuffix(".jsonl") else { return nil }
-            if claude.contains(where: { path.hasPrefix($0.path + "/") }) { return .claudeCode }
-            if codex.contains(where: { path.hasPrefix($0.path + "/") }),
+            if claude.contains(where: { PathRules.current.isStrictlyInside(path, folder: $0.path(percentEncoded: false)) }) {
+                return .claudeCode
+            }
+            if codex.contains(where: { PathRules.current.isStrictlyInside(path, folder: $0.path(percentEncoded: false)) }),
                (path as NSString).lastPathComponent.hasPrefix("rollout-") { return .codex }
             return nil
         }

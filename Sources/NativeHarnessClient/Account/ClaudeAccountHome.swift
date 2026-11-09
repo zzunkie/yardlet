@@ -151,7 +151,7 @@ enum ClaudeAccountHome {
     /// Whether a link in `home` reaching `destination` (absolute, or relative to `home`) ends at `url`.
     private static func isSame(_ destination: String, in home: URL, _ url: URL) -> Bool {
         guard !destination.isEmpty else { return false }
-        let target = destination.hasPrefix("/") ? URL(filePath: destination) : home.appending(path: destination)
+        let target = PathRules.current.url(for: destination, in: home)
         return ProjectSidebarPresentation.normalizedPath(for: target.resolvingSymlinksInPath())
             == ProjectSidebarPresentation.normalizedPath(for: url.resolvingSymlinksInPath())
     }

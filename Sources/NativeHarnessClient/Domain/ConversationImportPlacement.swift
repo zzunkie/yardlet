@@ -30,16 +30,13 @@ enum ConversationImportPlacement: Equatable, Sendable {
     /// The nearest of `roots` that holds `folder` strictly inside it. The home folder and the
     /// folders above it never count, so a project there does not take in everything.
     static func nearestEnclosing(_ folder: URL, in roots: [URL], home: URL) -> URL? {
-        func path(_ url: URL) -> String {
-            let value = url.standardizedFileURL.path(percentEncoded: false)
-            return value.hasSuffix("/") ? value : value + "/"
-        }
+        func path(_ url: URL) -> String { PathRules.current.path(of: url.standardizedFileURL) }
         let target = path(folder)
         let homePath = path(home)
         return roots
             .filter { root in
                 let base = path(root)
-                return target.hasPrefix(base) && target != base && !homePath.hasPrefix(base)
+                return PathRules.current.isStrictlyInside(target, folder: base) && !PathRules.current.isInside(homePath, folder: base)
             }
             .max { path($0).count < path($1).count }
     }

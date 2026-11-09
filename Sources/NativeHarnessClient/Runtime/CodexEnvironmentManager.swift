@@ -232,15 +232,8 @@ actor CodexEnvironmentManager {
     }
 
     private static func pathsOverlap(_ first: URL, _ second: URL) -> Bool {
-        let firstComponents = first.standardizedFileURL.pathComponents
-        let secondComponents = second.standardizedFileURL.pathComponents
-        return isPrefix(firstComponents, of: secondComponents)
-            || isPrefix(secondComponents, of: firstComponents)
-    }
-
-    private static func isPrefix(_ prefix: [String], of value: [String]) -> Bool {
-        guard prefix.count <= value.count else { return false }
-        return zip(prefix, value).allSatisfy { left, right in left == right }
+        PathRules.current.isInside(first.standardizedFileURL, folder: second.standardizedFileURL)
+            || PathRules.current.isInside(second.standardizedFileURL, folder: first.standardizedFileURL)
     }
 
     private func copySnapshotItem(at source: URL, to destination: URL) throws {

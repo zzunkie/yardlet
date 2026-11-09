@@ -27,7 +27,7 @@ enum RemoteReviewReader {
             }
             if query.operation == .text, query.revision == nil {
                 guard let path = query.path else { return .failure(RemoteError(.badRequest)) }
-                let file = query.repository != nil && !path.hasPrefix("/") ? selected.appending(path: path).path : path
+                let file = query.repository != nil && PathRules.current.isRelative(path) ? selected.appending(path: path).path : path
                 let part = await RemoteFileReader.perform { RemoteFileReader.read(file, offset: 0, in: scope) }
                 let read = try part.get()
                 guard read.size <= 2 * 1024 * 1024 else { return .failure(RemoteError(.tooLarge)) }
@@ -71,8 +71,8 @@ enum RemoteReviewReader {
                 result.text = snapshot.lines.map(\.text).joined(separator: "\n")
                 result.truncated = snapshot.isTruncated
             case .text:
-                guard let path = query.path, !path.hasPrefix("/"),
-                      !path.split(separator: "/").contains(".."), !path.isEmpty else {
+                guard let path = query.path, PathRules.current.isRelative(path),
+                      !PathRules.current.names(path).contains(".."), !path.isEmpty else {
                     return .failure(RemoteError(.badRequest))
                 }
                 if let revision = query.revision {

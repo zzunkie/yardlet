@@ -298,23 +298,22 @@ struct SessionRailContent: Equatable {
                         generatedFiles: [Output] = [], workspaceURL: URL) -> [Output] {
         // `standardized` works on the text alone: the rail reads this on every draw, and
         // `standardizedFileURL` asks the disk about `/private` and `..` paths.
-        let root = workspaceURL.standardized.path(percentEncoded: false)
-        let folder = root.hasSuffix("/") ? root : root + "/"
+        let root = PathRules.current.path(of: workspaceURL.standardized)
         var seen = Set<String>()
         var result: [Output] = []
         func add(_ url: URL, at date: Date?) {
             let url = url.standardized
             let path = url.path(percentEncoded: false)
             guard result.count < outputLimit, seen.insert(path).inserted else { return }
-            if path.hasPrefix(folder), !documentExtensions.contains(url.pathExtension.lowercased()) { return }
+            if PathRules.current.isStrictlyInside(PathRules.current.path(of: url), folder: root),
+               !documentExtensions.contains(url.pathExtension.lowercased()) { return }
             result.append(Output(url: url, writtenAt: date))
         }
         for entry in entries.reversed() {
             guard result.count < outputLimit else { break }
             guard case let .activity(activity, .completed) = entry.content, let diff = activity.diff,
                   diff.oldText == nil, diff.newText != nil, !diff.path.isEmpty else { continue }
-            let url = diff.path.hasPrefix("/") ? URL(filePath: diff.path)
-                : workspaceURL.appending(path: diff.path)
+            let url = PathRules.current.url(for: diff.path, in: workspaceURL)
             add(url, at: entry.createdAt)
         }
         for change in codexChanges.reversed() where change.status == "add" && change.isApplied {
@@ -338,7 +337,7 @@ struct SessionRailContent: Equatable {
             turn.items.reversed().compactMap { item -> Output? in
                 guard case let .imageGeneration(image) = item.content, image.status == "completed",
                       image.failure == nil || image.failure == .null, let path = image.savedPath,
-                      path.hasPrefix("/") else { return nil }
+                      PathRules.current.isAbsolute(path) else { return nil }
                 return Output(url: URL(filePath: path), writtenAt: item.completedAt ?? turn.completedAt)
             }
         }

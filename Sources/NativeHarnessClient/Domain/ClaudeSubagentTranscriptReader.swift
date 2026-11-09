@@ -18,12 +18,13 @@ struct ClaudeSubagentTranscriptReader: Sendable {
         let roots = ([session.workspaceURL] + session.additionalRootURLs).map { $0.resolvingSymlinksInPath().standardizedFileURL }
         var result: [String: String] = [:]
         for path in paths {
-            let url = (path.hasPrefix("/") ? URL(filePath: path)
-                : session.workspaceURL.appending(path: path)).standardizedFileURL
-            guard let root = roots.first(where: { url.path.hasPrefix($0.path + "/") }) else {
+            let url = PathRules.current.url(for: path, in: session.workspaceURL).standardizedFileURL
+            guard let (root, relative) = roots.lazy.compactMap({ root in
+                PathRules.current.relativePath(of: url, in: root).flatMap { $0.isEmpty ? nil : (root, $0) }
+            }).first else {
                 throw HarnessAdapterError.capabilityUnavailable(L10n.string("A restore file is outside this project's folders."))
             }
-            let components = String(url.path.dropFirst(root.path.count + 1)).split(separator: "/").map(String.init)
+            let components = relative.split(separator: "/").map(String.init)
             let files = ScopedFiles(root: root)
             guard files.isRegularFile(components) else {
                 let names = try files.names(Array(components.dropLast()), limit: 4_096)
@@ -431,11 +432,11 @@ struct ClaudeSubagentTranscriptReader: Sendable {
     ) -> URL {
         let values = environment.merging(connection?.environment ?? [:]) { _, new in new }
         if let path = values["CLAUDE_CONFIG_DIR"], !path.isEmpty {
-            return path.hasPrefix("/") ? URL(filePath: path, directoryHint: .isDirectory)
-                : workspaceURL.appending(path: path, directoryHint: .isDirectory).standardizedFileURL
+            return PathRules.current.isAbsolute(path) ? URL(filePath: path, directoryHint: .isDirectory)
+                : PathRules.current.url(for: path, in: workspaceURL, directoryHint: .isDirectory).standardizedFileURL
         }
         let home = values["HOME"].flatMap {
-            $0.hasPrefix("/") ? URL(filePath: $0, directoryHint: .isDirectory) : nil
+            PathRules.current.isAbsolute($0) ? URL(filePath: $0, directoryHint: .isDirectory) : nil
         } ?? homeURL
         return home.appending(path: ".claude", directoryHint: .isDirectory)
     }

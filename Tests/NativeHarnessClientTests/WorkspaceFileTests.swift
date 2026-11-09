@@ -45,6 +45,53 @@ final class WorkspaceFileTests: XCTestCase {
         XCTAssertThrowsError(try WorkspaceFileService.read(.init(relativePath: "../outside.txt"), in: root))
     }
 
+    /// Whether a path is in a folder is decided by whole names after `.` and `..`, never by a string prefix. On
+    /// Windows a path starts at a drive or a share, `\` and `/` both separate names, and names compare in any case
+    /// but keep their composition, as NTFS compares them; `\x` and `C:x` depend on where they are read from.
+    func testPathsAreInsideAFolderByWholeNamesAndOnWindowsInAnyCase() {
+        let posix = PathRules.posix
+        XCTAssertEqual(posix.relativePath(of: "/work/app/./src//a.swift", in: "/work/app/"), "src/a.swift")
+        XCTAssertEqual(posix.relativePath(of: "/work/app", in: "/work/app"), "")
+        XCTAssertTrue(posix.isInside("/work/app/x", folder: "/"))
+        XCTAssertFalse(posix.isStrictlyInside("/work/app", folder: "/work/app"))
+        for (path, folder) in [("/work/application", "/work/app"), ("/work/app/../secret", "/work/app"),
+                               ("/Work/App/x", "/work/app"), ("work/app/x", "work/app"), ("/work/app/x", ""),
+                               ("C:\\work\\app\\x", "C:\\work\\app")] {
+            XCTAssertNil(posix.relativePath(of: path, in: folder), "\(path) in \(folder)")
+        }
+        XCTAssertEqual(posix.names("a\\b/c"), ["a\\b", "c"])
+
+        let windows = PathRules.windows
+        for path in ["C:\\Users\\me", "c:/x", "C:\\", "/C:/Users/me", "\\\\server\\share\\x", "//server/share",
+                     "\\\\?\\C:\\x", "\\\\?\\UNC\\server\\share\\x"] {
+            XCTAssertTrue(windows.isAbsolute(path), path)
+            XCTAssertFalse(windows.isRelative(path), path)
+        }
+        for path in ["\\Users\\me", "C:Users", "C:", "Users\\me", "\\\\server", "\\\\server\\", ""] {
+            XCTAssertFalse(windows.isAbsolute(path), path)
+        }
+        XCTAssertTrue(windows.isRelative("src\\a.swift"))
+        XCTAssertFalse(windows.isRelative("\\src"))
+        XCTAssertFalse(windows.isRelative("C:src"))
+        XCTAssertEqual(windows.names("a\\b/c"), ["a", "b", "c"])
+        XCTAssertEqual(windows.relativePath(of: "c:\\USERS\\Me\\Proj\\src\\a.swift", in: "C:\\Users\\me\\proj"), "src/a.swift")
+        XCTAssertEqual(windows.relativePath(of: "/C:/Users/me/proj/a", in: "C:\\Users\\me\\proj\\"), "a")
+        XCTAssertEqual(windows.relativePath(of: "\\\\?\\C:\\Users\\me\\proj\\a", in: "C:/Users/me/proj"), "a")
+        XCTAssertEqual(windows.relativePath(of: "\\\\Server\\Share\\proj\\a", in: "//server/share/proj"), "a")
+        XCTAssertEqual(windows.relativePath(of: "\\\\?\\UNC\\server\\share\\a", in: "\\\\server\\share"), "a")
+        XCTAssertEqual(windows.relativePath(of: "C:\\Ä\\x", in: "C:\\ä"), "x")
+        // A `..` at a share's root stays there, as Windows reads it.
+        XCTAssertEqual(windows.relativePath(of: "\\\\server\\share\\..\\other\\x", in: "\\\\server\\share\\other"), "x")
+        for (path, folder) in [("C:\\Users\\me\\project", "C:\\Users\\me\\proj"), ("C:\\Users\\me\\proj\\..\\other", "C:\\Users\\me\\proj"),
+                               ("D:\\Users\\me\\proj\\a", "C:\\Users\\me\\proj"), ("\\\\server\\other\\a", "\\\\server\\share"),
+                               ("\\\\server\\share\\..\\other\\x", "\\\\server\\other"), ("\\Users\\me\\proj\\a", "C:\\Users\\me\\proj"),
+                               ("C:\\e\u{301}\\x", "C:\\\u{E9}"), ("C:\\SS\\x", "C:\\ß"), ("C:\\Users\\me\\proj\\a", "C:")] {
+            XCTAssertNil(windows.relativePath(of: path, in: folder), "\(path) in \(folder)")
+        }
+        XCTAssertEqual(windows.path(of: URL(string: "file://server/share/x")!), "//server/share/x")
+        XCTAssertEqual(posix.path(of: URL(string: "file://server/share/x")!), "/share/x")
+    }
+
     /// A link the person clicks opens any file on the Mac, as the Codex and Claude apps do: one outside
     /// the task's folder by its absolute path, read-only, and one inside through `/private` all the same.
     func testAPersonOpensAFileOutsideTheFolderReadOnly() throws {

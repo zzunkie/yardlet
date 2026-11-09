@@ -190,7 +190,7 @@ extension AppModelRemoteBridge {
         for match in railPath.matches(in: result, range: NSRange(result.startIndex..., in: result)).reversed() {
             guard let range = Range(match.range, in: result) else { continue }
             let path = String(result[range])
-            if !roots.contains(where: { path == $0.path || path.hasPrefix($0.path + "/") }) {
+            if !roots.contains(where: { PathRules.current.isInside(path, folder: PathRules.current.path(of: $0)) }) {
                 result.replaceSubrange(range, with: "…/" + URL(filePath: path).lastPathComponent)
             }
         }

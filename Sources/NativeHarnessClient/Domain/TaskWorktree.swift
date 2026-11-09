@@ -33,10 +33,9 @@ struct TaskWorktreeLayout: Equatable, Sendable {
     func worktreeURL(containing workspaceURL: URL) -> URL? {
         let root = ProjectSidebarPresentation.normalizedPath(for: rootURL)
         let path = ProjectSidebarPresentation.normalizedPath(for: workspaceURL)
-        guard path.hasPrefix(root + "/") else { return nil }
-        let components = path.dropFirst(root.count + 1).split(separator: "/", omittingEmptySubsequences: true)
-        guard components.count >= 2,
-              !components.prefix(2).contains(where: { $0 == "." || $0 == ".." }) else { return nil }
+        guard let relative = PathRules.current.relativePath(of: path, in: root) else { return nil }
+        let components = relative.split(separator: "/", omittingEmptySubsequences: true)
+        guard components.count >= 2 else { return nil }
         return worktreeURL(repositoryFolder: String(components[0]), name: String(components[1]))
     }
 }

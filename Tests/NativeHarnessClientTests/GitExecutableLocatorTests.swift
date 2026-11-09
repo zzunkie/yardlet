@@ -36,6 +36,23 @@ struct GitExecutableLocatorTests {
         #expect(GitExecutableLocator.preferredURL(isExecutableFile: { _ in false }).path == "/usr/bin/git")
     }
 
+    /// On Windows Git is `git.exe` in an absolute folder of `Path`, else where Git for Windows installs it for everyone,
+    /// for one person, or through Scoop; a relative folder of `Path` is never looked in.
+    @Test func testWindowsLooksInPathThenWhereGitForWindowsInstalls() {
+        let environment = [
+            "Path": "C:\\Windows\\system32;.\\tools;tools;C:\\Program Files\\Git\\cmd\\",
+            "ProgramFiles": "C:\\Program Files", "PROGRAMFILES(X86)": "C:\\Program Files (x86)",
+            "LocalAppData": "C:\\Users\\me\\AppData\\Local", "USERPROFILE": "C:\\Users\\me"
+        ]
+        let candidates = GitExecutableLocator.windowsCandidates(environment: environment)
+        #expect(candidates == [
+            "C:\\Windows\\system32\\git.exe", "C:\\Program Files\\Git\\cmd\\git.exe",
+            "C:\\Program Files (x86)\\Git\\cmd\\git.exe", "C:\\Users\\me\\AppData\\Local\\Programs\\Git\\cmd\\git.exe",
+            "C:\\Users\\me\\scoop\\apps\\git\\current\\cmd\\git.exe"
+        ])
+        #expect(GitExecutableLocator.windowsCandidates(environment: ["ProgramFiles": "Program Files"]).isEmpty)
+    }
+
     @Test func testSkipsDirectoriesAndNonExecutableFiles() throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

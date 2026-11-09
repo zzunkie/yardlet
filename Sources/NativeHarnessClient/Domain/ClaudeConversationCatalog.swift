@@ -125,7 +125,7 @@ enum ClaudeConversationCatalog {
         let marker = Data(#""cwd":"#.utf8)
         for line in head.split(separator: 10) where line.range(of: marker) != nil {
             guard let value = try? JSONDecoder().decode(JSONValue.self, from: Data(line)),
-                  let cwd = value["cwd"]?.stringValue, cwd.hasPrefix("/") else { continue }
+                  let cwd = value["cwd"]?.stringValue, PathRules.current.isAbsolute(cwd) else { continue }
             return URL(filePath: cwd, directoryHint: .isDirectory)
         }
         return nil

@@ -544,7 +544,7 @@ enum GmailAttachmentFiles {
     /// The file a path names, inside one of the roots and under no hidden name there.
     static func resolve(_ path: String, roots: [URL]) throws -> URL {
         let expanded = expandingHome(path)
-        guard expanded.hasPrefix("/") else {
+        guard PathRules.current.isAbsolute(expanded) else {
             throw GmailOutgoingMessage.Problem.unattachable(path: path, reason: "give an absolute path.")
         }
         guard let url = canonical(expanded) else {
@@ -557,7 +557,7 @@ enum GmailAttachmentFiles {
                 + "the temporary folder, Desktop, Documents, or Downloads.")
         }
         guard holding.contains(where: { root in
-            !url.pathComponents.dropFirst(root.pathComponents.count).contains { $0.hasPrefix(".") }
+            !(PathRules.current.relativePath(of: url, in: root) ?? ".").split(separator: "/").contains { $0.hasPrefix(".") }
         }) else {
             throw GmailOutgoingMessage.Problem.unattachable(path: path, reason: "it is hidden or in a hidden folder.")
         }

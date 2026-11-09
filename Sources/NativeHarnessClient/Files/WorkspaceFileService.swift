@@ -8,20 +8,21 @@ struct WorkspaceFileLocation: Equatable, Sendable {
     var column: Int?
 
     /// A file outside the task's folder, which the panel shows read-only.
-    var isOutsideWorkspace: Bool { relativePath.hasPrefix("/") }
+    var isOutsideWorkspace: Bool { PathRules.current.isAbsolute(relativePath) }
 
     static func url(for path: String, in workspace: URL) -> URL {
-        path.hasPrefix("/") ? URL(filePath: path) : workspace.appending(path: path)
+        PathRules.current.url(for: path, in: workspace)
     }
 
     /// A file inside the task's folder; anything else throws.
     static func resolve(_ url: URL, in workspace: URL) throws -> Self {
         let (path, line, column) = try target(of: url, in: workspace)
-        let root = workspace.standardizedFileURL.resolvingSymlinksInPath().path
-        let file = URL(filePath: path).standardizedFileURL.resolvingSymlinksInPath().path
-        let prefix = root.hasSuffix("/") ? root : root + "/"
-        guard file.hasPrefix(prefix), file.count > prefix.count else { throw WorkspaceFileError.outsideWorkspace }
-        return Self(relativePath: String(file.dropFirst(prefix.count)), line: line, column: column)
+        let root = workspace.standardizedFileURL.resolvingSymlinksInPath()
+        let file = URL(filePath: path).standardizedFileURL.resolvingSymlinksInPath()
+        guard let relative = PathRules.current.relativePath(of: file, in: root), !relative.isEmpty else {
+            throw WorkspaceFileError.outsideWorkspace
+        }
+        return Self(relativePath: relative, line: line, column: column)
     }
 
     /// A file the person opens from a link, as the Codex and Claude apps open any file on the Mac:

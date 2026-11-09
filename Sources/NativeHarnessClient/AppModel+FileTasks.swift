@@ -110,7 +110,7 @@ extension AppModel {
     }
 
     private static func absolute(_ path: String, in folder: String) -> String {
-        path.hasPrefix("/") ? path : URL(filePath: folder, directoryHint: .isDirectory).appending(path: path)
+        PathRules.current.isAbsolute(path) ? path : URL(filePath: folder, directoryHint: .isDirectory).appending(path: path)
             .path(percentEncoded: false)
     }
 

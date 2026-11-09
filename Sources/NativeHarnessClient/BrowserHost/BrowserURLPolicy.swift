@@ -33,7 +33,7 @@ enum BrowserURLPolicy {
     static func resolve(_ input: String) throws -> String {
         let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { throw AddressError.empty }
-        if value.hasPrefix("/") || value.hasPrefix("~/") {
+        if PathRules.current.isAbsolute(value) || value.hasPrefix("~/") {
             let path = value.hasPrefix("~/")
                 ? FileManager.default.homeDirectoryForCurrentUser.path(percentEncoded: false) + String(value.dropFirst(1))
                 : value
@@ -98,7 +98,7 @@ enum BrowserURLPolicy {
     /// A path, a URL with "://", a loopback host, a host with a port, or a dotted host name whose last
     /// label could be a top-level domain. Text with spaces and other single words are search terms.
     static func looksLikeAddress(_ value: String) -> Bool {
-        if value.hasPrefix("/") || value.hasPrefix("~/") || value.contains("://") { return true }
+        if PathRules.current.isAbsolute(value) || value.hasPrefix("~/") || value.contains("://") { return true }
         if value.contains(where: \.isWhitespace) { return false }
         if scheme(of: value) != nil { return true }
         let host = value.prefix { !"/?#".contains($0) }.lowercased()

@@ -52,7 +52,7 @@ actor FileTaskIndex {
         for candidate in candidates {
             let worksThere = candidate.folders.contains { folder in
                 if let repository = target.repository { return resolver.repository(of: folder) == repository }
-                return targetPath.hasPrefix(FileRepositoryResolver.standardized(folder) + "/")
+                return PathRules.current.isStrictlyInside(targetPath, folder: FileRepositoryResolver.standardized(folder))
             }
             guard worksThere else { continue }
             var marks = FileTouchMarks()

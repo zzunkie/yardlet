@@ -3824,7 +3824,7 @@ final class AppModel {
               current.status != .running, current.status != .waitingForApproval,
               !sessionMutations.contains(session.id) else { return }
         // The rollout the thread is written to, which following the shown task watches.
-        if let path = state.thread?.raw["path"]?.stringValue, path.hasPrefix("/") {
+        if let path = state.thread?.raw["path"]?.stringValue, PathRules.current.isAbsolute(path) {
             codexRolloutPathBySessionID[session.id] = path
         }
         settleDetachedCodexState(&state, for: session.id)

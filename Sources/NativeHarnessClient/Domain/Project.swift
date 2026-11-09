@@ -346,8 +346,8 @@ enum ProjectSidebarPresentation {
     ) -> String {
         let path = normalizedPath(for: workspaceURL)
         let home = normalizedPath(for: homeDirectory)
-        guard path == home || path.hasPrefix(home + "/") else { return path }
-        return "~" + path.dropFirst(home.count)
+        guard let relative = PathRules.current.relativePath(of: path, in: home) else { return path }
+        return relative.isEmpty ? "~" : "~/" + relative
     }
 
     private static func withoutTrailingSlash(_ path: String) -> String {

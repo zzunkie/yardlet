@@ -195,7 +195,7 @@ enum AccountHomeDiscovery {
             value = home + value.dropFirst(prefix.count)
             break
         }
-        guard value.hasPrefix("/"), !value.contains("$"), !value.contains("`") else { return nil }
+        guard PathRules.current.isAbsolute(value), !value.contains("$"), !value.contains("`") else { return nil }
         return URL(filePath: value, directoryHint: .isDirectory).standardizedFileURL
     }
 }

@@ -372,9 +372,8 @@ enum ConversationLineWording {
     /// A path inside the task's folder, from the folder.
     private static func relative(_ subject: String, to workspaceURL: URL?) -> String {
         guard let workspaceURL else { return subject }
-        let root = workspaceURL.standardizedFileURL.path(percentEncoded: false)
-        let prefix = root.hasSuffix("/") ? root : root + "/"
-        return subject.hasPrefix(prefix) ? String(subject.dropFirst(prefix.count)) : subject
+        let relative = PathRules.current.relativePath(of: subject, in: PathRules.current.path(of: workspaceURL.standardizedFileURL))
+        return relative.flatMap { $0.isEmpty ? nil : $0 } ?? subject
     }
 
     // MARK: Claude Code's tools
