@@ -1353,7 +1353,7 @@ struct RemoteTaskView: View {
         }
         WindowDragRegion().frame(minWidth: 8, maxWidth: .infinity)
         TaskSurfaceControls(showsSessionRail: showsRail, onToggleSessionRail: { showsRail.toggle() }, panelState: $panels,
-                            unavailableSurfaces: unavailableSurfaces)
+                            unavailableSurfaces: unavailableSurfaces, find: find)
     }
 
     private var actions: ConversationActions {

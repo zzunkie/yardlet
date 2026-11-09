@@ -28,7 +28,7 @@ struct YardletConversationFindCommands: Commands {
     var body: some Commands {
         CommandGroup(after: .pasteboard) {
             Divider()
-            Button(L10n.string("Find")) { open() }
+            Button(L10n.string("Find")) { find?.openFromKeyWindow() }
                 .keyboardShortcut(ConversationFindShortcut.find)
                 .disabled(find == nil)
             Button(L10n.string("Next result")) { find?.next() }
@@ -39,19 +39,28 @@ struct YardletConversationFindCommands: Commands {
                 .disabled(find == nil)
         }
     }
+}
 
-    private func open() {
-        guard let find else { return }
+extension ConversationFindModel {
+    /// Edit › Find and the task header's Find button: opens the bar, or brings the keyboard back to it,
+    /// starting from the key window's selected text and returning focus where it was once it closes.
+    func openFromKeyWindow() {
         let window = NSApp.keyWindow
         let editor = window?.firstResponder as? NSTextView
         // With the bar already open, the field's own selection is not a new query.
-        let selection = find.isPresented && editor?.isFieldEditor == true
+        let selection = isPresented && editor?.isFieldEditor == true
             ? nil : ConversationFindSelection.text(in: editor)
         var returnFocus: (@MainActor () -> Bool)?
-        if !find.isPresented, let bookmark = WindowFocusBookmark(window: window) {
+        if !isPresented, let bookmark = WindowFocusBookmark(window: window) {
             returnFocus = { bookmark.restore() }
         }
-        find.open(selection: selection, returnFocus: returnFocus)
+        open(selection: selection, returnFocus: returnFocus)
+    }
+
+    /// The bar's close button and the header's Find button while the bar is open: the keyboard goes
+    /// back where it was before the bar opened, or to the conversation.
+    func close(fallingBackTo keyboardFocus: TaskKeyboardFocus?) {
+        if !close() { keyboardFocus?.move(to: .chat) }
     }
 }
 

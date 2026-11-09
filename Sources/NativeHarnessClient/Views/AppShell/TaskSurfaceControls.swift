@@ -11,10 +11,18 @@ extension TaskSurface {
     }
 }
 
-/// A task header's buttons: the session rail (where the Environment popover was), the terminal
-/// below the conversation, and the side panel. In the title bar they act on the task the window
-/// shows; in a split pane's header, on that pane's task. A header too narrow for them shows them in a
-/// "More" menu instead, as the Claude app's header does.
+/// The symbols of a task header's panel buttons, which the command palette's items for the same panels
+/// share. The terminal's is the one its tab and pane show.
+enum TaskPanelSymbol {
+    static let sessionRail = "checklist"
+    static let terminal = "terminal"
+    static let sidePanel = "sidebar.right"
+}
+
+/// A task header's buttons: find in the conversation, then the session rail (where the Environment
+/// popover was), the terminal below the conversation, and the side panel. In the title bar they act on
+/// the task the window shows; in a split pane's header, on that pane's task. A header too narrow for
+/// them shows them in a "More" menu instead, as the Claude app's header does.
 struct TaskSurfaceControls: View {
     /// The session rail is on screen for the task.
     let showsSessionRail: Bool
@@ -35,6 +43,9 @@ struct TaskSurfaceControls: View {
     /// Panels the window cannot show yet (another Mac's window, for a panel its host does not serve): their buttons and
     /// keys show dimmed.
     var unavailableSurfaces: Set<TaskSurface> = []
+    /// The task's find in its conversation, for the Find button; nil where there is no conversation,
+    /// as on the new-task screen.
+    var find: ConversationFindModel? = nil
     @Environment(\.taskKeyboardFocus) private var keyboardFocus
     @AppStorage(TerminalLocation.key) private var terminalLocation = TerminalLocation.bottom.rawValue
 
@@ -52,6 +63,9 @@ struct TaskSurfaceControls: View {
                 foldedMenu
             } else {
                 HStack(spacing: 4) {
+                    if let find {
+                        findButton(find)
+                    }
                     ForEach(toolbarSurfaces) { surface in
                         button(surface)
                     }
@@ -77,17 +91,7 @@ struct TaskSurfaceControls: View {
         Button {
             press(surface)
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: symbol(surface))
-                    .font(.system(size: 12))
-            }
-            .foregroundStyle(isActive(surface) ? Color.primary : Color.secondary)
-            .frame(minWidth: 28, minHeight: 28)
-            .background(
-                isActive(surface) ? ParityTheme.selectedFill : .clear,
-                in: RoundedRectangle(cornerRadius: 7)
-            )
-            .contentShape(Rectangle())
+            label(symbol(surface), isActive: isActive(surface))
         }
         .buttonStyle(.borderless)
         .parityPointer()
@@ -104,9 +108,40 @@ struct TaskSurfaceControls: View {
         }
     }
 
-    /// The Claude app's overflow menu for a narrow header: the same three, by their titles.
+    /// The bar is the conversation's own (`ConversationFindBar`): the button opens it as Edit › Find does,
+    /// and closes it as its close button does.
+    private func findButton(_ find: ConversationFindModel) -> some View {
+        Button {
+            pressFind(find)
+        } label: {
+            label(Self.findSymbol, isActive: find.isPresented)
+        }
+        .buttonStyle(.borderless)
+        .parityPointer()
+        .accessibilityLabel(findTitle(find))
+        .accessibilityAddTraits(find.isPresented ? .isSelected : [])
+        .help(ShortcutHelp.text(findTitle(find), find.isPresented ? nil : ConversationFindShortcut.find))
+    }
+
+    private func label(_ symbol: String, isActive: Bool) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 12))
+            .foregroundStyle(isActive ? Color.primary : Color.secondary)
+            .frame(minWidth: 28, minHeight: 28)
+            .background(isActive ? ParityTheme.selectedFill : .clear, in: RoundedRectangle(cornerRadius: 7))
+            .contentShape(Rectangle())
+    }
+
+    /// The Claude app's overflow menu for a narrow header: the same buttons, by their titles.
     private var foldedMenu: some View {
         Menu {
+            if let find {
+                Button {
+                    pressFind(find)
+                } label: {
+                    Label(findTitle(find), systemImage: Self.findSymbol)
+                }
+            }
             ForEach(toolbarSurfaces) { surface in
                 Button {
                     press(surface)
@@ -130,7 +165,26 @@ struct TaskSurfaceControls: View {
     }
 
     private func symbol(_ surface: TaskSurface) -> String {
-        surface == .browser ? "sidebar.right" : (surface == .terminal ? "rectangle.bottomthird.inset.filled" : "sidebar.squares.right")
+        switch surface {
+        case .browser: TaskPanelSymbol.sidePanel
+        case .terminal: TaskPanelSymbol.terminal
+        case .diff, .chat: TaskPanelSymbol.sessionRail
+        }
+    }
+
+    private static let findSymbol = "magnifyingglass"
+
+    private func findTitle(_ find: ConversationFindModel) -> String {
+        L10n.string(find.isPresented ? "Close find" : "Find in chat")
+    }
+
+    private func pressFind(_ find: ConversationFindModel) {
+        onActivate()
+        if find.isPresented {
+            find.close(fallingBackTo: keyboardFocus)
+        } else {
+            find.openFromKeyWindow()
+        }
     }
 
     private func press(_ surface: TaskSurface) {

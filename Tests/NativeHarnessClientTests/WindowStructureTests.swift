@@ -104,9 +104,9 @@ final class WindowStructureTests: XCTestCase {
 
     func testAHeaderFoldsItsButtonsWhenItIsNarrow() {
         XCTAssertFalse(TaskHeaderFold.folds(headerWidth: 516))
-        XCTAssertFalse(TaskHeaderFold.folds(headerWidth: 330))
-        XCTAssertTrue(TaskHeaderFold.folds(headerWidth: 320))
-        XCTAssertTrue(TaskHeaderFold.folds(headerWidth: 340, interfaceScale: 1.08))
+        XCTAssertFalse(TaskHeaderFold.folds(headerWidth: 362))
+        XCTAssertTrue(TaskHeaderFold.folds(headerWidth: 352))
+        XCTAssertTrue(TaskHeaderFold.folds(headerWidth: 372, interfaceScale: 1.08))
     }
 
     // MARK: - Open in Split View

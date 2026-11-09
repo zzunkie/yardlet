@@ -832,7 +832,8 @@ struct MainWindow: View {
                         isFolded: isFolded,
                         // The focused pane's header takes `⌘1`–`⌘4`, as the title bar does for one task.
                         registersShortcuts: isFocused,
-                        onActivate: { focusPane(pane) }
+                        onActivate: { focusPane(pane) },
+                        find: workspace.conversationFind
                     )
                     .environment(\.taskKeyboardFocus, workspace.keyboardFocus)
                     .id(session.id)
@@ -2326,6 +2327,9 @@ struct MainWindow: View {
             pullRequest: session.flatMap { model.pullRequests.pullRequest(for: $0.id) },
             servers: { model.resourceMonitor.servers(of: $0.id) },
             onOpenServer: openServer,
+            conversationFind: session.map {
+                model.taskWorkspaces.state(for: $0.id, initialSurface: model.initialTaskSurface).conversationFind
+            },
             splitTitle: isSplit ? titleBarSplitTitle : nil,
             draftPanels: item == .home ? taskPanelState : nil,
             tabs: item != nil && model.splits.tabs.count > 1 ? TitleBarTabs(
@@ -3044,7 +3048,7 @@ struct MainWindow: View {
                     id: "toggle-side-panel",
                     title: TaskCommandTitle.sidePanel(isShown: panels.trailingSurfaceID != nil),
                     subtitle: L10n.string("Review, browser, files and side chat beside the conversation."),
-                    systemName: "sidebar.right",
+                    systemName: TaskPanelSymbol.sidePanel,
                     action: { toggleTaskPanel(TaskSurfaceNavigationProjection.sidePanelToggleID) }
                 ),
                 CommandPaletteItem(
@@ -3052,7 +3056,7 @@ struct MainWindow: View {
                     title: TaskCommandTitle.terminal(isShown: panels.showsTerminal),
                     subtitle: L10n.string(TerminalLocation.current() == .right ? "A shell in the task's folder in the side panel."
                                                                                : "A shell in the task's folder below the conversation."),
-                    systemName: "rectangle.bottomthird.inset.filled",
+                    systemName: TaskPanelSymbol.terminal,
                     action: { toggleTaskPanel(TaskSurface.terminal.rawValue) }
                 )
             ]
@@ -3062,7 +3066,7 @@ struct MainWindow: View {
                     id: "toggle-session-rail",
                     title: sessionRail.toggleTitle(for: model.store.selectedSessionID),
                     subtitle: L10n.string("The task's environment, settings, context, changes and progress beside the conversation."),
-                    systemName: "sidebar.squares.right",
+                    systemName: TaskPanelSymbol.sessionRail,
                     action: toggleSessionRail
                 ), at: 0)
             }

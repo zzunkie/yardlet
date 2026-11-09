@@ -594,3 +594,99 @@ private extension ConversationFindSource {
         ))
     }
 }
+
+// MARK: - The task header's Find button
+
+extension ConversationFindTests {
+    /// The task header's Find button, light and dark, into `.build/find-qa/header-*.png`: beside the
+    /// rail, terminal and side panel buttons, selected while the bar is open, in the "More" menu of a
+    /// narrow header and in a split pane's header, and missing from the new-task screen's header. A
+    /// press opens the task's own find, as Edit › Find does, and a second press closes it.
+    func testTheTaskHeaderFindButtonOpensAndClosesTheTasksFind() throws {
+        let directory = try WindowlessRender.directory("find-qa")
+        let session = SessionRecord(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp/yardlet"),
+                                    runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                    title: "Fix the dashboard chart", titleOrigin: .provider, status: .ready)
+        let open = TaskSurfaceNavigationProjection.PanelState(trailingSurfaceID: "browser", isTerminalPresented: true,
+                                                              trailingTabs: ["browser"], recentTrailingTabs: ["browser"])
+        let closedFind = ConversationFindModel()
+        let openFind = ConversationFindModel()
+        openFind.open()
+        let width: CGFloat = 1_000
+        let size = NSSize(width: width, height: ParityTheme.titleBarHeight * 5 + SplitPaneHeader<EmptyView, EmptyView>.height)
+        for appearance in WindowlessRender.Appearance.allCases {
+            let sheet = VStack(alignment: .leading, spacing: 0) {
+                HeaderShowcase(session: session, find: closedFind).frame(width: width)
+                HeaderShowcase(session: session, find: openFind).frame(width: width)
+                HeaderShowcase(session: session, find: closedFind, rail: true, panels: open).frame(width: width)
+                // Too narrow for the buttons: they fold into "More".
+                HeaderShowcase(session: session, find: closedFind).frame(width: ParityTheme.sidebarWidth + 1 + 340)
+                HeaderShowcase(session: nil, find: nil).frame(width: width)
+                PaneHeaderShowcase(session: session, find: closedFind).frame(width: 460)
+            }
+            .frame(width: width, height: size.height, alignment: .top)
+            .background(ParityTheme.canvas)
+            .environment(\.colorScheme, appearance.colorScheme)
+            let capture = try WindowlessRender.hosted(sheet, size: size, appearance: appearance, passes: 4)
+            try WindowlessRender.writePNG(capture.bitmap, to: directory.appending(path: "header-\(appearance.suffix).png"))
+        }
+
+        let find = ConversationFindModel()
+        let host = WindowlessRender.Host(HeaderShowcase(session: session, find: find).frame(width: width),
+                                         size: NSSize(width: width, height: ParityTheme.titleBarHeight))
+        defer { host.close() }
+        host.settle()
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Find in chat")))
+        host.settle(passes: 3)
+        XCTAssertTrue(find.isPresented)
+        XCTAssertTrue(host.hosting.pressAccessibilityElement(labelled: L10n.string("Close find")))
+        host.settle(passes: 3)
+        XCTAssertFalse(find.isPresented)
+
+        let draft = WindowlessRender.Host(HeaderShowcase(session: nil, find: nil).frame(width: width),
+                                          size: NSSize(width: width, height: ParityTheme.titleBarHeight))
+        defer { draft.close() }
+        draft.settle()
+        let labels = draft.accessibilityElements().map(\.label)
+        XCTAssertTrue(labels.contains(TaskCommandTitle.terminal(isShown: false)), "\(labels)")
+        XCTAssertFalse(labels.contains(L10n.string("Find in chat")), "the new-task screen has no conversation")
+    }
+}
+
+/// The title bar as the window puts it, for a task or, without one, the new-task screen.
+private struct HeaderShowcase: View {
+    let session: SessionRecord?
+    let find: ConversationFindModel?
+    var rail = false
+    @State var panels = TaskSurfaceNavigationProjection.PanelState()
+    @FocusState private var focusedSurface: TaskSurface?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            TitleBarSidebarPart(isSidebarVisible: true, width: ParityTheme.sidebarWidth, onToggleSidebar: {}, onNewTask: {})
+            Rectangle().fill(ParityTheme.separator).frame(width: 1)
+            IntegratedTitleBar(
+                session: session, isSidebarVisible: true, isAttached: true, showsSessionRail: rail,
+                onToggleSessionRail: {}, panelState: $panels, focusedSurface: $focusedSurface,
+                onToggleSidebar: {}, onNewTask: {}, onResume: { _ in }, onRename: { _ in },
+                onTogglePinned: { _ in }, onArchive: { _ in }, onBackToConversation: { _ in },
+                conversationFind: find, draftPanels: session == nil ? $panels : nil
+            )
+        }
+    }
+}
+
+private struct PaneHeaderShowcase: View {
+    let session: SessionRecord
+    let find: ConversationFindModel
+    @State private var panels = TaskSurfaceNavigationProjection.PanelState()
+
+    var body: some View {
+        SplitPaneHeader(isFocused: true, onFocus: {}, onClose: {}, identity: { _ in
+            TaskHeaderIdentity(session: session, actions: TaskHeaderActions(), compact: true)
+        }, controls: { isFolded in
+            TaskSurfaceControls(showsSessionRail: false, onToggleSessionRail: {}, panelState: $panels,
+                                isFolded: isFolded, registersShortcuts: false, find: find)
+        })
+    }
+}

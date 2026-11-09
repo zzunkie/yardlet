@@ -289,9 +289,9 @@ struct TaskHeaderActivity: View {
 /// overflow menu (`hiddenCount`, `railToggleFolded`).
 enum TaskHeaderFold {
     /// The header's width below which the buttons fold: room for a short title, the harness, the
-    /// three buttons, and in a pane the close button.
+    /// four buttons, and in a pane the close button.
     static func folds(headerWidth: CGFloat, interfaceScale: CGFloat = 1) -> Bool {
-        headerWidth < 330 * interfaceScale
+        headerWidth < 362 * interfaceScale
     }
 
     /// The part of that width for a short title and the harness.
