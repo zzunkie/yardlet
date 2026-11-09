@@ -23,7 +23,7 @@ final class ToolRowWordingTests: XCTestCase {
         XCTAssertEqual(ConversationLineWording.codex(read, phase: .completed, localize: ko),
                        ConversationLineWords(leading: "Parser.swift", verb: "읽음"))
         XCTAssertEqual(ConversationLineWording.codex(read, phase: .running, localize: en).text, "Reading Parser.swift")
-        XCTAssertEqual(ConversationLineWording.codex(read, phase: .running, localize: ko).text, "읽는 중인 Parser.swift")
+        XCTAssertEqual(ConversationLineWording.codex(read, phase: .running, localize: ko).text, "Parser.swift 읽는 중")
         // A failed or stopped read is still a finished one to the Codex app.
         XCTAssertEqual(ConversationLineWording.codex(read, phase: .failed, localize: en).text, "Read Parser.swift")
         XCTAssertEqual(ConversationLineWording.codex(.read(name: " ./a.swift ", path: nil, command: "cat ./a.swift"),
@@ -54,12 +54,12 @@ final class ToolRowWordingTests: XCTestCase {
         XCTAssertEqual(ConversationLineWording.codex(folder, phase: .completed, localize: en).text,
                        "Listed files in Sources")
         XCTAssertEqual(ConversationLineWording.codex(folder, phase: .completed, localize: ko).text,
-                       "Sources에 파일 목록 작성함")
+                       "Sources의 파일 목록 확인함")
         XCTAssertEqual(ConversationLineWording.codex(folder, phase: .running, localize: en).text,
                        "Listing files in Sources")
         let here = ConversationCommandAction.listFiles(path: nil, command: "ls")
         XCTAssertEqual(ConversationLineWording.codex(here, phase: .completed, localize: en).text, "Listed files")
-        XCTAssertEqual(ConversationLineWording.codex(here, phase: .completed, localize: ko).text, "파일 목록 작성함")
+        XCTAssertEqual(ConversationLineWording.codex(here, phase: .completed, localize: ko).text, "파일 목록 확인함")
     }
 
     /// An unrecognized command reads as its inner command on one line: "Ran …", "Running …",
@@ -201,7 +201,7 @@ final class ToolRowWordingTests: XCTestCase {
     func testClaudeWordsEachTool() {
         let cases: [(String, [String: Any], ConversationItemPhase, String, String)] = [
             ("Read", ["file_path": "/repo/Sources/Parser.swift", "offset": 10], .completed,
-             "Read Parser.swift", "읽기 Parser.swift"),
+             "Read Parser.swift", "읽음 Parser.swift"),
             ("Read", ["file_path": "/repo/Sources/Parser.swift"], .running, "Reading Parser.swift", "읽는 중 Parser.swift"),
             ("Read", ["file_path": "/repo/missing.swift"], .failed, "Failed to read missing.swift", "읽기 실패 missing.swift"),
             ("Write", ["file_path": "/repo/notes.md"], .completed, "Created notes.md", "생성됨 notes.md"),
@@ -213,7 +213,7 @@ final class ToolRowWordingTests: XCTestCase {
             ("Grep", ["pattern": "TODO", "path": "Sources", "output_mode": "content"], .completed,
              "Searched TODO", "검색됨 TODO"),
             ("Glob", ["pattern": "**/*.swift"], .running, "Searching **/*.swift", "검색 중 **/*.swift"),
-            ("LS", ["path": "/repo/Sources"], .completed, "Listed /repo/Sources", "목록에 표시됨 /repo/Sources"),
+            ("LS", ["path": "/repo/Sources"], .completed, "Listed /repo/Sources", "목록 조회됨 /repo/Sources"),
             ("WebFetch", ["url": "https://example.com/docs", "prompt": "Summarize"], .completed,
              "Fetched https://example.com/docs", "가져옴 https://example.com/docs"),
             ("WebSearch", ["query": "swift regex lookbehind"], .running, "Searching web swift regex lookbehind",
@@ -223,6 +223,7 @@ final class ToolRowWordingTests: XCTestCase {
             ("Agent", ["prompt": "Look", "subagent_type": "general"], .completed, "Ran agent", "에이전트 실행함"),
             ("Skill", ["skill": "commit"], .completed, "Ran skill /commit", "Skill 실행됨 /commit"),
             ("TodoWrite", ["todos": [["content": "Fix", "status": "pending"]]], .completed, "Updated todos", "할 일 업데이트됨"),
+            ("TodoWrite", ["todos": [["content": "Fix", "status": "pending"]]], .failed, "Failed to update todos", "할 일 업데이트 실패"),
             ("TodoWrite", ["todos": [Any]()], .completed, "Cleared todos", "할 일 지워짐"),
             ("TodoWrite", ["todos": [Any]()], .running, "Updating todos", "할 일 업데이트 중"),
             ("mcp__github__create_issue", ["title": "Bug"], .completed, "Used github: create issue",
@@ -321,7 +322,7 @@ final class ToolRowWordingTests: XCTestCase {
                        "Called a tool, searched the web")
         XCTAssertEqual(ConversationWorkSummary.title(for: tools, harness: .codex, localize: ko), "도구 호출함, 웹 검색함")
         XCTAssertEqual(ConversationWorkSummary.title(for: [Self.tool("i1", .imageView), Self.tool("i2", .sleep)],
-                                                     harness: .codex, localize: ko), "완료됨")
+                                                     harness: .codex, localize: ko), "작업함")
     }
 
     /// While a command in the run works, the Codex group reads that command's line.
@@ -521,6 +522,8 @@ private struct ToolWordingShowcase: View {
     static var codexRunning: [ConversationItem] {
         [
             ToolRowWordingTests.codexCommand("c5", [.search(query: "TODO", path: nil, command: "rg TODO")]),
+            ToolRowWordingTests.codexCommand("c7", [.read(name: "Lexer.swift", path: "/tmp/yardlet/Sources/Lexer.swift",
+                                                          command: "cat Sources/Lexer.swift")], phase: .running),
             ToolRowWordingTests.codexCommand("c6", [.unknown(command: "swift test --filter ParserTests")],
                                              phase: .running)
         ]
@@ -531,6 +534,7 @@ private struct ToolWordingShowcase: View {
             ToolRowWordingTests.claudeItem("Read", ["file_path": "/tmp/yardlet/Sources/Parser.swift"], phase: .completed),
             ToolRowWordingTests.claudeItem("Grep", ["pattern": "parseArray", "path": "Sources"], phase: .completed),
             ToolRowWordingTests.claudeItem("Glob", ["pattern": "Tests/**/*.swift"], phase: .completed),
+            ToolRowWordingTests.claudeItem("LS", ["path": "/tmp/yardlet/Sources"], phase: .completed),
             ToolRowWordingTests.claudeItem("WebFetch", ["url": "https://www.json.org/json-en.html", "prompt": "Grammar"],
                                            phase: .completed),
             ToolRowWordingTests.claudeItem("Bash", ["command": "swift test --filter ParserTests",
@@ -543,6 +547,8 @@ private struct ToolWordingShowcase: View {
         [
             ToolRowWordingTests.claudeItem("TodoWrite", ["todos": [["content": "Fix", "status": "in_progress"]]],
                                            phase: .completed),
+            ToolRowWordingTests.claudeItem("TodoWrite", ["todos": [["content": "Fix", "status": "in_progress"]]],
+                                           phase: .failed),
             ToolRowWordingTests.claudeItem("Bash", ["command": "swift build", "description": "Build and run the app"],
                                            phase: .running)
         ]

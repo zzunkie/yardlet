@@ -122,6 +122,8 @@ final class ComposerSessionControlsRenderingTests: XCTestCase {
             let expected: [HarnessKind: String] = [.claudeCode: L10n.string("Manual"), .codex: L10n.string("Ask for approval")]
             XCTAssertEqual(permissions?.value, expected[harness], harness.rawValue)
             XCTAssertEqual(elements.contains { $0.label == L10n.string("Model") }, harness != .openCode, harness.rawValue)
+            // The task composer's "+", for files before the task exists, as in a new chat in both apps.
+            XCTAssertTrue(elements.contains { $0.label == L10n.string("Add files and more") }, harness.rawValue)
         }
 
         // Codex with Full access chosen, and its menu as the control opens it: the Codex app's choices.

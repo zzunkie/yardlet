@@ -192,7 +192,7 @@ final class ChatSidebarTests: XCTestCase {
         XCTAssertEqual(L10n.string("Chats", languageCode: "en"), "Chats")
         XCTAssertEqual(L10n.string("Chats", languageCode: "ko"), "채팅")
         XCTAssertEqual(L10n.string("Chat (no project)", languageCode: "en"), "Chat (no project)")
-        XCTAssertEqual(L10n.string("Chat (no project)", languageCode: "ko"), "채팅 (프로젝트 없음)")
+        XCTAssertEqual(L10n.string("Chat (no project)", languageCode: "ko"), "채팅(프로젝트 없음)")
     }
 }
 

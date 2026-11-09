@@ -8,6 +8,8 @@ struct ServiceAccountList: View {
     let center: ConnectorCenter
     let provider: ConnectorAccountProvider
     @Binding var newAccountServices: Set<LocalConnectorService>
+    /// The account whose removal waits for the person's answer.
+    @State private var removingAccount: UUID?
 
     private var canSignIn: Bool { center.canSignIn(with: provider) }
     /// What a new sign-in can turn on: not Google Analytics or Ads with Yardlet's own Google app.
@@ -77,6 +79,22 @@ struct ServiceAccountList: View {
             }
         }
         .padding(.top, 2)
+        // Removing signs the account out of every service, so it asks first, naming the account.
+        .confirmationDialog(removalTitle, isPresented: Binding(get: { removingAccount != nil },
+                                                               set: { if !$0 { removingAccount = nil } })) {
+            Button(L10n.string("Remove"), role: .destructive) {
+                if let id = removingAccount { center.removeAccount(id) }
+                removingAccount = nil
+            }
+            Button(L10n.string("Cancel"), role: .cancel) { removingAccount = nil }
+        } message: {
+            Text(L10n.string("Tasks stop using its services, and Yardlet signs out of the account."))
+        }
+    }
+
+    private var removalTitle: String {
+        let account = center.accounts(provider).first { $0.id == removingAccount }
+        return L10n.format("Remove %@?", account?.address ?? accountWord)
     }
 
     private func accountRow(_ account: ConnectorCenter.ServiceAccount) -> some View {
@@ -118,9 +136,9 @@ struct ServiceAccountList: View {
                         Button(L10n.string("Reconnect")) { center.reconnect(first.id) }
                     }
                     Divider()
-                    Button(provider == .google ? L10n.string("Remove this Google account") : L10n.string("Remove this Microsoft account"),
+                    Button(provider == .google ? L10n.string("Remove this Google account…") : L10n.string("Remove this Microsoft account…"),
                            role: .destructive) {
-                        center.removeAccount(account.id)
+                        removingAccount = account.id
                     }
                 } label: {
                     Image(systemName: "ellipsis")

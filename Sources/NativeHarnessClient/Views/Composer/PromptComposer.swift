@@ -796,18 +796,7 @@ struct PromptComposer: View {
     /// attachment, as the earlier media picker added it; any other file joins as context, as the
     /// earlier `@` button added it.
     private func chooseFiles() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = true
-        panel.prompt = L10n.string("Add")
-        guard panel.runModal() == .OK else { return }
-        let inputs = Self.addedInputs(panel.urls, policy: inputPolicy)
-        guard !inputs.isEmpty else {
-            composerDraft.notice = L10n.string("Context unavailable")
-            return
-        }
-        composerDraft.attachments.append(contentsOf: inputs)
+        if let chosen = ComposerFilePicker.chooseFiles(policy: inputPolicy) { composerDraft.add(chosen: chosen) }
     }
 
     /// What "Add files or photos" adds for each chosen file.
@@ -826,18 +815,7 @@ struct PromptComposer: View {
 
     /// "Add folder": folders join as context, as the earlier `@` button added them.
     private func chooseFolders() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = true
-        panel.prompt = L10n.string("Add")
-        guard panel.runModal() == .OK else { return }
-        let mentions = panel.urls.compactMap(CodexUserInput.localMention(for:))
-        guard !mentions.isEmpty else {
-            composerDraft.notice = L10n.string("Context unavailable")
-            return
-        }
-        composerDraft.attachments.append(contentsOf: mentions)
+        if let chosen = ComposerFilePicker.chooseFolders() { composerDraft.add(chosen: chosen) }
     }
 }
 

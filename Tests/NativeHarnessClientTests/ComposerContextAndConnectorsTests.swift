@@ -175,7 +175,7 @@ final class ComposerContextAndConnectorsTests: XCTestCase {
     /// The Korean words are the Claude app's own (`ko-KR.json`).
     func testKoreanWordingIsTheClaudeApps() {
         let expected: [String: String] = [
-            "Context window": "컨텍스트 윈도우",
+            "Context window": "컨텍스트 창",
             "Context %@": "컨텍스트 %@",
             "%@ until auto-compact": "자동 압축까지 %@ 토큰 남음",
             "Auto-compacts soon": "곧 자동 압축됨",

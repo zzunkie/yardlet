@@ -369,6 +369,7 @@ private struct ConnectorRow: View {
     @State private var token = ""
     @State private var clientID = ""
     @State private var clientSecret = ""
+    @State private var confirmsRemoval = false
 
     private enum Entry { case token, client }
 
@@ -694,7 +695,7 @@ private struct ConnectorRow: View {
                 Button(L10n.string("Open the service's setup page")) { NSWorkspace.shared.open(setup) }
             }
             Divider()
-            Button(L10n.string("Remove"), role: .destructive) { center.remove(record.id) }
+            Button(L10n.string("Remove…"), role: .destructive) { confirmsRemoval = true }
         } label: {
             Image(systemName: "ellipsis")
         }
@@ -702,6 +703,15 @@ private struct ConnectorRow: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .accessibilityLabel(L10n.format("More for %@", record.displayName))
+        // Removing signs out, so it asks first, naming the account, as deleting a task does.
+        .confirmationDialog(L10n.format("Remove %@?", record.displayName), isPresented: $confirmsRemoval) {
+            Button(L10n.string("Remove"), role: .destructive) { center.remove(record.id) }
+            Button(L10n.string("Cancel"), role: .cancel) {}
+        } message: {
+            Text(center.removalKeepsSignIn(record.id)
+                ? L10n.string("Tasks stop using it. The account stays signed in for its other services.")
+                : L10n.string("Tasks stop using it, and the sign-in and settings Yardlet saved for it are deleted."))
+        }
     }
 }
 

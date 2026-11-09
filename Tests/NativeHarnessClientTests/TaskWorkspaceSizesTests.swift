@@ -92,8 +92,8 @@ final class TaskWorkspaceSizesTests: XCTestCase {
         XCTAssertTrue(TaskCommandShortcut.all.contains(TaskCommandShortcut.toggleTerminal))
         XCTAssertEqual(TaskCommandTitle.sidePanel(isShown: false), L10n.string("Show side panel"))
         XCTAssertEqual(TaskCommandTitle.sidePanel(isShown: true), L10n.string("Hide side panel"))
-        XCTAssertEqual(L10n.string("Show terminal", languageCode: "ko"), "터미널 표시")
+        XCTAssertEqual(L10n.string("Show terminal", languageCode: "ko"), "터미널 보기")
         XCTAssertEqual(L10n.string("Hide terminal", languageCode: "ko"), "터미널 숨기기")
-        XCTAssertEqual(L10n.string("Show side panel", languageCode: "ko"), "오른쪽 패널 보기")
+        XCTAssertEqual(L10n.string("Show side panel", languageCode: "ko"), "사이드 패널 보기")
     }
 }

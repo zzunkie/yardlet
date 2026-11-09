@@ -901,12 +901,16 @@ final class ConnectorCenter: ConnectorToolProviding {
         }
     }
 
+    /// An account's sign-in stays while another service of the account uses it.
+    func removalKeepsSignIn(_ id: UUID) -> Bool {
+        let key = taskKey(id)
+        return record(id)?.signsInPerAccount == true
+            && connectors.contains { $0.id != id && $0.signsInPerAccount && $0.credentialID == key }
+    }
+
     func remove(_ id: UUID) {
         let key = taskKey(id)
-        // An account's sign-in stays while another service of the account uses it.
-        let shared = record(id)?.signsInPerAccount == true
-            && connectors.contains { $0.id != id && $0.signsInPerAccount && $0.credentialID == key }
-        if !shared {
+        if !removalKeepsSignIn(id) {
             cancelConnect(id)
             forgetCredential(key, keepingClient: false)
             accountSessions[key] = nil

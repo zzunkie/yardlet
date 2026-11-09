@@ -49,7 +49,7 @@ final class CodexStatusPanelTests: XCTestCase {
             XCTAssertEqual(L10n.string(key, languageCode: "en"), en, key)
             XCTAssertEqual(L10n.string(key, languageCode: "ko"), ko, key)
         }
-        XCTAssertEqual(korean.format("Show %lld more threads", Int64(3)), "추가 대화 3개 표시")
+        XCTAssertEqual(korean.format("Show %lld more threads", Int64(3)), "대화 3개 더 보기")
         XCTAssertEqual(english.format("Show %lld more threads", Int64(3)), "Show 3 more threads")
     }
 

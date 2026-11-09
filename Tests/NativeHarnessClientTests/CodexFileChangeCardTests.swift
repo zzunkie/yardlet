@@ -51,7 +51,7 @@ final class CodexFileChangeCardTests: XCTestCase {
             XCTAssertEqual(rows(threeKinds, status: status).compactMap(\.expandedTitle), [])
         }
         XCTAssertEqual(rows(threeKinds, status: "inProgress", finished: false).compactMap(\.expandedTitle), [])
-        XCTAssertEqual(L10n.string("Stopped editing", languageCode: "ko"), "편집 중단됨")
+        XCTAssertEqual(L10n.string("Stopped editing", languageCode: "ko"), "편집 중지됨")
         XCTAssertEqual(L10n.string("Diff too large to preview", languageCode: "ko"), "변경 내용이 너무 커서 미리 볼 수 없습니다")
     }
 
