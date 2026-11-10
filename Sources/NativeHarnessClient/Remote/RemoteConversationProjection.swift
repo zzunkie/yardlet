@@ -662,6 +662,30 @@ enum RemoteApprovalPolicy {
         }
     }
 
+    /// The answer allows more than the one call it answers: for the rest of the session, or by a rule kept beyond the
+    /// task. A device chooses one only with its Terminal permission (§15.28); a one-time answer and a denial for this
+    /// call need none.
+    static func allowsBeyondCall(_ route: ConversationRequestRoute) -> Bool {
+        if leavesStandingRule(route) { return true }
+        switch route {
+        case let .providerAction(action):
+            return action.decision == .allow && isSessionScoped(action)
+        case let .codex(response):
+            switch response {
+            case .command(.acceptForSession), .fileChange(.acceptForSession), .legacyReview(.approvedForSession):
+                return true
+            case let .permissions(_, scope, _):
+                return scope == .session
+            case let .mcpElicitation(action, _, meta):
+                return action == .accept && meta?["persist"]?.stringValue == "session"
+            default:
+                return false
+            }
+        case .decision, .answer, .structured:
+            return false
+        }
+    }
+
     /// A provider action that names the session as its scope and no standing rule.
     private static func isSessionScoped(_ action: PermissionRequestAction) -> Bool {
         let token = [action.kind ?? "", action.id].joined(separator: " ").lowercased()

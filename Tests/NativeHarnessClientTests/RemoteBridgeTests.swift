@@ -437,6 +437,19 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(kept.choices?.filter { $0.standing == true }.map(\.title),
                        ["Always allow in this project (saved to .claude/settings.local.json)"])
         XCTAssertEqual(item.choices?.contains { $0.standing == true }, false, "Allow for session ends with the task")
+        // What takes the device's Terminal permission (§15.28): an allow for the session or by a rule, never a one-time
+        // allow or a denial.
+        func beyondCall(_ actions: [PermissionRequestAction]) throws -> [String] {
+            try XCTUnwrap(pending(actions)).responses.filter { RemoteApprovalPolicy.allowsBeyondCall($0.route) }.map(\.title)
+        }
+        XCTAssertEqual(try beyondCall(session), ["Allow and switch to Accept edits mode for this session"])
+        XCTAssertEqual(try beyondCall(saved), ["Always allow in this project (saved to .claude/settings.local.json)"])
+        XCTAssertTrue(RemoteApprovalPolicy.allowsBeyondCall(.codex(.command(.acceptForSession))))
+        XCTAssertFalse(RemoteApprovalPolicy.allowsBeyondCall(.codex(.command(.accept))))
+        XCTAssertTrue(RemoteApprovalPolicy.allowsBeyondCall(.codex(.permissions(permissions: .object([:]), scope: .session,
+                                                                                strictAutoReview: nil))))
+        XCTAssertFalse(RemoteApprovalPolicy.allowsBeyondCall(.codex(.permissions(permissions: .object([:]), scope: .turn,
+                                                                                 strictAutoReview: nil))))
         XCTAssertTrue(RemoteApprovalPolicy.leavesStandingRule(.codex(.mcpElicitation(action: .accept, meta: .object(["persist": .string("always")])))))
         XCTAssertFalse(RemoteApprovalPolicy.leavesStandingRule(.codex(.mcpElicitation(action: .accept, meta: .object(["persist": .string("session")])))))
         XCTAssertTrue(RemoteApprovalPolicy.leavesStandingRule(.codex(.command(.acceptWithExecpolicyAmendment(["swift", "test"])))))
@@ -1130,6 +1143,8 @@ final class RemoteBridgeTests: XCTestCase {
         var screenshots = ScheduledTask(name: "Nightly screenshots", prompt: "Shoot", trigger: .daily(ScheduleTime(hour: 2, minute: 0)),
                                         destination: ScheduleDestination(harness: .claudeCode, workspacePath: "/tmp/remote-schedules/acme-web"),
                                         isEnabled: false, createdAt: created)
+        // It starts its tasks in Bypass permissions.
+        screenshots.destination.modelChoice = NewTaskModelChoice(model: nil, permissionMode: ClaudePermissionMode.bypassPermissions)
         screenshots.state.stopReason = .repeatedFailures
         screenshots.state.consecutiveFailures = 3
         screenshots.state.runs = [run(.failed, hoursAgo: 3, failure: "No simulator")]
@@ -1198,6 +1213,13 @@ final class RemoteBridgeTests: XCTestCase {
         let resumed = await bridge.perform(.setScheduledTaskEnabled(scheduleID: weekly.id.uuidString, enabled: true))
         XCTAssertNil(resumed)
         XCTAssertEqual(center.schedule(id: weekly.id)?.isEnabled, true)
+        // One that starts in Bypass permissions runs or resumes only for a device with its Terminal permission (§15.28).
+        let elevatedRun = await bridge.perform(.runScheduledTask(scheduleID: screenshots.id.uuidString))
+        XCTAssertEqual(elevatedRun?.reason, .terminal)
+        let elevatedResume = await bridge.perform(.setScheduledTaskEnabled(scheduleID: screenshots.id.uuidString, enabled: true))
+        XCTAssertEqual(elevatedResume?.reason, .terminal)
+        XCTAssertEqual(center.schedule(id: screenshots.id)?.isEnabled, false)
+        XCTAssertEqual(center.schedule(id: screenshots.id)?.state.runs.count, 1)
         try await waitUntil { signals.changes.contains(.schedules) }
         let afterResuming = try await bridge.scheduledTasks().get()
         XCTAssertEqual(Array(afterResuming.map(\.id).prefix(2)), [morning, weekly].map(\.id.uuidString),
@@ -1215,6 +1237,10 @@ final class RemoteBridgeTests: XCTestCase {
         try await model.store.updateSession(id: working.id, status: .completed)
         try await waitUntil { (try? await bridge.scheduledTasks().get().first?.running) == false }
         XCTAssertEqual(bridge.scheduleMaskings, maskings, "A task change rereads the list, not its schedules' prompts")
+        let resumedWithTerminal = await bridge.perform(.setScheduledTaskEnabled(scheduleID: screenshots.id.uuidString, enabled: true,
+                                                                                mayElevate: true))
+        XCTAssertNil(resumedWithTerminal)
+        XCTAssertEqual(center.schedule(id: screenshots.id)?.isEnabled, true)
         await model.shutdown()
     }
 
@@ -2116,6 +2142,24 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertNil(chosen)
         let denied = await adapter.permissionDecisions
         XCTAssertEqual(denied["bash-2"], .deny)
+
+        // An answer that allows past this call takes the device's Terminal permission (§15.28).
+        let third = PermissionRequest(id: "bash-3", title: "Bash", detail: nil, command: "swift build", actions: [
+            PermissionRequestAction(id: "allow", label: "Allow", decision: .allow, kind: "allow_once"),
+            PermissionRequestAction(id: "allow_session", label: "Allow for this session", decision: .allow, kind: "allow_session"),
+            PermissionRequestAction(id: "deny", label: "Deny", decision: .deny, kind: "reject_once")])
+        await adapter.emit(.permissionRequested(third), for: session.id, sequence: 6)
+        try await waitUntil { bridge.conversation(of: taskID)?.turns.last?.items.contains { $0.requestId == "bash-3" } == true }
+        let lasting = try XCTUnwrap(bridge.conversation(of: taskID)?.turns.last?.items.last { $0.requestId == "bash-3" }?
+            .choices?.first { $0.title == "Allow for this session" })
+        let withoutTerminal = await bridge.perform(.chooseAnswer(taskID: taskID, requestID: "bash-3", choice: lasting.id))
+        XCTAssertEqual(withoutTerminal?.reason, .terminal)
+        let unanswered = await adapter.permissionDecisions
+        XCTAssertNil(unanswered["bash-3"])
+        let withTerminal = await bridge.perform(.chooseAnswer(taskID: taskID, requestID: "bash-3", choice: lasting.id,
+                                                              mayElevate: true))
+        XCTAssertNil(withTerminal)
+        try await waitUntilAsync { await adapter.permissionDecisions["bash-3"] == .allow }
 
         // Editing a message on the Mac: the phone's text is not taken as the edit.
         model.composerDrafts.tasks.draft(for: session.id).editState = ConversationEditState(

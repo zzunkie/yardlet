@@ -550,6 +550,7 @@ reason words the refusal by its `code`.
 | `harness` | the Mac does not offer the harness now (§15.16), or none can start a task |
 | `setting` | a setting, or a value of it, the Mac's menus do not offer now (§15.16) |
 | `confirmation` | a choice the Mac asks to confirm, sent without `confirmed` (§15.16) |
+| `terminal` | the device's Terminal permission is off: a terminal, or a choice that lets an agent act without asking (§15.28) |
 | `account` | an account the Mac cannot start or move the task on now (§15.16, §15.33) |
 | `worktree` | a new worktree asked for outside a Git repository (§15.16, §15.35) |
 | `attachments` | pictures or files the harness or the task does not take (§4.4, §15.16) |
@@ -1211,7 +1212,8 @@ that does not know them ignores them.
 - `optionTitles: {"allowForSession": "Allow and switch to Accept edits mode for this session"}`: the card's own
   words, in the Mac's language, for an option whose meaning depends on the provider. Show them; fall back to the
   phone's words for an option without one.
-- `answerApproval` takes `"answer": "allowForSession"`. With `"answer": "deny"` it takes an optional `note`
+- `answerApproval` takes `"answer": "allowForSession"`, from a device with its Terminal permission (§15.28). With
+  `"answer": "deny"` it takes an optional `note`
   (≤ 4,000 characters): what the agent should do instead. Claude Code reads it as the denial's message, as its own
   "No, and tell Claude what to do differently", also when the request is a Claude Code subagent's the task runs;
   every other harness gets the denial, then the note as the task's next message, as the Mac's composer sends one
@@ -1298,7 +1300,8 @@ that does not know them ignores them.
   starts in a choice the Mac asks to confirm: one the request names is refused, and one only the Mac's new-task
   screen has chosen gives way to the harness's default, as `newTaskOptions` showed. Errors: `notAllowed`, with
   `reason`: `harness` (not offered now), `setting` (a setting or value the menus do not offer now; `setting` names it
-  when it is one of theirs), `confirmation` (a choice that asks, without `confirmed`), `account` (§15.33),
+  when it is one of theirs), `confirmation` (a choice that asks, without `confirmed`), `terminal` (a choice that asks,
+  from a device without its Terminal permission; §15.28), `account` (§15.33),
   `worktree` (asked for outside a Git repository), `attachments` (the harness takes no images or no such files), or
   `signIn` (the harness's login on the Mac needs signing in first).
 
@@ -1393,7 +1396,8 @@ shows, instead of the few §4.4 and §15.13 name.
   ```
 
   `note` goes with a `destructive` choice only, as §15.13's. A command. Errors: `requestNotFound`, `notAllowed`
-  (no such choice), `tooLarge`, `unsupportedCommand` (the note), `unavailable`.
+  (no such choice; reason `terminal` for an allow that lasts beyond this call, for the session or as a `standing` rule,
+  from a device without its Terminal permission, §15.28), `tooLarge`, `unsupportedCommand` (the note), `unavailable`.
 - An MCP form (`requestKind` `form` with `formFields`) is answered by a choice with `values`:
 
   ```json
@@ -1619,7 +1623,8 @@ message's Edit message, and Fork from here. Each acts through the path the Mac's
   A command: the menu's choice, applied as the Mac's composer applies it. `confirmed: true` is required for a choice
   with `confirm`, once the person said yes. The answer carries `settings`, the controls after the change, once the
   provider took it (or after about 10 s). Errors: `notFound`, `notAllowed` (no such setting, a value the menu does not
-  offer now, a setting that still has `prepare`, or a choice with `confirm` without `confirmed`).
+  offer now, a setting that still has `prepare`, or a choice with `confirm` without `confirmed`, with reason
+  `confirmation`; reason `terminal` for one from a device without its Terminal permission, §15.28).
 - `{"event": "taskSettingsChanged", "taskId": "4C1F…"}` goes to a connection that asked for the task's `taskSettings`
   since it subscribed to it, when they change by any path (the Mac's own menus, another device, the provider leaving
   plan mode). It carries nothing; the phone asks for `taskSettings` again. Unsubscribing ends it.
@@ -2011,9 +2016,24 @@ refusals are coalesced per device, request type and result, independent of the u
 transition clears that device's refusal window so its first newly refused operation is recorded.
 
 These permissions reserve separate authorization for terminal sessions, direct file writes and host settings.
-They do not add file-writing or settings-changing requests by themselves, and do not change the existing paired
-remote's task messages or task-specific controls. Credentials, vault entries, sign-in and remote device management
-remain on the host.
+They do not add file-writing or settings-changing requests by themselves. Credentials, vault entries, sign-in and
+remote device management remain on the host.
+
+`terminal` also guards every choice that lets an agent act without asking, since such an agent can run what a shell
+runs. Without it the host treats a request's `confirmed` as absent for `createTask`, a suggestion's Start
+(`actOnSuggestion`), `setTaskSetting` and `saveScheduledTask`, so a permission the Mac asks to confirm (Bypass
+permissions, Full access) is refused with `notAllowed` and reason `terminal` rather than `confirmation`; a task
+whose new-task choice the Mac's own screen holds starts on the harness's default, as one that names none does
+(§15.16). `answerApproval` with `allowForSession` and a `chooseAnswer` choice that allows beyond the one call (for
+the session, or as a `standing` rule, §15.19) are refused the same way, as are `runScheduledTask` and resuming
+(`setScheduledTaskEnabled` with `enabled: true`) a schedule whose new task starts in such a permission. The
+permission is read when each request arrives.
+
+This covers what the device chooses, not what the person already chose on the Mac. A device without `terminal`
+still sends messages to any listed task, including one already running without asking, answers its requests with a
+one-time allow or a denial, forks or continues it, and runs or resumes a schedule that continues such a task. Device
+permissions gate these direct requests; they do not make a device without `terminal` unable to reach a shell through
+an agent the person set up that way.
 
 ### 15.29 Task terminals
 
@@ -2405,8 +2425,8 @@ writes a schedule to its own repository.
 - `saveScheduledTask` takes optional `scheduleId` (absent to create), `definition` (the edited presentation
   copy), `settings` (the host's option identifiers and values), and `confirmed`. The host validates the
   destination, account and choices against its own projects, tasks and option catalog, and requires confirmation for
-  elevated permissions. It creates or updates through the same center methods as the local editor, retaining
-  the host-owned run history on edits. A successful response carries `scheduleId`.
+  elevated permissions, and the device's Terminal permission (§15.28). It creates or updates through the same center
+  methods as the local editor, retaining the host-owned run history on edits. A successful response carries `scheduleId`.
 - `deleteScheduledTasks` takes `scheduleIds`, `completedOnly` (default false), and `confirmed`. The client asks
   the local window's deletion question first. Delete All captures the completed schedules shown at confirmation;
   with `completedOnly: true`, the host deletes only those still completed, preserving one edited to run again.

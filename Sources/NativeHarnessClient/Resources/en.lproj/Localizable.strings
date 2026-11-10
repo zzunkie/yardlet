@@ -2070,6 +2070,7 @@
 "Sign in to this harness on %@ first." = "Sign in to this harness on %@ first.";
 "%@ doesn't offer this harness now." = "%@ doesn't offer this harness now.";
 "That choice isn't offered on %@ now." = "That choice isn't offered on %@ now.";
+"To use this from here, allow Terminal for this device in Settings › Remote › Paired devices on %@." = "To use this from here, allow Terminal for this device in Settings › Remote › Paired devices on %@.";
 "That account can't be used on %@ now." = "That account can't be used on %@ now.";
 "This harness doesn't take these pictures or files." = "This harness doesn't take these pictures or files.";
 "%@ didn't accept the connection." = "%@ didn't accept the connection.";
@@ -3834,7 +3835,7 @@
 
 "Permission is off, but the change could not be saved. Retry before restarting Yardlet." = "Permission is off, but the change could not be saved. Retry before restarting Yardlet.";
 
-"Run shell commands as the host user." = "Run shell commands as the host user.";
+"Run shell commands as the host user, and let agents act without asking." = "Run shell commands as the host user, and let agents act without asking.";
 
 "Save and discard changes in the task's workspace." = "Save and discard changes in the task's workspace.";
 

@@ -44,6 +44,7 @@ import XCTest
 /// - `remote-controls-codex-*.png` and `local-controls-codex-*.png`: a Codex task's bottom row and its turns' Edit
 ///   message and Fork from here.
 /// - `remote-controls-edit-*.png` and `local-controls-edit-*.png`: the same task editing its latest request.
+/// - `remote-controls-needs-terminal-*.png`: Bypass permissions refused for a device without its Terminal permission.
 /// - `remote-controls-claude-*.png` and `local-controls-claude-*.png`: a Claude Code task in Bypass permissions.
 @MainActor
 final class RemoteHostWindowRenderingTests: XCTestCase {
@@ -1053,6 +1054,19 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
         await model.readTaskSettings(guideID, prepare: true)
         await model.readTaskRail(guideID)
         try await waitUntil { model.railComposerOptions(guideID)?.contextUsage != nil }
+        // Asked from a device without its Terminal permission, the choice is refused, saying what it takes (§15.28).
+        model.setTaskSetting(guideID, id: ClaudeLaunchOption.permissionMode, value: ClaudePermissionMode.bypassPermissions,
+                             confirmed: true)
+        let needsTerminal = L10n.format(
+            "To use this from here, allow Terminal for this device in Settings › Remote › Paired devices on %@.", model.name)
+        try await waitUntil { model.commandError == needsTerminal }
+        try await render("remote-controls-needs-terminal", size: size, titled: true, title: model.name) {
+            RemoteHostView(model: model, directory: hosts)
+        } check: { elements in
+            XCTAssertTrue(elements.contains { $0.value == needsTerminal || $0.label == needsTerminal }, elements.description)
+        }
+        model.commandError = nil
+        try await stack.server.setPermission(.terminal, allowed: true, for: try XCTUnwrap(model.host.deviceID))
         model.setTaskSetting(guideID, id: ClaudeLaunchOption.permissionMode, value: ClaudePermissionMode.bypassPermissions,
                              confirmed: true)
         try await waitUntil { model.taskSettings[guideID]?.first { $0.role == "permission" }?.elevated == true }

@@ -685,7 +685,7 @@ final class AppModelRemoteBridge: RemoteBridge {
                 return RemoteError(.requestNotFound)
             }
             return nil
-        case let .chooseAnswer(taskID, requestID, choice, note, values):
+        case let .chooseAnswer(taskID, requestID, choice, note, values, mayElevate):
             guard let session = session(taskID) else { return RemoteError(.notFound) }
             guard let request = pendingRequest(requestID, in: session) else { return RemoteError(.requestNotFound) }
             // The card's own answers, as the phone was offered them (`RemoteApprovalPolicy.choices`).
@@ -711,6 +711,7 @@ final class AppModelRemoteBridge: RemoteBridge {
                 guard let formed = request.route(for: response, input: input) else { return RemoteError(.notAllowed) }
                 route = formed
             }
+            guard mayElevate || !RemoteApprovalPolicy.allowsBeyondCall(route) else { return Self.needsTerminal }
             if let note, case .transcript = request.source, Self.isPlainDenial(route),
                Self.readsDenialNotes(request, in: session, model: model) {
                 await model.respond(to: request.id, answer: .denial(reason: note), in: session)
@@ -719,14 +720,15 @@ final class AppModelRemoteBridge: RemoteBridge {
             if let error = await answer(request, in: session, by: route) { return error }
             if let note { Task { await model.send(HarnessUserInput(text: note), to: session) } }
             return nil
-        case let .runScheduledTask(scheduleID):
+        case let .runScheduledTask(scheduleID, mayElevate):
             let center = model.scheduledTasks
-            guard let id = UUID(uuidString: scheduleID), center.schedule(id: id) != nil else { return RemoteError(.notFound) }
+            guard let id = UUID(uuidString: scheduleID), let schedule = center.schedule(id: id) else { return RemoteError(.notFound) }
+            guard mayElevate || !Self.startsElevated(schedule, in: model) else { return Self.needsTerminal }
             guard !center.startingIDs.contains(id) else { return RemoteError(.busy, "A run of it is starting", reason: .running) }
             // Run now in the list's menu and the detail: a skip while its task is busy, a failure when it cannot start.
             Task { await center.runNow(id) }
             return nil
-        case let .setScheduledTaskEnabled(scheduleID, enabled):
+        case let .setScheduledTaskEnabled(scheduleID, enabled, mayElevate):
             let center = model.scheduledTasks
             guard let id = UUID(uuidString: scheduleID), let schedule = center.schedule(id: id) else {
                 return RemoteError(.notFound)
@@ -736,6 +738,7 @@ final class AppModelRemoteBridge: RemoteBridge {
                 return RemoteError(.notAllowed, "A one-off that ran or whose time passed runs again once edited on the Mac",
                                    reason: .hostOnly)
             }
+            if enabled, !schedule.isEnabled, !mayElevate, Self.startsElevated(schedule, in: model) { return Self.needsTerminal }
             center.setEnabled(enabled, for: id)
             return nil
         case let .editMessage(taskID, turnID, text):
@@ -764,6 +767,11 @@ final class AppModelRemoteBridge: RemoteBridge {
     static func messageAccepted(by session: SessionRecord, in model: AppModel) {
         model.composerDrafts.tasks.existingDraft(for: session.id)?.notice = nil
     }
+
+    /// What a device without its Terminal permission is told when it chooses what lets an agent act without asking
+    /// (§15.28): an answer that allows more than the call it answers, or a run of a schedule that starts in a permission
+    /// the Mac asks to confirm.
+    static let needsTerminal = RemoteError(.notAllowed, "This takes the device's Terminal permission", reason: .terminal)
 
     /// Whether a request can be answered now, in the card's order (`AppModel.respond`): one Yardlet holds itself (a
     /// session tool's, or a question a restart cut off) whether or not the task is connected, any other through the

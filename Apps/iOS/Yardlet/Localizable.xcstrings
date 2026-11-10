@@ -1873,6 +1873,16 @@
         }
       }
     },
+    "To use this from here, allow Terminal for this device in Settings › Remote › Paired devices on %@.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "여기서 쓰려면 %@의 설정 › 원격 연결 › 연결된 기기에서 이 기기에 “터미널”을 허용하세요."
+          }
+        }
+      }
+    },
     "Too many requests. Try again in a moment.": {
       "localizations": {
         "ko": {

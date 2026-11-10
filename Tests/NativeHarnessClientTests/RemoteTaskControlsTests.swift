@@ -33,7 +33,7 @@ final class RemoteTaskControlsTests: XCTestCase {
             initialCodexPresentation: [session.id: state], transcriptRepository: UserDefaultsTranscriptRepository(defaults: defaults),
             sessionTitleResolver: { _ in nil }, restoresIndexOnLaunch: false)
         await adapter.emitPresentation(state, for: session.id)
-        let (client, close) = try await Self.connect(to: host)
+        let (client, _, close) = try await Self.connect(to: host)
         defer { close() }
         try await waitUntil { client.nextSteps }
         let taskID = session.id.uuidString
@@ -85,7 +85,7 @@ final class RemoteTaskControlsTests: XCTestCase {
                             sessionTitleResolver: { _ in nil }, restoresIndexOnLaunch: false)
         // The thread the App Server shows once the task connects.
         await adapter.emitPresentation(state, for: session.id)
-        let (client, close) = try await Self.connect(to: host)
+        let (client, server, close) = try await Self.connect(to: host)
         defer { close() }
         let taskID = session.id.uuidString
         try await waitUntil { client.task(taskID) != nil && client.taskControls }
@@ -115,6 +115,13 @@ final class RemoteTaskControlsTests: XCTestCase {
                                                                     value: CodexRunLocation.dangerFullAccess.rawValue))
         XCTAssertEqual(unconfirmed.error?.code, .notAllowed)
         XCTAssertEqual(host.store.sessions.first?.providerOptions[CodexRunLocation.storageKey], nil)
+        // A device without its Terminal permission confirms in vain (§15.28), and is told what it takes.
+        client.setTaskSetting(taskID, id: permission.id, value: CodexRunLocation.dangerFullAccess.rawValue, confirmed: true)
+        let needsTerminal = L10n.format(
+            "To use this from here, allow Terminal for this device in Settings › Remote › Paired devices on %@.", client.name)
+        try await waitUntil { client.commandError == needsTerminal }
+        XCTAssertEqual(host.store.sessions.first?.providerOptions[CodexRunLocation.storageKey], nil)
+        try await server.setPermission(.terminal, allowed: true, for: try XCTUnwrap(client.host.deviceID))
         client.setTaskSetting(taskID, id: permission.id, value: CodexRunLocation.dangerFullAccess.rawValue, confirmed: true)
         try await waitUntil { client.taskSettings[taskID]?.first { $0.role == "permission" }?.elevated == true }
         XCTAssertEqual(host.store.sessions.first?.providerOptions[CodexRunLocation.storageKey],
@@ -182,7 +189,7 @@ final class RemoteTaskControlsTests: XCTestCase {
                             registry: HarnessRegistry { _, _ in adapter },
                             transcriptRepository: UserDefaultsTranscriptRepository(defaults: defaults),
                             sessionTitleResolver: { _ in nil }, restoresIndexOnLaunch: false)
-        let (client, close) = try await Self.connect(to: host)
+        let (client, server, close) = try await Self.connect(to: host)
         defer { close() }
         let taskID = session.id.uuidString
         try await waitUntil { client.task(taskID) != nil && client.taskControls }
@@ -203,6 +210,10 @@ final class RemoteTaskControlsTests: XCTestCase {
         let unconfirmed = await client.response(to: .setTaskSetting(taskID: taskID, setting: permission.id,
                                                                     value: ClaudePermissionMode.bypassPermissions))
         XCTAssertEqual(unconfirmed.error?.code, .notAllowed)
+        let withoutTerminal = await client.response(to: .setTaskSetting(taskID: taskID, setting: permission.id,
+            value: ClaudePermissionMode.bypassPermissions, confirmed: true))
+        XCTAssertEqual(withoutTerminal.error?.reason, .terminal)
+        try await server.setPermission(.terminal, allowed: true, for: try XCTUnwrap(client.host.deviceID))
         client.setTaskSetting(taskID, id: permission.id, value: ClaudePermissionMode.bypassPermissions, confirmed: true)
         try await waitUntil { client.taskSettings[taskID]?.first { $0.role == "permission" }?.elevated == true }
         let selections = await adapter.providerOptionSelections
@@ -252,6 +263,7 @@ final class RemoteTaskControlsTests: XCTestCase {
         XCTAssertEqual(client.taskSettings[idle]?.compactMap(\.role), ["permission", "model", "effort"])
         let refused = await client.response(to: .setTaskSetting(taskID: idle, setting: "permissionMode", value: "bypassPermissions"))
         XCTAssertEqual(refused.error?.code, .notAllowed)
+        try await stack.server.setPermission(.terminal, allowed: true, for: try XCTUnwrap(client.host.deviceID))
         client.setTaskSetting(idle, id: "permissionMode", value: "bypassPermissions", confirmed: true)
         try await waitUntil { client.taskSettings[idle]?.first?.elevated == true }
 
@@ -295,8 +307,8 @@ final class RemoteTaskControlsTests: XCTestCase {
 
     // MARK: - Support
 
-    /// The client paired with a server in front of `host`, and what closes both.
-    private static func connect(to host: AppModel) async throws -> (RemoteHostModel, () -> Void) {
+    /// The client paired with a server in front of `host`, that server, and what closes both.
+    private static func connect(to host: AppModel) async throws -> (RemoteHostModel, RemoteServer, () -> Void) {
         let stack = try await LoopbackStack(name: "Mac Studio", bridge: AppModelRemoteBridge(model: host))
         let ticket = await stack.server.openPairing()
         let link = try XCTUnwrap(RemoteSecurePairingURL(macKey: stack.identity.noise.publicKey, secret: ticket.secret,
@@ -305,7 +317,7 @@ final class RemoteTaskControlsTests: XCTestCase {
                                             hello: RemoteHandshakeHello(name: "MacBook Air", platform: "macos", appVersion: "test"))
         let paired = try await directory.pair(link: link.absoluteString)
         let client = try XCTUnwrap(directory.model(for: paired.id))
-        return (client, {
+        return (client, stack.server, {
             directory.close(paired.id)
             stack.stop()
         })

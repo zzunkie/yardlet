@@ -122,6 +122,10 @@ public enum RemoteRefusal: String, Codable, Sendable, CaseIterable {
     case setting
     /// The value is one the host asks to confirm first, and the request did not say it was confirmed.
     case confirmation
+    /// The device's Terminal permission is off on the host (§15.28). It guards the task terminals, and every choice that
+    /// lets an agent act without asking: a permission the host asks to confirm, and an answer that allows more than the
+    /// one call it answers.
+    case terminal
     /// The account is not one the host can start this harness on now.
     case account
     /// A new worktree was asked for in a project that is not in a Git repository.
@@ -1271,9 +1275,12 @@ public enum RemoteRequest: Equatable, Sendable {
     }
 
     /// Every request explicitly declares its additional host permission. New requests must extend
-    /// this exhaustive switch; task-specific controls retain their established paired-device access.
+    /// this exhaustive switch; task-specific controls retain their established paired-device access. A choice that lets
+    /// an agent act without asking takes `.terminal` too: here where the request names it, and where the host reads it
+    /// otherwise (`confirmed`, a card's answer, a schedule's permission; §15.28).
     public var requiredPermission: RemoteDevicePermission? {
         switch self {
+        case let .answerApproval(_, _, answer, _): answer == .allowForSession ? .terminal : nil
         case .hostAccounts: nil
         case .setHostAccount, .setHostHarnessRuntime, .setHostConnector: .settings
         case .taskRail, .railAction: nil
@@ -1288,7 +1295,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .openTab, .closeTab: nil
         case .hostSettings: nil
         case .setHostSetting, .saveHostInstructions, .hostCLIUpdate: .settings
-        case .snapshot, .subscribeTask, .loadOlder, .unsubscribeTask, .ping, .sendMessage, .answerApproval,
+        case .snapshot, .subscribeTask, .loadOlder, .unsubscribeTask, .ping, .sendMessage,
              .stopTurn, .markRead, .answerQuestion, .reviewPlan, .createTask, .newTaskOptions, .limitAccounts,
              .continueWithAccount, .setAutoContinue, .actOnQueued, .answerHandoff, .chooseAnswer, .uploadFile, .registerPush,
              .unregisterPush, .forgetDevice, .itemDetail, .actOnSuggestion, .suggestionOptions, .setPinned, .archiveTask,

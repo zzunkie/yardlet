@@ -36,7 +36,9 @@ public enum RemoteBridgeChange: Equatable, Sendable {
     case hostAccounts
 }
 
-/// What a command asks of the Mac.
+/// What a command asks of the Mac. `mayElevate`: the device has its Terminal permission (§15.28), without which a
+/// command never lets an agent act without asking: an answer that allows more than the call it answers, or a run of a
+/// schedule that starts in a permission the Mac asks to confirm.
 public enum RemoteCommand: Equatable, Sendable {
     case sendMessage(taskID: String, text: String, images: [RemoteImage] = [], followUp: RemoteFollowUpMode? = nil,
                      files: [RemoteFile] = [])
@@ -58,10 +60,10 @@ public enum RemoteCommand: Equatable, Sendable {
     case actOnQueued(taskID: String, itemID: String, action: RemoteQueuedAction)
     case answerHandoff(taskID: String, requestID: String, answer: RemoteHandoffAnswer)
     case chooseAnswer(taskID: String, requestID: String, choice: String, note: String? = nil,
-                      values: [String: RemoteFormValue] = [:])
+                      values: [String: RemoteFormValue] = [:], mayElevate: Bool = false)
     /// Run now, Pause and Resume of a schedule (§15.21).
-    case runScheduledTask(scheduleID: String)
-    case setScheduledTaskEnabled(scheduleID: String, enabled: Bool)
+    case runScheduledTask(scheduleID: String, mayElevate: Bool = false)
+    case setScheduledTaskEnabled(scheduleID: String, enabled: Bool, mayElevate: Bool = false)
     /// Edit message on the task's latest message, then Send, as the Mac's turn and composer do (§15.23).
     case editMessage(taskID: String, turnID: String, text: String)
 }
@@ -1145,9 +1147,20 @@ public actor RemoteServer {
         guard permissionsLoaded, permissionRequestsEnabled, let connection = connections[id], connection.isProven,
               let deviceID = connection.deviceID, !revokedDeviceIDs.contains(deviceID),
               !removingDeviceIDs.contains(deviceID), effectivePermissions[deviceID]?[permission] == true else {
-            return RemoteError(.notAllowed)
+            return RemoteError(.notAllowed, reason: permission == .terminal ? .terminal : nil)
         }
         return nil
+    }
+
+    /// Whether the device may choose what lets an agent act without asking (§15.28): its Terminal permission.
+    func mayElevate(on id: UUID) -> Bool { permissionError(.terminal, on: id) == nil }
+
+    /// `confirmed` from a device without Terminal counts as absent (§15.28): the host's own check then refuses a choice
+    /// it asks to confirm, and the refusal names the permission it takes instead of asking for a confirmation.
+    static func elevationRefusal(_ error: RemoteError?, mayElevate: Bool) -> RemoteError? {
+        guard let error, !mayElevate, error.reason == .confirmation else { return error }
+        return RemoteError(.notAllowed, "The choice takes this device's Terminal permission", reason: .terminal,
+                           setting: error.setting)
     }
 
     func auditPermissionRefusal(device: String?, request: RemoteRequest) {
@@ -1349,6 +1362,8 @@ public actor RemoteServer {
                 }
                 var trimmed = start
                 trimmed.text = start.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let mayElevate = self.mayElevate(on: id)
+                trimmed.confirmed = start.confirmed && mayElevate
                 switch self.uploadedFiles(start.files, on: id) {
                 case let .success(files): trimmed.attachedFiles = files
                 case let .failure(error): return error
@@ -1360,7 +1375,7 @@ public actor RemoteServer {
                     return nil
                 case let .failure(error):
                     self.uploads.unclaim(start.files, now: self.now())
-                    return error
+                    return Self.elevationRefusal(error, mayElevate: mayElevate)
                 }
             } answer: { response in
                 response.taskId = created
@@ -1399,8 +1414,15 @@ public actor RemoteServer {
                 respond(.failure(envelope.id, error), to: id)
             }
         case let .actOnSuggestion(taskID, suggestionID, action, start):
+            let mayElevate = self.mayElevate(on: id)
+            let checked = start.map { start in
+                var checked = start
+                checked.confirmed = start.confirmed && mayElevate
+                return checked
+            }
             await command(envelope.id, request: request, on: id) {
-                await self.bridge.perform(.actOnSuggestion(taskID: taskID, suggestionID: suggestionID, action: action, start: start))
+                Self.elevationRefusal(await self.bridge.perform(.actOnSuggestion(
+                    taskID: taskID, suggestionID: suggestionID, action: action, start: checked)), mayElevate: mayElevate)
             }
         case let .suggestionOptions(taskID, suggestionID, harness, settings, projectID, accountID, composer):
             switch await bridge.suggestionOptions(taskID: taskID, suggestionID: suggestionID, harness: harness, settings: settings,
@@ -1562,11 +1584,12 @@ public actor RemoteServer {
                 await self.bridge.perform(.answerHandoff(taskID: taskID, requestID: requestID, answer: answer))
             }
         case let .chooseAnswer(taskID, requestID, choice, note, values):
+            let mayElevate = self.mayElevate(on: id)
             await command(envelope.id, request: request, on: id) {
                 if (note?.count ?? 0) > RemoteProtocol.maxAnswerCharacters { return RemoteError(.tooLarge) }
                 if let note, Self.isSlashCommand(note) { return RemoteError(.unsupportedCommand, "Slash commands stay on the Mac") }
                 return await self.bridge.perform(.chooseAnswer(taskID: taskID, requestID: requestID, choice: choice, note: note,
-                                                               values: values))
+                                                               values: values, mayElevate: mayElevate))
             }
         case let .presence(active):
             connections[id]?.isPresent = active
@@ -1595,10 +1618,12 @@ public actor RemoteServer {
             }
         case let .saveScheduledTask(scheduleID, definition, settings, confirmed):
             var savedID: String?
+            let mayElevate = self.mayElevate(on: id)
             await command(envelope.id, request: request, on: id) {
-                switch await self.bridge.saveScheduledTask(scheduleID: scheduleID, definition: definition, settings: settings, confirmed: confirmed) {
+                switch await self.bridge.saveScheduledTask(scheduleID: scheduleID, definition: definition, settings: settings,
+                                                           confirmed: confirmed && mayElevate) {
                 case let .success(id): savedID = id; return nil
-                case let .failure(error): return error
+                case let .failure(error): return Self.elevationRefusal(error, mayElevate: mayElevate)
                 }
             } answer: { $0.scheduleId = savedID }
         case let .deleteScheduledTasks(ids, completedOnly, confirmed):
@@ -1632,12 +1657,14 @@ public actor RemoteServer {
                 respond(.failure(envelope.id, error), to: id)
             }
         case let .runScheduledTask(scheduleID):
+            let mayElevate = self.mayElevate(on: id)
             await command(envelope.id, request: request, on: id) {
-                await self.bridge.perform(.runScheduledTask(scheduleID: scheduleID))
+                await self.bridge.perform(.runScheduledTask(scheduleID: scheduleID, mayElevate: mayElevate))
             }
         case let .setScheduledTaskEnabled(scheduleID, enabled):
+            let mayElevate = self.mayElevate(on: id)
             await command(envelope.id, request: request, on: id) {
-                await self.bridge.perform(.setScheduledTaskEnabled(scheduleID: scheduleID, enabled: enabled))
+                await self.bridge.perform(.setScheduledTaskEnabled(scheduleID: scheduleID, enabled: enabled, mayElevate: mayElevate))
             }
         case let .taskOutputs(taskID):
             switch await bridge.taskOutputs(taskID: taskID) {
@@ -1739,13 +1766,15 @@ public actor RemoteServer {
             respondSettings(envelope.id, taskID: taskID, result, on: id)
         case let .setTaskSetting(taskID, setting, value, confirmed):
             var settings: [RemoteSetting]?
+            let mayElevate = self.mayElevate(on: id)
             await command(envelope.id, request: request, on: id) {
-                switch await self.bridge.setTaskSetting(taskID: taskID, setting: setting, value: value, confirmed: confirmed) {
+                switch await self.bridge.setTaskSetting(taskID: taskID, setting: setting, value: value,
+                                                        confirmed: confirmed && mayElevate) {
                 case let .success(after):
                     settings = after
                     return nil
                 case let .failure(error):
-                    return error
+                    return Self.elevationRefusal(error, mayElevate: mayElevate)
                 }
             } answer: { response in
                 response.settings = settings

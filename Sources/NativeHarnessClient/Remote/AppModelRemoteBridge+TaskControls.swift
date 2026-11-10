@@ -120,7 +120,7 @@ extension AppModelRemoteBridge {
         }
         // The Mac asks before Bypass permissions and Full access; the other device asked too, and says so.
         guard found.confirmations[value] == nil || confirmed else {
-            return .failure(RemoteError(.notAllowed, "This choice is confirmed first"))
+            return .failure(RemoteError(.notAllowed, "This choice is confirmed first", reason: .confirmation, setting: id))
         }
         // The composer's own apply (`ComposerActions.apply`), answered once the provider took it, or after a while.
         await RemoteServer.waitAtMost(10) { @MainActor in
