@@ -330,6 +330,24 @@ final class BrowserSessionTabsTests: XCTestCase {
         XCTAssertTrue(second.isDrivenByAgent, "external-app requests still require the person's answer")
         second.notePersonInput()
         XCTAssertFalse(second.isDrivenByAgent, "the person's own input takes over the popup")
+
+        // The host hears who drives each tab, where a site's saved camera or microphone allow is not used for the
+        // agent: as soon as it changes, before the input that changed it goes, and for a pop-up the host opened (which
+        // started as its opener) at once.
+        func told(_ tab: BrowserTab) -> [Bool] {
+            connection.sent.compactMap { if case .drivenByAgent(tab.id, let driven) = $0 { driven } else { nil } }
+        }
+        XCTAssertEqual(told(opener), [true])
+        XCTAssertEqual(told(first), [true])
+        XCTAssertEqual(told(second), [true, false])
+        second.noteAgentActivity()
+        second.noteAgentActivity()
+        XCTAssertEqual(told(second), [true, false, true], "only a change is told")
+        let click = BrowserHostCommand.mouse(tab: second.id, input: BrowserMouseInput(kind: .down, x: 1, y: 1, button: .left))
+        second.send(click)
+        XCTAssertEqual(told(second), [true, false, true, false])
+        XCTAssertLessThan(try XCTUnwrap(connection.sent.lastIndex(of: .drivenByAgent(tab: second.id, isDriven: false))),
+                          try XCTUnwrap(connection.sent.lastIndex(of: click)), "told before the person's click reaches the page")
     }
 
     func testPopupDownloadRestrictionsIncludeInputBeforeApprovalAndEndWithLocalInput() throws {

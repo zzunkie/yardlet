@@ -1,9 +1,9 @@
 import Foundation
 
 /// The task profiles' changes, one line each, beside the host's log (`Browser/Logs/sign-ins.log`): when a task took a
-/// profile of its own before its agent's sign-in (the site, the task, how it signed in), and when the task profiles
-/// from before tasks shared the default profile were sorted (docs/BROWSER_SESSION_ISOLATION.md 3 and 7). Never a
-/// cookie's value or an account's name. The log is kept under `maximumFileSize`; the lines before go to
+/// profile of its own for its agent (the site, the task, and the sign-in or page script it was about to make), and when
+/// the task profiles from before tasks shared the default profile were sorted (docs/BROWSER_SESSION_ISOLATION.md 3 and
+/// 7). Never a cookie's value or an account's name. The log is kept under `maximumFileSize`; the lines before go to
 /// `sign-ins.1.log`.
 final class BrowserSignInLog: Sendable {
     let file: URL

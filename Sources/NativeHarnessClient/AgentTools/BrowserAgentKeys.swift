@@ -39,6 +39,11 @@ struct BrowserAgentKeyPress: Equatable {
 
     var modifierBits: Int { modifiers.reduce(0) { $0 | $1.bit } }
 
+    /// The key puts text into a field: a character (Enter's line break aside), or a paste.
+    var insertsText: Bool {
+        key.text.map { $0 != "\r" } ?? false || macEditingCommands.contains { $0.hasPrefix("paste") }
+    }
+
     private static let aliases: [String: String] = [
         "Esc": "Escape", "Return": "Enter", "Up": "ArrowUp", "Down": "ArrowDown", "Left": "ArrowLeft",
         "Right": "ArrowRight", "Del": "Delete", "Spacebar": "Space"

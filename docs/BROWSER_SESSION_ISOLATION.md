@@ -14,8 +14,8 @@ of its own must not sign the person out, or in as someone else, in the other tas
 
 With Settings › General "Keep cookies" set to "Per task" (the default), tasks share the default profile
 (`~/Library/Application Support/Yardlet/Browser/Default`), as the Codex app's threads share one browser. Just before a
-task's agent signs in to a site itself, the task takes a profile of its own, a copy of the default profile's cookies,
-and its sign-ins stay there (section 3). Credentials stay shared through the vault (passwords, TOTP, Yardlet passkeys)
+task's agent signs in to a site itself or runs its first page script, the task takes a profile of its own, a copy of the
+default profile's cookies, and its sign-ins stay there (section 3). Credentials stay shared through the vault (passwords, TOTP, Yardlet passkeys)
 and Touch ID passkeys. With "Shared by all tasks", every task uses the default profile, agents' sign-ins included.
 
 ## 2. How the two apps and other browsers do it
@@ -41,7 +41,7 @@ These are the rules of "Per task". Why sign-ins are not copied between profiles 
 | Question | Rule | Reason |
 |---|---|---|
 | Which profile a task uses | The default profile, until the task takes one of its own. No folder is made for it | The person's sign-ins reach every task as they are made, with nothing copied, and a site's accounts stay in one set of cookies |
-| When a task takes a profile of its own | Just before its agent signs in to a site itself: a `browser_fill_credential` fill (a password, a one-time code, a new password, a passkey) on a site the vault has an item for, or `browser_type` into a password field or a field that looks like a one-time code field (the vault's `looksLikeCodeField`). The call stops without filling or typing, and says to take a new snapshot and call again | The sign-in then changes only that task's cookies. A sign-in made before the switch would already be in the default profile |
+| When a task takes a profile of its own | Just before its agent signs in to a site itself: a `browser_fill_credential` fill (a password, a one-time code, a new password, a passkey) on a site the vault has an item for, `browser_type` into a password field or a field that looks like a one-time code field (the vault's `looksLikeCodeField`), or a `browser_press_key` that puts a character or a paste into a password field (`VaultPageScripts.focusMayBePassword`, which also counts a focused field in a frame of another origin). And just before its first `browser_evaluate`, because a script can sign in too without typing into a field. The call stops without filling, typing, pressing the key or running the function, and says to take a new snapshot and call again. Other tasks keep the default profile | The sign-in then changes only that task's cookies. A sign-in made before the switch would already be in the default profile |
 | What the profile starts with | A copy of the default profile's cookies at that moment (`Browser/Task-<key>`, the `cache_path` of `CefRequestContext`, directly under the root cache, because Chromium opens only such a folder as a disk profile; section 7). localStorage and IndexedDB are not copied | The task keeps the person's sign-ins it had, so its agent signs in only where it means to |
 | The task's tabs | A tab's request context is fixed once it opens, so each of the task's tabs opens again in its place at its page, once, in the new profile (`BrowserHostClient.reopenTabs`). The agent's tools name the new tab for the old tab's ID with a note. A restored tab that has not loaded opens there when it does | Tabs of one task share one profile |
 | After that | The task stays on its profile, across restarts (`TaskProfiles.json`), and none of its sites follow the default profile: the person's later sign-ins elsewhere do not reach it, and a sign-in the person makes in that task stays there | Any copy into a profile replaces the sessions it lacks (section 11). A profile that is never written by Yardlet never loses an account |
@@ -53,6 +53,7 @@ These are the rules of "Per task". Why sign-ins are not copied between profiles 
 | Turning it on and off | Settings › General "Keep cookies": "Per task" (default) / "Shared by all tasks". With "Shared by all tasks", no task takes a profile of its own, and the tabs of tasks that have one open in the default profile | A setting in the same place as the Claude app's "Keep cookies". "Until quit" was left out, because it would mean something different in Yardlet, whose host ends often |
 | Sign-ins from another browser | The cookies of the sites the person chose from the page menu of the browser panel replace that site's cookies in the default profile and, if the panel's task has a profile of its own, in that one too | So that sites whose passkey exists only in another browser can be used in Yardlet (section 10) |
 | Touch ID passkeys | The default profile's `webauthn.touchid.metadata_secret` is put into each new task profile | Chromium reads Touch ID passkey metadata per profile with this key. Without it, the passkeys would not show in a task's profile |
+| Camera and microphone | Chromium keeps the person's allow or block for a site in the profile. In a tab the agent drives (`BrowserTab.isDrivenByAgent`: the agent used it after the person's last input, or opened it and the person has not used it since), a site allowed before is asked again in the panel's bar, and an allow given there is for that request only; a block is kept for the site, as before. Yardlet tells the host when this changes (`drivenByAgent`), before the input that changed it goes, and a pop-up starts as its opener was | Tasks share the default profile, and an allow the person gave is for the person's own use of the site |
 
 ## 4. Structure
 
@@ -74,16 +75,17 @@ These are the rules of "Per task". Why sign-ins are not copied between profiles 
   another browser (section 10).
 - **Yardlet:** `BrowserTaskProfiles` keeps which tasks have profiles of their own (`own` in `Browser/TaskProfiles.json`,
   each with the parent profile a new folder starts from), the child tasks that stay in the default profile, the setting
-  and cleanup. `BrowserAgentTools` asks for a profile of its own (`takesOwnProfile`) before a fill or a typed sign-in;
-  `MacBrowserHost.takeOwnProfile` records it, writes a line in `Browser/Logs/sign-ins.log` (the site's host, the task
-  and how it was about to sign in; never a value or an account) and opens the task's tabs again
-  (`BrowserHostClient.reopenTabs`, departure cause `ownProfile`). `BrowserHostClient` attaches the profile every time it
-  opens a task's tab (`BrowserTaskProfiles.opening`, where a child task's first tab decides) and calls cleanup when the
-  host ends. Cleanup runs only after the saved task list has been read in full. It moves each folder it removes into
-  `Browser/Removed task profiles` and deletes it there off the main thread, so a profile with a large cache does not
-  hold up the app as it quits; a deletion that a quit cut short is finished at the next cleanup. Chromium writes every
-  profile it opens into `Local State` (`profile.info_cache`, `profile.profiles_order`, `variations_google_groups`) and
-  does not remove them when the folder disappears, so cleanup also removes `Task-` names without a folder from there.
+  and cleanup. `BrowserAgentTools` asks for a profile of its own (`takesOwnProfile`) before a fill, a typed sign-in or
+  the first page script; `MacBrowserHost.takeOwnProfile` records it, writes a line in `Browser/Logs/sign-ins.log` (the
+  site's host, the task and the sign-in or script it was about to make; never a value or an account) and opens the
+  task's tabs again (`BrowserHostClient.reopenTabs`, departure cause `ownProfile`). `BrowserHostClient` attaches the
+  profile every time it opens a task's tab (`BrowserTaskProfiles.opening`, where a child task's first tab decides) and
+  calls cleanup when the host ends. Cleanup runs only after the saved task list has been read in full. It moves each
+  folder it removes into `Browser/Removed task profiles` and deletes it there off the main thread, so a profile with a
+  large cache does not hold up the app as it quits; a deletion that a quit cut short is finished at the next cleanup.
+  Chromium writes every profile it opens into `Local State` (`profile.info_cache`, `profile.profiles_order`,
+  `variations_google_groups`) and does not remove them when the folder disappears, so cleanup also removes `Task-`
+  names without a folder from there.
 
 ## 5. Costs and limits
 
@@ -101,7 +103,9 @@ These are the rules of "Per task". Why sign-ins are not copied between profiles 
   in that task, which the person or the agent makes there.
 - An agent's sign-in with the person's own account also stays in its task: the other tasks do not get it. A sign-in
   the agent makes without a password or code field (a "Sign in with Google" click on an account the default profile
-  holds, a sign-in link) is no sign-in of its own, and stays in the default profile, as the person's would.
+  holds, a sign-in link) is no sign-in of its own, and stays in the default profile, as the person's would, unless
+  the task ran a page script before. A one-time code pressed key by key (`browser_press_key`) is not taken as one
+  either: only a password field is checked there.
 - Partitioned cookies (CHIPS: cookies that a page embedded in another site keeps only under that top-level site) are not
   copied into a new profile. CEF's cookie manager does not take a partition key, so inserting one would make a cookie
   that every top-level site receives (section 8). In a new profile, embedded widgets start as if seen for the first time.

@@ -1520,13 +1520,15 @@ extension BrowserAgentTools {
     // MARK: Pieces
 
     /// The page's main frame as the browser reports it: its ID, the document it shows, and its origin.
-    /// Before the task's agent signs in to a site itself (`takesOwnProfile`): once the task took a profile of its own,
-    /// the page the agent read has opened again there, so the call stops and says what to do again.
-    func takeOwnProfile(_ sessionID: UUID?, on page: BrowserAgentPage, how: String, undone: String, again: String) async throws {
+    /// Before the task's agent signs in to a site itself, or runs its first page script (`takesOwnProfile`): once the
+    /// task took a profile of its own, the page the agent read has opened again there, so the call stops and says what
+    /// to do again. `what` is what then stays the task's own.
+    func takeOwnProfile(_ sessionID: UUID?, on page: BrowserAgentPage, what: String = "the sign-in it makes here",
+                        how: String, undone: String, again: String) async throws {
         guard let sessionID, let takesOwnProfile else { return }
         let origin = try await mainFrame(of: page).origin
         guard takesOwnProfile(sessionID, VaultSite.host(of: origin), how) else { return }
-        throw BrowserAgentToolError("This task now has a browser profile of its own, so the sign-in it makes here leaves the "
+        throw BrowserAgentToolError("This task now has a browser profile of its own, so \(what) leaves the "
             + "person's sign-ins in other tasks as they are. Its tabs opened again in that profile, which starts with the "
             + "person's cookies, and \(undone). Call browser_snapshot for new refs, then \(again).",
             AgentToolFailure(.refused, retry: .withChanges))

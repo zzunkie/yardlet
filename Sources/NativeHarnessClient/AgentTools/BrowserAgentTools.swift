@@ -74,9 +74,10 @@ final class BrowserAgentTools {
     var loadTimeout: Duration = .seconds(30)
     /// The vault `browser_fill_credential` asks (design docs/BROWSER_VAULT_DESIGN.md); nil leaves the tool refusing.
     var vault: VaultCenter?
-    /// Just before the task's agent signs in to a site itself: the task takes a browser profile of its own and its tabs
-    /// open again there, so the sign-in changes no other task's (docs/BROWSER_SESSION_ISOLATION.md 3). Given the task,
-    /// the page's host and how it signs in; true when it did. Nil (tests) takes none.
+    /// Just before the task's agent signs in to a site itself, or runs its first page script: the task takes a browser
+    /// profile of its own and its tabs open again there, so the sign-in changes no other task's
+    /// (docs/BROWSER_SESSION_ISOLATION.md 3). Given the task, the page's host and what the agent was about to do; true
+    /// when it did. Nil (tests) takes none.
     var takesOwnProfile: (@MainActor (UUID, String, String) -> Bool)?
     /// The two-factor setups the QR codes in a picture hold (Vision on macOS): a screenshot does not hand over a
     /// picture of one while the vault is on, and a code fill on a page showing one asks the person to keep it; nil
@@ -659,13 +660,13 @@ final class BrowserAgentTools {
         case AgentToolCatalog.snapshot: try await snapshot(on: page)
         case AgentToolCatalog.click: try await click(arguments, on: page)
         case AgentToolCatalog.type: try await type(arguments, on: page, sessionID: sessionID)
-        case AgentToolCatalog.pressKey: try await pressKey(arguments, on: page)
+        case AgentToolCatalog.pressKey: try await pressKey(arguments, on: page, sessionID: sessionID)
         case AgentToolCatalog.scroll: try await scroll(arguments, on: page)
         case AgentToolCatalog.selectOption: try await selectOption(arguments, on: page)
         case AgentToolCatalog.waitFor: try await waitFor(arguments, on: page)
         case AgentToolCatalog.screenshot: try await screenshot(arguments, on: page)
         case AgentToolCatalog.consoleMessages: consoleMessages(arguments, on: page)
-        case AgentToolCatalog.evaluate: try await evaluate(arguments, on: page)
+        case AgentToolCatalog.evaluate: try await evaluate(arguments, on: page, sessionID: sessionID)
         case AgentToolCatalog.handleDialog: try handleDialog(arguments, on: page, sessionID: sessionID)
         case AgentToolCatalog.fileUpload: try await fileUpload(arguments, on: page)
         case AgentToolCatalog.resize: try await resize(arguments, on: page)
@@ -934,7 +935,7 @@ final class BrowserAgentTools {
         return .text(summary + ".")
     }
 
-    private func pressKey(_ arguments: JSONValue, on page: BrowserAgentPage) async throws -> AgentToolResult {
+    private func pressKey(_ arguments: JSONValue, on page: BrowserAgentPage, sessionID: UUID?) async throws -> AgentToolResult {
         guard let name = arguments["key"]?.stringValue else {
             throw BrowserAgentToolError("browser_press_key needs a key.")
         }
@@ -945,6 +946,12 @@ final class BrowserAgentTools {
         if press.macEditingCommands.contains(where: { $0.hasPrefix("paste") }), clipboardIsConcealed() {
             throw BrowserAgentToolError("The clipboard holds what a password manager copied for the person, so Yardlet does not "
                 + "paste it for you. Fill a saved sign-in with browser_fill_credential, or type the text.")
+        }
+        // Text going into a password field key by key is a sign-in of the task's own, as `browser_type`'s is.
+        if press.insertsText, sessionID != nil, takesOwnProfile != nil,
+           await VaultPageScripts.focusMayBePassword(page.cdp, timeout: commandTimeout) {
+            try await takeOwnProfile(sessionID, on: page, how: "pressed keys in a password field", undone: "no key was pressed",
+                                     again: "focus the field and press the key again")
         }
         try await dispatch(press, on: page)
         return .text("Pressed \(name).")
@@ -1421,13 +1428,17 @@ final class BrowserAgentTools {
         return .text(header + recent.joined(separator: "\n") + note)
     }
 
-    private func evaluate(_ arguments: JSONValue, on page: BrowserAgentPage) async throws -> AgentToolResult {
+    private func evaluate(_ arguments: JSONValue, on page: BrowserAgentPage, sessionID: UUID?) async throws -> AgentToolResult {
         guard let function = arguments["function"]?.stringValue, !function.trimmingCharacters(in: .whitespaces).isEmpty else {
             throw BrowserAgentToolError("browser_evaluate needs a function.")
         }
         if let refusal = vaultObservationRefusal(page, AgentToolCatalog.evaluate) {
             throw BrowserAgentToolError(refusal, Self.vaultBoundary)
         }
+        // A script can sign in too, without typing into a field: a task in the default profile takes one of its own
+        // before its first script runs.
+        try await takeOwnProfile(sessionID, on: page, what: "what its page scripts do", how: "page script",
+                                 undone: "the function did not run", again: "call browser_evaluate again")
         // A later fill of this document, of one a linked tab shows, or of one they load while either shows such a
         // document, asks the person first.
         let document = try? await send(page, "Page.getFrameTree")["frameTree"]?["frame"]?["loaderId"]?.stringValue
