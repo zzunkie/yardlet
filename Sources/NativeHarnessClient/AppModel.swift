@@ -5436,9 +5436,13 @@ final class AppModel {
         try await store.updateConnection(id: current.id, connection: connection)
     }
 
+    /// Ends an idle task's runtime. What still ran in its process, such as a background command, ends
+    /// with it, and the conversation says so, as when the memory saver closes it or the process exits:
+    /// left running, its row would keep an account move, and the messages behind it, waiting forever.
     func closeIdleRuntime(of id: UUID) async {
         eventTasksBySessionID.removeValue(forKey: id)?.cancel()
         flushTranscriptDeltas(for: id)
+        mutateTranscript(for: id, publishImmediately: true) { $0.endRuntime() }
         if let adapter = adaptersBySessionID.removeValue(forKey: id),
            let handle = handlesBySessionID.removeValue(forKey: id) { await adapter.close(handle) }
     }

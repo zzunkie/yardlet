@@ -40,7 +40,10 @@ The latest screen flow and design decisions follow [ACCOUNT_SELECTION_UX.md](ACC
   switch waits for what moving an account's tasks waits for ("Removing an account" below), except that the messages
   and shell output Yardlet holds go after the switch instead, on the new account. While background work keeps it
   waiting after the turn, the line says "Moving to <account> when its background work ends" and a message sent then
-  waits too. A switch refused then (the target
+  waits too. Background work lives in the task's CLI: when that CLI closes first (a schedule's run moved the task at
+  once, say), what ran in it shows as stopped (`AppModel.closeIdleRuntime`), so the waiting switch goes ahead and the
+  messages follow (`ClaudeUsageLimitAppModelTests.testWhatWaitsForAMoveGoesOnceTheRuntimeRunningItsBackgroundWorkCloses`).
+  A switch refused then (the target
   signed out, or no longer sharing the history) says why above the composer, as an immediate one does, and what was
   queued for the new account waits paused until the person resumes it. The choice is not kept across a quit. The
   Claude app has the same notice for a task that moves to another computer ("Moving to {place} after this turn"); for

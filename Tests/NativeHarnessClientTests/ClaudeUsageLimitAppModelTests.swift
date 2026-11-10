@@ -399,6 +399,47 @@ import XCTest
         XCTAssertTrue(fixture.transports.all.isEmpty, "No CLI starts for the move")
     }
 
+    /// A task whose turn ended with a background command still running waits to move to the account
+    /// chosen during the turn, and what is sent meanwhile waits for the move. When its runtime closes
+    /// another way first (a schedule's run moves the task at once), the command ends with that CLI:
+    /// its row stops, the move settles, and what waited goes to the new runtime rather than waiting
+    /// for a command no process runs (2026-11-10: a task's messages, the person's own among them,
+    /// waited hours behind a background shell the closed CLI had taken with it).
+    func testWhatWaitsForAMoveGoesOnceTheRuntimeRunningItsBackgroundWorkCloses() async throws {
+        let fixture = try makeFixture()
+        let model = fixture.model
+        let created = await model.createSession(harness: .claudeCode, workspaceURL: fixture.shared,
+            runtimeExecutableURL: fixture.cli, title: "Background", connection: fixture.first)
+        let task = try XCTUnwrap(created, model.errorBySessionID.values.first ?? "Missing task")
+        let closing = try XCTUnwrap(fixture.transports.all.first)
+        func backgroundRows() -> Int {
+            BackgroundTasksProjection(entries: model.transcriptBySessionID[task.id] ?? []).rows.count
+        }
+
+        await closing.emit(try json(#"{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_start","message":{}},"session_id":"s"}"#))
+        try await waitUntil { model.store.sessions.first?.status == .running }
+        await model.chooseAccount(fixture.next, for: task)
+        XCTAssertEqual(model.accountSwitchesAfterTurn[task.id], fixture.next)
+        await closing.emit(try json(#"{"type":"system","subtype":"task_started","task_id":"t-shell","tool_use_id":"shell","description":"npm run dev","task_type":"local_bash","is_backgrounded":true}"#))
+        await closing.emit(try json(#"{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"s"}"#))
+        try await waitUntil { model.store.sessions.first?.status == .ready && backgroundRows() == 1 }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(model.store.sessions.first?.connection, fixture.first, "The move waits for the background work")
+
+        await model.switchAccount(to: fixture.next, for: try XCTUnwrap(model.store.sessions.first))
+        XCTAssertEqual(model.store.sessions.first?.connection, fixture.next)
+        XCTAssertEqual(backgroundRows(), 0, "The command ended with its CLI")
+        await model.send(HarnessUserInput(text: "Morning check"), to: task)
+
+        let resumed = try XCTUnwrap(fixture.transports.all.last)
+        XCTAssertFalse(resumed === closing)
+        try await waitUntil {
+            await resumed.sentValues.contains { $0["message"]?["content"]?.stringValue == "Morning check" }
+        }
+        XCTAssertTrue(model.followUps.queue(for: task.id).isEmpty)
+        XCTAssertNil(model.accountSwitchesAfterTurn[task.id])
+    }
+
     func testRetriesWarningsAndReportsFollowTheRunningTask() async throws {
         let fixture = try makeFixture()
         let model = fixture.model
