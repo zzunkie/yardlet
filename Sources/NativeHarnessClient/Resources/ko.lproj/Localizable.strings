@@ -2068,6 +2068,7 @@
 "Sign in to this harness on %@ first." = "먼저 %@에서 이 하네스에 로그인하세요.";
 "%@ doesn't offer this harness now." = "지금 %@에서는 이 하네스를 쓸 수 없습니다.";
 "That choice isn't offered on %@ now." = "지금 %@에서는 그 선택을 쓸 수 없습니다.";
+"To use this from here, allow Terminal for this device in Settings › Remote › Paired devices on %@." = "여기서 쓰려면 %@의 설정 › 원격 연결 › 연결된 기기에서 이 기기에 “터미널”을 허용하세요.";
 "That account can't be used on %@ now." = "지금 %@에서는 그 계정을 쓸 수 없습니다.";
 "This harness doesn't take these pictures or files." = "이 하네스는 이 그림이나 파일을 받지 않습니다.";
 "%@ didn't accept the connection." = "%@에서 연결을 받지 않았습니다.";
@@ -3824,7 +3825,7 @@
 
 "Permission is off, but the change could not be saved. Retry before restarting Yardlet." = "권한은 껐지만 저장하지 못했습니다. Yardlet을 다시 시작하기 전에 다시 시도해 주세요.";
 
-"Run shell commands as the host user." = "이 Mac의 사용자 권한으로 셸 명령을 실행합니다.";
+"Run shell commands as the host user, and let agents act without asking." = "이 Mac의 사용자 권한으로 셸 명령을 실행하고, 에이전트가 묻지 않고 작업하도록 허용합니다.";
 
 "Save and discard changes in the task's workspace." = "작업 폴더의 파일을 저장하거나 변경 내용을 버립니다.";
 

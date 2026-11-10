@@ -932,12 +932,12 @@ final class RemoteServerTests: XCTestCase {
         let awaited18 = try await phone.response("6").error?.code
         XCTAssertEqual(awaited18, .notRunning)
         // A refusal says what it is about, to the phone and in the audit line, never with the value or the words.
-        await harness.bridge.failNext(RemoteError(.notAllowed, "permissionMode bypassPermissions is confirmed first",
-                                                  reason: .confirmation, setting: "permissionMode"))
+        await harness.bridge.failNext(RemoteError(.notAllowed, "permissionMode has no such choice now",
+                                                  reason: .setting, setting: "permissionMode"))
         await harness.send(#"{"id":"7","type":"createTask","projectId":"P","text":"Secret start","settings":{"permissionMode":"bypassPermissions"}}"#, on: phone)
         let refused = try await phone.response("7").error
         XCTAssertEqual(refused?.code, .notAllowed)
-        XCTAssertEqual(refused?.reason, .confirmation)
+        XCTAssertEqual(refused?.reason, .setting)
         XCTAssertEqual(refused?.setting, "permissionMode")
         let unknownReason = try JSONDecoder().decode(RemoteError.self, from: Data(#"{"code":"notAllowed","message":"m","reason":"later"}"#.utf8))
         XCTAssertNil(unknownReason.reason, "A reason from a newer Mac is read as none")
@@ -955,7 +955,7 @@ final class RemoteServerTests: XCTestCase {
                                            "createTask"])
         XCTAssertEqual(audit.map(\.result), ["ok", "ok", "ok", "ok", "unsupportedCommand", "notRunning", "notAllowed"])
         XCTAssertEqual(audit.map(\.task), ["A", "A", "A", "B", "A", "B", nil])
-        XCTAssertEqual(audit.last?.reason, "confirmation")
+        XCTAssertEqual(audit.last?.reason, "setting")
         XCTAssertEqual(audit.last?.setting, "permissionMode")
         XCTAssertEqual(audit.last?.project, "P")
         let log = try String(contentsOf: harness.auditURL, encoding: .utf8)
@@ -988,6 +988,68 @@ final class RemoteServerTests: XCTestCase {
         XCTAssertEqual(entries.map(\.result), ["ok", "notAllowed", "notAllowed", "ok", "ok"])
         let log = try String(contentsOf: harness.auditURL, encoding: .utf8)
         XCTAssertFalse(log.contains("private instructions") || log.contains("bypassPermissions"))
+        await harness.server.shutdown(reason: "test")
+    }
+
+    /// A choice that lets an agent act without asking takes the device's Terminal permission (§15.28). Without it, the
+    /// device's `confirmed` reaches the bridge as absent and the host's refusal names the permission instead, an allow for
+    /// the session never reaches the bridge, and the commands the bridge judges say the device may not elevate. With it,
+    /// all goes as before.
+    func testChoicesThatLetAnAgentActWithoutAskingTakeTheDevicesTerminalPermission() async throws {
+        let clock = RemoteTestClock()
+        let harness = try await ServerHarness(clock: clock)
+        let phone = try await harness.authenticatedPhone()
+        let devices = await harness.devices.all()
+        let device = try XCTUnwrap(devices.first)
+        func request(_ id: String, _ value: RemoteRequest) async throws -> RemoteResponse {
+            await harness.send(String(decoding: RemoteRequestEnvelope(id: id, request: value).encoded(), as: UTF8.self), on: phone)
+            return try await phone.response(id)
+        }
+        let bypass = ["permissionMode": "bypassPermissions"]
+        for terminal in [false, true] {
+            if terminal {
+                try await harness.server.setPermission(.terminal, allowed: true, for: device.id)
+                clock.advance(by: 60)
+            }
+            let refusal: RemoteRefusal? = terminal ? nil : .terminal
+            let created = try await request("create-\(terminal)", .createTask(RemoteTaskStart(projectID: "P", text: "Clean up",
+                                                                                              settings: bypass, confirmed: true)))
+            XCTAssertEqual(created.error?.reason, refusal)
+            XCTAssertEqual(created.error?.setting, terminal ? nil : "permissionMode")
+            let switched = try await request("switch-\(terminal)", .setTaskSetting(taskID: "A", setting: "permissionMode",
+                                                                                   value: "bypassPermissions", confirmed: true))
+            XCTAssertEqual(switched.error?.reason, refusal)
+            let saved = try await request("save-\(terminal)", .saveScheduledTask(scheduleID: nil, definition: Data("{}".utf8),
+                                                                                 settings: bypass, confirmed: true))
+            XCTAssertTrue(saved.ok)
+            let forSession = try await request("session-\(terminal)", .answerApproval(taskID: "A", requestID: "toolu_1",
+                                                                                      answer: .allowForSession))
+            XCTAssertEqual(forSession.error?.reason, refusal)
+            for (index, command) in [RemoteRequest.actOnSuggestion(taskID: "A", suggestionID: "S", action: .start,
+                                                                   start: RemoteSuggestionStart(settings: bypass, confirmed: true)),
+                                     .chooseAnswer(taskID: "A", requestID: "toolu_1", choice: "1"),
+                                     .runScheduledTask(scheduleID: "S1"),
+                                     .setScheduledTaskEnabled(scheduleID: "S1", enabled: true)].enumerated() {
+                let response = try await request("command-\(terminal)-\(index)", command)
+                XCTAssertTrue(response.ok, "\(command.type)")
+            }
+        }
+        let confirmations = await harness.bridge.confirmations
+        XCTAssertEqual(confirmations, [false, false, false, true, true, true])
+        let commands = await harness.bridge.commands
+        XCTAssertEqual(commands, [
+            .actOnSuggestion(taskID: "A", suggestionID: "S", action: .start, start: RemoteSuggestionStart(settings: bypass)),
+            .chooseAnswer(taskID: "A", requestID: "toolu_1", choice: "1"),
+            .runScheduledTask(scheduleID: "S1"),
+            .setScheduledTaskEnabled(scheduleID: "S1", enabled: true),
+            .answerApproval(taskID: "A", requestID: "toolu_1", answer: .allowForSession),
+            .actOnSuggestion(taskID: "A", suggestionID: "S", action: .start,
+                             start: RemoteSuggestionStart(settings: bypass, confirmed: true)),
+            .chooseAnswer(taskID: "A", requestID: "toolu_1", choice: "1", mayElevate: true),
+            .runScheduledTask(scheduleID: "S1", mayElevate: true),
+            .setScheduledTaskEnabled(scheduleID: "S1", enabled: true, mayElevate: true)
+        ])
+        XCTAssertTrue(harness.audit.entries().contains { $0.type == "createTask" && $0.reason == "terminal" })
         await harness.server.shutdown(reason: "test")
     }
 
@@ -1967,7 +2029,8 @@ actor FakeBridge: RemoteBridge {
     }
 
     func saveScheduledTask(scheduleID: String?, definition: Data, settings: [String: String], confirmed: Bool) -> Result<String, RemoteError> {
-        .success(scheduleID ?? "created-schedule")
+        confirmations.append(confirmed)
+        return .success(scheduleID ?? "created-schedule")
     }
     func deleteScheduledTasks(scheduleIDs: [String], completedOnly: Bool, confirmed: Bool) -> RemoteError? {
         confirmed ? nil : RemoteError(.notAllowed)
@@ -1975,11 +2038,24 @@ actor FakeBridge: RemoteBridge {
 
     func createTask(_ start: RemoteTaskStart) -> Result<String, RemoteError> {
         if let nextFailure { self.nextFailure = nil; return .failure(nextFailure) }
+        if let refusal = confirming(start.settings["permissionMode"], start.confirmed) { return .failure(refusal) }
         createdTasks.append((start.projectID, start.text))
         return .success("NEW-\(createdTasks.count)")
     }
     func itemDetail(taskID: String, itemID: String) -> Result<RemoteItemDetail, RemoteError> {
         details["\(taskID)/\(itemID)"].map { .success($0) } ?? .failure(RemoteError(.notFound))
+    }
+    func setTaskSetting(taskID: String, setting: String, value: String, confirmed: Bool) -> Result<[RemoteSetting], RemoteError> {
+        confirming(value, confirmed).map { .failure($0) } ?? .success([])
+    }
+
+    /// The `confirmed` each choice reached the bridge with. Bypass permissions without it is refused, as the host's own
+    /// check refuses it (§15.16).
+    private(set) var confirmations: [Bool] = []
+    private func confirming(_ value: String?, _ confirmed: Bool) -> RemoteError? {
+        confirmations.append(confirmed)
+        guard value == "bypassPermissions", !confirmed else { return nil }
+        return RemoteError(.notAllowed, "Confirm it first", reason: .confirmation, setting: "permissionMode")
     }
 
     /// Until a task is given files, the bridge answers no files at all (§15.22).

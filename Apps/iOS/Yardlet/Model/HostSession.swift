@@ -436,6 +436,8 @@ final class HostSession: Identifiable {
         case .unavailable?: String(localized: "Can't reach \(host) right now.")
         case .busy?: String(localized: "\(host) is changing this task. Try again in a moment.")
         case .requestNotFound?: String(localized: "This request was already answered.")
+        case .notAllowed? where error?.reason == .terminal:
+            String(localized: "To use this from here, allow Terminal for this device in Settings › Remote › Paired devices on \(host).")
         case .notAllowed?:
             error.flatMap { $0.message.isEmpty ? nil : $0.message } ?? String(localized: "That isn't offered for this task now.")
         case .unsupportedCommand?: String(localized: "Slash commands run on \(host).")

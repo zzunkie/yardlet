@@ -417,7 +417,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
             limit.autoContinue = enabled ? true : nil
             replaceItem(limit, in: taskID)
             return nil
-        case let .chooseAnswer(taskID, requestID, choice, note, values):
+        case let .chooseAnswer(taskID, requestID, choice, note, values, _):
             guard let item = pendingItem(taskID, requestID) else {
                 return tasks[taskID] == nil ? RemoteError(.notFound) : RemoteError(.requestNotFound)
             }
@@ -448,7 +448,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
                     reply: answer == .done ? "Thanks, the session is signed in. The release notes are published at github.com/acme/web/releases."
                         : "Okay, I left the release notes as a draft. Publish it from the Releases page when you can.")
             return nil
-        case let .runScheduledTask(scheduleID):
+        case let .runScheduledTask(scheduleID, _):
             guard let index = schedules.firstIndex(where: { $0.id == scheduleID }) else { return RemoteError(.notFound) }
             guard !schedules[index].starting else { return RemoteError(.busy, "A run of it is starting") }
             // As the Mac's Run now: a skip while the task of its previous run (or the task it continues) is busy.
@@ -464,7 +464,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
             handler?(.schedules)
             Task { await self.startRun(scheduleID) }
             return nil
-        case let .setScheduledTaskEnabled(scheduleID, enabled):
+        case let .setScheduledTaskEnabled(scheduleID, enabled, _):
             guard let index = schedules.firstIndex(where: { $0.id == scheduleID }) else { return RemoteError(.notFound) }
             let schedule = schedules[index]
             if enabled, !schedule.enabled, Self.isOnce(schedule), schedule.stop != nil {
@@ -625,7 +625,10 @@ public actor RemoteFixtureBridge: RemoteBridge {
             }
             selectedAccount = options.scheduleAccountID ?? "fixture-home"
             for setting in options.settings {
-                if setting.choices.first(where: { $0.value == setting.value })?.confirm != nil, !confirmed { return .failure(RemoteError(.notAllowed)) }
+                if setting.choices.first(where: { $0.value == setting.value })?.confirm != nil, !confirmed {
+                    return .failure(RemoteError(.notAllowed, "Confirm the unattended schedule's permissions", reason: .confirmation,
+                                                setting: setting.id))
+                }
                 if let role = setting.role {
                     choice[role == "permission" ? "permissionMode" : role] = setting.value
                 }
@@ -981,7 +984,9 @@ public actor RemoteFixtureBridge: RemoteBridge {
         guard let choice = entry.settings[index].choices.first(where: { $0.value == value }) else {
             return .failure(RemoteError(.notAllowed, "The menu does not offer that choice now"))
         }
-        guard choice.confirm == nil || confirmed else { return .failure(RemoteError(.notAllowed, "This choice is confirmed first")) }
+        guard choice.confirm == nil || confirmed else {
+            return .failure(RemoteError(.notAllowed, "This choice is confirmed first", reason: .confirmation, setting: id))
+        }
         await pause(0.2)
         tasks[taskID]?.settings[index].value = value
         tasks[taskID]?.settings[index].elevated = choice.confirm != nil ? true : nil

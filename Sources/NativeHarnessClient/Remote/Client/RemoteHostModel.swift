@@ -661,6 +661,7 @@ final class RemoteHostModel: Identifiable {
         case .signIn: L10n.format("Sign in to this harness on %@ first.", host)
         case .harness: L10n.format("%@ doesn't offer this harness now.", host)
         case .setting, .confirmation: L10n.format("That choice isn't offered on %@ now.", host)
+        case .terminal: L10n.format("To use this from here, allow Terminal for this device in Settings › Remote › Paired devices on %@.", host)
         case .account: L10n.format("That account can't be used on %@ now.", host)
         case .worktree: L10n.string("The folder isn't in a Git repository, so it can't have a worktree.")
         case .attachments: L10n.string("This harness doesn't take these pictures or files.")

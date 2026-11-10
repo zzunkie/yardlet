@@ -264,9 +264,9 @@ extension AppModelRemoteBridge {
                     model: model, connection: connection, folder: folder).get()
                 let options = ComposerSessionOptionsProjection.newTask(harness: harness, choice: destination.modelChoice,
                     catalogs: model.modelCatalogs, connection: connection, workspaceURL: folder)
-                if let permission = options.permission, let selector = permission.selector,
-                   permission.confirmations[selector.currentValue] != nil, !confirmed {
-                    return .failure(RemoteError(.notAllowed, "Confirm the unattended schedule's permissions"))
+                if !confirmed, Self.newTaskRequiresConfirmation(options) {
+                    return .failure(RemoteError(.notAllowed, "Confirm the unattended schedule's permissions",
+                                                reason: .confirmation, setting: options.permission?.selector?.id))
                 }
                 guard !supplied.destination.startsInNewWorktree || folder.map(SuggestedTaskPlace.isInRepository) == true else {
                     return .failure(RemoteError(.notAllowed, "The project is not in a Git repository", reason: .worktree))
@@ -287,6 +287,18 @@ extension AppModelRemoteBridge {
             return .success(schedule.id.uuidString)
         } catch let error as RemoteError { return .failure(error) }
         catch { return .failure(RemoteError(.badRequest)) }
+    }
+
+    /// Whether the schedule starts its task in a permission the Mac asks to confirm (Bypass permissions, Full access), read
+    /// as saving it checks; a schedule that continues a task runs in that task's.
+    static func startsElevated(_ schedule: ScheduledTask, in model: AppModel) -> Bool {
+        let destination = schedule.destination
+        guard destination.mode == .newTask else { return false }
+        let connection = scheduleConnection(accountID: destination.accountID, harness: destination.harness,
+                                            connections: model.connections)
+        return newTaskRequiresConfirmation(ComposerSessionOptionsProjection.newTask(
+            harness: destination.harness, choice: destination.modelChoice, catalogs: model.modelCatalogs,
+            connection: connection, workspaceURL: destination.workspaceURL))
     }
 
     func deleteScheduledTasks(scheduleIDs: [String], completedOnly: Bool, confirmed: Bool) async -> RemoteError? {
