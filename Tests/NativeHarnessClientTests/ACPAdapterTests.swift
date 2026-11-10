@@ -436,11 +436,12 @@ final class ACPAdapterTests: XCTestCase {
         XCTAssertTrue(methods.contains("session/set_config_option"))
     }
 
-    /// Antigravity over ACP keeps the option names its print mode saved, and its permission mode is
-    /// how Yardlet answers what the agent asks: Default shows the request and Plan answers no. Bypass
-    /// permissions runs the session on `agy acp --dangerously-skip-permissions`, which approves for
-    /// itself even in the turns the agent starts between prompts: the conversation is loaded there
-    /// with the task's model and effort, and closed on the process it leaves, between prompts.
+    /// Antigravity over ACP keeps the option names its print mode saved, and its permission mode, offered
+    /// in place of the CLI's own session mode, is how Yardlet answers what the agent asks: Default shows
+    /// the request and Plan answers no. Bypass permissions runs the session on
+    /// `agy acp --dangerously-skip-permissions`, which approves for itself even in the turns the agent
+    /// starts between prompts: the conversation is loaded there with the task's model and effort, and
+    /// closed on the process it leaves, between prompts.
     func testAntigravityKeepsItsOptionNamesAndAnswersApprovalsByItsPermissionMode() async throws {
         let transport = FakeACPTransport(exposesAntigravity: true)
         let bypassing = FakeACPTransport(exposesAntigravity: true)
@@ -470,8 +471,10 @@ final class ACPAdapterTests: XCTestCase {
         let sentOptions = await transport.requestValues.filter { $0["method"]?.stringValue == "session/set_config_option" }
         XCTAssertEqual(sentOptions.compactMap { $0["params"]?["configId"]?.stringValue }, ["model", "thought_level"])
         XCTAssertEqual(chosen.selectors.first { $0.id == StructuredHeadlessOptionID.reasoningEffort }?.currentValue, "low")
-        // Print mode's own choices, and a default, change nothing; a model it does not offer is said.
-        for (id, value) in [(StructuredHeadlessOptionID.reasoningEffort, "default"), (StructuredHeadlessOptionID.agent, "x")] {
+        // Print mode's own choices, a default and the CLI's own session mode, kept by a task that chose it
+        // before the permission menu was the only one, change nothing; a model it does not offer is said.
+        for (id, value) in [(StructuredHeadlessOptionID.reasoningEffort, "default"), (StructuredHeadlessOptionID.agent, "x"),
+                            ("mode", "plan")] {
             _ = try await adapter.setProviderOption(id: id, value: value, in: handle)
         }
         let requestCount = await transport.requestMethods.count
@@ -1249,8 +1252,8 @@ actor FakeACPTransport: ACPTransport {
     private let exposesGrokModels: Bool
     private let canLoadSession: Bool
     private let advertisesImagePrompts: Bool
-    /// Answers as `agy acp` does: a model and thinking level in `configOptions` and the model
-    /// variants in `models.availableModels`.
+    /// Answers as `agy acp` 1.5.4 does: a model, thinking level and session mode in
+    /// `configOptions`, the model variants in `models.availableModels` and the modes in `modes`.
     private let exposesAntigravity: Bool
     /// Runs while the transport stops, as a process's end changes what the process table shows.
     private let onStop: (@Sendable () -> Void)?
@@ -1363,7 +1366,10 @@ actor FakeACPTransport: ACPTransport {
         return [
             "configOptions": antigravityConfigOptions(),
             "models": .object(["currentModelId": .string("gemini-3.8-flash-high"),
-                               "availableModels": .array(["high", "medium", "low"].map(variant))])
+                               "availableModels": .array(["high", "medium", "low"].map(variant))]),
+            "modes": .object(["currentModeId": .string("default"), "availableModes": .array(antigravityModes.map {
+                .object(["id": .string($0), "name": .string($0)])
+            })])
         ]
     }
 
@@ -1376,9 +1382,14 @@ actor FakeACPTransport: ACPTransport {
                      "type": .string("select"), "currentValue": .string(antigravityEffort),
                      "options": .array(["low", "medium", "high"].map {
                          .object(["value": .string($0), "name": .string($0.capitalized)])
-                     })])
+                     })]),
+            .object(["id": .string("mode"), "name": .string("Mode"), "category": .string("mode"),
+                     "type": .string("select"), "currentValue": .string("default"),
+                     "options": .array(antigravityModes.map { .object(["value": .string($0), "name": .string($0)]) })])
         ])
     }
+
+    private let antigravityModes = ["default", "accept-edits", "plan"]
 
     private func grokModels(current: String) -> JSONValue {
         .object([

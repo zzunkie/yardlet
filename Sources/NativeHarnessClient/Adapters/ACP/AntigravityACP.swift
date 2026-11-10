@@ -25,12 +25,16 @@ enum AntigravityTransport {
 ///   (`AntigravityPermissionMode.askingValue`). Bypass permissions runs it on the CLI's own
 ///   `agy acp --dangerously-skip-permissions` ("auto-approve all tool permission requests",
 ///   `ACPProcessLane`); Plan has Yardlet answer no, as print mode refused what it could not ask about.
+/// - `agy acp`'s own session mode (`mode`: `default`, `accept-edits`, `plan`, from 1.5) is not
+///   offered, so the permission mode stays the one menu for approvals. A mode a task saved is not
+///   sent, and the session keeps the CLI's default, which a reloaded session starts on anyway.
 /// - Print mode's agent, sandbox and review choices have no counterpart and are left alone.
 ///
 /// The models are the ones `agy acp` offers this client; Yardlet names itself and shows what it
 /// is given.
 enum AntigravityACPOptions {
     static let effortConfigID = "thought_level"
+    static let sessionModeConfigID = "mode"
 
     /// One config option to set in the session.
     struct ConfigValue: Equatable, Sendable {
@@ -55,7 +59,8 @@ enum AntigravityACPOptions {
         switch id {
         case AntigravityPermissionMode.optionID, StructuredHeadlessOptionID.executionMode:
             return .permission(AntigravityPermissionMode.askingValue(value))
-        case StructuredHeadlessOptionID.agent, StructuredHeadlessOptionID.sandbox, StructuredHeadlessOptionID.reviewPolicy:
+        case StructuredHeadlessOptionID.agent, StructuredHeadlessOptionID.sandbox, StructuredHeadlessOptionID.reviewPolicy,
+             sessionModeConfigID:
             return .none
         case StructuredHeadlessOptionID.reasoningEffort:
             guard value != "default", offers(effortConfigID, value, in: selectors) else { return .none }
@@ -85,7 +90,7 @@ enum AntigravityACPOptions {
                 id: StructuredHeadlessOptionID.reasoningEffort, name: selector.name, description: selector.description,
                 category: selector.category, currentValue: selector.currentValue, choices: selector.choices)
         }
-        state.selectors.removeAll { $0.id == AntigravityPermissionMode.optionID }
+        state.selectors.removeAll { [AntigravityPermissionMode.optionID, sessionModeConfigID].contains($0.id) }
         state.selectors.append(AntigravityPermissionMode.askingSelector(current: permissionMode))
         return state
     }
