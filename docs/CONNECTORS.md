@@ -65,7 +65,13 @@ OAuth steps (the MCP authorization spec):
    as the authorization server (the fallback in the 2025-03-26 spec).
 3. Authorization server metadata (RFC 8414, OpenID): with an issuer path, the two path-inserted forms and OpenID after
    the path; without one, the two root forms. A trailing `/` on the issuer (for example `https://accounts.google.com/`)
-   is not a path.
+   is not a path. When the authorization page is on another site than the server (`mcp.example.com` sending the
+   person to `github.com`; `mcp.linear.app` and `linear.app` are one site), Yardlet asks first, naming both hosts,
+   since what the person allows there goes to the server. A site is approximated without a public suffix list: the
+   last two labels, or three under a country code's common second level (`co.uk`, `co.kr`), and a host under a shared
+   hosting suffix (`vercel.app`), an IP address or `localhost` is a site only with itself
+   (`ConnectorOAuth.sameSite`). Cancel ends the sign-in as Cancel on the page does, before a client is registered.
+   Continue is kept for that server address and page host (`approvedSignIn`), so signing in again does not ask again.
 4. Client:
    - Dynamic client registration (RFC 7591): every sign-in registers a new redirect URI, `/callback` on a random port of
      `127.0.0.1`. If the server accepts `none`, it is a public client; otherwise it uses whichever of
@@ -600,7 +606,8 @@ What the person does (per service):
 - `~/.yardlet/connectors.json`: name, slug, server address, auth type, state, the tool list and when it was read
   (`toolsUpdatedAt`), directory ID (`presetID`), your own OAuth client ID (`oauthClientID`, not a secret), scope, extra
   authorization parameters, the key's query name (`tokenQueryParameter`), server icons (`serverIcons`) and connectors
-  turned off per task (`offInTasks`: task ID → connector ID), the header a pasted key goes in (`tokenHeader`), and a
+  turned off per task (`offInTasks`: task ID → connector ID), the header a pasted key goes in (`tokenHeader`), a
+  sign-in page on another site the person agreed to (`approvedSignIn`: the server address and the page's host), and a
   program's runtime, program name, package, version, origin and environment names (`program`). Google and Microsoft
   services have `localService`, `account` (the address) and `googleAccountID` (the account's sign-in, for both), and the
   top of the file has the `googleOAuthClientID` of the Google app the user saved and the `microsoftOAuthApp` (client ID

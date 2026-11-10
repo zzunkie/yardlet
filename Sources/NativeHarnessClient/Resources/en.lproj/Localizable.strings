@@ -1357,6 +1357,8 @@
 "The server did not register Yardlet: %@" = "The server did not register Yardlet: %@";
 "Sign-in was not completed: %@" = "Sign-in was not completed: %@";
 "Sign-in was cancelled." = "Sign-in was cancelled.";
+"Sign in through %@?" = "Sign in through %@?";
+"“%1$@” is at %2$@ but asks you to sign in on %3$@. The access you allow there goes to %2$@. Continue only if you trust this server." = "“%1$@” is at %2$@ but asks you to sign in on %3$@. The access you allow there goes to %2$@. Continue only if you trust this server.";
 "The sign-in answer did not match the request. Try connecting again." = "The sign-in answer did not match the request. Try connecting again.";
 "The server did not issue a token: %@" = "The server did not issue a token: %@";
 "Sign-in did not finish in time." = "Sign-in did not finish in time.";

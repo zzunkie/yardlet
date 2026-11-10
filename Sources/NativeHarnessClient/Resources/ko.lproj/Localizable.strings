@@ -1357,6 +1357,8 @@
 "The server did not register Yardlet: %@" = "서버가 Yardlet을 등록하지 않았습니다: %@";
 "Sign-in was not completed: %@" = "로그인이 완료되지 않았습니다: %@";
 "Sign-in was cancelled." = "로그인이 취소되었습니다.";
+"Sign in through %@?" = "%@에서 로그인할까요?";
+"“%1$@” is at %2$@ but asks you to sign in on %3$@. The access you allow there goes to %2$@. Continue only if you trust this server." = "“%1$@”의 주소는 %2$@인데 %3$@에서 로그인하라고 합니다. 그곳에서 허용한 권한은 %2$@에 넘어갑니다. 이 서버를 믿을 수 있을 때만 계속하세요.";
 "The sign-in answer did not match the request. Try connecting again." = "로그인 응답이 요청과 맞지 않습니다. 다시 연결해 보세요.";
 "The server did not issue a token: %@" = "서버가 토큰을 발급하지 않았습니다: %@";
 "Sign-in did not finish in time." = "로그인이 제한 시간 안에 끝나지 않았습니다.";

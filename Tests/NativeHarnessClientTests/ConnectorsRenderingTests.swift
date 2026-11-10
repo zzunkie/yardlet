@@ -13,6 +13,7 @@ import XCTest
 /// - `settings-add-slack-*`: the add sheet opened at Slack: its steps and the OAuth client fields.
 /// - `composer-connectors-*`: a task's list: switches, "Reconnect", a connector left to the
 ///   harness's own server, one turned off here, and the harness's servers.
+/// - `sign-in-elsewhere-*`: the question before a sign-in page on another site than the server's.
 @MainActor
 final class ConnectorsRenderingTests: XCTestCase {
     private var roots: [URL] = []
@@ -139,6 +140,22 @@ final class ConnectorsRenderingTests: XCTestCase {
                 .environment(\.colorScheme, appearance.colorScheme)
         }
         for capture in captures { XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6)) }
+    }
+
+    func testTheSignInElsewhereQuestionDraws() throws {
+        let directory = try WindowlessRender.directory("connectors-qa")
+        let confirmation = try XCTUnwrap(ConnectorSignInConfirmation(
+            connector: "Example", serverURL: URL(string: "https://mcp.example.com/mcp")!,
+            signInPage: URL(string: "https://github.com/login/oauth/authorize")!))
+        for appearance in WindowlessRender.Appearance.allCases {
+            let alert = confirmation.alert()
+            alert.window.appearance = NSAppearance(named: appearance.appKitName)
+            alert.layout()
+            let frame = try XCTUnwrap(alert.window.contentView?.superview ?? alert.window.contentView)
+            let bitmap = try WindowlessRender.capture(frame)
+            XCTAssertTrue(WindowlessRender.drawsContent(bitmap, step: 6))
+            try WindowlessRender.writePNG(bitmap, to: directory.appending(path: "sign-in-elsewhere-\(appearance.suffix).png"))
+        }
     }
 
     func testTheComposerListDraws() throws {

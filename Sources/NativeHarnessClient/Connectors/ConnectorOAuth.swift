@@ -23,6 +23,39 @@ struct OAuthPlan: Equatable, Sendable {
     var scope: String?
 }
 
+/// The question Yardlet asks before it opens a sign-in page on another site than the MCP
+/// server's. What the person allows on that page goes to the server, so the person should know the
+/// server is sending them to another service's sign-in.
+struct ConnectorSignInConfirmation: Equatable, Sendable {
+    /// The connector's name as Settings shows it.
+    var connector: String
+    /// The MCP server's host, with its port when it names one.
+    var serverHost: String
+    /// The sign-in page's host, as the browser's address bar shows it.
+    var signInHost: String
+
+    var title: String { L10n.format("Sign in through %@?", signInHost) }
+
+    var message: String {
+        L10n.format("“%1$@” is at %2$@ but asks you to sign in on %3$@. The access you allow there goes to %2$@. Continue only if you trust this server.",
+                    connector, serverHost, signInHost)
+    }
+}
+
+extension ConnectorSignInConfirmation {
+    /// The question for a sign-in at `signInPage`, or nil when the page is on the server's own site.
+    init?(connector: String, serverURL: URL, signInPage: URL) {
+        let server = serverURL.host(percentEncoded: false)?.lowercased() ?? ""
+        let signIn = signInPage.host(percentEncoded: false)?.lowercased() ?? ""
+        if !server.isEmpty, !signIn.isEmpty, ConnectorOAuth.sameSite(server, signIn) { return nil }
+        self.init(
+            connector: connector,
+            serverHost: server.isEmpty ? serverURL.absoluteString : server + (serverURL.port.map { ":\($0)" } ?? ""),
+            signInHost: signIn.isEmpty ? signInPage.absoluteString : signIn
+        )
+    }
+}
+
 /// The OAuth client Yardlet registered for one sign-in.
 struct OAuthClient: Equatable, Sendable {
     var id: String
@@ -135,6 +168,51 @@ enum ConnectorOAuth {
         func directory(_ path: String) -> String { path.hasSuffix("/") ? path : path + "/" }
         return directory(server.percentEncodedPath).hasPrefix(directory(named.percentEncodedPath))
     }
+
+    /// Whether two hosts are one site, so a sign-in on one for the other needs no question
+    /// (`ConnectorSignInConfirmation`): `mcp.linear.app` and `linear.app` are, `mcp.example.com` and
+    /// `github.com` are not.
+    ///
+    /// Foundation has no public suffix list, and shipping one means keeping it current, so the
+    /// site is approximated: the last two labels, or three under a two-letter country code whose
+    /// second level is a common public one (`co.uk`, `co.kr`, `com.au`). Hosts under a shared
+    /// hosting suffix where anyone can run a server (`vercel.app`), IP addresses and single-label
+    /// hosts (`localhost`) are a site only with themselves. Mistakes here should be in asking
+    /// too often; a shared hosting suffix or a country's second level missing from these lists is
+    /// how it asks too rarely.
+    static func sameSite(_ first: String, _ second: String) -> Bool {
+        func normalized(_ host: String) -> String {
+            var host = host.lowercased()
+            while host.hasSuffix(".") { host.removeLast() }
+            return host
+        }
+        let first = normalized(first), second = normalized(second)
+        if first == second { return true }
+        guard let site = site(of: first) else { return false }
+        return site == self.site(of: second)
+    }
+
+    /// The approximate registrable domain of a lowercase host, or nil for a host that is only a
+    /// site with itself.
+    private static func site(of host: String) -> String? {
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+        guard labels.count >= 2, !labels.contains(where: \.isEmpty), !host.contains(":"),
+              !labels.allSatisfy({ $0.allSatisfy(\.isNumber) }),
+              !sharedHostingSuffixes.contains(where: { host == $0 || host.hasSuffix("." + $0) })
+        else { return nil }
+        let countryLevel = labels[labels.count - 1].count == 2 && commonSecondLevels.contains(labels[labels.count - 2])
+        let count = countryLevel ? 3 : 2
+        guard labels.count >= count else { return nil }
+        return labels.suffix(count).joined(separator: ".")
+    }
+
+    private static let commonSecondLevels: Set<String> = ["ac", "co", "com", "edu", "go", "gov", "ne", "net", "or", "org"]
+
+    private static let sharedHostingSuffixes = [
+        "amazonaws.com", "azurewebsites.net", "deno.dev", "fly.dev", "github.io", "herokuapp.com", "netlify.app",
+        "ngrok-free.app", "ngrok.app", "ngrok.io", "onrender.com", "pages.dev", "railway.app", "run.app",
+        "trycloudflare.com", "vercel.app", "workers.dev"
+    ]
 
     private static func port(_ components: URLComponents) -> Int? {
         if let port = components.port { return port }

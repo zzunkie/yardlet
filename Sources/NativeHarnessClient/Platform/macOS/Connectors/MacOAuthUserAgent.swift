@@ -23,8 +23,26 @@ struct MacOAuthUserAgent: OAuthUserAgent {
         return await MainActor.run { NSWorkspace.shared.open(url) }
     }
 
+    func confirm(_ confirmation: ConnectorSignInConfirmation) async -> Bool {
+        await MainActor.run { confirmation.alert().runModal() == .alertFirstButtonReturn }
+    }
+
     static func sha256(_ data: Data) -> Data {
         Data(SHA256.hash(data: data))
+    }
+}
+
+extension ConnectorSignInConfirmation {
+    /// The warning alert: Continue first, Cancel second.
+    @MainActor
+    func alert() -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: L10n.string("Continue"))
+        alert.addButton(withTitle: L10n.string("Cancel"))
+        return alert
     }
 }
 

@@ -95,8 +95,27 @@ final class ConnectorTests: XCTestCase {
 
     /// Protected resource metadata is the server's only when it names the server, or its origin or a
     /// path above it (RFC 9728 §3.3, as the MCP SDKs compare); otherwise discovery stops before any
-    /// authorization server is asked.
+    /// authorization server is asked. A sign-in page on another site than the server's is asked
+    /// about first (`ConnectorSignInConfirmation`).
     func testResourceMetadataMustNameTheServer() async throws {
+        for (first, second) in [("mcp.linear.app", "linear.app"), ("mcp.atlassian.com", "auth.atlassian.com"),
+                                ("MCP.Example.com.", "example.com"), ("mcp.example.co.uk", "login.example.co.uk"),
+                                ("mcp.example.co.kr", "example.co.kr"), ("huggingface.co", "auth.huggingface.co"),
+                                ("my.vercel.app", "my.vercel.app"), ("127.0.0.1", "127.0.0.1")] {
+            XCTAssertTrue(ConnectorOAuth.sameSite(first, second), "\(first) \(second)")
+        }
+        for (first, second) in [("mcp.example.com", "github.com"), ("a.co.uk", "b.co.uk"), ("example.co.kr", "example.or.kr"),
+                                ("mine.vercel.app", "theirs.vercel.app"), ("x.us-east-1.amazonaws.com", "y.us-east-1.amazonaws.com"),
+                                ("localhost", "127.0.0.1"), ("10.0.0.1", "10.0.0.2"), ("co.uk", "example.co.uk")] {
+            XCTAssertFalse(ConnectorOAuth.sameSite(first, second), "\(first) \(second)")
+        }
+        XCTAssertNil(ConnectorSignInConfirmation(connector: "Linear", serverURL: URL(string: "https://mcp.linear.app/mcp")!,
+                                                 signInPage: URL(string: "https://linear.app/oauth/authorize")!))
+        XCTAssertEqual(
+            ConnectorSignInConfirmation(connector: "Linear", serverURL: URL(string: "https://mcp.example.com:8443/mcp")!,
+                                        signInPage: URL(string: "https://github.com/login/oauth/authorize")!),
+            ConnectorSignInConfirmation(connector: "Linear", serverHost: "mcp.example.com:8443", signInHost: "github.com"))
+
         let server = URL(string: "https://mcp.example.test/mcp")!
         for named in ["https://mcp.example.test/mcp", "https://MCP.example.test:443/mcp/", "https://mcp.example.test",
                       "https://mcp.example.test/"] {
@@ -241,6 +260,7 @@ final class ConnectorTests: XCTestCase {
         // The browser opened the authorization server with PKCE, and the token request proved it.
         let opened = try XCTUnwrap(agent.opened.first)
         XCTAssertEqual(opened.host(), "auth.example.test")
+        XCTAssertTrue(agent.confirmations.isEmpty, "A sign-in page on the server's own site is opened without asking")
         let credential = try XCTUnwrap(credentials.load(record.id))
         XCTAssertEqual(credential.accessToken, "access-1")
         XCTAssertEqual(credential.refreshToken, "refresh-1")
@@ -647,6 +667,36 @@ final class ConnectorTests: XCTestCase {
         XCTAssertNil(center.activity[record.id])
         XCTAssertNil(center.failures[record.id])
         XCTAssertEqual(center.record(record.id)?.status, .notConnected)
+
+        // A sign-in page on another site is asked about first. No there stops before Yardlet
+        // registers a client or stores anything; yes is remembered for that server and page.
+        let elsewhere = FakeConnectorServer(authorizationHost: "login.other.test")
+        let asking = FakeUserAgent()
+        asking.confirms = false
+        let credentials = InMemoryConnectorCredentialStore()
+        let other = makeCenter(server: elsewhere, agent: asking, credentials: credentials)
+        let linked = try await other.add(name: "Example", serverURL: FakeConnectorServer.mcpURL)
+        other.connect(linked.id)
+        await other.waitForConnection(linked.id)
+        XCTAssertEqual(asking.confirmations, [ConnectorSignInConfirmation(
+            connector: "Example", serverHost: "mcp.example.test", signInHost: "login.other.test")])
+        XCTAssertTrue(asking.opened.isEmpty)
+        XCTAssertTrue(asking.loopbackPorts.isEmpty)
+        XCTAssertFalse(elsewhere.requests.contains { $0.url?.path() == "/register" })
+        XCTAssertNil(try credentials.load(linked.id))
+        XCTAssertNil(other.failures[linked.id])
+        XCTAssertEqual(other.record(linked.id)?.status, .notConnected)
+        XCTAssertNil(other.record(linked.id)?.approvedSignIn)
+
+        asking.confirms = true
+        other.connect(linked.id)
+        await other.waitForConnection(linked.id)
+        XCTAssertEqual(other.record(linked.id)?.status, .connected)
+        XCTAssertEqual(asking.opened.first?.host(), "login.other.test")
+        other.reconnect(linked.id)
+        await other.waitForConnection(linked.id)
+        XCTAssertEqual(asking.opened.count, 2)
+        XCTAssertEqual(asking.confirmations.count, 2, "Signing in again on the same page does not ask again")
     }
 
     func testDisconnectAndRemoveForgetTheCredential() async throws {
@@ -942,6 +992,23 @@ final class FakeUserAgent: OAuthUserAgent, @unchecked Sendable {
     /// The port each sign-in asked to listen on: nil for any, a number for a registered client.
     var loopbackPorts: [UInt16?] { lock.withLock { ports } }
 
+    private var asked: [ConnectorSignInConfirmation] = []
+    private var agreeing = true
+    /// The questions about sign-in pages on another site, in the order they were asked.
+    var confirmations: [ConnectorSignInConfirmation] { lock.withLock { asked } }
+    /// Whether the person goes on when asked.
+    var confirms: Bool {
+        get { lock.withLock { agreeing } }
+        set { lock.withLock { agreeing = newValue } }
+    }
+
+    func confirm(_ confirmation: ConnectorSignInConfirmation) async -> Bool {
+        lock.withLock {
+            asked.append(confirmation)
+            return agreeing
+        }
+    }
+
     func startLoopback(port: UInt16?) async throws -> any OAuthLoopbackReceiving {
         lock.withLock { ports.append(port) }
         return loopback
@@ -1018,10 +1085,13 @@ final class FakeConnectorServer: ConnectorHTTPTransport, @unchecked Sendable {
     let listsToolsToAnyone: Bool
     /// Takes the token in this query parameter instead of a bearer header, as Browserbase does.
     let queryTokenName: String?
+    /// The authorization server the resource metadata names.
+    let authorizationHost: String
 
     init(requiresToken: Bool = true, publishesResourceMetadata: Bool = true, supportsRegistration: Bool = true,
          authMethods: [String] = ["none", "client_secret_basic"], listsToolsToAnyone: Bool = false,
-         queryTokenName: String? = nil) {
+         queryTokenName: String? = nil, authorizationHost: String = "auth.example.test") {
+        self.authorizationHost = authorizationHost
         self.requiresToken = requiresToken
         self.publishesResourceMetadata = publishesResourceMetadata
         self.supportsRegistration = supportsRegistration
@@ -1108,9 +1178,9 @@ final class FakeConnectorServer: ConnectorHTTPTransport, @unchecked Sendable {
         switch (url.host() ?? "", url.path(), request.httpMethod ?? "GET") {
         case ("mcp.example.test", "/.well-known/oauth-protected-resource/mcp", "GET") where publishesResourceMetadata:
             return json(["resource": .string("https://mcp.example.test/mcp"),
-                         "authorization_servers": .array([.string("https://auth.example.test")]),
+                         "authorization_servers": .array([.string("https://\(authorizationHost)")]),
                          "scopes_supported": .array([.string("read"), .string("write")])], url: url)
-        case ("auth.example.test", "/.well-known/oauth-authorization-server", "GET"),
+        case (authorizationHost, "/.well-known/oauth-authorization-server", "GET"),
              ("mcp.example.test", "/.well-known/oauth-authorization-server", "GET") where !publishesResourceMetadata:
             let base = "https://\(url.host()!)"
             var metadata: [String: ToolJSON] = [

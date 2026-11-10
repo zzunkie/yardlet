@@ -927,6 +927,9 @@ final class LoopbackBrowser: OAuthUserAgent, @unchecked Sendable {
         }
         return true
     }
+
+    /// Google's sign-in is on Yardlet's own addresses, which ask nothing; a question would stop it.
+    func confirm(_ confirmation: ConnectorSignInConfirmation) async -> Bool { false }
 }
 
 /// Google's authorization server, token endpoint, and Gmail API for a few mailboxes, as the

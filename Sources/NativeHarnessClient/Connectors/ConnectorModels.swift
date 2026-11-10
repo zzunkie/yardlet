@@ -72,6 +72,17 @@ struct ConnectorRecord: Codable, Equatable, Identifiable, Sendable {
     /// A mail account's IMAP and SMTP servers and user names (`LocalConnectorService.imapMail`); not
     /// secret, the password is in the secure store. Absent in files from before.
     var mailServer: MailServerSettings?
+    /// The sign-in page on another site the person agreed to (`ConnectorSignInConfirmation`), so
+    /// signing in again there does not ask again. Absent in files from before and where none was asked.
+    var approvedSignIn: ApprovedSignIn?
+
+    /// A sign-in on another site's page the person agreed to, for this server address and that
+    /// page's host only.
+    struct ApprovedSignIn: Codable, Equatable, Sendable {
+        /// The server's address as `MCPServerAddress.canonical` gives it.
+        var server: String
+        var signInHost: String
+    }
 
     init(
         id: UUID = UUID(),
@@ -120,6 +131,7 @@ struct ConnectorRecord: Codable, Equatable, Identifiable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, name, slug, serverURL, authorization, status, tools, toolsUpdatedAt, presetID, oauthClientID, scope
         case authorizationParameters, tokenQueryParameter, localService, account, serverIcons, tokenHeader, program, mailServer
+        case approvedSignIn
         case accountSignInID = "googleAccountID"
     }
 

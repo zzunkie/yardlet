@@ -10,6 +10,9 @@ protocol OAuthUserAgent: Sendable {
     func startLoopback(port: UInt16?) async throws -> any OAuthLoopbackReceiving
     /// Opens the sign-in page in the user's browser.
     func open(_ url: URL) async -> Bool
+    /// Asks the person whether to go on to a sign-in page on another site than the server's; true
+    /// to go on.
+    func confirm(_ confirmation: ConnectorSignInConfirmation) async -> Bool
 }
 
 protocol OAuthLoopbackReceiving: Sendable {
@@ -1025,6 +1028,7 @@ final class ConnectorCenter: ConnectorToolProviding {
         let http = environment.http
         var plan = try await ConnectorOAuth.discover(serverURL: record.serverURL, challenge: challenge, http: http)
         if let scope = record.scope, !scope.isEmpty { plan.scope = scope }
+        try await confirmSignInPage(plan.server.authorizationEndpoint, for: record, userAgent: userAgent)
         let id = record.id
         let registered: OAuthClient? = if record.usesRegisteredClient {
             try await store(at: record.credentialDestination) { try $0.load(id) }.flatMap { credential in
@@ -1061,6 +1065,21 @@ final class ConnectorCenter: ConnectorToolProviding {
             code: code, verifier: verifier, plan: plan, client: client,
             redirectURI: loopback.redirectURI, http: http, now: environment.now()
         )
+    }
+
+    /// Asks before a sign-in page on another site than the server's, once for each server and page
+    /// host. The page's host is the one checked, not only the issuer the server names, since it is
+    /// where the person signs in. Declining ends the connection as Cancel on the page does, before
+    /// a client is registered or anything is stored.
+    private func confirmSignInPage(_ page: URL, for record: ConnectorRecord, userAgent: any OAuthUserAgent) async throws {
+        guard let confirmation = ConnectorSignInConfirmation(connector: record.displayName, serverURL: record.serverURL,
+                                                             signInPage: page) else { return }
+        let approval = ConnectorRecord.ApprovedSignIn(server: MCPServerAddress.canonical(record.serverURL),
+                                                      signInHost: confirmation.signInHost)
+        guard self.record(record.id)?.approvedSignIn != approval else { return }
+        guard await userAgent.confirm(confirmation) else { throw ConnectorOAuthError.declined }
+        try Task.checkCancellation()
+        update(record.id) { $0.approvedSignIn = approval }
     }
 
     /// GitHub's device flow: Yardlet asks GitHub for a code, puts it on the clipboard and beside
