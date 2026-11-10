@@ -1,0 +1,41 @@
+name: First run
+description: Tell us where your first minutes with Yardlet went wrong or felt slow, from download to your first task.
+labels: ["first run", "needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Short answers are fine. If it went well, that helps too. Remove tokens, email addresses and private repository names from anything you paste.
+  - type: dropdown
+    id: stopped-at
+    attributes:
+      label: Where did you get stuck, or stop?
+      options:
+        - Downloading or installing
+        - Opening Yardlet the first time
+        - Finding my agent or its sign-in
+        - Starting the first task
+        - Answering the first approval or question
+        - After the first task
+        - I did not get stuck
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you tried, what you expected, and what you saw instead. A screenshot helps.
+    validations:
+      required: true
+  - type: input
+    id: agents
+    attributes:
+      label: Agents you use
+      description: Which agent CLIs you have, and whether you were already signed in to them before opening Yardlet.
+      placeholder: "Claude Code, signed in; Codex not installed"
+  - type: input
+    id: setup
+    attributes:
+      label: Yardlet, macOS and Mac
+      description: Yardlet > About Yardlet, and Apple menu > About This Mac.
+      placeholder: "Yardlet 0.11.10, macOS 26.1, M2"
