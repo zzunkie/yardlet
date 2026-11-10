@@ -152,23 +152,27 @@ struct CLIUpdatePlan: Equatable, Sendable {
     /// Reads the check's answer. A Homebrew or npm answer names the newest version; grok's JSON
     /// says whether one is available.
     func latest(from result: CLICommandResult, installed: String?) -> CLILatest {
-        guard result.succeeded else { return .failed(result.failureSummary) }
         let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         switch method {
         case .homebrewFormula, .homebrewCask:
-            guard let value = try? JSONDecoder().decode(JSONValue.self, from: Data(output.utf8)) else {
-                return .failed(L10n.string("Homebrew's answer could not be read"))
+            // `brew outdated` given a name exits 1 when that name is outdated, so its JSON is read
+            // whatever the exit status; an error writes none.
+            guard let value = try? JSONDecoder().decode(JSONValue.self, from: Data(output.utf8)),
+                  value["formulae"] != nil || value["casks"] != nil else {
+                return .failed(result.succeeded ? L10n.string("Homebrew's answer could not be read") : result.failureSummary)
             }
             let rows = (value["formulae"]?.arrayValue ?? []) + (value["casks"]?.arrayValue ?? [])
             guard let row = rows.first else { return .upToDate }
             guard let current = row["current_version"]?.stringValue, !current.isEmpty else { return .upToDate }
             return .available(current)
         case .npmGlobal:
+            guard result.succeeded else { return .failed(result.failureSummary) }
             let text = (try? JSONDecoder().decode(String.self, from: Data(output.utf8))) ?? output
             guard let newest = CLIVersion.parse(text) else { return .failed(L10n.string("npm's answer could not be read")) }
             guard let installed else { return .available(newest) }
             return CLIVersion.isNewer(newest, than: installed) ? .available(newest) : .upToDate
         case .selfUpdater:
+            guard result.succeeded else { return .failed(result.failureSummary) }
             guard let value = try? JSONDecoder().decode(JSONValue.self, from: Data(output.utf8)) else { return .unknown }
             if let error = value["error"]?.stringValue, !error.isEmpty { return .failed(error) }
             guard let newest = value["latestVersion"]?.stringValue else { return .unknown }
@@ -176,7 +180,7 @@ struct CLIUpdatePlan: Equatable, Sendable {
             if let installed, !CLIVersion.isNewer(newest, than: installed) { return .upToDate }
             return .available(newest)
         case .appBundled, .manual:
-            return .unknown
+            return result.succeeded ? .unknown : .failed(result.failureSummary)
         }
     }
 }

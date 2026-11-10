@@ -292,6 +292,8 @@ final class CLIUpdateCenter {
         update(harness) { $0.phase = .verifying }
         guard case let .failed(reason) = await dependencies.verifier.verify(harness, executable: plan.launcher) else {
             accept(plan, version: installed, previous: record.previous)
+            // The runtimes Yardlet started before run the version this replaced.
+            await dependencies.runtimeChanged(harness, plan.launcher)
             return
         }
         // The version that worked, where its installer kept it, or else the copy Yardlet made
@@ -388,7 +390,6 @@ final class CLIUpdateCenter {
     /// The new version works: Yardlet runs the install again and keeps only `previous`.
     private func accept(_ plan: CLIUpdatePlan, version: String, previous: CLIPreviousVersion?) {
         let harness = plan.harness
-        let wasHeld = dependencies.overrides.entry(for: harness) != nil
         dependencies.overrides.set(nil, for: harness)
         modifyRecord(harness) {
             $0.verifiedVersion = version
@@ -404,7 +405,6 @@ final class CLIUpdateCenter {
             saveRecords()
         }
         update(harness) { $0.outcome = nil }
-        if wasHeld { Task { await dependencies.runtimeChanged(harness, plan.launcher) } }
     }
 
     /// The new version failed: Yardlet runs `previous` in its place, or says none is left.

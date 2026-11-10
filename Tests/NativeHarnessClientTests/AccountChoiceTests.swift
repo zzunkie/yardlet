@@ -219,8 +219,9 @@ import XCTest
     }
 
     /// A sign-in ends each idle CLI on the login, since one that found none keeps running on that
-    /// answer. A login's first reading says nothing about them, so they run on.
-    func testOnlyASignInAfterAKnownReadingEndsIdleCLIs() async throws {
+    /// answer. A login's first reading says nothing about them, so they run on. A new version of the
+    /// CLI ends each idle one too, since a process keeps the version it started from.
+    func testOnlyASignInAfterAKnownReadingOrANewCLIVersionEndsIdleCLIs() async throws {
         let fixture = try signInFixture(.claudeCode, connections: ProviderConnectionStore())
         let model = fixture.model
         let made = await model.createSession(harness: .claudeCode, workspaceURL: fixture.draft.workspaceURL!,
@@ -231,6 +232,13 @@ import XCTest
         XCTAssertTrue(model.isAttached(task.id))
         await model.continueTasks(afterSignInOf: .claudeCode, connection: nil)
         XCTAssertFalse(model.isAttached(task.id))
+
+        let next = await model.createSession(harness: .claudeCode, workspaceURL: fixture.draft.workspaceURL!,
+                                             runtimeExecutableURL: URL(filePath: "/usr/bin/true"), title: "Idle too")
+        let other = try XCTUnwrap(next, model.bootstrapError ?? "Missing task")
+        XCTAssertTrue(model.isAttached(other.id))
+        await model.harnessRuntimeChanged(.claudeCode)
+        XCTAssertFalse(model.isAttached(other.id))
     }
 
     /// The account of a login with no address comes from the config file, and only the account.

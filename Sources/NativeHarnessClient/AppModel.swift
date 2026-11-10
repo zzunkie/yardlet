@@ -3141,9 +3141,16 @@ final class AppModel {
     }
 
     /// A harness's CLI changed under Yardlet (updated, or back to an earlier version): tasks that
-    /// attach from now on start it again, and attached ones keep the process they have.
+    /// attach from now on start it again, and so does each idle attached task at its next message,
+    /// as after a sign-in (`continueTasks(afterSignInOf:)`). A process keeps running the version it
+    /// started from, and an update may remove that version's files: a Codex App Server looks for its
+    /// helpers in its own version folder, which `brew upgrade --cask` deletes. A task in a turn, or
+    /// with work its runtime holds, keeps the process it has until that runtime ends.
     func harnessRuntimeChanged(_ harness: HarnessKind) async {
         await registry.invalidate(harness: harness)
+        for session in store.sessions where session.harness == harness && handlesBySessionID[session.id] != nil {
+            await endRuntimeToSaveMemory(session.id, evenOnScreen: true)
+        }
     }
 
     /// Sessions with provider work, or a running bash-mode command, that would be interrupted by

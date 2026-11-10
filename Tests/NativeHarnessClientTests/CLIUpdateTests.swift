@@ -141,7 +141,8 @@ final class CLIUpdateTests: XCTestCase {
         let codex = try link("opt/homebrew/bin/codex", to: "../Caskroom/codex/0.157.1/bin/codex")
         let cask = CLIUpdatePlan(harness: .codex, launcher: codex,
                                  method: CLIInstallDetector.detect(harness: .codex, executable: codex))
-        XCTAssertEqual(cask.latest(from: ok(Self.outdated("0.157.1", "0.163.0")), installed: "0.157.1"), .available("0.163.0"))
+        XCTAssertEqual(cask.latest(from: Self.homebrewOutdated("0.157.1", "0.163.0"), installed: "0.157.1"), .available("0.163.0"),
+                       "`brew outdated` exits 1 when the cask it names is outdated")
         XCTAssertEqual(cask.latest(from: ok(#"{"formulae":[],"casks":[]}"#), installed: "0.163.0"), .upToDate)
         guard case .failed = cask.latest(from: ok("Error: not JSON"), installed: "0.157.1") else { return XCTFail() }
         guard case .failed = cask.latest(from: CLICommandResult(exitCode: 1, stdout: "", stderr: "Error: Another active Homebrew process"),
@@ -427,8 +428,10 @@ final class CLIUpdateTests: XCTestCase {
 
         // Signed in again, 1.4.12 passes, and the copy to go back to is of 1.4.12.
         verifier.signedOut = false
+        XCTAssertEqual(made.changed.value, [])
         await made.center.checkAll()
         XCTAssertEqual(made.center.record(for: .antigravityCLI)?.verifiedVersion, "1.4.12")
+        XCTAssertEqual(made.changed.value, [.antigravityCLI], "Runtimes started from 1.4.0 start 1.4.12")
         let working = try XCTUnwrap(made.center.record(for: .antigravityCLI)?.previous)
         XCTAssertEqual(version(atPath: working.executable), "1.4.12")
         XCTAssertNil(made.center.row(for: .antigravityCLI)?.outcome)
@@ -629,8 +632,8 @@ final class CLIUpdateTests: XCTestCase {
                 return Self.ok("")
             case "outdated":
                 let current = Self.version(of: launcher) ?? ""
-                return Self.ok(CLIVersion.isNewer(newestBox.value, than: current)
-                    ? Self.outdated(current, newestBox.value) : #"{"formulae":[],"casks":[]}"#)
+                return CLIVersion.isNewer(newestBox.value, than: current)
+                    ? Self.homebrewOutdated(current, newestBox.value) : Self.ok(#"{"formulae":[],"casks":[]}"#)
             case "upgrade":
                 let current = Self.version(of: launcher) ?? ""
                 let target = newestBox.value
@@ -685,8 +688,10 @@ final class CLIUpdateTests: XCTestCase {
         return (center, overrides, changed, defaults)
     }
 
-    nonisolated private static func outdated(_ installed: String, _ current: String) -> String {
-        #"{"formulae":[],"casks":[{"name":"codex","installed_versions":[""# + installed + #""],"current_version":""# + current + #""}]}"#
+    /// Homebrew's answer for an outdated cask it was asked about by name: the JSON, and exit 1.
+    nonisolated private static func homebrewOutdated(_ installed: String, _ current: String) -> CLICommandResult {
+        CLICommandResult(exitCode: 1, stdout: #"{"formulae":[],"casks":[{"name":"codex","installed_versions":[""# + installed
+            + #""],"current_version":""# + current + #""}]}"#, stderr: "")
     }
 
     nonisolated private static func ok(_ stdout: String) -> CLICommandResult {
