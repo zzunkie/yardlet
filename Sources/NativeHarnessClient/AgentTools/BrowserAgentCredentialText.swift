@@ -1,11 +1,13 @@
 import Foundation
 
-/// Text shaped like a key or token a service issues, wherever a browser tool reads it: a field that is not a password
-/// field (a read-only box showing a bot token), a page's text, an address, a script's result. Its secret part becomes
-/// `[hidden credential]`, and the prefix that names its kind stays, as `VaultSetupText` keeps a setup address. The shapes
-/// are the prefixes services give their keys so that secret scanning finds them, with lengths ordinary words do not
-/// reach; a secret without such a prefix (a signing secret in hex, an AWS secret key) is not found. On unless the person
-/// turned it off in Settings (`VaultCenter.hidesCredentials`).
+/// Text shaped like a key or token a service issues, wherever an agent reads it through Yardlet: a field that is not a
+/// password field (a read-only box showing a bot token), a page's text, an address, a script's result, a terminal, or
+/// another task's title, conversation or answer. Its secret part becomes `[hidden credential]`, and the prefix that
+/// names its kind stays, as `VaultSetupText` keeps a setup address. The shapes are the prefixes services give their keys
+/// so that secret scanning finds them, with lengths ordinary words do not reach, a bearer token, a JSON Web Token, and
+/// a value of letters and digits given to a name that ends in key, token, secret or password; a secret with none of
+/// these around it (a signing secret in hex on its own, a password of letters alone) is not found, and neither is a
+/// UUID. On unless the person turned it off in Settings (`VaultCenter.hidesCredentials`).
 enum CredentialText {
     static let marker = "[hidden credential]"
 
@@ -44,7 +46,30 @@ enum CredentialText {
         // PEM and OpenSSH private keys and PGP private key blocks; one a cut left without its end, to the end of its body.
         Shape(["PRIVATE KEY"], #"(-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?)-----)"#
             + #"(?:[\s\S]*?(-----END \2-----)|[A-Za-z0-9+/=\s\\]*)"#, template: "$1" + marker + "$3"),
+        // JSON Web Tokens: a header and a payload that are JSON objects in base64url, and a signature.
+        Shape(["eyJ"], #"\b(eyJ)[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{16,}"#),
+        // A bearer token, as an `Authorization` header gives it.
+        Shape(["earer"], #"\b([Bb]earer\s+)(?=[A-Za-z0-9._~+/-]*[0-9])[A-Za-z0-9._~+/-]{19,}[A-Za-z0-9_~+/-]=*"#),
+        // A value of 16 characters or more, with letters and digits, given to a name that ends in key, token, secret or
+        // password (`OPENAI_API_KEY=…`, `"apiKey": "…"`, `password: …`), also inside JSON's escaped quotes; a UUID is
+        // an identifier, not a secret. The name is read 40 characters back at most, so a long run of joined words is not
+        // searched again from each of its words. Last, after the shapes that name a key's kind.
+        Shape(secretNames, #"\b([A-Za-z0-9_.-]{0,40}(?:"# + secretNames.joined(separator: "|")
+                + #")(?:\\?["'])?\s*[:=]\s*(?:\\?["'])?)"#
+                + #"(?![0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}(?!"#
+                + "\(valueCharacter)*\(valueEnd)))"
+                + "(?=\(valueCharacter)*[0-9])(?=\(valueCharacter)*[A-Za-z])\(valueCharacter){15,}\(valueEnd)"),
     ]
+
+    /// The words a secret's name ends in, in capitals, with a capital first and in small letters.
+    private static let secretNames = ["key", "token", "secret", "password", "passwd"].flatMap {
+        [$0.uppercased(), $0.prefix(1).uppercased() + $0.dropFirst(), $0]
+    }
+    /// A character of a value given to a secret's name: it ends at a space, a quote, a backslash (JSON's escaped quote
+    /// or line break), a bracket, so that a key an earlier shape hid is not hidden again, or what separates values.
+    private static let valueCharacter = #"[^\s"'`\\<>,;&()|\[\]]"#
+    /// The last character of such a value, which is not the period that ends a sentence.
+    private static let valueEnd = #"[^\s"'`\\<>,;&()|\[\].]"#
 
     static func scrub(_ text: String) -> String {
         var text = text

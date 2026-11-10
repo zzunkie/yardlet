@@ -403,7 +403,7 @@ choices (Codex: once, for the chat, more broadly; Claude: the permission prompt'
 | Codex MCP form | The form's fields with its answers | On the Mac | Fields and answers on the phone (`formFields`) |
 | A question with a secret answer (Codex `isSecret`) | A masked field | On the Mac | On the phone, masked, never stored |
 | A mode switch request (ACP `switch_mode`) | Allow, Deny | On the Mac | Both |
-| Yardlet's own approvals (a message or a child task into another project, a subagent in another folder) | Allow, Deny | Allow once, Deny | The same, through `choices` |
+| Yardlet's own approvals (a message or a child task into another project, reading another project's tasks, a subagent in another folder) | Allow, Deny | Allow once, Deny | The same, through `choices` |
 | Connector writes Claude Code asks about (Gmail send, Calendar, Drive, App Store Connect, the Mac's apps) | Allow, Deny, with the account, recipients and a body preview | Allow once, Deny, with the same preview (up to 1,000 characters) | The same |
 | A request Yardlet answers nothing for (`unanswerableReason`) | None, with the reason | The reason | The reason |
 | Touch ID, a passkey or sign-in window, a macOS permission prompt, a keychain prompt | Not requests | On the Mac | On the Mac |

@@ -13,7 +13,9 @@ import XCTest
 ///   latest step on one line, Stop) and one waiting for the person, whose request waits at the end of
 ///   the turn like every request.
 /// - `subagent-done-*`: a finished Codex subagent's card with its model and answer.
-/// - `approval-card-*`: `send_message_to_task` into another project waiting on the person's card.
+/// - `approval-card-*`: `send_message_to_task` into another project waiting on the person's card;
+///   `read-approval-card-*` and `list-approval-card-*`: `read_task` of another project's task and `list_tasks` of every
+///   project's, on the same card.
 /// - `setting-approval-card-*`, `setting-changed-*`: `update_setting` waiting on the person's card, and the
 ///   change it made as a row in the folded turn.
 @MainActor
@@ -156,6 +158,34 @@ final class SessionToolRenderingTests: XCTestCase {
         for drawing in drawings {
             let texts = drawing.elements.map(\.description).joined(separator: "\n")
             XCTAssertTrue(texts.contains(L10n.string("Send a message to another project's task")), texts)
+        }
+
+        // Reading another project's task, and listing every project's tasks, ask on the same card.
+        let reads = [
+            ("read-approval-card", "read_task", #"{"task_id":"5D0F…"}"#, L10n.string("Read another project's task"),
+             L10n.format("%@ → %@", "Upload limits doc", "Payment webhook retries") + " · billing"),
+            ("list-approval-card", "list_tasks", #"{"scope":"all"}"#, L10n.string("List every project's tasks"),
+             L10n.format("%@ → %@", "Upload limits doc", "billing, site, Chats"))
+        ]
+        for (name, tool, input, title, detail) in reads {
+            let read = SessionToolApproval(
+                id: SessionToolApproval.idPrefix + name, taskID: caller,
+                request: PermissionRequest(id: SessionToolApproval.idPrefix + name, title: title, detail: detail, command: nil))
+            let asked = transcript([
+                .user(text: "What did the payments task decide about retries?"),
+                .activity(HarnessActivity(id: "toolu_\(tool)", kind: "mcp__yardlet__\(tool)", title: "mcp__yardlet__\(tool)",
+                                          input: input), state: .running)
+            ])
+            let drawn = try draw(name, height: 420) {
+                ConversationTimeline(source: .transcript(entries: asked, harness: .claudeCode, status: .running,
+                                                         latestTurnIsComplete: false),
+                                     actions: ConversationActions(heldRequests: [read.conversationRequest]))
+            }
+            for drawing in drawn {
+                let texts = drawing.elements.map(\.description).joined(separator: "\n")
+                XCTAssertTrue(texts.contains(title), texts)
+                XCTAssertTrue(texts.contains(detail), texts)
+            }
         }
     }
 

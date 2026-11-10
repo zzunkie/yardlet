@@ -1285,7 +1285,7 @@
 "Claude Code user settings" = "Claude Code user settings";
 "Agent browser tools" = "Agent browser tools";
 "Hide keys and tokens" = "Hide keys and tokens";
-"Hides values that look like API keys, access tokens or private keys in what agents read in the browser. Turned off, agents read them as the page shows them, and they stay in the task's history." = "Hides values that look like API keys, access tokens or private keys in what agents read in the browser. Turned off, agents read them as the page shows them, and they stay in the task's history.";
+"Hides values that look like API keys, access tokens or private keys in what agents read in the browser, a terminal or another task. Turned off, agents read them as they are shown, and they stay in the task's history." = "Hides values that look like API keys, access tokens or private keys in what agents read in the browser, a terminal or another task. Turned off, agents read them as they are shown, and they stay in the task's history.";
 "turn off hiding keys and tokens from agents" = "turn off hiding keys and tokens from agents";
 "Always on in a build that is not team-signed." = "Always on in a build that is not team-signed.";
 
@@ -2246,6 +2246,9 @@
 "Opens the task that sent this message" = "Opens the task that sent this message";
 "Send a message to another project's task" = "Send a message to another project's task";
 "Send a message to a task that runs without asking" = "Send a message to a task that runs without asking";
+"Read another project's task" = "Read another project's task";
+"Read other projects' tasks" = "Read other projects' tasks";
+"List every project's tasks" = "List every project's tasks";
 "Create a task in another project" = "Create a task in another project";
 "Schedule messages to a task that runs without asking" = "Schedule messages to a task that runs without asking";
 "Schedule messages to another project's task" = "Schedule messages to another project's task";

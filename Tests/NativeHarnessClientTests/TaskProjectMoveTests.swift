@@ -228,9 +228,13 @@ final class TaskProjectMoveTests: XCTestCase {
             struct Entry: Decodable { let taskId: String; let project: String? }
             let tasks: [Entry]
         }
-        let listing = await model.callSessionTool(named: "list_tasks",
-                                                  arguments: .object(["scope": .string("all")]), callerID: byFolder.id)
-        let entries = try JSONDecoder().decode(Listing.self, from: Data(listing.text.utf8)).tasks
+        // Out of Alpha now, the moved task is another project's to Alpha's task, which lists it once the person allows it.
+        let listing = Task { await model.callSessionTool(named: "list_tasks", arguments: .object(["scope": .string("all")]),
+                                                         callerID: byFolder.id) }
+        try await waitUntil { !model.sessionTools.approvals(for: byFolder.id).isEmpty }
+        await model.respond(to: try XCTUnwrap(model.sessionTools.approvals(for: byFolder.id).last).id, decision: .allow,
+                            in: byFolder)
+        let entries = try JSONDecoder().decode(Listing.self, from: Data(await listing.value.text.utf8)).tasks
         XCTAssertNil(try XCTUnwrap(entries.first { $0.taskId == moved.id.uuidString }).project, "list_tasks names no project")
         XCTAssertEqual(entries.first { $0.taskId == byFolder.id.uuidString }?.project, "Alpha")
         let snapshot = AppModelRemoteBridge.snapshot(of: model)

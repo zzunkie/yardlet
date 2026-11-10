@@ -56,7 +56,7 @@ extension AppModel: SessionToolHandling {
             return .error("Yardlet no longer has the task that made this call.")
         }
         switch name {
-        case SessionToolCatalog.listTasks: return listTasks(arguments, caller: caller)
+        case SessionToolCatalog.listTasks: return await listTasks(arguments, caller: caller)
         case SessionToolCatalog.readTask: return await readTask(arguments, caller: caller)
         case SessionToolCatalog.sendMessageToTask: return await sendMessageToTask(arguments, caller: caller)
         case SessionToolCatalog.waitTasks: return await waitTasks(arguments, caller: caller)
@@ -138,7 +138,7 @@ extension AppModel: SessionToolHandling {
 
     // MARK: - list_tasks
 
-    private func listTasks(_ arguments: JSONValue, caller: SessionToolCaller) -> AgentToolResult {
+    private func listTasks(_ arguments: JSONValue, caller: SessionToolCaller) async -> AgentToolResult {
         let scope = arguments["scope"]?.stringValue ?? "project"
         guard scope == "project" || scope == "all" else { return .error("scope must be \"project\" or \"all\".") }
         let limit = Self.integer(arguments["limit"]).map { min(max($0, 1), SessionToolPolicy.listMaximumLimit) }
@@ -162,24 +162,43 @@ extension AppModel: SessionToolHandling {
             }
             olderThan = date
         }
-        let neighbors = Set(splits.split(containing: caller.hostTaskID)?.sessionIDs ?? [])
-        let onScreen = sessionToolOnScreenIDs()
-        var listed = sidebarSessions
-        if let host = store.sessions.first(where: { $0.id == caller.hostTaskID }),
-           !listed.contains(where: { $0.id == host.id }) {
-            listed.append(host)
+        func matches() -> [(session: SessionRecord, entry: SessionToolText.TaskEntry)] {
+            let neighbors = Set(splits.split(containing: caller.hostTaskID)?.sessionIDs ?? [])
+            let onScreen = sessionToolOnScreenIDs()
+            var listed = sidebarSessions
+            if let host = store.sessions.first(where: { $0.id == caller.hostTaskID }),
+               !listed.contains(where: { $0.id == host.id }) {
+                listed.append(host)
+            }
+            return listed.filter { session in
+                (scope == "all" || session.id == caller.hostTaskID || neighbors.contains(session.id)
+                    || (caller.projectID != nil && project(for: session)?.id == caller.projectID))
+                    && olderThan.map { max(session.updatedAt, providerActivityBySessionID[session.id] ?? .distantPast) < $0 } != false
+            }.map { session in
+                (session, SessionToolText.entry(
+                    session, projectName: project(for: session)?.name, detail: taskAttentionDetails[session.id],
+                    isShellBusy: shellBusySessionIDs.contains(session.id), isSelf: session.id == caller.hostTaskID,
+                    inSameSplit: session.id != caller.hostTaskID && neighbors.contains(session.id),
+                    onScreen: onScreen.contains(session.id), lastActivity: providerActivityBySessionID[session.id]))
+            }.filter { states?.contains($0.entry.state) != false }
         }
-        let entries = listed.filter { session in
-            (scope == "all" || session.id == caller.hostTaskID || neighbors.contains(session.id)
-                || (caller.projectID != nil && project(for: session)?.id == caller.projectID))
-                && olderThan.map { max(session.updatedAt, providerActivityBySessionID[session.id] ?? .distantPast) < $0 } != false
-        }.map { session in
-            SessionToolText.entry(
-                session, projectName: project(for: session)?.name, detail: taskAttentionDetails[session.id],
-                isShellBusy: shellBusySessionIDs.contains(session.id), isSelf: session.id == caller.hostTaskID,
-                inSameSplit: session.id != caller.hostTaskID && neighbors.contains(session.id),
-                onScreen: onScreen.contains(session.id), lastActivity: providerActivityBySessionID[session.id])
-        }.filter { states?.contains($0.state) != false }
+        // Another project's tasks are listed once the person allows it, as a message into one is sent.
+        let outside = matches().map(\.session).filter { sessionToolReadsPastProject($0, caller: caller) }
+        if !outside.isEmpty, sessionToolAsksPerson(caller) {
+            let names = outside.reduce(into: [String]()) { names, task in
+                let name = project(for: task)?.name
+                    ?? (projects.isChat(task) ? L10n.string("Chats") : task.workspaceURL.lastPathComponent)
+                if !names.contains(name) { names.append(name) }
+            }
+            let allowed = await askPerson(title: L10n.string("List every project's tasks"),
+                                          detail: L10n.format("%@ → %@", caller.title, names.joined(separator: ", ")),
+                                          caller: caller)
+            guard allowed else {
+                return .failure("Not listed: the person did not approve listing other projects' tasks. "
+                    + "scope \"project\" lists this project's.", .refused, retry: .withChanges)
+            }
+        }
+        let entries = matches().map(\.entry)
         guard let page = SessionToolText.page(entries, limit: limit, cursor: arguments["cursor"]?.stringValue) else {
             return .error("That cursor is not from list_tasks. List again without cursor.")
         }
@@ -222,6 +241,9 @@ extension AppModel: SessionToolHandling {
         switch await sessionToolTask(reference, caller: caller) {
         case let .success(found): session = found
         case let .failure(error): return error.result("Not read")
+        }
+        if let reason = await sessionToolReadApproval(of: [session], caller: caller) {
+            return .failure("Not read: \(reason)", .refused, retry: .no)
         }
         let id = session.id
         // A task nothing has opened since Yardlet started reads its saved history first; no turn starts.
@@ -401,12 +423,35 @@ extension AppModel: SessionToolHandling {
     /// Whether a message into `target` needs the person: nil when it goes without asking (the
     /// caller's own project or split, or a caller that runs without asking).
     func sessionToolMessageReach(to target: SessionRecord, caller: SessionToolCaller) -> TaskMessageReach? {
+        let raisesPermission = sessionToolPermission(of: target) == .elevated && caller.permission < .elevated
+        guard sessionToolIsPastProject(target, caller: caller) || raisesPermission, sessionToolAsksPerson(caller)
+        else { return nil }
+        return raisesPermission ? .raisesPermission : .otherProject
+    }
+
+    /// Whether `target` is past the caller's own project: neither in it nor beside the caller in a split view.
+    func sessionToolIsPastProject(_ target: SessionRecord, caller: SessionToolCaller) -> Bool {
         let neighbors = SessionToolPolicy.splitNeighborsShareProject
             && splits.split(containing: caller.hostTaskID)?.sessionIDs.contains(target.id) == true
         let sameProject = caller.projectID != nil && project(for: target)?.id == caller.projectID
-        let raisesPermission = sessionToolPermission(of: target) == .elevated && caller.permission < .elevated
-        guard (!sameProject && !neighbors) || raisesPermission, sessionToolAsksPerson(caller) else { return nil }
-        return raisesPermission ? .raisesPermission : .otherProject
+        return !sameProject && !neighbors
+    }
+
+    /// Whether reading `target` reaches past the caller's own project (`sessionToolIsPastProject`); the caller's own
+    /// task is its own to read.
+    func sessionToolReadsPastProject(_ target: SessionRecord, caller: SessionToolCaller) -> Bool {
+        target.id != caller.hostTaskID && sessionToolIsPastProject(target, caller: caller)
+    }
+
+    /// Asks the person before the caller reads tasks past its own project (`read_task`, `wait_tasks`), on the card a
+    /// message into one asks on: one card for the call, a line for each task. Nil when it may read; otherwise why not.
+    private func sessionToolReadApproval(of targets: [SessionRecord], caller: SessionToolCaller) async -> String? {
+        let outside = targets.filter { sessionToolReadsPastProject($0, caller: caller) }
+        guard !outside.isEmpty, sessionToolAsksPerson(caller) else { return nil }
+        let title = outside.count == 1 ? L10n.string("Read another project's task") : L10n.string("Read other projects' tasks")
+        let detail = outside.map { sessionToolCardLine(to: $0, caller: caller) }.joined(separator: "\n")
+        let allowed = await askPerson(title: title, detail: detail, caller: caller)
+        return allowed ? nil : "the person did not approve reading another project's task."
     }
 
     /// Asks the person when a message reaches past what goes without asking. Nil when it may go;
@@ -424,8 +469,12 @@ extension AppModel: SessionToolHandling {
 
     /// A card's lines for a message: from whom to which task, in which project, then the message.
     func sessionToolMessageDetail(to target: SessionRecord, _ message: String, caller: SessionToolCaller) -> String {
+        sessionToolCardLine(to: target, caller: caller) + "\n\n" + Self.cardPreview(message)
+    }
+
+    /// A card's line for a call from the caller into a task: from whom to which task, in which project.
+    func sessionToolCardLine(to target: SessionRecord, caller: SessionToolCaller) -> String {
         L10n.format("%@ → %@", caller.title, target.title) + (project(for: target).map { " · \($0.name)" } ?? "")
-            + "\n\n" + Self.cardPreview(message)
     }
 
     /// A message or prompt on a card: its first 600 characters, and "…" when there is more.
@@ -499,6 +548,7 @@ extension AppModel: SessionToolHandling {
             return .error("At most \(SessionToolCatalog.maximumWaitTargets) ids.")
         }
         var ids: [UUID] = []
+        var tasks: [SessionRecord] = []
         for reference in references {
             if let id = UUID(uuidString: reference), sessionTools.run(id) != nil {
                 ids.append(id)
@@ -508,9 +558,14 @@ extension AppModel: SessionToolHandling {
             case let .success(task) where task.id == caller.hostTaskID:
                 return .failure("\(reference) is this task, which cannot wait for itself.", .invalidArguments,
                                 retry: .withChanges)
-            case let .success(task): ids.append(task.id)
+            case let .success(task):
+                ids.append(task.id)
+                tasks.append(task)
             case let .failure(error): return error.result()
             }
+        }
+        if let reason = await sessionToolReadApproval(of: tasks, caller: caller) {
+            return .failure("Not waited for: \(reason)", .refused, retry: .no)
         }
         let requested = Self.integer(arguments["timeout_seconds"]).map { Duration.seconds(max(0, $0)) }
             ?? SessionToolPolicy.waitDefault
@@ -1610,9 +1665,6 @@ extension AppModel: SessionToolHandling {
 
     // MARK: - Approvals
 
-    /// Asks the person in the caller's host task, on the request card every harness draws, and
-    /// waits for the answer: true to go ahead. The task waits for approval meanwhile, so its dot,
-    /// notification, Dock badge and the phone remote say so.
     /// Whether a session tool asks the person before reaching past the caller's own project, archiving
     /// or running a subagent outside its folders. A task that runs without asking (Claude Code's Bypass
     /// permissions, Codex's Full access, Antigravity's bypass) does these without a card, as the Claude
@@ -1632,6 +1684,9 @@ extension AppModel: SessionToolHandling {
         return await askPerson(title: L10n.string("Open a file outside this task's folders?"), detail: path, caller: caller)
     }
 
+    /// Asks the person in the caller's host task, on the request card every harness draws, and
+    /// waits for the answer: true to go ahead. The task waits for approval meanwhile, so its dot,
+    /// notification, Dock badge and the phone remote say so.
     func askPerson(title: String, detail: String, caller: SessionToolCaller) async -> Bool {
         let host = caller.hostTaskID
         let request = PermissionRequest(

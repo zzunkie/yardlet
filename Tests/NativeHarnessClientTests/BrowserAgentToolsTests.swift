@@ -1352,8 +1352,33 @@ final class BrowserAgentToolsTests: XCTestCase {
         }
         let pem = "-----BEGIN RSA PRIVATE" + " KEY-----\n\(body)\n\(body)\n-----END RSA PRIVATE KEY-----"
         XCTAssertEqual(CredentialText.scrub(pem), "-----BEGIN RSA PRIVATE KEY-----[hidden credential]-----END RSA PRIVATE KEY-----")
-        let ordinary = "sk-learn, risk-assessment-2026-quarterly-report-final-v2, task_live_updates_2026, xoxo-hugs, AKIA."
+        // A bearer token, a JSON Web Token, and a value given to a name a secret goes by, as typed and inside JSON's
+        // escaped quotes; the name stays.
+        let jwt = "ey" + "JhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0." + body
+        let named = [
+            ("Authorization: Bearer \(body).", "Authorization: Bearer [hidden credential]."),
+            ("Here: \(jwt).", "Here: eyJ[hidden credential]."),
+            ("export OPENAI_API_KEY=\(body).", "export OPENAI_API_KEY=[hidden credential]."),
+            (#"{"apiKey": ""# + body + #""}"#, #"{"apiKey": "[hidden credential]"}"#),
+            (#"{"answer":"Use password: "# + body + #"\nthen db_password = '"# + body + #"'"}"#,
+             #"{"answer":"Use password: [hidden credential]\nthen db_password = '[hidden credential]'"}"#),
+            (#"{"answer":"Set \"STRIPE_SECRET\": \""# + body + #"\""}"#,
+             #"{"answer":"Set \"STRIPE_SECRET\": \"[hidden credential]\""}"#),
+            ("GITHUB_TOKEN=gh" + "p_" + body, "GITHUB_TOKEN=ghp_[hidden credential]")
+        ]
+        for (text, hidden) in named {
+            XCTAssertEqual(CredentialText.scrub(text), hidden)
+        }
+        let ordinary = "sk-learn, risk-assessment-2026-quarterly-report-final-v2, task_live_updates_2026, xoxo-hugs, AKIA. "
+            + "Commit 3f2a9c1e8b7d6a5f4e3d2c1b0a9f8e7d6c5b4a3f, sha256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855, "
+            + "task_key: 550e8400-e29b-41d4-a716-446655440000. max_tokens: 4096, sort_key=created_at_timestamp_desc, "
+            + "PRIMARY_KEY=id, KEYCHAIN_PATH=/tmp/a1b2c3d4e5f6g7h8, apiKey: process.env.OPENAI_API_KEY, a bearer token, "
+            + "Bearer tokens expire."
         XCTAssertEqual(CredentialText.scrub(ordinary), ordinary)
+        let joined = String(repeating: "a-", count: 8_000)
+        let started = ContinuousClock.now
+        XCTAssertEqual(CredentialText.scrub(joined + "key"), joined + "key")
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(2), "A long run of joined words is read once")
 
         // A screenshot's page finds them with the same expressions in JavaScript (`CredentialText.pageShapes`).
         let context = try XCTUnwrap(JSContext())
@@ -1366,6 +1391,9 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertNil(context.exception, context.exception?.toString() ?? "")
         for (key, kind) in keys + [(pem, "PEM")] {
             XCTAssertEqual(holds?.call(withArguments: ["Key: \(key)."])?.toBool(), true, kind)
+        }
+        for (text, _) in named {
+            XCTAssertEqual(holds?.call(withArguments: [text])?.toBool(), true, text)
         }
         XCTAssertEqual(holds?.call(withArguments: [ordinary])?.toBool(), false)
     }

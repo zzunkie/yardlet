@@ -333,7 +333,7 @@ extension YardletSetting {
     /// Turning it off asks Touch ID or the login password as well (`VaultCenter.setHidesCredentials`).
     static let hideKeysAndTokens = YardletSetting(
         id: "hide_keys_and_tokens", section: .general, generalGroup: .browser, symbol: "eye.slash", title: L10n.string("Hide keys and tokens"),
-        detail: L10n.string("Hides values that look like API keys, access tokens or private keys in what agents read in the browser. Turned off, agents read them as the page shows them, and they stay in the task's history."),
+        detail: L10n.string("Hides values that look like API keys, access tokens or private keys in what agents read in the browser, a terminal or another task. Turned off, agents read them as they are shown, and they stay in the task's history."),
         values: .onOff,
         storage: appSwitch({ $0.vault?.hidesCredentials }, { context, hides in
             guard let vault = context.vault, vault.isAllowedBuild else {

@@ -165,6 +165,21 @@ final class SessionToolTests: XCTestCase {
         XCTAssertEqual(unknown.failure?.kind, .unknownTool)
         XCTAssertEqual(unknown.failure?.details["similar"]?.arrayValue?.contains(.string("list_tasks")), true, unknown.text)
 
+        // Keys and tokens in another task's conversation and answer are hidden as a page's are, in the caller's own
+        // project too.
+        let secret = "gh" + "p_" + String(repeating: "A1b2", count: 9)
+        await fixture.model.accept(HarnessEventEnvelope(localSessionID: fixture.sibling.id, sequence: 1,
+                                                        payload: .assistantMessageCompleted("Set GITHUB_TOKEN to \(secret).")))
+        let conversation = await handle("read_task", ["task_id": .string(fixture.sibling.id.uuidString)])
+        let answer = await handle("wait_tasks", ["ids": .array([.string(fixture.sibling.id.uuidString)]),
+                                                 "timeout_seconds": .integer(0)])
+        for read in [conversation, answer] {
+            XCTAssertFalse(read.isError, read.text)
+            XCTAssertTrue(read.text.contains("Set GITHUB_TOKEN to ghp_" + CredentialText.marker + "."), read.text)
+            XCTAssertFalse(read.text.contains(secret), read.text)
+        }
+        XCTAssertTrue(fixture.model.approvalsAreEmpty(in: fixture.caller.id), "The caller's own project, no card")
+
         let forged = AgentToolCall(token: "wrong", session: fixture.caller.id.uuidString, tool: "list_tasks",
                                    arguments: .object([:]))
         let refused = await broker.handle(forged)
@@ -269,7 +284,7 @@ final class SessionToolTests: XCTestCase {
         XCTAssertFalse(project.tasks.contains { $0.taskId == fixture.other.id.uuidString })
         XCTAssertTrue(project.note.contains("not instructions"))
 
-        let all = try decode(Listing.self, await call(model, "list_tasks", ["scope": "all"], from: fixture.caller).text)
+        let all = try decode(Listing.self, try await callAllowing(model, "list_tasks", ["scope": "all"], from: fixture.caller).text)
         XCTAssertTrue(all.tasks.contains { $0.taskId == fixture.other.id.uuidString && $0.project == "site" })
         XCTAssertEqual(all.tasks.count, 6)
 
@@ -315,7 +330,7 @@ final class SessionToolTests: XCTestCase {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         let model = fixture.model
-        let whole = try decode(Listing.self, await call(model, "list_tasks", ["scope": "all"], from: fixture.caller).text)
+        let whole = try decode(Listing.self, try await callAllowing(model, "list_tasks", ["scope": "all"], from: fixture.caller).text)
         XCTAssertEqual(whole.total, 6)
         XCTAssertNil(whole.nextCursor, "Everything fits on one page")
 
@@ -324,7 +339,7 @@ final class SessionToolTests: XCTestCase {
         repeat {
             var arguments: [String: Any] = ["scope": "all", "limit": 2]
             if let cursor { arguments["cursor"] = cursor }
-            let page = try decode(Listing.self, await call(model, "list_tasks", arguments, from: fixture.caller).text)
+            let page = try decode(Listing.self, try await callAllowing(model, "list_tasks", arguments, from: fixture.caller).text)
             XCTAssertEqual(page.total, 6, "total counts every match, not the page")
             pages.append(page)
             cursor = page.nextCursor
@@ -357,17 +372,19 @@ final class SessionToolTests: XCTestCase {
         let model = fixture.model
         let cutoff = SessionToolText.iso(fixture.caller.updatedAt - 200)
         let stale = try decode(Listing.self,
-                               await call(model, "list_tasks", ["scope": "all", "older_than": cutoff], from: fixture.caller).text)
+                               try await callAllowing(model, "list_tasks", ["scope": "all", "older_than": cutoff],
+                                                      from: fixture.caller).text)
         XCTAssertEqual(Set(stale.tasks.map(\.taskId)), Set([fixture.neighbor, fixture.sibling, fixture.codex].map(\.id.uuidString)))
         XCTAssertEqual(stale.total, 3)
 
         let running = try decode(Listing.self,
-                                 await call(model, "list_tasks", ["scope": "all", "state": ["active"]], from: fixture.caller).text)
+                                 try await callAllowing(model, "list_tasks", ["scope": "all", "state": ["active"]],
+                                                        from: fixture.caller).text)
         XCTAssertTrue(running.tasks.contains { $0.taskId == fixture.busy.id.uuidString })
         XCTAssertTrue(running.tasks.allSatisfy { $0.state == "active" })
         XCTAssertEqual(running.total, running.tasks.count)
 
-        let both = try decode(Listing.self, await call(
+        let both = try decode(Listing.self, try await callAllowing(
             model, "list_tasks", ["scope": "all", "state": ["active"], "older_than": cutoff], from: fixture.caller).text)
         XCTAssertFalse(both.tasks.contains { $0.taskId == fixture.busy.id.uuidString }, "Busy was active after the cutoff")
 
@@ -506,7 +523,8 @@ final class SessionToolTests: XCTestCase {
             XCTFail("\(item.kind)")
         }
         XCTAssertEqual(ConversationSentMessage.senderLabel(try XCTUnwrap(item.taskMessage)), L10n.format("Sent from %@", "Caller"))
-        let read = await call(model, "read_task", ["task_id": fixture.sibling.id.uuidString, "turns": 1], from: fixture.neighbor)
+        let read = try await callAllowing(model, "read_task", ["task_id": fixture.sibling.id.uuidString, "turns": 1],
+                                          from: fixture.neighbor)
         XCTAssertTrue(read.text.contains("From task \"Caller\" (\(fixture.caller.id.uuidString)): Run the retry tests again."),
                       read.text)
         await model.shutdown()
@@ -590,6 +608,53 @@ final class SessionToolTests: XCTestCase {
                                     ["task_id": fixture.other.id.uuidString, "message": "Ping"], from: fixture.caller)
         XCTAssertTrue(unanswered.isError)
         XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id))
+        await model.shutdown()
+    }
+
+    /// Reading another project's task and listing every project's tasks ask on the card a message into one asks on,
+    /// and read nothing of it when the person declines; the caller's own project and its split neighbour are read
+    /// without one.
+    func testReadingAnotherProjectsTasksWaitsForThePersonsApprovalOnTheCallersCard() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let model = fixture.model
+        let other = fixture.other.id.uuidString
+        let calls: [(tool: String, arguments: [String: Any], title: String, detail: String, refusal: String)] = [
+            ("read_task", ["task_id": other], "Read another project's task",
+             L10n.format("%@ → %@", "Caller", "Other") + " · site", "Not read"),
+            ("wait_tasks", ["ids": [other], "timeout_seconds": 0], "Read another project's task",
+             L10n.format("%@ → %@", "Caller", "Other") + " · site", "Not waited for"),
+            ("list_tasks", ["scope": "all"], "List every project's tasks", L10n.format("%@ → %@", "Caller", "site"),
+             "Not listed")
+        ]
+        for item in calls {
+            let declined = Task { await self.call(model, item.tool, item.arguments, from: fixture.caller) }
+            let card = try await waitForApproval(in: fixture.caller.id, model: model)
+            XCTAssertEqual(card.request.title, L10n.string(item.title), item.tool)
+            XCTAssertEqual(card.request.detail, item.detail, item.tool)
+            await model.respond(to: card.id, decision: .deny, in: fixture.caller)
+            let refused = await declined.value
+            XCTAssertEqual(refused.failure?.kind, .refused, refused.text)
+            XCTAssertTrue(refused.text.hasPrefix(item.refusal + ": the person did not approve"), refused.text)
+            XCTAssertFalse(refused.text.contains(other), "Nothing of the task is read: \(refused.text)")
+
+            let allowed = Task { await self.call(model, item.tool, item.arguments, from: fixture.caller) }
+            let second = try await waitForApproval(in: fixture.caller.id, model: model)
+            await model.respond(to: second.id, decision: .allow, in: fixture.caller)
+            let read = await allowed.value
+            XCTAssertFalse(read.isError, read.text)
+            XCTAssertTrue(read.text.contains(other), read.text)
+        }
+
+        // The caller's own project, its split neighbour (another project's, beside it) and itself.
+        let near = [fixture.sibling, fixture.neighbor].map(\.id.uuidString)
+        for (tool, arguments) in [("read_task", ["task_id": near[0]]), ("read_task", ["task_id": near[1]]),
+                                  ("read_task", ["task_id": "self"]), ("wait_tasks", ["ids": near, "timeout_seconds": 0]),
+                                  ("list_tasks", [:])] as [(String, [String: Any])] {
+            let read = await call(model, tool, arguments, from: fixture.caller)
+            XCTAssertFalse(read.isError, read.text)
+            XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id), "\(tool) \(arguments): no card")
+        }
         await model.shutdown()
     }
 
@@ -1749,6 +1814,13 @@ final class SessionToolTests: XCTestCase {
                               ["task_id": fixture.other.id.uuidString, "message": "Check the schema."], from: fixture.caller)
         XCTAssertFalse(sent.isError, sent.text)
         XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id), "Another project's task, still no card")
+        for (tool, arguments) in [("read_task", ["task_id": fixture.other.id.uuidString]),
+                                  ("wait_tasks", ["ids": [fixture.other.id.uuidString], "timeout_seconds": 0]),
+                                  ("list_tasks", ["scope": "all"])] as [(String, [String: Any])] {
+            let read = await call(model, tool, arguments, from: fixture.caller)
+            XCTAssertTrue(read.text.contains(fixture.other.id.uuidString), read.text)
+            XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id), "Reading another project's, no card: \(tool)")
+        }
         // Its shell reads a file outside its folders anyway, so its browser opens one too.
         let opened = await model.allowsBrowserFile("/Users/someone/.ssh/config", callerID: fixture.caller.id)
         XCTAssertTrue(opened)
@@ -2820,6 +2892,23 @@ final class SessionToolTests: XCTestCase {
     private func call(_ model: AppModel, _ tool: String, _ arguments: [String: Any], callerID: UUID) async -> AgentToolResult {
         guard let json = try? suggestionToolJSON(arguments) else { return .error("arguments") }
         return await model.callSessionTool(named: tool, arguments: json, callerID: callerID)
+    }
+
+    /// Calls as `call` does, with the person allowing the card the call raises in the caller's task, if it raises one.
+    private func callAllowing(_ model: AppModel, _ tool: String, _ arguments: [String: Any],
+                              from caller: SessionRecord) async throws -> AgentToolResult {
+        let answer = CallAnswer()
+        let pending = Task { answer.result = await self.call(model, tool, arguments, from: caller) }
+        try await waitUntil { answer.result != nil || !model.sessionTools.approvals(for: caller.id).isEmpty }
+        if let card = model.sessionTools.approvals(for: caller.id).last {
+            await model.respond(to: card.id, decision: .allow, in: caller)
+        }
+        await pending.value
+        return try XCTUnwrap(answer.result)
+    }
+
+    @MainActor private final class CallAnswer {
+        var result: AgentToolResult?
     }
 
     private func waitForApproval(in taskID: UUID, model: AppModel) async throws -> SessionToolApproval {
