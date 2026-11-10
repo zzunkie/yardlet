@@ -2009,6 +2009,8 @@
 "Bypass permissions asks first and then passes --dangerously-skip-permissions." = "Bypass permissions asks first and then passes --dangerously-skip-permissions.";
 "Antigravity will change files and run commands without asking." = "Antigravity will change files and run commands without asking.";
 "Antigravity asks before actions that need approval. Bypass permissions approves every request without asking." = "Antigravity asks before actions that need approval. Bypass permissions approves every request without asking.";
+"A step may be waiting for approval. Antigravity asks only while it answers a message, so send a message to continue." = "A step may be waiting for approval. Antigravity asks only while it answers a message, so send a message to continue.";
+"Waiting for approval or still running" = "Waiting for approval or still running";
 "Antigravity CLI does not offer %@ to Yardlet" = "Antigravity CLI does not offer %@ to Yardlet";
 "%@ (it offers %@)" = "%@ (it offers %@)";
 "Continue a conversation started in another app or CLI. Its history stays where it is." = "Continue a conversation started in another app or CLI. Its history stays where it is.";

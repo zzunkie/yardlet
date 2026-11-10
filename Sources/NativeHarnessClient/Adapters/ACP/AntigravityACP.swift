@@ -21,10 +21,10 @@ enum AntigravityTransport {
 /// - `model` is the model as `agy acp` names it in `configOptions` (`gemini-3.8-flash`); a variant a
 ///   task saved (`gemini-3.8-flash-low`) is that model with that effort.
 /// - `reasoningEffort` is `agy acp`'s `thought_level`.
-/// - `permissionMode` is how Yardlet answers the approvals the agent asks for
-///   (`AntigravityPermissionMode.askingValue`). Bypass permissions answers yes, as the CLI's own
-///   `--dangerously-skip-permissions` ("auto-approve all tool permission requests") would; Plan
-///   answers no, as print mode refused what it could not ask about.
+/// - `permissionMode` is how the session's approvals are answered
+///   (`AntigravityPermissionMode.askingValue`). Bypass permissions runs it on the CLI's own
+///   `agy acp --dangerously-skip-permissions` ("auto-approve all tool permission requests",
+///   `ACPProcessLane`); Plan has Yardlet answer no, as print mode refused what it could not ask about.
 /// - Print mode's agent, sandbox and review choices have no counterpart and are left alone.
 ///
 /// The models are the ones `agy acp` offers this client; Yardlet names itself and shows what it

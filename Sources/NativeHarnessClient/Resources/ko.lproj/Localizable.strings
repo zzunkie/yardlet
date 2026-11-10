@@ -2009,6 +2009,8 @@
 "Bypass permissions asks first and then passes --dangerously-skip-permissions." = "권한 우회는 먼저 묻고 --dangerously-skip-permissions로 실행합니다.";
 "Antigravity will change files and run commands without asking." = "Antigravity가 묻지 않고 파일을 바꾸고 명령을 실행합니다.";
 "Antigravity asks before actions that need approval. Bypass permissions approves every request without asking." = "Antigravity는 승인이 필요한 작업 전에 묻습니다. 권한 우회를 고르면 묻지 않고 모든 요청을 승인합니다.";
+"A step may be waiting for approval. Antigravity asks only while it answers a message, so send a message to continue." = "승인을 기다리는 단계가 있을 수 있습니다. Antigravity는 메시지에 답하는 동안에만 승인을 요청하니, 메시지를 보내면 이어서 진행합니다.";
+"Waiting for approval or still running" = "승인 대기 중이거나 아직 실행 중";
 "Antigravity CLI does not offer %@ to Yardlet" = "Antigravity CLI가 Yardlet에 %@ 모델을 제공하지 않습니다";
 "%@ (it offers %@)" = "%@ (제공하는 모델: %@)";
 "Continue a conversation started in another app or CLI. Its history stays where it is." = "다른 앱이나 CLI에서 시작한 대화를 Yardlet에서 이어갑니다. 기록은 원래 자리에 그대로 둡니다.";

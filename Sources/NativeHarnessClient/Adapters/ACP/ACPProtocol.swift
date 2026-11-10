@@ -73,6 +73,12 @@ enum ACPProtocol {
         return request(id: id, method: "session/load", params: .object(params))
     }
 
+    /// Lets the agent's process drop a session it serves (`sessionCapabilities.close`). The
+    /// conversation stays saved, and another process can load it.
+    static func closeSession(id: Int64, providerSessionID: String) -> JSONValue {
+        request(id: id, method: "session/close", params: .object(["sessionId": .string(providerSessionID)]))
+    }
+
     /// The agent's saved sessions in `workspaceURL`, a page at a time from `cursor`
     /// (`sessionCapabilities.list`). The folder is its real path, as `getcwd` gives it to a CLI
     /// started there and as the CLI saves a session started in a terminal (`/private/tmp/…` for

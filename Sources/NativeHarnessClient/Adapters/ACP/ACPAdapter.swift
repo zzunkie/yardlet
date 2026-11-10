@@ -9,9 +9,12 @@ actor ACPAdapter:
     HarnessAgentToolConfiguring,
     HarnessYardletInstructionsConfiguring,
     HarnessModelCatalogReporting,
-    HarnessInterruptedTurnContinuing {
+    HarnessInterruptedTurnContinuing,
+    HarnessLaunchOptionConfiguring {
     private struct PermissionContext: Sendable {
         let localSessionID: UUID
+        /// The process that asked, which takes the answer.
+        let transport: any ACPTransport
         let rpcID: JSONValue
         let allowOptionID: String?
         let denyOptionID: String?
@@ -29,23 +32,28 @@ actor ACPAdapter:
     private let launchArguments: [String]
     private let launchEnvironmentOverrides: [String: String]
     private let transportFactory: @Sendable () -> any ACPTransport
-    /// The process every open session shares. A stopped transport cannot start again, so stopping
-    /// it puts a new one in its place for the next session.
-    private var transport: any ACPTransport
+    /// The processes the open sessions share, one per lane (`ACPProcessLane`), each started by the
+    /// first session that needs it. A stopped transport cannot start again, so a lane whose process
+    /// stopped starts a new one for its next session.
+    private var processes: [ACPProcessLane: ACPAgentProcess] = [:]
+    private var laneByLocalSessionID: [UUID: ACPProcessLane] = [:]
+    /// A session's move to another lane in progress (`moveToItsLane`), which its next prompt and
+    /// option wait for.
+    private var laneMoves: [UUID: Task<Void, Error>] = [:]
     /// Antigravity's copies of the tool schemas, which go once the process that wrote them has
     /// exited (`AntigravitySchemaCopies`); nil for the other agents.
     private let schemaCopies: AntigravitySchemaCopies?
     private let projector = ACPEventProjector()
     private let capabilityProjector = ACPCapabilityProjector()
 
-    private var initialized = false
     private var canLoadSession = false
+    /// The agent's `initialize` answer on `sessionCapabilities.close`.
+    private var canCloseSession = false
     /// The agent's `initialize` answer on stdio MCP servers; ACP makes them mandatory.
     private var acceptsStdioMCPServers = true
     /// nil until the agent has answered `initialize`.
     private var advertisesImagePrompts: Bool?
     private var nextRequestID: Int64 = 1
-    private var messageTask: Task<Void, Never>?
     private var promptTasks: [UUID: Task<Void, Never>] = [:]
     private var handles: [UUID: HarnessSessionHandle] = [:]
     private var localSessionIDByProviderID: [String: UUID] = [:]
@@ -61,8 +69,8 @@ actor ACPAdapter:
     private var additionalRootsByLocalSessionID: [UUID: [URL]] = [:]
     private var agentToolServerByLocalSessionID: [UUID: AgentToolServerLaunch] = [:]
     private var yardletInstructionsByLocalSessionID: [UUID: YardletInstructionsDelivery] = [:]
-    /// Antigravity: the permission mode Yardlet answers approvals by, and the models the session
-    /// listed (`AntigravityACPOptions`).
+    /// Antigravity: the permission mode, which picks the session's lane and how Yardlet answers
+    /// approvals, and the models the session listed (`AntigravityACPOptions`).
     private var antigravityPermissionModeByLocalSessionID: [UUID: String] = [:]
     private var antigravityModelsByLocalSessionID: [UUID: [ProviderCapabilityChoice]] = [:]
     /// Sessions loaded since their last prompt. `session/load` replays the conversation as session
@@ -98,9 +106,15 @@ actor ACPAdapter:
         self.schemaCopies = schemaCopies
         self.conversationStore = conversationStore
         self.agentTurnReadInterval = agentTurnReadInterval
-        let transportFactory = transportFactory ?? { ACPProcessTransport(executableURL: executableURL) }
-        self.transportFactory = transportFactory
-        self.transport = transportFactory()
+        self.transportFactory = transportFactory ?? { ACPProcessTransport(executableURL: executableURL) }
+    }
+
+    /// Antigravity's saved permission mode, before its session starts, so a session in Bypass
+    /// permissions starts on the process that approves for itself (`ACPProcessLane`).
+    func setLaunchOptions(_ options: [String: String], for localSessionID: UUID) {
+        guard kind == .antigravityCLI else { return }
+        let saved = options[AntigravityPermissionMode.optionID] ?? options[StructuredHeadlessOptionID.executionMode]
+        antigravityPermissionModeByLocalSessionID[localSessionID] = saved.map(AntigravityPermissionMode.askingValue)
     }
 
     /// The project's other roots, held for the launch this session triggers. ACP `session/new`
@@ -187,7 +201,9 @@ actor ACPAdapter:
 
     func createSession(_ request: CreateHarnessSessionRequest) async throws
         -> HarnessSessionHandle {
+        let lane = lane(for: request.localSessionID)
         let transport = try await ensureInitialized(
+            lane,
             workspaceURL: request.workspaceURL,
             localSessionID: request.localSessionID
         )
@@ -214,13 +230,13 @@ actor ACPAdapter:
                 workspaceURL: request.workspaceURL.standardizedFileURL
             )
             rememberCapabilities(result, for: handle)
-            register(handle)
+            register(handle, on: lane)
             if let prompt = request.initialPrompt, !prompt.isEmpty {
                 try await send(prompt, to: handle)
             }
             return handle
         } catch {
-            await stopTransportIfUnused(transport)
+            await stopProcessIfUnused(lane, used: transport)
             throw error
         }
     }
@@ -236,9 +252,10 @@ actor ACPAdapter:
             return try await createSession(CreateHarnessSessionRequest(
                 localSessionID: localSessionID, workspaceURL: workspaceURL, initialPrompt: nil))
         }
-        let transport = try await ensureInitialized(workspaceURL: workspaceURL, localSessionID: localSessionID)
+        let lane = lane(for: localSessionID)
+        let transport = try await ensureInitialized(lane, workspaceURL: workspaceURL, localSessionID: localSessionID)
         guard canLoadSession else {
-            await stopTransportIfUnused(transport)
+            await stopProcessIfUnused(lane, used: transport)
             throw HarnessAdapterError.capabilityUnavailable(
                 L10n.format(
                     "%@ does not advertise ACP session loading",
@@ -266,11 +283,11 @@ actor ACPAdapter:
                 workspaceURL: workspaceURL.standardizedFileURL
             )
             rememberCapabilities(result, for: handle)
-            register(handle)
+            register(handle, on: lane)
             return handle
         } catch {
             replayingProviderSessionIDs.remove(providerSessionID)
-            await stopTransportIfUnused(transport)
+            await stopProcessIfUnused(lane, used: transport)
             throw error
         }
     }
@@ -302,6 +319,7 @@ actor ACPAdapter:
         images: [HarnessUserInput.EncodedImage],
         to session: HarnessSessionHandle
     ) async throws {
+        await waitForLaneMove(of: session.localSessionID)
         try requireRegistered(session)
         guard promptTasks[session.localSessionID] == nil else {
             throw HarnessAdapterError.capabilityUnavailable(
@@ -312,9 +330,10 @@ actor ACPAdapter:
         stopFollowingAgentTurns(of: session.localSessionID)
         emit(.sessionStatusChanged(.running), for: session.localSessionID)
         let id = takeRequestID()
+        let transport = transport(of: session.localSessionID)
         promptTasks[session.localSessionID] = Task { [weak self] in
             do {
-                let result = try await self?.transport.requestWithoutTimeout(
+                let result = try await transport.requestWithoutTimeout(
                     ACPProtocol.prompt(
                         id: id,
                         providerSessionID: session.providerSessionID,
@@ -323,8 +342,7 @@ actor ACPAdapter:
                     ),
                     id: id
                 )
-                if let result,
-                   let usage = ACPEventProjector().usage(from: result) {
+                if let usage = ACPEventProjector().usage(from: result) {
                     await self?.emit(.usageUpdated(usage), for: session.localSessionID)
                 }
                 // ACP notifications and the prompt response share stdout, but the transport
@@ -332,10 +350,10 @@ actor ACPAdapter:
                 // brief chance to drain before closing the turn so the final text cannot arrive
                 // after turnCompleted on a busy UI thread.
                 try? await Task.sleep(for: .milliseconds(20))
-                await self?.finishPrompt(for: session.localSessionID)
+                await self?.finishPrompt(for: session)
             } catch {
                 guard !Task.isCancelled else { return }
-                await self?.failPrompt(error, for: session.localSessionID)
+                await self?.failPrompt(error, for: session)
             }
         }
     }
@@ -358,12 +376,12 @@ actor ACPAdapter:
         }
         for requestID in pendingRequestIDs {
             guard let context = permissions[requestID] else { continue }
-            try await transport.send(
+            try await context.transport.send(
                 ACPProtocol.permissionResponse(id: context.rpcID, optionID: nil)
             )
             permissions.removeValue(forKey: requestID)
         }
-        try await transport.send(
+        try await transport(of: session.localSessionID).send(
             ACPProtocol.cancel(providerSessionID: session.providerSessionID)
         )
         // A prompt's turn ends with its answer; an agent's own turn has no answer to wait for.
@@ -385,7 +403,7 @@ actor ACPAdapter:
             )
         }
         let optionID = decision == .allow ? context.allowOptionID : context.denyOptionID
-        try await transport.send(
+        try await context.transport.send(
             ACPProtocol.permissionResponse(id: context.rpcID, optionID: optionID)
         )
         emit(.sessionStatusChanged(.running), for: session.localSessionID)
@@ -409,7 +427,7 @@ actor ACPAdapter:
                 L10n.string("ACP permission action is not available")
             )
         }
-        try await transport.send(
+        try await context.transport.send(
             ACPProtocol.permissionResponse(id: context.rpcID, optionID: selectedActionID)
         )
         emit(.sessionStatusChanged(.running), for: session.localSessionID)
@@ -443,6 +461,7 @@ actor ACPAdapter:
         value: String,
         in session: HarnessSessionHandle
     ) async throws -> ProviderCapabilityState {
+        await waitForLaneMove(of: session.localSessionID)
         try requireRegistered(session)
         guard kind == .antigravityCLI else {
             return try await setSessionOption(id: id, value: value, in: session)
@@ -453,7 +472,18 @@ actor ACPAdapter:
         switch try AntigravityACPOptions.step(id: id, value: value, selectors: current.selectors,
                                               models: antigravityModelsByLocalSessionID[session.localSessionID] ?? []) {
         case let .permission(mode):
+            let previous = antigravityPermissionModeByLocalSessionID[session.localSessionID]
             antigravityPermissionModeByLocalSessionID[session.localSessionID] = mode
+            // A prompt running finishes where it started, and the session moves when it ends.
+            if promptTasks[session.localSessionID] == nil {
+                do {
+                    try await moveToItsLane(session)
+                } catch {
+                    antigravityPermissionModeByLocalSessionID[session.localSessionID] = previous
+                    throw error
+                }
+            }
+            state = capabilityStateByLocalSessionID[session.localSessionID] ?? state
         case let .send(values):
             for config in values {
                 state = try await setSessionOption(id: config.id, value: config.value, in: session)
@@ -503,7 +533,7 @@ actor ACPAdapter:
                 value: value
             )
         }
-        let result = try await transport.request(request, id: requestID)
+        let result = try await transport(of: session.localSessionID).request(request, id: requestID)
         var state = capabilityStateByLocalSessionID[session.localSessionID]
             ?? capabilityProjector.state(from: .object([:]), harness: kind)
         let projected = capabilityProjector.configOptions(from: result)
@@ -543,18 +573,20 @@ actor ACPAdapter:
     }
 
     func close(_ session: HarnessSessionHandle) async {
+        let lane = laneByLocalSessionID[session.localSessionID]
         let wasOpen = forget(session)
         eventChannel.close(session.localSessionID)
-        // Closing the last open session ends the process; closing a session again, or one whose
+        // Closing the last open session of a process ends it; closing a session again, or one whose
         // process already ended, leaves alone a process started since.
-        if wasOpen, handles.isEmpty {
-            await stopTransport()
+        if wasOpen, let lane {
+            await stopProcessIfUnused(lane)
         }
     }
 
     /// Drops what the adapter holds for `session`, and returns whether it was open.
     private func forget(_ session: HarnessSessionHandle) -> Bool {
         let wasOpen = handles.removeValue(forKey: session.localSessionID) != nil
+        laneByLocalSessionID.removeValue(forKey: session.localSessionID)
         localSessionIDByProviderID.removeValue(forKey: session.providerSessionID)
         replayingProviderSessionIDs.remove(session.providerSessionID)
         promptTasks.removeValue(forKey: session.localSessionID)?.cancel()
@@ -586,28 +618,53 @@ actor ACPAdapter:
         )
     }
 
-    /// Starts the shared process and runs `initialize` on it once, and returns the transport the
+    /// The lane `localSessionID` belongs on: Antigravity's Bypass permissions on the process that
+    /// approves for itself, every other session on the standard one.
+    private func lane(for localSessionID: UUID) -> ACPProcessLane {
+        kind == .antigravityCLI
+            && antigravityPermissionModeByLocalSessionID[localSessionID] == AntigravityPermissionMode.bypass
+            ? .approvesItself : .standard
+    }
+
+    /// The process `lane` uses, a new one when it has none running.
+    private func transport(for lane: ACPProcessLane) -> any ACPTransport {
+        if let process = processes[lane] { return process.transport }
+        let transport = transportFactory()
+        processes[lane] = ACPAgentProcess(transport: transport)
+        return transport
+    }
+
+    /// The process serving an open session.
+    private func transport(of localSessionID: UUID) -> any ACPTransport {
+        transport(for: laneByLocalSessionID[localSessionID] ?? .standard)
+    }
+
+    /// Starts `lane`'s process and runs `initialize` on it once, and returns the transport the
     /// session's requests go to.
-    private func ensureInitialized(workspaceURL: URL, localSessionID: UUID) async throws -> any ACPTransport {
-        let transport = transport
-        guard !initialized else { return transport }
+    private func ensureInitialized(
+        _ lane: ACPProcessLane,
+        workspaceURL: URL,
+        localSessionID: UUID
+    ) async throws -> any ACPTransport {
+        let transport = transport(for: lane)
+        guard processes[lane]?.initialized != true else { return transport }
         do {
             // A new process could write a copy again under a name a sweep is deciding about.
             if schemaCopies != nil { await AntigravitySchemaCopies.waitForSweeps() }
             try await transport.start(
                 ACPLaunchConfiguration(
-                    arguments: launchArguments(for: localSessionID),
+                    arguments: launchArguments(for: localSessionID) + lane.launchArguments,
                     workspaceURL: workspaceURL,
                     environmentOverrides: launchEnvironmentOverrides
                 )
             )
             let stream = await transport.messages()
             // Another call may have started reading this process, or stopped it, while this one waited.
-            if messageTask == nil, transport === self.transport {
-                messageTask = Task { [weak self] in
+            if processes[lane]?.transport === transport, processes[lane]?.messageTask == nil {
+                processes[lane]?.messageTask = Task { [weak self] in
                     for await frame in stream {
                         guard !Task.isCancelled else { break }
-                        await self?.accept(frame)
+                        await self?.accept(frame, from: transport)
                     }
                     // Stopping cancels this first; otherwise the process ended on its own.
                     guard !Task.isCancelled else { return }
@@ -621,32 +678,107 @@ actor ACPAdapter:
                     version: "ACP \(result["protocolVersion"]?.integerValue ?? -1)"
                 )
             }
-            guard transport === self.transport else {
+            guard processes[lane]?.transport === transport else {
                 throw HarnessAdapterError.processExited(code: -1, message: "ACP transport stopped")
             }
             canLoadSession = result["agentCapabilities"]?["loadSession"]?.boolValue == true
+            canCloseSession = result["agentCapabilities"]?["sessionCapabilities"]?["close"] != nil
             acceptsStdioMCPServers = ACPProtocol.acceptsStdioMCPServers(initializeResult: result)
             // Image prompts belong to the agent, not to the ACP family. Record what this agent
             // advertised so a turn is never sent with a block it did not ask for.
             advertisesImagePrompts = result["agentCapabilities"]?["promptCapabilities"]?["image"]?
                 .boolValue == true
-            initialized = true
+            processes[lane]?.initialized = true
             return transport
         } catch {
-            // One stopped while this call waited has been replaced already; the new one is not this call's.
-            if transport === self.transport { await stopTransport() }
+            // One stopped while this call waited is gone already; a new one in its lane is not this call's.
+            if processes[lane]?.transport === transport { await stopProcess(lane) }
             throw error
         }
     }
 
-    private func register(_ handle: HarnessSessionHandle) {
+    private func register(_ handle: HarnessSessionHandle, on lane: ACPProcessLane) {
         handles[handle.localSessionID] = handle
+        laneByLocalSessionID[handle.localSessionID] = lane
         localSessionIDByProviderID[handle.providerSessionID] = handle.localSessionID
         emit(.sessionStarted(handle), for: handle.localSessionID)
         emit(.sessionStatusChanged(.ready), for: handle.localSessionID)
     }
 
-    private func accept(_ frame: ACPRawFrame) async {
+    /// Serves `session` from the lane its permission mode calls for, between prompts: the
+    /// conversation is loaded on that lane's process with the model and settings it had, then
+    /// closed on the one that served it, so the turns the agent starts on its own run there too.
+    /// `agy acp` has no session mode that approves every step (it offers `default`,
+    /// `accept-edits` and `plan`), and its `--dangerously-skip-permissions` holds for a whole process.
+    /// One move runs at a time, and a prompt or option for the session waits for it.
+    private func moveToItsLane(_ session: HarnessSessionHandle) async throws {
+        await waitForLaneMove(of: session.localSessionID)
+        let move = Task {
+            defer { laneMoves.removeValue(forKey: session.localSessionID) }
+            try await performLaneMove(session)
+        }
+        laneMoves[session.localSessionID] = move
+        try await move.value
+    }
+
+    private func waitForLaneMove(of localSessionID: UUID) async {
+        while let move = laneMoves[localSessionID] { _ = await move.result }
+    }
+
+    private func performLaneMove(_ session: HarnessSessionHandle) async throws {
+        let id = session.localSessionID
+        let lane = lane(for: id)
+        guard handles[id] == session, let current = laneByLocalSessionID[id], current != lane else { return }
+        let target = try await ensureInitialized(lane, workspaceURL: session.workspaceURL, localSessionID: id)
+        let previous = capabilityStateByLocalSessionID[id]
+        let wasReplaying = replayingProviderSessionIDs.contains(session.providerSessionID)
+        replayingProviderSessionIDs.insert(session.providerSessionID)
+        let result: JSONValue
+        do {
+            let requestID = takeRequestID()
+            result = try await target.request(
+                ACPProtocol.loadSession(
+                    id: requestID,
+                    providerSessionID: session.providerSessionID,
+                    workspaceURL: session.workspaceURL,
+                    mcpServers: mcpServers(for: id),
+                    meta: sessionMeta(for: id, loading: true)
+                ),
+                id: requestID
+            )
+        } catch {
+            if !wasReplaying { replayingProviderSessionIDs.remove(session.providerSessionID) }
+            await stopProcessIfUnused(lane, used: target)
+            throw error
+        }
+        // Closed, or ended with its process, while the conversation loaded.
+        guard handles[id] == session, laneByLocalSessionID[id] == current else {
+            await stopProcessIfUnused(lane, used: target)
+            return
+        }
+        let source = transport(for: current)
+        laneByLocalSessionID[id] = lane
+        agentTurnFollowers[id]?.stepsWaitForApproval = lane.stepsWaitForApproval
+        rememberCapabilities(result, for: session)
+        // A loaded session starts on the agent's defaults; it keeps what the task had chosen.
+        for selector in previous?.selectors ?? [] {
+            guard let loaded = capabilityStateByLocalSessionID[id]?.selectors.first(where: { $0.id == selector.id }),
+                  loaded.currentValue != selector.currentValue,
+                  loaded.choices.contains(where: { $0.value == selector.currentValue }) else { continue }
+            _ = try? await setSessionOption(id: selector.id, value: selector.currentValue, in: session)
+        }
+        capabilityStateByLocalSessionID[id]?.actionMessage = previous?.actionMessage
+        if canCloseSession {
+            let requestID = takeRequestID()
+            _ = try? await source.request(
+                ACPProtocol.closeSession(id: requestID, providerSessionID: session.providerSessionID),
+                id: requestID
+            )
+        }
+        await stopProcessIfUnused(current, used: source)
+    }
+
+    private func accept(_ frame: ACPRawFrame, from transport: any ACPTransport) async {
         let value = frame.value
         if value["method"]?.stringValue == "session/request_permission",
            let rpcID = value["id"] {
@@ -654,7 +786,7 @@ actor ACPAdapter:
                let localSessionID = localSessionIDByProviderID[providerSessionID] {
                 completeAssistantIfNeeded(for: localSessionID, rawData: frame.data)
             }
-            await acceptPermissionRequest(value, rpcID: rpcID, rawData: frame.data)
+            await acceptPermissionRequest(value, rpcID: rpcID, rawData: frame.data, from: transport)
             return
         }
         if value["id"] != nil, value["method"] != nil {
@@ -760,7 +892,8 @@ actor ACPAdapter:
     private func acceptPermissionRequest(
         _ value: JSONValue,
         rpcID: JSONValue,
-        rawData: Data
+        rawData: Data,
+        from transport: any ACPTransport
     ) async {
         guard let providerSessionID = value["params"]?["sessionId"]?.stringValue,
               let localSessionID = localSessionIDByProviderID[providerSessionID] else {
@@ -776,7 +909,8 @@ actor ACPAdapter:
         let allow = PermissionActionPreference.preferred(from: actions, decision: .allow)?.id
         let deny = PermissionActionPreference.preferred(from: actions, decision: .deny)?.id
         let toolCall = value["params"]?["toolCall"] ?? .object([:])
-        // An Antigravity task in Bypass permissions or Plan has Yardlet answer for it.
+        // An Antigravity task in Plan has Yardlet answer no for it. One in Bypass permissions runs on
+        // a process that approves for itself; anything it still asks while a prompt runs is answered yes.
         if kind == .antigravityCLI {
             switch antigravityPermissionModeByLocalSessionID[localSessionID] {
             case AntigravityPermissionMode.bypass?:
@@ -792,6 +926,7 @@ actor ACPAdapter:
         let requestID = "acp-permission-\(rpcID.stringValue ?? String(rpcID.integerValue ?? 0))"
         permissions[requestID] = PermissionContext(
             localSessionID: localSessionID,
+            transport: transport,
             rpcID: rpcID,
             allowOptionID: allow,
             denyOptionID: deny,
@@ -836,9 +971,13 @@ actor ACPAdapter:
     }
 
     /// Called from the prompt's own task. One cancelled by closing its session or by its process
-    /// ending has been accounted for there, and reports nothing more.
-    private func finishPrompt(for localSessionID: UUID) {
+    /// ending has been accounted for there, and reports nothing more. A permission mode chosen
+    /// while it ran takes the session to its lane first, before another prompt can start.
+    private func finishPrompt(for session: HarnessSessionHandle) async {
         guard !Task.isCancelled else { return }
+        try? await moveToItsLane(session)
+        guard !Task.isCancelled else { return }
+        let localSessionID = session.localSessionID
         promptTasks.removeValue(forKey: localSessionID)
         followAgentTurns(of: localSessionID)
         completeAssistantIfNeeded(for: localSessionID)
@@ -846,10 +985,13 @@ actor ACPAdapter:
         emit(.sessionStatusChanged(.ready), for: localSessionID)
     }
 
-    private func failPrompt(_ error: Error, for localSessionID: UUID) {
+    private func failPrompt(_ error: Error, for session: HarnessSessionHandle) async {
         guard !Task.isCancelled else { return }
         // The process ended under the turn; its end, which follows, reports the turn with the session.
         if case HarnessAdapterError.processExited = error { return }
+        try? await moveToItsLane(session)
+        guard !Task.isCancelled else { return }
+        let localSessionID = session.localSessionID
         promptTasks.removeValue(forKey: localSessionID)
         followAgentTurns(of: localSessionID)
         completeAssistantIfNeeded(for: localSessionID)
@@ -865,7 +1007,8 @@ actor ACPAdapter:
         agentTurnFollowers[localSessionID] = AntigravityAgentTurnFollower(
             store: conversationStore,
             conversationID: handle.providerSessionID,
-            redelivery: redeliveries.removeValue(forKey: localSessionID) ?? AntigravityRedelivery()
+            redelivery: redeliveries.removeValue(forKey: localSessionID) ?? AntigravityRedelivery(),
+            stepsWaitForApproval: (laneByLocalSessionID[localSessionID] ?? .standard).stepsWaitForApproval
         )
         let interval = agentTurnReadInterval
         agentTurnReadTasks[localSessionID] = Task { [weak self] in
@@ -898,13 +1041,13 @@ actor ACPAdapter:
         }
     }
 
-    /// The shared process ended on its own: it exited or was killed. Its sessions end with it, a
+    /// A shared process ended on its own: it exited or was killed. Its sessions end with it, a
     /// turn in progress with an error, as a crashed runtime's do, and the next session or prompt
     /// starts a new process instead of reaching the one that ended.
     private func transportEnded(_ ended: any ACPTransport) async {
-        guard ended === transport else { return }
+        guard let lane = processes.first(where: { $0.value.transport === ended })?.key else { return }
         let message = L10n.format("Connection to %@ ended.", kind.displayName)
-        for session in handles.values {
+        for session in handles.values where laneByLocalSessionID[session.localSessionID] == lane {
             let id = session.localSessionID
             if let prompt = promptTasks.removeValue(forKey: id) {
                 prompt.cancel()
@@ -915,26 +1058,24 @@ actor ACPAdapter:
             _ = forget(session)
             eventChannel.finish(id)
         }
-        await stopTransport()
+        await stopProcess(lane)
     }
 
-    /// After a failed session request, ends the process if no session uses it. `used` is the
-    /// transport the request went to: one stopped and replaced while the request waited leaves the
-    /// new process to the sessions after it.
-    private func stopTransportIfUnused(_ used: any ACPTransport) async {
-        guard handles.isEmpty, used === transport else { return }
-        await stopTransport()
+    /// Ends `lane`'s process if no open session uses it. `used`, when given, is the transport a
+    /// request went to: one stopped and replaced while the request waited leaves the new process
+    /// to the sessions after it.
+    private func stopProcessIfUnused(_ lane: ACPProcessLane, used: (any ACPTransport)? = nil) async {
+        guard let process = processes[lane], !laneByLocalSessionID.values.contains(lane) else { return }
+        if let used, used !== process.transport { return }
+        await stopProcess(lane)
     }
 
-    /// Ends the shared process and puts a new transport in its place, so the next session starts
-    /// one of its own. Antigravity's schema copies the process leaves go once it has exited, in the
-    /// background; the next process waits for that.
-    private func stopTransport() async {
-        messageTask?.cancel()
-        messageTask = nil
-        initialized = false
-        let stopping = transport
-        transport = transportFactory()
+    /// Ends `lane`'s process, so its next session starts one of its own. Antigravity's schema copies
+    /// the process leaves go once it has exited, in the background; the next process waits for that.
+    private func stopProcess(_ lane: ACPProcessLane) async {
+        guard let process = processes.removeValue(forKey: lane) else { return }
+        process.messageTask?.cancel()
+        let stopping = process.transport
         guard let schemaCopies else {
             await stopping.stop()
             return
@@ -994,4 +1135,32 @@ actor ACPAdapter:
     private func readVersion() throws -> String {
         try HarnessRuntimeVersionProbe.output(executableURL: executableURL, inheritsAppEnvironment: true)
     }
+}
+
+/// Which of an adapter's processes serves a session. Every agent's sessions share the standard one.
+/// Antigravity's in Bypass permissions run on a second, `agy acp --dangerously-skip-permissions`:
+/// `agy acp` sends `session/request_permission` only while a prompt streams, so a step of a turn the
+/// agent starts on its own (a subagent's result) that needs approval would wait for good on the
+/// standard process, whatever Yardlet would have answered.
+enum ACPProcessLane: Hashable, Sendable {
+    case standard
+    case approvesItself
+
+    var launchArguments: [String] {
+        switch self {
+        case .standard: []
+        case .approvesItself: ["--dangerously-skip-permissions"]
+        }
+    }
+
+    /// Whether a step can wait for an approval no client hears of between prompts.
+    var stepsWaitForApproval: Bool { self == .standard }
+}
+
+/// One process of an ACP adapter: its transport, whether `initialize` has run on it, and the task
+/// reading its messages.
+private struct ACPAgentProcess {
+    let transport: any ACPTransport
+    var initialized = false
+    var messageTask: Task<Void, Never>?
 }

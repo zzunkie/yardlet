@@ -437,12 +437,17 @@ final class ACPAdapterTests: XCTestCase {
     }
 
     /// Antigravity over ACP keeps the option names its print mode saved, and its permission mode is
-    /// how Yardlet answers what the agent asks: Default shows the request, Bypass permissions
-    /// answers yes and Plan answers no.
+    /// how Yardlet answers what the agent asks: Default shows the request and Plan answers no. Bypass
+    /// permissions runs the session on `agy acp --dangerously-skip-permissions`, which approves for
+    /// itself even in the turns the agent starts between prompts: the conversation is loaded there
+    /// with the task's model and effort, and closed on the process it leaves, between prompts.
     func testAntigravityKeepsItsOptionNamesAndAnswersApprovalsByItsPermissionMode() async throws {
         let transport = FakeACPTransport(exposesAntigravity: true)
-        let adapter = ACPAdapter(kind: .antigravityCLI, executableURL: URL(filePath: "/tmp/agy"),
-                                 launchArguments: ["acp"], transportFactory: { transport })
+        let bypassing = FakeACPTransport(exposesAntigravity: true)
+        let restarted = FakeACPTransport(exposesAntigravity: true)
+        let savedInBypass = FakeACPTransport(exposesAntigravity: true)
+        let adapter = ACPAdapter(kind: .antigravityCLI, executableURL: URL(filePath: "/tmp/agy"), launchArguments: ["acp"],
+                                 transportFactory: transportSequence(transport, bypassing, restarted, savedInBypass))
         let localID = UUID()
         // A print-mode task that never ran a turn kept its local ID; it starts a conversation.
         let handle = try await adapter.resumeSession(providerSessionID: localID.uuidString.lowercased(),
@@ -481,7 +486,7 @@ final class ACPAdapterTests: XCTestCase {
 
         let recorder = ACPPayloadRecorder()
         let collector = Task { for await event in await adapter.events(for: handle) { await recorder.append(event.payload) } }
-        func ask(_ rpcID: String) async {
+        func ask(_ rpcID: String, on transport: FakeACPTransport) async {
             await transport.emit(.object([
                 "jsonrpc": .string("2.0"), "id": .string(rpcID), "method": .string("session/request_permission"),
                 "params": .object([
@@ -494,30 +499,77 @@ final class ACPAdapterTests: XCTestCase {
                 ])
             ]))
         }
-        func answer(_ rpcID: String) async -> String? {
+        func answer(_ rpcID: String, on transport: FakeACPTransport) async -> String? {
             await transport.sentMessages.first { $0["id"]?.stringValue == rpcID }?["result"]?["outcome"]?["optionId"]?.stringValue
         }
-        _ = try await adapter.setProviderOption(id: AntigravityPermissionMode.optionID, value: AntigravityPermissionMode.bypass, in: handle)
-        await ask("bypass-1")
-        try await waitUntil { await answer("bypass-1") != nil }
-        let bypassAnswer = await answer("bypass-1")
+        func configSent(_ transport: FakeACPTransport) async -> [String] {
+            let values = await transport.requestValues
+            return values.filter { $0["method"]?.stringValue == "session/set_config_option" }.map {
+                "\($0["params"]?["configId"]?.stringValue ?? "")=\($0["params"]?["value"]?.stringValue ?? "")"
+            }
+        }
+
+        // Bypass permissions moves the idle session to a process that approves for itself.
+        let bypass = try await adapter.setProviderOption(id: AntigravityPermissionMode.optionID,
+                                                         value: AntigravityPermissionMode.bypass, in: handle)
+        XCTAssertEqual(bypass.selectors.first { $0.id == StructuredHeadlessOptionID.reasoningEffort }?.currentValue, "low")
+        let bypassArguments = await bypassing.configuration?.arguments
+        XCTAssertEqual(bypassArguments, ["acp", "--dangerously-skip-permissions"])
+        let bypassMethods = await bypassing.requestMethods
+        XCTAssertEqual(bypassMethods, ["initialize", "session/load", "session/set_config_option"])
+        let restored = await configSent(bypassing)
+        XCTAssertEqual(restored, ["thought_level=low"])
+        let left = await transport.requestMethods.last
+        let leftStops = await transport.stopCount
+        XCTAssertEqual(left, "session/close")
+        XCTAssertEqual(leftStops, 1, "A process no session uses ends")
+        await ask("bypass-1", on: bypassing)
+        try await waitUntil { await answer("bypass-1", on: bypassing) != nil }
+        let bypassAnswer = await answer("bypass-1", on: bypassing)
         XCTAssertEqual(bypassAnswer, "allow-once")
+
+        // A mode chosen while a prompt runs moves the session once the prompt ends, before its turn does.
+        try await adapter.send("Go on", to: handle)
+        try await waitUntil { await bypassing.pendingPromptCount == 1 }
         _ = try await adapter.setProviderOption(id: AntigravityPermissionMode.optionID, value: AntigravityPermissionMode.plan, in: handle)
-        await ask("plan-1")
-        try await waitUntil { await answer("plan-1") != nil }
-        let planAnswer = await answer("plan-1")
+        let startedEarly = await restarted.configuration
+        XCTAssertNil(startedEarly)
+        await bypassing.completePrompt()
+        try await waitUntil { await recorder.payloads.contains(.turnCompleted) }
+        let planArguments = await restarted.configuration?.arguments
+        XCTAssertEqual(planArguments, ["acp"])
+        let planMethods = await restarted.requestMethods
+        XCTAssertEqual(planMethods, ["initialize", "session/load", "session/set_config_option"])
+        let bypassStops = await bypassing.stopCount
+        XCTAssertEqual(bypassStops, 1)
+        await ask("plan-1", on: restarted)
+        try await waitUntil { await answer("plan-1", on: restarted) != nil }
+        let planAnswer = await answer("plan-1", on: restarted)
         XCTAssertEqual(planAnswer, "reject-once")
+
+        // Plan and Default share a process.
         _ = try await adapter.setProviderOption(id: AntigravityPermissionMode.optionID, value: AntigravityPermissionMode.standard, in: handle)
-        await ask("ask-1")
+        let afterDefault = await restarted.requestMethods
+        XCTAssertEqual(afterDefault, planMethods)
+        await ask("ask-1", on: restarted)
         try await waitUntil {
             await recorder.payloads.contains { if case .permissionRequested = $0 { return true }; return false }
         }
         let payloads = await recorder.payloads
         XCTAssertEqual(payloads.filter { if case .permissionRequested = $0 { return true }; return false }.count, 1)
-        let askAnswer = await answer("ask-1")
+        let askAnswer = await answer("ask-1", on: restarted)
         XCTAssertNil(askAnswer)
         collector.cancel()
         await adapter.close(handle)
+
+        // A task saved in Bypass permissions starts there.
+        let saved = UUID()
+        await adapter.setLaunchOptions([AntigravityPermissionMode.optionID: AntigravityPermissionMode.bypass], for: saved)
+        let savedHandle = try await adapter.resumeSession(providerSessionID: "saved-conversation", localSessionID: saved,
+                                                          workspaceURL: URL(filePath: "/tmp/project"))
+        let savedArguments = await savedInBypass.configuration?.arguments
+        XCTAssertEqual(savedArguments, ["acp", "--dangerously-skip-permissions"])
+        await adapter.close(savedHandle)
     }
 
 
@@ -1040,7 +1092,8 @@ final class ACPAdapterTests: XCTestCase {
 
     /// Stopping the agent's own turn cancels it as any turn, with no prompt to answer for it, and a
     /// turn that adds nothing to the log for too long leaves the task ready, not stuck behind a step
-    /// no client can answer between prompts.
+    /// no client can answer between prompts. One stopped on a tool call with no result ends, with a
+    /// row saying a step may wait for approval and no failure, unless its process approves for itself.
     func testAnAgentsOwnTurnEndsWhenStoppedOrWhenItsLogGoesQuiet() async throws {
         let log = try AntigravityLogFixture()
         defer { log.remove() }
@@ -1069,8 +1122,24 @@ final class ACPAdapterTests: XCTestCase {
         XCTAssertEqual(follower.read(at: start), [.sessionStatusChanged(.running), .activityCompleted(HarnessActivity(
             id: "\(log.conversationID)-21-0", kind: "run_command", title: "run command"))])
         XCTAssertEqual(follower.read(at: start + .seconds(59)), [])
-        XCTAssertEqual(follower.read(at: start + .seconds(60)), [.sessionStatusChanged(.ready)])
+        XCTAssertEqual(follower.read(at: start + .seconds(60)), [
+            .activityCompleted(HarnessActivity(
+                id: "\(log.conversationID)-21-waiting", kind: "wait", title: L10n.string("Waiting for approval or still running"),
+                detail: "run command", outcome: .stopped, output: AntigravityAgentTurnFollower.waitingStepNotice)),
+            .turnCompleted, .sessionStatusChanged(.ready)
+        ])
         XCTAssertEqual(follower.read(at: start + .seconds(120)), [])
+        // The step ran after all: the turn goes on, and a quiet one whose calls all have results only
+        // leaves the task ready.
+        try log.append(.tool(22), .response(23, tools: ["read_file"]), .tool(24))
+        XCTAssertEqual(follower.read(at: start + .seconds(130)).first, .sessionStatusChanged(.running))
+        XCTAssertEqual(follower.read(at: start + .seconds(190)), [.sessionStatusChanged(.ready)])
+
+        var approving = AntigravityAgentTurnFollower(store: log.store, conversationID: log.conversationID,
+                                                     quietLimit: .seconds(60), stepsWaitForApproval: false)
+        try log.append(.systemMessage(30), .response(31, tools: ["run_command"]))
+        _ = approving.read(at: start)
+        XCTAssertEqual(approving.read(at: start + .seconds(60)), [.sessionStatusChanged(.ready)])
     }
 
     private func permissionOption(_ id: String, _ name: String, _ kind: String) -> JSONValue {
@@ -1233,12 +1302,14 @@ actor FakeACPTransport: ACPTransport {
         requestValues.append(value)
         switch method {
         case "initialize":
+            var capabilities: [String: JSONValue] = [
+                "loadSession": .bool(canLoadSession),
+                "promptCapabilities": .object(["image": .bool(advertisesImagePrompts)])
+            ]
+            if exposesAntigravity { capabilities["sessionCapabilities"] = .object(["close": .object([:])]) }
             return .object([
                 "protocolVersion": .integer(protocolVersion),
-                "agentCapabilities": .object([
-                    "loadSession": .bool(canLoadSession),
-                    "promptCapabilities": .object(["image": .bool(advertisesImagePrompts)])
-                ])
+                "agentCapabilities": .object(capabilities)
             ])
         case "session/new":
             var result: [String: JSONValue] = ["sessionId": .string("acp-session-1")]

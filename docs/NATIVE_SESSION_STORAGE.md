@@ -758,7 +758,8 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
 
 - **How Yardlet runs it:** from 1.4.11 the CLI serves the Agent Client Protocol (`agy acp`, documented by `agy help acp`),
   and Yardlet runs it as it runs the other ACP agents: one `agy acp` process per account and storage, `session/new` for a
-  new task and `session/load` for one that continues. The version the runtime reported decides (`AntigravityTransport`;
+  new task and `session/load` for one that continues. Tasks in Bypass permissions share a second process,
+  `agy acp --dangerously-skip-permissions` (see Saved options). The version the runtime reported decides (`AntigravityTransport`;
   `--version` runs again only when the file changes). An earlier version, or one whose version could not be read, keeps
   print mode: one `agy --print --output-format stream-json` per turn.
 - **One store either way:** `agy acp` keeps its sessions with the CLI's own conversations, so a task's provider session
@@ -794,10 +795,15 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
   and `thought_level` (`AntigravityACPOptions`). A model variant print mode saved (`gemini-3.8-flash-low`) is that model
   with that effort. The models are the ones `agy acp` offers Yardlet, which names itself in `clientInfo`; the CLI offers
   its Claude and GPT models only to the editors it lists, so a task that kept one says so when it attaches and runs on
-  the session's model. `agy acp` has no modes, so the permission mode is how Yardlet answers what the agent asks:
-  Default shows each request, Bypass permissions answers yes (what the CLI's own `--dangerously-skip-permissions` does),
-  and Plan, which read-only runs use, answers no. A task that kept Accept edits or Auto, which have no counterpart, asks.
-  Print mode's agent, sandbox and review choices are left alone.
+  the session's model. `agy acp` asks a client to approve a step only while a `session/prompt` streams, and none of the
+  session modes it offers (`default`, `accept-edits`, `plan`) approves every step. So Default shows each request and
+  Plan, which read-only runs use, answers no, while Bypass permissions runs the session on the
+  `agy acp --dangerously-skip-permissions` process, which approves for itself, also in the turns the agent starts between
+  prompts, and still blocks the commands on the CLI's own system denylist. Choosing Bypass permissions, or leaving it,
+  loads the conversation on the other process (`session/load`), sets the task's model and effort there again, since a
+  loaded session starts on the CLI's defaults, and closes it on the process it left (`session/close`), which ends once no
+  task uses it. This happens between prompts: a mode chosen while a prompt runs takes effect when the prompt ends. A task
+  that kept Accept edits or Auto asks. Print mode's agent, sandbox and review choices are left alone.
 
 - **Index `conversation_summaries.db`:** the `/resume` list of `agy`. It is in WAL mode, so opening it read-only can
   still create `-wal` and `-shm`, and Yardlet makes a copy (with `-wal` if present) in a 0700 temporary folder, reads it
@@ -832,7 +838,11 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
   response with no tool calls ends the turn, with the unread mark and notification of any turn. Stop sends
   `session/cancel`; a message sent meanwhile is a prompt that takes over. A step waiting for an approval reaches no
   client between prompts either, so a turn that adds nothing to the log for 5 minutes leaves the task ready, and the next
-  prompt delivers that step. The next prompt's stream repeats what the log showed; that is dropped
+  prompt delivers that step. When the last response's tool calls do not all have a result by then (the CLI logs a call's
+  result once it has run), the turn ends as any turn does, so a task waiting on this one hears that it stopped, with a
+  row of its own, as print mode's list of what it could not ask about: a step is waiting for approval or still running,
+  and a message continues it. It is no failure, since the step may only be slow; in Bypass permissions no step waits for
+  approval and the turn only goes ready. The next prompt's stream repeats what the log showed; that is dropped
   (`AntigravityRedelivery`), texts by their words, which are the log's exactly, and tool calls by their order, since the
   log has no call IDs. A repeat that is not recognised shows twice rather than dropping the turn's own steps.
 - **Title:** the pull path for task titles (`ProviderSessionTitleResolver`) reads `title` from the index. It is not read

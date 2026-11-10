@@ -12,13 +12,26 @@ import Foundation
 struct AntigravityAgentTurnFollower: Sendable {
     /// How long a running turn may add nothing to the log before the task goes back to ready. A step
     /// that waits for an approval reaches no client between prompts either, and a next prompt is what
-    /// lets it be answered, so a queued message must not wait on it for ever. A tool that is merely
-    /// slow loses nothing: what it adds later runs the turn again.
+    /// lets it be answered, so a queued message must not wait on it for ever: a turn whose last tool
+    /// call has no result by then ends, saying so, where a step can wait for approval. A tool that is
+    /// merely slow loses nothing: what it adds later runs the turn again.
     static let quietLimit: Duration = .seconds(300)
+
+    /// What a turn that ended on a step with no result says.
+    static var waitingStepNotice: String {
+        L10n.string("A step may be waiting for approval. Antigravity asks only while it answers a message, so send a message to continue.")
+    }
 
     private let store: AntigravityConversationStore
     private let conversationID: String
     private let quietLimit: Duration
+    /// Whether a step can wait for an approval: not on a process that approves for itself
+    /// (`ACPProcessLane`).
+    var stepsWaitForApproval: Bool
+    /// The last response's step, and its tool calls the log has no result of yet: the CLI writes
+    /// each call's result as the step after the response, in call order, once the call has run.
+    private var responseStep: Int64?
+    private var callsWithoutResult: [String] = []
     /// The end of what has been read of the log.
     private var position: UInt64
     /// The agent woke since the last prompt: a system message is what wakes it, and any line before
@@ -39,11 +52,13 @@ struct AntigravityAgentTurnFollower: Sendable {
         store: AntigravityConversationStore,
         conversationID: String,
         redelivery: AntigravityRedelivery = AntigravityRedelivery(),
-        quietLimit: Duration = Self.quietLimit
+        quietLimit: Duration = Self.quietLimit,
+        stepsWaitForApproval: Bool = true
     ) {
         self.store = store
         self.conversationID = conversationID
         self.quietLimit = quietLimit
+        self.stepsWaitForApproval = stepsWaitForApproval
         self.redelivery = redelivery
         lastLine = .now
         position = store.transcriptURL(conversationID: conversationID).flatMap(Self.size(of:)) ?? 0
@@ -62,7 +77,14 @@ struct AntigravityAgentTurnFollower: Sendable {
             turnLines.append(line)
             turnLines.append(0x0A)
             guard type != "CHECKPOINT" else { continue }
-            atRest = type == "PLANNER_RESPONSE" && (record["tool_calls"]?.arrayValue ?? []).isEmpty
+            let calls = record["tool_calls"]?.arrayValue ?? []
+            if type == "PLANNER_RESPONSE" {
+                responseStep = record["step_index"]?.integerValue
+                callsWithoutResult = calls.map { $0["name"]?.stringValue ?? "" }
+            } else if type == "GENERIC", !callsWithoutResult.isEmpty {
+                callsWithoutResult.removeFirst()
+            }
+            atRest = type == "PLANNER_RESPONSE" && calls.isEmpty
         }
         guard let atRest else { return [] }
         lastLine = now
@@ -101,10 +123,24 @@ struct AntigravityAgentTurnFollower: Sendable {
         return [.turnCompleted, .sessionStatusChanged(.ready)]
     }
 
+    /// A turn quiet for `quietLimit` leaves the task ready. One stopped on a tool call that has no
+    /// result, where a step can wait for approval, ends as any turn does, which also tells a task
+    /// waiting on this one that it has stopped, with a row saying why, as print mode lists what it
+    /// could not ask about (`denied_actions`). It is no failure: the step may only be slow.
     private mutating func settleIfQuiet(at now: ContinuousClock.Instant) -> [HarnessEventPayload] {
         guard isRunning, lastLine.duration(to: now) >= quietLimit else { return [] }
-        isRunning = false
-        return [.sessionStatusChanged(.ready)]
+        guard stepsWaitForApproval, let call = callsWithoutResult.first else {
+            isRunning = false
+            return [.sessionStatusChanged(.ready)]
+        }
+        let row = HarnessActivity(
+            id: "\(conversationID)-\(responseStep.map(String.init) ?? "step")-waiting",
+            kind: "wait",
+            title: L10n.string("Waiting for approval or still running"),
+            detail: call.replacingOccurrences(of: "_", with: " "),
+            outcome: .stopped,
+            output: Self.waitingStepNotice)
+        return [.activityCompleted(row)] + endTurn()
     }
 
     /// The whole lines past `position`. The CLI only adds to the log; a line still being written waits

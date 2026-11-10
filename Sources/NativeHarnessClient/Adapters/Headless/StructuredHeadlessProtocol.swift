@@ -128,10 +128,10 @@ enum AntigravityPermissionMode {
             })
     }
 
-    /// Over ACP (`agy acp`) the agent asks before what needs approval, and has no modes of its own:
-    /// Default shows each request, Bypass permissions answers yes to all of them, and Plan, kept by
-    /// read-only runs and by tasks from print mode, answers no. Accept edits and Auto have no
-    /// counterpart there, so a task that kept one asks.
+    /// Over ACP (`agy acp`) the agent asks before what needs approval: Default shows each request,
+    /// Bypass permissions runs on a process that approves for itself (`ACPProcessLane`), and Plan,
+    /// kept by read-only runs and by tasks from print mode, answers no. A task that kept Accept edits
+    /// or Auto asks.
     static func askingValue(_ saved: String?) -> String {
         switch saved {
         case bypass: bypass
