@@ -13,6 +13,11 @@ struct MailServerSettings: Codable, Equatable, Sendable {
     var smtpPort: Int
     var smtpSecurity: MailSocketSecurity
     var smtpUsername: String
+
+    /// The servers the password goes to, which it is bound to (`ConnectorRecord.credentialDestination`).
+    var credentialDestination: String {
+        "mail:\(imapHost.lowercased()):\(imapPort),\(smtpHost.lowercased()):\(smtpPort)"
+    }
 }
 
 /// A mail service that is reached over IMAP and SMTP with an app password, as its own help pages give

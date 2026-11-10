@@ -33,6 +33,9 @@ struct OAuthClient: Equatable, Sendable {
 
 enum ConnectorOAuthError: Error, Equatable, LocalizedError {
     case noAuthorizationServer
+    /// The server's protected resource metadata names a resource other than the server (RFC 9728
+    /// §3.3), so it is not used.
+    case resourceMismatch(String)
     case noDynamicRegistration
     case registrationFailed(String)
     case authorizationDenied(String)
@@ -54,6 +57,8 @@ enum ConnectorOAuthError: Error, Equatable, LocalizedError {
         switch self {
         case .noAuthorizationServer:
             L10n.string("The server did not say where to sign in.")
+        case .resourceMismatch(let resource):
+            L10n.format("The server asked to sign in for another address (%@). Check the connector's server address.", resource)
         case .noDynamicRegistration:
             L10n.string("The server does not let apps register themselves. Connect with an OAuth client of your own or an access token.")
         case .registrationFailed(let detail):
@@ -97,6 +102,10 @@ enum ConnectorOAuth {
                 break
             }
         }
+        let resource = resourceMetadata?["resource"]?.stringValue
+        if let resource, !Self.resource(resource, covers: serverURL) {
+            throw ConnectorOAuthError.resourceMismatch(resource)
+        }
         // Servers from before protected resource metadata act as their own authorization server.
         let issuers = resourceMetadata?["authorization_servers"]?.arrayValue?.compactMap(\.stringValue)
             .compactMap(URL.init(string:)) ?? []
@@ -108,9 +117,32 @@ enum ConnectorOAuth {
         let scope = challenge?.scope ?? (scopes.isEmpty ? nil : scopes.joined(separator: " "))
         return OAuthPlan(
             server: server,
-            resource: resourceMetadata?["resource"]?.stringValue ?? canonicalResource(serverURL),
+            resource: resource ?? canonicalResource(serverURL),
             scope: scope
         )
+    }
+
+    /// Whether protected resource metadata naming `resource` is the server's (RFC 9728 §3.3): the same
+    /// scheme, host and port, and the server's path at or under the resource's. Many servers name their
+    /// origin rather than the exact address, so the MCP SDKs compare them this way too.
+    static func resource(_ resource: String, covers serverURL: URL) -> Bool {
+        guard let named = URLComponents(string: resource),
+              let server = URLComponents(url: serverURL, resolvingAgainstBaseURL: false),
+              let scheme = named.scheme?.lowercased(), scheme == server.scheme?.lowercased(),
+              let host = named.host?.lowercased(), !host.isEmpty, host == server.host?.lowercased(),
+              port(named) == port(server)
+        else { return false }
+        func directory(_ path: String) -> String { path.hasSuffix("/") ? path : path + "/" }
+        return directory(server.percentEncodedPath).hasPrefix(directory(named.percentEncodedPath))
+    }
+
+    private static func port(_ components: URLComponents) -> Int? {
+        if let port = components.port { return port }
+        switch components.scheme?.lowercased() {
+        case "https": return 443
+        case "http": return 80
+        default: return nil
+        }
     }
 
     /// The challenge's metadata address, then the well-known one with the server's path, then

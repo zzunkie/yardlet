@@ -1353,6 +1353,7 @@
 "MCP server URL" = "MCP 서버 URL";
 "Access token" = "액세스 토큰";
 "The server did not say where to sign in." = "서버가 로그인할 위치를 알려 주지 않았습니다.";
+"The server asked to sign in for another address (%@). Check the connector's server address." = "서버가 다른 주소(%@)에 로그인하라고 요청했습니다. 커넥터의 서버 주소를 확인하세요.";
 "The server did not register Yardlet: %@" = "서버가 Yardlet을 등록하지 않았습니다: %@";
 "Sign-in was not completed: %@" = "로그인이 완료되지 않았습니다: %@";
 "Sign-in was cancelled." = "로그인이 취소되었습니다.";

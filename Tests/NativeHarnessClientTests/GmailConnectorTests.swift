@@ -84,7 +84,8 @@ final class GmailConnectorTests: XCTestCase {
         try await center.saveGoogleApp(clientID: "  \(FakeGoogle.clientID) ", secret: " \(FakeGoogle.clientSecret) ")
         XCTAssertEqual(center.googleAppClientID, FakeGoogle.clientID)
         XCTAssertEqual(try credentials.load(GoogleOAuth.appCredentialID),
-                       .client(id: FakeGoogle.clientID, secret: FakeGoogle.clientSecret))
+                       .client(id: FakeGoogle.clientID, secret: FakeGoogle.clientSecret)
+                        .bound(to: ConnectorAccountProvider.google.credentialDestination))
         center.finishSaving()
         let file = try String(contentsOf: repository.fileURL, encoding: .utf8)
         XCTAssertTrue(file.contains(FakeGoogle.clientID), "The client ID is shown without a keychain read")

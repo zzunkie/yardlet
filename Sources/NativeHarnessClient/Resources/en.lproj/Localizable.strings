@@ -1353,6 +1353,7 @@
 "MCP server URL" = "MCP server URL";
 "Access token" = "Access token";
 "The server did not say where to sign in." = "The server did not say where to sign in.";
+"The server asked to sign in for another address (%@). Check the connector's server address." = "The server asked to sign in for another address (%@). Check the connector's server address.";
 "The server did not register Yardlet: %@" = "The server did not register Yardlet: %@";
 "Sign-in was not completed: %@" = "Sign-in was not completed: %@";
 "Sign-in was cancelled." = "Sign-in was cancelled.";

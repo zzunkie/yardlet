@@ -93,6 +93,33 @@ final class ConnectorTests: XCTestCase {
         XCTAssertNil(plan.scope)
     }
 
+    /// Protected resource metadata is the server's only when it names the server, or its origin or a
+    /// path above it (RFC 9728 §3.3, as the MCP SDKs compare); otherwise discovery stops before any
+    /// authorization server is asked.
+    func testResourceMetadataMustNameTheServer() async throws {
+        let server = URL(string: "https://mcp.example.test/mcp")!
+        for named in ["https://mcp.example.test/mcp", "https://MCP.example.test:443/mcp/", "https://mcp.example.test",
+                      "https://mcp.example.test/"] {
+            XCTAssertTrue(ConnectorOAuth.resource(named, covers: server), named)
+        }
+        for named in ["https://other.example.test/mcp", "http://mcp.example.test/mcp", "https://mcp.example.test:8443/mcp",
+                      "https://mcp.example.test/mcp/v2", "https://mcp.example.test/mc", "not a url"] {
+            XCTAssertFalse(ConnectorOAuth.resource(named, covers: server), named)
+        }
+
+        let elsewhere = URL(string: "https://elsewhere.example.test/mcp")!
+        let metadata = URL(string: "https://mcp.example.test/.well-known/oauth-protected-resource/mcp")!
+        let fake = FakeConnectorServer()
+        do {
+            _ = try await ConnectorOAuth.discover(serverURL: elsewhere, challenge: BearerChallenge(resourceMetadata: metadata),
+                                                  http: fake)
+            XCTFail("Metadata naming another server is not used")
+        } catch {
+            XCTAssertEqual(error as? ConnectorOAuthError, .resourceMismatch("https://mcp.example.test/mcp"))
+        }
+        XCTAssertFalse(fake.requests.contains { $0.url?.host() == "auth.example.test" })
+    }
+
     func testTheAuthorizationRequestCarriesPKCEStateAndResource() throws {
         let plan = OAuthPlan(
             server: OAuthAuthorizationServer(
@@ -521,7 +548,7 @@ final class ConnectorTests: XCTestCase {
         let credentials = InMemoryConnectorCredentialStore()
         let tokenCenter = makeCenter(server: guarded, agent: nil, credentials: credentials)
         let good = try await tokenCenter.add(name: "GitHub", serverURL: FakeConnectorServer.mcpURL, token: "  pasted \n")
-        XCTAssertEqual(try credentials.load(good.id), .token("pasted"))
+        XCTAssertEqual(try credentials.load(good.id), .token("pasted").bound(to: "https://mcp.example.test/mcp"))
         tokenCenter.connect(good.id)
         await tokenCenter.waitForConnection(good.id)
         XCTAssertEqual(tokenCenter.record(good.id)?.status, .connected)
@@ -534,6 +561,50 @@ final class ConnectorTests: XCTestCase {
         XCTAssertEqual(tokenCenter.record(bad.id)?.status, .notConnected)
         XCTAssertEqual(tokenCenter.failures[bad.id], L10n.string("The server did not accept the access token."))
         XCTAssertFalse(guarded.requests.contains { $0.url?.path() == "/register" }, "A token connector never starts a sign-in")
+    }
+
+    /// A token saved before credentials were bound to where they go is bound to its connector's address
+    /// on first use, with no new sign-in. A credential bound to one address is not sent to another: a
+    /// token stays home, and a sign-in for the other address goes without the registered client's secret.
+    func testASecretGoesOnlyWhereItIsBound() async throws {
+        let server = FakeConnectorServer(publishesResourceMetadata: false)
+        server.validTokens.insert("pasted")
+        let destination = "https://mcp.example.test/mcp"
+        let saved = ConnectorRecord(name: "Saved", slug: "saved", serverURL: FakeConnectorServer.mcpURL, authorization: .token)
+        let moved = ConnectorRecord(name: "Moved", slug: "moved", serverURL: URL(string: "https://elsewhere.example.test/mcp")!,
+                                    authorization: .token)
+        let client = ConnectorRecord(name: "Client", slug: "client", serverURL: URL(string: "https://mcp.example.test/other")!,
+                                     authorization: .oauth, oauthClientID: "client-x")
+        XCTAssertEqual(saved.credentialDestination, destination)
+        let credentials = InMemoryConnectorCredentialStore([
+            saved.id: .token("pasted"),
+            moved.id: .token("pasted").bound(to: destination),
+            client.id: .client(id: "client-x", secret: "secret-x").bound(to: destination)
+        ])
+        let center = makeCenter(server: server, credentials: credentials,
+                                repository: InMemoryConnectorRepository(records: [saved, moved, client]))
+
+        center.connect(saved.id)
+        await center.waitForConnection(saved.id)
+        XCTAssertEqual(center.record(saved.id)?.status, .connected, center.failures[saved.id] ?? "")
+        XCTAssertEqual(server.requests.last?.value(forHTTPHeaderField: "Authorization"), "Bearer pasted")
+        XCTAssertEqual(try credentials.load(saved.id), .token("pasted").bound(to: destination))
+
+        center.connect(moved.id)
+        await center.waitForConnection(moved.id)
+        let elsewhere = server.requests.filter { $0.url?.host() == "elsewhere.example.test" }
+        XCTAssertFalse(elsewhere.isEmpty)
+        XCTAssertTrue(elsewhere.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == nil })
+        XCTAssertEqual(try credentials.load(moved.id), .token("pasted").bound(to: destination), "It stays bound where it was")
+
+        center.connect(client.id)
+        await center.waitForConnection(client.id)
+        let tokenRequest = try XCTUnwrap(server.requests.last { $0.url?.path() == "/token" })
+        XCTAssertEqual(FakeConnectorServer.form(tokenRequest)["client_id"], "client-x")
+        XCTAssertFalse(server.requests.contains { String(decoding: $0.httpBody ?? Data(), as: UTF8.self).contains("secret-x") })
+        XCTAssertNil(tokenRequest.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(try credentials.load(client.id)?.destination, "https://mcp.example.test/other",
+                       "The sign-in for the other address replaces the credential")
     }
 
     func testAServerWithoutDynamicRegistrationAsksForAToken() async throws {
@@ -561,7 +632,7 @@ final class ConnectorTests: XCTestCase {
         XCTAssertNil(center.failures[record.id])
         XCTAssertEqual(center.record(record.id)?.authorization, .token)
         XCTAssertEqual(center.record(record.id)?.status, .connected)
-        XCTAssertEqual(try credentials.load(record.id), .token("personal"))
+        XCTAssertEqual(try credentials.load(record.id), .token("personal").bound(to: record.credentialDestination))
     }
 
     func testCancellingASignInLeavesTheConnectorAsItWas() async throws {

@@ -223,7 +223,8 @@ final class ConnectorDirectoryTests: XCTestCase {
         let record = try await center.add(name: "Google Calendar", serverURL: FakeConnectorServer.mcpURL,
                                           client: (id: " client-x ", secret: "secret-x"), preset: calendar)
         XCTAssertEqual(record.oauthClientID, "client-x")
-        XCTAssertEqual(try credentials.load(record.id), .client(id: "client-x", secret: "secret-x"))
+        let client = ConnectorCredential.client(id: "client-x", secret: "secret-x").bound(to: record.credentialDestination)
+        XCTAssertEqual(try credentials.load(record.id), client)
 
         center.connect(record.id)
         await center.waitForConnection(record.id)
@@ -257,7 +258,7 @@ final class ConnectorDirectoryTests: XCTestCase {
         // Disconnecting forgets the token and keeps the client, so connecting signs in at once.
         center.disconnect(record.id)
         await center.waitForPendingDeletions()
-        XCTAssertEqual(try credentials.load(record.id), .client(id: "client-x", secret: "secret-x"))
+        XCTAssertEqual(try credentials.load(record.id), client)
         center.connect(record.id)
         await center.waitForConnection(record.id)
         XCTAssertEqual(center.record(record.id)?.status, .connected)
@@ -321,7 +322,7 @@ final class ConnectorDirectoryTests: XCTestCase {
         center.reconnect(token.id)
         await center.waitForConnection(token.id)
         await center.waitForPendingDeletions()
-        XCTAssertEqual(try credentials.load(token.id), .token("pasted"))
+        XCTAssertEqual(try credentials.load(token.id), .token("pasted").bound(to: token.credentialDestination))
         XCTAssertEqual(center.record(token.id)?.status, .connected)
 
         let listing = FakeConnectorServer(listsToolsToAnyone: true)

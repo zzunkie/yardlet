@@ -77,6 +77,10 @@ struct HarnessRemoteServer: Equatable, Hashable, Sendable {
 }
 
 enum MCPServerAddress {
+    /// The address without what does not change the server: scheme and host in lowercase, no
+    /// default port, user, query, fragment, or trailing slash. A connector's credential is bound to
+    /// its server's (`ConnectorRecord.credentialDestination`), so a change here asks connectors to
+    /// sign in again.
     static func canonical(_ url: URL) -> String {
         guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url.absoluteString }
         components.scheme = components.scheme?.lowercased()

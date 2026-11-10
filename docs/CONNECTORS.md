@@ -58,8 +58,11 @@ OAuth steps (the MCP authorization spec):
    "Connected" and then fail on a call. A connector without its own client connects to such a server without a
    sign-in; its first refused call marks it "Needs sign-in", and Reconnect then signs in.
 2. Protected resource metadata (RFC 9728): the address the header points to, else
-   `/.well-known/oauth-protected-resource<path>`, then the root. For a server without the metadata (Atlassian), the
-   server's origin is taken as the authorization server (the fallback in the 2025-03-26 spec).
+   `/.well-known/oauth-protected-resource<path>`, then the root. Its `resource` must be the server: the same scheme,
+   host and port, and the server's path at or under the resource's, as the MCP SDKs compare them (many servers name
+   their origin). Metadata naming anything else is not used, and the sign-in stops with "The server asked to sign in
+   for another address" (RFC 9728 §3.3). For a server without the metadata (Atlassian), the server's origin is taken
+   as the authorization server (the fallback in the 2025-03-26 spec).
 3. Authorization server metadata (RFC 8414, OpenID): with an issuer path, the two path-inserted forms and OpenID after
    the path; without one, the two root forms. A trailing `/` on the issuer (for example `https://accounts.google.com/`)
    is not a path.
@@ -614,6 +617,13 @@ What the person does (per service):
   issuer ID and PEM). `client` is what is left before sign-in or after a disconnect: only your own client. The ID and
   secret of the Google app the user saved are a single item under the same service with a fixed account
   (`GoogleOAuth.appCredentialID`). The Google app built into the build is not written to Keychain.
+- Each item also records where its secret may be sent (`destination`, from `ConnectorRecord.credentialDestination`):
+  the server's canonical address, a Mail (IMAP) account's IMAP and SMTP hosts and ports, a program's name or path, or
+  `account:google` / `account:microsoft` for an account sign-in and the Google app the user saved. Every save sets it,
+  and a connector uses only items recorded for its own destination (`ConnectorCredentialDestinationStore`); otherwise
+  it has no credential and asks for a sign-in. An item without a destination is given its connector's the first time
+  it is used, with no new sign-in. Adding a mail account again with other servers, pasting a new token, or signing in
+  again saves the item for the connector's destination then.
 - Ad-hoc builds also have an identifier-based designated requirement, so no keychain permission prompt appears after an
   update. QA bundles have a different bundle ID, so their items do not mix.
 - Keychain calls run off the main thread, so the UI does not freeze while the keychain waits for a system prompt.

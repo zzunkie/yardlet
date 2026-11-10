@@ -256,9 +256,22 @@ final class IMAPMailTransportTests: XCTestCase {
         XCTAssertEqual(connected.status, .connected, center.failures[record.id] ?? "")
         XCTAssertEqual(connected.slug, "mail")
         XCTAssertEqual(connected.mailServer, Self.settings)
-        XCTAssertEqual(try credentials.load(record.id), ConnectorCredential.password("correct horse"))
+        XCTAssertEqual(try credentials.load(record.id),
+                       ConnectorCredential.password("correct horse").bound(to: Self.settings.credentialDestination))
         let file = String(decoding: try JSONEncoder().encode(repository.records), as: UTF8.self)
         XCTAssertFalse(file.contains("correct horse"), "No password in connectors.json")
+
+        // The password is bound to these servers: the account's record naming another server finds none to send there.
+        var moved = connected
+        moved.mailServer?.imapHost = "imap.elsewhere.test"
+        var elsewhere = environment
+        elsewhere.repository = InMemoryConnectorRepository(records: [moved])
+        let other = ConnectorCenter(environment: elsewhere)
+        let opened = opener.opened.count
+        other.connect(moved.id)
+        await other.waitForConnection(moved.id)
+        XCTAssertNotEqual(other.record(moved.id)?.status, .connected)
+        XCTAssertEqual(opener.opened.count, opened, "Nothing is opened toward the other server")
         XCTAssertEqual(opener.smtpServers.first?.commands, ["EHLO [127.0.0.1]",
                                                             "AUTH PLAIN AGRhbmFAZXhhbXBsZS5jb20AY29ycmVjdCBob3JzZQ==", "QUIT"],
                        "The check sends nothing")

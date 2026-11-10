@@ -543,9 +543,10 @@ final class ConnectorCenter: ConnectorToolProviding {
             }
         }.map(\.id)
         guard !accounts.isEmpty else { return }
+        let destination = ConnectorAccountProvider.google.credentialDestination
         Task { [weak self] in
             for accountID in accounts {
-                guard let stored = try? await self?.store({ try $0.load(accountID) }), let self,
+                guard let stored = try? await self?.store(at: destination, { try $0.load(accountID) }), let self,
                       let account = account(accountID) else { continue }
                 let held = ownAppOnly(.google, stored, of: account.services.compactMap(\.localService))
                 guard !held.isEmpty else { continue }
@@ -612,12 +613,13 @@ final class ConnectorCenter: ConnectorToolProviding {
         )
         if matchingPreset?.signIn == ConnectorPreset.SignIn.none { record.authorization = .none }
         let id = record.id
+        let destination = record.credentialDestination
         if let token = token?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty {
-            try await store { try $0.save(.token(token), for: id) }
+            try await store(at: destination) { try $0.save(.token(token), for: id) }
             record.authorization = .token
         } else if let client, let clientID = Self.trimmed(client.id) {
             let secret = Self.trimmed(client.secret)
-            try await store { try $0.save(.client(id: clientID, secret: secret), for: id) }
+            try await store(at: destination) { try $0.save(.client(id: clientID, secret: secret), for: id) }
             record.oauthClientID = clientID
             record.authorization = .oauth
         }
@@ -629,8 +631,8 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// that has no sign-in Yardlet can use.
     func useToken(_ token: String, for id: UUID) async throws {
         let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty, record(id) != nil else { return }
-        try await replaceCredential(.token(value), for: id)
+        guard !value.isEmpty, let record = record(id) else { return }
+        try await replaceCredential(.token(value), for: id, at: record.credentialDestination)
         update(id) {
             $0.authorization = .token
             $0.oauthClientID = nil
@@ -641,8 +643,9 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// Makes an OAuth client the user registered with the service the one this connector signs
     /// in with, then signs in.
     func useRegisteredClient(id clientID: String, secret: String?, for id: UUID) async throws {
-        guard let clientID = Self.trimmed(clientID), record(id) != nil else { return }
-        try await replaceCredential(.client(id: clientID, secret: Self.trimmed(secret)), for: id)
+        guard let clientID = Self.trimmed(clientID), let record = record(id) else { return }
+        try await replaceCredential(.client(id: clientID, secret: Self.trimmed(secret)), for: id,
+                                    at: record.credentialDestination)
         update(id) {
             $0.authorization = .oauth
             $0.oauthClientID = clientID
@@ -658,7 +661,9 @@ final class ConnectorCenter: ConnectorToolProviding {
     func saveGoogleApp(clientID: String, secret: String?) async throws {
         guard let id = Self.trimmed(clientID) else { return }
         let credential = ConnectorCredential.client(id: id, secret: Self.trimmed(secret))
-        try await store { try $0.save(credential, for: GoogleOAuth.appCredentialID) }
+        try await store(at: ConnectorAccountProvider.google.credentialDestination) {
+            try $0.save(credential, for: GoogleOAuth.appCredentialID)
+        }
         googleAppClientID = id
     }
 
@@ -755,14 +760,15 @@ final class ConnectorCenter: ConnectorToolProviding {
         guard account.record(service) == nil else { return }
         let record = makeAccountRecord(service, address: account.address, accountID: accountID)
         connectors.append(record)
-        let stored = try? await store { try $0.load(accountID) }
+        let destination = account.provider.credentialDestination
+        let stored = try? await store(at: destination) { try $0.load(accountID) }
         if var stored, stored.kind == .oauth, stored.refreshToken != nil,
            granted(account.provider, stored, of: [service]).contains(service), account.address != nil {
             if account.provider == .microsoft {
                 // Microsoft issues a refreshed token for what the refresh names, so it names this service too.
                 stored.refreshScope = MicrosoftOAuth.scope(for: account.enabled.union([service]))
                 let updated = stored
-                try? await store { try $0.save(updated, for: accountID) }
+                try? await store(at: destination) { try $0.save(updated, for: accountID) }
                 accountSessions[accountID] = nil
             }
             update(record.id) {
@@ -825,11 +831,11 @@ final class ConnectorCenter: ConnectorToolProviding {
         return services.filter { !served.contains($0) }
     }
 
-    private func replaceCredential(_ credential: ConnectorCredential, for id: UUID) async throws {
+    private func replaceCredential(_ credential: ConnectorCredential, for id: UUID, at destination: String) async throws {
         cancelConnect(id)
         await connectTasks[id]?.value
         await pendingDeletion?.value
-        try await store { try $0.save(credential, for: id) }
+        try await store(at: destination) { try $0.save(credential, for: id) }
         sessions[id] = nil
     }
 
@@ -950,7 +956,7 @@ final class ConnectorCenter: ConnectorToolProviding {
         let session = session(for: record)
         do {
             var tools: [ToolJSON] = []
-            let stored = try await store { try $0.load(id) }
+            let stored = try await store(at: record.credentialDestination) { try $0.load(id) }
             if signingInAgain {
                 // Asked without the stored token, the server says where to sign in as it does
                 // the first time; the stored token serves the tools until the new one is saved.
@@ -1006,7 +1012,7 @@ final class ConnectorCenter: ConnectorToolProviding {
     private func signInAndUse(_ record: ConnectorRecord, challenge: BearerChallenge?, session: ConnectorSession) async throws {
         let credential = try await signIn(record, challenge: challenge)
         let id = record.id
-        try await store { try $0.save(credential, for: id) }
+        try await store(at: record.credentialDestination) { try $0.save(credential, for: id) }
         await session.use(credential)
         update(id) { $0.authorization = .oauth }
     }
@@ -1021,7 +1027,7 @@ final class ConnectorCenter: ConnectorToolProviding {
         if let scope = record.scope, !scope.isEmpty { plan.scope = scope }
         let id = record.id
         let registered: OAuthClient? = if record.usesRegisteredClient {
-            try await store { try $0.load(id) }.flatMap { credential in
+            try await store(at: record.credentialDestination) { try $0.load(id) }.flatMap { credential in
                 credential.clientID.map {
                     ConnectorOAuth.registeredClient(id: $0, secret: credential.clientSecret, server: plan.server)
                 }
@@ -1114,9 +1120,10 @@ final class ConnectorCenter: ConnectorToolProviding {
             failures[record.id] = nil
             activity[record.id] = .connecting
         }
-        let session = accountSession(accountID)
+        let session = accountSession(for: first)
+        let destination = provider.credentialDestination
         do {
-            var credential = try await store { try $0.load(accountID) }
+            var credential = try await store(at: destination) { try $0.load(accountID) }
             var signedIn: ConnectorCredential?
             // A sign-in is asked for a service the stored one lacks only when a new one could serve it.
             let wanted = Set(signInServices(provider)).intersection(services)
@@ -1149,7 +1156,7 @@ final class ConnectorCenter: ConnectorToolProviding {
                 return
             }
             if let signedIn {
-                try await store { try $0.save(signedIn, for: accountID) }
+                try await store(at: destination) { try $0.save(signedIn, for: accountID) }
                 await session.use(signedIn)
             }
             try await settleAccount(accountID, provider: provider, address: identity, credential: credential)
@@ -1215,8 +1222,9 @@ final class ConnectorCenter: ConnectorToolProviding {
            let existing = accounts(provider).first(where: { $0.id != accountID && $0.address?.lowercased() == address.lowercased() }) {
             // The same account signed in twice: one account, with the newer sign-in, which holds what
             // was granted before as well (Google's `include_granted_scopes`, Microsoft's consent).
-            if let credential = try await store({ try $0.load(accountID) }) {
-                try await store { try $0.save(credential, for: existing.id) }
+            let destination = provider.credentialDestination
+            if let credential = try await store(at: destination, { try $0.load(accountID) }) {
+                try await store(at: destination) { try $0.save(credential, for: existing.id) }
             }
             try await store { try $0.delete(accountID) }
             accountSessions[accountID] = nil
@@ -1268,7 +1276,7 @@ final class ConnectorCenter: ConnectorToolProviding {
         let parameters: [String: String]
         switch provider {
         case .google:
-            let saved = try await store { try $0.load(GoogleOAuth.appCredentialID) }
+            let saved = try await store(at: provider.credentialDestination) { try $0.load(GoogleOAuth.appCredentialID) }
             let app: (id: String, secret: String?)
             if let id = saved?.clientID, !id.isEmpty {
                 app = (id, saved?.clientSecret)
@@ -1325,17 +1333,18 @@ final class ConnectorCenter: ConnectorToolProviding {
     }
 
     /// The account's one session, so its services refresh its token one at a time.
-    private func accountSession(_ accountID: UUID) -> OAuthAPISession {
+    private func accountSession(for record: ConnectorRecord) -> OAuthAPISession {
+        let accountID = record.credentialID
         if let session = accountSessions[accountID] { return session }
-        let session = OAuthAPISession(id: accountID, credentials: environment.credentials, http: environment.http,
-                                      now: environment.now)
+        let session = OAuthAPISession(id: accountID, credentials: environment.credentials.bound(to: record.credentialDestination),
+                                      http: environment.http, now: environment.now)
         accountSessions[accountID] = session
         return session
     }
 
     private func callGoogleTool(_ record: ConnectorRecord, tool: String, arguments: ToolJSON,
                                 taskFolders: [URL]) async -> AgentToolResult {
-        let session = accountSession(record.credentialID)
+        let session = accountSession(for: record)
         let google = environment.google
         do {
             switch record.localService {
@@ -1376,7 +1385,7 @@ final class ConnectorCenter: ConnectorToolProviding {
 
     private func callMicrosoftTool(_ record: ConnectorRecord, tool: String, arguments: ToolJSON,
                                    taskFolders: [URL]) async -> AgentToolResult {
-        let graph = GraphAPI(base: environment.microsoft.graph, session: accountSession(record.credentialID))
+        let graph = GraphAPI(base: environment.microsoft.graph, session: accountSession(for: record))
         do {
             switch record.localService {
             case .outlookMail?:
@@ -1449,7 +1458,7 @@ final class ConnectorCenter: ConnectorToolProviding {
     func addAppStoreConnectKey(privateKey pem: String, keyID: String, issuerID: String?) async throws -> ConnectorRecord {
         let key = try AppStoreConnectKey(id: keyID, issuer: issuerID, pem: pem, signer: environment.es256)
         if let existing = connectors.first(where: { $0.localService == .appStoreConnect && $0.account == key.id }) {
-            try await replaceCredential(key.credential, for: existing.id)
+            try await replaceCredential(key.credential, for: existing.id, at: existing.credentialDestination)
             appStoreSessions[existing.id] = nil
             connect(existing.id)
             return existing
@@ -1464,7 +1473,7 @@ final class ConnectorCenter: ConnectorToolProviding {
             account: key.id
         )
         let id = record.id
-        try await store { try $0.save(key.credential, for: id) }
+        try await store(at: record.credentialDestination) { try $0.save(key.credential, for: id) }
         connectors.append(record)
         connect(id)
         return record
@@ -1480,7 +1489,7 @@ final class ConnectorCenter: ConnectorToolProviding {
         try await IMAPMailSession.verify(settings, password: password, sockets: environment.mailSockets)
         let credential = ConnectorCredential.password(password)
         if let existing = connectors.first(where: { $0.localService == .imapMail && $0.account?.lowercased() == address.lowercased() }) {
-            try await replaceCredential(credential, for: existing.id)
+            try await replaceCredential(credential, for: existing.id, at: settings.credentialDestination)
             closeLocalServer(existing.id)
             update(existing.id) {
                 $0.name = name
@@ -1505,7 +1514,7 @@ final class ConnectorCenter: ConnectorToolProviding {
             mailServer: settings
         )
         let id = record.id
-        try await store { try $0.save(credential, for: id) }
+        try await store(at: record.credentialDestination) { try $0.save(credential, for: id) }
         connectors.append(record)
         connect(id)
         return record
@@ -1516,7 +1525,8 @@ final class ConnectorCenter: ConnectorToolProviding {
         if let session = imapSessions[record.id] { return session }
         guard let settings = record.mailServer, let address = record.account else { return nil }
         let id = record.id
-        let session = IMAPMailSession(id: id, address: address, settings: settings, credentials: environment.credentials,
+        let session = IMAPMailSession(id: id, address: address, settings: settings,
+                                      credentials: environment.credentials.bound(to: record.credentialDestination),
                                       sockets: environment.mailSockets, refused: { @MainActor [weak self] in
                                           self?.update(id) { $0.status = .signInRequired }
                                           self?.failures[id] = L10n.string("The mail server refused the app password.")
@@ -1610,7 +1620,8 @@ final class ConnectorCenter: ConnectorToolProviding {
 
     private func appStoreConnectAPI(_ record: ConnectorRecord) -> AppStoreConnectAPI {
         let session = appStoreSessions[record.id] ?? AppStoreConnectSession(
-            id: record.id, credentials: environment.credentials, http: environment.http, signer: environment.es256,
+            id: record.id, credentials: environment.credentials.bound(to: record.credentialDestination), http: environment.http,
+            signer: environment.es256,
             now: environment.now)
         appStoreSessions[record.id] = session
         return AppStoreConnectAPI(base: record.serverURL, session: session)
@@ -1701,7 +1712,7 @@ final class ConnectorCenter: ConnectorToolProviding {
             authorization: .none,
             program: program
         )
-        try await store { try $0.save(.program(spec), for: id) }
+        try await store(at: record.credentialDestination) { try $0.save(.program(spec), for: id) }
         connectors.append(record)
         connect(id)
         return record
@@ -1750,7 +1761,9 @@ final class ConnectorCenter: ConnectorToolProviding {
         if let client = stdioClients[record.id] { return client }
         guard let program = record.program else { throw ProgramFailure.missingSpec }
         let id = record.id
-        guard let spec = try await store({ try $0.load(id) })?.program else { throw ProgramFailure.missingSpec }
+        guard let spec = try await store(at: record.credentialDestination, { try $0.load(id) })?.program else {
+            throw ProgramFailure.missingSpec
+        }
         if let client = stdioClients[id] { return client }
         guard let executable = environment.locateProgram(program.program) else {
             throw ProgramFailure.missingRuntime(program.missingRuntimeAdvice)
@@ -2210,11 +2223,11 @@ final class ConnectorCenter: ConnectorToolProviding {
             switch service {
             case .gmail:
                 let account = MailAccount(id: record.credentialID, address: address, provider: .gmail, connectorSlug: tools)
-                let api = GmailAPI(base: environment.google.gmailAPI, session: accountSession(record.credentialID))
+                let api = GmailAPI(base: environment.google.gmailAPI, session: accountSession(for: record))
                 return (account, GmailMailTransport(api: api, account: account))
             case .outlookMail:
                 let account = MailAccount(id: record.credentialID, address: address, provider: .outlook, connectorSlug: tools)
-                let api = GraphAPI(base: environment.microsoft.graph, session: accountSession(record.credentialID))
+                let api = GraphAPI(base: environment.microsoft.graph, session: accountSession(for: record))
                 return (account, OutlookMailTransport(api: api, account: account))
             case .imapMail:
                 guard let session = imapSession(record) else { return nil }
@@ -2239,10 +2252,10 @@ final class ConnectorCenter: ConnectorToolProviding {
         guard let record = account, record.status == .connected else { return nil }
         switch record.localService {
         case .gmail?:
-            let api = GmailAPI(base: environment.google.gmailAPI, session: accountSession(record.credentialID))
+            let api = GmailAPI(base: environment.google.gmailAPI, session: accountSession(for: record))
             return try? await GmailToolRunner(api: api).draftPreview(arguments)
         case .outlookMail?:
-            let api = GraphAPI(base: environment.microsoft.graph, session: accountSession(record.credentialID))
+            let api = GraphAPI(base: environment.microsoft.graph, session: accountSession(for: record))
             return try? await OutlookMailToolRunner(api: api).draftPreview(arguments)
         case .imapMail?:
             return try? await mailAccountRunner(record)?.draftPreview(arguments)
@@ -2392,6 +2405,16 @@ final class ConnectorCenter: ConnectorToolProviding {
         return try await Task.detached { try operation(credentials) }.value
     }
 
+    /// The same, on the store as a connector whose secret goes to `destination` sees it
+    /// (`ConnectorCredentialDestinationStore`): every read of a secret that is then sent, and every save.
+    private func store<T: Sendable>(
+        at destination: String,
+        _ operation: @escaping @Sendable (any ConnectorCredentialStoring) throws -> T
+    ) async throws -> T {
+        let credentials = environment.credentials.bound(to: destination)
+        return try await Task.detached { try operation(credentials) }.value
+    }
+
     /// Deletes in the background; a stale item is harmless, since a new sign-in replaces it. With
     /// `keepingClient`, a client the user registered stays for the next sign-in.
     private func forgetCredential(_ id: UUID, keepingClient: Bool) {
@@ -2419,7 +2442,7 @@ final class ConnectorCenter: ConnectorToolProviding {
             endpoint: record.serverURL,
             tokenQueryParameter: record.tokenQueryParameter,
             tokenHeader: record.tokenHeader,
-            credentials: environment.credentials,
+            credentials: environment.credentials.bound(to: record.credentialDestination),
             http: environment.http,
             clientVersion: environment.clientVersion,
             now: environment.now,

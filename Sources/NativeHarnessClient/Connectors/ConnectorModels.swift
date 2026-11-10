@@ -127,6 +127,17 @@ struct ConnectorRecord: Codable, Equatable, Identifiable, Sendable {
     /// in per account (Google's, Microsoft's), its own otherwise.
     var credentialID: UUID { accountSignInID ?? id }
 
+    /// Where this connector's secret goes, which its credential is bound to
+    /// (`ConnectorCredential.destination`): the program it starts, the provider an account signs in
+    /// with (whose addresses are Yardlet's own), a mail account's IMAP and SMTP servers, or the
+    /// server's address. A connector for which this changes signs in again.
+    var credentialDestination: String {
+        if let program { return "program:" + program.program }
+        if let provider = localService?.accountProvider { return provider.credentialDestination }
+        if localService == .imapMail, let mailServer { return mailServer.credentialDestination }
+        return MCPServerAddress.canonical(serverURL)
+    }
+
     /// The directory entry. A local service's entry belongs only to a record of that service: a
     /// remote server once added under the same ID stays a plain remote server.
     var preset: ConnectorPreset? {
@@ -173,6 +184,10 @@ enum ConnectorAccountProvider: String, Sendable, CaseIterable {
         case .microsoft: "Microsoft"
         }
     }
+
+    /// Where its accounts' sign-ins and the Google app the person saved may go: the provider's own
+    /// addresses, which Yardlet knows (`ConnectorRecord.credentialDestination`).
+    var credentialDestination: String { "account:" + rawValue }
 
     /// Its services, in the directory's order.
     var services: [LocalConnectorService] {
@@ -440,6 +455,10 @@ struct ConnectorCredential: Codable, Equatable, Sendable {
     var privateKey: String?
     /// A program's arguments and environment values. Absent in items from before.
     var program: ConnectorProgramSpec?
+    /// Where the secret may go (`ConnectorRecord.credentialDestination`): a use for any other
+    /// destination finds no credential (`ConnectorCredentialDestinationStore`). Absent in items from
+    /// before, which their first use binds.
+    var destination: String?
 
     /// A mail account's password (an app password, as the services ask for), signed in with the user
     /// names its record's `mailServer` keeps.
@@ -469,10 +488,19 @@ struct ConnectorCredential: Codable, Equatable, Sendable {
         kind == .client || kind == .signingKey || kind == .program || accessToken.isEmpty ? nil : accessToken
     }
 
-    /// The registered client alone, as a disconnect keeps it for the next sign-in.
+    /// The registered client alone, as a disconnect keeps it for the next sign-in, still bound
+    /// where it was.
     var clientOnly: ConnectorCredential? {
         guard let clientID, !clientID.isEmpty else { return nil }
-        return .client(id: clientID, secret: clientSecret)
+        let client = ConnectorCredential.client(id: clientID, secret: clientSecret)
+        return destination.map(client.bound(to:)) ?? client
+    }
+
+    /// The same credential, bound to `destination`.
+    func bound(to destination: String) -> ConnectorCredential {
+        var bound = self
+        bound.destination = destination
+        return bound
     }
 
     /// What a disconnect keeps for the next connection: the registered client, or a program's
@@ -493,6 +521,41 @@ protocol ConnectorCredentialStoring: Sendable {
     func load(_ id: UUID) throws -> ConnectorCredential?
     func save(_ credential: ConnectorCredential, for id: UUID) throws
     func delete(_ id: UUID) throws
+}
+
+extension ConnectorCredentialStoring {
+    /// The store as a connector whose secret goes to `destination` sees it.
+    func bound(to destination: String) -> ConnectorCredentialDestinationStore {
+        ConnectorCredentialDestinationStore(base: self, destination: destination)
+    }
+}
+
+/// The secure store as one destination sees it (`ConnectorRecord.credentialDestination`). A secret
+/// goes only where it is bound: a credential bound to another destination is not there, and the
+/// connector asks for a sign-in instead. Every save binds the credential to this destination, and an
+/// item saved before credentials were bound is bound to it the first time it is read, so a connection
+/// keeps working without a new sign-in.
+struct ConnectorCredentialDestinationStore: ConnectorCredentialStoring {
+    let base: any ConnectorCredentialStoring
+    let destination: String
+
+    func load(_ id: UUID) throws -> ConnectorCredential? {
+        guard let credential = try base.load(id) else { return nil }
+        guard let bound = credential.destination else {
+            let bound = credential.bound(to: destination)
+            try? base.save(bound, for: id)
+            return bound
+        }
+        return bound == destination ? credential : nil
+    }
+
+    func save(_ credential: ConnectorCredential, for id: UUID) throws {
+        try base.save(credential.bound(to: destination), for: id)
+    }
+
+    func delete(_ id: UUID) throws {
+        try base.delete(id)
+    }
 }
 
 final class InMemoryConnectorCredentialStore: ConnectorCredentialStoring, @unchecked Sendable {
