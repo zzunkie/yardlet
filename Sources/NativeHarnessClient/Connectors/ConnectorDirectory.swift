@@ -39,6 +39,11 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
     var name: String
     var serverURL: URL
     var signIn: SignIn
+    /// Sign-in page hosts on another site than the server's that were checked to be the
+    /// service's own, by reading its public OAuth metadata without signing in (2026-11-11,
+    /// docs/CONNECTORS.md, "Directory"). Connecting this entry's server sends the person there
+    /// without asking (`vouchesForSignIn`).
+    var signInHosts: [String] = []
     /// GitHub takes a token by default and an OAuth app of the user's own too.
     var acceptsRegisteredClient = false
     var tokenQueryParameter: String?
@@ -62,6 +67,14 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
     var isZoom: Bool { id.hasPrefix("zoom-") }
 
     static func preset(id: String) -> ConnectorPreset? { all.first { $0.id == id } }
+
+    /// Whether a connector from this entry may open a sign-in page on `host` without asking
+    /// (`ConnectorSignInConfirmation`): only while its server is still this entry's address, and
+    /// only on a host checked for it. Another host, or the same entry at another address, asks.
+    func vouchesForSignIn(on host: String, serverURL: URL) -> Bool {
+        signInHosts.contains(host.lowercased())
+            && MCPServerAddress.canonical(serverURL) == MCPServerAddress.canonical(self.serverURL)
+    }
 
     /// The preset for a server address, by canonical address and then by host.
     static func preset(for url: URL) -> ConnectorPreset? {
@@ -165,7 +178,8 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
                         signIn: .macPermission, symbol: "person.crop.circle",
                         note: "The contacts on this Mac, read only. macOS asks once."),
         ConnectorPreset(id: "github", name: "GitHub", serverURL: URL(string: "https://api.githubcopilot.com/mcp/")!,
-                        signIn: .token, acceptsRegisteredClient: true, symbol: "chevron.left.forwardslash.chevron.right",
+                        signIn: .token, signInHosts: ["github.com"], acceptsRegisteredClient: true,
+                        symbol: "chevron.left.forwardslash.chevron.right",
                         setupURL: URL(string: "https://github.com/settings/personal-access-tokens/new")!,
                         note: "Paste a personal access token, or use an OAuth app of your own.",
                         claudeAINames: ["claude.ai GitHub"], codexPlugins: ["github"]),
@@ -192,7 +206,7 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
         ConnectorPreset(id: "monday", name: "monday.com", serverURL: URL(string: "https://mcp.monday.com/mcp")!,
                         signIn: .oauth, symbol: "calendar.day.timeline.left", claudeAINames: ["claude.ai monday.com", "claude.ai Monday"]),
         ConnectorPreset(id: "todoist", name: "Todoist", serverURL: URL(string: "https://ai.todoist.net/mcp")!,
-                        signIn: .oauth, symbol: "checkmark.square"),
+                        signIn: .oauth, signInHosts: ["todoist.com"], symbol: "checkmark.square"),
         ConnectorPreset(id: "airtable", name: "Airtable", serverURL: URL(string: "https://mcp.airtable.com/mcp")!,
                         signIn: .oauth, symbol: "tablecells"),
         ConnectorPreset(id: "miro", name: "Miro", serverURL: URL(string: "https://mcp.miro.com/")!,
@@ -208,7 +222,7 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
         // (checked 2026-10-27, docs/CONNECTORS.md, "Directory"). Pipedream keeps its resource
         // metadata only at the root; Make takes `client_secret_post` alone.
         ConnectorPreset(id: "pipedream", name: "Pipedream", serverURL: URL(string: "https://mcp.pipedream.net/v2")!,
-                        signIn: .oauth, symbol: "point.3.connected.trianglepath.dotted"),
+                        signIn: .oauth, signInHosts: ["mcp.pipedream.com"], symbol: "point.3.connected.trianglepath.dotted"),
         ConnectorPreset(id: "composio", name: "Composio", serverURL: URL(string: "https://connect.composio.dev/mcp")!,
                         signIn: .oauth, symbol: "square.grid.3x3"),
         ConnectorPreset(id: "make", name: "Make", serverURL: URL(string: "https://mcp.make.com/v2")!,
@@ -232,11 +246,11 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
         ConnectorPreset(id: "pandadoc", name: "PandaDoc", serverURL: URL(string: "https://mcp.pandadoc.com/v1/mcp")!,
                         signIn: .oauth, symbol: "signature"),
         ConnectorPreset(id: "fathom", name: "Fathom", serverURL: URL(string: "https://api.fathom.ai/mcp")!,
-                        signIn: .oauth, symbol: "waveform"),
+                        signIn: .oauth, signInHosts: ["fathom.video"], symbol: "waveform"),
         ConnectorPreset(id: "deepl", name: "DeepL", serverURL: URL(string: "https://mcp.deepl.com/v1/mcp")!,
                         signIn: .oauth, symbol: "translate"),
         ConnectorPreset(id: "mobbin", name: "Mobbin", serverURL: URL(string: "https://api.mobbin.com/mcp")!,
-                        signIn: .oauth, symbol: "iphone"),
+                        signIn: .oauth, signInHosts: ["ujasntkfphywizsdaapi.supabase.co"], symbol: "iphone"),
         // Zoom's own servers, one per product (developers.zoom.us/docs/mcp/servers, 2026-10-27): no
         // dynamic registration, so a Zoom app of the person's own (General app, PKCE, its secret in
         // Basic). Each asks only for the read scopes of its server's metadata (`scopes_supported`).
@@ -318,7 +332,7 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
         ConnectorPreset(id: "posthog", name: "PostHog", serverURL: URL(string: "https://mcp.posthog.com/mcp")!,
                         signIn: .oauth, symbol: "chart.bar.xaxis"),
         ConnectorPreset(id: "semgrep", name: "Semgrep", serverURL: URL(string: "https://mcp.semgrep.ai/mcp")!,
-                        signIn: .oauth, symbol: "lock.shield"),
+                        signIn: .oauth, signInHosts: ["login.semgrep.dev"], symbol: "lock.shield"),
         ConnectorPreset(id: "postman", name: "Postman", serverURL: URL(string: "https://mcp.postman.com/mcp")!,
                         signIn: .oauth, symbol: "paperplane"),
         ConnectorPreset(id: "jam", name: "Jam", serverURL: URL(string: "https://mcp.jam.dev/mcp")!,
@@ -328,9 +342,9 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
         ConnectorPreset(id: "browserstack", name: "BrowserStack", serverURL: URL(string: "https://mcp.browserstack.com/mcp")!,
                         signIn: .oauth, symbol: "macbook.and.iphone"),
         ConnectorPreset(id: "bugsnag", name: "BugSnag", serverURL: URL(string: "https://bugsnag.mcp.smartbear.com/mcp")!,
-                        signIn: .oauth, symbol: "exclamationmark.triangle"),
+                        signIn: .oauth, signInHosts: ["oauth.bugsnag.com"], symbol: "exclamationmark.triangle"),
         ConnectorPreset(id: "swagger", name: "Swagger", serverURL: URL(string: "https://swagger.mcp.smartbear.com/mcp")!,
-                        signIn: .oauth, symbol: "curlybraces"),
+                        signIn: .oauth, signInHosts: ["auth.swaggerhub.com"], symbol: "curlybraces"),
         ConnectorPreset(id: "zephyr", name: "Zephyr", serverURL: URL(string: "https://zephyr.mcp.smartbear.com/mcp")!,
                         signIn: .oauth, symbol: "checkmark.seal"),
         ConnectorPreset(id: "grafana", name: "Grafana", serverURL: URL(string: "https://mcp.grafana.com/mcp")!,
@@ -344,7 +358,7 @@ struct ConnectorPreset: Identifiable, Equatable, Sendable {
         ConnectorPreset(id: "port", name: "Port", serverURL: URL(string: "https://mcp.port.io/v1")!,
                         signIn: .oauth, symbol: "square.stack.3d.down.right"),
         ConnectorPreset(id: "aiven", name: "Aiven", serverURL: URL(string: "https://mcp.aiven.live/mcp")!,
-                        signIn: .oauth, symbol: "cylinder.fill"),
+                        signIn: .oauth, signInHosts: ["console.aiven.io"], symbol: "cylinder.fill"),
         ConnectorPreset(id: "upstash", name: "Upstash", serverURL: URL(string: "https://mcp.upstash.com/mcp")!,
                         signIn: .oauth, symbol: "bolt.horizontal"),
         ConnectorPreset(id: "algolia", name: "Algolia", serverURL: URL(string: "https://mcp.algolia.com/mcp")!,

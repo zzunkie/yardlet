@@ -1069,11 +1069,14 @@ final class ConnectorCenter: ConnectorToolProviding {
 
     /// Asks before a sign-in page on another site than the server's, once for each server and page
     /// host. The page's host is the one checked, not only the issuer the server names, since it is
-    /// where the person signs in. Declining ends the connection as Cancel on the page does, before
-    /// a client is registered or anything is stored.
+    /// where the person signs in. A directory entry's server sending the person to a host checked
+    /// for that entry is not asked about (`ConnectorPreset.vouchesForSignIn`). Declining ends the
+    /// connection as Cancel on the page does, before a client is registered or anything is stored.
     private func confirmSignInPage(_ page: URL, for record: ConnectorRecord, userAgent: any OAuthUserAgent) async throws {
         guard let confirmation = ConnectorSignInConfirmation(connector: record.displayName, serverURL: record.serverURL,
                                                              signInPage: page) else { return }
+        if let preset = record.presetID.flatMap(ConnectorPreset.preset(id:)),
+           preset.vouchesForSignIn(on: confirmation.signInHost, serverURL: record.serverURL) { return }
         let approval = ConnectorRecord.ApprovedSignIn(server: MCPServerAddress.canonical(record.serverURL),
                                                       signInHost: confirmation.signInHost)
         guard self.record(record.id)?.approvedSignIn != approval else { return }

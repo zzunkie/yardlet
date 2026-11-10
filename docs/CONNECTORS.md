@@ -70,8 +70,10 @@ OAuth steps (the MCP authorization spec):
    since what the person allows there goes to the server. A site is approximated without a public suffix list: the
    last two labels, or three under a country code's common second level (`co.uk`, `co.kr`), and a host under a shared
    hosting suffix (`vercel.app`), an IP address or `localhost` is a site only with itself
-   (`ConnectorOAuth.sameSite`). Cancel ends the sign-in as Cancel on the page does, before a client is registered.
-   Continue is kept for that server address and page host (`approvedSignIn`), so signing in again does not ask again.
+   (`ConnectorOAuth.sameSite`). A directory entry still at its own address does not ask about a page host checked for
+   it (`ConnectorPreset.signInHosts`, the "Directory" section); another host, or the entry at another address, asks.
+   Cancel ends the sign-in as Cancel on the page does, before a client is registered. Continue is kept for that server
+   address and page host (`approvedSignIn`), so signing in again does not ask again.
 4. Client:
    - Dynamic client registration (RFC 7591): every sign-in registers a new redirect URI, `/callback` on a random port of
      `127.0.0.1`. If the server accepts `none`, it is a public client; otherwise it uses whichever of
@@ -145,6 +147,13 @@ registration, the connection error shows the reason the service gave.
 | GitHub | GitHub (`https://api.githubcopilot.com/mcp/`): device code sign-in (the "GitHub sign-in" section), a personal access token or your own OAuth app |
 | Key in the address | Browserbase (`https://mcp.browserbase.com/mcp`, key in Keychain) |
 
+- Sign-in on another site: most entries sign in on their server's own site. Nine send the person to another domain
+  of the same service, read from their public protected resource and authorization server metadata on 2026-11-11 and
+  kept on the entry (`ConnectorPreset.signInHosts`), so connecting them does not ask (the "Connection types" section,
+  OAuth step 3): Todoist (`todoist.com`), Fathom (`fathom.video`), GitHub with your own OAuth app (`github.com`), Mobbin
+  (its Supabase project's host, not all of `supabase.co`), BugSnag (`oauth.bugsnag.com`), Aiven (`console.aiven.io`),
+  Pipedream (`mcp.pipedream.com`), Semgrep (`login.semgrep.dev`) and Swagger (`auth.swaggerhub.com`). When a service
+  moves its sign-in to a host not on its entry, Yardlet asks until the entry is checked again.
 - Order: widely used services (Linear, Notion, Slack, the five Google services, the four Microsoft services, the three
   Mac services, GitHub,
   Browserbase, Atlassian, Sentry) → work and planning → sales, marketing and product analytics → development and

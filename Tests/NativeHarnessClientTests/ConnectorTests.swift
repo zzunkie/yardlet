@@ -697,6 +697,34 @@ final class ConnectorTests: XCTestCase {
         await other.waitForConnection(linked.id)
         XCTAssertEqual(asking.opened.count, 2)
         XCTAssertEqual(asking.confirmations.count, 2, "Signing in again on the same page does not ask again")
+
+        // A directory entry's server sending the person to the host checked for it does not ask.
+        // The same entry at another address, or its server sending them to another host, still asks.
+        let todoist = try XCTUnwrap(ConnectorPreset.preset(id: "todoist"))
+        let vetted = FakeConnectorServer(authorizationHost: "todoist.com", serverHost: "ai.todoist.net")
+        let trusting = FakeUserAgent()
+        trusting.confirms = false
+        let directory = makeCenter(server: vetted, agent: trusting)
+        let listed = try await directory.add(name: "", serverURL: todoist.serverURL, preset: todoist)
+        directory.connect(listed.id)
+        await directory.waitForConnection(listed.id)
+        XCTAssertTrue(trusting.confirmations.isEmpty)
+        XCTAssertEqual(trusting.opened.first?.host(), "todoist.com")
+        XCTAssertEqual(directory.record(listed.id)?.status, .connected)
+        XCTAssertNil(directory.record(listed.id)?.approvedSignIn)
+
+        for (server, address) in [(FakeConnectorServer(authorizationHost: "todoist.com"), FakeConnectorServer.mcpURL),
+                                  (FakeConnectorServer(authorizationHost: "login.other.test", serverHost: "ai.todoist.net"),
+                                   todoist.serverURL)] {
+            let wary = FakeUserAgent()
+            wary.confirms = false
+            let center = makeCenter(server: server, agent: wary)
+            let moved = try await center.add(name: "", serverURL: address, preset: todoist)
+            center.connect(moved.id)
+            await center.waitForConnection(moved.id)
+            XCTAssertEqual(wary.confirmations.count, 1, address.absoluteString)
+            XCTAssertTrue(wary.opened.isEmpty, address.absoluteString)
+        }
     }
 
     func testDisconnectAndRemoveForgetTheCredential() async throws {
@@ -1087,11 +1115,15 @@ final class FakeConnectorServer: ConnectorHTTPTransport, @unchecked Sendable {
     let queryTokenName: String?
     /// The authorization server the resource metadata names.
     let authorizationHost: String
+    /// The MCP server's host; its endpoint is `/mcp` there.
+    let serverHost: String
 
     init(requiresToken: Bool = true, publishesResourceMetadata: Bool = true, supportsRegistration: Bool = true,
          authMethods: [String] = ["none", "client_secret_basic"], listsToolsToAnyone: Bool = false,
-         queryTokenName: String? = nil, authorizationHost: String = "auth.example.test") {
+         queryTokenName: String? = nil, authorizationHost: String = "auth.example.test",
+         serverHost: String = "mcp.example.test") {
         self.authorizationHost = authorizationHost
+        self.serverHost = serverHost
         self.requiresToken = requiresToken
         self.publishesResourceMetadata = publishesResourceMetadata
         self.supportsRegistration = supportsRegistration
@@ -1176,12 +1208,12 @@ final class FakeConnectorServer: ConnectorHTTPTransport, @unchecked Sendable {
         lock.withLock { recorded.append(request) }
         let url = request.url!
         switch (url.host() ?? "", url.path(), request.httpMethod ?? "GET") {
-        case ("mcp.example.test", "/.well-known/oauth-protected-resource/mcp", "GET") where publishesResourceMetadata:
-            return json(["resource": .string("https://mcp.example.test/mcp"),
+        case (serverHost, "/.well-known/oauth-protected-resource/mcp", "GET") where publishesResourceMetadata:
+            return json(["resource": .string("https://\(serverHost)/mcp"),
                          "authorization_servers": .array([.string("https://\(authorizationHost)")]),
                          "scopes_supported": .array([.string("read"), .string("write")])], url: url)
         case (authorizationHost, "/.well-known/oauth-authorization-server", "GET"),
-             ("mcp.example.test", "/.well-known/oauth-authorization-server", "GET") where !publishesResourceMetadata:
+             (serverHost, "/.well-known/oauth-authorization-server", "GET") where !publishesResourceMetadata:
             let base = "https://\(url.host()!)"
             var metadata: [String: ToolJSON] = [
                 "issuer": .string(base),
@@ -1214,7 +1246,7 @@ final class FakeConnectorServer: ConnectorHTTPTransport, @unchecked Sendable {
             }
             if Self.form(request)["grant_type"] == "refresh_token", let hook = beforeRefresh { hook() }
             return token(request, url: url)
-        case ("mcp.example.test", "/mcp", "POST"):
+        case (serverHost, "/mcp", "POST"):
             if Self.rpcMethod(request) == "tools/call" {
                 let (delay, failure) = lock.withLock {
                     (state.callDelay, state.callFailures.isEmpty ? nil : state.callFailures.removeFirst())
@@ -1270,7 +1302,8 @@ final class FakeConnectorServer: ConnectorHTTPTransport, @unchecked Sendable {
             if requiresToken, !open, !(bearer.map { state.validTokens.contains($0) } ?? false) {
                 state.refusedRequests += 1
                 return (Data(), response(url, status: 401, headers: [
-                    "WWW-Authenticate": #"Bearer realm="OAuth", resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource/mcp", scope="read write""#
+                    "WWW-Authenticate": #"Bearer realm="OAuth", resource_metadata="https://"# + serverHost
+                        + #"/.well-known/oauth-protected-resource/mcp", scope="read write""#
                 ]))
             }
             if method == "initialize" {
