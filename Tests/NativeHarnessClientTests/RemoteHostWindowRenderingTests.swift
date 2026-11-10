@@ -15,7 +15,8 @@ import XCTest
 ///   with Claude Code's own three answers.
 /// - `remote-host-question-*.png` and `local-question-*.png`: a question with its options.
 /// - `remote-host-lines-*.png` and `local-lines-*.png`: the same turn with its Read and Edit lines opened.
-/// - `remote-host-suggestion-*.png` and `local-suggestion-*.png`: a finished task with a suggested task's chip.
+/// - `remote-host-suggestion-*.png` and `local-suggestion-*.png`: a finished task with a suggested task's chip;
+///   `remote-host-suggestion-options-*.png` and `local-suggestion-options-*.png`: its Options popover.
 /// - `remote-host-outputs-*.png` and `local-outputs-*.png`: a task that wrote a report and a chart, with the
 ///   session rail's Outputs card beside it.
 /// - `remote-host-schedules-*.png` and `local-schedules-*.png`: the scheduled tasks list beside a schedule.
@@ -512,7 +513,7 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
         let size = NSSize(width: 1280, height: 820)
         let column = NSSize(width: size.width - ParityTheme.sidebarWidth - 21, height: size.height - ParityTheme.paneToolbarHeight)
 
-        // The chip: Start, Do it here and ✕ as on the Mac; Options is the host's.
+        // The chip: Options, Start, Do it here and ✕ as on the Mac.
         model.select(.task(footer.id.uuidString))
         let conversation = try XCTUnwrap(model.conversations[footer.id.uuidString])
         try await waitUntil { conversation.isLoaded && conversation.suggestions[suggestion.id] != nil }
@@ -524,6 +525,28 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
             localTimeline(footerEntries, folder: website, status: .completed)
                 .environment(\.taskSuggestionActions, localSuggestionActions(host, session: footer))
         }
+        // Its Options: the local popover, drawn from the host's choices for the chip (§15.9) beside the host's own.
+        XCTAssertTrue(model.offersSuggestionOptions)
+        let options = RemoteSuggestionOptions(host: model, taskID: footer.id.uuidString, suggestion: suggestion)
+        await options.read()
+        try await waitUntil { options.menus().canStart }
+        let popover = NSSize(width: 400, height: 260)
+        let drawn = [L10n.string("Harness"), L10n.string("taskSuggestion.where"), "website", L10n.string("Permissions"),
+                     L10n.string("Start")]
+        try await render("remote-host-suggestion-options", size: popover, titled: false) {
+            TaskSuggestionOptionsPopover(context: options, dismiss: {}).background(ParityTheme.elevated)
+        } check: { elements in
+            for label in drawn { XCTAssertTrue(elements.contains { $0.description.contains(label) }, "\(label): \(elements)") }
+        }
+        let local = try XCTUnwrap(localSuggestionOptions(host, suggestion: suggestion, session: footer))
+        XCTAssertEqual(options.menus().options.permission?.title, local.menus().options.permission?.title)
+        XCTAssertEqual(options.menus().place.title, local.menus().place.title)
+        try await render("local-suggestion-options", size: popover, titled: false) {
+            TaskSuggestionOptionsPopover(context: local, dismiss: {}).background(ParityTheme.elevated)
+        } check: { elements in
+            for label in drawn { XCTAssertTrue(elements.contains { $0.description.contains(label) }, "\(label): \(elements)") }
+        }
+        XCTAssertNil(host.taskSuggestions.choice(of: suggestion.id, in: footer.id), "Opening Options changes nothing")
 
         // The rail's Outputs card: the host's card's files, newest first.
         model.select(.task(crash.id.uuidString))
@@ -888,6 +911,22 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
                     settings: model.suggestedTaskSettingsLabel(choice, for: suggestion))
             },
             dismiss: { _ in })
+    }
+
+    /// The chip's Options as the host's own window builds them for its task.
+    private func localSuggestionOptions(_ model: AppModel, suggestion: ConversationTaskSuggestion,
+                                        session: SessionRecord) -> TaskSuggestionOptionsContext? {
+        guard case let .success(start) = model.suggestedTaskStart(for: suggestion, from: session) else { return nil }
+        let runtimes = model.runtimeSelections, connections = model.connections
+        return TaskSuggestionOptionsContext(
+            choice: { model.suggestedTaskChoice(for: suggestion, start: start, in: session.id) }, parentLabel: nil,
+            projects: model.projects.visibleGroups(sessions: model.store.sessions).compactMap(\.project),
+            harnesses: runtimes.connectedDescriptors,
+            models: NewTaskModelSource(catalogs: model.modelCatalogs) { _, _, _, _ in },
+            accounts: { connections.choices(for: [$0]) }, runtimeURL: { runtimes.selectedURL(for: $0) },
+            defaults: { model.suggestedTaskOptions(harness: $0, parent: start.parent) },
+            connection: { model.suggestedTaskConnection(harness: $0, parent: start.parent) },
+            isRepository: SuggestedTaskPlace.isInRepository, chooseWorkspace: { _ in nil }, save: { _ in }, start: { _ in })
     }
 
     /// The local timeline of a Claude Code task waiting on the person, whose cards can answer as the window's do.

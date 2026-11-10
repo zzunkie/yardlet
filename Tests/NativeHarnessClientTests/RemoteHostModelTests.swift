@@ -807,7 +807,8 @@ final class RemoteHostModelTests: XCTestCase {
             } == true
         }
 
-        // The suggested task's chip reads what became of it from the host, and Start starts it there.
+        // The suggested task's chip reads what became of it from the host, and its Options starts it there with what
+        // they show (§15.9): the host's choices for the chip, read again after each pick.
         model.select(.task(ID.idle))
         let idle = try XCTUnwrap(model.conversations[ID.idle])
         try await waitUntil { idle.isLoaded }
@@ -817,10 +818,20 @@ final class RemoteHostModelTests: XCTestCase {
         guard case let .taskSuggestion(suggestion)? = chip?.kind else { return XCTFail("No suggestion chip") }
         XCTAssertEqual(suggestion.title, "Add a link checker to CI")
         XCTAssertNil(idle.suggestions[suggestion.id].flatMap(RemoteSuggestionState.resolution))
-        model.send(.actOnSuggestion(taskID: ID.idle, suggestionID: suggestion.id, action: .start))
+        XCTAssertTrue(model.offersSuggestionOptions)
+        let options = RemoteSuggestionOptions(host: model, taskID: ID.idle, suggestion: suggestion)
+        await options.read()
+        XCTAssertEqual(options.menus().harness, .claudeCode, "The task's own harness")
+        XCTAssertEqual(options.menus().place.title, "Website")
+        options.menus().chooseHarness(.codex)
+        try await waitUntil { options.menus().harness == .codex && options.menus().canStart }
+        options.menus().pick(.providerOption(id: "model", value: "gpt-6-astra"))
+        try await waitUntil { options.menus().options.model?.menu.model?.currentValue == "gpt-6-astra" && options.menus().canStart }
+        options.menus().start(false)
         try await waitUntil { idle.suggestions[suggestion.id].flatMap(RemoteSuggestionState.resolution)?.outcome == .started }
         let started = try XCTUnwrap(idle.suggestions[suggestion.id].flatMap(RemoteSuggestionState.resolution)?.startedTaskID)
         try await waitUntil { model.task(started.uuidString)?.parentTaskId == ID.idle }
+        XCTAssertEqual(model.task(started.uuidString)?.harness, HarnessKind.codex.rawValue, "Started with the choices shown")
 
         // An approval's notification offers "Allow once", the host card's narrowest allow, and says which request.
         model.select(.task(ID.approval))

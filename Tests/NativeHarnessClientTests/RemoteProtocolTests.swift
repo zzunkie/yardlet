@@ -76,6 +76,11 @@ final class RemoteProtocolTests: XCTestCase {
             .forgetDevice,
             .itemDetail(taskID: "T1", itemID: "i:1"),
             .actOnSuggestion(taskID: "T1", suggestionID: "task_1", action: .start),
+            .actOnSuggestion(taskID: "T1", suggestionID: "task_1", action: .start, start: RemoteSuggestionStart(
+                harness: "codex", settings: ["model": "gpt-6"], projectID: "P1", worktree: true, accountID: "account-1",
+                confirmed: true)),
+            .suggestionOptions(taskID: "T1", suggestionID: "task_1", harness: "codex", settings: ["model": "gpt-6"],
+                               projectID: "P1", accountID: "account-1", composer: true),
             .setPinned(taskID: "T1", pinned: false),
             .archiveTask(taskID: "T1"),
             .answerLink(requestID: "L", approve: true),
@@ -131,6 +136,16 @@ final class RemoteProtocolTests: XCTestCase {
     func testTheDocumentedRequestsDecode() throws {
         let markRead = try decode(#"{"id": "17", "type": "markRead", "taskId": "4C1F"}"#)
         XCTAssertEqual(markRead, RemoteRequestEnvelope(id: "17", request: .markRead(taskID: "4C1F")))
+        // §15.9: a Start with the chip's Options carries its choices; a Start with none, or another action, carries none.
+        let options = try decode(#"{"id": "41", "type": "actOnSuggestion", "taskId": "4C1F", "suggestionId": "task_1a2b3c4d", "action": "start", "harness": "codex", "settings": {"model": "gpt-6", "reasoningEffort": "high"}, "worktree": false}"#)
+        XCTAssertEqual(options.request, .actOnSuggestion(taskID: "4C1F", suggestionID: "task_1a2b3c4d", action: .start,
+            start: RemoteSuggestionStart(harness: "codex", settings: ["model": "gpt-6", "reasoningEffort": "high"], worktree: false)))
+        let plain = try decode(#"{"id": "19", "type": "actOnSuggestion", "taskId": "4C1F", "suggestionId": "task_1a2b3c4d", "action": "start"}"#)
+        XCTAssertEqual(plain.request, .actOnSuggestion(taskID: "4C1F", suggestionID: "task_1a2b3c4d", action: .start))
+        let here = try decode(#"{"id": "20", "type": "actOnSuggestion", "taskId": "4C1F", "suggestionId": "task_1a2b3c4d", "action": "here", "harness": "codex"}"#)
+        XCTAssertEqual(here.request, .actOnSuggestion(taskID: "4C1F", suggestionID: "task_1a2b3c4d", action: .here))
+        let read = try decode(#"{"id": "40", "type": "suggestionOptions", "taskId": "4C1F", "suggestionId": "task_1a2b3c4d", "harness": "codex"}"#)
+        XCTAssertEqual(read.request, .suggestionOptions(taskID: "4C1F", suggestionID: "task_1a2b3c4d", harness: "codex"))
         let answer = try decode(#"{"id":"8","type":"answerApproval","taskId":"T","requestId":"toolu_01","answer":"allowOnce","extra":true}"#)
         XCTAssertEqual(answer.request, .answerApproval(taskID: "T", requestID: "toolu_01", answer: .allowOnce))
         let reveal = try decode(#"{"id":"1","type":"revealLink","nonce":"\#(RemoteEncoding.base64url(Data(repeating: 1, count: 32)))"}"#)

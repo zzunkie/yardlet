@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 @testable import NativeHarnessClient
+@testable import YardletAgentTools
 @testable import YardletRemote
 
 /// The Mac side of the phone remote: the conversation the phone reads is the one model the Mac's
@@ -542,6 +543,80 @@ final class RemoteBridgeTests: XCTestCase {
         XCTAssertEqual(model.connections.selection, beforeSelection)
         XCTAssertEqual(model.composerDrafts.home.modelChoices[.claudeCode], beforeChoice)
         XCTAssertTrue(model.store.sessions.isEmpty)
+        await model.shutdown()
+    }
+
+    func testASuggestionsOptionsReadItsChipAndStartPassesTheNewTaskChecks() async throws {
+        // A chip in a Claude Code task that runs in Bypass permissions: its Start inherits that level (§15.9).
+        let folder = FileManager.default.temporaryDirectory.appending(path: "remote-suggestion-\(UUID())", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let source = SessionRecord(harness: .claudeCode, workspaceURL: folder, runtimeExecutableURL: URL(filePath: "/tmp/claude"),
+                                   title: "Fix the footer links", status: .completed,
+                                   providerOptions: [ClaudeLaunchOption.permissionMode: ClaudePermissionMode.bypassPermissions])
+        let chip = "task_00000001"
+        let entries = [
+            TranscriptEntry(content: .user(text: "Find the footer links that 404")),
+            TranscriptEntry(content: .activity(HarnessActivity(
+                id: "toolu_spawn", kind: "mcp__yardlet__spawn_task", title: "mcp__yardlet__spawn_task",
+                input: #"{"title":"Add a link checker to CI","prompt":"Add a CI job that checks every footer link."}"#,
+                output: TaskSuggestionToolCatalog.notedResult(taskID: chip)), state: .completed))
+        ]
+        // No runtime is found on this Mac and every harness is a fake one, so nothing reaches a provider.
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RemoteBridgeTests.suggestion")))
+        let model = AppModel(
+            store: SessionStore(sessions: [source], repository: InMemorySessionRepository(sessions: [source])),
+            runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false, loadsPersistedSelections: false),
+            registry: HarnessRegistry { kind, _ in FakeHarnessAdapter(kind: kind) },
+            initialTranscripts: [source.id: entries], restoresIndexOnLaunch: false)
+        model.connections.usesFixtureSnapshots = true
+        let bridge = AppModelRemoteBridge(model: model)
+        XCTAssertTrue(bridge.snapshot().suggestionOptions)
+        let taskID = source.id.uuidString
+
+        // A phone that cannot confirm is shown the permission it would start on; the desktop the chip's own, to confirm.
+        let phone = try await bridge.suggestionOptions(taskID: taskID, suggestionID: chip, harness: nil, settings: [:],
+                                                       projectID: nil, accountID: nil, composer: false).get()
+        XCTAssertEqual(phone.harness.harness, HarnessKind.claudeCode.rawValue)
+        let phonePermission = try XCTUnwrap(phone.settings.first { $0.id == ClaudeLaunchOption.permissionMode })
+        XCTAssertEqual(phonePermission.value, ClaudePermissionMode.manual)
+        XCTAssertFalse(phonePermission.choices.contains { $0.value == ClaudePermissionMode.bypassPermissions })
+        XCTAssertNil(phone.worktree, "A folder outside Git has no worktree to choose")
+        let desktop = try await bridge.suggestionOptions(taskID: taskID, suggestionID: chip, harness: nil, settings: [:],
+                                                         projectID: nil, accountID: nil, composer: true).get()
+        let permission = try XCTUnwrap(desktop.settings.first { $0.role == "permission" })
+        XCTAssertEqual(permission.value, ClaudePermissionMode.bypassPermissions)
+        XCTAssertNotNil(permission.choices.first { $0.value == permission.value }?.confirm)
+        XCTAssertNil(model.taskSuggestions.choice(of: chip, in: source.id), "Reading changes nothing")
+
+        // Start with choices passes createTask's checks: a choice that asks is refused unconfirmed, as is a harness the
+        // Mac does not offer or a worktree outside Git, and none of them touches the chip.
+        let named = await bridge.startSuggestion(taskID: taskID, suggestionID: chip, with: RemoteSuggestionStart(
+            settings: [ClaudeLaunchOption.permissionMode: ClaudePermissionMode.bypassPermissions]))
+        XCTAssertEqual(named?.reason, .confirmation)
+        XCTAssertEqual(named?.setting, ClaudeLaunchOption.permissionMode)
+        let codex = await bridge.startSuggestion(taskID: taskID, suggestionID: chip,
+                                                 with: RemoteSuggestionStart(harness: HarnessKind.codex.rawValue))
+        XCTAssertEqual(codex?.reason, .harness)
+        let worktree = await bridge.startSuggestion(taskID: taskID, suggestionID: chip, with: RemoteSuggestionStart(worktree: true))
+        XCTAssertEqual(worktree?.reason, .worktree)
+        XCTAssertNil(model.taskSuggestions.choice(of: chip, in: source.id))
+        XCTAssertNil(model.taskSuggestions.progress(of: chip, in: source.id))
+
+        // Confirmed, the choice that asks stands; the chip keeps it for its Start, which fails here only because no
+        // Claude Code runtime is selected.
+        let bypass = [ClaudeLaunchOption.permissionMode: ClaudePermissionMode.bypassPermissions]
+        let confirmed = await bridge.startSuggestion(taskID: taskID, suggestionID: chip,
+                                                     with: RemoteSuggestionStart(settings: bypass, confirmed: true))
+        XCTAssertNil(confirmed)
+        XCTAssertEqual(model.taskSuggestions.choice(of: chip, in: source.id)?.providerOptions[ClaudeLaunchOption.permissionMode],
+                       ClaudePermissionMode.bypassPermissions)
+        try await waitUntil { if case .failed? = model.taskSuggestions.progress(of: chip, in: source.id) { true } else { false } }
+        // Unconfirmed, the chip's Bypass permissions gives way to the harness's default, as the phone was shown.
+        let unconfirmed = await bridge.startSuggestion(taskID: taskID, suggestionID: chip, with: RemoteSuggestionStart(worktree: false))
+        XCTAssertNil(unconfirmed)
+        XCTAssertNil(model.taskSuggestions.choice(of: chip, in: source.id)?.providerOptions[ClaudeLaunchOption.permissionMode])
+        XCTAssertEqual(model.store.sessions.map(\.id), [source.id], "Nothing started")
         await model.shutdown()
     }
 

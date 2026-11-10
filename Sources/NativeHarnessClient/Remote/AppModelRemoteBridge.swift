@@ -145,6 +145,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         snapshot.conversationBodies = true
         snapshot.nextSteps = true
         snapshot.composerExtensions = true
+        snapshot.suggestionOptions = true
         snapshot.fullConversation = true
         snapshot.fileRewind = true
         snapshot.taskNotices = true
@@ -598,7 +599,9 @@ final class AppModelRemoteBridge: RemoteBridge {
             }
             guard let route else { return RemoteError(.notAllowed) }
             return await answer(request, in: session, by: route)
-        case let .actOnSuggestion(taskID, suggestionID, action):
+        case let .actOnSuggestion(taskID, suggestionID, action, start):
+            // Start with the chip's Options: what they chose, checked as `createTask` checks it (§15.9).
+            if action == .start, let start { return await startSuggestion(taskID: taskID, suggestionID: suggestionID, with: start) }
             guard let session = session(taskID) else { return RemoteError(.notFound) }
             guard let suggestion = suggestion(suggestionID, in: session) else { return RemoteError(.notFound) }
             guard model.taskSuggestions.resolution(of: suggestionID, in: session.id) == nil,
@@ -897,7 +900,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     /// The new-task choice after the client's picks, each as the menus take it, in the order the composer lists its
     /// settings (§15.16, §15.33); refused when one names a setting or value the menus do not offer then, or, unless
     /// `allowsConfirmed`, a value the Mac asks to confirm.
-    private static func choosing(_ picks: [String: String], harness: HarnessKind, from start: NewTaskModelChoice?,
+    static func choosing(_ picks: [String: String], harness: HarnessKind, from start: NewTaskModelChoice?,
                                  model: AppModel, connection: ProviderConnection?,
                                  folder: URL?, allowsConfirmed: Bool = false) -> Result<NewTaskModelChoice?, RemoteError> {
         var choice = start
@@ -1471,7 +1474,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         }.joined(separator: "\n")
     }
 
-    private func suggestion(_ id: String, in session: SessionRecord) -> ConversationTaskSuggestion? {
+    func suggestion(_ id: String, in session: SessionRecord) -> ConversationTaskSuggestion? {
         guard let model else { return nil }
         for turn in presentation(of: session, in: model).turns {
             for item in turn.work + turn.answers {

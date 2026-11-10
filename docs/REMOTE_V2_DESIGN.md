@@ -273,7 +273,7 @@ account shows that person's Macs and lets them add a new phone. End-to-end encry
 | Plan review | On the Mac | **Yes**: Approve plan, Keep planning (with an optional reason) | The same two answers the Mac card gives. No answer that changes the permission mode |
 | New task | No | **Yes**: project (or chat) and first message | Both apps open new local tasks from the phone. Harness, model, account and worktree are the current values in the Mac home composer |
 | Command output, file changes (diff) | No | **Yes**: loaded when the tool line is tapped (`itemDetail`) | Codex on the phone shows diffs. Fetched only on tap instead of always riding the stream, to keep things fast |
-| Suggested tasks | No | **Yes**: Start, Do it here, Dismiss | The same three actions as the Mac chip |
+| Suggested tasks | No | **Yes**: Start, Do it here, Dismiss, and Options (2026-11-10) | The same actions as the Mac chip; Options offers the Mac's harness, project, model, effort, permission mode and worktree choices for what Start starts with (protocol §15.9) |
 | Child tasks | Parent link | Shown collapsed under the parent and opened directly | Users run several child tasks at once |
 | Pin and archive | No | **Yes** | Keeping the list tidy |
 | Several Macs, accounts | No | **Yes** | Sections 3 and 3.1 |

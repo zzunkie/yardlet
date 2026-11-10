@@ -309,6 +309,8 @@ public struct RemoteSnapshot: Equatable, Sendable {
     public var composerExtensions: Bool = false
     public var hostSettings: Bool = false
     public var hostAccounts: Bool = false
+    /// The bridge answers `suggestionOptions` and starts a suggestion with the client's choices (§15.9).
+    public var suggestionOptions: Bool = false
 
     public init(projects: [RemoteProject] = [], tasks: [RemoteTask] = [], newestRequestIDs: [String: String] = [:],
                 requestSummaries: [String: String] = [:], newTask: RemoteNewTask? = nil,
@@ -1011,6 +1013,28 @@ public enum RemoteSuggestionAction: String, Codable, Sendable, CaseIterable {
     case dismiss
 }
 
+/// What a suggested task starts with when the client chose it in the chip's Options (§15.9): the choices `createTask`
+/// takes, over what the chip's Start starts with now. Absent ones stay the chip's.
+public struct RemoteSuggestionStart: Equatable, Sendable {
+    public var harness: String?
+    /// Setting IDs and values from `suggestionOptions`.
+    public var settings: [String: String]
+    public var projectID: String?
+    public var worktree: Bool?
+    public var accountID: String?
+    public var confirmed: Bool
+
+    public init(harness: String? = nil, settings: [String: String] = [:], projectID: String? = nil, worktree: Bool? = nil,
+                accountID: String? = nil, confirmed: Bool = false) {
+        self.harness = harness
+        self.settings = settings
+        self.projectID = projectID
+        self.worktree = worktree
+        self.accountID = accountID
+        self.confirmed = confirmed
+    }
+}
+
 /// A request a client sends, after decoding.
 public struct RemoteNextQuestion: Codable, Equatable, Sendable {
     public var title: String
@@ -1061,7 +1085,11 @@ public enum RemoteRequest: Equatable, Sendable {
     case unregisterPush
     case forgetDevice
     case itemDetail(taskID: String, itemID: String)
-    case actOnSuggestion(taskID: String, suggestionID: String, action: RemoteSuggestionAction)
+    /// `start` names the choices a Start starts with (§15.9); nil starts with the chip's own.
+    case actOnSuggestion(taskID: String, suggestionID: String, action: RemoteSuggestionAction, start: RemoteSuggestionStart? = nil)
+    /// What a suggested task's Start starts with after the client's picks, to a Mac that announces it (§15.9).
+    case suggestionOptions(taskID: String, suggestionID: String, harness: String? = nil, settings: [String: String] = [:],
+                           projectID: String? = nil, accountID: String? = nil, composer: Bool = false)
     case setPinned(taskID: String, pinned: Bool)
     case projectAction(projectID: String, pinned: Bool?, archive: Bool)
     case openOriginalConversation(taskID: String)
@@ -1168,6 +1196,7 @@ public enum RemoteRequest: Equatable, Sendable {
         case .forgetDevice: "forgetDevice"
         case .itemDetail: "itemDetail"
         case .actOnSuggestion: "actOnSuggestion"
+        case .suggestionOptions: "suggestionOptions"
         case .setPinned: "setPinned"
         case let .projectAction(_, pinned, _): pinned == nil ? "archiveProjectChats" : "setProjectPinned"
         case .openOriginalConversation: "openOriginalConversation"
@@ -1239,8 +1268,8 @@ public enum RemoteRequest: Equatable, Sendable {
         case .snapshot, .subscribeTask, .loadOlder, .unsubscribeTask, .ping, .sendMessage, .answerApproval,
              .stopTurn, .markRead, .answerQuestion, .reviewPlan, .createTask, .newTaskOptions, .limitAccounts,
              .continueWithAccount, .setAutoContinue, .actOnQueued, .answerHandoff, .chooseAnswer, .uploadFile, .registerPush,
-             .unregisterPush, .forgetDevice, .itemDetail, .actOnSuggestion, .setPinned, .archiveTask, .answerLink,
-             .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled, .taskOutputs, .readFile, .presence,
+             .unregisterPush, .forgetDevice, .itemDetail, .actOnSuggestion, .suggestionOptions, .setPinned, .archiveTask,
+             .answerLink, .revealLink, .scheduledTasks, .runScheduledTask, .setScheduledTaskEnabled, .taskOutputs, .readFile, .presence,
              .taskSettings, .setTaskSetting, .composerCommands, .runComposerCommand, .editMessage, .forkTask, .watchTab,
              .unwatchTab, .tabFrameAck, .tabInput: nil
         }
@@ -1259,7 +1288,8 @@ public enum RemoteRequest: Equatable, Sendable {
         case .scheduledTaskOptions, .saveScheduledTask, .deleteScheduledTasks: nil
         case let .subscribeTask(id, _), let .loadOlder(id, _), let .unsubscribeTask(id), let .sendMessage(id, _, _, _, _),
              let .answerApproval(id, _, _, _), let .stopTurn(id), let .markRead(id), let .answerQuestion(id, _, _),
-             let .reviewPlan(id, _, _, _), let .itemDetail(id, _), let .actOnSuggestion(id, _, _), let .setPinned(id, _),
+             let .reviewPlan(id, _, _, _), let .itemDetail(id, _), let .actOnSuggestion(id, _, _, _),
+             let .suggestionOptions(id, _, _, _, _, _, _), let .setPinned(id, _),
              let .archiveTask(id), let .limitAccounts(id), let .continueWithAccount(id, _), let .setAutoContinue(id, _),
              let .actOnQueued(id, _, _), let .answerHandoff(id, _, _), let .chooseAnswer(id, _, _, _, _),
              let .readReview(id, _), let .workspaceFiles(id), let .taskOutputs(id), let .readFile(id, _, _), let .taskSettings(id, _), let .setTaskSetting(id, _, _, _),
@@ -1298,6 +1328,7 @@ public enum RemoteRequest: Equatable, Sendable {
         switch self {
         case let .projectAction(id, _, _): id
         case let .createTask(start): start.projectID
+        case let .actOnSuggestion(_, _, _, start): start?.projectID
         default: nil
         }
     }
@@ -1638,7 +1669,21 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
             guard let action = wire.action.flatMap(RemoteSuggestionAction.init(rawValue:)) else {
                 return fail(.badRequest, "action must be start, here or dismiss")
             }
-            request = .actOnSuggestion(taskID: taskID, suggestionID: suggestionID, action: action)
+            // A Start with the chip's Options carries `createTask`'s choices (§15.9); the others carry none.
+            let chosen = wire.harness != nil || wire.settings != nil || wire.projectId != nil || wire.worktree != nil
+                || wire.accountId != nil
+            request = .actOnSuggestion(taskID: taskID, suggestionID: suggestionID, action: action, start: action == .start && chosen
+                ? RemoteSuggestionStart(harness: required(wire.harness), settings: wire.settings ?? [:],
+                                        projectID: required(wire.projectId), worktree: wire.worktree,
+                                        accountID: required(wire.accountId), confirmed: wire.confirmed == true)
+                : nil)
+        case "suggestionOptions":
+            guard let taskID = required(wire.taskId), let suggestionID = required(wire.suggestionId) else {
+                return fail(.badRequest, "Missing taskId or suggestionId")
+            }
+            request = .suggestionOptions(taskID: taskID, suggestionID: suggestionID, harness: required(wire.harness),
+                                         settings: wire.settings ?? [:], projectID: required(wire.projectId),
+                                         accountID: required(wire.accountId), composer: wire.composer == true)
         case "setPinned":
             guard let taskID = required(wire.taskId), let pinned = wire.pinned else {
                 return fail(.badRequest, "Missing taskId or pinned")
@@ -1997,10 +2042,26 @@ public struct RemoteRequestEnvelope: Equatable, Sendable {
         case let .itemDetail(taskID, itemID):
             wire.taskId = taskID
             wire.itemId = itemID
-        case let .actOnSuggestion(taskID, suggestionID, action):
+        case let .actOnSuggestion(taskID, suggestionID, action, start):
             wire.taskId = taskID
             wire.suggestionId = suggestionID
             wire.action = action.rawValue
+            if let start {
+                wire.harness = start.harness
+                wire.settings = start.settings.isEmpty ? nil : start.settings
+                wire.projectId = start.projectID
+                wire.worktree = start.worktree
+                wire.accountId = start.accountID
+                wire.confirmed = start.confirmed ? true : nil
+            }
+        case let .suggestionOptions(taskID, suggestionID, harness, settings, projectID, accountID, composer):
+            wire.taskId = taskID
+            wire.suggestionId = suggestionID
+            wire.harness = harness
+            wire.settings = settings.isEmpty ? nil : settings
+            wire.projectId = projectID
+            wire.accountId = accountID
+            wire.composer = composer ? true : nil
         case let .setPinned(taskID, pinned):
             wire.taskId = taskID
             wire.pinned = pinned
@@ -2211,6 +2272,10 @@ public struct RemoteResponse: Codable, Equatable, Sendable {
     public var accountLine: String?
     public var settings: [RemoteSetting]?
     public var worktree: Bool?
+    /// `suggestionOptions` (§15.9): where the task starts, and the snapshot's flag.
+    public var projectId: String?
+    public var placeName: String?
+    public var suggestionOptions: Bool?
     /// `limitAccounts` (§15.17).
     public var accounts: [RemoteAccount]?
     /// `uploadFile` (§15.20).
@@ -2415,6 +2480,10 @@ public struct RemoteNewTaskOptions: Equatable, Sendable {
     public var accounts: [RemoteAccount]?
     public var accountLine: String?
     public var commands: [RemoteComposerCommand]?
+    /// A suggested task's place (`suggestionOptions`, §15.9): the listed project it starts in, Chats' ID for a chat,
+    /// and the name the Mac's Options shows for it.
+    public var projectID: String?
+    public var placeName: String?
 
     public init(harness: RemoteHarnessOption, harnesses: [RemoteHarnessOption], settings: [RemoteSetting] = [],
                 worktree: Bool? = nil) {

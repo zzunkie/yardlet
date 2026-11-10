@@ -97,6 +97,8 @@ final class RemoteHostModel: Identifiable {
     private(set) var taskActions = false
     private(set) var composerExtensions = false
     private(set) var taskControls = false
+    /// A suggested task's Options read and start with the host's choices (§15.9).
+    private(set) var offersSuggestionOptions = false
     /// Each open task's composer settings as the host last answered them (§15.23).
     var taskSettings: [String: [RemoteSetting]] = [:]
     var composerStates: [String: RemoteComposerState] = [:]
@@ -342,6 +344,7 @@ final class RemoteHostModel: Identifiable {
             taskActions = response.taskActions == true
             composerExtensions = response.composerExtensions == true
             taskControls = response.taskControls == true
+            offersSuggestionOptions = response.suggestionOptions == true
             offersHostSettings = response.hostSettings == true
             if !offersHostSettings {
                 hostSettings = nil

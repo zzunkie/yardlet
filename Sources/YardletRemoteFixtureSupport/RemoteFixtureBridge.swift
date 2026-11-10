@@ -224,6 +224,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
                               scheduledTasks: true, taskFiles: true, taskControls: true, browserTabs: true)
         snapshot.scheduleEditing = true
         snapshot.hostAccounts = true
+        snapshot.suggestionOptions = true
         return snapshot
     }
 
@@ -325,10 +326,31 @@ public actor RemoteFixtureBridge: RemoteBridge {
                     reply: decision == .approve ? "Plan approved. Starting with the read path."
                         : "I'll rework the plan\(reason.map { ": \($0)" } ?? ".")")
             return nil
-        case let .actOnSuggestion(taskID, suggestionID, action):
+        case let .actOnSuggestion(taskID, suggestionID, action, start):
             guard let entry = tasks[taskID] else { return RemoteError(.notFound) }
             guard var item = entry.turns.flatMap(\.items).first(where: { $0.suggestionId == suggestionID }),
                   item.options?.contains(action.rawValue) == true else { return RemoteError(.notAllowed) }
+            // The chip's Options (§15.9), checked as `createTask` checks the same choices, before the chip changes.
+            var harness = Harness(id: entry.task.harness) ?? .claude
+            var project = entry.task.projectId
+            var model: String?
+            if action == .start, let start {
+                if let named = start.harness {
+                    guard let chosen = Harness(id: named) else { return RemoteError(.notAllowed, reason: .harness) }
+                    harness = chosen
+                }
+                if let projectID = start.projectID {
+                    guard projects.contains(where: { $0.id == projectID }) else { return RemoteError(.notFound) }
+                    project = projectID
+                }
+                if let error = Self.refusal(start.settings, in: Self.taskSettings(for: harness), confirmed: start.confirmed) {
+                    return error
+                }
+                guard start.worktree != true || project != "chats" else { return RemoteError(.notAllowed, reason: .worktree) }
+                model = start.settings["model"].flatMap { value in
+                    Self.settings(for: harness).first { $0.id == "model" }?.choices.first { $0.value == value }?.name
+                }
+            }
             item.options = nil
             switch action {
             case .dismiss:
@@ -339,8 +361,9 @@ public actor RemoteFixtureBridge: RemoteBridge {
                 replaceItem(item, in: taskID)
                 send("Do this task here: “\(item.title ?? "")”", to: taskID)
             case .start:
-                let started = startTask(title: item.title ?? "Suggested task", text: item.detail ?? "", project: entry.task.projectId,
-                                        parent: taskID)
+                let started = startTask(title: item.title ?? "Suggested task",
+                                        text: (item.detail ?? "") + (model.map { " (on \($0))" } ?? ""), project: project,
+                                        parent: taskID, harness: harness)
                 item.suggestionState = "started"
                 item.startedTaskId = started
                 replaceItem(item, in: taskID)
@@ -838,14 +861,7 @@ public actor RemoteFixtureBridge: RemoteBridge {
             return .failure(RemoteError(.notAllowed, reason: .harness))
         }
         let offered = Self.settings(for: harness)
-        for (id, value) in start.settings {
-            guard let setting = offered.first(where: { $0.id == id }) else {
-                return .failure(RemoteError(.notAllowed, "No such setting", reason: .setting))
-            }
-            guard setting.choices.contains(where: { $0.value == value }) else {
-                return .failure(RemoteError(.notAllowed, "\(id) has no choice \(value)", reason: .setting, setting: id))
-            }
-        }
+        if let error = Self.refusal(start.settings, in: offered, confirmed: false) { return .failure(error) }
         guard start.images.isEmpty || harness.acceptsImages else { return .failure(RemoteError(.notAllowed, reason: .attachments)) }
         guard start.attachedFiles.isEmpty || harness.acceptsImages else {
             return .failure(RemoteError(.notAllowed, reason: .attachments))
@@ -861,6 +877,49 @@ public actor RemoteFixtureBridge: RemoteBridge {
             + (model.map { " (on \($0)\(start.worktree == true ? ", in a new worktree" : ""))" } ?? "")
         return .success(startTask(title: title.isEmpty ? "New task" : title, text: words, project: start.projectID,
                                   parent: nil, harness: harness))
+    }
+
+    /// Why the menus `offered` do not take `settings`, or nil when they do (§15.16): a choice that asks only `confirmed`.
+    private static func refusal(_ settings: [String: String], in offered: [RemoteSetting], confirmed: Bool) -> RemoteError? {
+        for (id, value) in settings {
+            guard let setting = offered.first(where: { $0.id == id }) else {
+                return RemoteError(.notAllowed, "No such setting", reason: .setting)
+            }
+            guard let choice = setting.choices.first(where: { $0.value == value }) else {
+                return RemoteError(.notAllowed, "\(id) has no choice \(value)", reason: .setting, setting: id)
+            }
+            guard confirmed || choice.confirm == nil else {
+                return RemoteError(.notAllowed, "\(id) \(value) is confirmed first", reason: .confirmation, setting: id)
+            }
+        }
+        return nil
+    }
+
+    /// A chip's Options (§15.9): the task's own harness and project, after the client's picks.
+    public func suggestionOptions(taskID: String, suggestionID: String, harness: String?, settings: [String: String],
+                                  projectID: String?, accountID: String?, composer: Bool) async -> Result<RemoteNewTaskOptions, RemoteError> {
+        guard let entry = tasks[taskID] else { return .failure(RemoteError(.notFound)) }
+        guard entry.turns.flatMap(\.items).first(where: { $0.suggestionId == suggestionID })?.options?
+            .contains(RemoteSuggestionAction.start.rawValue) == true else { return .failure(RemoteError(.notAllowed)) }
+        if let projectID, !projects.contains(where: { $0.id == projectID }) { return .failure(RemoteError(.notFound)) }
+        let own = Harness(id: entry.task.harness) ?? .claude
+        guard let chosen = harness.map(Harness.init(id:)) ?? own else { return .failure(RemoteError(.notAllowed, reason: .harness)) }
+        // The desktop's extended catalog has the permission too, and the choices that ask (§15.33).
+        let offered = composer ? Self.taskSettings(for: chosen) : Self.settings(for: chosen)
+        if let error = Self.refusal(settings, in: offered, confirmed: composer) { return .failure(error) }
+        // As the Mac reads a model list it has not read yet.
+        await pause(0.4)
+        let place = projectID ?? entry.task.projectId
+        var options = RemoteNewTaskOptions(
+            harness: chosen.option, harnesses: Harness.allCases.map(\.option),
+            settings: offered.map { setting in
+                var setting = setting
+                setting.value = settings[setting.id] ?? setting.value
+                return setting
+            }, worktree: place == "chats" ? nil : false)
+        options.projectID = place
+        options.placeName = place == "chats" ? nil : projects.first { $0.id == place }?.name
+        return .success(options)
     }
 
     public func newTaskOptions(projectID: String?, harness: String?, settings: [String: String] = [:]) async -> Result<RemoteNewTaskOptions, RemoteError> {

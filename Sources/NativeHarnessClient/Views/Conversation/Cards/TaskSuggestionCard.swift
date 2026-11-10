@@ -13,9 +13,9 @@ struct TaskSuggestionActions {
     var doHere: @MainActor (ConversationTaskSuggestion) -> Void = { _ in }
     /// Options: what Start starts the suggestion with and where, to change in a popover
     /// (`TaskSuggestionOptionsPopover`); nil where it cannot start now.
-    var optionsContext: @MainActor (ConversationTaskSuggestion) -> TaskSuggestionOptionsContext? = { _ in nil }
-    /// Why Options is not offered where the chip is shown, as its help: another Mac's task starts a
-    /// suggestion with that Mac's choices. Nil where it is.
+    var optionsContext: @MainActor (ConversationTaskSuggestion) -> (any TaskSuggestionOptionsSource)? = { _ in nil }
+    /// Why Options is not offered where the chip is shown, as its help: a Mac too old to take
+    /// another device's choices starts a suggestion with its own. Nil where it is.
     var optionsUnavailable: String? = nil
     /// Where Start starts the suggestion, as the row's summary leads with it.
     var startPlace: @MainActor (ConversationTaskSuggestion) -> TaskSuggestionStartPlace = {
@@ -150,7 +150,7 @@ private struct TaskSuggestionRow: View {
 
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @State private var showsPrompt = false
-    @State private var options: TaskSuggestionOptionsContext?
+    @State private var options: (any TaskSuggestionOptionsSource)?
 
     private var title: String { suggestion.title ?? L10n.string("Untitled task") }
 

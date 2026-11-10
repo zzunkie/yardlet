@@ -1464,19 +1464,27 @@ struct RemoteTaskView: View {
     }
 
     /// The chips' Start, Do it here and ✕, sent to the host (§15.9); what became of each is the host's.
-    /// Options stays the host's: a suggestion starts with that Mac's choices.
+    /// Options draws the local popover from the host's choices where the host reads them for another device;
+    /// an older host starts a suggestion with its own.
     private var suggestionActions: TaskSuggestionActions {
         let taskID = conversation.taskID
         let model = model, conversation = conversation
         func act(_ id: String, _ action: RemoteSuggestionAction) {
             model.send(.actOnSuggestion(taskID: taskID, suggestionID: id, action: action))
         }
+        let offersOptions = model.offersSuggestionOptions
         return TaskSuggestionActions(
             resolution: { conversation.suggestions[$0].flatMap(RemoteSuggestionState.resolution) },
             progress: { id in conversation.suggestions[id].flatMap { RemoteSuggestionState.progress($0, host: model.name) } },
             start: { act($0.id, .start) },
             doHere: { act($0.id, .here) },
-            optionsUnavailable: L10n.format("It starts with the choices set on %@.", model.name),
+            optionsContext: { suggestion in
+                guard offersOptions else { return nil }
+                let options = RemoteSuggestionOptions(host: model, taskID: taskID, suggestion: suggestion)
+                Task { await options.read() }
+                return options
+            },
+            optionsUnavailable: offersOptions ? nil : L10n.format("It starts with the choices set on %@.", model.name),
             dismiss: { act($0, .dismiss) },
             openTask: { model.select(.task($0.uuidString)) },
             canOpenTask: { model.task($0.uuidString) != nil })

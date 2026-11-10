@@ -581,6 +581,8 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
 
 Every revision of protocol 2 only adds optional fields or states a rule, except where it says otherwise.
 
+- 2026-11-10: a suggested task's Options from another device: `suggestionOptions`, and Start with the client's
+  choices, advertised by the snapshot's `suggestionOptions` (§15.9).
 - 2026-11-08: a connection waiting on a link request is held to 65,536 bytes a message (§7, §13.2). At most 40 finished
   files wait per device, and a message being sent keeps its files, which another message then finds `busy` (§15.20).
 - 2026-11-05: a second address of the same relay, `a` in the pairing link (§12) and `alternate` in message 2's `relay`
@@ -1085,6 +1087,45 @@ phone may take: `start`, `here` (do it in this task), `dismiss`.
 
 As the chip's buttons on the Mac. A command. Errors: `notFound`, `notAllowed` (the action is
 not offered now).
+
+The chip's Options, for a Mac whose snapshot says `suggestionOptions: true`; a client keeps the three buttons
+alone with one that does not. `suggestionOptions` reads what the chip's Start starts with now: the harness, model,
+effort and permission of the task it nests under (another harness at that task's permission level, in its words),
+that task's account, and the place the Mac's Options shows.
+
+```json
+{"id": "40", "type": "suggestionOptions", "taskId": "4C1F…", "suggestionId": "task_1a2b3c4d", "harness": "codex"}
+```
+
+```json
+{"re": "40", "ok": true, "harness": "codex", "harnessName": "Codex",
+ "harnesses": [{"harness": "claude-code", "harnessName": "Claude Code"}, {"harness": "codex", "harnessName": "Codex"}],
+ "settings": [{"id": "model", "name": "Model", "value": "gpt-6", "choices": [{"value": "gpt-6", "name": "GPT-6"}]}],
+ "worktree": true, "projectId": "6A1E…", "placeName": "website"}
+```
+
+- It takes `newTaskOptions`'s `harness`, `settings`, `accountId` and `composer` (§15.16, §15.33), and `projectId`, as
+  picks over the chip's own: another harness, another listed project or Chats, an account from the answer's list, then
+  the settings in the order the menus list them. The answer is `newTaskOptions`'s, with the same rule for choices the
+  Mac asks to confirm: without `composer` they are left out, and a permission only the chip holds shows as the
+  harness's default, the one its Start would start in without confirmation. `projectId` is the listed project it
+  starts in, Chats' ID for a chat, and absent for a folder the agent named that no listed project holds; `placeName`
+  is the name the Mac's Options shows for a folder. `worktree` is present where the folder is in a Git repository. A
+  read changes nothing on the Mac. Errors: `notFound`, `notAllowed` (already started, sent or dismissed, or a pick
+  the menus do not offer, with `reason` as `createTask`'s), `unavailable` (the place the chip starts in is gone).
+- `actOnSuggestion` with `action` `start` takes `createTask`'s `harness`, `settings`, `worktree`, `accountId` and
+  `confirmed`, and `projectId`. Given any, the Mac keeps them as the chip's choice, as its Options does, and Start
+  starts with it: the chip reads `starting`, then `started` or `failed`, as for any Start. They pass `createTask`'s
+  checks (§15.16): without `confirmed: true` a choice the Mac asks to confirm never starts, one the request names is
+  refused (`confirmation`), and one only the chip holds gives way to the harness's default, as the answer above
+  showed. A client sends `confirmed: true` only after the person accepted every choice shown that asks, in the Mac's
+  words. Errors as `suggestionOptions`, with `reason` `worktree` for a folder outside Git. An older Mac ignores the
+  choices and starts with its own, which is why a client waits for the snapshot's flag.
+
+```json
+{"id": "41", "type": "actOnSuggestion", "taskId": "4C1F…", "suggestionId": "task_1a2b3c4d", "action": "start",
+ "harness": "codex", "settings": {"model": "gpt-6", "reasoningEffort": "high"}, "worktree": false}
+```
 
 ### 15.10 Pinning and archiving
 
@@ -2459,7 +2500,8 @@ device's push key, associated data the UTF-8 bytes of `yardlet-push/1`, over the
   phones are told. `--approve-links` approves a link request (§12.1) three seconds after it arrives.
   `--signed-out HARNESS` (`claude-code`, `codex`, `opencode`; repeatable) refuses `createTask` on that harness with
   `reason` `signIn` (§15.16), as a Mac whose login for it is signed out.
-- The fixture's v2 tasks add a plan review, an answerable question, a suggested task, lines with details,
+- The fixture's v2 tasks add a plan review, an answerable question, a suggested task (with `suggestionOptions`: its
+  task's harness and project, and a Start with choices names the model in its first message), lines with details,
   and taking `createTask`, `setPinned` and `archiveTask`. It does not announce `fullConversation` (§15.24) and
   answers every subscription in §6's shape.
 - Its scheduled tasks (§15.21): "Summarize new crash reports" runs every morning and its last run started "Summarize
@@ -2529,7 +2571,9 @@ chooses Connect), and each paired host opens in a window of its own. The host li
   own form card and sent with the host's Submit and its `values`, questions and plan reviews, the queue's actions,
   the plan limit's actions, Stop, Pin and Archive, new tasks with the host's choices (§15.16), and pictures and
   files (§15.14, §15.20). A suggested task draws as Yardlet's own chip, whose Start, Do it here and ✕ are
-  `actOnSuggestion` (§15.9); what it starts with stays the host's. When the snapshot says so, the sidebar lists the
+  `actOnSuggestion` (§15.9); from a host advertising `suggestionOptions`, its Options opens the local popover with the
+  host's choices (`composer`), asks before Start about a choice the host confirms first, and starts with what it
+  shows. An older host's chip starts with the host's own choices and keeps Options dimmed. When the snapshot says so, the sidebar lists the
   host's scheduled tasks with Run now, Pause and Resume (§15.21), and with `scheduleEditing` the local list,
   editor and full detail, New, Edit, confirmed Delete and Delete All, and Claude Code session schedules (§15.35), and a task's session rail shows its Outputs card
   (§15.22). An output, or a file a conversation's link names, is read with `readFile` into a folder of its own in

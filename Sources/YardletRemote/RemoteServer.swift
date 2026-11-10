@@ -46,7 +46,8 @@ public enum RemoteCommand: Equatable, Sendable {
     case markRead(taskID: String)
     case answerQuestion(taskID: String, requestID: String, answers: [RemoteQuestionAnswer])
     case reviewPlan(taskID: String, requestID: String, decision: RemotePlanDecision, reason: String?)
-    case actOnSuggestion(taskID: String, suggestionID: String, action: RemoteSuggestionAction)
+    /// `start` names the choices a Start starts with (§15.9); nil starts with the chip's own.
+    case actOnSuggestion(taskID: String, suggestionID: String, action: RemoteSuggestionAction, start: RemoteSuggestionStart? = nil)
     case setPinned(taskID: String, pinned: Bool)
     case projectAction(projectID: String, pinned: Bool?, archive: Bool)
     case taskAction(taskID: String, action: RemoteTaskAction)
@@ -140,6 +141,10 @@ public protocol RemoteBridge: AnyObject, Sendable {
     /// What a task started in the project may run on (§15.16).
     func newTaskOptions(projectID: String?, harness: String?, settings: [String: String]) async -> Result<RemoteNewTaskOptions, RemoteError>
     func newTaskComposerOptions(projectID: String?, harness: String?, settings: [String: String], accountID: String?, readCommands: Bool) async -> Result<RemoteNewTaskOptions, RemoteError>
+    /// What a suggested task's Start starts with after the client's picks (§15.9). A bridge that answers it, and
+    /// starts a suggestion with the client's choices, says so in its snapshot (`suggestionOptions`).
+    func suggestionOptions(taskID: String, suggestionID: String, harness: String?, settings: [String: String],
+                           projectID: String?, accountID: String?, composer: Bool) async -> Result<RemoteNewTaskOptions, RemoteError>
     /// The accounts a task a plan limit stopped may continue under (§15.17).
     func usageReset(taskID: String, token: String?, confirmed: Bool) async -> Result<RemoteUsageReset, RemoteError>
     func limitAccounts(taskID: String) async -> Result<[RemoteAccount], RemoteError>
@@ -281,6 +286,11 @@ extension RemoteBridge {
     }
 
     public func limitAccounts(taskID: String) async -> Result<[RemoteAccount], RemoteError> {
+        .failure(RemoteError(.unavailable))
+    }
+
+    public func suggestionOptions(taskID: String, suggestionID: String, harness: String?, settings: [String: String],
+                                  projectID: String?, accountID: String?, composer: Bool) async -> Result<RemoteNewTaskOptions, RemoteError> {
         .failure(RemoteError(.unavailable))
     }
 
@@ -1384,9 +1394,26 @@ public actor RemoteServer {
             case let .failure(error):
                 respond(.failure(envelope.id, error), to: id)
             }
-        case let .actOnSuggestion(taskID, suggestionID, action):
+        case let .actOnSuggestion(taskID, suggestionID, action, start):
             await command(envelope.id, request: request, on: id) {
-                await self.bridge.perform(.actOnSuggestion(taskID: taskID, suggestionID: suggestionID, action: action))
+                await self.bridge.perform(.actOnSuggestion(taskID: taskID, suggestionID: suggestionID, action: action, start: start))
+            }
+        case let .suggestionOptions(taskID, suggestionID, harness, settings, projectID, accountID, composer):
+            switch await bridge.suggestionOptions(taskID: taskID, suggestionID: suggestionID, harness: harness, settings: settings,
+                                                  projectID: projectID, accountID: accountID, composer: composer) {
+            case let .success(options):
+                var response = RemoteResponse(re: envelope.id)
+                response.harness = options.harness.harness
+                response.harnessName = options.harness.harnessName
+                response.harnesses = options.harnesses
+                response.settings = options.settings
+                response.worktree = options.worktree
+                response.accounts = options.accounts
+                response.projectId = options.projectID
+                response.placeName = options.placeName
+                respond(response, to: id)
+            case let .failure(error):
+                respond(.failure(envelope.id, error), to: id)
             }
         case let .setPinned(taskID, pinned):
             await command(envelope.id, request: request, on: id) { await self.bridge.perform(.setPinned(taskID: taskID, pinned: pinned)) }
@@ -1965,6 +1992,7 @@ public actor RemoteServer {
             response.tabLists = published?.tabLists == true ? true : nil
             response.hostSettings = published?.hostSettings == true ? true : nil
             response.hostAccounts = published?.hostAccounts == true ? true : nil
+            response.suggestionOptions = published?.suggestionOptions == true ? true : nil
             response.serverTime = RemoteJSON.milliseconds(now())
             respond(response, to: id)
             connections[id]?.receivesTaskEvents = true
