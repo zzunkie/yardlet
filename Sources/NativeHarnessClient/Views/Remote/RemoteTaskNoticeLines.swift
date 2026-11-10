@@ -25,7 +25,7 @@ struct RemoteTaskNoticeLines: View {
         if ProviderNoticeLines.showsAnything(providerNotices) { ProviderNoticeLines(notices: providerNotices) }
         if let account = notices.accountName {
             TaskAccountMoveLine(notice: TaskAccountMoveNotice(accountName: account,
-                isInTurn: notices.accountMoveInTurn != false, cancel: cancelAccountMove))
+                waitsFor: notices.accountMoveInTurn != false ? .turn : .backgroundWork, cancel: cancelAccountMove))
         }
     }
 

@@ -46,6 +46,9 @@ enum TaskMessageDelivery: Equatable {
     /// A usage limit stopped the task, which continues once it resets at this time; the message goes
     /// after that continue (`TaskContinuationCoordinator.usageLimitHold`).
     case afterReset(Date)
+    /// The task waits to move to another account; the message goes after the move, or once the move
+    /// is cancelled or given up (`TaskContinuationCoordinator.holdUntilAccountMoves`).
+    case afterAccountMove
     case undelivered(String)
 }
 
@@ -407,6 +410,10 @@ extension AppModel: SessionToolHandling {
             return .text("Queued for task \(target.id.uuidString)\(title): a usage limit stopped it, and it continues "
                 + "when the limit resets at \(resetsAt.ISO8601Format()); this message goes right after. wait_tasks or "
                 + "read_task show what it did." + quoted.lines)
+        case .afterAccountMove:
+            return .text("Queued for task \(target.id.uuidString)\(title): it waits to move to another account, and "
+                + "this message goes once it has moved, or once the move is cancelled or given up. wait_tasks or "
+                + "read_task show what it did." + quoted.lines)
         case let .undelivered(reason):
             return .error("Not delivered to task \(target.id.uuidString)\(title): \(reason)")
         }
@@ -517,6 +524,9 @@ extension AppModel: SessionToolHandling {
             return .afterReset(resetsAt)
         }
         let isRunning = target.status == .running || target.status == .waitingForApproval
+        if !isRunning, continuations.holdUntilAccountMoves(HarnessUserInput(text: text), for: target.id) {
+            return .afterAccountMove
+        }
         let previousError = errorBySessionID[target.id]
         let steers = FollowUpPolicy(harness: target.harness)?.steers == true
         if target.harness == .codex {

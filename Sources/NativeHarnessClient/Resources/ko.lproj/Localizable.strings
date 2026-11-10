@@ -3686,6 +3686,12 @@
 "Mail handoff message %@ %@ %@" = "계정: %1$@ · 메시지 %2$@ (%3$@ 도구로 읽기)";
 "Moving to %@ after this turn" = "이 턴이 끝나면 %@ 계정으로 옮깁니다";
 "Moving to %@ when its background work ends" = "백그라운드 작업이 끝나면 %@ 계정으로 옮깁니다";
+"Moving to %@ once its request is answered" = "요청에 답하면 %@ 계정으로 옮깁니다";
+"Moving to %@ once the message on its way is delivered" = "보내는 중인 메시지가 전달되면 %@ 계정으로 옮깁니다";
+"Moving to %@ when its shell command ends" = "셸 명령이 끝나면 %@ 계정으로 옮깁니다";
+"Moving to %@ when the agents it runs finish" = "이 작업이 실행한 에이전트가 끝나면 %@ 계정으로 옮깁니다";
+"Moving to %@ once you finish editing the message" = "메시지 수정을 마치면 %@ 계정으로 옮깁니다";
+"Moving to %@ when the change under way ends" = "진행 중인 변경이 끝나면 %@ 계정으로 옮깁니다";
 "Cancel account change" = "계정 변경 취소";
 "%@ no longer shares this task's conversation history, so the task stays on its account." = "%@ 계정이 더 이상 이 작업의 대화 기록을 공유하지 않아서 작업을 지금 계정에 그대로 둡니다.";
 "Naver Mail" = "네이버 메일";

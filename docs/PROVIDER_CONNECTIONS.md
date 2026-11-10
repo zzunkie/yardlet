@@ -38,9 +38,13 @@ The latest screen flow and design decisions follow [ACCOUNT_SELECTION_UX.md](ACC
   line above the composer says "Moving to <account> after this turn" with **Cancel**, and Return queues what the person
   sends (⌘Return still delivers it at Claude's next step). Once the turn has ended (finished, stopped or failed), the
   switch waits for what moving an account's tasks waits for ("Removing an account" below), except that the messages
-  and shell output Yardlet holds go after the switch instead, on the new account. While background work keeps it
-  waiting after the turn, the line says "Moving to <account> when its background work ends" and a message sent then
-  waits too. Background work lives in the task's CLI: when that CLI closes first (the person switched the idle task
+  and shell output Yardlet holds go after the switch instead, on the new account. While something keeps it waiting
+  after the turn, the line names it (`AccountMoveBlocker`): "Moving to <account> when its background work ends", or
+  when its shell command ends, the agents it runs finish, the message on its way is delivered, its request is
+  answered, the message being edited is done, or another change under way ends. A message the person sends then waits
+  too, as do one from another task and a schedule's run (`TaskContinuationCoordinator.holdUntilAccountMoves`). A move
+  Yardlet chose itself ("Moving tasks to an account with room" below) is different: it never holds up the person.
+  Background work lives in the task's CLI: when that CLI closes first (the person switched the idle task
   at once, say), what ran in it shows as stopped (`AppModel.closeIdleRuntime`), so the waiting switch goes ahead and the
   messages follow (`ClaudeUsageLimitAppModelTests.testWhatWaitsForAMoveGoesOnceTheRuntimeRunningItsBackgroundWorkCloses`).
   A switch refused then (the target
@@ -362,10 +366,21 @@ cache has expired, the next request does that anyway, wherever the task is. So (
 
 A task waiting for its reset that moves under rule 1 continues on the new account at once. A move never cuts into a
 turn: it goes through the path of an account chosen during one (`TaskContinuationCoordinator.moveAutomatically`), so a task with
-background work or a message on its way moves once that is over, with the line "Moving to <account> when its
-background work ends" and Cancel above the composer. The card a move continues from is the one a stopped task
-continues from (`UsageLimitContinuation.card`). A turn that starts meanwhile cancels the move, since it writes
-the cache again on the current account, and a move the person cancels is not made again until the task works again.
+background work or a message on its way moves once that is over, with a line above the composer that says what the
+move waits for ("Moving to <account> when its background work ends") and Cancel. The card a move continues from is
+the one a stopped task continues from (`UsageLimitContinuation.card`). A turn that starts meanwhile cancels the move,
+since it writes the cache again on the current account. Such a move never holds up the person, and never waits
+forever (`AccountMoveHold`):
+
+- A message the person sends meanwhile goes at once, on the current account, and calls the move off
+  (`AppModel.send`). What another task, a schedule or auto-fix sent before waits in the queue and follows that turn,
+  as what is queued during a limit's wait does ("Continuing after a usage limit" above).
+- A move still waiting ten minutes after Yardlet chose it (`AccountMoveHold.yardletWaitLimit`) is given up, not
+  forced: forcing it would end what still runs in the CLI, such as a dev server. The task stays where it is, and
+  what was queued behind the move goes there
+  (`ClaudeUsageLimitAppModelTests.testAMoveYardletChoseGivesWayToThePersonAndIsGivenUpAtItsDeadline`).
+
+A move the person cancels, or one given up at its deadline, is not made again until the task works again.
 A task that moved keeps why, in its hover card ("Switched from <account>: nearly out of its limit").
 
 Nothing is read for this beyond what Yardlet holds: the accounts' readings, which a running task's own limit reports

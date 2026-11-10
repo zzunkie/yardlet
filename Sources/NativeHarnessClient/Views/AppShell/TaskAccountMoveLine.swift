@@ -4,8 +4,9 @@ import SwiftUI
 /// to keep it where it is.
 struct TaskAccountMoveNotice {
     let accountName: String
-    /// The task is still in its turn; after it, the move waits for the background work left.
-    var isInTurn = true
+    /// What the move waits for: the task's turn, and after it what still keeps the task busy
+    /// (`AccountMoveHold`).
+    var waitsFor: AccountMoveBlocker = .turn
     let cancel: @MainActor () -> Void
 }
 
@@ -15,7 +16,7 @@ private struct TaskAccountMoveNoticeKey: EnvironmentKey {
 
 extension EnvironmentValues {
     /// The shown task moves to another account when its turn ends. Its composer queues what Return
-    /// sends meanwhile, which goes after the move.
+    /// sends during the turn, which goes after the move.
     var taskAccountMove: TaskAccountMoveNotice? {
         get { self[TaskAccountMoveNoticeKey.self] }
         set { self[TaskAccountMoveNoticeKey.self] = newValue }
@@ -29,8 +30,7 @@ struct TaskAccountMoveLine: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Label(L10n.format(notice.isInTurn ? "Moving to %@ after this turn" : "Moving to %@ when its background work ends",
-                              notice.accountName), systemImage: "person.crop.circle")
+            Label(text, systemImage: "person.crop.circle")
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -46,5 +46,19 @@ struct TaskAccountMoveLine: View {
         .frame(maxWidth: ParityTheme.contentWidth, alignment: .leading)
         .padding(.horizontal, 30)
         .frame(maxWidth: .infinity)
+    }
+
+    private var text: String {
+        let name = notice.accountName
+        return switch notice.waitsFor {
+        case .turn: L10n.format("Moving to %@ after this turn", name)
+        case .request: L10n.format("Moving to %@ once its request is answered", name)
+        case .messages: L10n.format("Moving to %@ once the message on its way is delivered", name)
+        case .shellCommand: L10n.format("Moving to %@ when its shell command ends", name)
+        case .backgroundWork: L10n.format("Moving to %@ when its background work ends", name)
+        case .agents: L10n.format("Moving to %@ when the agents it runs finish", name)
+        case .edit: L10n.format("Moving to %@ once you finish editing the message", name)
+        case .otherChange: L10n.format("Moving to %@ when the change under way ends", name)
+        }
     }
 }

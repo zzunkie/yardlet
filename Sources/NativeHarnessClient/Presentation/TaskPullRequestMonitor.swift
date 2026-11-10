@@ -349,12 +349,14 @@ extension AppModel {
 
     /// Sends auto-fix's message as the task's next turn, the way a message from another task goes
     /// (`deliverTaskMessage`) to an idle task, or after its continue while it waits for a usage limit
-    /// to reset (`usageLimitHold`). True when it went without a new error.
+    /// to reset (`usageLimitHold`), or after the move while it waits to move to another account
+    /// (`holdUntilAccountMoves`). True when it went without a new error.
     func deliverAutoFix(_ message: String, to taskID: UUID) async -> Bool {
         guard canTakeAutoFix(taskID), let session = store.sessions.first(where: { $0.id == taskID }) else {
             return false
         }
-        if continuations.holdUntilUsageLimitResets(HarnessUserInput(text: message), for: taskID) != nil { return true }
+        if continuations.holdUntilUsageLimitResets(HarnessUserInput(text: message), for: taskID) != nil
+            || continuations.holdUntilAccountMoves(HarnessUserInput(text: message), for: taskID) { return true }
         let previousError = errorBySessionID[taskID]
         if session.harness == .codex {
             await submitCodex(CodexComposerDraft(inputs: [.text(message)]), action: .automatic, to: session)

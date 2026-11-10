@@ -19,11 +19,51 @@ struct AutomaticAccountMove: Equatable {
     let assignment: AccountAssignment
 }
 
+/// What keeps a task from moving to another account now (`AppModel.accountMoveBlocker`), as the line
+/// above the composer names it.
+enum AccountMoveBlocker: Equatable {
+    /// Its turn runs, or waits for an approval.
+    case turn
+    /// A question or request in its conversation waits for the person's answer.
+    case request
+    /// A message or shell output on its way to the provider.
+    case messages
+    /// A shell command the person ran in it.
+    case shellCommand
+    /// The harness's background commands.
+    case backgroundWork
+    /// Agents it runs (`run_agent`).
+    case agents
+    /// A message the person is editing.
+    case edit
+    /// Another change under way: a switch, a restart, a fork, a side chat opening, unarchiving, a
+    /// worktree being made again, or a cut-off turn about to continue.
+    case otherChange
+}
+
+/// A move after a turn that waits on its task (`TaskContinuationCoordinator.switchAccountAfterTurn`):
+/// who chose it, what keeps it waiting now, and since when. One Yardlet chose itself waits only until
+/// its deadline and is then given up, not forced; one the person chose waits until they cancel it.
+struct AccountMoveHold: Equatable {
+    enum Owner: Equatable { case person, yardlet }
+
+    /// How long a move Yardlet chose itself waits on its task before it is given up.
+    static let yardletWaitLimit: TimeInterval = 10 * 60
+
+    let owner: Owner
+    var waitsFor: AccountMoveBlocker
+    let since: Date
+
+    var deadline: Date? { owner == .yardlet ? since.addingTimeInterval(Self.yardletWaitLimit) : nil }
+}
+
 // Moving Claude Code tasks to an account with room, by what a move costs (`AccountRouting.move`):
 // an idle task whose prompt cache has expired leaves a nearly spent account, a task a limit stopped
 // moves and continues there unless the limit resets before its cache expires, and a task whose
 // cache lives stays where it is. A move never cuts into a turn: it goes through the same path as an
-// account chosen during one (`moveAutomatically`). What Yardlet reads is what it already holds: the
+// account chosen during one (`moveAutomatically`), and it never holds up the person: their message goes
+// at once and calls the move off, and one that waits past its deadline is given up
+// (`AccountMoveHold`). What Yardlet reads is what it already holds: the
 // accounts' readings, which the tasks' own limit reports keep current, each task's last activity
 // and the conversation of a task that just ran. A look follows a turn's end, a change in which
 // accounts have room, and the moment the next cache expires or account frees up; never a timer
@@ -302,7 +342,8 @@ extension AppModel {
     }
 
     /// A task Yardlet may move now: a Claude Code task that is idle, has no move of its own coming,
-    /// and whose last automatic move the person did not cancel since it last worked.
+    /// and whose last automatic move was neither cancelled by the person nor given up at its deadline
+    /// since it last worked.
     func canMoveAutomatically(_ task: SessionRecord) -> Bool {
         task.harness == .claudeCode && !Self.isWorking(task) && continuations.accountSwitchesAfterTurn[task.id] == nil
             && !switchingAccounts.contains(task.id) && !continuations.declinedAccountMoves.contains(task.id)
