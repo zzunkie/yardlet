@@ -292,43 +292,22 @@ final class BrowserAgentTabs: BrowserAgentTabDirectory {
         page.setupAsk = { [weak tab] in tab?.vaultSetupAsk }
         page.endSetupAsk = { [weak tab] in tab?.endSetupAsk() }
         page.vaultFills = tab.vaultFills
-        page.linkedVaultFill = { [weak self, weak tab] in tab.flatMap { self?.filledTab(linkedTo: $0)?.id } }
-        page.noteScriptInLinkedTabs = { [weak self, weak tab] in
-            guard let self, let tab else { return }
-            for linked in self.tabs(linkedTo: tab) {
-                let frame = try? await VaultPageScripts.mainFrame(linked.devTools, timeout: .seconds(5))
-                linked.vaultFills.noteScript(in: frame?.loaderID ?? "")
+        page.linkedVaultFill = { [weak tab] in
+            tab?.linkedTabs.first { $0.vaultFills.holdShownDocument(in: $0.devTools.events) }?.id
+        }
+        page.noteScriptInLinkedTabs = { [weak tab] in
+            let linked = tab?.linkedTabs ?? []
+            linked.forEach { $0.vaultFills.noteScript(in: nil) }
+            for other in linked {
+                let frame = try? await VaultPageScripts.mainFrame(other.devTools, timeout: .seconds(5))
+                other.vaultFills.noteScriptedDocument(frame?.loaderID)
             }
         }
+        page.linkedTabShowsScript = { [weak tab] in tab?.linkedTabs.contains { $0.vaultFills.showsScriptedDocument } ?? false }
         let observer = tab.addEventObserver { [weak page] event in page?.receive(event) }
         let entry = Entry(tab: tab, page: page, observer: observer)
         entries[tab.id] = entry
         return entry
-    }
-
-    /// A tab of the same task that shows a document the vault filled and that `window.opener` links to this one: the
-    /// tab that opened it, the tabs it opened, and theirs in turn. Page scripts can reach such a document through the
-    /// opener or a window's name when it is of their origin, or through a frame of its origin they hold.
-    private func filledTab(linkedTo tab: BrowserTab) -> BrowserTab? {
-        tabs(linkedTo: tab).first { $0.vaultFills.holdShownDocument(in: $0.devTools.events) }
-    }
-
-    /// The task's other tabs that `window.opener` links to this one, directly or through other tabs.
-    private func tabs(linkedTo tab: BrowserTab) -> [BrowserTab] {
-        guard let client = client(), let session = tab.session else { return [] }
-        let tabs = client.tabs(forSession: session)
-        var reached: [BrowserTab] = []
-        var seen: Set<BrowserTabID> = [tab.id]
-        var pending = [tab]
-        while let next = pending.popLast() {
-            for other in tabs where !seen.contains(other.id)
-                && (next.openedTabs.contains(other.id) || other.openedTabs.contains(next.id)) {
-                seen.insert(other.id)
-                reached.append(other)
-                pending.append(other)
-            }
-        }
-        return reached
     }
 
     private func forget(_ id: BrowserTabID) {

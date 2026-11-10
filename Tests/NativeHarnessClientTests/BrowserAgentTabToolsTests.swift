@@ -12,13 +12,25 @@ final class BrowserAgentTabToolsTests: XCTestCase {
         var sent: [BrowserHostCommand] = []
         /// Answers every CDP command with an empty result, as an idle page does.
         var answersDevTools = false
+        /// Answers each CDP command with the result this gives for its tab and method, when set.
+        var answer: (@MainActor (BrowserTabID, String) -> JSONValue)?
         func send(_ command: BrowserHostCommand) {
             sent.append(command)
-            guard answersDevTools, case .devTools(let tab, let message) = command,
-                  let object = try? JSONSerialization.jsonObject(with: Data(message.utf8)) as? [String: Any],
-                  let id = object["id"] as? Int else { return }
+            guard case .devTools(let tab, let message) = command,
+                  let request = try? JSONDecoder().decode(JSONValue.self, from: Data(message.utf8)),
+                  let id = request["id"]?.integerValue else { return }
+            let result: JSONValue
+            if let answer {
+                result = MainActor.assumeIsolated { answer(tab, request["method"]?.stringValue ?? "") }
+            } else if answersDevTools {
+                result = .object([:])
+            } else {
+                return
+            }
+            let reply = String(decoding: (try? JSONEncoder().encode(JSONValue.object(["id": .integer(id), "result": result]))) ?? Data(),
+                               as: UTF8.self)
             DispatchQueue.main.async { [weak self] in
-                MainActor.assumeIsolated { self?.eventHandler?(.devTools(tab: tab, message: #"{"id":\#(id),"result":{}}"#)) }
+                MainActor.assumeIsolated { self?.eventHandler?(.devTools(tab: tab, message: reply)) }
             }
         }
         func terminate() {}
@@ -27,6 +39,7 @@ final class BrowserAgentTabToolsTests: XCTestCase {
     private let connection = FakeHostConnection()
     private var client: BrowserHostClient!
     private var tools: BrowserAgentTools!
+    private var tabs: BrowserAgentTabs!
     private let task = UUID()
 
     override func setUp() async throws {
@@ -34,7 +47,8 @@ final class BrowserAgentTabToolsTests: XCTestCase {
         client = BrowserHostClient(idleGrace: .seconds(60)) { connection }
         client.rendererCheckWait = .milliseconds(50)
         let client = client!
-        tools = BrowserAgentTools(usesMacEditingCommands: true, tabs: BrowserAgentTabs { client })
+        tabs = BrowserAgentTabs { client }
+        tools = BrowserAgentTools(usesMacEditingCommands: true, tabs: tabs)
     }
 
     private func run(_ tool: String, _ arguments: [String: JSONValue] = [:]) async -> AgentToolResult {
@@ -322,5 +336,110 @@ final class BrowserAgentTabToolsTests: XCTestCase {
         XCTAssertEqual(connection.sent.filter { if case .open = $0 { true } else { false } }.count, opensBefore,
                        "no new tab between turns")
         XCTAssertTrue(client.isHostRunning)
+    }
+
+    /// A fill asks the person first wherever a script the agent ran may still reach the document, through the windows a
+    /// page opened and their openers (docs/BROWSER_VAULT_DESIGN.md §5.3): a window the script opened, while it ran or
+    /// after; a document such a window or its opener loads while the other shows one; and that also once the tab that
+    /// ran the script left or closed, or the tab that linked two others closed. A new document with no such tab linked
+    /// fills as before.
+    func testAFillAsksFirstWhereAScriptTheAgentRanMayReachThroughLinkedWindows() async throws {
+        let item = VaultItem(name: "Example", sites: ["example.com"], username: "ada", policy: .always)
+        var asked = 0
+        tools.vault = VaultCenter(environment: VaultCenter.Environment(
+            secrets: InMemoryVaultSecretStore([item.id: VaultSecret(password: "correct-horse-battery")]),
+            repository: InMemoryVaultRepository(items: [item]), hmac: MacVault.hmac, isAllowedBuild: true,
+            confirm: { _ in asked += 1; return false }, defaults: .vaultTests()))
+        // Each tab's document (its main frame's loaderId), and what the agent's next script does in the page.
+        var documents: [BrowserTabID: String] = [:]
+        var duringScript: @MainActor () -> Void = {}
+        connection.answer = { tab, method in
+            switch method {
+            case "Page.getFrameTree":
+                return .object(["frameTree": .object(["frame": .object([
+                    "id": .string("main-\(tab)"), "loaderId": .string(documents[tab] ?? "\(tab)-blank"),
+                    "url": .string("https://www.example.com/login"), "securityOrigin": .string("https://www.example.com")
+                ])])])
+            case "Runtime.evaluate":
+                let script = duringScript
+                DispatchQueue.main.async { MainActor.assumeIsolated { script() } }
+                return .object(["result": .object(["type": .string("number"), "value": .integer(1)])])
+            case "Page.createIsolatedWorld":
+                return .object(["executionContextId": .integer(7)])
+            case "DOM.resolveNode":
+                return .object(["object": .object(["objectId": .string("field")])])
+            case "Runtime.callFunctionOn":
+                return .object(["result": .object(["type": .string("boolean"), "value": .bool(true)])])
+            default:
+                return .object([:])
+            }
+        }
+        func load(_ tab: BrowserTabID, _ document: String) {
+            documents[tab] = document
+            connection.eventHandler?(.newDocument(tab: tab, url: "https://www.example.com/login"))
+        }
+        func script(in tab: BrowserTabID, session: UUID) async {
+            let result = await tools.run(tool: AgentToolCatalog.evaluate, arguments: .object([
+                "function": .string("() => 1"), "tabId": .string(String(tab))]), sessionID: session)
+            XCTAssertFalse(result.isError, text(result))
+            duringScript = {}
+        }
+        /// Fills the tab's sign-in, and says whether the person was asked first.
+        func fillAsks(_ tab: BrowserTabID, session: UUID) async throws -> Bool {
+            let page = try tabs.page(for: session, tabID: String(tab))
+            page.replaceRefs(["@e1": .init(node: 3, session: nil)], eventMark: page.cdp.eventLog.count)
+            let before = asked
+            let result = await tools.run(tool: VaultToolCatalog.fillCredential, arguments: .object([
+                "ref": .string("@e1"), "tabId": .string(String(tab))]), sessionID: session)
+            guard asked > before else { return false }
+            XCTAssertTrue(result.isError && text(result).contains("ran your own scripts"), text(result))
+            return true
+        }
+
+        // The script opens a window (`window.open` keeps the opener) and can reach what it loads.
+        let opener = try tabs.page(for: task, tabID: nil).tabID
+        load(opener, "opener-1")
+        let popup: BrowserTabID = 1 << 30
+        duringScript = { [connection] in
+            connection.eventHandler?(.popupOpened(tab: popup, opener: opener, url: "https://www.example.com/login", background: false))
+        }
+        await script(in: opener, session: task)
+        XCTAssertTrue(client.tabs(forSession: task).contains { $0.id == popup }, "the window opened while the script ran")
+        load(popup, "popup-1")
+        let inScriptWindow = try await fillAsks(popup, session: task)
+        XCTAssertTrue(inScriptWindow, "a window the script opened")
+        // A window it opens once it has returned (a timer, within the click's activation).
+        connection.eventHandler?(.newWindow(tab: opener, url: "https://www.example.com/login", background: true, userGesture: true))
+        let later = try XCTUnwrap(client.tabs(forSession: task).first { ![opener, popup].contains($0.id) }).id
+        load(later, "later-1")
+        let afterScriptWindow = try await fillAsks(later, session: task)
+        XCTAssertTrue(afterScriptWindow, "a window it opened after it returned")
+        // Code it left in the window stays when the tab that ran it moves on, and that tab can reach the window again.
+        load(opener, "opener-2")
+        let afterOpenerLeft = try await fillAsks(popup, session: task)
+        XCTAssertTrue(afterOpenerLeft, "the window after the tab that ran the script moved on")
+        let openerAgain = try await fillAsks(opener, session: task)
+        XCTAssertTrue(openerAgain, "the opener's next document, which the window's code can reach")
+        // Closing the tab between two windows the script opened leaves them linked.
+        connection.eventHandler?(.closed(tab: opener))
+        load(popup, "popup-2")
+        let afterOpenerClosed = try await fillAsks(popup, session: task)
+        XCTAssertTrue(afterOpenerClosed, "the other window it opened still reaches this one")
+        connection.eventHandler?(.closed(tab: later))
+        load(popup, "popup-3")
+        let alone = try await fillAsks(popup, session: task)
+        XCTAssertFalse(alone, "no tab that a script reached links to the window any more")
+
+        // A script in a window the person opened reaches its opener's next document.
+        let other = UUID()
+        let signIn = try tabs.page(for: other, tabID: nil).tabID
+        load(signIn, "sign-in-1")
+        let window: BrowserTabID = (1 << 30) + 1
+        connection.eventHandler?(.popupOpened(tab: window, opener: signIn, url: "https://www.example.com/help", background: false))
+        load(window, "window-1")
+        await script(in: window, session: other)
+        load(signIn, "sign-in-2")
+        let openerOfScriptedWindow = try await fillAsks(signIn, session: other)
+        XCTAssertTrue(openerOfScriptedWindow, "the opener's next document")
     }
 }

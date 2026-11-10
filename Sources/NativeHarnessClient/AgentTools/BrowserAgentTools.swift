@@ -1428,10 +1428,10 @@ final class BrowserAgentTools {
         if let refusal = vaultObservationRefusal(page, AgentToolCatalog.evaluate) {
             throw BrowserAgentToolError(refusal, Self.vaultBoundary)
         }
-        // A later fill of this document, or of one a linked tab shows, asks the person first.
-        if let frame = try? await send(page, "Page.getFrameTree")["frameTree"]?["frame"]?["loaderId"]?.stringValue {
-            page.vaultFills.noteScript(in: frame)
-        }
+        // A later fill of this document, of one a linked tab shows, or of one they load while either shows such a
+        // document, asks the person first.
+        let document = try? await send(page, "Page.getFrameTree")["frameTree"]?["frame"]?["loaderId"]?.stringValue
+        page.vaultFills.noteScript(in: document)
         await page.noteScriptInLinkedTabs()
         let result: JSONValue
         if let ref = arguments["ref"]?.stringValue {

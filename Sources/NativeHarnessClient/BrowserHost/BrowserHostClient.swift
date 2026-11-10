@@ -154,6 +154,12 @@ final class BrowserHostClient {
         (sessionOrder[session] ?? []).compactMap { tabs[$0] }
     }
 
+    /// The other open tabs whose pages can reach this tab's, and it theirs, through `window.opener` and the windows they
+    /// opened (`BrowserTab.linkGroup`), whatever task holds them, by id.
+    func tabs(linkedTo tab: BrowserTab) -> [BrowserTab] {
+        tabs.values.filter { $0 !== tab && $0.linkGroup == tab.linkGroup }.sorted { $0.id < $1.id }
+    }
+
     /// The session's fronted tab, if the host has one: the tab its panel shows and the agent's tools
     /// use when they name none.
     func tab(forSession session: UUID) -> BrowserTab? {
@@ -1370,6 +1376,10 @@ final class BrowserTab {
     private(set) var openFailure: BrowserTabOpenFailure?
     /// The tabs this tab's page opened (new-window requests, `openedTab`).
     private(set) var openedTabs: Set<BrowserTabID> = []
+    /// The tabs whose pages can reach each other's through `window.opener` and the windows they opened, directly or
+    /// through other tabs: a tab a page opened joins its opener's (`inherit(from:)`), and stays in it when the tabs
+    /// between them close, as a page keeps the windows it holds.
+    private(set) var linkGroup = UUID()
     /// The passwords and codes the vault filled into the tab's documents, for the agent and for the person.
     let vaultFills = BrowserVaultFills()
     /// What the page asks permission for and waits on, until the person answers it, the agent closes it or the page
@@ -1713,13 +1723,32 @@ final class BrowserTab {
     }
 
     /// A tab a page opened answers to what drove that page: a remote device's input, and whether its downloads were
-    /// refused.
+    /// refused. It joins the opener's windows, and a script of the agent's that may reach the opener's page reaches it.
     fileprivate func inherit(from opener: BrowserTab, retained: BrowserBlockedPopup? = nil) {
         // Match the host: either the original request or the opener's current input can restrict a popup.
         // Local input in this popup ends both inherited restrictions through tellDownloads().
         remoteOpener = retained?.drivenByRemote == true || opener.isDrivenByRemote
         openerRefusedDownloads = retained?.refusedDownloads == true || opener.refusesDownloads
         tellDownloads()
+        linkGroup = opener.linkGroup
+        if opener.vaultFills.showsScriptedDocument { vaultFills.noteScript(in: nil) }
+    }
+
+    /// The other open tabs whose pages can reach this one's (`linkGroup`).
+    var linkedTabs: [BrowserTab] { client?.tabs(linkedTo: self) ?? [] }
+
+    /// The tab started another document: one a script of the agent's may reach while a linked tab shows one it may
+    /// reach, whose script can reach this window and leave code in it (`BrowserVaultFills.showsScriptedDocument`).
+    private func noteDocumentStarted() {
+        let reached = linkedTabs.contains { $0.vaultFills.showsScriptedDocument }
+        vaultFills.documentStarted(reachedFromLinkedTab: reached)
+        guard reached else { return }
+        // Its loaderId too, for when going back shows it again with that code in it.
+        Task { [weak self] in
+            guard let devTools = self?.devTools,
+                  let frame = try? await VaultPageScripts.mainFrame(devTools, timeout: .seconds(5)) else { return }
+            self?.vaultFills.noteScriptedDocument(frame.loaderID)
+        }
     }
 
     /// Downloads are refused while a remote device's input is the last that drove the page: until someone here uses
@@ -2221,6 +2250,7 @@ final class BrowserTab {
             documentStartedAt = .now
             hadPersonEdits = false
             workedInBackground = false
+            noteDocumentStarted()
             // The chooser was the document's that went, as Chrome's goes with its frame.
             if let chooser = fileDialog {
                 fileDialog = nil

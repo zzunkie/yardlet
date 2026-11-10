@@ -110,14 +110,33 @@ struct BrowserAgentVaultFill: Equatable {
 @MainActor
 final class BrowserVaultFills {
     private(set) var fills: [BrowserAgentVaultFill] = []
-    /// The documents (main frame `loaderId`) the agent ran its own scripts in, there or in a tab linked by
-    /// `window.opener` while they were shown: a fill there asks the person first (`VaultFillRequest.afterAgentScript`).
+    /// The documents (main frame `loaderId`) a script of the agent's may reach (`showsScriptedDocument` while they were
+    /// shown): a fill there asks the person first (`VaultFillRequest.afterAgentScript`), also when going back shows one
+    /// again.
     private(set) var scriptedDocuments: Set<String> = []
+    /// Whether a script of the agent's may reach the document the tab shows now: it ran there, or in a tab linked to this
+    /// one (`BrowserTab.linkedTabs`) while it was shown, or the document came while a linked tab showed such a document.
+    /// A live script reaches the linked windows of its origin and can leave code in them, which stays when its own tab
+    /// moves on or closes; a new document while no linked tab shows one ends it.
+    private(set) var showsScriptedDocument = false
 
-    func noteScript(in loaderID: String) {
-        guard !loaderID.isEmpty else { return }
+    /// A script of the agent's may reach the document shown now, `loaderID` when known.
+    func noteScript(in loaderID: String?) {
+        showsScriptedDocument = true
+        noteScriptedDocument(loaderID)
+    }
+
+    /// Keeps `loaderID` as a document a script of the agent's may reach, for when it shows again.
+    func noteScriptedDocument(_ loaderID: String?) {
+        guard let loaderID, !loaderID.isEmpty else { return }
         scriptedDocuments.insert(loaderID)
         if scriptedDocuments.count > 200 { scriptedDocuments.removeFirst() }
+    }
+
+    /// The tab started another document, which a script of the agent's may reach only from a linked tab
+    /// (`BrowserTab.noteDocumentStarted`).
+    func documentStarted(reachedFromLinkedTab: Bool) {
+        showsScriptedDocument = reachedFromLinkedTab
     }
 
     var documents: Set<String> { Set(fills.map(\.loaderID)) }
@@ -1079,7 +1098,7 @@ extension BrowserAgentTools {
         }
 
         var request = VaultFillRequest(sessionID: sessionID, itemName: itemName, kind: kind, origin: frame.origin)
-        request.afterAgentScript = page.vaultFills.scriptedDocuments.contains(frame.loaderID)
+        request.afterAgentScript = page.scriptMayReach(frame.loaderID)
         // A two-factor setup the page shows goes into the vault once the person saves it, and its first code is filled.
         var kept = ""
         if kind == .oneTimeCode, let setup = await setupShown(on: page, objectID: objectID) {
@@ -1328,7 +1347,7 @@ extension BrowserAgentTools {
         }
         let username = context["username"]?.stringValue ?? ""
         var request = VaultFillRequest(sessionID: sessionID, itemName: itemName, kind: .newPassword, origin: frame.origin)
-        request.afterAgentScript = page.vaultFills.scriptedDocuments.contains(frame.loaderID)
+        request.afterAgentScript = page.scriptMayReach(frame.loaderID)
         let confirmation: VaultUse.Confirmation
         switch await vault.authorizeNewPassword(request, username: username) {
         case .success(let confirmed): confirmation = confirmed

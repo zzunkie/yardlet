@@ -96,12 +96,20 @@ final class BrowserAgentPage {
     /// What the vault filled into the tab's documents; the tab's own (`BrowserTab.vaultFills`), which the
     /// person's fills from the panel record in too.
     var vaultFills = BrowserVaultFills()
-    /// A tab of the task linked to this one by `window.opener` (this tab's page opened it, or it opened this one, or so
-    /// on through other tabs) that shows a document the vault filled: its id. Page scripts here can reach that document.
+    /// A tab linked to this one by `window.opener` (this tab's page opened it, or it opened this one, or so on through
+    /// other tabs) that shows a document the vault filled: its id. Page scripts here can reach that document.
     var linkedVaultFill: () -> BrowserTabID? = { nil }
-    /// The agent is about to run its own script here: the documents the task's tabs linked to this one by
-    /// `window.opener` show now are noted as scripted (`BrowserVaultFills.noteScript`), as this tab's own is.
+    /// The agent is about to run its own script here: the documents the tabs linked to this one by `window.opener`
+    /// show now are noted as scripted (`BrowserVaultFills.noteScript`), as this tab's own is.
     var noteScriptInLinkedTabs: () async -> Void = {}
+    /// Whether a tab linked to this one shows a document a script of the agent's may reach, which reaches this tab's.
+    var linkedTabShowsScript: () -> Bool = { false }
+
+    /// Whether a script of the agent's may reach `loaderID`, the document the tab shows: a fill there asks the person
+    /// first.
+    func scriptMayReach(_ loaderID: String) -> Bool {
+        vaultFills.showsScriptedDocument || vaultFills.scriptedDocuments.contains(loaderID) || linkedTabShowsScript()
+    }
     /// The vault's passkey waiting in this tab's authenticator for the page's next request.
     var armedPasskey: BrowserAgentArmedPasskey? {
         didSet { onArmedPasskeyChange?(self) }

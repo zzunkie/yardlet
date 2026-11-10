@@ -491,7 +491,7 @@ final class VaultCenter: ObservableObject {
                 }
                 return refuse(request, item: item, "You ran your own scripts on this page (browser_evaluate here or in a tab "
                     + "linked to it), so Yardlet asked the person before filling “\(item.name)”, and they did not confirm. "
-                    + "Reload the page (browser_navigate to its address) and fill it without running scripts on it first.")
+                    + Self.afterScriptAgain)
             }
             if item.policy == .whileUnlocked { isUnlocked = true }
             confirmation = .touchID
@@ -569,8 +569,8 @@ final class VaultCenter: ObservableObject {
         guard await environment.confirm(L10n.format("make a password for %@ for “%@”, on a page where it ran its own scripts",
                                                    host, title)) else {
             return refuse(request, item: nil, "You ran your own scripts on this page (browser_evaluate here or in a tab "
-                + "linked to it), so Yardlet asked the person before making a password, and they did not confirm. Reload "
-                + "the page (browser_navigate to its address) and fill it without running scripts on it first.")
+                + "linked to it), so Yardlet asked the person before making a password, and they did not confirm. "
+                + Self.afterScriptAgain)
                 .map { _ in .always }
         }
         return .success(.touchID)
@@ -737,6 +737,11 @@ final class VaultCenter: ObservableObject {
             + "two-factor code bar in this task's browser panel; later fills here then work.",
             details: ["unlinkedCodes": .array(codes.map { .string($0.name) }), "site": .string(site)])
     }
+
+    /// How a fill the person did not confirm after the agent's scripts goes without them: a script in a linked tab can
+    /// reach the page's next document while that tab is open.
+    private static let afterScriptAgain = "Close the other tabs linked to it (one of them opened the other, directly or "
+        + "through other tabs), reload the page (browser_navigate to its address) and fill it without running scripts first."
 
     private func refuse(_ request: VaultFillRequest, item: VaultItem?, _ message: String,
                         kind: AgentToolFailure.Kind = .refused, retry: AgentToolFailure.Retry = .no,
