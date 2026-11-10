@@ -36,7 +36,7 @@ enum TokenUsagePrices {
     }
 
     static let anthropic = Table(provider: "Anthropic", source: "https://platform.claude.com/docs/en/about-claude/pricing",
-                                 copied: "2026-11-03")
+                                 copied: "2026-11-10")
     static let openAI = Table(provider: "OpenAI", source: "https://developers.openai.com/api/docs/pricing",
                               copied: "2026-11-03")
     static let tables = [anthropic, openAI]
@@ -48,6 +48,8 @@ enum TokenUsagePrices {
 
     /// Model ids as the transcripts write them, without a date suffix.
     private static let models: [String: Model] = [
+        "claude-fable-5-2": Model(rates: rates(8, 10, 16, 0.2, 40), fastFactor: 2),
+        "claude-mythos-5-2": Model(rates: rates(8, 10, 16, 0.2, 40), fastFactor: 2),
         "claude-fable-5-1": Model(rates: rates(10, 12.5, 20, 0.25, 50)),
         "claude-mythos-5-1": Model(rates: rates(10, 12.5, 20, 0.25, 50)),
         "claude-fable-5": Model(rates: rates(10, 12.5, 20, 1, 50)),

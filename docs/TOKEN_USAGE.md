@@ -68,7 +68,7 @@ the menu bar menu and the sidebar's account menu. Nothing is sent anywhere and n
 The API-equivalent cost uses the providers' public prices, copied into Yardlet with the date of the copy
 (`TokenUsagePrices`), never fetched:
 
-- Anthropic, <https://platform.claude.com/docs/en/about-claude/pricing>, 2026-11-03: input, 5-minute and 1-hour cache
+- Anthropic, <https://platform.claude.com/docs/en/about-claude/pricing>, 2026-11-10: input, 5-minute and 1-hour cache
   writes, cache reads and output per model; Claude Haiku 5.5's prices over 100,000 prompt tokens; fast mode at twice
   the rates on the models that have it; US-only inference at 1.1 times.
 - OpenAI, <https://developers.openai.com/api/docs/pricing>, 2026-11-03: the GPT-6 family's Standard tier, with the
