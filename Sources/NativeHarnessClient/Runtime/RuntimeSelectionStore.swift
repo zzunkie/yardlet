@@ -35,7 +35,7 @@ final class RuntimeSelectionStore {
         defaults: UserDefaults = .yardlet,
         discoversRuntimes: Bool = true,
         loadsPersistedSelections: Bool = true,
-        candidates: @escaping @Sendable (HarnessKind) -> [URL] = { RuntimeSelectionStore.candidates(for: $0) },
+        candidates: @escaping @Sendable (HarnessKind) -> [URL] = { RuntimeSelectionStore.defaultCandidates(for: $0) },
         versions: RuntimeVersionCache? = nil
     ) {
         self.defaults = defaults
@@ -204,6 +204,15 @@ final class RuntimeSelectionStore {
 
     private static func key(for harness: HarnessKind) -> String {
         "runtime.\(harness.rawValue).executablePath"
+    }
+
+    /// Where a store looks for installs when its caller names no places: this Mac's
+    /// (`candidates(for:home:)`), or, in a test process, nowhere. A test store that looked found the
+    /// person's own CLI, and a task the test started, or a fixture task whose made-up runtime was
+    /// missing (`runtimeReplacement(for:)`), ran a real turn under their sign-in. A test that needs
+    /// an install passes `candidates` or names the runtime itself.
+    nonisolated static func defaultCandidates(for harness: HarnessKind) -> [URL] {
+        NSClassFromString("XCTestCase") == nil ? candidates(for: harness) : []
     }
 
     /// Where `harness` may be installed, in the order that breaks a tie between equal versions:
