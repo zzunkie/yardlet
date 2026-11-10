@@ -59,15 +59,17 @@ extension AppModelRemoteBridge {
         let enabled = NextMessageSuggestionPreference.isOn()
         let suggestion = enabled && session.status != .running && session.status != .waitingForApproval
             ? draft.nextMessageSuggestion : nil
+        // What the Mac's composer says under its text: a message it kept, a command that failed (`keepUnsent`, its commands).
         return RemoteComposerState(nextMessageSuggestion: RemoteText.short(suggestion, RemoteText.userLimit),
             queuePaused: model.followUps.isPaused(session.id), connectors: rows,
-            toolListFollowsNextTurn: list?.toolListFollowsNextTurn ?? false)
+            toolListFollowsNextTurn: list?.toolListFollowsNextTurn ?? false,
+            notice: RemoteText.short(draft.notice, RemoteText.errorLimit))
     }
 
     func composerAction(taskID: String, action: String, itemID: String?, value: String?) async -> Result<RemoteComposerState, RemoteError> {
         guard let model, let session = session(taskID) else { return .failure(RemoteError(.notFound)) }
         guard !model.switchingAccounts.contains(session.id), !model.sessionMutations.contains(session.id) else {
-            return .failure(RemoteError(.busy))
+            return .failure(RemoteError(.busy, "The task is changing on the Mac", reason: .changing))
         }
         switch action {
         case "connector":

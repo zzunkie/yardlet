@@ -280,7 +280,8 @@ final class AppModelRemoteBridge: RemoteBridge {
             }
             let remote = RemoteConversationProjection.turn(
                 turn, harness: presentation.harness, workspaceURL: session.workspaceURL,
-                full: detail == .full ? full(turn, of: session, in: model) : nil)
+                full: detail == .full ? full(turn, of: session, in: model) : nil,
+                childTasks: childTasks(of: turn, in: session, model: model))
             projectedTurnCount += 1
             kept[turn.id] = (turn, remote)
             return remote
@@ -366,8 +367,10 @@ final class AppModelRemoteBridge: RemoteBridge {
                 case (nil, .starting?), (nil, .sending?):
                     item.suggestionState = "starting"
                     item.options = nil
-                case (nil, .failed?):
+                case let (nil, .failed(reason)?):
                     item.suggestionState = "failed"
+                    // What the chip's row says on the Mac.
+                    item.suggestionFailure = RemoteText.short(reason, RemoteText.errorLimit)
                     item.options = RemoteSuggestionAction.allCases.map(\.rawValue)
                 case (nil, nil):
                     item.suggestionState = "open"
@@ -398,8 +401,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     }
 
     /// What full detail reads beside one of the task's turns (§15.24): its sent pictures' previews, asked for once
-    /// and told to the turn when made, and the listed tasks its Codex child threads run in, as "Open child task"
-    /// finds them on the Mac.
+    /// and told to the turn when made.
     private func full(_ turn: ConversationTurn, of session: SessionRecord,
                       in model: AppModel) -> RemoteConversationProjection.Full {
         var full = RemoteConversationProjection.Full()
@@ -416,19 +418,26 @@ final class AppModelRemoteBridge: RemoteBridge {
                 for url in RemoteConversationProjection.bodyImages(item, workspaceURL: session.workspaceURL) where full.previews[url] == nil {
                     full.previews[url] = previews.preview(url, for: asker)
                 }
-            case let .subagent(subagent):
-                for case let .codexThread(threadID) in subagent.routes {
-                    guard let child = TaskLineage.task(continuing: threadID, harness: .codex, among: model.store.sessions,
-                                                       environmentScope: session.environmentScope,
-                                                       connection: session.connection),
-                          listedSession(child) != nil else { continue }
-                    full.childTasks[threadID] = child.uuidString
-                }
             default:
                 continue
             }
         }
         return full
+    }
+
+    /// The listed tasks a turn's Codex child threads run in, as "Open child task" finds them on the Mac.
+    private func childTasks(of turn: ConversationTurn, in session: SessionRecord, model: AppModel) -> [String: String] {
+        var tasks: [String: String] = [:]
+        for item in turn.prompt + turn.notices + turn.work + turn.answers {
+            guard case let .subagent(subagent) = item.kind else { continue }
+            for case let .codexThread(threadID) in subagent.routes {
+                guard let child = TaskLineage.task(continuing: threadID, harness: .codex, among: model.store.sessions,
+                                                   environmentScope: session.environmentScope, connection: session.connection),
+                      listedSession(child) != nil else { continue }
+                tasks[threadID] = child.uuidString
+            }
+        }
+        return tasks
     }
 
     /// Previews made since a turn asked for them: those turns are projected again, and their tasks' phones told.
@@ -494,25 +503,16 @@ final class AppModelRemoteBridge: RemoteBridge {
         switch command {
         case let .sendMessage(taskID, text, images, followUp, files):
             guard let session = session(taskID) else { return RemoteError(.notFound) }
-            // The composer's own send would take the text as the edited message, or drop it.
-            if model.composerDrafts.tasks.draft(for: session.id).editState != nil {
-                return RemoteError(.busy, "A message is being edited on the Mac")
-            }
-            if model.switchingAccounts.contains(session.id) || model.sessionMutations.contains(session.id) {
-                return RemoteError(.busy, "The task is changing on the Mac")
-            }
-            switch model.sendRefusal(for: session) {
-            case .heldElsewhere?: return RemoteError(.busy, "Another app holds this conversation")
-            case .folderMissing?: return RemoteError(.unavailable, "The task's folder no longer exists")
-            case nil: break
-            }
+            if let refusal = Self.composerRefusal(of: session, in: model) { return refusal }
             var input = HarnessUserInput(text: text)
             // Everything is checked before an image is written, so a refused message leaves nothing behind.
             guard let fileInputs = Self.inputs(for: files, policy: Self.inputPolicy(session, in: model)) else {
-                return RemoteError(.notAllowed, "This task takes no such files")
+                return RemoteError(.notAllowed, "This task takes no such files", reason: .attachments)
             }
             if !images.isEmpty {
-                guard Self.acceptsImages(session, in: model) else { return RemoteError(.notAllowed, "This task takes no images") }
+                guard Self.acceptsImages(session, in: model) else {
+                    return RemoteError(.notAllowed, "This task takes no images", reason: .attachments)
+                }
                 guard let attached = Self.store(images) else { return RemoteError(.internal, "The images could not be saved") }
                 input.images = attached
             }
@@ -524,6 +524,7 @@ final class AppModelRemoteBridge: RemoteBridge {
                 default: break
                 }
             }
+            Self.messageAccepted(by: session, in: model)
             // As the composer sends: an idle task starts a turn, a running one takes a follow-up, steered or
             // queued as the phone chose (the composer's Return and ⌘Return) or as the Mac's setting says.
             if let followUp, session.status == .running || session.status == .waitingForApproval {
@@ -536,9 +537,9 @@ final class AppModelRemoteBridge: RemoteBridge {
             guard let session = session(taskID) else { return RemoteError(.notFound) }
             guard let request = pendingRequest(requestID, in: session) else { return RemoteError(.requestNotFound) }
             guard let route = RemoteApprovalPolicy.route(for: answer, to: request) else {
-                return RemoteError(.notAllowed, "Answer this request on the Mac")
+                return RemoteError(.notAllowed, "Answer this request on the Mac", reason: .hostOnly)
             }
-            guard model.isAttached(session.id) else { return RemoteError(.unavailable, "The task is not connected") }
+            if let refusal = Self.answerRefusal(request, in: session, model: model) { return refusal }
             // Claude Code reads a denial's note as its message, as its own "tell Claude what to do differently",
             // whether the task's own session asks or a subagent it runs does.
             if let note, case .transcript = request.source, Self.readsDenialNotes(request, in: session, model: model) {
@@ -586,7 +587,7 @@ final class AppModelRemoteBridge: RemoteBridge {
             guard let session = session(taskID) else { return RemoteError(.notFound) }
             guard let request = pendingRequest(requestID, in: session) else { return RemoteError(.requestNotFound) }
             guard !RemoteApprovalPolicy.formAnswers(for: request).isEmpty, case .planReview = request.form else {
-                return RemoteError(.notAllowed, "Review this plan on the Mac")
+                return RemoteError(.notAllowed, "Review this plan on the Mac", reason: .hostOnly)
             }
             let route: ConversationRequestRoute?
             switch decision {
@@ -626,16 +627,15 @@ final class AppModelRemoteBridge: RemoteBridge {
             return await performTaskAction(taskID, action: action)
         case let .archiveTask(taskID):
             guard let session = session(taskID) else { return RemoteError(.notFound) }
-            if session.status == .running || session.status == .waitingForApproval || model.isShellCommandRunning(in: session) {
-                return RemoteError(.busy, "Stop the task before archiving it")
-            }
+            // The sidebar's Archive, which takes a running task too.
             await model.archive(session)
-            return nil
+            guard model.store.sessions.contains(where: { $0.id == session.id }) else { return nil }
+            return Self.failure(of: model, "The task was not archived")
         case let .actOnQueued(taskID, itemID, action):
             guard let session = session(taskID) else { return RemoteError(.notFound) }
             guard itemID.hasPrefix("queued:"), let id = UUID(uuidString: String(itemID.dropFirst("queued:".count))),
                   let item = model.followUps.item(id, in: session.id) else { return RemoteError(.notFound) }
-            guard !model.followUps.isClaimed(id) else { return RemoteError(.busy, "The message is on its way") }
+            guard !model.followUps.isClaimed(id) else { return RemoteError(.busy, "The message is on its way", reason: .changing) }
             let queue = model.followUps.queue(for: session.id)
             guard TaskMessage.parse(item.draft.text) == nil, let policy = FollowUpPolicy(harness: session.harness),
                   let index = queue.firstIndex(where: { $0.id == id }) else { return RemoteError(.notAllowed) }
@@ -695,7 +695,7 @@ final class AppModelRemoteBridge: RemoteBridge {
             guard note == nil || response.role == .destructive else {
                 return RemoteError(.notAllowed, "A note goes with a denial only")
             }
-            guard model.isAttached(session.id) else { return RemoteError(.unavailable, "The task is not connected") }
+            if let refusal = Self.answerRefusal(request, in: session, model: model) { return refusal }
             var route = response.route
             if route == .structured {
                 guard case let .mcpForm(form) = request.form else { return RemoteError(.notAllowed) }
@@ -706,7 +706,7 @@ final class AppModelRemoteBridge: RemoteBridge {
                 }
                 if let field = form.fields.first(where: { form.issue(of: $0, in: input.fields) != nil }),
                    let issue = form.issue(of: field, in: input.fields) {
-                    return RemoteError(.notAllowed, "\(field.label): \(issue.message)")
+                    return RemoteError(.notAllowed, "\(field.label): \(issue.message)", reason: .form)
                 }
                 guard let formed = request.route(for: response, input: input) else { return RemoteError(.notAllowed) }
                 route = formed
@@ -722,7 +722,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         case let .runScheduledTask(scheduleID):
             let center = model.scheduledTasks
             guard let id = UUID(uuidString: scheduleID), center.schedule(id: id) != nil else { return RemoteError(.notFound) }
-            guard !center.startingIDs.contains(id) else { return RemoteError(.busy, "A run of it is starting") }
+            guard !center.startingIDs.contains(id) else { return RemoteError(.busy, "A run of it is starting", reason: .running) }
             // Run now in the list's menu and the detail: a skip while its task is busy, a failure when it cannot start.
             Task { await center.runNow(id) }
             return nil
@@ -733,13 +733,46 @@ final class AppModelRemoteBridge: RemoteBridge {
             }
             // Pause and Resume as the Mac offers them.
             if enabled, !schedule.isEnabled, !schedule.canResume {
-                return RemoteError(.notAllowed, "A one-off that ran or whose time passed runs again once edited on the Mac")
+                return RemoteError(.notAllowed, "A one-off that ran or whose time passed runs again once edited on the Mac",
+                                   reason: .hostOnly)
             }
             center.setEnabled(enabled, for: id)
             return nil
         case let .editMessage(taskID, turnID, text):
             return await editMessage(taskID: taskID, turnID: turnID, text: text)
         }
+    }
+
+    /// Why the task's composer would not take a message or a command now (§4.4, §15.23), or nil when it would.
+    static func composerRefusal(of session: SessionRecord, in model: AppModel) -> RemoteError? {
+        // The composer's own send would take the text as the edited message, or drop it.
+        if model.composerDrafts.tasks.existingDraft(for: session.id)?.editState != nil {
+            return RemoteError(.busy, "A message is being edited on the Mac", reason: .editing)
+        }
+        if model.switchingAccounts.contains(session.id) || model.sessionMutations.contains(session.id) {
+            return RemoteError(.busy, "The task is changing on the Mac", reason: .changing)
+        }
+        switch model.sendRefusal(for: session) {
+        case .heldElsewhere?: return RemoteError(.busy, "Another app holds this conversation", reason: .otherApp)
+        case .folderMissing?: return RemoteError(.unavailable, "The task's folder no longer exists", reason: .folderMissing)
+        case nil: return nil
+        }
+    }
+
+    /// A message or command from another device went to the task, as the composer's send clears what its notice said
+    /// about the last one: the notice another device reads (`composerState`) would otherwise outlive it.
+    static func messageAccepted(by session: SessionRecord, in model: AppModel) {
+        model.composerDrafts.tasks.existingDraft(for: session.id)?.notice = nil
+    }
+
+    /// Whether a request can be answered now, in the card's order (`AppModel.respond`): one Yardlet holds itself (a
+    /// session tool's, or a question a restart cut off) whether or not the task is connected, any other through the
+    /// task's harness.
+    private static func answerRefusal(_ request: ConversationRequest, in session: SessionRecord, model: AppModel) -> RemoteError? {
+        guard !model.isAttached(session.id), !model.heldRequests(in: session.id).contains(where: { $0.id == request.id }) else {
+            return nil
+        }
+        return RemoteError(.unavailable, "The task is not connected", reason: .notConnected)
     }
 
     /// A denial that leaves nothing behind: the plain deny, or the provider's one-time one.
@@ -758,7 +791,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     static func fieldValues(_ values: [String: RemoteFormValue],
                             for form: CodexMCPElicitationForm) -> Result<[String: CodexMCPElicitationFieldValue], RemoteError> {
         if let unknown = values.keys.sorted().first(where: { id in !form.fields.contains { $0.id == id } }) {
-            return .failure(RemoteError(.notAllowed, "\(unknown): no such field"))
+            return .failure(RemoteError(.notAllowed, "\(unknown): no such field", reason: .form))
         }
         var fields: [String: CodexMCPElicitationFieldValue] = [:]
         for field in form.fields {
@@ -773,7 +806,8 @@ final class AppModelRemoteBridge: RemoteBridge {
             case let (.boolean, .flag(flag)): fields[field.id] = .flag(flag)
             case let (.choice, .text(choice)): fields[field.id] = .picked([choice])
             case let (.choices, .list(list)): fields[field.id] = .picked(Set(list))
-            default: return .failure(RemoteError(.notAllowed, "\(field.label): \(L10n.string("Wrong kind of value"))"))
+            default:
+                return .failure(RemoteError(.notAllowed, "\(field.label): \(L10n.string("Wrong kind of value"))", reason: .form))
             }
         }
         return .success(fields)
@@ -815,7 +849,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     private func answer(_ request: ConversationRequest, in session: SessionRecord,
                         by route: ConversationRequestRoute) async -> RemoteError? {
         guard let model else { return RemoteError(.unavailable) }
-        guard model.isAttached(session.id) else { return RemoteError(.unavailable, "The task is not connected") }
+        if let refusal = Self.answerRefusal(request, in: session, model: model) { return refusal }
         switch route {
         case let .decision(decision): await model.respond(to: request.id, decision: decision, in: session)
         case let .providerAction(action): await model.respond(to: request.id, action: action, in: session)
@@ -859,7 +893,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: folder.path(percentEncoded: false), isDirectory: &isDirectory),
               isDirectory.boolValue else {
-            return .failure(RemoteError(.unavailable, "The project's folder no longer exists"))
+            return .failure(RemoteError(.unavailable, "The project's folder no longer exists", reason: .folderMissing))
         }
         return .success((folder, group.project))
     }
@@ -875,7 +909,7 @@ final class AppModelRemoteBridge: RemoteBridge {
             return .success(harness)
         }
         guard let harness = newTaskHarness(in: model) ?? offered.first else {
-            return .failure(RemoteError(.unavailable, "No harness can start a task"))
+            return .failure(RemoteError(.unavailable, "No harness can start a task", reason: .harness))
         }
         return .success(harness)
     }
@@ -1052,23 +1086,27 @@ final class AppModelRemoteBridge: RemoteBridge {
                 RemoteText.capped($0.accountName + " · " + $0.reasonLine(), RemoteText.detailLimit).text
             }
         }
-        if composer, readCommands, harness == .claudeCode, let folder = place.folder,
-           let runtime = model.runtimeSelections.selectedURL(for: harness) {
-            let key = folder.path + "\n" + runtime.path + "\n" + (binding?.id ?? "native")
-            if let cached = homeCommandCache[key], Date().timeIntervalSince(cached.0) < 30 {
-                result.commands = cached.1
-            } else {
-                let rows = (try? await model.readHomeComposerCommands(workspaceURL: folder, runtimeURL: runtime, connection: binding)) ?? []
-                let commands = rows.filter { $0.builtin == false }.map {
-                    RemoteComposerCommand(name: $0.name, description: RemoteText.short($0.description, RemoteText.detailLimit),
-                                          argumentHint: RemoteText.short($0.argumentHint, RemoteText.detailLimit))
-                }
-                if homeCommandCache.count >= 32 { homeCommandCache.removeAll() }
-                homeCommandCache[key] = (Date(), commands)
-                result.commands = commands
-            }
+        if composer, readCommands, harness == .claudeCode, let runtime = model.runtimeSelections.selectedURL(for: harness) {
+            result.commands = await homeUserCommands(harness: harness, folder: place.folder, runtime: runtime, connection: binding)
         }
         return .success(result)
+    }
+
+    /// The user commands the home composer's slash list offers for a new task in the folder (§15.33): Claude Code's,
+    /// read as the list reads them and kept for a short while.
+    private func homeUserCommands(harness: HarnessKind, folder: URL?, runtime: URL,
+                                  connection: ProviderConnection?) async -> [RemoteComposerCommand] {
+        guard let model, harness == .claudeCode, let folder else { return [] }
+        let key = folder.path + "\n" + runtime.path + "\n" + (connection?.id ?? "native")
+        if let cached = homeCommandCache[key], Date().timeIntervalSince(cached.0) < 30 { return cached.1 }
+        let rows = (try? await model.readHomeComposerCommands(workspaceURL: folder, runtimeURL: runtime, connection: connection)) ?? []
+        let commands = rows.filter { $0.builtin == false }.map {
+            RemoteComposerCommand(name: $0.name, description: RemoteText.short($0.description, RemoteText.detailLimit),
+                                  argumentHint: RemoteText.short($0.argumentHint, RemoteText.detailLimit))
+        }
+        if homeCommandCache.count >= 32 { homeCommandCache.removeAll() }
+        homeCommandCache[key] = (Date(), commands)
+        return commands
     }
 
     static func newTaskRequiresConfirmation(_ options: ComposerSessionOptions) -> Bool {
@@ -1092,7 +1130,7 @@ final class AppModelRemoteBridge: RemoteBridge {
         case let .failure(error): return .failure(error)
         }
         guard let runtime = model.runtimeSelections.selectedURL(for: harness) else {
-            return .failure(RemoteError(.unavailable, "No harness can start a task"))
+            return .failure(RemoteError(.unavailable, "No harness can start a task", reason: .harness))
         }
         let accountChoices = model.connections.choices(for: [harness])
         let explicitAccount = start.accountID.flatMap { id in accountChoices.first { $0.id == id && $0.canSelect } }
@@ -1100,6 +1138,13 @@ final class AppModelRemoteBridge: RemoteBridge {
             return .failure(RemoteError(.notAllowed, "The account is unavailable", reason: .account))
         }
         let connection = explicitAccount.map { $0.connection } ?? model.connections.selected(for: harness)
+        // A leading command goes as the home composer sends one: a user command its slash list offers here.
+        if let command = RemoteServer.isSlashCommand(start.text) ? start.text.split(whereSeparator: \.isWhitespace).first : nil {
+            let offered = await homeUserCommands(harness: harness, folder: folder, runtime: runtime, connection: connection)
+            guard offered.contains(where: { "/" + $0.name == command }) else {
+                return .failure(RemoteError(.unsupportedCommand, "The new-task composer offers no such command here"))
+            }
+        }
         var choice: NewTaskModelChoice?
         switch Self.choosing(start.settings, harness: harness, from: draft.modelChoices[harness], model: model,
                              connection: connection, folder: folder, allowsConfirmed: start.confirmed) {
@@ -1158,7 +1203,7 @@ final class AppModelRemoteBridge: RemoteBridge {
             guard let created = try await model.createTask(submission) else {
                 Self.discard(stored)
                 let reason = model.bootstrapError != previousError ? model.bootstrapError : nil
-                return .failure(RemoteError(.internal, reason ?? "The task did not start"))
+                return .failure(RemoteError(.internal, reason ?? "The task did not start", reason: reason == nil ? nil : .failed))
             }
             return .success(created.id.uuidString)
         } catch let signIn as HarnessSignInRequired {
@@ -1166,7 +1211,7 @@ final class AppModelRemoteBridge: RemoteBridge {
             return .failure(RemoteError(.notAllowed, signIn.localizedDescription, reason: .signIn))
         } catch {
             Self.discard(stored)
-            return .failure(RemoteError(.internal, error.localizedDescription))
+            return .failure(RemoteError(.internal, error.localizedDescription, reason: .failed))
         }
     }
 

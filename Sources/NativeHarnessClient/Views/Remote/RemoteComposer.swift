@@ -124,6 +124,11 @@ struct RemoteComposer: View {
         .onChange(of: composerState?.nextMessageSuggestion, initial: true) { _, suggestion in
             draft.nextMessageSuggestion = draft.text.isEmpty ? suggestion : nil
         }
+        // What the host's composer says about the task's last message or command (`keepUnsent`, a command that
+        // failed), under the text as the local composer's notice, until the host's goes or this composer's own replaces it.
+        .onChange(of: composerState?.notice, initial: true) { previous, notice in
+            if let notice { draft.notice = notice } else if draft.notice == previous { draft.notice = nil }
+        }
         .onChange(of: isRunning) { _, running in
             if running { draft.nextMessageSuggestion = nil }
         }

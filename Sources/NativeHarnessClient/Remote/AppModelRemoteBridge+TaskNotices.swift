@@ -19,6 +19,13 @@ extension AppModelRemoteBridge {
             notices.accountName = model.accountChoice(harness: session.harness, connection: connection).title
             notices.accountMoveInTurn = AppModel.isWorking(session)
         }
+        // The card above the Mac's composer, where the conversation does not show the error itself. Its transcript and
+        // Codex state are read only while there is an error, so a task streaming without one costs nothing here.
+        if let error = model.errorBySessionID[session.id], let shown = TaskErrorNotice.message(
+            error, harness: session.harness, entries: model.transcriptBySessionID[session.id] ?? [],
+            codexTaskState: model.codexPresentationBySessionID[session.id]) {
+            notices.error = RemoteText.short(shown, RemoteText.errorLimit)
+        }
         return notices == RemoteTaskNotices() ? nil : notices
     }
 }

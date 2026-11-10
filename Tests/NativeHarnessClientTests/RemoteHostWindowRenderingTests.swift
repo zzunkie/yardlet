@@ -584,6 +584,13 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
             XCTAssertTrue(elements.contains { $0.label == "Summarize new crash reports" }, elements.description)
             XCTAssertTrue(elements.contains { $0.label == L10n.string("Run now") }, elements.description)
         }
+        // A schedule action the host refuses says why on the schedules screen, in this Mac's words for its reason.
+        model.schedules.refused(.failure("r", RemoteError(.notAllowed, "Edit it on the Mac", reason: .hostOnly)))
+        let refusal = L10n.format("Do this on %@.", model.name)
+        try await render("remote-host-schedule-refused", size: size, model: model, hosts: hosts) { elements in
+            XCTAssertTrue(elements.contains { $0.value == refusal }, elements.description)
+        }
+        model.commandError = nil
         let detailSize = NSSize(width: 900, height: 1000)
         let remoteMorning = try XCTUnwrap(model.schedules.schedule(morning.id.uuidString))
         try await render("remote-schedule-detail", size: detailSize, titled: false) {
@@ -870,6 +877,13 @@ final class RemoteHostWindowRenderingTests: XCTestCase {
             return nil
         }
         XCTAssertEqual(routes, [[.codexThread(child.id.uuidString)]])
+        // A phone reading the basic detail is offered what the turn does too: the plan to carry out and the child task
+        // to open, while what the subagent read and wrote stays in full detail.
+        let basic = try XCTUnwrap(AppModelRemoteBridge(model: host).conversation(of: plan.id.uuidString)?.turns.last)
+        XCTAssertNotNil(basic.items.first { $0.kind == .turn }?.planToImplement)
+        let basicSubagent = try XCTUnwrap(basic.items.first { $0.activity == "subagent" }?.subagent)
+        XCTAssertEqual(basicSubagent.taskIds, [child.id.uuidString])
+        XCTAssertNil(basicSubagent.input)
         try await render("remote-full-codex", size: size, model: model, hosts: hosts)
         XCTAssertEqual(remoteTurn.actions.planToImplement, localTurn.actions.planToImplement)
         XCTAssertEqual(remoteTurn.actions.questionsToAnswer, localTurn.actions.questionsToAnswer)

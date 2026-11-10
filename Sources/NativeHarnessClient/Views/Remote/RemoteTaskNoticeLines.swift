@@ -1,12 +1,22 @@
 import SwiftUI
 import YardletRemote
 
-/// The host's notices drawn by the local task's own lines. Recreating a missing worktree stays on the host.
+/// The host's notices drawn by the local task's own lines, in their order: the task's error card, the missing folder,
+/// the provider's notices and the account move. Recreating a missing worktree stays on the host, as does the harness's
+/// settings the error card would open.
 struct RemoteTaskNoticeLines: View {
     let notices: RemoteTaskNotices
+    var harness: HarnessKind = .claudeCode
     let cancelAccountMove: @MainActor () -> Void
 
     var body: some View {
+        if let error = notices.error {
+            TranscriptErrorCard(harness: harness, message: error, recoverable: true)
+                // The composer's column, so the reason sits over the composer, as the local task's card does.
+                .frame(maxWidth: ParityTheme.contentWidth)
+                .padding(.horizontal, 24)
+                .frame(maxWidth: .infinity)
+        }
         if let path = notices.missingFolder {
             TaskFolderMissingBanner(notice: TaskFolderMissingNotice(
                 missing: TaskFolderMissing(path: path, worktreeBranch: notices.worktreeBranch),

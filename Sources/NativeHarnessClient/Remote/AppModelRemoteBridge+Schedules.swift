@@ -269,7 +269,7 @@ extension AppModelRemoteBridge {
                     return .failure(RemoteError(.notAllowed, "Confirm the unattended schedule's permissions"))
                 }
                 guard !supplied.destination.startsInNewWorktree || folder.map(SuggestedTaskPlace.isInRepository) == true else {
-                    return .failure(RemoteError(.notAllowed, "The project is not in a Git repository"))
+                    return .failure(RemoteError(.notAllowed, "The project is not in a Git repository", reason: .worktree))
                 }
                 destination.startsInNewWorktree = supplied.destination.startsInNewWorktree
                 destination.parentTaskID = existing?.destination.parentTaskID

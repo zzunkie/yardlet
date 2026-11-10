@@ -81,19 +81,27 @@ extension RemoteHostWindowRenderingTests {
         notices.warning = RemoteLimit(status: "warning", window: "session", usedFraction: 0.95)
         notices.warningReset = RemoteJSON.milliseconds(Date().addingTimeInterval(3600))
         notices.accountName = "Work account"; notices.accountMoveInTurn = true
+        // The task's error card above them, as the host's window draws it where the conversation does not.
+        let failure = "Claude Code ended before it answered."
+        notices.error = failure
         let localNotices = TaskProviderNotices(limitWarning: HarnessRateLimit(status: .warning, window: .session,
             resetsAt: Date(timeIntervalSince1970: Double(notices.warningReset!) / 1000), usedFraction: 0.95),
             resumedAfterRestart: true, reconnecting: true)
-        try await render("local-next-notices", size: NSSize(width: 850, height: 320), titled: false) {
+        try await render("local-next-notices", size: NSSize(width: 850, height: 420), titled: false) {
             VStack {
+                TranscriptErrorCard(harness: .claudeCode, message: failure, recoverable: true)
+                    .frame(maxWidth: ParityTheme.contentWidth).padding(.horizontal, 24).frame(maxWidth: .infinity)
                 TaskFolderMissingBanner(notice: TaskFolderMissingNotice(
                     missing: TaskFolderMissing(path: folder.path, worktreeBranch: nil), isRecreating: false, recreateWorktree: {}))
                 ProviderNoticeLines(notices: localNotices)
                 TaskAccountMoveLine(notice: TaskAccountMoveNotice(accountName: "Work account", cancel: {}))
             }.background(ParityTheme.canvas)
         }
-        try await render("remote-next-notices", size: NSSize(width: 850, height: 320), titled: false) {
+        let summary = TranscriptRecoveryProjection.errorSummary(failure)
+        try await render("remote-next-notices", size: NSSize(width: 850, height: 420), titled: false) {
             VStack { RemoteTaskNoticeLines(notices: notices, cancelAccountMove: {}) }.background(ParityTheme.canvas)
+        } check: { elements in
+            XCTAssertTrue(elements.contains { $0.label.contains(summary) || $0.value.contains(summary) }, elements.description)
         }
     }
 }

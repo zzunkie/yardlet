@@ -46,8 +46,10 @@ relative to events):
 
 - `re`: the request's `id`. `ok`: whether it succeeded. On success the message's result fields sit
   beside `ok`; on failure `error.code` is one of §8 and `error.message` is an English diagnostic for
-  logs, not for the UI. A refusal may also say what it is about: `error.reason` (§15.16) and `error.setting`, the
-  id of the setting it concerns, never a value. A client treats a reason it does not know as absent.
+  logs, not for the UI. A refusal may also say what it is about: `error.reason` (§8) and `error.setting`, the
+  id of the setting it concerns, never a value. A client words a refusal from its `reason` when it has one and from
+  its `code` otherwise, and treats a reason it does not know as absent. Only the reasons `failed` and `form` make
+  `message` the host's own words for the person, which a client shows as they are.
 - A frame whose `id` cannot be read (not JSON, not an object, `id` missing, not a string or longer
   than 64 characters) gets `{"re": "", "ok": false, "error": {"code": "badRequest", …}}`.
 
@@ -208,7 +210,13 @@ means the Mac accepted the command; what happens next arrives as events.
 - `text`: trimmed; 1–32,000 characters. Plain text only, no attachments.
 - Errors: `emptyMessage`, `tooLarge`, `unsupportedCommand` (the first word is a slash command such as
   `/clear` or `/model` — commands stay on the Mac, but for those `runComposerCommand` runs, §15.23), `busy` (the Mac is editing a message in this task,
-  switching its account, or another app holds the conversation), `notFound`.
+  reason `editing`; switching its account or otherwise changing the task, `changing`; or another app holds the
+  conversation, `otherApp`), `unavailable` (the task's folder is gone, `folderMissing`), `notAllowed` (pictures or files
+  the task does not take, `attachments`), `notFound`.
+- `ok: true` means the Mac took the message. Its own composer then sends it, and what goes wrong after that shows
+  where the Mac shows it: the message stays in the conversation with the turn's `error` item (§6.7), or waits as a
+  `queueFailed` item with Retry (§6.2, §15.33), and the error the Mac's window shows above its composer is the task's
+  `notices.error` (§15.31).
 
 #### `answerApproval`
 
@@ -222,8 +230,10 @@ means the Mac accepted the command; what happens next arrives as events.
   session", "Always allow", provider options with a broader scope) and answers to questions and plan
   reviews stay on the Mac.
 - Errors: `requestNotFound` (no longer waiting, answered elsewhere, or unknown), `notAllowed` (that
-  answer is not offered for this request), `unavailable` (the task is not connected to its harness on
-  the Mac), `notFound`.
+  answer is not offered for this request; `hostOnly` when only the Mac's card gives it), `unavailable` (the task is not
+  connected to its harness on the Mac, reason `notConnected`), `notFound`. A request Yardlet holds itself, which its own
+  card answers whether or not the task is connected, is answered the same way here: a question a restart of Yardlet
+  cut off, and what a task's session tools or the subagent runs they host wait on.
 
 #### `stopTurn`
 
@@ -532,6 +542,29 @@ The provider's notices beside the turn (a model reroute, a warning) and context 
 | `unknownDevice` | v2 handshake: the phone's key is not paired, or the device was removed (§13.1) |
 | `linkUnavailable` | v2 handshake: a link request to a Mac not signed in to an account (§12.1) |
 
+A refusal's optional `reason` (§2) says what it is about, so a client words it itself. A client that does not know a
+reason words the refusal by its `code`.
+
+| reason | what it is about |
+|---|---|
+| `harness` | the Mac does not offer the harness now (§15.16), or none can start a task |
+| `setting` | a setting, or a value of it, the Mac's menus do not offer now (§15.16) |
+| `confirmation` | a choice the Mac asks to confirm, sent without `confirmed` (§15.16) |
+| `account` | an account the Mac cannot start or move the task on now (§15.16, §15.33) |
+| `worktree` | a new worktree asked for outside a Git repository (§15.16, §15.35) |
+| `attachments` | pictures or files the harness or the task does not take (§4.4, §15.16) |
+| `signIn` | the harness's login on the Mac needs signing in first (§15.16) |
+| `folderMissing` | the task's or the project's folder no longer exists on the Mac |
+| `notConnected` | the task is not connected to its harness on the Mac now |
+| `otherApp` | another app holds the task's conversation |
+| `editing` | a message of the task is being edited on the Mac |
+| `changing` | the task is changing on the Mac: moving to another account, another change under way, or the message is on its way |
+| `queue` | messages wait in the task's queue |
+| `running` | it waits for the running turn to end, or a run of the schedule is starting |
+| `hostOnly` | it is done on the Mac itself |
+| `failed` | the Mac or the harness tried and could not; `message` says why in its own words, for the person |
+| `form` | a form's value does not fit; `message` names the field and the problem in the Mac's words (§15.19) |
+
 Close codes: 1000 normal, 1003 text frame, 1009 frame too large, 4401 handshake, decryption or link nonce
 failed, 4403 device removed, 4408 idle or nothing in time, 4426 unsupported version, 4429 rate limited,
 4503 remote off, Yardlet quitting, or too many connections.
@@ -581,6 +614,14 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
 
 Every revision of protocol 2 only adds optional fields or states a rule, except where it says otherwise.
 
+- 2026-11-10: refusal `reason` values for the state a command met (§8), and the rule that only `failed` and `form` make
+  `message` the person's (§2); a task's `notices.error` (§15.31) and the Mac composer's `notice` (§15.33); next steps,
+  a subagent's Stop and Open child task, and a created schedule's row in every subscription, not only in full detail
+  (§15.24, §15.31); a request Yardlet holds answered whether or not its task is connected (§4.4); `createTask` with a
+  user command the new-task slash list offers (§15.5); why a suggested task's Start failed, `suggestionFailure`
+  (§15.9). Not only additions: `archiveTask` archives a running task as the Mac's sidebar does, and a failed archive,
+  rename, delete, restore, Resume or account choice answers `internal` rather than `ok` or `unavailable` (§15.10,
+  §15.32).
 - 2026-11-10: a suggested task's Options from another device: `suggestionOptions`, and Start with the client's
   choices, advertised by the snapshot's `suggestionOptions` (§15.9).
 - 2026-11-08: a connection waiting on a link request is held to 65,536 bytes a message (§7, §13.2). At most 40 finished
@@ -1010,7 +1051,8 @@ them with the token.
   `custom` (≤ 4,000 characters), `skipped` only where `skippable`. Sent the way the Mac's card sends
   the same answers.
 - Errors: `notFound`, `requestNotFound`, `notAllowed` (`answer` not offered, a label the step does not
-  have, a step missing), `tooLarge`, `unavailable`.
+  have, a step missing; `hostOnly` for a plan review the Mac keeps), `tooLarge`, `unavailable` (`notConnected`, as
+  §4.4's `answerApproval`).
 
 ### 15.4 `reviewPlan`
 
@@ -1036,9 +1078,12 @@ characters). Errors as §15.3.
 - Starts a task as the Mac's new-task composer would with that project (or Chats, `projectId` `"chats"`, which
   the Mac takes whether or not its snapshot lists Chats yet) chosen and the text typed: its harness, model, account and worktree setting as they are now on the Mac. The new task is listed
   (a `tasksChanged` event) before this response arrives, so the phone can subscribe to it at once.
+- `text` may start with a Claude Code user command that the new-task composer's slash list offers for the project
+  (`newTaskOptions` with `readCommands`, §15.33), which the task sends as its first message, as the Mac's home composer
+  does. Any other leading slash command is `unsupportedCommand`.
 - A command (§7). Errors: `notFound` (no such project, or it cannot take tasks), `emptyMessage`,
-  `tooLarge`, `unsupportedCommand`, `unavailable` (no harness, or the project's folder is gone), `busy`,
-  `internal` (the task did not start; `message` says why).
+  `tooLarge`, `unsupportedCommand`, `unavailable` (no harness, reason `harness`, or the project's folder is gone,
+  `folderMissing`), `busy`, `internal` (the task did not start; with reason `failed`, `message` says why).
 
 ### 15.6 Push and devices
 
@@ -1078,8 +1123,9 @@ characters). Errors as §15.3.
 ### 15.9 Suggested tasks
 
 `activity` items with `activity` `taskSuggestion` carry `suggestionId`, `suggestionState` (`open`, `starting`,
-`started`, `failed`, `dismissed`, `sentHere`), `startedTaskId` once started, and in `options` the actions the
-phone may take: `start`, `here` (do it in this task), `dismiss`.
+`started`, `failed`, `dismissed`, `sentHere`), `startedTaskId` once started, `suggestionFailure` while `failed` (since
+2026-11-10, ≤ 2,000 characters: why the Start failed, in the Mac's words, as the chip's row says it), and in `options`
+the actions the phone may take: `start`, `here` (do it in this task), `dismiss`.
 
 ```json
 {"id": "19", "type": "actOnSuggestion", "taskId": "4C1F…", "suggestionId": "task_1a2b3c4d", "action": "start"}
@@ -1134,8 +1180,9 @@ that task's account, and the place the Mac's Options shows.
 {"id": "21", "type": "archiveTask", "taskId": "4C1F…"}
 ```
 
-As the sidebar's Pin and Archive. Commands. An archived task leaves the list (`removedTaskIds`). Errors:
-`notFound`, `busy` (the Mac cannot archive it now, for example while it runs).
+As the sidebar's Pin and Archive, which archives a running task too. Commands. An archived task leaves the list
+(`removedTaskIds`). Errors: `notFound`, `internal` (the task was not archived; with reason `failed`, `message` says
+why, as the Mac's window does).
 
 ### 15.11 Link requests
 
@@ -1360,7 +1407,8 @@ shows, instead of the few §4.4 and §15.13 name.
   `integer` (`minimum`, `maximum`), `boolean`, `choice` (one of `options`), `choices` (several, `minItems`,
   `maxItems`). `default` is the field's value to start from. `{"type": "chooseAnswer", …, "choice": "1",
   "values": {"repo": "acme/web", "private": true, "team": "web"}}`: the Mac checks the values as its card does and
-  answers `notAllowed` with the first problem in `message` ("Repository: Required") when one does not fit. A value
+  answers `notAllowed` with reason `form` and the first problem in `message` ("Repository: Required") when one does
+  not fit. A value
   of the wrong kind for its field, or for no field, is refused the same way, never replaced by the field's default. The
   sentence the form asks with, which the Mac's card shows above the fields, is the item's `message` (§6.5). The
   form's item also keeps `moreOnMac` for phones that do not read `choices`.
@@ -1602,8 +1650,10 @@ message's Edit message, and Fork from here. Each acts through the path the Mac's
   `argumentHint` or an explicitly classified CLI user command. A command that starts a task (`clear`, `new`, `fork`) answers with its `taskId`, listed before the
   answer as a new task is (§15.5); the Mac's window does not switch to it. `compact`, `clear` and `new` wait for the
   task's turn to end, as on the Mac. Errors: `notFound`, `notAllowed` (not listed now, or `arguments` it does not take),
-  `busy` (a turn runs, the task is changing, or another app holds it), `tooLarge`, `unavailable` (the task's folder is
-  gone), `internal` (the new task did not start).
+  `busy` (a turn runs, `running`; a message is being edited, `editing`; messages wait in the queue, `queue`; the task is
+  changing, `changing`; or another app holds it, `otherApp`), `tooLarge`, `unavailable` (the task's folder is gone,
+  `folderMissing`), `internal` (the new task did not start). What fails once the command runs is the Mac composer's
+  `notice` (§15.33), as the Mac's composer says it.
 - The `turn` item of a turn that offers them carries `options`: `edit` (the turn's Edit message: Codex's latest request
   once every turn has finished, Claude Code's latest message while the task is idle) and `fork` (Fork from here: a
   finished Codex turn, or a Claude Code task's latest turn while idle, which forks its whole conversation). An edit is
@@ -1615,8 +1665,9 @@ message's Edit message, and Fork from here. Each acts through the path the Mac's
   A command: Edit message and Send, as on the Mac. The turn is replaced by the edited message and a new turn starts;
   the message's pictures stay with it, and `text` (as `sendMessage`'s) takes the place of its words. Whatever the
   Mac's composer for the task held comes back to it afterwards. Errors: `notFound`, `notAllowed` (the turn offers no
-  edit now, or the provider refused it; `message` says why), `busy` (a message is being edited on the Mac, messages
-  wait in the task's queue, or the task is changing), `emptyMessage`, `tooLarge`, `unsupportedCommand`.
+  edit now; or the provider refused it, reason `failed`, and `message` says why), `busy` (a message is being edited on
+  the Mac, `editing`; messages wait in the task's queue, `queue`; or the task is changing, `changing`), `emptyMessage`,
+  `tooLarge`, `unsupportedCommand`.
 - ```json
   {"id": "45", "type": "forkTask", "taskId": "4C1F…", "turnId": "3F2A…"}
   ```
@@ -1665,14 +1716,16 @@ for what they read beyond §6's items. A phone keeps §6.
 
   `input` and `output` are cut at 64,000 characters. `taskIds`: the listed tasks a Codex subagent's child threads run
   in, which its "Open child task" opens; a child the Mac does not list yet has none. `copyText`: what the card's copy
-  button takes.
+  button takes. Since 2026-11-10 every subscription carries what the card does: `subagent` with only `taskIds`, and
+  `activityId` and `canStop` for a Claude Code subagent (§15.31's `subtask`), so a client reading §6 can stop the
+  subagent and open its child tasks too.
 - **`compaction`** on a `notice` item that is a context compaction: `{"phase": "completed", "tokensBefore": 180000,
   "tokensAfter": 42000}`, `phase` `started`, `completed` or `failed` with the provider's `message`.
 - **`providerNotice`** on a `notice` item a provider sent beside a turn: `{"kind": "modelRerouted", "message": "gpt-5.5",
   "fromModel": "gpt-6", "reason": "highRiskCyberActivity"}`; `kind` `modelRerouted`, `warning`, `configWarning` or
   `deprecationNotice`, with `details` and a config file's `path` when it names one. A client words it itself.
 - **`schedule`** on the `activity` item of a schedule an agent created (§15.21): `{"id": "6B0E…", "name": "Morning
-  check"}`, the schedule's ID and the name the call gave.
+  check"}`, the schedule's ID and the name the call gave. In every subscription since 2026-11-10.
 - **`limit`** on an `error` item with `errorKind` `usageLimit`: the limit as the provider reported it, which a client
   words itself (its `title` and `message` are the Mac's words):
 
@@ -2067,8 +2120,9 @@ shows an update notice instead of sending those links to the client's own loopba
 
 ### 15.31 Conversation next steps and content
 
-The optional snapshot flag `nextSteps: true` advertises `nextStep`. Full-detail turn headers carry
-optional `planToImplement`, `nextQuestions` and `answeredQuestions`; each question carries `title`,
+The optional snapshot flag `nextSteps: true` advertises `nextStep`. Turn headers carry
+optional `planToImplement`, `nextQuestions` and `answeredQuestions` in every subscription (before 2026-11-10, only in
+full detail), the plan cut at 8,000 characters outside full detail as plan items are; each question carries `title`,
 `options`, and the provider's `itemID`. Answered questions additionally carry `answerOptions` and
 `customAnswer`. Full assistant items retain `sentWhileWorking` and `unmarkedAnswer`, so questions
 keep their host position instead of becoming a closing answer. These fields are derived from the host's conversation projection and retained with
@@ -2085,8 +2139,8 @@ The client captures the shown turn ID in the button's handler, so a stale button
 uses the plan on the host, ignoring client text. Retry uses the host's retry path. Resume targets the
 current Claude Code limit card and requires that its reset time has passed; its item advertises
 `resumeAfterReset` even before that time so the same local countdown can reveal Resume when due.
-Stale targets return `notFound`; unavailable actions return `notAllowed`, and an edit or account move
-returns `busy`. No additional device permission is required. Each accepted or rejected command is
+Stale targets return `notFound`; unavailable actions return `notAllowed` (reason `running` while a turn runs, `queue`
+while messages wait), and an edit or account move returns `busy` (`editing`, `changing`). No additional device permission is required. Each accepted or rejected command is
 logged with its kind, task, device and result, never answer or plan text.
 
 The optional `conversationBodies` flag advertises the additional full-detail bodies below. Older
@@ -2129,8 +2183,11 @@ an audited command. Neither requires an additional device permission. A Codex ch
 to open as the host's own task.
 
 `taskNotices: true` advertises the optional task `notices`: provider limit warnings, restart resume,
-reconnecting, missing folder and account-move state. The desktop composer uses the local notice
-views. `cancelAccountMove` invokes the host's own cancellation path and is audited. Recreating a
+reconnecting, missing folder and account-move state, and `error` (since 2026-11-10, ≤ 2,000 characters): the task's
+last error where the Mac shows it as a card above its composer, in the Mac's words. That is where the conversation
+does not show it already: a conversation with no items yet, or a Codex task's failure outside its turns (a turn the
+App Server refused, a runtime that ended). It goes when the Mac clears it, on the task's next message. The desktop
+composer uses the local notice views and error card. `cancelAccountMove` invokes the host's own cancellation path and is audited. Recreating a
 missing worktree remains on the host; the client keeps that notice's action disabled.
 
 `fileRewind: true` advertises `fileRewind(taskId, action, pointId?, receipt?, confirmed?)`, with actions
@@ -2181,7 +2238,12 @@ device, task or project ID and result, never a title or account value. These act
   restores the host's archived record through its ordinary unarchive operation. Archived tasks in a project the host
   hides are neither listed nor restorable (`notFound`), as their live tasks are left out of the snapshot.
 - `setProjectPinned`: `projectId` and `pinned`; `archiveProjectChats`: `projectId` and `confirmed: true`, after
-  the ordinary project archive confirmation. Partial failures are reported. Edit project, Show in Finder and
+  the ordinary project archive confirmation. Partial failures are reported.
+- An action that did not take answers `internal`: with reason `failed` and the Mac window's own words in `message` when
+  it has them (a rename, delete, restore or project archive the provider refused), else without a reason. A Resume
+  refused before it starts names what stopped it as `sendMessage` does (`folderMissing`, `otherApp`, `editing`,
+  `changing`), `busy` with `running` while a turn runs; one that did not connect answers `internal` with the task's
+  error. Choose account that did not take answers `internal`; its reason is the task's `notices.error`. Edit project, Show in Finder and
   Remove project remain host-only.
 
 Task snapshots optionally include `originalConversation`, `canOpenOriginalConversation`, `canReturnToChats`, `attached`, `hasProviderSession`, `accountName` and
@@ -2195,7 +2257,10 @@ The optional snapshot flag `composerExtensions: true` advertises these additions
 composer with hosts that omit it. Existing requests and optional fields remain readable by phone clients.
 
 - `composerState` takes `taskId` and returns `composerState`: `nextMessageSuggestion` when available,
-  `queuePaused`, and optional `connectors` with their display names, state, tool count, source and opaque IDs.
+  `queuePaused`, optional `connectors` with their display names, state, tool count, source and opaque IDs, and
+  optional `notice` (since 2026-11-10, ≤ 2,000 characters): what the Mac's composer for the task says under its text
+  in the Mac's words, such as why a message stayed unsent or a command such as Compact failed. A message, command or
+  edit the Mac takes from another device clears it, as sending from its own composer does.
   Connector credentials, server configuration and environment values never travel. The desktop draws the local
   connector menu and accepts the next-message suggestion with Tab.
   A meaningful state change emits `taskSettingsChanged` with optional `composerChanged: true`; that flag

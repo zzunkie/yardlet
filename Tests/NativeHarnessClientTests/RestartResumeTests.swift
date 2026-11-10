@@ -3,6 +3,7 @@ import Foundation
 import SwiftTerm
 import SwiftUI
 import XCTest
+import YardletRemote
 @testable import NativeHarnessClient
 
 /// Continuing the turns a quit or an update cut off. Claude Code and Codex tasks follow the Claude
@@ -750,10 +751,16 @@ final class RestartResumeTests: XCTestCase {
                        question)
 
         after.store.selectedSessionID = asking.id
-        await after.respond(to: card.id, answer: .questions([
-            PermissionQuestionAnswer(question: "Which layout?", selectedLabels: ["Side by side"]),
-            PermissionQuestionAnswer(question: "Which checks run?", selectedLabels: ["Unit", "UI"], customAnswer: "lint"),
-        ]), in: askingTask)
+        // Answered from another device as the card answers it, though no harness runs for the task yet.
+        XCTAssertFalse(after.isAttached(asking.id))
+        let steps = try XCTUnwrap(card.form?.questionSteps.map(\.id))
+        let remote = await AppModelRemoteBridge(model: after).perform(.answerQuestion(taskID: asking.id.uuidString,
+            requestID: card.id, answers: [
+                RemoteQuestionAnswer(questionId: steps[0], options: ["Side by side"]),
+                RemoteQuestionAnswer(questionId: steps[1], options: ["UI", "Unit"], text: "lint"),
+                RemoteQuestionAnswer(questionId: steps[2], skipped: true),
+            ]))
+        XCTAssertNil(remote)
         try await waitUntil { await fixture.transports.all.last?.sentValues.isEmpty == false }
         let answer = await fixture.transports.all.last?.sentValues.first
         XCTAssertEqual(answer?["message"]?["content"]?.stringValue,

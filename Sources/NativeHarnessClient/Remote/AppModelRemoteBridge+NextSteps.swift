@@ -5,16 +5,30 @@ import YardletRemote
 extension AppModelRemoteBridge {
     func nextStep(taskID: String, turnID: String, action: RemoteNextStep, text: String?) async -> RemoteError? {
         guard let model, let session = session(taskID) else { return RemoteError(.notFound) }
-        guard !model.switchingAccounts.contains(session.id), !model.sessionMutations.contains(session.id),
-              model.composerDrafts.tasks.draft(for: session.id).editState == nil else { return RemoteError(.busy) }
+        guard !model.switchingAccounts.contains(session.id), !model.sessionMutations.contains(session.id) else {
+            return RemoteError(.busy, "The task is changing on the Mac", reason: .changing)
+        }
+        guard model.composerDrafts.tasks.existingDraft(for: session.id)?.editState == nil else {
+            return RemoteError(.busy, "A message is being edited on the Mac", reason: .editing)
+        }
         let presentation = presentation(of: session, in: model)
         guard let turn = presentation.turns.first(where: { $0.id == turnID }) else { return RemoteError(.notFound) }
+        // What waits for the task to be idle says so, as the Mac hides these buttons until then; a retry looks at the
+        // task's status only, as the Mac's does.
+        func busy(_ codexTurnCounts: Bool = true) -> RemoteError? {
+            if session.status == .running || session.status == .waitingForApproval
+                || (codexTurnCounts && Self.codexState(of: session, in: model)?.activeTurnID != nil) {
+                return RemoteError(.notAllowed, "Available when the turn ends", reason: .running)
+            }
+            if !model.followUps.queue(for: session.id).isEmpty {
+                return RemoteError(.notAllowed, "Messages wait in the task's queue", reason: .queue)
+            }
+            return nil
+        }
         switch action {
         case .implementPlan:
-            guard presentation.turns.last?.id == turnID, let plan = turn.actions.planToImplement,
-                  session.status != .running, session.status != .waitingForApproval,
-                  Self.codexState(of: session, in: model)?.activeTurnID == nil,
-                  model.followUps.queue(for: session.id).isEmpty else { return RemoteError(.notAllowed) }
+            guard presentation.turns.last?.id == turnID, let plan = turn.actions.planToImplement else { return RemoteError(.notAllowed) }
+            if let busy = busy() { return busy }
             Task { await model.implementCodexPlan(plan, in: session) }
         case .answer, .answerWhileWorking:
             guard session.harness == .codex, presentation.turns.last?.id == turnID,
@@ -30,16 +44,13 @@ extension AppModelRemoteBridge {
             if action == .answerWhileWorking {
                 guard Self.codexState(of: session, in: model)?.activeTurnID == turnID else { return RemoteError(.notAllowed) }
             }
-            if action == .answer {
-                guard session.status != .running, session.status != .waitingForApproval,
-                      Self.codexState(of: session, in: model)?.activeTurnID == nil,
-                      model.followUps.queue(for: session.id).isEmpty else { return RemoteError(.busy) }
-            }
+            if action == .answer, let busy = busy() { return RemoteError(.busy, busy.message, reason: busy.reason) }
             Task { await model.submitCodex(CodexComposerDraft(inputs: [.text(reply)]),
                                             action: action == .answerWhileWorking ? .steer : .automatic, to: session) }
         case .retry:
-            guard turn.actions.canRetry, session.status == .ready || session.status == .failed,
-                  model.followUps.queue(for: session.id).isEmpty else { return RemoteError(.notAllowed) }
+            guard turn.actions.canRetry else { return RemoteError(.notAllowed) }
+            if let busy = busy(false) { return busy }
+            guard session.status == .ready || session.status == .failed else { return RemoteError(.notAllowed) }
             Task { await model.retryTurn(turnID, in: session) }
         case .resumeAfterReset:
             guard session.harness == .claudeCode, session.status != .running, session.status != .waitingForApproval,
@@ -52,15 +63,17 @@ extension AppModelRemoteBridge {
     }
 }
 
-/// Carried with the memoized turn, so old questions and plans are not rebuilt for each event.
+/// Carried with the memoized turn, so old questions and plans are not rebuilt for each event. Every subscription
+/// gets them, so a client that reads the conversation in its basic detail offers the same next steps; only the plan's
+/// words are cut there as its plan items' are.
 extension RemoteConversationProjection {
-    static func addNextSteps(_ actions: ConversationTurnActions, to item: inout RemoteItem) {
+    static func addNextSteps(_ actions: ConversationTurnActions, to item: inout RemoteItem, isFull: Bool = true) {
         func question(_ source: CodexAsyncQuestion) -> RemoteNextQuestion {
             RemoteNextQuestion(title: RemoteText.capped(source.title, RemoteText.questionLimit).text,
                 options: source.options.prefix(32).map { RemoteText.capped($0, RemoteText.questionLimit).text },
                 itemID: source.itemID)
         }
-        item.planToImplement = RemoteText.short(actions.planToImplement, RemoteText.fullTextLimit)
+        item.planToImplement = RemoteText.short(actions.planToImplement, isFull ? RemoteText.fullTextLimit : RemoteText.planTextLimit)
         if !actions.questionsToAnswer.isEmpty { item.nextQuestions = actions.questionsToAnswer.prefix(32).map(question) }
         if let answered = actions.answeredQuestions {
             item.answeredQuestions = answered.questions.prefix(32).map { source in

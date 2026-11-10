@@ -568,7 +568,7 @@ enum RemoteTurnProjection {
 }
 
 /// What became of a host's suggested task (§15.9), as the chip reads it: started, sent here or dismissed, or
-/// starting, or a start that failed. The host does not say why a start failed.
+/// starting, or a start that failed, with why where the host says.
 enum RemoteSuggestionState {
     static func resolution(_ item: RemoteItem) -> TaskSuggestionResolution? {
         let at = Date(timeIntervalSince1970: 0)
@@ -583,7 +583,7 @@ enum RemoteSuggestionState {
     static func progress(_ item: RemoteItem, host: String) -> TaskSuggestionStore.Progress? {
         switch item.suggestionState {
         case "starting": .starting
-        case "failed": .failed(L10n.format("%@ couldn't start this task.", host))
+        case "failed": .failed(item.suggestionFailure ?? L10n.format("%@ couldn't start this task.", host))
         default: nil
         }
     }

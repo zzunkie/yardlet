@@ -2055,6 +2055,18 @@
 "On another computer, copy the link and open it in Yardlet there." = "다른 컴퓨터에서는 링크를 복사해 그 컴퓨터의 Yardlet에서 여세요.";
 /* The desktop remote: another Mac's Yardlet in a window of its own (File › Connect to Mac…). */
 "%@ couldn't do that." = "%@에서 그 작업을 하지 못했습니다.";
+"This task's folder on %@ no longer exists." = "%@에서 이 작업의 폴더가 더 이상 없습니다.";
+"This task isn't connected to its harness on %@." = "이 작업은 지금 %@에서 하네스에 연결되어 있지 않습니다.";
+"Another app on %@ holds this conversation." = "%@의 다른 앱이 이 대화를 열어 두고 있습니다.";
+"A message is being edited on %@." = "%@에서 메시지를 고치는 중입니다.";
+"Messages are waiting in this task's queue." = "이 작업의 대기열에 메시지가 기다리고 있습니다.";
+"Available when this turn ends." = "이번 턴이 끝나면 할 수 있습니다.";
+"Do this on %@." = "%@에서 하세요.";
+"Sign in to this harness on %@ first." = "먼저 %@에서 이 하네스에 로그인하세요.";
+"%@ doesn't offer this harness now." = "지금 %@에서는 이 하네스를 쓸 수 없습니다.";
+"That choice isn't offered on %@ now." = "지금 %@에서는 그 선택을 쓸 수 없습니다.";
+"That account can't be used on %@ now." = "지금 %@에서는 그 계정을 쓸 수 없습니다.";
+"This harness doesn't take these pictures or files." = "이 하네스는 이 그림이나 파일을 받지 않습니다.";
 "%@ didn't accept the connection." = "%@에서 연결을 받지 않았습니다.";
 "%@ is changing this task. Try again in a moment." = "%@에서 이 작업을 바꾸는 중입니다. 잠시 뒤 다시 시도하세요.";
 "%@ no longer lists this task." = "%@에 이 작업이 더 이상 없습니다.";

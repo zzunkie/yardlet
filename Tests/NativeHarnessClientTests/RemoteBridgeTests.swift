@@ -2120,14 +2120,22 @@ final class RemoteBridgeTests: XCTestCase {
         // Editing a message on the Mac: the phone's text is not taken as the edit.
         model.composerDrafts.tasks.draft(for: session.id).editState = ConversationEditState(
             session: session, targetID: "t", previousID: nil, originalText: "x", draft: TaskDraftSnapshot(), entries: [])
-        let awaited34 = await bridge.perform(.sendMessage(taskID: taskID, text: "Other"))?.code
-        XCTAssertEqual(awaited34, .busy)
+        let awaited34 = await bridge.perform(.sendMessage(taskID: taskID, text: "Other"))
+        XCTAssertEqual(awaited34?.code, .busy)
+        XCTAssertEqual(awaited34?.reason, .editing, "Said as what it is about, for the device's own words")
         model.composerDrafts.tasks.draft(for: session.id).editState = nil
 
         await adapter.emit(.sessionStatusChanged(.running), for: session.id, sequence: 3)
         try await waitUntil { model.store.sessions.first?.status == .running }
         let awaited35 = await bridge.perform(.stopTurn(taskID: taskID))
         XCTAssertNil(awaited35)
+
+        // The sidebar's Archive, which takes a running task too.
+        await adapter.emit(.sessionStatusChanged(.running), for: session.id, sequence: 5)
+        try await waitUntil { model.store.sessions.first?.status == .running }
+        let archived = await bridge.perform(.archiveTask(taskID: taskID))
+        XCTAssertNil(archived)
+        XCTAssertFalse(model.store.sessions.contains { $0.id == session.id })
         await model.shutdown()
     }
 

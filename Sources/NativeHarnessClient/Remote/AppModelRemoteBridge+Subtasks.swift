@@ -44,6 +44,6 @@ extension AppModelRemoteBridge {
             return .success(RemoteSubtaskTranscript.window(
                 RemoteConversation(turns: turns.reversed(), hasEarlier: hasEarlier),
                 omittedItemText: L10n.string("This part of the task is too large to show here.")))
-        } catch { return .failure(RemoteError(.unavailable)) }
+        } catch { return .failure(RemoteError(.internal, error.localizedDescription, reason: .failed)) }
     }
 }

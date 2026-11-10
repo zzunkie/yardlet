@@ -1342,7 +1342,11 @@ public actor RemoteServer {
         case let .createTask(start):
             var created: String?
             await command(envelope.id, request: request, on: id) {
-                if let error = Self.validateMessage(start.text) ?? Self.validateImages(start.images) { return error }
+                // A leading slash command is the bridge's to judge: the host's new-task composer sends a user command
+                // its slash list offers as the first message (§15.5).
+                if let error = Self.validateMessage(start.text, allowsCommand: true) ?? Self.validateImages(start.images) {
+                    return error
+                }
                 var trimmed = start
                 trimmed.text = start.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 switch self.uploadedFiles(start.files, on: id) {
@@ -2146,11 +2150,12 @@ public actor RemoteServer {
 
     /// `sendMessage` text and images the Mac would not send (§4.4, §15.14). With images or files the
     /// text may be empty.
-    static func validateMessage(_ text: String, images: [RemoteImage] = [], hasFiles: Bool = false) -> RemoteError? {
+    static func validateMessage(_ text: String, images: [RemoteImage] = [], hasFiles: Bool = false,
+                                allowsCommand: Bool = false) -> RemoteError? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty, images.isEmpty, !hasFiles { return RemoteError(.emptyMessage) }
         if trimmed.count > RemoteProtocol.maxMessageCharacters { return RemoteError(.tooLarge) }
-        if isSlashCommand(trimmed) { return RemoteError(.unsupportedCommand, "Slash commands stay on the Mac") }
+        if !allowsCommand, isSlashCommand(trimmed) { return RemoteError(.unsupportedCommand, "Slash commands stay on the Mac") }
         return validateImages(images)
     }
 
@@ -2164,7 +2169,7 @@ public actor RemoteServer {
     }
 
     /// The first word is a slash command (`/clear`, `/model`, `/review:pr`), not a path (`/Users/me`).
-    static func isSlashCommand(_ text: String) -> Bool {
+    public static func isSlashCommand(_ text: String) -> Bool {
         guard let first = text.split(whereSeparator: \.isWhitespace).first, first.first == "/" else { return false }
         let name = first.dropFirst()
         guard let initial = name.first, initial.isLetter else { return false }

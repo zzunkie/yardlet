@@ -9,5 +9,7 @@ public struct RemoteTaskNotices: Codable, Equatable, Sendable {
     public var worktreeBranch: String?
     public var accountName: String?
     public var accountMoveInTurn: Bool?
+    /// The task's last error where the host shows it above the composer, in the host's words (§15.31).
+    public var error: String?
     public init() {}
 }

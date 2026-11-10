@@ -2055,6 +2055,18 @@
 "On another computer, copy the link and open it in Yardlet there." = "On another computer, copy the link and open it in Yardlet there.";
 /* The desktop remote: another Mac's Yardlet in a window of its own (File › Connect to Mac…). */
 "%@ couldn't do that." = "%@ couldn't do that.";
+"This task's folder on %@ no longer exists." = "This task's folder on %@ no longer exists.";
+"This task isn't connected to its harness on %@." = "This task isn't connected to its harness on %@.";
+"Another app on %@ holds this conversation." = "Another app on %@ holds this conversation.";
+"A message is being edited on %@." = "A message is being edited on %@.";
+"Messages are waiting in this task's queue." = "Messages are waiting in this task's queue.";
+"Available when this turn ends." = "Available when this turn ends.";
+"Do this on %@." = "Do this on %@.";
+"Sign in to this harness on %@ first." = "Sign in to this harness on %@ first.";
+"%@ doesn't offer this harness now." = "%@ doesn't offer this harness now.";
+"That choice isn't offered on %@ now." = "That choice isn't offered on %@ now.";
+"That account can't be used on %@ now." = "That account can't be used on %@ now.";
+"This harness doesn't take these pictures or files." = "This harness doesn't take these pictures or files.";
 "%@ didn't accept the connection." = "%@ didn't accept the connection.";
 "%@ is changing this task. Try again in a moment." = "%@ is changing this task. Try again in a moment.";
 "%@ no longer lists this task." = "%@ no longer lists this task.";

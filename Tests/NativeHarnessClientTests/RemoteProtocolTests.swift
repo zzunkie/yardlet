@@ -454,6 +454,10 @@ final class RemoteProtocolTests: XCTestCase {
         for code in RemoteErrorCode.allCases {
             XCTAssertTrue(document.contains("| `\(code.rawValue)` |"), "\(code.rawValue) is missing from the error table")
         }
+        // A client words a refusal by its reason (§2), so every reason is in the reasons table.
+        for reason in RemoteRefusal.allCases {
+            XCTAssertTrue(document.contains("| `\(reason.rawValue)` |"), "\(reason.rawValue) is missing from the reasons table")
+        }
         for name in ["tasksChanged", "attention", "conversation", "conversationReset", "conversationEnded", "revoked", "closing",
                      "linked", "linkRefused", "linkRequest", "linkResolved", "schedulesChanged"] {
             XCTAssertTrue(document.contains("\"event\": \"\(name)\""), name)

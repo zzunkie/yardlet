@@ -390,7 +390,10 @@ struct RemoteHostView: View {
                     .id(taskID)
             }
         case .newTask:
-            plainDetail { RemoteNewTaskView(model: model, draft: drafts.newTask, chosenProjectID: $drafts.newTaskProjectID) }
+            // The new task draws its refusals under its own composer.
+            plainDetail(showsRefusal: false) {
+                RemoteNewTaskView(model: model, draft: drafts.newTask, chosenProjectID: $drafts.newTaskProjectID)
+            }
         case let .schedule(id):
             plainDetail {
                 if let schedule = model.schedules.schedule(id) {
@@ -421,11 +424,21 @@ struct RemoteHostView: View {
         }
     }
 
-    /// A detail with nothing to name in the title bar: the bar's row over it, then the connection's line.
-    private func plainDetail(@ViewBuilder _ content: () -> some View) -> some View {
+    /// A detail with nothing to name in the title bar: the bar's row over it, then the connection's line and what the
+    /// host refused last (a schedule's Run now, Pause or Delete, or a sidebar action taken from here).
+    private func plainDetail(showsRefusal: Bool = true, @ViewBuilder _ content: () -> some View) -> some View {
         VStack(spacing: 0) {
             RemoteTitleBar(context: titleBar) { WindowDragRegion().frame(maxWidth: .infinity) }
             RemoteConnectionBanner(model: model, directory: directory)
+            if showsRefusal, let error = model.commandError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+            }
             content()
         }
     }
@@ -1296,9 +1309,8 @@ struct RemoteTaskView: View {
                         .padding(.horizontal, 16)
                 }
             if let notices = task?.notices {
-                RemoteTaskNoticeLines(notices: notices, cancelAccountMove: {
-                    model.send(.cancelAccountMove(taskID: conversation.taskID))
-                })
+                RemoteTaskNoticeLines(notices: notices, harness: task.flatMap { HarnessKind(rawValue: $0.harness) } ?? .claudeCode,
+                                      cancelAccountMove: { model.send(.cancelAccountMove(taskID: conversation.taskID)) })
             }
             if let editing {
                 ConversationEditBanner(canCancel: true) {
@@ -1385,8 +1397,9 @@ struct RemoteTaskView: View {
         // A subagent's child thread is the host's task it runs in (§15.24).
         actions.openCodexSubagent = { [model] taskID in model.select(.task(taskID)) }
         if model.nextSteps, model.isConnected {
-            actions.retryTurn = { turnID in model.send(.nextStep(taskID: conversation.taskID, turnID: turnID, action: .retry)) }
+            // As the local task offers them: once the task is idle, with nothing queued and no message being edited.
             if model.task(conversation.taskID)?.running != true, conversation.queued.isEmpty, editing == nil {
+                actions.retryTurn = { turnID in model.send(.nextStep(taskID: conversation.taskID, turnID: turnID, action: .retry)) }
                 actions.implementCodexPlan = { _ in sendNextStep(.implementPlan, turnID: nextTurnID) }
                 actions.answerQuestion = { sendNextStep(.answer, turnID: nextTurnID, text: $0) }
             }

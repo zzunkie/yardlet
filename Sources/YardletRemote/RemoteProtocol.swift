@@ -113,7 +113,8 @@ public struct RemoteError: Error, Codable, Equatable, Sendable {
     }
 }
 
-/// Why the host refused a new task or its options (§15.16).
+/// What a refusal is about (§2, §8): a new task or its options (§15.16), or the state of the task a command named. A
+/// client words it itself; `failed` and `form` carry the host's own words in `message`.
 public enum RemoteRefusal: String, Codable, Sendable, CaseIterable {
     /// The host does not offer the harness now.
     case harness
@@ -129,6 +130,26 @@ public enum RemoteRefusal: String, Codable, Sendable, CaseIterable {
     case attachments
     /// The harness's login needs signing in on the host first.
     case signIn
+    /// The task's or the project's folder no longer exists on the host.
+    case folderMissing
+    /// The task is not connected to its harness on the host now.
+    case notConnected
+    /// Another app holds the task's conversation.
+    case otherApp
+    /// A message of the task is being edited on the host.
+    case editing
+    /// The task is changing on the host: moving to another account, or another change under way.
+    case changing
+    /// Messages wait in the task's queue.
+    case queue
+    /// It waits for the running turn to end, or a run of the schedule is starting.
+    case running
+    /// It is done on the host itself.
+    case hostOnly
+    /// The host or the harness tried and could not; `message` says why in its own words, for the person.
+    case failed
+    /// A form's value does not fit; `message` names the field and the problem in the host's words.
+    case form
 }
 
 /// WebSocket close codes the server uses (§8).
@@ -463,6 +484,8 @@ public struct RemoteItem: Codable, Equatable, Sendable {
     public var suggestionId: String?
     public var suggestionState: String?
     public var startedTaskId: String?
+    /// Why the chip's Start failed, in the Mac's words, while `suggestionState` is `failed`.
+    public var suggestionFailure: String?
 
     // approval
     public var requestId: String?
@@ -2852,9 +2875,12 @@ public struct RemoteComposerState: Codable, Equatable, Sendable {
     public var queuePaused: Bool
     public var connectors: [RemoteComposerConnector]?
     public var toolListFollowsNextTurn: Bool
+    /// What the host's own composer for the task says under its text: why a message or a command did not go (§15.33).
+    public var notice: String?
     public init(nextMessageSuggestion: String? = nil, queuePaused: Bool = false,
-                connectors: [RemoteComposerConnector]? = nil, toolListFollowsNextTurn: Bool = false) {
+                connectors: [RemoteComposerConnector]? = nil, toolListFollowsNextTurn: Bool = false, notice: String? = nil) {
         self.nextMessageSuggestion = nextMessageSuggestion; self.queuePaused = queuePaused
         self.connectors = connectors; self.toolListFollowsNextTurn = toolListFollowsNextTurn
+        self.notice = notice
     }
 }

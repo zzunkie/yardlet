@@ -279,6 +279,6 @@ extension AppModelRemoteBridge {
             }
             changeHandler?(.taskRail(taskID))
             return nil
-        } catch { return RemoteError(.unavailable, "The task action could not finish") }
+        } catch { return RemoteError(.internal, error.localizedDescription, reason: .failed) }
     }
 }

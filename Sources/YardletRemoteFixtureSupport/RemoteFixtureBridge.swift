@@ -857,6 +857,8 @@ public actor RemoteFixtureBridge: RemoteBridge {
 
     public func createTask(_ start: RemoteTaskStart) async -> Result<String, RemoteError> {
         guard projects.contains(where: { $0.id == start.projectID }) else { return .failure(RemoteError(.notFound)) }
+        // The fixture's projects offer no user commands for a new task's first message.
+        if RemoteServer.isSlashCommand(start.text) { return .failure(RemoteError(.unsupportedCommand)) }
         guard let harness = start.harness.map(Harness.init(id:)) ?? .claude else {
             return .failure(RemoteError(.notAllowed, reason: .harness))
         }

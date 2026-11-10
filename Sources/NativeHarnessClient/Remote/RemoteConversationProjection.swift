@@ -10,15 +10,14 @@ import YardletRemote
 /// out, and fetched one line at a time by `itemDetail` (§15.8); text is capped.
 ///
 /// A subscription's full detail (§15.24) adds what the Mac's own cards read beyond a line: a sent message's
-/// pictures as small previews, a subagent's card, a compaction's marker, a provider's notice, a created
-/// schedule's row and a plan limit's windows, each from the same normalized item, and text capped far higher.
+/// pictures as small previews, a subagent's card, a compaction's marker, a provider's notice and a plan limit's
+/// windows, each from the same normalized item, and text capped far higher. What a turn offers to do (its next
+/// steps, stopping or opening a subagent, a created schedule's row) comes in either detail.
 enum RemoteConversationProjection {
     /// What full detail reads from the app beside a turn.
     struct Full {
         /// Previews of the turn's sent pictures, by their URL; a picture without one counts in `imageCount` only.
         var previews: [URL: Data] = [:]
-        /// The listed tasks the turn's Codex child threads run in, by thread ID.
-        var childTasks: [String: String] = [:]
     }
 
     static func conversation(_ presentation: ConversationPresentation, workspaceURL: URL?) -> RemoteConversation {
@@ -35,28 +34,32 @@ enum RemoteConversationProjection {
         RemoteConversation(turns: uniqued(presentation.turns.map(project)), hasEarlier: presentation.earlier != .none)
     }
 
-    static func turn(_ turn: ConversationTurn, harness: HarnessKind, workspaceURL: URL?, full: Full? = nil) -> RemoteTurn {
+    /// `childTasks`: the listed tasks the turn's Codex child threads run in, by thread ID, which "Open child task" opens.
+    static func turn(_ turn: ConversationTurn, harness: HarnessKind, workspaceURL: URL?, full: Full? = nil,
+                     childTasks: [String: String] = [:]) -> RemoteTurn {
         var items: [RemoteItem] = []
         func add(_ item: RemoteItem?) { if let item { items.append(item) } }
         for item in turn.prompt + turn.notices {
-            add(self.item(item, turnID: turn.id, harness: harness, workspaceURL: workspaceURL, inWork: false, full: full))
+            add(self.item(item, turnID: turn.id, harness: harness, workspaceURL: workspaceURL, inWork: false, full: full,
+                          childTasks: childTasks))
         }
         let headerIndex = items.count
         if let plan = turn.plan { add(self.plan(plan, turnID: turn.id)) }
         let kept = Set(turn.workKeptWhenFolded.map(\.id))
         for item in turn.work {
             add(self.item(item, turnID: turn.id, harness: harness, workspaceURL: workspaceURL,
-                          inWork: !kept.contains(item.id), full: full))
+                          inWork: !kept.contains(item.id), full: full, childTasks: childTasks))
         }
         for item in turn.answers {
-            add(self.item(item, turnID: turn.id, harness: harness, workspaceURL: workspaceURL, inWork: false, full: full))
+            add(self.item(item, turnID: turn.id, harness: harness, workspaceURL: workspaceURL, inWork: false, full: full,
+                          childTasks: childTasks))
         }
         if let outcome = turn.outcome {
             add(self.outcome(outcome, id: "outcome:\(turn.id)", turnID: turn.id, inWork: false, isFull: full != nil))
         }
         for request in turn.requests { add(self.request(request, turnID: turn.id, inWork: false, isFull: full != nil)) }
         var heading = header(turn, workCount: items.filter { $0.inWork == true }.count)
-        if full != nil { addNextSteps(turn.actions, to: &heading) }
+        addNextSteps(turn.actions, to: &heading, isFull: full != nil)
         items.insert(heading, at: headerIndex)
         return RemoteTurn(id: turn.id, items: items)
     }
@@ -152,7 +155,8 @@ enum RemoteConversationProjection {
     // MARK: - Items
 
     static func item(
-        _ item: ConversationItem, turnID: String, harness: HarnessKind, workspaceURL: URL?, inWork: Bool, full: Full? = nil
+        _ item: ConversationItem, turnID: String, harness: HarnessKind, workspaceURL: URL?, inWork: Bool, full: Full? = nil,
+        childTasks: [String: String] = [:]
     ) -> RemoteItem? {
         var result = RemoteItem(id: "i:\(item.id)", turnId: turnID, kind: .activity)
         if inWork { result.inWork = true }
@@ -238,16 +242,21 @@ enum RemoteConversationProjection {
             activity(&result, "subagent", subagent.title, item.phase)
             result.detail = RemoteText.short(subagent.detail ?? subagent.status, RemoteText.detailLimit)
             if subagent.isApproved { result.approved = true }
-            if let full {
-                result.subagent = self.subagent(subagent, full: full)
-                for route in subagent.routes {
-                    if case let .harnessSubtask(reference, activityID) = route {
-                        result.subagent?.activityId = activityID
-                        result.subagent?.canStop = reference.taskID != nil && item.phase == .running ? true : nil
-                    }
+            // What the card does comes in either detail: Stop, and Open child task; what it reads, in full detail.
+            var card = full == nil ? RemoteSubagent() : self.subagent(subagent)
+            for route in subagent.routes {
+                switch route {
+                case let .harnessSubtask(reference, activityID):
+                    card.activityId = activityID
+                    card.canStop = reference.taskID != nil && item.phase == .running ? true : nil
+                case let .codexThread(threadID):
+                    if let task = childTasks[threadID] { card.taskIds = (card.taskIds ?? []) + [task] }
+                default:
+                    continue
                 }
-                result.subagent?.copyText = RemoteText.short(item.copyDetails, RemoteText.fullSubagentLimit)
             }
+            if full != nil { card.copyText = RemoteText.short(item.copyDetails, RemoteText.fullSubagentLimit) }
+            if card != RemoteSubagent() { result.subagent = card }
         case let .taskSuggestion(suggestion):
             activity(&result, "taskSuggestion", suggestion.title ?? firstLine(suggestion.prompt), item.phase)
             result.detail = RemoteText.short(suggestion.tldr, RemoteText.detailLimit)
@@ -256,7 +265,7 @@ enum RemoteConversationProjection {
         case let .scheduleCreated(creation):
             // A tool line on the phone, which has no Scheduled tasks to open.
             activity(&result, "tool", L10n.format("Created scheduled task: %@", creation.name), item.phase)
-            if full != nil { result.schedule = RemoteScheduleCreation(id: creation.scheduleID.uuidString, name: creation.name) }
+            result.schedule = RemoteScheduleCreation(id: creation.scheduleID.uuidString, name: creation.name)
         case let .settingChanged(change):
             // A tool line on the phone, which has no Settings to open.
             activity(&result, "tool", L10n.format("Changed setting: %@", change.title), item.phase)
@@ -325,20 +334,13 @@ enum RemoteConversationProjection {
         return nil
     }
 
-    /// A subagent's card as the Mac draws it (§15.24): what it was asked and reported, its model, and the listed
-    /// tasks its Codex child threads run in.
-    private static func subagent(_ subagent: ConversationSubagent, full: Full) -> RemoteSubagent {
-        let threads = subagent.routes.compactMap { route -> String? in
-            if case let .codexThread(threadID) = route { return threadID }
-            return nil
-        }
-        let tasks = threads.compactMap { full.childTasks[$0] }
-        return RemoteSubagent(
+    /// A subagent's card as the Mac draws it (§15.24): what it was asked and reported, and its model.
+    private static func subagent(_ subagent: ConversationSubagent) -> RemoteSubagent {
+        RemoteSubagent(
             kind: subagent.kind, detail: RemoteText.short(subagent.detail, RemoteText.requestDetailLimit),
             input: RemoteText.short(subagent.input, RemoteText.fullSubagentLimit),
             output: RemoteText.short(subagent.output, RemoteText.fullSubagentLimit),
-            model: subagent.model, harnessLabel: subagent.harnessLabel, background: subagent.isBackground ? true : nil,
-            taskIds: tasks.isEmpty ? nil : tasks)
+            model: subagent.model, harnessLabel: subagent.harnessLabel, background: subagent.isBackground ? true : nil)
     }
 
     /// A line's words as the Mac draws them (§6.4), each part capped as the title is.

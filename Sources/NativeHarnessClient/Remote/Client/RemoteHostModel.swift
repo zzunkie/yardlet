@@ -626,13 +626,17 @@ final class RemoteHostModel: Identifiable {
         for (id, handler) in waiting { handler(.failure(id, RemoteError(.unavailable, "Not connected"))) }
     }
 
-    /// A refusal in the person's words.
+    /// A refusal in the person's words: what it is about when the host said (`reason`), else what its code means. The
+    /// host's `message` is shown only where the reason says it holds the host's own words (§2).
     static func message(for error: RemoteError?, host: String) -> String {
-        switch error?.code {
+        if let error, let reason = error.reason, let words = words(for: reason, message: error.message, host: host) {
+            return words
+        }
+        return switch error?.code {
         case .unavailable?: L10n.format("Can't reach %@ right now.", host)
         case .busy?: L10n.format("%@ is changing this task. Try again in a moment.", host)
         case .requestNotFound?: L10n.string("This request was already answered.")
-        case .notAllowed?: error?.message.isEmpty == false ? error!.message : L10n.string("That isn't offered for this task now.")
+        case .notAllowed?: L10n.string("That isn't offered for this task now.")
         case .unsupportedCommand?: L10n.format("Slash commands run on %@.", host)
         case .tooLarge?: L10n.string("The message is too long.")
         case .emptyMessage?: L10n.string("Write a message first.")
@@ -640,6 +644,26 @@ final class RemoteHostModel: Identifiable {
         case .notRunning?: L10n.string("Nothing is running.")
         case .notFound?: L10n.format("%@ no longer lists this task.", host)
         default: L10n.format("%@ couldn't do that.", host)
+        }
+    }
+
+    private static func words(for reason: RemoteRefusal, message: String, host: String) -> String? {
+        switch reason {
+        case .failed, .form: message.isEmpty ? nil : message
+        case .folderMissing: L10n.format("This task's folder on %@ no longer exists.", host)
+        case .notConnected: L10n.format("This task isn't connected to its harness on %@.", host)
+        case .otherApp: L10n.format("Another app on %@ holds this conversation.", host)
+        case .editing: L10n.format("A message is being edited on %@.", host)
+        case .changing: L10n.format("%@ is changing this task. Try again in a moment.", host)
+        case .queue: L10n.string("Messages are waiting in this task's queue.")
+        case .running: L10n.string("Available when this turn ends.")
+        case .hostOnly: L10n.format("Do this on %@.", host)
+        case .signIn: L10n.format("Sign in to this harness on %@ first.", host)
+        case .harness: L10n.format("%@ doesn't offer this harness now.", host)
+        case .setting, .confirmation: L10n.format("That choice isn't offered on %@ now.", host)
+        case .account: L10n.format("That account can't be used on %@ now.", host)
+        case .worktree: L10n.string("The folder isn't in a Git repository, so it can't have a worktree.")
+        case .attachments: L10n.string("This harness doesn't take these pictures or files.")
         }
     }
 

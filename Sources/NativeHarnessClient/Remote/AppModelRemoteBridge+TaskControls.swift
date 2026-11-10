@@ -237,17 +237,18 @@ extension AppModelRemoteBridge {
             return .failure(RemoteError(.notAllowed, "/\(name) takes nothing after it"))
         }
         if model.switchingAccounts.contains(session.id) || model.sessionMutations.contains(session.id) {
-            return .failure(RemoteError(.busy, "The task is changing on the Mac"))
+            return .failure(RemoteError(.busy, "The task is changing on the Mac", reason: .changing))
         }
         switch model.sendRefusal(for: session) {
-        case .heldElsewhere?: return .failure(RemoteError(.busy, "Another app holds this conversation"))
-        case .folderMissing?: return .failure(RemoteError(.unavailable, "The task's folder no longer exists"))
+        case .heldElsewhere?: return .failure(RemoteError(.busy, "Another app holds this conversation", reason: .otherApp))
+        case .folderMissing?: return .failure(RemoteError(.unavailable, "The task's folder no longer exists", reason: .folderMissing))
         case nil: break
         }
         // What the Mac's composer would only say in its notice is said here instead.
         if Self.isRunning(session), name == "compact" || name == "clear" || name == "new" {
-            return .failure(RemoteError(.busy, L10n.format("Available when %@ finishes this turn", session.harness.displayName)))
+            return .failure(RemoteError(.busy, "Available when the turn ends", reason: .running))
         }
+        Self.messageAccepted(by: session, in: model)
         switch session.harness {
         case .codex:
             guard let row = CodexComposerCommands.catalog(Self.codexCommandContext(of: session, in: model)).first(where: { $0.name == name }),
@@ -267,8 +268,11 @@ extension AppModelRemoteBridge {
                 }
                 return .success(started.id.uuidString)
             case .compact:
-                if model.composerDrafts.tasks.draft(for: session.id).editState != nil || !model.followUps.queue(for: session.id).isEmpty {
-                    return .failure(RemoteError(.busy, L10n.string("Use this command with an empty composer while the chat is idle.")))
+                if model.composerDrafts.tasks.draft(for: session.id).editState != nil {
+                    return .failure(RemoteError(.busy, "A message is being edited on the Mac", reason: .editing))
+                }
+                if !model.followUps.queue(for: session.id).isEmpty {
+                    return .failure(RemoteError(.busy, "Messages wait in the task's queue", reason: .queue))
                 }
                 Task { await model.runCodexComposerCommand(.compact, in: session) }
                 return .success(nil)
@@ -348,11 +352,14 @@ extension AppModelRemoteBridge {
               Self.turnOptions(turn, canBranch: true).contains("edit") else {
             return RemoteError(.notAllowed, "This message can no longer be edited")
         }
+        if model.composerDrafts.tasks.existingDraft(for: session.id)?.editState != nil {
+            return RemoteError(.busy, "A message is being edited on the Mac", reason: .editing)
+        }
         if model.switchingAccounts.contains(session.id) || model.sessionMutations.contains(session.id) {
-            return RemoteError(.busy, "The task is changing on the Mac")
+            return RemoteError(.busy, "The task is changing on the Mac", reason: .changing)
         }
         guard model.followUps.queue(for: session.id).isEmpty else {
-            return RemoteError(.busy, "Messages wait in the task's queue")
+            return RemoteError(.busy, "Messages wait in the task's queue", reason: .queue)
         }
         let start: AppModel.ConversationEditStart
         if session.harness == .codex {
@@ -364,7 +371,8 @@ extension AppModelRemoteBridge {
             guard let target = turn.actions.editLatest else { return RemoteError(.notAllowed) }
             start = .claudeMessage(target.text)
         }
-        if let reason = await model.editMessage(start, to: text, in: session) { return RemoteError(.notAllowed, reason) }
+        Self.messageAccepted(by: session, in: model)
+        if let reason = await model.editMessage(start, to: text, in: session) { return RemoteError(.notAllowed, reason, reason: .failed) }
         return nil
     }
 

@@ -383,8 +383,9 @@ final class RemoteSecureTests: XCTestCase {
         let phone = try await harness.pairedPhone()
         let created = try await phone.request(#"{"id":"1","type":"createTask","projectId":"P","text":"  Add a dark mode toggle  "}"#)
         XCTAssertEqual(created.taskId, "NEW-1")
-        let slash = try await phone.request(#"{"id":"2","type":"createTask","projectId":"P","text":"/clear"}"#)
-        XCTAssertEqual(slash.error?.code, .unsupportedCommand)
+        // A leading command is the bridge's to judge, as the Mac's new-task slash list offers some (§15.5).
+        let slash = try await phone.request(#"{"id":"2","type":"createTask","projectId":"P","text":"/review the parser"}"#)
+        XCTAssertNil(slash.error)
         _ = try await phone.request(#"{"id":"3","type":"answerQuestion","taskId":"A","requestId":"q1","answers":[{"questionId":"q","options":["Juniper"]}]}"#)
         _ = try await phone.request(#"{"id":"4","type":"reviewPlan","taskId":"A","requestId":"p1","decision":"keepPlanning","reason":"Split it"}"#)
         _ = try await phone.request(#"{"id":"5","type":"setPinned","taskId":"A","pinned":true}"#)
@@ -398,7 +399,7 @@ final class RemoteSecureTests: XCTestCase {
             .setPinned(taskID: "A", pinned: true)
         ])
         let createdTasks = await harness.bridge.createdTasks
-        XCTAssertEqual(createdTasks.map(\.text), ["Add a dark mode toggle"])
+        XCTAssertEqual(createdTasks.map(\.text), ["Add a dark mode toggle", "/review the parser"])
 
         // Since 2026-10-27 (§15.13–§15.15): a photo larger than v1's 64 KB frame comes through in chunks, a
         // file that is not one is refused, and a denial carries its note.

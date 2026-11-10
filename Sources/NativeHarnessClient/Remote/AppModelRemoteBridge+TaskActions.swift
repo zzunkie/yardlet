@@ -10,7 +10,10 @@ extension AppModelRemoteBridge {
             guard let record = model.store.archivedSessions?.first(where: { $0.id == id }),
                   Self.listsArchived(record, model: model) else { return RemoteError(.notFound) }
             await model.unarchive(record)
-            return model.store.sessions.contains(where: { $0.id == id }) ? nil : RemoteError(.unavailable)
+            guard !model.store.sessions.contains(where: { $0.id == id }) else { return nil }
+            // The archived list's own line on the Mac (`archivedTaskError`).
+            return model.archivedTaskError.map { RemoteError(.internal, $0, reason: .failed) }
+                ?? RemoteError(.internal, "The task was not restored")
         }
         guard let session = session(taskID) else { return RemoteError(.notFound) }
         switch action.kind {
@@ -23,13 +26,17 @@ extension AppModelRemoteBridge {
             }
             await model.chooseAccount(connection, for: session)
             guard model.store.sessions.first(where: { $0.id == id })?.connection == connection
-                    || model.accountSwitchesAfterTurn[id] == connection else { return RemoteError(.unavailable) }
+                    || model.accountSwitchesAfterTurn[id] == connection else {
+                // The reason is the task's error, which its notices carry (§15.31).
+                return RemoteError(.internal, "The task did not move to the account")
+            }
         case .rename:
             guard let title = action.value?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
                 return RemoteError(.badRequest)
             }
             await model.rename(session, to: title)
-            return model.store.sessions.first(where: { $0.id == id })?.title == title ? nil : RemoteError(.unavailable)
+            return model.store.sessions.first(where: { $0.id == id })?.title == title
+                ? nil : Self.failure(of: model, "The task was not renamed")
         case .markUnread:
             await model.store.markUnread(id: id)
         case .move:
@@ -46,13 +53,19 @@ extension AppModelRemoteBridge {
         case .delete:
             guard action.confirmed else { return RemoteError(.notAllowed) }
             await model.delete(session)
-            if model.store.sessions.contains(where: { $0.id == id }) { return RemoteError(.unavailable) }
+            if model.store.sessions.contains(where: { $0.id == id }) { return Self.failure(of: model, "The task was not deleted") }
         case .resume:
-            guard !model.isAttached(id), session.status != .running, session.status != .waitingForApproval else {
-                return RemoteError(.busy)
+            guard session.status != .running, session.status != .waitingForApproval else {
+                return RemoteError(.busy, "The task is running", reason: .running)
             }
+            guard !model.isAttached(id) else { return RemoteError(.notAllowed, "The task is connected already") }
+            // What the Mac's Resume would only say in its composer's notice is said here instead.
+            if let refusal = Self.composerRefusal(of: session, in: model) { return refusal }
             await model.resume(session)
-            guard model.isAttached(id) else { return RemoteError(.unavailable) }
+            guard model.isAttached(id) else {
+                let error = model.errorBySessionID[id]
+                return RemoteError(.internal, error ?? "The task did not connect", reason: error == nil ? nil : .failed)
+            }
         case .unarchive: break
         }
         return nil
@@ -142,6 +155,12 @@ extension AppModelRemoteBridge {
         }
     }
 
+    /// A menu action that did not take, with the reason the Mac's own window shows (`bootstrapError`) when it has one.
+    static func failure(of model: AppModel, _ diagnostic: String) -> RemoteError {
+        guard let reason = model.bootstrapError else { return RemoteError(.internal, diagnostic) }
+        return RemoteError(.internal, reason, reason: .failed)
+    }
+
     func performProjectAction(_ projectID: String, pinned: Bool?, archive: Bool) async -> RemoteError? {
         guard let model else { return RemoteError(.unavailable) }
         guard let group = model.projects.visibleGroups(sessions: model.store.listedSessions)
@@ -151,7 +170,7 @@ extension AppModelRemoteBridge {
             if project.isPinned != pinned { model.projects.togglePinned(project.id) }
         } else if archive {
             let outcomes = await model.archive(group.sessions)
-            if outcomes.contains(where: { $0.failure != nil }) { return RemoteError(.unavailable, "Some tasks could not be archived") }
+            if outcomes.contains(where: { $0.failure != nil }) { return Self.failure(of: model, "Some tasks could not be archived") }
         } else { return RemoteError(.badRequest) }
         return nil
     }
