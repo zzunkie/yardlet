@@ -108,11 +108,48 @@ final class ClaudeSessionProjectionTests: XCTestCase {
         XCTAssertEqual(activity("agent", in: builder)?.state, .stopped)
     }
 
-    func testTransportErrorStillStopsBackgroundActivities() {
-        var builder = TranscriptBuilder()
-        builder.apply(.activityStarted(HarnessActivity(id: "bg", kind: "Agent", title: "Review", isBackground: true)))
-        builder.apply(.error(message: "Claude process exited", recoverable: false))
-        XCTAssertEqual(activity("bg", in: builder)?.state, .stopped)
+    /// Claude Code runs its background work on after a turn that ends on a usage limit or an error, as
+    /// after one that completes (2.1.308 reported a background shell finished minutes after the limit
+    /// stopped its turn), so its card keeps running and an account move keeps waiting for it. When the
+    /// CLI's process ends, the work ends with it, which the CLI cannot report: the adapter stops the card.
+    func testBackgroundWorkOutlivesTurnsEndedByALimitOrAnErrorButNotItsProcess() async throws {
+        let transport = FakeClaudeTransport()
+        let adapter = ClaudeAdapter(executableURL: URL(filePath: "/tmp/fake-claude"), transportFactory: { _ in transport })
+        let handle = try await adapter.createSession(CreateHarnessSessionRequest(
+            localSessionID: UUID(), workspaceURL: URL(filePath: "/tmp/claude-parity"), initialPrompt: nil
+        ))
+        let recorder = ParityRecorder()
+        let collector = Task {
+            for await event in await adapter.events(for: handle) { await recorder.append(event.payload) }
+        }
+        defer { collector.cancel() }
+        func backgroundCard() async -> TranscriptActivityState? {
+            var builder = TranscriptBuilder()
+            for payload in await recorder.payloads { builder.apply(payload) }
+            return activity("agent", in: builder)?.state
+        }
+        func turnsEnded() async -> Int { await recorder.payloads.filter { $0 == .turnCompleted }.count }
+
+        try await adapter.send("Review", to: handle)
+        for json in [
+            agentStart, backgroundStart, agentAcknowledgement,
+            #"{"type":"assistant","error":"rate_limit","isApiErrorMessage":true,"message":{"content":[{"type":"text","text":"You've hit your limit"}]}}"#,
+            #"{"type":"result","subtype":"success","is_error":true,"result":"You've hit your limit"}"#
+        ] { await transport.emit(try decode(json)) }
+        try await waitUntil { await turnsEnded() == 1 }
+        let limitTurn = await recorder.payloads
+        XCTAssertTrue(limitTurn.contains { if case .usageLimitReached = $0 { true } else { false } })
+        let afterLimit = await backgroundCard()
+        XCTAssertEqual(afterLimit, .running)
+
+        await transport.emit(try decode(#"{"type":"result","subtype":"success","is_error":true,"result":"API Error: 500"}"#))
+        try await waitUntil { await turnsEnded() == 2 }
+        let afterError = await backgroundCard()
+        XCTAssertEqual(afterError, .running)
+
+        await transport.crash()
+        try await waitUntil { await backgroundCard() == .stopped }
+        await adapter.close(handle)
     }
 
     /// Claude Code 2.1.318 refuses a turn with no login as a synthetic assistant message and an error

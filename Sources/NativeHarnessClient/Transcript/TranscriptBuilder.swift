@@ -162,26 +162,20 @@ struct TranscriptBuilder: Sendable {
             upsertPlan(plan)
 
         case .turnCompleted:
-            finishStreamingBlocks()
-            forgetStreamedEntries()
-            completeRunningActivities(includingBackground: false)
+            endTurn()
             expirePendingPermissions()
             // The turn went on past a compaction whose end the provider did not announce.
             finishRunningCompaction(as: .completed)
 
         case let .error(message, recoverable, transient):
-            finishStreamingBlocks()
-            forgetStreamedEntries()
-            completeRunningActivities()
+            endTurn()
             finishRunningCompaction(as: .failed)
             list.append(
                 TranscriptEntry(content: .error(message: message, recoverable: recoverable, transient: transient))
             )
 
         case let .usageLimitReached(limit):
-            finishStreamingBlocks()
-            forgetStreamedEntries()
-            completeRunningActivities()
+            endTurn()
             finishRunningCompaction(as: .failed)
             upsertUsageLimit(limit)
 
@@ -200,12 +194,24 @@ struct TranscriptBuilder: Sendable {
         trimIfNeeded()
     }
 
+    /// The runtime ended, and with its process all the work it ran, the background work too.
     mutating func endRuntime() {
         finishStreamingBlocks()
         forgetStreamedEntries()
-        completeRunningActivities()
+        completeRunningActivities(includingBackground: true)
         expirePendingPermissions()
         finishRunningCompaction(as: .failed)
+    }
+
+    /// What every end of a turn settles, however it ended: completed, on an error or on a usage limit.
+    /// The provider's background work (a background shell or agent) goes on in its process after the
+    /// turn, which Claude Code shows by reporting such a shell finished minutes after the turn that
+    /// started it hit a limit. It ends with its own report, or with the process: `endRuntime`, or the
+    /// adapter's report that its process ended (`ClaudeSessionProjection.processEnded`).
+    private mutating func endTurn() {
+        finishStreamingBlocks()
+        forgetStreamedEntries()
+        completeRunningActivities(includingBackground: false)
     }
 
     /// One card per stopped turn. The provider can name the window and its reset in a report
@@ -432,7 +438,7 @@ struct TranscriptBuilder: Sendable {
         self.currentAssistantEntryID = nil
     }
 
-    private mutating func completeRunningActivities(includingBackground: Bool = true) {
+    private mutating func completeRunningActivities(includingBackground: Bool) {
         for index in entries.indices {
             guard case let .activity(activity, .running) = entries[index].content else { continue }
             guard includingBackground || activity.isBackground != true else { continue }

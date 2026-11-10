@@ -185,6 +185,23 @@ struct ClaudeSessionProjection: Sendable {
         return result
     }
 
+    /// The CLI's process ended, and the background work it ran (a shell, an agent) with it, which the
+    /// CLI can no longer report. Each such task the session shows ends as stopped.
+    mutating func processEnded() -> [HarnessEventPayload] {
+        var result: [HarnessEventPayload] = []
+        for id in taskOrder {
+            guard var task = tasks[id], !task.terminal, task.activity.isBackground == true,
+                  task.activity.subtask?.isSubagentWork != true || shownSubagentTaskIDs.contains(id) else { continue }
+            task.terminal = true
+            task.activity.outcome = .stopped
+            tasks[id] = task
+            activities.removeValue(forKey: task.activity.id)
+            shownSubagentTaskIDs.remove(id)
+            result.append(.activityCompleted(task.activity))
+        }
+        return result
+    }
+
     private mutating func rateLimitPayloads(from frame: JSONValue) -> [HarnessEventPayload] {
         guard let limit = ClaudeEventProjector.rateLimit(from: frame["rate_limit_info"]) else { return [] }
         latestRateLimit = limit

@@ -44,8 +44,9 @@ The latest screen flow and design decisions follow [ACCOUNT_SELECTION_UX.md](ACC
   answered, the message being edited is done, or another change under way ends. A message the person sends then waits
   too, as do one from another task and a schedule's run (`TaskContinuationCoordinator.holdUntilAccountMoves`). A move
   Yardlet chose itself ("Moving tasks to an account with room" below) is different: it never holds up the person.
-  Background work lives in the task's CLI: when that CLI closes first (the person switched the idle task
-  at once, say), what ran in it shows as stopped (`AppModel.closeIdleRuntime`), so the waiting switch goes ahead and the
+  Background work lives in the task's CLI and goes on after a turn a limit or an error ended, as after any other: when
+  that CLI closes first (the person switched the idle task at once, say, or it exited), what ran in it shows as stopped
+  (`AppModel.closeIdleRuntime`, `ClaudeSessionProjection.processEnded`), so the waiting switch goes ahead and the
   messages follow (`ClaudeUsageLimitAppModelTests.testWhatWaitsForAMoveGoesOnceTheRuntimeRunningItsBackgroundWorkCloses`).
   A switch refused then (the target
   signed out, or no longer sharing the history) says why above the composer, as an immediate one does, and what was

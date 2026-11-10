@@ -1324,6 +1324,7 @@ actor ClaudeAdapter:
 
     private func transportStreamEnded(for localSessionID: UUID) {
         guard handles[localSessionID] != nil else { return }
+        for payload in projections[localSessionID]?.processEnded() ?? [] { emit(payload, for: localSessionID) }
         emit(
             .error(
                 message: L10n.string("Claude Code transport ended unexpectedly"),

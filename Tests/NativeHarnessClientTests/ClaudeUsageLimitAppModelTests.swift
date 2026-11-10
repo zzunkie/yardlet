@@ -292,29 +292,42 @@ import XCTest
     /// With Settings › Harness Accounts' moves to an account with room on, a task a limit stopped whose limit
     /// resets after its cache would expire moves at the end of its turn to the account with room, keeps
     /// its conversation and why it moved, and asks Claude to pick up there. The continue the default
-    /// setting armed as the limit came stands aside for the move.
+    /// setting armed as the limit came stands aside for the move. A background command the turn started
+    /// goes on in the CLI after the limit, as after any turn end, so the move waits for it rather than
+    /// closing the CLI that runs it, and goes once it ends.
     func testALimitThatResetsAfterTheCacheExpiresMovesTheTaskToAnAccountWithRoom() async throws {
-        let fixture = try makeFixture()
-        let model = fixture.model
-        read(fixture.first, used: 0.5, in: model)
-        read(fixture.next, used: 0.2, in: model)
-        model.startAccountMoves()
-        let task = try await limitedTask(in: fixture, resetsAt: Date().addingTimeInterval(2 * 3_600))
-        let card = try await waitForLimitCard(in: model, task: task)
+        for runsACommand in [false, true] {
+            let fixture = try makeFixture()
+            let model = fixture.model
+            read(fixture.first, used: 0.5, in: model)
+            read(fixture.next, used: 0.2, in: model)
+            model.startAccountMoves()
+            let command = try json(#"{"type":"system","subtype":"task_started","task_id":"t-shell","tool_use_id":"shell","description":"npm run dev","task_type":"local_bash","is_backgrounded":true}"#)
+            let task = try await limitedTask(in: fixture, resetsAt: Date().addingTimeInterval(2 * 3_600),
+                                             before: runsACommand ? [command] : [])
+            let card = try await waitForLimitCard(in: model, task: task)
+            if runsACommand {
+                try await waitUntil { model.accountMoveHolds[task.id]?.waitsFor == .backgroundWork }
+                XCTAssertEqual(model.store.sessions.first?.connection, fixture.first, "The move waits for the command")
+                XCTAssertEqual(fixture.transports.all.count, 1)
+                await fixture.transports.all.first?.emit(try json(
+                    #"{"type":"system","subtype":"task_notification","task_id":"t-shell","status":"completed","summary":"Done"}"#))
+            }
 
-        try await waitUntil { model.store.sessions.first?.connection == fixture.next && fixture.transports.all.count == 2 }
-        let resumed = try XCTUnwrap(fixture.transports.all.last)
-        try await waitUntil {
-            await resumed.sentValues.contains { $0["message"]?["content"]?.stringValue == UsageLimitContinuation.afterAccountSwitch }
+            try await waitUntil { model.store.sessions.first?.connection == fixture.next && fixture.transports.all.count == 2 }
+            let resumed = try XCTUnwrap(fixture.transports.all.last)
+            try await waitUntil {
+                await resumed.sentValues.contains { $0["message"]?["content"]?.stringValue == UsageLimitContinuation.afterAccountSwitch }
+            }
+            XCTAssertEqual(fixture.transports.all.count, 2)
+            XCTAssertEqual(model.store.sessions.first?.providerSessionID, task.providerSessionID)
+            let assignment = try XCTUnwrap(model.accountAssignments.assignment(for: task.id))
+            XCTAssertEqual(assignment.accountID, fixture.next.id)
+            XCTAssertEqual(assignment.replacedAccountName, fixture.first.name)
+            XCTAssertNil(model.usageLimitAutoContinue[task.id])
+            XCTAssertNotEqual(model.transcriptBySessionID[task.id]?.last?.id, card)
+            XCTAssertNil(model.accountSwitchesAfterTurn[task.id])
         }
-        XCTAssertEqual(fixture.transports.all.count, 2)
-        XCTAssertEqual(model.store.sessions.first?.providerSessionID, task.providerSessionID)
-        let assignment = try XCTUnwrap(model.accountAssignments.assignment(for: task.id))
-        XCTAssertEqual(assignment.accountID, fixture.next.id)
-        XCTAssertEqual(assignment.replacedAccountName, fixture.first.name)
-        XCTAssertNil(model.usageLimitAutoContinue[task.id])
-        XCTAssertNotEqual(model.transcriptBySessionID[task.id]?.last?.id, card)
-        XCTAssertNil(model.accountSwitchesAfterTurn[task.id])
     }
 
     /// A limit that resets before the task's cache expires keeps the task where it is, armed to
@@ -738,13 +751,14 @@ import XCTest
             first: connection(first), next: connection(next), signedOut: connection(signedOut), transports: transports)
     }
 
+    /// - Parameter before: frames of the turn before the limit stops it.
     private func limitedTask(in fixture: Fixture, resetsAt: Date = Date().addingTimeInterval(3_600),
-                             options: [String: String] = [:]) async throws -> SessionRecord {
+                             options: [String: String] = [:], before: [JSONValue] = []) async throws -> SessionRecord {
         let created = await fixture.model.createSession(harness: .claudeCode, workspaceURL: fixture.shared,
             runtimeExecutableURL: fixture.cli, title: "Limit", connection: fixture.first, providerOptions: options)
         _ = try XCTUnwrap(created, fixture.model.errorBySessionID.values.first ?? "Missing task")
         let transport = try XCTUnwrap(fixture.transports.all.first)
-        for frame in limitFrames(resetsAt: resetsAt) { await transport.emit(frame) }
+        for frame in before + limitFrames(resetsAt: resetsAt) { await transport.emit(frame) }
         try await waitUntil { fixture.model.store.sessions.first?.status == .failed }
         return try XCTUnwrap(fixture.model.store.sessions.first)
     }

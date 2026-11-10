@@ -193,10 +193,11 @@ enum TranscriptProjectionFixtures {
         ])
         replays.append(killed)
 
-        var transportError = Replay("transport error")
-        transportError.apply(.activityStarted(HarnessActivity(id: "bg", kind: "Agent", title: "Review", isBackground: true)))
-        transportError.apply(.error(message: "Claude process exited", recoverable: false))
-        replays.append(transportError)
+        // A turn that ends on an error leaves the background work running, as any turn end does.
+        var errorTurn = Replay("error with background work")
+        errorTurn.apply(.activityStarted(HarnessActivity(id: "bg", kind: "Agent", title: "Review", isBackground: true)))
+        errorTurn.apply(.error(message: "API Error: 500", recoverable: true))
+        replays.append(errorTurn)
 
         var lateAcknowledgement = Replay("late acknowledgement")
         try lateAcknowledgement.frames([
