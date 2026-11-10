@@ -101,8 +101,14 @@ final class TaskContinuationCoordinator {
     /// The moves in `accountSwitchesAfterTurn` Yardlet made itself, to an account with room
     /// (AppModel+AccountMoves.swift), and the state each was made for.
     @ObservationIgnored private(set) var automaticAccountMoves: [UUID: AutomaticAccountMove] = [:]
-    /// Tasks whose automatic move the person cancelled: they stay until they work again.
+    /// Tasks whose automatic move the person cancelled, or that Yardlet gave up at its deadline: they
+    /// stay until they work again.
     @ObservationIgnored var declinedAccountMoves = Set<UUID>()
+    /// What each move in `accountSwitchesAfterTurn` waits for once its task's turn has ended, while it
+    /// waits; the line above the composer says it.
+    private(set) var accountMoveHolds: [UUID: AccountMoveHold] = [:]
+    /// The time a move's wait is measured by; tests hand it a clock of their own.
+    @ObservationIgnored var accountMoveClock: () -> Date = { Date() }
 
     // MARK: A task leaving, and quitting
 
@@ -118,6 +124,7 @@ final class TaskContinuationCoordinator {
         accountSwitchesAfterTurn.removeValue(forKey: id)
         automaticAccountMoves.removeValue(forKey: id)
         declinedAccountMoves.remove(id)
+        forgetAccountMoveHold(id)
         accountSwitchWaits.removeValue(forKey: id)?.cancel()
         contextLimitRestarts.removeValue(forKey: id)
     }
@@ -178,23 +185,51 @@ final class TaskContinuationCoordinator {
         switchAccountAfterTurn(id)
     }
 
-    /// Keeps a working task on its account after all. An automatic move the person cancels is not
-    /// made again until the task works again.
+    /// Keeps a working task on its account after all. An automatic move the person cancels, or one
+    /// given up at its deadline, is not made again until the task works again.
     func cancelAccountSwitchAfterTurn(for sessionID: UUID, declined: Bool = true) {
         guard let model, accountSwitchesAfterTurn.removeValue(forKey: sessionID) != nil else { return }
         if automaticAccountMoves.removeValue(forKey: sessionID) != nil, declined {
             declinedAccountMoves.insert(sessionID)
         }
+        forgetAccountMoveHold(sessionID)
         accountSwitchWaits[sessionID]?.cancel()
         // What was sent for the new account goes on this one.
         if !model.isRunning(sessionID) { model.scheduleFollowUpDrain(for: sessionID) }
         model.scheduleShellDelivery(for: sessionID)
     }
 
+    /// The person's own message does not wait for a move Yardlet chose itself (`AppModel.send`): the
+    /// move is called off at once and the message goes on this account. What waited behind the move
+    /// follows that message's turn, as what is queued during a turn does. False when no such move waits.
+    func callOffAutomaticAccountMove(for id: UUID) -> Bool {
+        guard automaticAccountMoves.removeValue(forKey: id) != nil else { return false }
+        accountSwitchesAfterTurn.removeValue(forKey: id)
+        forgetAccountMoveHold(id)
+        accountSwitchWaits[id]?.cancel()
+        return true
+    }
+
+    /// Only an actual change publishes: every window showing a task reads the holds.
+    private func forgetAccountMoveHold(_ id: UUID) {
+        if accountMoveHolds[id] != nil { accountMoveHolds.removeValue(forKey: id) }
+    }
+
+    /// Puts what another task, a schedule or auto-fix sends to an idle task in its queue while the task
+    /// waits to move to another account, whoever chose the move: it goes after the move, on the new
+    /// account, or once the move is cancelled or given up. False when no move waits.
+    func holdUntilAccountMoves(_ input: HarnessUserInput, for id: UUID) -> Bool {
+        guard let model, accountSwitchesAfterTurn[id] != nil else { return false }
+        model.followUps.append(QueuedFollowUp(draft: CodexComposerDraft(input)), to: id)
+        return true
+    }
+
     /// A task whose account was chosen during its turn moves once the turn ends, before the messages
     /// sent meanwhile go: they start its next turn on the new account. One still busy otherwise (a
     /// message the provider holds, a background command) is looked at again, as an account move
-    /// looks again at its tasks; a turn that starts meanwhile looks again when it ends.
+    /// looks again at its tasks; a turn that starts meanwhile looks again when it ends. While it waits,
+    /// its hold says what for, and a move Yardlet chose itself that has waited past its deadline is
+    /// given up rather than forced, so what was queued behind it goes on this account.
     func switchAccountAfterTurn(_ id: UUID) {
         guard let model, accountSwitchesAfterTurn[id] != nil else { return }
         guard switchingAfterTurn.insert(id).inserted else {
@@ -202,7 +237,10 @@ final class TaskContinuationCoordinator {
             return
         }
         Task {
-            defer { switchingAfterTurn.remove(id) }
+            defer {
+                switchingAfterTurn.remove(id)
+                forgetAccountMoveHold(id)
+            }
             while let target = accountSwitchesAfterTurn[id] {
                 guard let task = model.store.sessions.first(where: { $0.id == id }) else {
                     accountSwitchesAfterTurn.removeValue(forKey: id)
@@ -214,11 +252,22 @@ final class TaskContinuationCoordinator {
                     cancelAccountSwitchAfterTurn(for: id, declined: false)
                     return
                 }
-                if model.settlesForAccountMove(task, heldMessagesGoAfter: true) {
+                guard let blocker = model.accountMoveBlocker(of: task, heldMessagesGoAfter: true) else {
                     accountSwitchesAfterTurn.removeValue(forKey: id)
                     await completeAccountSwitch(task, to: target, automatic: automaticAccountMoves.removeValue(forKey: id))
                     return
                 }
+                let owner: AccountMoveHold.Owner = automaticAccountMoves[id] == nil ? .person : .yardlet
+                let now = accountMoveClock()
+                let since = accountMoveHolds[id].flatMap { $0.owner == owner ? $0.since : nil } ?? now
+                let hold = AccountMoveHold(owner: owner, waitsFor: blocker, since: since)
+                // Waiting on would hold up what is queued behind the move for as long as, say, a dev
+                // server runs; moving anyway would end that server with the CLI.
+                if let deadline = hold.deadline, now >= deadline {
+                    cancelAccountSwitchAfterTurn(for: id)
+                    return
+                }
+                if accountMoveHolds[id] != hold { accountMoveHolds[id] = hold }
                 let wait = Task { [accountMoveSleep = model.accountMoveSleep] in _ = try? await accountMoveSleep() }
                 accountSwitchWaits[id] = wait
                 await wait.value

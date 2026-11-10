@@ -8,8 +8,13 @@ import XCTest
 /// them.
 @MainActor
 final class ClaudeProviderNoticeRenderingTests: XCTestCase {
+    private static let moveWaits: [AccountMoveBlocker] = [
+        .turn, .request, .messages, .shellCommand, .backgroundWork, .agents, .edit, .otherChange
+    ]
+
     /// The limit cards, compaction markers and the lines above the composer (a limit warning, and a
-    /// task moving to another account in its turn and after it), in both appearances.
+    /// task moving to another account in its turn and after it, naming what it waits for), in both
+    /// appearances.
     /// Rendered without a window into `.build/claude-provider-notices-qa`.
     func testLimitCardsCompactionMarkersAndNoticeLinesRender() throws {
         let directory = try WindowlessRender.directory("claude-provider-notices-qa")
@@ -70,9 +75,11 @@ final class ClaudeProviderNoticeRenderingTests: XCTestCase {
                 CompactionMarker(compaction: HarnessContextCompaction(phase: .failed,
                     message: "Conversation too long to summarize"))
                 ProviderNoticeLines(notices: notices)
-                TaskAccountMoveLine(notice: TaskAccountMoveNotice(accountName: "work@example.test", cancel: {}))
-                TaskAccountMoveLine(notice: TaskAccountMoveNotice(accountName: "work@example.test", isInTurn: false,
-                                                                  cancel: {}))
+                // In its turn, then each thing the move can wait for after it.
+                ForEach(Array(Self.moveWaits.enumerated()), id: \.offset) { _, wait in
+                    TaskAccountMoveLine(notice: TaskAccountMoveNotice(accountName: "work@example.test", waitsFor: wait,
+                                                                      cancel: {}))
+                }
             }
             .padding(20)
             .frame(width: 720)
@@ -119,7 +126,8 @@ final class ClaudeProviderNoticeRenderingTests: XCTestCase {
                     resetsAt: Date().addingTimeInterval(3 * 3_600), usedFraction: 1,
                     message: "You've hit your session limit · resets 6pm (Asia/Seoul)"),
                     isLatest: true, notices: moving)
-                TaskAccountMoveLine(notice: TaskAccountMoveNotice(accountName: next.name, isInTurn: false, cancel: {}))
+                TaskAccountMoveLine(notice: TaskAccountMoveNotice(accountName: next.name, waitsFor: .backgroundWork,
+                                                                  cancel: {}))
             }
             .padding(20)
             .frame(width: 720)

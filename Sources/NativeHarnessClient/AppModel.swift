@@ -1207,9 +1207,13 @@ final class AppModel {
             await submitFollowUp(input, action: .automatic, to: session)
             return
         }
-        // A task whose turn ended but that still waits to move to another account (its background
-        // work runs on) sends this after the move, on the new account.
-        if continuations.accountSwitchesAfterTurn[session.id] != nil {
+        // A task whose turn ended but that still waits to move to the account the person chose (its
+        // background work runs on) sends this after the move, on the new account. A move Yardlet chose
+        // itself never holds up the person: their message goes now, here, and the move is called off.
+        // Another task's, a schedule's or auto-fix's message waits for either move before it gets
+        // here (`holdUntilAccountMoves`).
+        if continuations.accountSwitchesAfterTurn[session.id] != nil,
+           !continuations.callOffAutomaticAccountMove(for: session.id) {
             followUps.append(QueuedFollowUp(draft: CodexComposerDraft(input)), to: session.id)
             return
         }
@@ -5564,22 +5568,30 @@ final class AppModel {
     /// `heldMessagesGoAfter`, the messages and shell output Yardlet holds go after the move instead, on
     /// the new account; only those the provider holds or one being sent are waited for.
     func settlesForAccountMove(_ session: SessionRecord, heldMessagesGoAfter: Bool = false) -> Bool {
+        accountMoveBlocker(of: session, heldMessagesGoAfter: heldMessagesGoAfter) == nil
+    }
+
+    /// The first thing that keeps a task's account from changing now (`settlesForAccountMove`), or nil.
+    func accountMoveBlocker(of session: SessionRecord, heldMessagesGoAfter: Bool = false) -> AccountMoveBlocker? {
         let id = session.id
+        if Self.isWorking(session) { return .turn }
         let queue = followUps.queue(for: id)
         let messagesSettle = heldMessagesGoAfter
             ? !queue.contains { $0.state == .sent || followUps.isClaimed($0.id) }
             : queue.isEmpty && pendingShellDeliveries[id]?.isEmpty != false
-        return !Self.isWorking(session) && messagesSettle && runningShellCommandBySessionID[id] == nil
-            && TaskAttentionProjection.waitingRequest(of: session, detail: taskAttentionDetails[id]) == nil
-            && heldRequests(in: id).isEmpty
-            && BackgroundTasksProjection(entries: transcriptBySessionID[id] ?? []).rows.isEmpty
-            && !sessionTools.runs(hostedBy: id).contains(where: { !$0.state.isFinished })
-            && !sessionTools.isQueued(id) && !sessionTools.starting.contains(id)
-            && composerDrafts.tasks.existingDraft(for: id)?.editState == nil
-            && !sessionMutations.contains(id) && !switchingAccounts.contains(id) && !forkingSessions.contains(id)
-            && !restartingSessions.contains(id) && !openingSideChats.contains(id) && !unarchivingSessionIDs.contains(id)
-            && !recreatingTaskWorktrees.contains(id)
-            && !continuations.continuesCutOffTurn(id)
+        if !messagesSettle { return .messages }
+        if runningShellCommandBySessionID[id] != nil { return .shellCommand }
+        if TaskAttentionProjection.waitingRequest(of: session, detail: taskAttentionDetails[id]) != nil
+            || !heldRequests(in: id).isEmpty { return .request }
+        if composerDrafts.tasks.existingDraft(for: id)?.editState != nil { return .edit }
+        if sessionMutations.contains(id) || switchingAccounts.contains(id) || forkingSessions.contains(id)
+            || restartingSessions.contains(id) || openingSideChats.contains(id) || unarchivingSessionIDs.contains(id)
+            || recreatingTaskWorktrees.contains(id) || sessionTools.isQueued(id) || sessionTools.starting.contains(id)
+            || continuations.continuesCutOffTurn(id) { return .otherChange }
+        if sessionTools.runs(hostedBy: id).contains(where: { !$0.state.isFinished }) { return .agents }
+        // Last: it reads the whole conversation.
+        if !BackgroundTasksProjection(entries: transcriptBySessionID[id] ?? []).rows.isEmpty { return .backgroundWork }
+        return nil
     }
 
     /// Moves one settled task to another folder of its account. It keeps a runtime only if it had one,

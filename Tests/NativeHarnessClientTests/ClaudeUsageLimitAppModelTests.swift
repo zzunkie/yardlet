@@ -440,6 +440,82 @@ import XCTest
         XCTAssertNil(model.accountSwitchesAfterTurn[task.id])
     }
 
+    /// A move Yardlet chose itself never holds up the person and never waits forever (2026-11-11). An
+    /// idle task on a nearly spent account whose cache has expired, with a background command running,
+    /// waits to move to the account with room, and the line above the composer says it waits for that
+    /// command. Another task's message and a schedule's run wait for the move; the person's own message
+    /// goes at once on the current account and calls the move off, and what waited follows its turn.
+    /// A move that waits past its deadline is given up rather than forced: the command keeps running
+    /// in the same CLI, and what waited goes there.
+    func testAMoveYardletChoseGivesWayToThePersonAndIsGivenUpAtItsDeadline() async throws {
+        for personSends in [true, false] {
+            var rested: SessionRecord?
+            let fixture = try makeFixture { first, cli in
+                rested = SessionRecord(harness: .claudeCode, workspaceURL: cli.deletingLastPathComponent(),
+                    runtimeExecutableURL: cli, title: "Dev server", updatedAt: Date().addingTimeInterval(-2 * 3_600),
+                    providerSessionID: "dev", connection: first)
+                return [rested].compactMap { $0 }
+            }
+            let model = fixture.model
+            let task = try XCTUnwrap(rested)
+            try await model.store.restore()
+            model.accountMoveSleep = { try await Task.sleep(for: .milliseconds(10)) }
+            var now = Date()
+            model.accountMoveClock = { now }
+            await model.resume(task)
+            let transport = try XCTUnwrap(fixture.transports.all.first)
+            func sent(_ text: String) async -> Bool {
+                await transport.sentValues.contains { $0["message"]?["content"]?.stringValue?.contains(text) == true }
+            }
+            func backgroundRows() -> Int {
+                BackgroundTasksProjection(entries: model.transcriptBySessionID[task.id] ?? []).rows.count
+            }
+            model.mutateTranscript(for: task.id, publishImmediately: true) {
+                $0.apply(.activityStarted(HarnessActivity(id: "shell", kind: "Bash", title: "npm run dev", isBackground: true,
+                    subtask: HarnessSubtaskReference(taskID: "t-shell", taskType: "local_bash"))))
+            }
+            XCTAssertEqual(backgroundRows(), 1)
+            read(fixture.first, used: 0.95, in: model)
+            read(fixture.next, used: 0.2, in: model)
+            model.startAccountMoves()
+
+            try await waitUntil { model.accountMoveHolds[task.id] != nil }
+            XCTAssertEqual(model.accountSwitchesAfterTurn[task.id], fixture.next)
+            XCTAssertEqual(model.accountMoveHolds[task.id], AccountMoveHold(owner: .yardlet, waitsFor: .backgroundWork, since: now))
+            XCTAssertEqual(model.accountMoveHolds[task.id]?.deadline, now.addingTimeInterval(AccountMoveHold.yardletWaitLimit))
+
+            let held = await model.deliverTaskMessage(TaskMessage(senderID: UUID().uuidString, senderName: "Planner",
+                body: "Also check the docs"), to: task)
+            XCTAssertEqual(held, .afterAccountMove)
+            let scheduled = await model.deliverAutoFix("Any new failures?", to: task.id)
+            XCTAssertTrue(scheduled)
+            XCTAssertEqual(model.followUps.queue(for: task.id).count, 2, "Both wait for the move")
+            let nothingYet = await transport.sentValues
+            XCTAssertTrue(nothingYet.isEmpty)
+
+            if personSends {
+                await model.send(HarnessUserInput(text: "Keep going here"), to: task)
+                try await waitUntil { await sent("Keep going here") }
+                XCTAssertNil(model.accountSwitchesAfterTurn[task.id], "The person's message called the move off")
+                XCTAssertNil(model.accountMoveHolds[task.id])
+                XCTAssertEqual(model.followUps.queue(for: task.id).count, 2, "What waited follows the person's turn")
+                await transport.emit(try json(#"{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"s"}"#))
+            } else {
+                try await Task.sleep(for: .milliseconds(100))
+                XCTAssertEqual(model.accountSwitchesAfterTurn[task.id], fixture.next, "Within its deadline it waits")
+                now = now.addingTimeInterval(AccountMoveHold.yardletWaitLimit)
+                try await waitUntil { model.accountSwitchesAfterTurn[task.id] == nil }
+                XCTAssertNil(model.accountMoveHolds[task.id])
+                XCTAssertFalse(model.canMoveAutomatically(try XCTUnwrap(model.store.sessions.first)),
+                               "Given up, it is not chosen again until the task works again")
+            }
+            try await waitUntil { await sent("Also check the docs") }
+            XCTAssertEqual(model.store.sessions.first?.connection, fixture.first)
+            XCTAssertEqual(fixture.transports.all.count, 1, "The CLI running the command was kept")
+            XCTAssertEqual(backgroundRows(), 1)
+        }
+    }
+
     /// A schedule's run that would move its task off a nearly spent account moves it only as any move
     /// would go at once: moving closes the task's CLI, and what still runs in it. With a background
     /// command running the task stays and the run goes on the CLI that keeps the command; with a move

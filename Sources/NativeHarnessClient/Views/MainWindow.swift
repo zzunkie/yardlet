@@ -1497,7 +1497,8 @@ struct MainWindow: View {
         })
         .environment(\.taskAccountMove, model.accountSwitchesAfterTurn[session.id].map { connection in
             TaskAccountMoveNotice(accountName: model.accountChoice(harness: session.harness, connection: connection).title,
-                                  isInTurn: AppModel.isWorking(session),
+                                  waitsFor: AppModel.isWorking(session)
+                                      ? .turn : model.accountMoveHolds[session.id]?.waitsFor ?? .backgroundWork,
                                   cancel: { model.cancelAccountSwitchAfterTurn(for: session.id) })
         })
         .task(id: session.id) { await model.refreshTaskFolder(session.id) }

@@ -3682,6 +3682,12 @@
 "Mail handoff message %@ %@ %@" = "Account: %1$@ · message %2$@, read with %3$@";
 "Moving to %@ after this turn" = "Moving to %@ after this turn";
 "Moving to %@ when its background work ends" = "Moving to %@ when its background work ends";
+"Moving to %@ once its request is answered" = "Moving to %@ once its request is answered";
+"Moving to %@ once the message on its way is delivered" = "Moving to %@ once the message on its way is delivered";
+"Moving to %@ when its shell command ends" = "Moving to %@ when its shell command ends";
+"Moving to %@ when the agents it runs finish" = "Moving to %@ when the agents it runs finish";
+"Moving to %@ once you finish editing the message" = "Moving to %@ once you finish editing the message";
+"Moving to %@ when the change under way ends" = "Moving to %@ when the change under way ends";
 "Cancel account change" = "Cancel account change";
 "%@ no longer shares this task's conversation history, so the task stays on its account." = "%@ no longer shares this task's conversation history, so the task stays on its account.";
 "Naver Mail" = "Naver Mail";

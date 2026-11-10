@@ -10,6 +10,7 @@ extension AppModel {
     var restartResumeLine: RestartResumeLine { continuations.restartResumeLine }
     var connectionResumes: [UUID: ConnectionResume] { continuations.connectionResumes }
     var accountSwitchesAfterTurn: [UUID: ProviderConnection] { continuations.accountSwitchesAfterTurn }
+    var accountMoveHolds: [UUID: AccountMoveHold] { continuations.accountMoveHolds }
 
     /// Test clocks.
     var usageLimitResumeGrace: Duration {
@@ -23,6 +24,10 @@ extension AppModel {
     var restartResumeSleep: @Sendable (Duration) async throws -> Void {
         get { continuations.restartResumeSleep }
         set { continuations.restartResumeSleep = newValue }
+    }
+    var accountMoveClock: () -> Date {
+        get { continuations.accountMoveClock }
+        set { continuations.accountMoveClock = newValue }
     }
 
     func chooseAccount(_ connection: ProviderConnection, for session: SessionRecord) async {
