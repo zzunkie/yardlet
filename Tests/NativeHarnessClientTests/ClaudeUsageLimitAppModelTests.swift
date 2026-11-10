@@ -401,7 +401,7 @@ import XCTest
 
     /// A task whose turn ended with a background command still running waits to move to the account
     /// chosen during the turn, and what is sent meanwhile waits for the move. When its runtime closes
-    /// another way first (a schedule's run moves the task at once), the command ends with that CLI:
+    /// another way first (an immediate switch), the command ends with that CLI:
     /// its row stops, the move settles, and what waited goes to the new runtime rather than waiting
     /// for a command no process runs (2026-11-10: a task's messages, the person's own among them,
     /// waited hours behind a background shell the closed CLI had taken with it).
@@ -438,6 +438,72 @@ import XCTest
         }
         XCTAssertTrue(model.followUps.queue(for: task.id).isEmpty)
         XCTAssertNil(model.accountSwitchesAfterTurn[task.id])
+    }
+
+    /// A schedule's run that would move its task off a nearly spent account moves it only as any move
+    /// would go at once: moving closes the task's CLI, and what still runs in it. With a background
+    /// command running the task stays and the run goes on the CLI that keeps the command; with a move
+    /// already waiting, the run's message waits for that move rather than starting another one, also
+    /// once the command has ended and before that move looks again (2026-11-10: a run moved a task at
+    /// once, ending its background shell, while a move chosen during its turn still waited).
+    func testAScheduledRunLeavesATaskWhoseMoveWouldWaitOnItsAccount() async throws {
+        let fixture = try makeFixture()
+        let model = fixture.model
+        read(fixture.first, used: 0.95, in: model)
+        read(fixture.next, used: 0.2, in: model)
+        // A waiting move looks again later than this test waits.
+        model.accountMoveSleep = { try await Task.sleep(for: testWaitLimit * 2) }
+        let created = await model.createSession(harness: .claudeCode, workspaceURL: fixture.shared,
+            runtimeExecutableURL: fixture.cli, title: "Watch", connection: fixture.first)
+        let task = try XCTUnwrap(created, model.errorBySessionID.values.first ?? "Missing task")
+        let transport = try XCTUnwrap(fixture.transports.all.first)
+        func status() -> SessionStatus? { model.store.sessions.first?.status }
+        func backgroundRows() -> Int {
+            BackgroundTasksProjection(entries: model.transcriptBySessionID[task.id] ?? []).rows.count
+        }
+        func sent(_ text: String) async -> Bool {
+            await transport.sentValues.contains { $0["message"]?["content"]?.stringValue == text }
+        }
+        func runSchedule(_ prompt: String) async throws -> ScheduledTaskRun {
+            var destination = ScheduleDestination(harness: .claudeCode)
+            destination.mode = .continueTask
+            destination.targetTaskID = task.id
+            let schedule = ScheduledTask(name: prompt, prompt: prompt, trigger: .daily(ScheduleTime(hour: 9, minute: 0)),
+                                         destination: destination)
+            model.scheduledTasks.create(schedule)
+            await model.scheduledTasks.runNow(schedule.id)
+            let run = try XCTUnwrap(model.scheduledTasks.schedule(id: schedule.id)?.state.runs.first)
+            XCTAssertEqual(run.outcome, .started, run.failure ?? "")
+            XCTAssertNil(run.account)
+            XCTAssertEqual(model.store.sessions.first?.connection, fixture.first)
+            return run
+        }
+        let result = try json(#"{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"s"}"#)
+
+        await transport.emit(try json(#"{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_start","message":{}},"session_id":"s"}"#))
+        await transport.emit(try json(#"{"type":"system","subtype":"task_started","task_id":"t-shell","tool_use_id":"shell","description":"npm run dev","task_type":"local_bash","is_backgrounded":true}"#))
+        await transport.emit(result)
+        try await waitUntil { status() == .ready && backgroundRows() == 1 }
+        _ = try await runSchedule("Any new failures?")
+        try await waitUntil { await sent("Any new failures?") }
+        XCTAssertEqual(backgroundRows(), 1, "The command still runs")
+        XCTAssertEqual(fixture.transports.all.count, 1)
+
+        // The account chosen during the turn the run started waits for the command, then for the next look.
+        try await waitUntil { status() == .running }
+        await model.chooseAccount(fixture.next, for: try XCTUnwrap(model.store.sessions.first))
+        XCTAssertEqual(model.accountSwitchesAfterTurn[task.id], fixture.next)
+        await transport.emit(result)
+        await transport.emit(try json(#"{"type":"system","subtype":"task_notification","task_id":"t-shell","status":"completed","summary":"Done"}"#))
+        try await waitUntil { status() == .ready && backgroundRows() == 0 }
+        _ = try await runSchedule("Anything else?")
+        XCTAssertEqual(model.accountSwitchesAfterTurn[task.id], fixture.next, "The move already waiting stays the one")
+        XCTAssertEqual(model.followUps.queue(for: task.id).count, 1, "The run's message waits for it")
+
+        // Cancelling that move keeps the task here, and the run's message goes here.
+        model.cancelAccountSwitchAfterTurn(for: task.id)
+        try await waitUntil { await sent("Anything else?") }
+        XCTAssertEqual(fixture.transports.all.count, 1)
     }
 
     func testRetriesWarningsAndReportsFollowTheRunningTask() async throws {

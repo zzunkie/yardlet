@@ -40,8 +40,8 @@ The latest screen flow and design decisions follow [ACCOUNT_SELECTION_UX.md](ACC
   switch waits for what moving an account's tasks waits for ("Removing an account" below), except that the messages
   and shell output Yardlet holds go after the switch instead, on the new account. While background work keeps it
   waiting after the turn, the line says "Moving to <account> when its background work ends" and a message sent then
-  waits too. Background work lives in the task's CLI: when that CLI closes first (a schedule's run moved the task at
-  once, say), what ran in it shows as stopped (`AppModel.closeIdleRuntime`), so the waiting switch goes ahead and the
+  waits too. Background work lives in the task's CLI: when that CLI closes first (the person switched the idle task
+  at once, say), what ran in it shows as stopped (`AppModel.closeIdleRuntime`), so the waiting switch goes ahead and the
   messages follow (`ClaudeUsageLimitAppModelTests.testWhatWaitsForAMoveGoesOnceTheRuntimeRunningItsBackgroundWorkCloses`).
   A switch refused then (the target
   signed out, or no longer sharing the history) says why above the composer, as an immediate one does, and what was
@@ -377,7 +377,11 @@ and once at the moment the next of those tasks' caches expires or a nearly spent
 scan.
 
 While the setting is on, a schedule's run that continues a task whose cache lives leaves it on its account (see
-[NATIVE_SESSION_STORAGE.md](NATIVE_SESSION_STORAGE.md), "Schedules and nearly spent accounts"). Turned off, Yardlet
+[NATIVE_SESSION_STORAGE.md](NATIVE_SESSION_STORAGE.md), "Schedules and nearly spent accounts"). On or off, a run moves
+its task first only when a move here would go at once (`AppModel.canMoveAutomatically` and `settlesForAccountMove`):
+a task with background work, hosted runs or a message on its way stays, and the run goes on its account; a task already
+waiting to move keeps that move, and the run's message goes after it; and one whose automatic move the person cancelled
+stays until it works again. Turned off, Yardlet
 looks at nothing, cancels the moves it was waiting to make, disarms the continues it armed, also before a relaunch, and
 schedules move runs as they did before. Moving right after a compaction would also cost nothing, but a compaction happens inside a turn.
 
@@ -385,7 +389,8 @@ Tests: `AccountRoutingTests.testATaskMovesOnlyWhenItsCacheIsLostAnywayOrALimitSt
 `ClaudeUsageLimitAppModelTests.testALimitThatResetsAfterTheCacheExpiresMovesTheTaskToAnAccountWithRoom`,
 `testALimitThatResetsBeforeTheCacheExpiresWaitsForTheReset` (with and without room elsewhere, and turning the setting
 off), `testAnIdleTaskLeavesANearlySpentAccountOnceItsCacheHasExpired`,
-`ScheduledTaskTests.testAContinuingRunMovesItsTaskOffANearlySpentAccountFirst`, and the renders
+`ScheduledTaskTests.testAContinuingRunMovesItsTaskOffANearlySpentAccountFirst`,
+`ClaudeUsageLimitAppModelTests.testAScheduledRunLeavesATaskWhoseMoveWouldWaitOnItsAccount`, and the renders
 `ClaudeProviderNoticeRenderingTests.testAnAutomaticMoveWaitsForTheResetOrSaysWhereTheTaskGoes`
 (`.build/claude-provider-notices-qa/automatic-move-*.png`) and Settings › Harness Accounts in
 `AccountListRenderingTests.testEachModeDrawsTheSameRows` (`.build/account-list-qa/manage-*.png`).

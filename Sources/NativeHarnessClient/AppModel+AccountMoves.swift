@@ -303,7 +303,7 @@ extension AppModel {
 
     /// A task Yardlet may move now: a Claude Code task that is idle, has no move of its own coming,
     /// and whose last automatic move the person did not cancel since it last worked.
-    private func canMoveAutomatically(_ task: SessionRecord) -> Bool {
+    func canMoveAutomatically(_ task: SessionRecord) -> Bool {
         task.harness == .claudeCode && !Self.isWorking(task) && continuations.accountSwitchesAfterTurn[task.id] == nil
             && !switchingAccounts.contains(task.id) && !continuations.declinedAccountMoves.contains(task.id)
     }

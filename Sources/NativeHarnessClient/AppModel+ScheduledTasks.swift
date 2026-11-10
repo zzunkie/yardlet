@@ -9,7 +9,8 @@ import Foundation
 /// and skips other busy slots. A run whose account is nearly spent goes to
 /// the one automatic assignment picks instead (`accountReplacing`): a new task starts there, and a
 /// continued task first moves there as Continue with another account moves it, unless tasks move
-/// to an account with room on their own and its cache still lives (`AccountRouting.move`).
+/// to an account with room on their own and its cache still lives (`AccountRouting.move`), or it
+/// could not move now as any account move (`moveToAccountWithRoom`).
 extension AppModel {
     /// Gives the center its start and busy checks. The loop itself starts with the app.
     func wireScheduledTasks() {
@@ -138,9 +139,12 @@ extension AppModel {
     /// ones it may go on under (`TaskAccountSwitch`, as Continue with another account offers) that
     /// automatic assignment may use and that are signed in, and says why when it moved. With none, or
     /// when the move is refused, the task stays where it was and its message goes there, as before
-    /// (sending clears the refusal's error). While tasks move to an account with room on their own,
-    /// one whose cache still lives stays too: moving it would write its conversation again on the
-    /// other account, and a limit that stops it moves it then.
+    /// (sending clears the refusal's error). Moving closes the task's CLI, so it moves only as any
+    /// move Yardlet chooses moves a task at once (`canMoveAutomatically`, `settlesForAccountMove`): one
+    /// with background work, hosted runs or a message on its way stays and gets the message there, and
+    /// one already waiting to move gets it after that move. While tasks move to an account with room
+    /// on their own, one whose cache still lives stays too: moving it would write its conversation
+    /// again on the other account, and a limit that stops it moves it then.
     private func moveToAccountWithRoom(_ task: SessionRecord) async -> AccountAssignment? {
         if movesTasksToAccountsWithRoom,
            Date() < task.updatedAt.addingTimeInterval(AccountRouting.promptCacheLifetime) { return nil }
@@ -148,7 +152,9 @@ extension AppModel {
             task.connection, harness: task.harness, model: Self.modelOption(task.providerOptions, harness: task.harness)) {
             automaticMoveTargets(for: task)
         }
-        guard let account, let connection = account.connection else { return nil }
+        guard let account, let connection = account.connection,
+              let current = store.sessions.first(where: { $0.id == task.id }),
+              canMoveAutomatically(current), settlesForAccountMove(current) else { return nil }
         await switchAccount(to: connection, for: task)
         guard store.sessions.first(where: { $0.id == task.id })?.connection == connection else { return nil }
         accountAssignments.record(account.assignment, for: task.id)
