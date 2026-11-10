@@ -209,9 +209,9 @@ enum ConnectorOAuth {
     private static let commonSecondLevels: Set<String> = ["ac", "co", "com", "edu", "go", "gov", "ne", "net", "or", "org"]
 
     private static let sharedHostingSuffixes = [
-        "amazonaws.com", "azurewebsites.net", "deno.dev", "fly.dev", "github.io", "herokuapp.com", "netlify.app",
-        "ngrok-free.app", "ngrok.app", "ngrok.io", "onrender.com", "pages.dev", "railway.app", "run.app",
-        "trycloudflare.com", "vercel.app", "workers.dev"
+        "amazonaws.com", "appspot.com", "azurewebsites.net", "deno.dev", "firebaseapp.com", "fly.dev", "github.io",
+        "herokuapp.com", "hf.space", "netlify.app", "ngrok-free.app", "ngrok.app", "ngrok.io", "onrender.com",
+        "pages.dev", "railway.app", "run.app", "supabase.co", "trycloudflare.com", "vercel.app", "web.app", "workers.dev"
     ]
 
     private static func port(_ components: URLComponents) -> Int? {

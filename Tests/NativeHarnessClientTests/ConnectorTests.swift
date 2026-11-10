@@ -105,7 +105,7 @@ final class ConnectorTests: XCTestCase {
             XCTAssertTrue(ConnectorOAuth.sameSite(first, second), "\(first) \(second)")
         }
         for (first, second) in [("mcp.example.com", "github.com"), ("a.co.uk", "b.co.uk"), ("example.co.kr", "example.or.kr"),
-                                ("mine.vercel.app", "theirs.vercel.app"), ("x.us-east-1.amazonaws.com", "y.us-east-1.amazonaws.com"),
+                                ("mine.vercel.app", "theirs.vercel.app"), ("one.supabase.co", "two.supabase.co"), ("x.us-east-1.amazonaws.com", "y.us-east-1.amazonaws.com"),
                                 ("localhost", "127.0.0.1"), ("10.0.0.1", "10.0.0.2"), ("co.uk", "example.co.uk")] {
             XCTAssertFalse(ConnectorOAuth.sameSite(first, second), "\(first) \(second)")
         }
