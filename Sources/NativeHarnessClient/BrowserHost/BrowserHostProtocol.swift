@@ -438,6 +438,10 @@ enum BrowserHostCommand: Codable, Equatable, Sendable {
     /// a remote device drove it last (`BrowserTab.isDrivenByRemote`), with `remoteDownloadStopped`; false takes them
     /// again.
     case refuseDownloads(tab: BrowserTabID, isRefused: Bool)
+    /// The agent drives the tab now (`BrowserTab.isDrivenByAgent`), or no longer does: while it does, a camera or
+    /// microphone request asks the person though the site was allowed before, and an allow given then is for that
+    /// request only. A pop-up its page opens starts the same.
+    case drivenByAgent(tab: BrowserTabID, isDriven: Bool)
     /// Answers a `permissionPrompt` event.
     case permissionResult(tab: BrowserTabID, prompt: Int, result: BrowserPermissionResult)
     /// Turns the page's accessibility tree on or off. While on, the host sends the whole tree and

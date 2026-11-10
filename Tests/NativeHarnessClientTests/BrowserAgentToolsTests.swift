@@ -645,6 +645,58 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertEqual(cdp.params(of: "Input.insertText").first?["text"], .string("secret"))
     }
 
+    /// A sign-in can also go in key by key, or through a script with no field typed into: a task in the default profile
+    /// takes one of its own before a character goes into a password field, and before its first script runs.
+    func testKeysIntoAPasswordFieldAndTheFirstScriptGiveTheTaskAProfileOfItsOwnFirst() async {
+        let focused = Box("password")
+        cdp.responders["Page.getFrameTree"] = { _ in
+            .object(["frameTree": .object(["frame": .object(["id": .string("main"), "securityOrigin": .string("https://www.example.com")])])])
+        }
+        cdp.responders["Page.createIsolatedWorld"] = { _ in .object(["executionContextId": .integer(7)]) }
+        cdp.responders["Runtime.evaluate"] = { params in
+            if params["contextId"] == .integer(7) { return ScriptedCDP.value(.string(focused.value)) }
+            if params["objectGroup"] != nil { return .object(["result": .object(["type": .string("object"), "objectId": .string("none")])]) }
+            return ScriptedCDP.value(.integer(1))
+        }
+        var taken: [String] = []
+        var owns = false
+        tools.takesOwnProfile = { _, _, how in
+            taken.append(how)
+            defer { owns = true }
+            return !owns
+        }
+        func keyDowns() -> [String?] { cdp.params(of: "Input.dispatchKeyEvent").filter { $0["type"] != .string("keyUp") }.map { $0["key"]?.stringValue } }
+
+        // Enter puts no text in, and a field that is no password field is no sign-in.
+        let enter = await run(AgentToolCatalog.pressKey, ["key": .string("Enter")])
+        focused.value = "other"
+        let elsewhere = await run(AgentToolCatalog.pressKey, ["key": .string("a")])
+        XCTAssertFalse(enter.isError || elsewhere.isError, enter.text + elsewhere.text)
+        XCTAssertEqual(taken, [])
+
+        focused.value = "password"
+        let first = await run(AgentToolCatalog.pressKey, ["key": .string("a")])
+        XCTAssertTrue(first.isError)
+        XCTAssertTrue(first.text.contains("profile of its own") && first.text.contains("press the key again"), first.text)
+        XCTAssertEqual(keyDowns(), ["Enter", "a"], "the key goes to no page that opened again")
+        let second = await run(AgentToolCatalog.pressKey, ["key": .string("a")])
+        XCTAssertFalse(second.isError, second.text)
+        XCTAssertEqual(keyDowns(), ["Enter", "a", "a"])
+
+        owns = false
+        taken = []
+        func scripts() -> Int { cdp.params(of: "Runtime.evaluate").filter { $0["awaitPromise"] == .bool(true) }.count }
+        let before = scripts()
+        let script = await run(AgentToolCatalog.evaluate, ["function": .string("() => 1")])
+        XCTAssertTrue(script.isError)
+        XCTAssertTrue(script.text.contains("did not run") && script.text.contains("browser_evaluate again"), script.text)
+        XCTAssertEqual(scripts(), before, "the function did not run")
+        let again = await run(AgentToolCatalog.evaluate, ["function": .string("() => 1")])
+        XCTAssertFalse(again.isError, again.text)
+        XCTAssertEqual(scripts(), before + 1)
+        XCTAssertEqual(taken, ["page script", "page script"])
+    }
+
     func testTypeRefusesAnElementThatIsNotATextField() async {
         _ = await loadSnapshot()
         cdp.responders["DOM.resolveNode"] = { _ in .object(["object": .object(["objectId": .string("obj-13")])]) }

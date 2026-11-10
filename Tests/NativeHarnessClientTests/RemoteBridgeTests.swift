@@ -1760,7 +1760,7 @@ final class RemoteBridgeTests: XCTestCase {
         // The person's own click here takes downloads again, before it goes.
         let ownBefore = connection.sent.count
         tab.send(.mouse(tab: tab.id, input: BrowserMouseInput(kind: .down, x: 5, y: 5, button: .left)))
-        XCTAssertEqual(Array(connection.sent.dropFirst(ownBefore)).prefix(1),
+        XCTAssertEqual(Array(connection.sent.dropFirst(ownBefore)).leavingDrivers.prefix(1),
                        [.refuseDownloads(tab: tab.id, isRefused: false)])
 
         // A popup the agent's input opened asks before another app opens, as the agent's own page does.
@@ -1887,7 +1887,7 @@ final class RemoteBridgeTests: XCTestCase {
         tab.noteAgentActivity()
         XCTAssertFalse(connection.sent.dropFirst(before).contains(.refuseDownloads(tab: tab.id, isRefused: false)))
         tab.noteAgentInput()
-        XCTAssertEqual(Array(connection.sent.dropFirst(before)), [.refuseDownloads(tab: tab.id, isRefused: false)])
+        XCTAssertEqual(Array(connection.sent.dropFirst(before)).leavingDrivers, [.refuseDownloads(tab: tab.id, isRefused: false)])
         // An act that failed before it reached the page gives the refusal back; one that went keeps it lifted.
         tab.undoAgentInput()
         XCTAssertEqual(connection.sent.last, .refuseDownloads(tab: tab.id, isRefused: true))
@@ -2671,4 +2671,10 @@ private actor PausedTerminalSink {
         }
     }
     func resume() { released = true; continuation?.resume(); continuation = nil }
+}
+
+private extension Array where Element == BrowserHostCommand {
+    /// The commands without the host's word of who drives the tab (`drivenByAgent`), which the checks of downloads leave
+    /// aside.
+    var leavingDrivers: [BrowserHostCommand] { filter { if case .drivenByAgent = $0 { false } else { true } } }
 }

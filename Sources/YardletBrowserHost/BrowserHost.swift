@@ -238,6 +238,8 @@ final class BrowserHost {
             yardlet_cef_cancel_download(Int32(fields["download"] as? Int ?? -1))
         case "refuseDownloads":
             if fields["isRefused"] as? Bool == true { refusedDownloadTabs.insert(tab) } else { refusedDownloadTabs.remove(tab) }
+        case "drivenByAgent":
+            yardlet_cef_set_driven_by_agent(Int32(tab), fields["isDriven"] as? Bool == true ? 1 : 0)
         case "permissionResult":
             let results = ["allow": 0, "block": 1, "dismiss": 2]
             guard let prompt = fields["prompt"] as? Int, let result = (fields["result"] as? String).flatMap({ results[$0] })

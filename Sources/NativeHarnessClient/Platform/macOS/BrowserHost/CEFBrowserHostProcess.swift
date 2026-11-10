@@ -343,13 +343,14 @@ final class MacBrowserHost: NativeSurfaceResource {
     /// 3 and 7), written in `Logs/sign-ins.log` beside the host's log.
     private(set) lazy var signInLog = BrowserSignInLog(file: paths.log.deletingLastPathComponent().appending(path: "sign-ins.log"))
 
-    /// A task's agent is about to sign in to `site` itself (`how`: a fill from the password manager, or typing into a
-    /// password or code field): the task takes a profile of its own, a copy of the default profile's cookies, and its
-    /// tabs open again there, so the sign-in changes no other task's and none of the person's. False when its tabs use
-    /// a profile of their own already, or every task shares the default profile.
+    /// A task's agent is about to sign in to `site` itself, or to run its first script there (`how`: a fill from the
+    /// password manager, typing into a password or code field, a page script): the task takes a profile of its own, a
+    /// copy of the default profile's cookies, and its tabs open again there, so the sign-in changes no other task's and
+    /// none of the person's. False when its tabs use a profile of their own already, or every task shares the default
+    /// profile.
     func takeOwnProfile(for session: UUID, site: String, how: String) -> Bool {
         guard profiles.takeOwnProfile(for: session) else { return false }
-        signInLog.write("\(site): task \(session.uuidString.prefix(8)) took a profile of its own before its agent's sign-in (\(how))")
+        signInLog.write("\(site): task \(session.uuidString.prefix(8)) took a profile of its own for its agent (\(how))")
         client.reopenTabs(forSession: session, cause: .ownProfile)
         return true
     }

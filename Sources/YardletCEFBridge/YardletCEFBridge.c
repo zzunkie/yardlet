@@ -179,6 +179,9 @@ typedef struct {
     double audibleAt;
     /// The page uses the camera or the microphone (OnMediaAccessChange).
     int capturing;
+    /// Yardlet's last word that the agent drives the tab (yardlet_cef_set_driven_by_agent): a camera or microphone
+    /// request asks though the site was allowed before, and an allow given then is not kept.
+    int drivenByAgent;
     /// Spellings of the passwords the vault filled into the page (yardlet_cef_guard_filled_values), each ended by
     /// a NUL, until the main frame starts another document: no navigation of the tab goes to an address that
     /// carries one. malloc'd, or NULL.
@@ -925,6 +928,8 @@ void yardlet_cef_context_menu_result(int menu_id, int command_id) {
 // it never runs page-controlled JavaScript or grants an opener the request may have suppressed.
 typedef struct {
     int id, openerTab;
+    /// The agent drove the opener when its page asked (drivenByAgent), which the pop-up starts with.
+    int drivenByAgent;
     cef_frame_t *frame;
     char *frameID, *sourceURL, *url;
 } BlockedPopup;
@@ -1055,6 +1060,7 @@ int yardlet_cef_open_blocked_popup(int openerTab, int popupTab) {
         slot->screenY = opener->screenY;
         slot->frameRate = opener->frameRate;
         slot->sharedTexture = opener->sharedTexture;
+        slot->drivenByAgent = popup->drivenByAgent || opener->drivenByAgent;
         slot->contextHandle = opener->contextHandle;
         if (slot->contextHandle > 0) g_contexts[slot->contextHandle - 1].users++;
         // No openerIdentifier: CreateBrowserSync creates an unrelated browsing context.
@@ -1125,6 +1131,7 @@ static int CEF_CALLBACK life_span_on_before_popup(
         slot->popupID = popup_id;
         slot->openerTab = tab;
         slot->popupBehind = behind;
+        slot->drivenByAgent = opener->drivenByAgent;
         slot->width = opener->width;
         slot->height = opener->height;
         slot->scale = opener->scale;
@@ -1155,6 +1162,7 @@ static int CEF_CALLBACK life_span_on_before_popup(
         if (pending && count < kMaximumPagePopups) {
             pending->id = g_next_popup_tab++;
             pending->openerTab = tab;
+            pending->drivenByAgent = opener->drivenByAgent;
             pending->frame = frame;
             frame->base.add_ref(&frame->base);
             pending->frameID = strdup(frameID);
@@ -1882,9 +1890,12 @@ static void CEF_CALLBACK permission_on_dismiss_permission_prompt(cef_permission_
 // Camera and microphone (getUserMedia): CEF asks on_request_media_access_permission, whose default with
 // Alloy style refused both at once. The host asks Yardlet as for any permission, under its own prompt ids
 // (kMediaPrompt set), and keeps the person's allow or block in Chrome's own site settings for the camera
-// and microphone (the tab's profile), so a site is asked once, as in Chrome. An allow lets Chromium open
-// the device, which is when macOS asks the person for Yardlet's access. Screen sharing (getDisplayMedia)
-// needs Chrome's picker of screens and windows, which a windowless tab has none of: it is refused, as before.
+// and microphone (the tab's profile), so a site is asked once, as in Chrome. In a tab the agent drives
+// (drivenByAgent) a site allowed before is asked again, and an allow given there is for that request only:
+// tasks share the default profile, and an allow the person gave is for the person's own use of the site. An
+// allow lets Chromium open the device, which is when macOS asks the person for Yardlet's access. Screen
+// sharing (getDisplayMedia) needs Chrome's picker of screens and windows, which a windowless tab has none
+// of: it is refused, as before.
 // A request whose page moves on, closes or ends is let go: CEF refuses what a callback never answered.
 
 static const uint64_t kMediaPrompt = 1ULL << 62;
@@ -1893,6 +1904,8 @@ static uint64_t g_next_media_prompt = 1;
 typedef struct {
     uint64_t id;
     int tab;
+    /// The agent drove the tab when the page asked: an allow is not kept for the site.
+    int drivenByAgent;
     uint32_t devices;
     cef_string_t origin, topLevel;
     cef_media_access_callback_t *callback;
@@ -1939,7 +1952,9 @@ static int CEF_CALLBACK permission_on_request_media_access_permission(cef_permis
                                                                       cef_media_access_callback_t *callback) {
     (void)self;
     YARDLET_RELEASE(frame);
-    int tab = tab_of(browser);
+    BrowserSlot *slot = slot_for_browser(browser);
+    int tab = slot ? slot->tab : -1;
+    int driven_by_agent = slot ? slot->drivenByAgent : 0;
     uint32_t devices = requested_permissions & (CEF_MEDIA_PERMISSION_DEVICE_VIDEO_CAPTURE | CEF_MEDIA_PERMISSION_DEVICE_AUDIO_CAPTURE);
     PendingMedia *pending = NULL;
     for (int index = 0; index < kMaximumPending && pending == NULL; index++) {
@@ -1958,8 +1973,8 @@ static int CEF_CALLBACK permission_on_request_media_access_permission(cef_permis
     cef_string_userfree_t top_level = main_frame ? main_frame->get_url(main_frame) : NULL;
     YARDLET_RELEASE(main_frame);
     YARDLET_RELEASE(browser);
-    // What the person answered for the site before: an allow for every device asked for goes on, a block of any
-    // is refused.
+    // What the person answered for the site before: a block of any device asked for is refused, and an allow for
+    // every one goes on unless the agent drives the tab.
     int allowed = 1, blocked = 0;
     for (size_t index = 0; index < sizeof(kMediaDevices) / sizeof(kMediaDevices[0]); index++) {
         if (!(devices & kMediaDevices[index])) continue;
@@ -1969,7 +1984,7 @@ static int CEF_CALLBACK permission_on_request_media_access_permission(cef_permis
         if (value != CEF_CONTENT_SETTING_VALUE_ALLOW) allowed = 0;
     }
     YARDLET_RELEASE_CONTEXT(context);
-    if (blocked || allowed) {
+    if (blocked || (allowed && !driven_by_agent)) {
         callback->cont(callback, blocked ? CEF_MEDIA_PERMISSION_NONE : devices);
         YARDLET_RELEASE(callback);
         if (top_level) p_cef_string_userfree_utf16_free(top_level);
@@ -1977,6 +1992,7 @@ static int CEF_CALLBACK permission_on_request_media_access_permission(cef_permis
     }
     pending->id = kMediaPrompt | g_next_media_prompt++;
     pending->tab = tab;
+    pending->drivenByAgent = driven_by_agent;
     pending->devices = devices;
     pending->callback = callback;
     if (requesting_origin && requesting_origin->str) {
@@ -1992,14 +2008,16 @@ static int CEF_CALLBACK permission_on_request_media_access_permission(cef_permis
     return 1;
 }
 
-/// The person's answer to a camera or microphone prompt: kept for the site, as Chrome keeps it.
+/// The person's answer to a camera or microphone prompt: kept for the site, as Chrome keeps it, except an allow
+/// given while the agent drove the tab.
 static void answer_media_prompt(uint64_t prompt_id, int result) {
     for (int index = 0; index < kMaximumPending; index++) {
         PendingMedia *pending = &g_media_prompts[index];
         if (pending->callback == NULL || pending->id != prompt_id) continue;
         BrowserSlot *slot = slot_for_tab(pending->tab);
         cef_request_context_t *context = slot ? request_context_of(slot->browser) : NULL;
-        if (context && result != CEF_PERMISSION_RESULT_DISMISS) {
+        int kept = result == CEF_PERMISSION_RESULT_DENY || (result == CEF_PERMISSION_RESULT_ACCEPT && !pending->drivenByAgent);
+        if (context && kept) {
             for (size_t device = 0; device < sizeof(kMediaDevices) / sizeof(kMediaDevices[0]); device++) {
                 if (!(pending->devices & kMediaDevices[device])) continue;
                 context->set_content_setting(context, &pending->origin, &pending->topLevel,
@@ -2020,6 +2038,11 @@ static void answer_media_prompt(uint64_t prompt_id, int result) {
 }
 
 static cef_permission_handler_t g_permission_handler;
+
+void yardlet_cef_set_driven_by_agent(int tab, int driven) {
+    BrowserSlot *slot = slot_for_tab(tab);
+    if (slot) slot->drivenByAgent = driven != 0;
+}
 
 void yardlet_cef_permission_result(uint64_t prompt_id, int result) {
     if (prompt_id & kMediaPrompt) {

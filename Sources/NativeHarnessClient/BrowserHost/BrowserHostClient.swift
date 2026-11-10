@@ -961,6 +961,7 @@ final class BrowserHostClient {
         let tab = BrowserTab(id: id, client: self, session: session, key: UUID())
         tab.viewport = opener.viewport
         // The agent's click opened it; or a remote device's, which the new tab's own requests answer to.
+        tab.toldDrivenByAgent = nil
         tab.openedByAgent = retained?.openedByAgent == true || opener.isDrivenByAgent
         tab.inherit(from: opener, retained: retained)
         tabs[id] = tab
@@ -1398,7 +1399,9 @@ final class BrowserTab {
     private(set) var popupsAllowed = false
     /// The person's last input to the page: a click or key press in its panel, or an address, Back, Forward or
     /// Reload there (`notePersonInput`).
-    fileprivate(set) var lastPersonInput: ContinuousClock.Instant?
+    fileprivate(set) var lastPersonInput: ContinuousClock.Instant? {
+        didSet { tellDrivenByAgent() }
+    }
     /// The person's last use of the page in its panel: that input, or a scroll, a drag or typed text
     /// (`BrowserHostClient.personUse(of:)`).
     fileprivate(set) var lastPersonUse: ContinuousClock.Instant?
@@ -1445,7 +1448,9 @@ final class BrowserTab {
     /// A panel has shown the tab on screen at some point: the person may have seen it.
     fileprivate(set) var wasOnScreen = false
     /// The agent's tools opened the tab, or the agent's input in another tab opened it as a pop-up.
-    fileprivate(set) var openedByAgent = false
+    fileprivate(set) var openedByAgent = false {
+        didSet { tellDrivenByAgent() }
+    }
     /// The real path of the `file:` page the agent last opened in this tab with `browser_navigate`, nil after it opened
     /// any other address: a remote device sees that page though it lies outside the task's files
     /// (docs/REMOTE_PROTOCOL.md §15.25). Kept in memory only, so a tab opened again after Yardlet restarted has none.
@@ -1464,6 +1469,9 @@ final class BrowserTab {
     private var agentInputBefore: ContinuousClock.Instant??
     /// Whether the host was last told to refuse the tab's downloads (`refuseDownloads`).
     private var refusesDownloads = false
+    /// Whether the host was last told the agent drives the tab (`drivenByAgent`); nil for a pop-up the host opened,
+    /// which starts as its page's opener was.
+    fileprivate var toldDrivenByAgent: Bool? = false
     /// What the tab's emulation was before a phone's (`sizeForRemote`); nil while no phone's holds.
     private var emulationBeforeRemote: BrowserViewportEmulation??
     /// The size a remote device's watch asks for now: what the tab goes back to when another size set meanwhile goes.
@@ -1480,7 +1488,9 @@ final class BrowserTab {
     private var holdsLayout = false
     /// How many times the person brought the tab in front of its task (`BrowserHostClient.show`).
     fileprivate(set) var revisits = 0
-    fileprivate(set) var lastAgentActivity: ContinuousClock.Instant?
+    fileprivate(set) var lastAgentActivity: ContinuousClock.Instant? {
+        didSet { tellDrivenByAgent() }
+    }
     fileprivate let openedAt = ContinuousClock.now
     /// When the host last delivered a frame of the page (not of a pop-up), for a screenshot that waited for one.
     private(set) var lastViewFrameAt: ContinuousClock.Instant?
@@ -1766,6 +1776,15 @@ final class BrowserTab {
         guard refuses != refusesDownloads else { return }
         refusesDownloads = refuses
         client?.send(.refuseDownloads(tab: id, isRefused: refuses))
+    }
+
+    /// Tells the host whether the agent drives the tab (`isDrivenByAgent`), where a camera or microphone request asks the
+    /// person though they allowed the site before: sent as the input that changed it is noted, before it goes.
+    private func tellDrivenByAgent() {
+        let driven = isDrivenByAgent
+        guard driven != toldDrivenByAgent else { return }
+        toldDrivenByAgent = driven
+        client?.send(.drivenByAgent(tab: id, isDriven: driven))
     }
 
     // MARK: A remote device's size (docs/REMOTE_PROTOCOL.md §15.25)

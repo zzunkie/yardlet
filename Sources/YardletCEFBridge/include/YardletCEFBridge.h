@@ -314,8 +314,13 @@ void yardlet_cef_jsdialog_result(int dialogID, int accepted, const char *text);
 void yardlet_cef_file_dialog_result(int dialogID, const char *const *paths, int count);
 void yardlet_cef_cancel_download(int downloadID);
 /// result: 0 allow, 1 block, 2 dismiss (cef_permission_request_result_t). Chromium keeps an allow or a
-/// block for the site; for the camera and microphone the host keeps it in the same site settings.
+/// block for the site; for the camera and microphone the host keeps it in the same site settings, except an
+/// allow given while the agent drove the tab (yardlet_cef_set_driven_by_agent).
 void yardlet_cef_permission_result(uint64_t promptID, int result);
+/// Yardlet's word that the agent drives the tab now (1) or no longer does (0). While it does, a camera or
+/// microphone request asks though the site was allowed before, and an allow given then is for that request
+/// only. A pop-up the page opens starts as its opener is.
+void yardlet_cef_set_driven_by_agent(int tab, int driven);
 
 /// action: 0 zoom in, 1 zoom out, 2 reset.
 void yardlet_cef_zoom(int tab, int action);
