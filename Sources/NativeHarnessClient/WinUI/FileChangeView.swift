@@ -34,16 +34,20 @@ enum FileChangeView {
         expander.header = header
         expander.horizontalAlignment = .stretch
         expander.horizontalContentAlignment = .stretch
-        expander.expanding.addHandler { [weak expander] _, _ in
-            guard let expander, expander.content == nil else { return }
-            expander.content = details(shown, error: error)
+        // The diffs go into this panel the first time the line opens.
+        let panel = StackPanel()
+        panel.spacing = 10
+        expander.content = panel
+        var isDrawn = false
+        expander.expanding.addHandler { [weak panel] _, _ in
+            guard let panel, !isDrawn else { return }
+            isDrawn = true
+            draw(shown, error: error, in: panel)
         }
         return expander
     }
 
-    private static func details(_ rows: [CodexFileChangeCardProjection.Row], error: String?) -> UIElement {
-        let panel = StackPanel()
-        panel.spacing = 10
+    private static func draw(_ rows: [CodexFileChangeCardProjection.Row], error: String?, in panel: StackPanel) {
         for row in rows {
             let title = row.lineCounts.map { "\(row.displayPath)  \(countText($0))" } ?? row.displayPath
             let name = text(title, size: 12)
@@ -56,7 +60,6 @@ enum FileChangeView {
             line.foreground = SolidColorBrush(UWP.Color(a: 0xFF, r: 0xC4, g: 0x2B, b: 0x1C))
             panel.children.append(line)
         }
-        return panel
     }
 
     /// The file's lines as the Mac's diff box draws them: a number, the change's mark and the line, in a box that
