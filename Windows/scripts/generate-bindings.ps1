@@ -78,7 +78,10 @@ $nuget = (Get-Command nuget -ErrorAction SilentlyContinue).Source
 if (-not $nuget) {
     $nuget = Join-Path $work 'nuget.exe'
     Invoke-WebRequest -Uri 'https://dist.nuget.org/win-x86-commandline/v6.14.0/nuget.exe' -OutFile $nuget
-    if ((Get-AuthenticodeSignature $nuget).Status -ne 'Valid') { throw 'nuget.exe is not validly signed' }
+    $signature = Get-AuthenticodeSignature $nuget
+    if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+        throw "nuget.exe's signature is $($signature.Status), by $($signature.SignerCertificate.Subject)"
+    }
 }
 $config = Join-Path $work 'packages.config'
 $lines = @('<?xml version="1.0" encoding="utf-8"?>', '<packages>')

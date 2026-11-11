@@ -1502,6 +1502,7 @@
 "The staged build's signature could not be verified." = "The staged build's signature could not be verified.";
 "The staged build is not signed by the developer who signed the installed Yardlet." = "The staged build is not signed by the developer who signed the installed Yardlet.";
 "The staged build is a link to another folder, so Yardlet does not install it." = "The staged build is a link to another folder, so Yardlet does not install it.";
+"The staged build (%@) is earlier than the installed Yardlet (%@), so Yardlet does not install it. To go back to an earlier build, replace the app yourself." = "The staged build (%@) is earlier than the installed Yardlet (%@), so Yardlet does not install it. To go back to an earlier build, replace the app yourself.";
 "This Yardlet has no developer's signature, so Yardlet cannot tell who made the staged build. Install it only if you built it." = "This Yardlet has no developer's signature, so Yardlet cannot tell who made the staged build. Install it only if you built it.";
 "with uncommitted changes" = "with uncommitted changes";
 "Install the staged Yardlet build?" = "Install the staged Yardlet build?";
