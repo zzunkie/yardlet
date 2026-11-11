@@ -235,91 +235,47 @@ struct ProcessMCPStdioLauncher: MCPStdioLaunching {
 
 final class ProcessMCPStdioChannel: MCPStdioChannel, @unchecked Sendable {
     let lines: AsyncStream<String>
-    private let process = Process()
-    private let input = Pipe.childInput()
-    private let lock = NSLock()
-    private var errors = Data()
-    /// Output read but not yet ended by a newline. Only the output handler, which runs one call at
-    /// a time, touches it.
-    private var partial = Data()
+    private let channel: LineDelimitedProcessChannel
     /// The last of standard error kept, enough for the reason a server gives.
     private static let errorLimit = 4_096
 
     init(executable: URL, arguments: [String], environment: [String: String]? = nil, directory: URL? = nil) throws {
-        let output = Pipe()
-        let errorPipe = Pipe()
-        process.executableURL = executable
-        process.arguments = arguments
-        if let environment { process.environment = environment }
-        if let directory { process.currentDirectoryURL = directory }
-        process.standardInput = input
-        process.standardOutput = output
-        process.standardError = errorPipe
-        let (stream, continuation) = AsyncStream.makeStream(of: String.self)
-        lines = stream
-        // The lines end once both outputs have, so the reason the server wrote last is kept by
-        // the time its client reads it.
-        let ends = Ends { continuation.finish() }
-        // Split at newline bytes only: a JSON string may hold U+2028, which line readers also end
-        // a line at, and the encoder escapes every real newline.
-        output.fileHandleForReading.readChunks { [weak self] data in
-            guard let self else { return }
-            partial.append(data)
-            while let newline = partial.firstIndex(of: 0x0A) {
-                continuation.yield(String(decoding: partial[partial.startIndex..<newline], as: UTF8.self))
-                partial.removeSubrange(partial.startIndex...newline)
+        let channel = try LineDelimitedProcessChannel(
+            .init(executableURL: executable, arguments: arguments, currentDirectoryURL: directory,
+                  environment: environment),
+            stderrLimit: Self.errorLimit
+        )
+        self.channel = channel
+        // The channel splits at newline bytes only: a JSON string may hold U+2028, which line
+        // readers also end a line at, and the encoder escapes every real newline. Its events end
+        // with the server's exit, after both outputs have been read, so the reason the server
+        // wrote last is kept by the time its client reads it.
+        let events = channel.events
+        let (lines, continuation) = AsyncStream.makeStream(of: String.self)
+        self.lines = lines
+        Task {
+            for await event in events {
+                if case let .line(line) = event { continuation.yield(String(decoding: line, as: UTF8.self)) }
             }
-        } atEnd: {
-            ends.reached()
+            continuation.finish()
         }
-        errorPipe.fileHandleForReading.readChunks { [weak self] data in
-            self?.keepError(data)
-        } atEnd: {
-            ends.reached()
-        }
-        try NativeProcessTree.run(process)
     }
 
     func send(_ message: Data) throws {
-        try input.fileHandleForWriting.write(contentsOf: message + Data("\n".utf8))
+        try channel.write(message + Data("\n".utf8))
     }
 
     func errorTail() -> String {
-        lock.withLock { String(decoding: errors, as: UTF8.self) }
+        channel.stderrText
     }
 
+    /// A server is asked to end and left to do it in its own way: its input closes and it is
+    /// signalled, where a harness's CLI is ended at once with everything it started.
     func terminate() {
-        try? input.fileHandleForWriting.close()
-        if process.isRunning { process.terminate() }
-    }
-
-    private func keepError(_ data: Data) {
-        lock.withLock {
-            errors.append(data)
-            if errors.count > Self.errorLimit { errors = errors.suffix(Self.errorLimit) }
-        }
+        channel.askToEnd()
     }
 
     deinit {
         terminate()
-    }
-
-    /// Calls `done` when standard output and standard error have both ended.
-    private final class Ends: @unchecked Sendable {
-        private let lock = NSLock()
-        private var remaining = 2
-        private let done: @Sendable () -> Void
-
-        init(_ done: @escaping @Sendable () -> Void) {
-            self.done = done
-        }
-
-        func reached() {
-            let last = lock.withLock {
-                remaining -= 1
-                return remaining == 0
-            }
-            if last { done() }
-        }
     }
 }
