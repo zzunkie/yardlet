@@ -918,14 +918,14 @@ final class TaskContinuationCoordinator {
             if !started {
                 forgetConnectionResume(id)
                 if model.store.sessions.first(where: { $0.id == id })?.status == .running {
-                    try? await model.store.updateSession(id: id, status: .ready)
+                    await model.turnEnded(id, as: .ready, cause: .continuationEnded)
                 }
             }
             return started
         } catch {
             guard model.store.sessions.contains(where: { $0.id == id }) else { return false }
             forgetConnectionResume(id)
-            try? await model.store.updateSession(id: id, status: .failed)
+            await model.turnEnded(id, as: .failed, cause: .continuationEnded)
             model.errorBySessionID[id] = error.localizedDescription
             return false
         }
@@ -1046,11 +1046,11 @@ final class TaskContinuationCoordinator {
                 return true
             } else if model.store.sessions.first(where: { $0.id == id })?.status == .running {
                 // The provider's record says the turn had ended; it stays as it ended.
-                try? await model.store.updateSession(id: id, status: .ready)
+                await model.turnEnded(id, as: .ready, cause: .continuationEnded)
             }
         } catch {
             guard model.store.sessions.contains(where: { $0.id == id }) else { return false }
-            try? await model.store.updateSession(id: id, status: .failed)
+            await model.turnEnded(id, as: .failed, cause: .continuationEnded)
             model.errorBySessionID[id] = error.localizedDescription
         }
         return false

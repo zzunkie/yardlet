@@ -1,7 +1,8 @@
 import Foundation
 
-/// A local record of what Yardlet decided about a task's runtime, so that "why did this task lose
-/// its CLI" can be answered from the Mac it happened on instead of guessed at:
+/// A local record of what Yardlet decided about a task's runtime and turns, so that "why did this
+/// task lose its CLI" or "what ended its turn" can be answered from the Mac it happened on instead of
+/// guessed at:
 /// `~/.yardlet/logs/task-coordination.log`, one JSON object a line, the newest half kept once it
 /// passes 512 KiB. A line names the task by its ID, its harness, what happened and why. It holds
 /// nothing of the conversation, no path, no account and no credential, and leaves the machine only
@@ -14,8 +15,10 @@ final class TaskCoordinationLog: @unchecked Sendable {
         /// The task's ID.
         var task: String
         var harness: String?
-        /// Why, in a fixed word such as a `RuntimeDetachReason`.
+        /// Why, in a fixed word: a `RuntimeDetachReason` or a `TurnEndCause`.
         var reason: String?
+        /// For a turn's end, the status it left the task in.
+        var status: String?
     }
 
     private struct Line: Encodable {

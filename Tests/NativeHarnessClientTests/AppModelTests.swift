@@ -371,9 +371,16 @@ final class AppModelTests: XCTestCase {
     /// A task's turn ends in several ways: the provider reports its state or an error, the message
     /// that was to start it does not go, or the runtime's stream ends while it runs. What follows
     /// differs with the way. This is what each leaves of a task that is not on screen: its status,
-    /// whether its row says there is something new, and whether a notification goes.
+    /// whether its row says there is something new, and whether a notification goes. Each goes
+    /// through `AppModel.turnEnded`, and the coordination log says what ended the turn.
     func testEachWayATurnEndsLeavesItsStatusItsUnreadMarkAndItsNotification() async throws {
         enum Way: String, CaseIterable { case providerReady, providerFailed, providerError, sendFailed, streamEnded }
+        let causes: [Way: TurnEndCause] = [.providerReady: .providerStatus, .providerFailed: .providerStatus,
+                                           .providerError: .providerError, .sendFailed: .notStarted,
+                                           .streamEnded: .streamEnded]
+        let folder = FileManager.default.temporaryDirectory.appending(path: "turn-end-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
         let expected: [Way: (status: SessionStatus, unread: Bool, notifications: Int)] = [
             .providerReady: (.ready, false, 0),
             .providerFailed: (.failed, true, 1),
@@ -395,6 +402,8 @@ final class AppModelTests: XCTestCase {
                                                     runtimeExecutableURL: URL(filePath: "/tmp/opencode"), title: way.rawValue)
             let task = try XCTUnwrap(created, model.bootstrapError ?? "Missing task")
             let want = try XCTUnwrap(expected[way])
+            let log = folder.appending(path: "\(way.rawValue).log")
+            model.coordinationLog.fileURL = log
 
             if way == .sendFailed { await adapter.failNextSend() }
             await model.send(HarnessUserInput(text: "Go"), to: task)
@@ -423,6 +432,13 @@ final class AppModelTests: XCTestCase {
             XCTAssertEqual(model.store.sessions.first?.hasUnreadUpdate, want.unread, way.rawValue)
             XCTAssertEqual(notifications.posts.count, want.notifications, way.rawValue)
             XCTAssertEqual(model.errorBySessionID[task.id] != nil, way != .providerReady && way != .providerFailed, way.rawValue)
+            model.coordinationLog.flush()
+            let ended = try String(contentsOf: log, encoding: .utf8).split(separator: "\n")
+                .map { try JSONDecoder().decode(TaskCoordinationLog.Entry.self, from: Data($0.utf8)) }
+                .filter { $0.event == "turn-ended" }
+            XCTAssertEqual(ended, [TaskCoordinationLog.Entry(event: "turn-ended", task: task.id.uuidString,
+                harness: HarnessKind.openCode.rawValue, reason: causes[way]?.rawValue, status: want.status.rawValue)],
+                way.rawValue)
             await model.shutdown()
         }
     }

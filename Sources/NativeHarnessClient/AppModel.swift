@@ -864,7 +864,7 @@ final class AppModel {
         } catch {
             if let id = createdSessionID {
                 guard store.sessions.contains(where: { $0.id == id }) else { return nil }
-                try? await store.updateSession(id: id, status: .failed)
+                await turnEnded(id, as: .failed, cause: .notStarted)
                 errorBySessionID[id] = error.localizedDescription
             } else {
                 bootstrapError = error.localizedDescription
@@ -883,7 +883,7 @@ final class AppModel {
             return true
         } catch {
             guard store.sessions.contains(where: { $0.id == session.id }) else { return false }
-            try? await store.updateSession(id: session.id, status: .failed)
+            await turnEnded(session.id, as: .failed, cause: .notStarted)
             errorBySessionID[session.id] = error.localizedDescription
             return false
         }
@@ -1113,7 +1113,7 @@ final class AppModel {
             try await attach(session, resumesExistingSession: session.providerSessionID != nil)
         } catch {
             guard store.sessions.contains(where: { $0.id == session.id }) else { return }
-            try? await store.updateSession(id: session.id, status: .failed)
+            await turnEnded(session.id, as: .failed, cause: .notStarted)
             errorBySessionID[session.id] = error.localizedDescription
         }
     }
@@ -1255,7 +1255,7 @@ final class AppModel {
             try await contextWasDelivered(to: session.id)
         } catch {
             guard store.sessions.contains(where: { $0.id == session.id }) else { return }
-            try? await store.updateSession(id: session.id, status: .failed)
+            await turnEnded(session.id, as: .failed, cause: .notStarted)
             errorBySessionID[session.id] = error.localizedDescription
             recordLocalError(error.localizedDescription, for: session.id)
             // The message stays in the conversation as sent; the diff comments it carried wait again.
@@ -1422,7 +1422,7 @@ final class AppModel {
             guard store.sessions.contains(where: { $0.id == session.id }) else { return }
             // A rejected steer leaves the running turn as it was; the draft is kept below.
             if action == .automatic, !steersRunningTurn {
-                try? await store.updateSession(id: session.id, status: .failed)
+                await turnEnded(session.id, as: .failed, cause: .notStarted)
             }
             queueCodexDraft(draft, for: session, failureMessage: error.localizedDescription)
             errorBySessionID[session.id] = error.localizedDescription
@@ -1719,7 +1719,7 @@ final class AppModel {
             }
         } catch {
             guard store.sessions.contains(where: { $0.id == session.id }) else { return }
-            try? await store.updateSession(id: session.id, status: .failed)
+            await turnEnded(session.id, as: .failed, cause: .notStarted)
             markFollowUpFailed(itemID, message: error.localizedDescription, in: session.id)
         }
     }
@@ -2071,7 +2071,7 @@ final class AppModel {
             try await contextWasDelivered(to: sessionID)
         } catch {
             guard store.sessions.contains(where: { $0.id == sessionID }) else { return }
-            try? await store.updateSession(id: sessionID, status: .failed)
+            await turnEnded(sessionID, as: .failed, cause: .notStarted)
             errorBySessionID[sessionID] = error.localizedDescription
             recordLocalError(error.localizedDescription, for: sessionID)
         }
@@ -2197,7 +2197,7 @@ final class AppModel {
             guard matchingSession(session) != nil else { return }
             if store.sessions.first(where: { $0.id == session.id })?.status == .running,
                codexPresentationBySessionID[session.id]?.activeTurnID == nil {
-                try? await store.updateSession(id: session.id, status: .failed)
+                await turnEnded(session.id, as: .failed, cause: .notStarted)
             }
             updateCodexActionError(error, for: session.id)
         }
@@ -6237,8 +6237,7 @@ final class AppModel {
             let message = errorBySessionID[id] ?? L10n.format("Connection to %@ ended.", session.harness.displayName)
             if errorBySessionID[id] == nil { recordLocalError(message, for: id) }
             errorBySessionID[id] = message
-            try? await store.updateSession(id: id, status: .failed,
-                hasUnreadUpdate: !isSessionVisible(id) ? true : nil)
+            await turnEnded(id, as: .failed, cause: .streamEnded)
         }
         await closing?.value
     }
@@ -6359,49 +6358,30 @@ final class AppModel {
             where status == .ready && (submissionStartedAt[event.localSessionID].map { event.timestamp < $0 } ?? false):
             break
         case let .sessionStatusChanged(status):
-            if status == .running || status == .waitingForApproval {
-                // The next turn has begun; what was suggested after the last one no longer fits, and a
-                // question a restart cut off is no longer what the task waits on.
-                composerDrafts.tasks.existingDraft(for: event.localSessionID)?.nextMessageSuggestion = nil
-                continuations.stopAskingRestartQuestion(event.localSessionID)
-                // A turn someone else started takes over from one a lost connection cut off.
-                if continuations.connectionResumes[event.localSessionID]?.isWaiting == true {
-                    continuations.forgetConnectionResume(event.localSessionID)
-                }
-                // Its cache is written again on this account: a move Yardlet chose would lose it.
-                if continuations.automaticAccountMoves[event.localSessionID] != nil {
-                    continuations.cancelAccountSwitchAfterTurn(for: event.localSessionID, declined: false)
-                }
-                continuations.declinedAccountMoves.remove(event.localSessionID)
-            } else {
-                // The rail's browser preview goes with the turn, as the Codex app's at `turn/completed`.
-                BrowserAgentUse.shared.endTurn(session: event.localSessionID)
-                // A turn that made, ended or listed a session job, or ran one, changed what the CLI holds.
-                if sessionJobsBySessionID[event.localSessionID] != nil || latestTurnTouchedSessionJobs(event.localSessionID) {
-                    readSessionJobs(of: event.localSessionID)
-                }
-                // A continuation that ended without its connection being cut again is done.
-                if let resume = continuations.connectionResumes[event.localSessionID], !resume.isWaiting {
-                    continuations.forgetConnectionResume(event.localSessionID)
-                }
+            guard status == .running || status == .waitingForApproval else {
+                await turnEnded(event.localSessionID, as: status, cause: .providerStatus, at: event.timestamp)
+                break
             }
-            let shouldMarkUnread = !isSessionVisible(event.localSessionID)
-                && [.waitingForApproval, .completed, .failed].contains(status)
-            // A runtime that reports ready when no turn was running (as it does on connecting)
-            // has done nothing new; a turn's own states move the task.
-            let previous = store.sessions.first(where: { $0.id == event.localSessionID })?.status
+            // The next turn has begun; what was suggested after the last one no longer fits, and a
+            // question a restart cut off is no longer what the task waits on.
+            composerDrafts.tasks.existingDraft(for: event.localSessionID)?.nextMessageSuggestion = nil
+            continuations.stopAskingRestartQuestion(event.localSessionID)
+            // A turn someone else started takes over from one a lost connection cut off.
+            if continuations.connectionResumes[event.localSessionID]?.isWaiting == true {
+                continuations.forgetConnectionResume(event.localSessionID)
+            }
+            // Its cache is written again on this account: a move Yardlet chose would lose it.
+            if continuations.automaticAccountMoves[event.localSessionID] != nil {
+                continuations.cancelAccountSwitchAfterTurn(for: event.localSessionID, declined: false)
+            }
+            continuations.declinedAccountMoves.remove(event.localSessionID)
+            let shouldMarkUnread = status == .waitingForApproval && !isSessionVisible(event.localSessionID)
             try? await store.updateSession(
                 id: event.localSessionID,
                 status: status,
                 hasUnreadUpdate: shouldMarkUnread ? true : nil,
-                completionState: status == .running ? SessionCompletionState.none : nil,
-                updatesRecency: status != .ready || previous == .running || previous == .waitingForApproval
+                completionState: status == .running ? SessionCompletionState.none : nil
             )
-            if previous == .running || previous == .waitingForApproval, status != .running, status != .waitingForApproval {
-                recordTurnForRoutingEvaluation(event.localSessionID, status: status, at: event.timestamp)
-                // A dialog the agent's own input opened and left unanswered is now the person's to answer.
-                refreshBrowserWaits()
-            }
             if status == .waitingForApproval {
                 announceApproval(in: event.localSessionID)
             } else {
@@ -6420,30 +6400,6 @@ final class AppModel {
                     for: event.localSessionID,
                     status: status
                 )
-            }
-            if status == .ready {
-                scheduleFollowUpDrain(for: event.localSessionID)
-            }
-            // A failure auto-fix held while the task worked may go now, and so may a change to
-            // its tools that waited for the turn's end.
-            if status != .running, status != .waitingForApproval {
-                pullRequestDetails.taskBecameIdle(event.localSessionID)
-                agentTools?.taskTurnEnded(event.localSessionID)
-                wakeAccountMove(for: event.localSessionID)
-                continuations.switchAccountAfterTurn(event.localSessionID)
-                considerAccountMoveAfterTurn(event.localSessionID)
-                if continuations.contextLimitRestarts[event.localSessionID] != nil {
-                    Task { await continuations.restartForContextLimit(event.localSessionID) }
-                }
-            }
-            // A shell command's output waits for the turn to end, however it ended.
-            if status != .running, status != .waitingForApproval {
-                scheduleShellDelivery(for: event.localSessionID)
-            }
-            // A provider says a lost connection cut its turn before the turn ends, so the network may come
-            // back while the task still runs: a cut-off turn already due continues once the turn has ended.
-            if status != .running, status != .waitingForApproval, continuations.connectionResumes[event.localSessionID]?.isDue == true {
-                continuations.continueDueConnectionResumes()
             }
         case let .followUpDelivery(delivery):
             acceptFollowUpDelivery(delivery, for: event.localSessionID)
@@ -6497,22 +6453,79 @@ final class AppModel {
             errorBySessionID[event.localSessionID] = message
             let asksToSignIn = ProviderSignIn.asksToSignIn(message)
             if asksToSignIn { continuations.noteSignInRefused(message, for: event.localSessionID) }
-            let shouldMarkUnread = !isSessionVisible(event.localSessionID)
-            try? await store.updateSession(
-                id: event.localSessionID,
-                status: .failed,
-                hasUnreadUpdate: shouldMarkUnread ? true : nil
-            )
-            agentTools?.taskTurnEnded(event.localSessionID)
-            if shouldMarkUnread {
-                await postBackgroundNotification(
-                    for: event.localSessionID,
-                    status: .failed,
-                    detail: asksToSignIn ? ProviderSignIn.prompt : message
-                )
-            }
+            await turnEnded(event.localSessionID, as: .failed, cause: .providerError, at: event.timestamp,
+                            notificationDetail: asksToSignIn ? ProviderSignIn.prompt : message)
         default:
             break
+        }
+    }
+
+    /// A task's turn ended, or its provider says the task is in none: its status becomes `status`
+    /// (ready, completed or failed). Every way a turn ends comes here (`TurnEndCause`), so what
+    /// follows a turn's end is decided in one place: the cause's `followUps`, done in this order.
+    /// The provider's own report runs all of them, also when no turn was running (a runtime reports
+    /// ready as it connects, and what waited for the task then goes). The coordination log gets a
+    /// line when a turn did end.
+    func turnEnded(_ id: UUID, as status: SessionStatus, cause: TurnEndCause, at timestamp: Date = Date(),
+                   notificationDetail: String? = nil) async {
+        let follows = cause.followUps
+        if follows.contains(.browserPreview) {
+            // The rail's browser preview goes with the turn, as the Codex app's at `turn/completed`.
+            BrowserAgentUse.shared.endTurn(session: id)
+        }
+        // A turn that made, ended or listed a session job, or ran one, changed what the CLI holds.
+        if follows.contains(.sessionJobs), sessionJobsBySessionID[id] != nil || latestTurnTouchedSessionJobs(id) {
+            readSessionJobs(of: id)
+        }
+        // A continuation that ended without its connection being cut again is done.
+        if follows.contains(.connectionResume), let resume = continuations.connectionResumes[id], !resume.isWaiting {
+            continuations.forgetConnectionResume(id)
+        }
+        let marksUnread = follows.contains(.unreadMark) && !isSessionVisible(id)
+            && [.waitingForApproval, .completed, .failed].contains(status)
+        let previous = store.sessions.first(where: { $0.id == id })?.status
+        let endsTurn = previous == .running || previous == .waitingForApproval
+        // A runtime that reports ready when no turn was running (as it does on connecting) has done
+        // nothing new; a turn's own states move the task.
+        try? await store.updateSession(
+            id: id,
+            status: status,
+            hasUnreadUpdate: marksUnread ? true : nil,
+            updatesRecency: cause != .providerStatus || status != .ready || endsTurn
+        )
+        if endsTurn {
+            coordinationLog.record(.init(event: "turn-ended", task: id.uuidString,
+                                         harness: store.sessions.first { $0.id == id }?.harness.rawValue,
+                                         reason: cause.rawValue, status: status.rawValue))
+        }
+        if follows.contains(.routingEvaluation), endsTurn {
+            recordTurnForRoutingEvaluation(id, status: status, at: timestamp)
+            // A dialog the agent's own input opened and left unanswered is now the person's to answer.
+            refreshBrowserWaits()
+        }
+        if follows.contains(.approvalNotifications) { withdrawAnsweredApprovalNotifications(for: id) }
+        if follows.contains(.notification), marksUnread {
+            await postBackgroundNotification(for: id, status: status, detail: notificationDetail)
+        }
+        if follows.contains(.queue), status == .ready { scheduleFollowUpDrain(for: id) }
+        // A failure auto-fix held while the task worked may go now, and so may a change to its tools
+        // that waited for the turn's end.
+        if follows.contains(.autoFix) { pullRequestDetails.taskBecameIdle(id) }
+        if follows.contains(.toolChanges) { agentTools?.taskTurnEnded(id) }
+        if follows.contains(.accountMove) {
+            wakeAccountMove(for: id)
+            continuations.switchAccountAfterTurn(id)
+            considerAccountMoveAfterTurn(id)
+        }
+        if follows.contains(.contextLimit), continuations.contextLimitRestarts[id] != nil {
+            Task { await continuations.restartForContextLimit(id) }
+        }
+        // A shell command's output waits for the turn to end, however it ended.
+        if follows.contains(.shellOutput) { scheduleShellDelivery(for: id) }
+        // A provider says a lost connection cut its turn before the turn ends, so the network may come
+        // back while the task still runs: a cut-off turn already due continues once the turn has ended.
+        if follows.contains(.dueConnectionResumes), continuations.connectionResumes[id]?.isDue == true {
+            continuations.continueDueConnectionResumes()
         }
     }
 
@@ -7623,7 +7636,7 @@ extension AppModel {
             if store.sessions.contains(where: { $0.id == source.id }), draft.editState?.id == edit.id {
                 draft.notice = error.localizedDescription
                 if store.sessions.first(where: { $0.id == source.id })?.status == .running {
-                    try? await store.updateSession(id: source.id, status: .failed)
+                    await turnEnded(source.id, as: .failed, cause: .notStarted)
                 }
             }
         }

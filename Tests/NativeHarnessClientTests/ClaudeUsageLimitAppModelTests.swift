@@ -526,10 +526,10 @@ import XCTest
             let stops = await first.stopCount
             XCTAssertEqual(stops, 1, "\(way.rawValue): its CLI is stopped once")
             model.coordinationLog.flush()
-            let lines = try String(contentsOf: log, encoding: .utf8).split(separator: "\n").map {
-                try JSONDecoder().decode(TaskCoordinationLog.Entry.self, from: Data($0.utf8))
-            }
-            XCTAssertEqual(lines, [TaskCoordinationLog.Entry(event: "runtime-detached", task: task.id.uuidString,
+            let detached = try String(contentsOf: log, encoding: .utf8).split(separator: "\n")
+                .map { try JSONDecoder().decode(TaskCoordinationLog.Entry.self, from: Data($0.utf8)) }
+                .filter { $0.event == "runtime-detached" }
+            XCTAssertEqual(detached, [TaskCoordinationLog.Entry(event: "runtime-detached", task: task.id.uuidString,
                 harness: "claude-code", reason: reasons[way]?.rawValue)], way.rawValue)
         }
     }
