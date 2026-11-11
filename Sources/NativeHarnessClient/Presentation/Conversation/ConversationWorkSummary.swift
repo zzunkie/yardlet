@@ -156,21 +156,29 @@ enum ConversationWorkSummary {
             var count: Int { Self.fileKinds.contains(kind) ? paths.count + pathless : calls }
             static let fileKinds: Set<String> = ["read", "write", "edit", "delete_file", "notebook_edit"]
         }
-        var groups: [Group] = []
-        var unknown = 0
-        func add(_ kind: String?, path: String?) {
-            guard let kind else { unknown += 1; return }
-            let index = groups.firstIndex { $0.kind == kind } ?? {
-                groups.append(Group(kind: kind))
-                return groups.count - 1
-            }()
-            groups[index].calls += 1
-            if let path, !path.isEmpty { groups[index].paths.insert(path) } else { groups[index].pathless += 1 }
+        /// The calls counted so far: a group for each known kind, in the order the kinds came, and the
+        /// calls of no known kind.
+        struct Tally {
+            var groups: [Group] = []
+            var unknown = 0
+            mutating func add(_ kind: String?, path: String?) {
+                guard let kind else { unknown += 1; return }
+                let index: Int
+                if let known = groups.firstIndex(where: { $0.kind == kind }) {
+                    index = known
+                } else {
+                    groups.append(Group(kind: kind))
+                    index = groups.count - 1
+                }
+                groups[index].calls += 1
+                if let path, !path.isEmpty { groups[index].paths.insert(path) } else { groups[index].pathless += 1 }
+            }
         }
+        var tally = Tally()
         for item in items {
             switch item.kind {
             case .command:
-                add("bash", path: nil)
+                tally.add("bash", path: nil)
             case let .fileChange(change):
                 for row in change.rows {
                     let kind = switch row.kind {
@@ -178,17 +186,20 @@ enum ConversationWorkSummary {
                     case .delete: "delete_file"
                     case .update: "edit"
                     }
-                    add(kind, path: row.id)
+                    tally.add(kind, path: row.id)
                 }
             case let .tool(tool):
-                guard case let .activity(name) = tool.kind else { add(nil, path: nil); continue }
+                guard case let .activity(name) = tool.kind else { tally.add(nil, path: nil); continue }
                 let arguments = ClaudeToolArguments(tool: name, input: tool.input)
-                add(claudeKind(of: name), path: arguments["file_path"] ?? arguments["notebook_path"])
+                tally.add(claudeKind(of: name), path: arguments["file_path"] ?? arguments["notebook_path"])
             default:
                 break
             }
         }
-        var phrases = groups.map { (phrase: claudePhrase($0.kind, count: $0.count, localize: localize), count: $0.count) }
+        var phrases = tally.groups.map {
+            (phrase: claudePhrase($0.kind, count: $0.count, localize: localize), count: $0.count)
+        }
+        let unknown = tally.unknown
         if unknown > 0 {
             phrases.append((unknown == 1 ? localize("Used a tool")
                             : String(format: localize("Used %lld tools"), Int64(unknown)), unknown))

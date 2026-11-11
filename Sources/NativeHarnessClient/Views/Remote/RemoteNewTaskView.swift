@@ -105,18 +105,24 @@ struct RemoteNewTaskView: View {
         }
     }
 
+    /// The project's files on the host for an @ mention, when the host offers them.
+    private var mentionSearch: (@MainActor (String) async -> WorkspaceFileSearchResult)? {
+        guard model.composerExtensions && projectID != nil && !isChat else { return nil }
+        return { query in
+            guard let projectID else { return .init() }
+            return await mentionIndex.search(query, key: projectID) {
+                await model.response(to: .projectWorkspaceFiles(projectID: projectID))
+            }
+        }
+    }
+
     private var composer: some View {
         VStack(alignment: .leading, spacing: 10) {
             ComposerEditor(
                 draft: draft, placeholder: NewTaskComposerText.placeholder(harnessName: chosenHarness?.harnessName ?? model.newTask?.harnessName),
                 accessibilityHint: L10n.string("Press Return to start the task"), metrics: .newTask,
                 input: nil, onExternalInput: acceptsAttachments ? { receive($0) } : nil, mentionRoots: [],
-                mentionSearch: model.composerExtensions && projectID != nil && !isChat ? { query in
-                    guard let projectID else { return .init() }
-                    return await mentionIndex.search(query, key: projectID) {
-                        await model.response(to: .projectWorkspaceFiles(projectID: projectID))
-                    }
-                } : nil,
+                mentionSearch: mentionSearch,
                 onInsertMention: { RemoteComposerMentionIndex.insert($0, replacing: $1, into: draft) },
                 commands: editorCommands,
                 isCommandMenuOpen: showsCommands, isMenuOpen: showsCommands || showsAccounts,

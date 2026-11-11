@@ -75,7 +75,7 @@ final class TranscriptImageThumbnails: @unchecked Sendable {
         let key = url.absoluteString as NSString
         cache.removeObject(forKey: key)
         guard let kept else { return }
-        _ = keptLock.withLock { kept.removeObject(forKey: key) }
+        keptLock.withLock { kept.removeObject(forKey: key) }
     }
 
     private func keptEntry(for key: NSString) -> Entry? {

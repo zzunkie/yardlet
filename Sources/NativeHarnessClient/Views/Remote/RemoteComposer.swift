@@ -63,12 +63,18 @@ struct RemoteComposer: View {
         model.railComposerOptions(taskID)
     }
 
+    /// The host's files for an @ mention, when it offers them.
+    private var mentionSearch: (@MainActor (String) async -> WorkspaceFileSearchResult)? {
+        guard model.offersWorkspaceFiles else { return nil }
+        return { await mentionIndex.search($0, model: model, taskID: taskID) }
+    }
+
     var body: some View {
         ComposerEditor(
             draft: draft, placeholder: placeholder,
             accessibilityHint: isRunning ? policy.returnHint(preferred: preferred) : L10n.string("Press Return to send"),
             metrics: .task(), input: nil, onExternalInput: acceptsAttachments ? { receive($0) } : nil, mentionRoots: [],
-            mentionSearch: model.offersWorkspaceFiles ? { await mentionIndex.search($0, model: model, taskID: taskID) } : nil,
+            mentionSearch: mentionSearch,
             onInsertMention: { RemoteComposerMentionIndex.insert($0, replacing: $1, into: draft) },
             commands: editorCommands, isCommandMenuOpen: menu == .commands, isMenuOpen: showsFollowUpMenu || menu != nil,
             showsChips: !draft.hostMentions.isEmpty,

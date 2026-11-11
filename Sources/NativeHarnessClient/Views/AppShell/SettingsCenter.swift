@@ -987,7 +987,7 @@ private struct CredentialHidingContentRow<Icon: View>: View {
                 }
             }
             Spacer(minLength: 8)
-            Toggle(setting.title, isOn: Binding(get: { hidesCredentials }, set: onToggle))
+            Toggle(setting.title, isOn: Binding(get: { hidesCredentials }, set: { onToggle($0) }))
                 .labelsHidden()
                 .toggleStyle(.paritySwitch)
                 .controlSize(.small)

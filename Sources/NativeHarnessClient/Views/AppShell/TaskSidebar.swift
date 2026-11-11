@@ -1475,7 +1475,7 @@ struct SidebarRowLeading<Mark: View>: View {
     }
 
     /// How far a row's gutter sits in from the row's start: a family indent per level nested.
-    static func indent(nestingDepth: Int) -> CGFloat {
+    nonisolated static func indent(nestingDepth: Int) -> CGFloat {
         CGFloat(nestingDepth) * SidebarMetrics.familyIndent
     }
 
@@ -1486,7 +1486,7 @@ struct SidebarRowLeading<Mark: View>: View {
 
     /// Where the family guide's line for a level runs down: under the middle of the mark of the row
     /// a level out (level 1 under the family's top task).
-    static func guideX(level: Int) -> CGFloat { indent(nestingDepth: level - 1) + SidebarMetrics.gutterWidth / 2 }
+    nonisolated static func guideX(level: Int) -> CGFloat { indent(nestingDepth: level - 1) + SidebarMetrics.gutterWidth / 2 }
 }
 
 /// A row that acts above or below a list of tasks (Home, Scheduled tasks, Back, Import): its
@@ -2183,7 +2183,7 @@ private final class SidebarRowPlace {
 @MainActor
 final class SidebarListOrigin {
     /// Names the list's content, inside its scroll view.
-    static let contentSpace = "SidebarListContent"
+    nonisolated static let contentSpace = "SidebarListContent"
 
     var scrollView = CGPoint.zero
     var offset: CGFloat = 0

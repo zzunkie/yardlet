@@ -212,7 +212,7 @@ actor MCPHTTPClient {
         negotiatedVersion = result["protocolVersion"]?.stringValue
         serverIcons = MCPServerIcon.list(in: result["serverInfo"])
         initialized = true
-        try? await post(.object([
+        _ = try? await post(.object([
             "jsonrpc": .string("2.0"),
             "method": .string("notifications/initialized")
         ]))

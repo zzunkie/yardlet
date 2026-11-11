@@ -366,7 +366,7 @@ struct SidebarHoverCardView: View {
                 .font(.system(size: 11 * interfaceScale, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 16 * interfaceScale, height: 20 * interfaceScale)
-                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 * interfaceScale }
+                .alignmentGuide(.firstTextBaseline) { [interfaceScale] in $0[VerticalAlignment.center] + 4 * interfaceScale }
             words()
                 .frame(minHeight: 20 * interfaceScale, alignment: .leading)
         }

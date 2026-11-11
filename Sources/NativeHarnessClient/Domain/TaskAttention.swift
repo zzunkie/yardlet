@@ -133,7 +133,7 @@ struct TaskAttentionDetail: Equatable, Sendable {
     }
 
     /// A heading, quote or list mark at the line's start, however many.
-    nonisolated(unsafe) private static let blockMarks = try! NSRegularExpression(
+    private static let blockMarks = try! NSRegularExpression(
         pattern: #"^(#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)+"#)
     /// The characters inline Markdown reads as more than text: emphasis, code, links and images,
     /// autolinks and HTML, escapes, entities and strikethrough.

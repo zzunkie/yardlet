@@ -23,8 +23,8 @@ struct SidePanelLauncher: View {
     @FocusState private var isSearchFocused: Bool
 
     /// The Codex app's recent list shows six rows before it scrolls.
-    static let recentCount = 6
-    static let matchLimit = 30
+    nonisolated static let recentCount = 6
+    nonisolated static let matchLimit = 30
     static let pageCount = 5
 
     /// The tasks the list shows: the most recent, or those whose title or project has the search.

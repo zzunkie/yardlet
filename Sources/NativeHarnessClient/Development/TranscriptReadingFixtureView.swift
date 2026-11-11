@@ -22,7 +22,7 @@ struct TranscriptReadingFixtureView: View {
         ```
         """
 
-    static let mixedMarkdown = #"""
+    nonisolated static let mixedMarkdown = #"""
         ## Mixed response
 
         9. **Review the structure.** 한글과 👩🏽‍💻 이모지가 있는 긴 문장도 본문 시작 위치를 유지합니다.

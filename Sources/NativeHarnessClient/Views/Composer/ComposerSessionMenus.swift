@@ -249,7 +249,7 @@ struct ComposerContextUsageDetails: View {
             .lineLimit(1)
         // A menu, as Default names the limit it stands for and four segments would not fit the rail. A menu is
         // as wide as its longest item, so where it leaves the name no room the name goes above it.
-        let menu = Picker(selector.name, selection: Binding(get: { selector.currentValue }, set: limit.choose)) {
+        let menu = Picker(selector.name, selection: Binding(get: { selector.currentValue }, set: { limit.choose($0) })) {
             ForEach(selector.choices) { choice in
                 Text(choice.name).tag(choice.value)
             }

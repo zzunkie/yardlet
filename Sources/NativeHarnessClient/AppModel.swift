@@ -6055,7 +6055,7 @@ final class AppModel {
         }
         // Opening a task is the one moment a row written before worktree origins existed may
         // gain one, and only when its folder really is a worktree. Launch never rescans.
-        try? await store.recordWorkspaceOriginIfMissing(id: session.id)
+        _ = try? await store.recordWorkspaceOriginIfMissing(id: session.id)
         try session.connection?.validate(for: session.harness)
         if let home = session.connection?.homePath {
             var isDirectory: ObjCBool = false

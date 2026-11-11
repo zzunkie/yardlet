@@ -39,7 +39,7 @@ enum ConversationSelection {
         }
     }
 
-    private struct Piece {
+    @MainActor private struct Piece {
         let view: NSView
         let frame: CGRect
         var text: TranscriptProseTextView? { view as? TranscriptProseTextView }

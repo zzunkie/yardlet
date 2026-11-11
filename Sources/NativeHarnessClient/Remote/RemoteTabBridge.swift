@@ -384,8 +384,7 @@ final class RemoteTabBridge {
         guard permit.isValid else { return RemoteError(.notAllowed) }
         let tab: BrowserTab
         do { tab = try watchedTab(taskID: taskID, tabID: tabID).get() }
-        catch let error as RemoteError { return error }
-        catch { return RemoteError(.notFound) }
+        catch { return error }
         if let refusal = await stepRefusal(tab, permit, PageScope(taskID: taskID)) { return refusal }
         guard let (_, client) = resolve(taskID), permit.isValid else { return RemoteError(.notAllowed) }
         tab.notePersonInput(remote: true)

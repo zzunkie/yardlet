@@ -282,7 +282,7 @@ final class RemoteControlService {
     func start() async {
         guard !started else { return }
         started = true
-        startup = Task {
+        startup = Task { [self] in
             _ = await loadIdentity(create: false)
             guard started, !Task.isCancelled else { return }
             await server.start()

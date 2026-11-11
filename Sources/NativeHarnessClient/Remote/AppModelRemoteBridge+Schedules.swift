@@ -205,8 +205,7 @@ extension AppModelRemoteBridge {
             result.scheduleAccounts = accounts.map { RemoteAccount(id: $0.id, name: Self.scheduleText($0.title, root: nil),
                 current: $0.id == account ? true : nil, available: true) }
             return .success(result)
-        } catch let error as RemoteError { return .failure(error) }
-        catch { return .failure(RemoteError(.badRequest)) }
+        } catch { return .failure(error) }
     }
 
     func saveScheduledTask(scheduleID: String?, definition: Data, settings: [String: String], confirmed: Bool) async
@@ -285,8 +284,7 @@ extension AppModelRemoteBridge {
             schedule.destination = destination
             if existing == nil { center.create(schedule) } else { center.update(schedule) }
             return .success(schedule.id.uuidString)
-        } catch let error as RemoteError { return .failure(error) }
-        catch { return .failure(RemoteError(.badRequest)) }
+        } catch { return .failure(error) }
     }
 
     /// Whether the schedule starts its task in a permission the Mac asks to confirm (Bypass permissions, Full access), read

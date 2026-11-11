@@ -346,7 +346,9 @@ enum RemoteTurnProjection {
         case "planReview":
             request.form = .planReview(item.text ?? "")
             if options.contains(RemoteProtocol.approvePlanOption) { request.responses = ConversationRequestResponses.planReview }
-        case "question", "form" where !steps.isEmpty || item.formFields == nil:
+        case "question":
+            fallthrough
+        case "form" where !steps.isEmpty || item.formFields == nil:
             if steps.contains(where: { $0.secret == true }) {
                 request.form = .freeText(steps.map { step in
                     ConversationRequestQuestion(id: step.id, text: step.text, header: step.header,

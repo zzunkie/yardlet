@@ -469,7 +469,7 @@ struct NativeHarnessClientApp: App {
 
     var body: some Scene {
         // A fixed scene ID keeps SwiftUI's own saved window frame from depending on the root view's type.
-        WindowGroup(id: "main") {
+        WindowGroup(id: "main") { [model] in
             YardletWindowPreferences(usesVisualFixture: model.usesVisualFixture) {
                 mainContent
                     .frame(minWidth: 760, minHeight: 560)

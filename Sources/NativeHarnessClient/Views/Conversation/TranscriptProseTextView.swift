@@ -396,7 +396,7 @@ final class TranscriptProseContainerView: ConversationFindCenteringView, NSTextV
             self.full = full
         }
 
-        func remove() {
+        @MainActor func remove() {
             copy.removeFromSuperview()
             run?.removeFromSuperview()
             full?.removeFromSuperview()
@@ -962,7 +962,12 @@ final class TranscriptProseFragment: NSTextLayoutFragment {
     }
 
     override func draw(at point: CGPoint, in context: CGContext) {
-        let appearance = textLayoutManager?.textContainer?.textView?.effectiveAppearance ?? NSAppearance.currentDrawing()
+        // The text view draws its fragments from its own `draw(_:)`, on the main thread, as `deinit` above
+        // assumes, in the named appearance its container gives it; a drawing anywhere else takes the
+        // appearance it is drawn in. The name crosses from the main actor, as an appearance cannot.
+        let textView = textLayoutManager?.textContainer?.textView
+        let name = Thread.isMainThread ? MainActor.assumeIsolated { textView?.effectiveAppearance.name } : nil
+        let appearance = name.flatMap(NSAppearance.init(named:)) ?? NSAppearance.currentDrawing()
         appearance.performAsCurrentDrawingAppearance {
             context.saveGState()
             context.translateBy(x: point.x, y: point.y)

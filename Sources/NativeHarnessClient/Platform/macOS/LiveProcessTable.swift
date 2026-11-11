@@ -143,7 +143,7 @@ struct LiveProcessTable: ProcessTableReading {
     func name(of processID: Int32) -> String? {
         var name = [CChar](repeating: 0, count: 256)
         guard proc_name(processID, &name, UInt32(name.count)) > 0 else { return nil }
-        return String(cString: name)
+        return String(decoding: name.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     private func nanoseconds(_ machTime: UInt64) -> UInt64 {

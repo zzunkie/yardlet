@@ -196,7 +196,7 @@ struct FileElsewhereButtons: View {
         }
     }
 
-    static func runs(_ url: URL) -> Bool {
+    nonisolated static func runs(_ url: URL) -> Bool {
         let path = url.path(percentEncoded: false)
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)

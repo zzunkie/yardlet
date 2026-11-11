@@ -61,7 +61,7 @@ struct PersonalAgentRequestCard: View {
         case let .approval(approval) where approval.family == .tool:
             [approval.toolName, approval.connectorName].compactMap { $0 }.first ?? L10n.string("Tool request")
         case let .approval(approval): approval.message
-        case let .form(_, _): message ?? L10n.string("Information requested")
+        case .form: message ?? L10n.string("Information requested")
         case let .unsupported(request): request.message.flatMap { $0.isEmpty ? nil : $0 } ?? L10n.string("Request from your dot")
         }
     }
