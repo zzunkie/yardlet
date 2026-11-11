@@ -228,7 +228,7 @@ final class TaskSuggestionTests: XCTestCase {
         XCTAssertEqual(together.map(\.id), ["a1", "a2"], "Consecutive chips are one card, as the Claude app aggregates them")
         var turn = ConversationTurn(id: "t", status: .completed, timing: ConversationTurnTiming())
         turn.work = [read, chip("a1"), grep, chip("a2")]
-        XCTAssertEqual(ConversationWorkGrouping.runsKeptWhenFolded(turn, live: nil).map(\.id),
+        XCTAssertEqual(ConversationDrawOrder.keptRuns(turn, harness: .claudeCode).map(\.id),
                        ["suggestions-a1"], "A folded turn keeps its chips, still one card")
     }
 

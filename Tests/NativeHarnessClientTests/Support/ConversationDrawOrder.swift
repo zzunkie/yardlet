@@ -2,12 +2,14 @@ import Foundation
 @testable import NativeHarnessClient
 
 /// A turn's parts in the order `ConversationTurnView` draws them, one row each: what was sent, the
-/// notices, the work (listed while it shows, what stays in view once it folds), the answers, the
-/// live line and the requests still waiting. For listing a turn as the person reads it.
+/// notices, the work (listed while it shows; once it folds, what stays in view, with a fold row where
+/// a message sent into the turn parts it), the answers, the live line and the requests still waiting.
+/// For listing a turn as the person reads it.
 enum ConversationDrawOrder {
     struct Row: CustomStringConvertible {
-        /// Where the turn draws it: prompt, notice, work, kept (in view over folded work), answer,
-        /// live (the live line's own call) or request.
+        /// Where the turn draws it: prompt, notice, work, kept (in view over folded work), fold (the
+        /// fold of the work after a message sent into the turn, its ID the stretch's), answer, live
+        /// (the live line's own call) or request.
         let part: String
         let id: String
         /// The item's shape: message, commentary, answer, call, reasoning, request, …
@@ -31,9 +33,13 @@ enum ConversationDrawOrder {
         if !folds {
             add("work", ConversationLiveWork.listedRuns(turn).flatMap(items))
         } else {
-            add("kept", ConversationWorkGrouping.runsKeptWhenFolded(
-                turn, live: ConversationLiveWork.make(turn, harness: harness, workspaceURL: nil)
-            ).flatMap(items))
+            for stretch in stretches(turn, harness: harness) {
+                add("kept", [stretch.message].compactMap { $0 })
+                if stretch.message != nil, stretch.hidesWork {
+                    rows.append(Row(part: "fold", id: stretch.id, shape: "fold", text: L10n.string("Work details")))
+                }
+                add("kept", ConversationWorkGrouping.runs(stretch.kept).flatMap(items))
+            }
         }
         add("answer", turn.answers)
         if let live = ConversationLiveWork.make(turn, harness: harness, workspaceURL: nil) {
@@ -46,6 +52,18 @@ enum ConversationDrawOrder {
 
     static func listing(_ turn: ConversationTurn, harness: HarnessKind, folded: Bool? = nil) -> String {
         rows(turn, harness: harness, folded: folded).map(\.description).joined(separator: "\n")
+    }
+
+    /// The stretches a folded turn draws, the live line's calls left out.
+    static func stretches(_ turn: ConversationTurn, harness: HarnessKind) -> [ConversationWorkStretch] {
+        ConversationWorkGrouping.stretchesWhenFolded(
+            turn, live: ConversationLiveWork.make(turn, harness: harness, workspaceURL: nil)
+        )
+    }
+
+    /// What a folded turn keeps in view of its work, in the runs it draws.
+    static func keptRuns(_ turn: ConversationTurn, harness: HarnessKind) -> [ConversationWorkGrouping.Run] {
+        stretches(turn, harness: harness).flatMap { ConversationWorkGrouping.runs([$0.message].compactMap { $0 } + $0.kept) }
     }
 
     private static func items(_ run: ConversationWorkGrouping.Run) -> [ConversationItem] {

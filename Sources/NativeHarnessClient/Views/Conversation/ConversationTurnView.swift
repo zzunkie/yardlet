@@ -131,7 +131,9 @@ enum ConversationTurnAction: Hashable, Sendable {
 /// and the Claude app draws a failed turn's card where the turn ended. A folded turn keeps in view
 /// what the rule every harness shares keeps (`ConversationTurn.workKeptWhenFolded`): the answers it
 /// went on past, the messages the person sent into it, the other messages no finished answer
-/// followed, and while it runs, what came after its latest answer.
+/// followed, and while it runs, what came after its latest answer. A message sent into the turn that
+/// stays in view parts the fold (`ConversationTurn.workStretches`): the header folds the work before
+/// it, and the work after it folds on a line of its own under the message, which opens only that work.
 struct ConversationTurnView: View, Equatable {
     let turn: ConversationTurn
     /// The part of its turn `turn` is (`ConversationTurnRows`); a part never folds, since only a turn
@@ -181,6 +183,8 @@ struct ConversationTurnView: View, Equatable {
     }
 
     @State private var showsWorkDetails = false
+    /// The stretches of the folded work the person opened on their own lines, by stretch.
+    @State private var openedStretches: Set<String> = []
     /// What the person opened and folded in this turn, which a line or run reads when it moves
     /// between the live line and the listed work (`ConversationWorkDisclosure`).
     @State private var choices = ConversationDisclosureChoices()
@@ -212,6 +216,7 @@ struct ConversationTurnView: View, Equatable {
     }
 
     var body: some View {
+        let live = self.live
         VStack(alignment: .leading, spacing: ConversationLayout.itemSpacing) {
             ForEach(turn.prompt) { item in
                 itemView(item)
@@ -236,10 +241,10 @@ struct ConversationTurnView: View, Equatable {
                     runView(run)
                 }
             } else {
-                // What the fold keeps in view, as the Codex app keeps it out of its folded work; a
-                // running turn's live call stays the live line's.
-                ForEach(ConversationWorkGrouping.runsKeptWhenFolded(turn, live: live)) { run in
-                    runView(run)
+                // What the fold keeps in view, as the Codex app keeps it out of its folded work, parted
+                // at the messages sent into the turn; a running turn's live call stays the live line's.
+                ForEach(ConversationWorkGrouping.stretchesWhenFolded(turn, live: live)) { stretch in
+                    stretchView(stretch)
                 }
             }
 
@@ -303,12 +308,32 @@ struct ConversationTurnView: View, Equatable {
 
     // MARK: - Items
 
+    /// A stretch of the folded work: the message that opens it, its own fold when it hides work, then
+    /// what it keeps in view, or all of its work once the person opened its fold. The first stretch has
+    /// no message, and the turn header is its fold.
+    @ViewBuilder
+    private func stretchView(_ stretch: ConversationWorkStretch) -> some View {
+        let folds = stretch.message != nil && stretch.hidesWork
+        let isOpen = folds && openedStretches.contains(stretch.id)
+        if let message = stretch.message {
+            itemView(message)
+        }
+        if folds {
+            ConversationWorkStretchFold(isOpen: isOpen) {
+                if isOpen { openedStretches.remove(stretch.id) } else { openedStretches.insert(stretch.id) }
+            }
+        }
+        ForEach(ConversationWorkGrouping.runs(isOpen ? Array(stretch.work) : stretch.kept)) { run in
+            runView(run, stretchWasOpened: isOpen)
+        }
+    }
+
     /// A run of the turn's work, drawn alike in the listed work and in what a folded turn keeps in
     /// view. A run of calls folds into one summary line, while the turn runs as well; it opens when one
     /// of its calls failed, when the person opened it under the live line, and when the person opened
-    /// the turn's folded work to see it.
+    /// the turn's folded work, or the stretch of it the run is in, to see it.
     @ViewBuilder
-    private func runView(_ run: ConversationWorkGrouping.Run) -> some View {
+    private func runView(_ run: ConversationWorkGrouping.Run, stretchWasOpened: Bool = false) -> some View {
         switch run {
         case let .single(item):
             itemView(item)
@@ -317,7 +342,8 @@ struct ConversationTurnView: View, Equatable {
             ConversationWorkRun(
                 lines: items.map(workLine), harness: context.harness,
                 startsOpen: ConversationWorkDisclosure.groupStartsOpen(
-                    items, turnIsRunning: !turn.status.isTerminal, workWasOpened: foldsWork && showsWorkDetails,
+                    items, turnIsRunning: !turn.status.isTerminal,
+                    workWasOpened: foldsWork && (showsWorkDetails || stretchWasOpened),
                     choice: choices.choice(key)
                 ),
                 onToggle: { choices.record(key, isOpen: $0) }
@@ -478,6 +504,37 @@ struct ConversationTurnView: View, Equatable {
 
     private var workDetailsAreVisible: Bool {
         !foldsWork || showsWorkDetails
+    }
+}
+
+/// The fold of the work after a message sent into a folded turn (`ConversationWorkStretch`), drawn as
+/// the turn header draws its fold when it has no time to read, "Work details", the same for every
+/// harness: a stretch has no time of its own, as a Codex item carries none. It opens only the work
+/// it folds, in place under it.
+private struct ConversationWorkStretchFold: View {
+    let isOpen: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "list.bullet")
+                    .font(.system(size: 11, weight: .medium))
+                    .accessibilityHidden(true)
+                Text(L10n.string("Work details"))
+                    .conversationSelectionText(L10n.string("Work details"))
+                DisclosureCaret(isOpen: isOpen)
+                    .centeredOnCapHeight(ofTextSize: CodexWorkSummaryLabel.fontSize)
+            }
+            .font(.system(size: CodexWorkSummaryLabel.fontSize))
+            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .combine)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .parityPointer()
+        .accessibilityValue(L10n.string(isOpen ? "Expanded" : "Collapsed"))
+        .accessibilityHint(isOpen ? L10n.string("Hide work details") : L10n.string("Show work details"))
     }
 }
 

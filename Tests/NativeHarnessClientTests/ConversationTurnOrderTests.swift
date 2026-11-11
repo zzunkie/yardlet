@@ -44,9 +44,10 @@ final class ConversationTurnOrderTests: XCTestCase {
         XCTAssertEqual(kind(of: "m2", in: turn), .commentary(text: "Checking the page again.", isStreaming: false))
         // Folded as the Codex app folds it, but for the person's messages: the answer the turn went on
         // past stays, and so do the messages the person sent into it (2026-10-31); the question asked
-        // while it worked folds with the work.
+        // while it worked folds with the work. Each message parts the fold, so the work after it folds
+        // under it rather than with the work before it under the header.
         XCTAssertTrue(turn.foldsWork)
-        XCTAssertEqual(drawnIDs(turn, folded: true), ["u1", "u2", "a1", "u3", "a2"],
+        XCTAssertEqual(drawnIDs(turn, folded: true), ["u1", "u2", "stretch-u2", "a1", "u3", "stretch-u3", "a2"],
                        ConversationDrawOrder.listing(turn, harness: .codex))
         // read_task reads the turn in the same order.
         XCTAssertEqual((turn.prompt + turn.notices + turn.work + turn.answers).map(\.id),
@@ -301,9 +302,10 @@ final class ConversationTurnOrderTests: XCTestCase {
         completed(item("t3"))
         started(streaming("a1"))
         delta("a1", "The certificate ")
-        // The answer began: the work folds, and the person's message stays in view.
+        // The answer began: the work folds, and the person's message stays in view, the work after it
+        // folded under it.
         try snapshot("answer streaming", opened: ["u1", "m1", "t1", "q1", "t2", "u2", "m2", "t3", "a1", "live"],
-                     folded: ["u1", "u2", "a1", "live"])
+                     folded: ["u1", "u2", "stretch-u2", "a1", "live"])
         delta("a1", "is issued.")
         completed(item("a1"))
         // Codex reads a steered message once the response it was writing ends.
@@ -312,7 +314,7 @@ final class ConversationTurnOrderTests: XCTestCase {
         delta("m3", "Making ")
         try snapshot("message read after the answer, note streaming",
                      opened: ["u1", "m1", "t1", "q1", "t2", "u2", "m2", "t3", "a1", "u3", "m3", "live"],
-                     folded: ["u1", "u2", "a1", "u3", "m3", "live"])
+                     folded: ["u1", "u2", "stretch-u2", "a1", "u3", "m3", "live"])
         let streamingState = state
         delta("m3", "the key.")
         completed(item("m3"))
@@ -324,7 +326,7 @@ final class ConversationTurnOrderTests: XCTestCase {
         finishedTurn["durationMs"] = .integer(250_000)
         send("turn/completed", ["turn": .object(finishedTurn)])
         try snapshot("finished", opened: ["u1", "m1", "t1", "q1", "t2", "u2", "m2", "t3", "a1", "u3", "m3", "t4", "a2"],
-                     folded: ["u1", "u2", "a1", "u3", "a2"])
+                     folded: ["u1", "u2", "stretch-u2", "a1", "u3", "stretch-u3", "a2"])
 
         // Nothing drawn moved: every step's items keep their order in the finished turn.
         let finished = drawnAtEachStep.last!.ids
@@ -393,14 +395,14 @@ final class ConversationTurnOrderTests: XCTestCase {
             XCTAssertTrue(codex.foldsWork && claude.foldsWork, stage)
             XCTAssertEqual(ConversationDrawOrder.rows(codex, harness: .codex).map { "\($0.shape): \($0.text)" }, finished
                 ? ["message: Issue the certificate, then make the API key.", "answer: The certificate is issued.",
-                   "message: Also make the API key.", "answer: Both are in Downloads."]
+                   "message: Also make the API key.", "fold: \(L10n.string("Work details"))",
+                   "answer: Both are in Downloads."]
                 : ["message: Issue the certificate, then make the API key.", "answer: The certificate is issued.",
                    "message: Also make the API key.", "call: swift run keygen", "reasoning: \(Self.thought)",
                    "call: ls Downloads", "commentary (streaming): Making the key.", "line: \(L10n.string("Working"))"])
             // The two calls the folded running turn keeps in view are one run in both, the thinking in it.
             let keptCalls = { (turn: ConversationTurn, harness: HarnessKind) -> [ConversationItem] in
-                let live = ConversationLiveWork.make(turn, harness: harness, workspaceURL: nil)
-                return ConversationWorkGrouping.runsKeptWhenFolded(turn, live: live).flatMap { run -> [ConversationItem] in
+                ConversationDrawOrder.keptRuns(turn, harness: harness).flatMap { run -> [ConversationItem] in
                     if case let .group(items) = run { return items }
                     return []
                 }
@@ -514,7 +516,7 @@ final class ConversationTurnOrderTests: XCTestCase {
         ], ConversationDrawOrder.listing(finished, harness: .claudeCode, folded: false))
         XCTAssertEqual(session.drawn(finished, folded: true), [
             "message: Fix the build", "answer: Fixed: the import was missing.", "message: Also run the tests",
-            "answer: All tests pass."
+            "fold: \(L10n.string("Work details"))", "answer: All tests pass."
         ])
     }
 
@@ -718,16 +720,5 @@ private struct ClaudeLiveTurn {
     private mutating func frame(_ text: String) {
         let value = try! JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
         for payload in projection.payloads(from: value) { builder.apply(payload) }
-    }
-}
-
-private extension NSView {
-    /// Presses the turn header's fold, as an assistive app would: the button labelled with the work
-    /// time, or "Work details" where the turn reads none.
-    func pressTurnHeader() -> Bool {
-        pressButton { label in
-            ConversationDrawing.isWorkTime(label) || label.hasPrefix(L10n.string("Work details"))
-                || label.contains(L10n.format("Working for %lld seconds", Int64(0)).prefix(4))
-        }
     }
 }
