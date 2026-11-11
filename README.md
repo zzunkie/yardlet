@@ -18,7 +18,9 @@ you already use, Codex, Claude Code, OpenCode, Antigravity CLI and others, side 
 of projects and tasks, each with the agent loop, sign-in and session history it already has. It adds
 no agent layer of its own and writes nothing into the agents' settings.
 
-Yardlet is written in Swift and SwiftUI; it is not a web view. It does not replace the agents or
+Yardlet is written in Swift and SwiftUI; it is not a web view. It uses 53 MiB of memory at rest after a
+first launch and 214 MiB with ten tasks streaming at once, not counting the agents' own CLIs (Yardlet
+0.11.10 on an M1 Pro MacBook Pro with macOS 15.6, November 2026). It does not replace the agents or
 proxy their accounts: it starts the CLI you already use, with the account you already signed in to.
 
 Most of us will end up with an agent workbench of our own. Yardlet began as one, built for working with
