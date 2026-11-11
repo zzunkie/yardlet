@@ -52,11 +52,19 @@ enum ConversationActivityProjection {
         if let run = ConversationAgentRunProjection.subagent(from: activity, phase: phase, isApproved: isApproved) {
             return .subagent(run)
         }
+        // Claude Code names a connector's tool in the call's kind, Antigravity in its kind or title.
+        let connector = ConnectorToolLabels.shared.label(forHarnessTool: activity.kind)
+            ?? ConnectorToolLabels.shared.label(forHarnessTool: activity.title)
         return .tool(ConversationTool(
             kind: .activity(activity.kind), name: activity.title, input: activity.input,
             output: activity.output, isBackground: activity.isBackground == true, isApproved: isApproved,
             detail: legacyDetail(activity), images: activity.images ?? [],
-            connector: ConnectorToolLabels.shared.label(forClaudeTool: activity.kind)
+            connector: connector?.label,
+            view: phase == .completed ? connector.flatMap { connector in
+                ConversationConnectorView.of(tool: connector.name, label: connector.label,
+                                             arguments: MCPAppArguments.parse(activity.input),
+                                             harnessResult: ConversationConnectorView.textResult(activity.output))
+            } : nil
         ))
     }
 

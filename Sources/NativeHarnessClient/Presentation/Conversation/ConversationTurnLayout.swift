@@ -177,6 +177,8 @@ extension ConversationTurn {
             return index >= answered
         case .taskSuggestion, .scheduleCreated, .settingChanged, .outcome:
             return true
+        case let .tool(tool) where tool.view != nil:
+            return true
         case let .request(request):
             return request.isQuestion
         default:

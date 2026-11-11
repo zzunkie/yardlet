@@ -3931,3 +3931,6 @@
 "Signed in to %@." = "Signed in to %@.";
 "%@ is still not signed in." = "%@ is still not signed in.";
 "The sign-in window could not open: %@" = "The sign-in window could not open: %@";
+"Allow the %@ view to %@?" = "Allow the %@ view to %@?";
+"Show view again" = "Show view again";
+"Connector view" = "Connector view";

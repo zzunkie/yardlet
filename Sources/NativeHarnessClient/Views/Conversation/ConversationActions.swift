@@ -90,6 +90,9 @@ struct ConversationActions {
     /// Reads what a line holds beyond its words when it opens (`ConversationTool.loadsDetailOnOpen`), by
     /// the item's ID: another Mac's lines (docs/REMOTE_PROTOCOL.md §15.8). Nil where every line holds it.
     var loadLineDetail: ((String) -> Void)? = nil
+    /// The task's way to the views its connector calls name (docs/CONNECTORS.md, "MCP Apps"); nil where its rows
+    /// stay text.
+    var connectorViews: ConnectorViewHost? = nil
 
     /// What a read-only child conversation (a subtask shown beside its task) may do: nothing that
     /// would edit, restore or answer for the parent task. Limit notices still read the parent.
