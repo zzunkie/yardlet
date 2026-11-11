@@ -2254,6 +2254,10 @@
 "Schedule messages to a task that runs without asking" = "묻지 않고 실행하는 작업에 예약 메시지 보내기";
 "Schedule messages to another project's task" = "다른 프로젝트의 작업에 예약 메시지 보내기";
 "Schedule a task in another project" = "다른 프로젝트에 예약된 작업 만들기";
+"Run a scheduled task with more permissions than this task" = "이 작업보다 권한이 넓은 예약된 작업 지금 실행하기";
+"Delete a scheduled task with more permissions than this task" = "이 작업보다 권한이 넓은 예약된 작업 삭제하기";
+"Resume a scheduled task with more permissions than this task" = "이 작업보다 권한이 넓은 예약된 작업 재개하기";
+"Reschedule a scheduled task with more permissions than this task" = "이 작업보다 권한이 넓은 예약된 작업의 실행 시간 바꾸기";
 "Run a subagent outside this task's folders" = "이 작업의 폴더 밖에서 하위 에이전트 실행";
 "Open a file outside this task's folders?" = "작업 폴더 밖의 파일을 열까요?";
 "Archive %lld tasks" = "작업 %lld개 보관";

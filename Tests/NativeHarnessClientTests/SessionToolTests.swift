@@ -1712,6 +1712,14 @@ final class SessionToolTests: XCTestCase {
         let acp = await call(model, "run_agent", ["harness": "opencode", "prompt": "Look around"], from: fixture.caller)
         XCTAssertTrue(acp.text.contains("cannot run OpenCode read only"), acp.text)
         XCTAssertEqual(AppModel.readOnlyOptions(for: .codex), [:], "Codex reads only by its run location")
+        // A task it creates reads only too, in its harness's words, or is not created.
+        let acpChild = await call(model, "create_task", ["prompt": "Edit it", "harness": "opencode"], from: fixture.caller)
+        XCTAssertTrue(acpChild.isError && acpChild.text.contains("cannot run OpenCode read only"), acpChild.text)
+        XCTAssertFalse(model.store.sessions.contains { $0.title == "Edit it" })
+        let codexChild = await call(model, "create_task", ["prompt": "Read it", "harness": "codex"], from: fixture.caller)
+        XCTAssertFalse(codexChild.isError, codexChild.text)
+        XCTAssertEqual(model.store.sessions.first { $0.title == "Read it" }?.providerOptions[CodexRunLocation.storageKey],
+                       CodexRunLocation.readOnly.rawValue)
 
         // An elevated caller's subagent still runs at the harness's default.
         let elevated = SessionRecord(harness: .claudeCode, workspaceURL: URL(filePath: "/tmp"), runtimeExecutableURL: URL(filePath: "/tmp/c"),
@@ -1724,6 +1732,23 @@ final class SessionToolTests: XCTestCase {
                                                                    runtimeExecutableURL: URL(filePath: "/tmp/c"), title: "x"),
                                                  codexRunLocation: .readOnly), .readOnly)
         await model.shutdown()
+
+        // A read-only subagent of a task that may do more starts read-only tasks as well.
+        let freer = try Fixture()
+        defer { freer.tearDown() }
+        _ = await call(freer.model, "run_agent", ["harness": "claude-code", "prompt": "Look around", "background": true,
+                                                  "permissionMode": "plan"], from: freer.caller)
+        let reader = try XCTUnwrap(freer.model.sessionTools.runs(hostedBy: freer.caller.id).first)
+        XCTAssertEqual(reader.permission, .readOnly)
+        for (prompt, harness, key, value) in [
+            ("Same harness", "claude-code", ClaudeLaunchOption.permissionMode, ClaudePermissionMode.plan),
+            ("Other harness", "codex", CodexRunLocation.storageKey, CodexRunLocation.readOnly.rawValue)
+        ] {
+            let made = await call(freer.model, "create_task", ["prompt": prompt, "harness": harness], callerID: reader.id)
+            XCTAssertFalse(made.isError, made.text)
+            XCTAssertEqual(freer.model.store.sessions.first { $0.title == prompt }?.providerOptions[key], value, prompt)
+        }
+        await freer.model.shutdown()
     }
 
     // MARK: - archive_task
