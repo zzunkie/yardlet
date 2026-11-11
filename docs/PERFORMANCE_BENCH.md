@@ -279,7 +279,15 @@ numbers to the file as a JSON line (`PerfBenchRecord`), which the bench collects
 | `TranscriptProseResizePerformanceTests` | eleven width changes of a 1,000-paragraph message and an 11,086-item conversation, with and without live-resize deferral; exact final heights, middle/end reading positions and light/dark renders |
 | `StreamingTurnRenderPerformanceTests` | a Claude Code fragment after 120 calls in its turn, which fails over 15 ms of the main thread's time |
 | `WindowStructureQATests/testBenchmarkTheSidebarCrossingItsTop` | the sidebar of 828 tasks crossing its top |
+| `ScrollFrameCostTests/testBenchmarkScrollingALongConversation` | a reader's scroll through 60 drawn turns of a 200-turn conversation: the turns that report their place each step, the timeline's evaluations and the main thread's time |
+| `ScrollFrameCostTests/testBenchmarkScrollingTheSidebarUnderARestingPointer` | a reader's scroll of a sidebar of 400 tasks, with no pointer and with the pointer resting on the list: the rows drawn again and the rows that report their place each step, and the main thread's time |
 | `SubagentStatePerformanceTests` | a long Codex subagent's state handled by the app, beside three others (also a check that runs with every `swift test`) |
+
+`ScrollFrameCostTests` is run by hand and is not in the bench's plan. The bench's `sidebar` scene scrolls a
+window no pointer is over, so it does not see what rows passing under a resting pointer cost; this
+benchmark hands the unshown window a pointer event at the same place after each step, where SwiftUI
+works hover out again by itself after each layout of a window on screen. SwiftUI takes no hover while
+the system hides the pointer, as it does while someone types, and the benchmark then skips.
 
 `NHC_PERF_BENCH_SECONDS` shortens the streaming benchmarks; the bench sets it to 20. A new benchmark
 skips without `NHC_PERF_BENCH=1`, prints what it measured, and calls `PerfBenchRecord.write` with numbers

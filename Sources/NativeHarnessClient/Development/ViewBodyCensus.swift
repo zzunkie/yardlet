@@ -28,6 +28,10 @@ enum ViewBodyCensus {
         case conversationTimeline
         /// The conversation's column of turns placed in its window, a layout pass of the conversation.
         case conversationLayout
+        /// A turn's place told to the conversation's reading tracker (`transcriptReadingAnchor`).
+        case conversationTurnPlaced
+        /// A sidebar task row's place kept for its hover card.
+        case sidebarRowPlaced
         /// The dots' content: the conversation beside its details. A new state of the room leaves it
         /// as it is.
         case personalAgentContent

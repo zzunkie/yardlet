@@ -2105,6 +2105,9 @@ private struct TaskRow: View {
             in: SidebarMetrics.rowShape()
         )
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(SidebarHoverCardMetrics.space)) } action: { frame in
+#if DEBUG
+            ViewBodyCensus.note(.sidebarRowPlaced)
+#endif
             place.frame = frame
             if isHovering { hoverCard?.rowMoved(session.id, to: frame) }
         }

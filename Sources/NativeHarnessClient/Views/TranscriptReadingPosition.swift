@@ -125,6 +125,9 @@ final class TranscriptReadingTracker {
     }
 
     func measure(id: String, frame: CGRect?) {
+#if DEBUG
+        ViewBodyCensus.note(.conversationTurnPlaced)
+#endif
         if let frame, frame.width >= 80, frame.height > 0, frame.minY.isFinite {
             frames[id] = frame
         } else {
