@@ -107,6 +107,13 @@
       ]
     },
     {
+      "test": "ConversationBlankFrameTests/testBenchmarkLargeToolCallsStreamingInTheWholeWindow",
+      "records": [
+        "window-short-calls-300-turns",
+        "window-large-calls-300-turns"
+      ]
+    },
+    {
       "test": "ConversationBlankFrameTests/testBenchmarkHoverReadsArrivingWhileTheSidebarScrolls",
       "records": [
         "hover-reads-8-first-reads",

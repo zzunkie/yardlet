@@ -272,6 +272,7 @@ numbers to the file as a JSON line (`PerfBenchRecord`), which the bench collects
 | `ConversationStreamingCostTests` | a Codex fragment in a turn of 3 and of 72 calls, and beside a scrolling list |
 | `ConversationBlankFrameTests/testBenchmarkSwitchingToALongConversation` | opening a 20- and a 300-turn task |
 | `ConversationBlankFrameTests/testBenchmarkStreamingInTheWholeWindow` | what drawing one publication costs the window under 1, 9 and 300 turns |
+| `ConversationBlankFrameTests/testBenchmarkLargeToolCallsStreamingInTheWholeWindow` | a turn of six tool calls after 300 turns, from its message to its end, with short calls and with 10,000 to 60,000 characters in and out of each, a plan limit reported close after every call; the passes over 250 ms and over a second |
 | `ConversationBlankFrameTests/testBenchmarkHoverReadsArrivingWhileTheSidebarScrolls` | saved conversations read ahead while a sidebar of 828 tasks scrolls |
 | `ConversationBlankFrameTests/testBenchmarkAnEarlierPageArriving` | an earlier page of a 60-turn Codex task arriving at the top |
 | `ConversationReopenGapRenderingTests/testBenchmarkOpeningATaskWhoseTurnsWereLetGo` | reopening a task after four others were opened |

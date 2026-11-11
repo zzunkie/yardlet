@@ -23,7 +23,7 @@ struct ConversationTurnHost: NSViewRepresentable, Equatable {
         self.context = context
         self.handlers = handlers
         self.renderState = renderState
-        offers = ConversationTurnOffers(context: context, handlers: handlers)
+        offers = ConversationTurnOffers(turn: turn, context: context, handlers: handlers)
     }
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
