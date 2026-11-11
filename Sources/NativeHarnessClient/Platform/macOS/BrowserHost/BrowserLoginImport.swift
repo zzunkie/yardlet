@@ -13,7 +13,8 @@ import Security
 /// `cookies.sqlite`. macOS 27 lets only Chrome, Edge, Brave and Firefox themselves, or an app with Full Disk Access,
 /// read their folders; Safari keeps its cookies where only such an app reads them, so it is not offered. Listing a
 /// profile's sites reads hosts only; the keychain is read when the person imports, and the key lives in memory for that
-/// import alone. Values go to the browser host and nowhere else.
+/// import alone. Values go to the browser host and nowhere else. The same profiles' visit history (Chromium's `History`,
+/// Firefox's `places.sqlite`) can come along into the address field's history (`history(in:since:now:)`), with no key.
 enum BrowserLoginImport {
     /// A browser to import from: its folder under Application Support, how it keeps cookies, and its app.
     struct Browser: Hashable, Sendable {
@@ -68,6 +69,8 @@ enum BrowserLoginImport {
         /// The name the browser shows for it.
         var name: String
         var cookies: URL
+        /// The profile's visit history (`History`, `places.sqlite`), when it has one.
+        var history: URL?
         var id: String { browser.name + "/" + folder }
         var title: String { folder.isEmpty ? browser.name : "\(browser.name) · \(name)" }
     }
@@ -90,6 +93,8 @@ enum BrowserLoginImport {
     enum Failure: LocalizedError, Equatable {
         /// The database could not be read, as the browser was writing it each time it was copied.
         case unreadable
+        /// The same, for the visit history.
+        case historyUnreadable
         case keychainMissing(browser: String)
         case keychainDenied(browser: String)
         /// No cookie decrypted: the key is not this profile's.
@@ -100,6 +105,8 @@ enum BrowserLoginImport {
             switch self {
             case .unreadable:
                 L10n.string("The browser's cookies could not be read. Try again in a moment.")
+            case .historyUnreadable:
+                L10n.string("The browser's visit history could not be read. Try again in a moment.")
             case .keychainMissing(let browser):
                 L10n.format("%@'s cookie key is not in the keychain.", browser)
             case .keychainDenied(let browser):
@@ -157,7 +164,8 @@ enum BrowserLoginImport {
             else { return nil }
             let info = cache[folder] as? [String: Any]
             let name = (info?["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? folder
-            return Profile(browser: browser, folder: folder, name: name, cookies: cookies)
+            return Profile(browser: browser, folder: folder, name: name, cookies: cookies,
+                           history: existing(profileRoot.appending(path: "History")))
         }
     }
 
@@ -186,8 +194,13 @@ enum BrowserLoginImport {
             let cookies = folder.appending(path: "cookies.sqlite")
             guard FileManager.default.fileExists(atPath: cookies.path(percentEncoded: false)) else { return nil }
             let name = values["Name"].flatMap { $0.isEmpty ? nil : $0 } ?? folder.lastPathComponent
-            return Profile(browser: browser, folder: path, name: name, cookies: cookies)
+            return Profile(browser: browser, folder: path, name: name, cookies: cookies,
+                           history: existing(folder.appending(path: "places.sqlite")))
         }
+    }
+
+    private static func existing(_ file: URL) -> URL? {
+        FileManager.default.fileExists(atPath: file.path(percentEncoded: false)) ? file : nil
     }
 
     /// The sites the profile has cookies for (unpartitioned and not expired), most recently used first. Reads hosts
@@ -371,6 +384,69 @@ enum BrowserLoginImport {
         return Data(output.dropFirst(hash.count))
     }
 
+    // MARK: Visit history
+
+    /// The profile's visits after `since` (an earlier import's newest) and within the address history's 90 days, in
+    /// the address history's shape (`BrowserAddressHistory.Importer`). Only the visits each browser shows in its own
+    /// history count: Chromium's visible visits (`VisitDatabase::GetVisibleVisitsInRange`: the end of a redirect
+    /// chain, no frame or keyword visit) without reloads, typed when their core transition is `TYPED`; Firefox's
+    /// visits of pages not hidden, without embeds, frames, downloads and reloads (the ones its `visit_count` leaves
+    /// out), typed when `TRANSITION_TYPED`. Read newest first from a copy, as cookies are; no key is needed.
+    static func history(in profile: Profile, since: Date?, now: Date = Date()) throws -> BrowserAddressHistory.Imported {
+        guard let database = profile.history else { return BrowserAddressHistory.Imported() }
+        let start = BrowserAddressHistory.Importer(now: now, since: since)
+        // Rounded up, a visit an earlier import brought is never read again.
+        let after = Int64((start.after.timeIntervalSince1970 * 1_000_000).rounded(.up))
+        do {
+            return try reading(database) { handle -> BrowserAddressHistory.Imported? in
+                var importer = start
+                let sql: String
+                let epoch: Int64
+                if profile.browser.kind == .firefox {
+                    guard columns(handle, "moz_places").isSuperset(of: ["id", "url", "title", "hidden"]),
+                          columns(handle, "moz_historyvisits").isSuperset(of: ["place_id", "visit_date", "visit_type"])
+                    else { return nil }
+                    // nsINavHistoryService: 2 typed, 4 embed, 7 download, 8 framed link, 9 reload.
+                    sql = """
+                        SELECT p.url, p.title, v.visit_date, v.visit_type = 2 FROM moz_historyvisits v
+                        JOIN moz_places p ON p.id = v.place_id
+                        WHERE p.hidden = 0 AND v.visit_date > \(after) AND v.visit_type NOT IN (0, 4, 7, 8, 9)
+                        ORDER BY v.visit_date DESC
+                        """
+                    epoch = 0
+                } else {
+                    guard columns(handle, "urls").isSuperset(of: ["id", "url", "title", "hidden"]),
+                          columns(handle, "visits").isSuperset(of: ["url", "visit_time", "transition"]) else { return nil }
+                    // ui::PageTransition: the core type in the low byte (1 typed, 3 and 4 frames, 8 reload, 10
+                    // keyword generated), CHAIN_END 0x20000000.
+                    sql = """
+                        SELECT u.url, u.title, v.visit_time, (v.transition & 255) = 1 FROM visits v
+                        JOIN urls u ON u.id = v.url
+                        WHERE u.hidden = 0 AND v.visit_time > \(after + chromiumEpochOffset)
+                          AND (v.transition & 536870912) != 0 AND (v.transition & 255) NOT IN (3, 4, 8, 10)
+                        ORDER BY v.visit_time DESC
+                        """
+                    epoch = chromiumEpochOffset
+                }
+                guard query(handle, sql, each: { statement in
+                    let micros = sqlite3_column_int64(statement, 2) - epoch
+                    importer.add(text(statement, 0), title: text(statement, 1),
+                                 date: Date(timeIntervalSince1970: Double(micros) / 1_000_000),
+                                 typed: sqlite3_column_int64(statement, 3) != 0)
+                }) != nil else { return nil }
+                return importer.result
+            }
+        } catch Failure.unreadable {
+            throw Failure.historyUnreadable
+        }
+    }
+
+    private static func columns(_ handle: OpaquePointer, _ table: String) -> Set<String> {
+        var columns = Set<String>()
+        _ = query(handle, "PRAGMA table_info(\(table))") { columns.insert(text($0, 1)) }
+        return columns
+    }
+
     // MARK: The database
 
     /// The `cookies` table's columns that vary between Chromium versions, as SQL.
@@ -458,11 +534,11 @@ enum BrowserLoginImport {
         let manager = FileManager.default
         for attempt in 0..<3 {
             if attempt > 0 { Thread.sleep(forTimeInterval: 0.3) }
-            let folder = manager.temporaryDirectory.appending(path: "Yardlet login import \(UUID().uuidString)", directoryHint: .isDirectory)
+            let folder = manager.temporaryDirectory.appending(path: "Yardlet browser import \(UUID().uuidString)", directoryHint: .isDirectory)
             guard (try? manager.createDirectory(at: folder, withIntermediateDirectories: false,
                                                 attributes: [.posixPermissions: 0o700])) != nil else { continue }
             defer { try? manager.removeItem(at: folder) }
-            let copy = folder.appending(path: "Cookies")
+            let copy = folder.appending(path: database.lastPathComponent)
             do {
                 for suffix in ["", "-journal", "-wal"] {
                     let file = URL(filePath: database.path(percentEncoded: false) + suffix)

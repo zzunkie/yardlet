@@ -33,19 +33,24 @@ final class BrowserAddressHistory {
     private struct Saved: Codable {
         var pages: [Page] = []
         var searches: [Search] = []
+        /// Each browser profile imported from (`BrowserLoginImport.Profile.id`), with its newest visit brought over.
+        var imports: [String: Date]?
     }
 
     nonisolated static let maxVisitsToScore = 10
     /// Chrome expires history after 90 days (`HistoryBackend::kExpireDaysThreshold`).
-    static let keptDays = 90
+    nonisolated static let keptDays = 90
     /// More than the person visits in 90 days; agents that open many pages stop growing the file here.
-    static let maxPages = 5000
+    nonisolated static let maxPages = 5000
 
     /// Nil keeps the history in memory only (tests).
     private let file: URL?
     private let now: () -> Date
     private(set) var pages: [String: Page] = [:]
     private(set) var searches: [String: Search] = [:]
+    /// The newest visit imported from each browser profile (`merge`), so that importing it again adds only what
+    /// came after.
+    private var imports: [String: Date] = [:]
     /// Each page's and each site's icon, never saved (`noteIcon`); the pages' at most `maxIcons`.
     private var pageIcons: [String: Data] = [:]
     private var siteIcons: [String: Data] = [:]
@@ -64,6 +69,7 @@ final class BrowserAddressHistory {
         let oldest = now().addingTimeInterval(-Double(Self.keptDays) * 86_400)
         for page in saved.pages where page.lastVisit >= oldest { pages[page.url] = page }
         for search in saved.searches where search.lastVisit >= oldest { searches[search.terms.lowercased()] = search }
+        imports = saved.imports ?? [:]
     }
 
     /// The address a tab committed. Only web pages and files count, without any user name or password in the
@@ -173,6 +179,100 @@ final class BrowserAddressHistory {
         scheduleSave()
     }
 
+    // MARK: Another browser's history
+
+    /// Another browser profile's history in this history's shape, made off the main thread (`Importer`) and merged
+    /// at once (`merge`).
+    struct Imported: Sendable {
+        var pages: [Page] = []
+        var searches: [Search] = []
+        /// The newest visit read, which the next import of the profile starts after.
+        var newest: Date?
+    }
+
+    /// Builds `Imported` from a browser's visits, given newest first, under this history's own rules: web pages and
+    /// files without a user name or password, a Google results page as its search, nothing older than `keptDays`,
+    /// at most `maxPages` pages (the newest), each with its newest `maxVisitsToScore` visits; typed as the browser
+    /// recorded it.
+    struct Importer: Sendable {
+        /// Visits at or before this are too old or already in the history.
+        let after: Date
+        private var pages: [String: Page] = [:]
+        private var order: [String] = []
+        private var searches: [String: Search] = [:]
+        private var newest: Date?
+
+        /// `since`: the newest visit an earlier import of the profile brought over.
+        init(now: Date, since: Date?) {
+            after = max(now.addingTimeInterval(-Double(BrowserAddressHistory.keptDays) * 86_400), since ?? .distantPast)
+        }
+
+        mutating func add(_ address: String, title: String, date: Date, typed: Bool) {
+            guard date > after, let url = BrowserAddressHistory.keptAddress(address) else { return }
+            newest = max(newest ?? date, date)
+            if let terms = BrowserURLPolicy.searchTerms(in: url) {
+                let key = terms.lowercased()
+                var search = searches[key] ?? Search(terms: terms, count: 0, lastVisit: date)
+                search.count += 1
+                search.lastVisit = max(search.lastVisit, date)
+                searches[key] = search
+                return
+            }
+            if var page = pages[url] {
+                page.visitCount += 1
+                if typed { page.typedCount += 1 }
+                if page.title.isEmpty { page.title = title }
+                if date > page.lastVisit { page.lastVisit = date }
+                if page.visits.count < BrowserAddressHistory.maxVisitsToScore { page.visits.append(Visit(date: date, typed: typed)) }
+                pages[url] = page
+            } else if pages.count < BrowserAddressHistory.maxPages {
+                pages[url] = Page(url: url, title: title, visitCount: 1, typedCount: typed ? 1 : 0, lastVisit: date,
+                                  visits: [Visit(date: date, typed: typed)])
+                order.append(url)
+            }
+        }
+
+        var result: Imported {
+            Imported(pages: order.compactMap { pages[$0] }.map { page in
+                var page = page
+                page.visits.sort { $0.date > $1.date }
+                return page
+            }, searches: Array(searches.values), newest: newest)
+        }
+    }
+
+    /// The newest visit imported from `source` (a browser profile) so far.
+    func importedUntil(_ source: String) -> Date? { imports[source] }
+
+    /// Adds another browser profile's history to this one: a page or search Yardlet has takes the other's visits
+    /// beside its own, and the profile's newest visit is kept, so that importing it again adds only later visits.
+    func merge(_ imported: Imported, from source: String) {
+        for other in imported.pages {
+            guard var page = pages[other.url] else {
+                pages[other.url] = other
+                continue
+            }
+            page.visitCount += other.visitCount
+            page.typedCount += other.typedCount
+            if page.title.isEmpty { page.title = other.title }
+            page.lastVisit = max(page.lastVisit, other.lastVisit)
+            page.visits = Array((page.visits + other.visits).sorted { $0.date > $1.date }.prefix(Self.maxVisitsToScore))
+            pages[other.url] = page
+        }
+        for other in imported.searches {
+            let key = other.terms.lowercased()
+            guard var search = searches[key] else {
+                searches[key] = other
+                continue
+            }
+            search.count += other.count
+            search.lastVisit = max(search.lastVisit, other.lastVisit)
+            searches[key] = search
+        }
+        if let newest = imported.newest { imports[source] = max(imports[source] ?? newest, newest) }
+        scheduleSave()
+    }
+
     private func scheduleSave() {
         guard file != nil else { return }
         isChanged = true
@@ -206,10 +306,11 @@ final class BrowserAddressHistory {
         if searches.values.contains(where: { $0.lastVisit < oldest }) {
             searches = searches.filter { $0.value.lastVisit >= oldest }
         }
-        let pages = pages, searches = searches
+        let pages = pages, searches = searches, imports = imports
         StateFileWriter.shared.write(file) {
             let saved = Saved(pages: pages.values.sorted { $0.lastVisit > $1.lastVisit },
-                              searches: searches.values.sorted { $0.lastVisit > $1.lastVisit })
+                              searches: searches.values.sorted { $0.lastVisit > $1.lastVisit },
+                              imports: imports.isEmpty ? nil : imports)
             let data = try JSONEncoder().encode(saved)
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: file, options: [.atomic])

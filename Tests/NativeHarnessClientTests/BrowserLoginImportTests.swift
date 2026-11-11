@@ -2,8 +2,9 @@ import Foundation
 import XCTest
 @testable import NativeHarnessClient
 
-/// Another browser's sign-ins (docs/BROWSER_SESSION_ISOLATION.md 10), read from made-up Chromium (under a test password)
-/// and Firefox data folders in a temporary directory; no keychain item and no real browser's cookies.
+/// Another browser's sign-ins and visit history (docs/BROWSER_SESSION_ISOLATION.md 10), read from made-up Chromium
+/// (under a test password) and Firefox data folders in a temporary directory; no keychain item and no real browser's
+/// data.
 final class BrowserLoginImportTests: XCTestCase {
     private static let password = Data("qa-safe-storage-not-real".utf8)
     private var root: URL!
@@ -29,9 +30,12 @@ final class BrowserLoginImportTests: XCTestCase {
         XCTAssertEqual(BrowserLoginImport.decrypt(older, key: key, hostKey: "accounts.example.com", version: 23), Data("signed-in".utf8))
     }
 
+    @MainActor
     func testProfilesSitesAndCookiesKeepTheirShape() throws {
         let support = root.appending(path: "Application Support")
         let expires = Date().addingTimeInterval(3600)
+        let now = Date()
+        func ago(_ hours: Double) -> Date { now.addingTimeInterval(-hours * 3600) }
         try ChromiumProfileFixture.make(at: support.appending(path: "Naver/Whale"), profiles: [
             .init(folder: "Default", name: "", cookies: []),
             .init(folder: "Profile 1", name: "Work", cookies: [
@@ -41,6 +45,18 @@ final class BrowserLoginImportTests: XCTestCase {
                 .init(host: "widget.example.com", name: "chips", value: "partitioned", partitionedUnder: "https://example.org"),
                 .init(host: ".example.com", name: "old", value: "expired", expires: Date().addingTimeInterval(-60)),
                 .init(host: "www.other.test", name: "other", value: "not chosen")
+            ], visits: [
+                // A user name and password in the address are dropped; typed is the core transition TYPED.
+                .init(url: "https://user:secret@example.com/account", title: "Account", date: ago(24), transition: 0x3000_0001),
+                .init(url: "https://example.com/account", date: ago(48)),
+                .init(url: "https://example.com/account", date: ago(1), transition: 0x3000_0008),
+                .init(url: "https://www.google.com/search?q=yardlet&oq=yardlet", date: ago(3), transition: 0x3000_0005),
+                .init(url: "https://example.com/old", date: ago(24 * 100)),
+                .init(url: "https://frame.example.com/", date: ago(2), transition: 0x3000_0004),
+                // A redirect's source: the chain starts there and ends elsewhere.
+                .init(url: "http://example.com/", date: ago(5), transition: 0x1000_0000),
+                .init(url: "https://example.com/hidden", date: ago(6), hidden: true),
+                .init(url: "chrome://settings/", date: ago(7))
             ]),
             .init(folder: "Profile 2", name: "Empty", cookies: [], inNetworkFolder: true)
         ], lastUsed: "Profile 1", password: Self.password)
@@ -73,6 +89,34 @@ final class BrowserLoginImportTests: XCTestCase {
         XCTAssertThrowsError(try BrowserLoginImport.cookies(in: whale, sites: ["example.com"], password: Data("wrong".utf8))) {
             XCTAssertEqual($0 as? BrowserLoginImport.Failure, .undecryptable)
         }
+
+        // The history: the pages Chromium shows in its own history, within 90 days, a Google results page as its
+        // search, typed as Chromium recorded it.
+        XCTAssertNil(profiles[1].history, "a profile with no History offers none")
+        let history = try BrowserLoginImport.history(in: whale, since: nil, now: now)
+        XCTAssertEqual(history.pages.map(\.url), ["https://example.com/account"])
+        XCTAssertEqual(history.pages.first.map { [$0.visitCount, $0.typedCount] }, [2, 1])
+        XCTAssertEqual(history.pages.first?.title, "Account")
+        XCTAssertEqual(history.searches.map(\.terms), ["yardlet"])
+        // Merged beside Yardlet's own visit; importing the profile again adds nothing it already brought.
+        let addresses = BrowserAddressHistory(file: nil) { now }
+        addresses.noteVisit("https://example.com/account", typed: false)
+        addresses.merge(history, from: whale.id)
+        let account = try XCTUnwrap(addresses.pages["https://example.com/account"])
+        XCTAssertEqual([account.visitCount, account.typedCount, account.visits.count], [3, 1, 3])
+        XCTAssertEqual(account.visits.map(\.date), account.visits.map(\.date).sorted(by: >))
+        let again = try BrowserLoginImport.history(in: whale, since: addresses.importedUntil(whale.id), now: now)
+        XCTAssertTrue(again.pages.isEmpty && again.searches.isEmpty, "\(again.pages.map(\.url))")
+        addresses.merge(again, from: whale.id)
+        XCTAssertEqual(addresses.pages["https://example.com/account"]?.visitCount, 3)
+        XCTAssertEqual(addresses.searches["yardlet"]?.count, 1)
+        // At most the newest 5000 pages come in.
+        var importer = BrowserAddressHistory.Importer(now: now, since: nil)
+        for index in 0...BrowserAddressHistory.maxPages {
+            importer.add("https://example.com/\(index)", title: "", date: now.addingTimeInterval(-Double(index)), typed: false)
+        }
+        XCTAssertEqual(importer.result.pages.count, BrowserAddressHistory.maxPages)
+        XCTAssertNil(importer.result.pages.first { $0.url.hasSuffix("/\(BrowserAddressHistory.maxPages)") })
     }
 
     func testFirefoxProfilesAndCookiesTakeChromiumsShape() throws {
@@ -90,6 +134,13 @@ final class BrowserLoginImportTests: XCTestCase {
                       originAttributes: "^partitionKey=%28https%2Cexample.org%29"),
                 .init(host: ".example.com", name: "old", value: "expired", expires: Date().addingTimeInterval(-60)),
                 .init(host: "www.other.test", name: "other", value: "not chosen")
+            ], visits: [
+                .init(url: "https://example.com/home", title: "Home", date: Date().addingTimeInterval(-3600), type: 2),
+                .init(url: "https://example.com/home", date: Date().addingTimeInterval(-7200)),
+                .init(url: "https://example.com/home", date: Date().addingTimeInterval(-60), type: 9),
+                .init(url: "https://example.com/frame", date: Date().addingTimeInterval(-60), type: 8),
+                .init(url: "https://example.com/go", date: Date().addingTimeInterval(-60), hidden: true),
+                .init(url: "https://www.google.com/search?q=zen", date: Date().addingTimeInterval(-60))
             ])
         ], installed: "Profiles/b.Work", marked: "Profiles/a.default")
         // A browser whose list of profiles exists but cannot be read, as macOS 27 keeps Chrome's.
@@ -112,6 +163,12 @@ final class BrowserLoginImportTests: XCTestCase {
             sameSite: 3, priority: 0, expires: Int64(expires.timeIntervalSince1970 * 1000) * 1000 + 11_644_473_600_000_000))
         XCTAssertEqual(byName["pref"]?.domain, ".example.com")
         XCTAssertEqual(byName.mapValues(\.sameSite), ["SID": 3, "pref": 0, "cross": 1, "plain": 0])
+
+        // Firefox's history: no reload, framed link or hidden page; typed as `TRANSITION_TYPED`.
+        let history = try BrowserLoginImport.history(in: work, since: nil)
+        XCTAssertEqual(history.pages.map(\.url), ["https://example.com/home"])
+        XCTAssertEqual(history.pages.first.map { [$0.visitCount, $0.typedCount] }, [2, 1])
+        XCTAssertEqual(history.searches.map(\.terms), ["zen"])
     }
 
     func testASiteIsItsRegistrableDomainOrTheHostItself() {
