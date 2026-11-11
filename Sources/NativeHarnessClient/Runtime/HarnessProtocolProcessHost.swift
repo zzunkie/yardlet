@@ -76,18 +76,12 @@ actor HarnessProtocolProcessHost {
     private let eventContinuation: AsyncStream<HarnessProtocolEventEnvelope>.Continuation
 
     private var connection: HarnessProtocolHostConnection
-    private var process: Process?
-    private var stdinHandle: FileHandle?
-    private var stdoutHandle: FileHandle?
-    private var stderrHandle: FileHandle?
-    private var chunkContinuation: AsyncStream<Data>.Continuation?
+    private var channel: LineDelimitedProcessChannel?
     private var readerTask: Task<Void, Never>?
     private var handshakeTimeoutTask: Task<Void, Never>?
     private var handshakeContinuation: CheckedContinuation<HarnessProtocolProcessSession, Error>?
     private var pending: [String: PendingRequest] = [:]
     private var submittedRequestIDs: Set<String> = []
-    private var stdoutBuffer = Data()
-    private var stderrBuffer = Data()
     private var launched = false
     private var stopped = false
     private var terminalError: HarnessProtocolProcessHostError?
@@ -128,36 +122,22 @@ actor HarnessProtocolProcessHost {
             handshakeTimeout: handshakeTimeout
         )
 
-        let process = Process()
-        let stdinPipe = Pipe.childInput()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.executableURL = configuration.executableURL
-        process.arguments = configuration.arguments
-        process.currentDirectoryURL = configuration.workspaceURL
-        process.environment = RuntimeProcessEnvironment.values(
-            executableURL: configuration.executableURL,
-            overrides: configuration.environmentOverrides
-        )
-        process.standardInput = stdinPipe
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        let chunks = AsyncStream<Data>.makeStream()
-        chunkContinuation = chunks.continuation
-        stdoutPipe.fileHandleForReading.readChunks(into: chunks.continuation)
-        stderrPipe.fileHandleForReading.readChunks { [weak self] data in
-            Task { await self?.appendStderr(data) }
-        }
-        process.terminationHandler = { [weak self] process in
-            Task { await self?.processDidTerminate(code: process.terminationStatus) }
-        }
-
+        // An adapter is installed on its own and not trusted to keep its lines short, so the
+        // channel holds no more of a line than the limit.
+        let channel: LineDelimitedProcessChannel
         do {
-            try NativeProcessTree.run(process)
+            channel = try LineDelimitedProcessChannel(
+                .init(executableURL: configuration.executableURL,
+                      arguments: configuration.arguments,
+                      currentDirectoryURL: configuration.workspaceURL,
+                      environment: RuntimeProcessEnvironment.values(
+                          executableURL: configuration.executableURL,
+                          overrides: configuration.environmentOverrides
+                      )),
+                stderrLimit: maximumStderrBytes,
+                lineLimit: maximumLineBytes
+            )
         } catch {
-            stdoutPipe.fileHandleForReading.readabilityHandler = nil
-            stderrPipe.fileHandleForReading.readabilityHandler = nil
             let hostError = HarnessProtocolProcessHostError.processLaunchFailed(
                 error.localizedDescription
             )
@@ -166,13 +146,11 @@ actor HarnessProtocolProcessHost {
             throw hostError
         }
 
-        self.process = process
-        stdinHandle = stdinPipe.fileHandleForWriting
-        stdoutHandle = stdoutPipe.fileHandleForReading
-        stderrHandle = stderrPipe.fileHandleForReading
+        self.channel = channel
+        let channelEvents = channel.events
         readerTask = Task { [weak self] in
-            for await chunk in chunks.stream {
-                await self?.acceptStdoutChunk(chunk)
+            for await event in channelEvents {
+                await self?.accept(event)
             }
         }
         handshakeTimeoutTask = Task { [weak self, handshakeTimeout] in
@@ -236,7 +214,7 @@ actor HarnessProtocolProcessHost {
                     timeoutTask: timeoutTask
                 )
                 do {
-                    try stdinHandle?.write(contentsOf: data)
+                    try channel?.write(data)
                 } catch {
                     timeoutTask.cancel()
                     pending.removeValue(forKey: request.id)
@@ -257,8 +235,8 @@ actor HarnessProtocolProcessHost {
     func diagnostics() -> HarnessProtocolProcessDiagnostics {
         HarnessProtocolProcessDiagnostics(
             phase: connection.phase,
-            processID: process?.processIdentifier,
-            stderr: stderrText,
+            processID: channel?.processIdentifier,
+            stderr: channel?.stderrText ?? "",
             terminalError: terminalError
         )
     }
@@ -270,31 +248,33 @@ actor HarnessProtocolProcessHost {
             terminalError = .stopped
         }
         connection.close()
-        finishIO()
+        endExchange()
         resumeHandshake(throwing: .stopped)
         failPending(.stopped)
-        terminateProcessIfNeeded()
         eventContinuation.finish()
     }
 
-    private func acceptStdoutChunk(_ chunk: Data) {
+    private func accept(_ event: LineDelimitedProcessChannel.Event) {
         guard terminalError == nil else { return }
-        stdoutBuffer.append(chunk)
-        while let newline = stdoutBuffer.firstIndex(of: 0x0A) {
-            let lineByteCount = stdoutBuffer.distance(from: stdoutBuffer.startIndex, to: newline)
-            guard lineByteCount <= maximumLineBytes else {
+        switch event {
+        case let .line(line):
+            // The channel cuts a line longer than the limit to one byte more than it.
+            guard line.count <= maximumLineBytes else {
                 fail(.lineTooLarge(limit: maximumLineBytes))
                 return
             }
-            var line = Data(stdoutBuffer[..<newline])
-            stdoutBuffer.removeSubrange(...newline)
-            if line.last == 0x0D { line.removeLast() }
-            guard !line.isEmpty else { continue }
             do {
                 try accept(codec.decodeLine(line))
             } catch let error as HarnessProtocolProcessHostError {
                 fail(error)
-                return
+            } catch let error as HarnessProtocolHostError {
+                fail(.protocolViolation(error))
+            } catch {
+                fail(.invalidFrame)
+            }
+        case let .exited(code, stderr):
+            do {
+                try connection.adapterExited(code: code)
             } catch let error as HarnessProtocolHostError {
                 fail(.protocolViolation(error))
                 return
@@ -302,9 +282,7 @@ actor HarnessProtocolProcessHost {
                 fail(.invalidFrame)
                 return
             }
-        }
-        if stdoutBuffer.count > maximumLineBytes {
-            fail(.lineTooLarge(limit: maximumLineBytes))
+            fail(.processExited(code: code, message: stderr))
         }
     }
 
@@ -314,12 +292,12 @@ actor HarnessProtocolProcessHost {
             let action = try connection.accept(frame)
             guard case let .send(readyFrame) = action,
                   case let .active(manifest, version) = connection.phase,
-                  let process
+                  let channel
             else {
                 throw HarnessProtocolProcessHostError.invalidFrame
             }
             do {
-                try stdinHandle?.write(contentsOf: codec.encodeLine(readyFrame))
+                try channel.write(codec.encodeLine(readyFrame))
             } catch {
                 throw HarnessProtocolProcessHostError.writeFailed(error.localizedDescription)
             }
@@ -327,7 +305,7 @@ actor HarnessProtocolProcessHost {
                 returning: HarnessProtocolProcessSession(
                     manifest: manifest,
                     version: version,
-                    processID: process.processIdentifier
+                    processID: channel.processIdentifier
                 )
             )
 
@@ -376,18 +354,6 @@ actor HarnessProtocolProcessHost {
         }
     }
 
-    private func appendStderr(_ data: Data) {
-        stderrBuffer.append(data)
-        if stderrBuffer.count > maximumStderrBytes {
-            stderrBuffer = Data(stderrBuffer.suffix(maximumStderrBytes))
-        }
-    }
-
-    private var stderrText: String {
-        String(decoding: stderrBuffer, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     private func handshakeDidTimeOut() {
         guard case .awaitingHello = connection.phase else { return }
         do {
@@ -419,53 +385,22 @@ actor HarnessProtocolProcessHost {
         )
     }
 
-    private func processDidTerminate(code: Int32) {
-        guard terminalError == nil else { return }
-        do {
-            try connection.adapterExited(code: code)
-        } catch let error as HarnessProtocolHostError {
-            fail(.protocolViolation(error), terminateProcess: false)
-            return
-        } catch {
-            fail(.invalidFrame, terminateProcess: false)
-            return
-        }
-        fail(
-            .processExited(code: code, message: stderrText),
-            terminateProcess: false
-        )
-    }
-
-    private func fail(
-        _ error: HarnessProtocolProcessHostError,
-        terminateProcess: Bool = true
-    ) {
+    private func fail(_ error: HarnessProtocolProcessHostError) {
         guard terminalError == nil else { return }
         terminalError = error
-        finishIO()
+        endExchange()
         resumeHandshake(throwing: error)
         failPending(error)
-        if terminateProcess {
-            terminateProcessIfNeeded()
-        }
         eventContinuation.finish()
     }
 
-    private func finishIO() {
+    /// Stops reading the adapter and ends its process tree, if it still runs.
+    private func endExchange() {
         handshakeTimeoutTask?.cancel()
         handshakeTimeoutTask = nil
-        stdoutHandle?.readabilityHandler = nil
-        stderrHandle?.readabilityHandler = nil
-        chunkContinuation?.finish()
-        chunkContinuation = nil
         readerTask?.cancel()
         readerTask = nil
-        try? stdinHandle?.close()
-    }
-
-    private func terminateProcessIfNeeded() {
-        guard let process, process.isRunning else { return }
-        _ = NativeProcessTree.terminate(process: process)
+        channel?.stop()
     }
 
     private func resumeHandshake(returning session: HarnessProtocolProcessSession) {
