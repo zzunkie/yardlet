@@ -22,23 +22,27 @@ struct ConversationTurnHandlers {
 }
 
 /// What a turn draws from the task around it, beyond the turn itself: which of its controls the task
-/// can carry out, and the values its cards read from the task's actions.
+/// can carry out, and the values its cards read from the task's actions. Only what the turn itself
+/// draws: the timeline compares it for every turn on every update, and a value none of a turn's
+/// cards reads drew every turn in the window again each time it changed. The task's limit state is
+/// its limit card's alone (`UsageLimitCard`), and whether the task can continue changes as each
+/// turn starts and ends. The warning that a limit is close, which a provider reports anew with
+/// every response, is drawn above the composer (`ProviderNoticeLines`), by no turn.
 struct ConversationTurnOffers: Equatable, Sendable {
     let harness: HarnessKind
     let workspaceURL: URL
-    let limitCardEntryID: UUID?
     let handlers: [Bool]
     let actions: [Bool]
+    /// The task's limit state, for a turn that draws a limit card.
+    let limitCardEntryID: UUID?
     let autoContinueResetsAt: Date?
     let canContinue: Bool
     let switchError: String?
-    let limitWarning: HarnessRateLimit?
 
     @MainActor
-    init(context: ConversationItemContext, handlers: ConversationTurnHandlers) {
+    init(turn: ConversationTurn, context: ConversationItemContext, handlers: ConversationTurnHandlers) {
         harness = context.harness
         workspaceURL = context.workspaceURL
-        limitCardEntryID = context.limitCardEntryID
         self.handlers = [handlers.retry != nil, handlers.edit != nil, handlers.fork != nil,
                          handlers.editMessage != nil, handlers.restoreFiles != nil, handlers.implementPlan != nil,
                          handlers.answerQuestion != nil]
@@ -47,10 +51,22 @@ struct ConversationTurnOffers: Equatable, Sendable {
                         actions.subtaskControls != nil, actions.subtaskControls?.stop != nil,
                         actions.providerNotices != nil, actions.rewind != nil, actions.runInTerminal != nil,
                         actions.signIn != nil, actions.signIn?.moveTo != nil]
-        autoContinueResetsAt = actions.providerNotices?.autoContinueResetsAt
-        canContinue = actions.providerNotices?.canContinue ?? false
-        switchError = actions.providerNotices?.switchError
-        limitWarning = actions.providerNotices?.limitWarning
+        let drawsLimitCard = turn.drawsLimitCard
+        let notices = drawsLimitCard ? actions.providerNotices : nil
+        limitCardEntryID = drawsLimitCard ? context.limitCardEntryID : nil
+        autoContinueResetsAt = notices?.autoContinueResetsAt
+        canContinue = notices?.canContinue ?? false
+        switchError = notices?.switchError
+    }
+}
+
+extension ConversationTurn {
+    /// Whether the turn draws a plan limit's card: the limit it ended on, or one it went on past.
+    var drawsLimitCard: Bool {
+        if case .usageLimit = outcome { return true }
+        return [prompt, notices, work, answers].contains { items in
+            items.contains { if case .outcome(.usageLimit) = $0.kind { true } else { false } }
+        }
     }
 }
 
@@ -135,7 +151,7 @@ struct ConversationTurnView: View, Equatable {
         self.part = part
         self.context = context
         self.handlers = handlers
-        offers = ConversationTurnOffers(context: context, handlers: handlers)
+        offers = ConversationTurnOffers(turn: turn, context: context, handlers: handlers)
         foldsWork = part == .whole && turn.foldsWork
     }
 

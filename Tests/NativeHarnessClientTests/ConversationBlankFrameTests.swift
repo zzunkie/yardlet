@@ -118,6 +118,121 @@ final class ConversationBlankFrameTests: XCTestCase {
         for line in lines { print("[window-streaming] \(line)") }
     }
 
+    /// What a turn of tool calls costs the whole window at the end of a 300-turn conversation, from the
+    /// message that starts it to its end, when each call's input and output run to 10,000 to 60,000
+    /// characters (a scheduled task's whole prompt, a task read back), beside the same turn with short
+    /// calls: thinking, text, and six calls, each started, finished and followed by the provider's
+    /// report that a plan limit is close and by more text, as Claude Code streams them. The main thread's
+    /// time for the turn and by kind of event, the turns drawn again, laid out anew and made; the
+    /// longest pass of the main run loop, the passes over 50 ms, and those the app's hang log would
+    /// write, over 250 ms and over a second. Run with `NHC_PERF_BENCH=1`; it prints the numbers and
+    /// checks nothing else.
+    func testBenchmarkLargeToolCallsStreamingInTheWholeWindow() throws {
+        guard ProcessInfo.processInfo.environment["NHC_PERF_BENCH"] == "1" else {
+            throw XCTSkip("Set NHC_PERF_BENCH=1 to run the window streaming benchmark")
+        }
+        let window = try makeWindow([.claude("Idle", turns: 1), .claude("Long", turns: 300)])
+        defer { window.close() }
+        window.show(1)
+        var passStart: CFAbsoluteTime?
+        var passes: [CFAbsoluteTime] = []
+        let passBegins = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.afterWaiting.rawValue, true, -1_000_000) { _, _ in
+            passStart = CFAbsoluteTimeGetCurrent()
+        }
+        // After the probe's display cycle (1,900,000), so a pass counts its layout and drawing.
+        let passEnds = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, 3_000_000) { _, _ in
+            if let start = passStart { passes.append(CFAbsoluteTimeGetCurrent() - start) }
+            passStart = nil
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), passBegins, .commonModes)
+        CFRunLoopAddObserver(CFRunLoopGetMain(), passEnds, .commonModes)
+        defer {
+            CFRunLoopRemoveObserver(CFRunLoopGetMain(), passBegins, .commonModes)
+            CFRunLoopRemoveObserver(CFRunLoopGetMain(), passEnds, .commonModes)
+        }
+        var reports = 0
+        func call(_ index: Int, round: Int, large: Bool) -> HarnessActivity {
+            let tool = index.isMultiple(of: 2) ? "mcp__yardlet__update_scheduled_task" : "mcp__yardlet__read_task"
+            let words = "Check the replies under the latest post, answer the ones that ask something, and report back. "
+            let lengths = [10_000, 25_000, 40_000, 60_000]
+            let prompt = large ? String(repeating: words + "\\n", count: lengths[index % lengths.count] / (words.count + 2))
+                : "Check the replies."
+            // A call's ID is its own: one an earlier turn's call had would run that call again.
+            return HarnessActivity(id: "toolu_\(large ? "large" : "short")_\(round)_\(index)", kind: tool, title: tool,
+                                   input: "{\n  \"prompt\" : \"\(prompt)\"\n}")
+        }
+        func stream(round: Int, large: Bool) -> String {
+            var steps: [(cpu: TimeInterval, kind: String)] = []
+            func step(_ kind: String, _ payload: HarnessEventPayload, wait: TimeInterval = 0.03) {
+                let start = Window.mainThreadCPU()
+                window.emit(1, payload, wait: wait)
+                steps.append((Window.mainThreadCPU() - start, kind))
+            }
+            ViewBodyCensus.isEnabled = true
+            ViewBodyCensus.reset()
+            passes = []
+            let published = window.model.publicationCounts.transcripts
+            let sending = Window.mainThreadCPU()
+            window.send(1, "Update the schedules and read back what they did.")
+            steps.append((Window.mainThreadCPU() - sending, "send"))
+            for fragment in 0..<10 { step("thinking", .reasoningDelta("Reading the schedules first \(fragment). ")) }
+            for fragment in 0..<10 { step("text", .assistantDelta("word\(fragment) ")) }
+            step("text", .assistantMessageCompleted((0..<10).map { "word\($0) " }.joined()))
+            for index in 0..<6 {
+                let started = call(index, round: round, large: large)
+                step("call started", .activityStarted(started))
+                var finished = started
+                finished.output = large ? String(repeating: "Line of the task's history as it was read back.\n",
+                                                 count: (started.input?.count ?? 0) / 48) : "Updated."
+                step("call finished", .activityCompleted(finished))
+                reports += 1
+                step("limit", .rateLimitUpdated(HarnessRateLimit(status: .warning, window: .session,
+                                                                 usedFraction: 0.8 + Double(reports) / 1000)))
+                for fragment in 0..<5 { step("text", .assistantDelta("next\(index)-\(fragment) ")) }
+                step("text", .assistantMessageCompleted((0..<5).map { "next\(index)-\($0) " }.joined()))
+            }
+            step("end", .assistantMessageCompleted("Done."))
+            step("end", .turnCompleted)
+            step("end", .sessionStatusChanged(.ready), wait: 0.2)
+            window.probe.run("settle", for: 0.3)
+            let publications = window.model.publicationCounts.transcripts - published
+            let turnsDrawn = ViewBodyCensus[.conversationTurn], laidOut = ViewBodyCensus[.conversationRowLaidOut]
+            let made = ViewBodyCensus[.conversationTurnHosting]
+            ViewBodyCensus.isEnabled = false
+            func median(_ kinds: Set<String>) -> Double {
+                let cpu = steps.filter { kinds.contains($0.kind) }.map(\.cpu).sorted()
+                return cpu[cpu.count / 2] * 1000
+            }
+            // Publications gather events, so the whole turn's time says more than its median event's.
+            let total = steps.reduce(0) { $0 + $1.cpu } * 1000, longest = (steps.map(\.cpu).max() ?? 0) * 1000
+            let hangs = passes.count { $0 >= 0.25 }, longHangs = passes.count { $0 >= 1 }
+            let name = large ? "large calls" : "short calls"
+            if round > 0 {
+                PerfBenchRecord.write("window-\(name.replacingOccurrences(of: " ", with: "-"))-300-turns", [
+                    "turnMainThreadMs": total, "eventMaxMs": longest,
+                    "callEventMedianMs": median(["call started", "call finished"]),
+                    "limitEventMedianMs": median(["limit"]), "textEventMedianMs": median(["text", "thinking"]),
+                    "longestPassMs": (passes.max() ?? 0) * 1000, "passesOver50MsCount": Double(passes.count { $0 > 0.05 }),
+                    "passesOver250MsCount": Double(hangs), "passesOver1SCount": Double(longHangs),
+                    "turnsDrawnCount": Double(turnsDrawn), "rowsLaidOutCount": Double(laidOut)
+                ])
+            }
+            return String(format: "%@, round %d: main thread %.0f ms for the turn, %.1f ms its longest event; a call's "
+                          + "event median %.1f ms, a limit report %.1f ms, text %.1f ms; longest pass %.0f ms, "
+                          + "%d passes over 50 ms, %d over 250 ms, %d over 1 s; %d events, %d publications, "
+                          + "%d turns drawn whole, %d rows laid out, %d hostings made",
+                          name, round + 1, total, longest,
+                          median(["call started", "call finished"]), median(["limit"]), median(["text", "thinking"]),
+                          (passes.max() ?? 0) * 1000, passes.count { $0 > 0.05 }, hangs, longHangs,
+                          steps.count, publications, turnsDrawn, laidOut, made)
+        }
+        var lines: [String] = []
+        for round in 0..<3 {
+            for large in [false, true] { lines.append(stream(round: round, large: large)) }
+        }
+        for line in lines { print("[window-large-calls] \(line)") }
+    }
+
     /// The task opened was being read at an earlier turn: it opens there.
     func testSwitchingToATaskReadAtAnEarlierTurnNeverDrawsABlankConversation() throws {
         let window = try makeWindow([.claude("Short", turns: 3), .claude("Long", turns: 80), .codex("Codex", turns: 60)])

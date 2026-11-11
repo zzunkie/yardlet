@@ -7,8 +7,8 @@ import XCTest
 /// Each turn draws in a hosting view of its own (`ConversationTurnHost`): a streamed fragment of words
 /// goes to the running turn's message alone, a transcript's or a Codex thread's, leaves every turn's
 /// graph as it was (`ConversationStreamedText`) and lays the conversation out a time or two, a
-/// conversation shown again finds its turns kept with its task, and a change in how the conversation
-/// looks reaches every turn.
+/// conversation shown again finds its turns kept with its task, a change in how the conversation
+/// looks reaches every turn, and the task's limit state only the turn that draws a limit card.
 @MainActor
 final class ConversationTurnHostTests: XCTestCase {
     @Observable
@@ -16,6 +16,7 @@ final class ConversationTurnHostTests: XCTestCase {
         var entries: [TranscriptEntry]
         var isShown = true
         var scheme: ColorScheme = .light
+        var notices: TaskProviderNotices?
         init(_ entries: [TranscriptEntry]) { self.entries = entries }
     }
 
@@ -26,7 +27,8 @@ final class ConversationTurnHostTests: XCTestCase {
             Group {
                 if feed.isShown {
                     TaskConversationView(harness: .claudeCode, workspaceURL: LongConversationFixture.workspace,
-                                         entries: feed.entries, sessionStatus: .running, renderState: renderState)
+                                         entries: feed.entries, sessionStatus: .running,
+                                         actions: ConversationActions(providerNotices: feed.notices), renderState: renderState)
                 } else {
                     Color.clear
                 }
@@ -42,6 +44,10 @@ final class ConversationTurnHostTests: XCTestCase {
         let answer = TranscriptEntry(content: .assistant(text: "Working", isStreaming: true))
         entries.append(answer)
         let feed = Feed(entries)
+        return (feed, mount(feed), answer)
+    }
+
+    private func mount(_ feed: Feed) -> WindowlessRender.Host<Host> {
         let host = WindowlessRender.Host(Host(feed: feed, renderState: ConversationRenderState()),
                                          size: NSSize(width: 900, height: 700), appearance: .light)
         host.settle(passes: 20)
@@ -52,7 +58,7 @@ final class ConversationTurnHostTests: XCTestCase {
             ViewBodyCensus.reset()
             host.close()
         }
-        return (feed, host, answer)
+        return host
     }
 
     func testAFragmentGoesToTheRunningMessageAndDrawsNoTurnAgain() {
@@ -205,6 +211,27 @@ final class ConversationTurnHostTests: XCTestCase {
         shown.taskID = taskID
         host.settle(passes: 10)
         XCTAssertEqual(texts(), drawn, "The task shown again draws its turns")
+    }
+
+    /// The task's limit state reaches the turn that draws a limit card and no other. Whether the task
+    /// can continue changes as each turn starts and ends, and a limit that is close is reported anew
+    /// with every response and drawn above the composer: compared for every turn, each of them drew
+    /// the ten turns of the window again.
+    func testTheTasksLimitStateDrawsOnlyTheTurnWithALimitCard() {
+        var entries = LongConversationFixture.claude(turns: 9)
+        entries.append(TranscriptEntry(content: .user(text: "Write up what changed")))
+        entries.append(TranscriptEntry(content: .usageLimit(HarnessRateLimit(status: .rejected, window: .session))))
+        let feed = Feed(entries)
+        feed.notices = TaskProviderNotices()
+        let host = mount(feed)
+        for used in [0.9, 0.91] {
+            feed.notices?.limitWarning = HarnessRateLimit(status: .warning, window: .weekly, usedFraction: used)
+            host.settle(passes: 4)
+        }
+        XCTAssertEqual(ViewBodyCensus[.conversationTurn], 0, "A limit that is close drew a turn again")
+        feed.notices?.canContinue = true
+        host.settle(passes: 4)
+        XCTAssertEqual(ViewBodyCensus[.conversationTurn], 1, "Whether the task can continue is its limit card's to read")
     }
 
     func testAChangeInLookReachesEveryTurn() {
