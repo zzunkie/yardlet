@@ -262,7 +262,9 @@ Before the release build is made, on the commit to release:
 The test suite's benchmarks run only with `NHC_PERF_BENCH=1` and are skipped otherwise, including in
 `scripts/test-fast.sh` and CI (except where the table says a check runs always). They isolate one cost in a windowless window, so they are the place to
 look once a scene shows a number got worse. With `NHC_PERF_BENCH_OUTPUT=<file>` each one appends its
-numbers to the file as a JSON line (`PerfBenchRecord`), which the bench collects under `micro`:
+numbers to the file as a JSON line (`PerfBenchRecord`). The bench runs the ones `contract.json` lists under `micro` and
+collects their records; `TranscriptProseResizePerformanceTests` and `ScrollFrameCostTests` are not in that list and
+run by hand:
 
 | Benchmark | Measures |
 |---|---|
@@ -280,6 +282,7 @@ numbers to the file as a JSON line (`PerfBenchRecord`), which the bench collects
 | `TranscriptProseResizePerformanceTests` | eleven width changes of a 1,000-paragraph message and an 11,086-item conversation, with and without live-resize deferral; exact final heights, middle/end reading positions and light/dark renders |
 | `StreamingTurnRenderPerformanceTests` | a Claude Code fragment after 120 calls in its turn, which fails over 15 ms of the main thread's time |
 | `WindowStructureQATests/testBenchmarkTheSidebarCrossingItsTop` | the sidebar of 828 tasks crossing its top |
+| `WindowStructureQATests/testBenchmarkAStateChangeInASidebarOfThousands` | a task starting or ending a turn in a sidebar of 3,000 tasks in 30 projects, grouped by project and by state |
 | `ScrollFrameCostTests/testBenchmarkScrollingALongConversation` | a reader's scroll through 60 drawn turns of a 200-turn conversation: the turns that report their place each step, the timeline's evaluations and the main thread's time |
 | `ScrollFrameCostTests/testBenchmarkScrollingTheSidebarUnderARestingPointer` | a reader's scroll of a sidebar of 400 tasks, with no pointer and with the pointer resting on the list: the rows drawn again and the rows that report their place each step, and the main thread's time |
 | `SubagentStatePerformanceTests` | a long Codex subagent's state handled by the app, beside three others (also a check that runs with every `swift test`) |

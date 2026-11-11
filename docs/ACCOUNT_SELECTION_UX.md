@@ -1,13 +1,13 @@
-# Account selection UX (2026-09-15)
+# Account selection UX
 
-This review revisits the existing UX and streamlines it. The baseline is **a flow where the user sees the accounts
-already signed in and picks the account for the task about to start**. The harness keeps ownership of authentication and
-storage. Different CLI sign-ins are not merged because they share an email or a provider.
+The baseline is **a flow where the user sees the accounts already signed in and picks the account for the task about to
+start**. The harness keeps ownership of authentication and storage. Different CLI sign-ins are not merged because they
+share an email or a provider.
 
 ## Decisions
 
-- **Connections** in the sidebar opens the **Harness Accounts** section of Settings (2026-10-08; before, a separate connections
-  sheet). Existing sign-ins and additional accounts show in the same list. No registration file or credential is copied
+- Accounts are managed in the **Harness Accounts** section of Settings, which the sidebar's account menu also opens.
+  Existing sign-ins and additional accounts show in the same list. No registration file or credential is copied
   to show an existing sign-in.
 - The **Harnesses** section of Settings covers install state and executable settings. Whether an account is signed in
   does not decide whether a harness is installed. The account list can be narrowed with a harness filter and search. At
@@ -22,7 +22,7 @@ storage. Different CLI sign-ins are not merged because they share an email or a 
   account shows as signed out, and a lookup that could not finish shows "Couldn't refresh · updated N min. ago". Every
   harness uses the same rows, limits and wording.
 - There is one account list (`AccountList`), and it shows in four places with the same rows, limits, update wording and
-  refresh position (2026-10-08, B5): the popover of the new task's account chip (that harness's default sign-in and
+  refresh position: the popover of the new task's account chip (that harness's default sign-in and
   saved accounts), a task's **Choose account** sheet (only accounts that share that task's history, most remaining limit
   first), the limit card's **Continue with another account** popover (the same list) and Settings › Harness Accounts (harness
   filter and search, grouped by account). An account with only one connection is one row, and when several connections
