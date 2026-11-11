@@ -371,8 +371,9 @@ final class AppModelTests: XCTestCase {
     /// A task's turn ends in several ways: the provider reports its state or an error, the message
     /// that was to start it does not go, or the runtime's stream ends while it runs. What follows
     /// differs with the way. This is what each leaves of a task that is not on screen: its status,
-    /// whether its row says there is something new, and whether a notification goes. Each goes
-    /// through `AppModel.turnEnded`, and the coordination log says what ended the turn.
+    /// whether its row says there is something new, and whether a notification goes, naming the
+    /// failure's reason. Each goes through `AppModel.turnEnded`, and the coordination log says what
+    /// ended the turn.
     func testEachWayATurnEndsLeavesItsStatusItsUnreadMarkAndItsNotification() async throws {
         enum Way: String, CaseIterable { case providerReady, providerFailed, providerError, sendFailed, streamEnded }
         let causes: [Way: TurnEndCause] = [.providerReady: .providerStatus, .providerFailed: .providerStatus,
@@ -385,8 +386,8 @@ final class AppModelTests: XCTestCase {
             .providerReady: (.ready, false, 0),
             .providerFailed: (.failed, true, 1),
             .providerError: (.failed, true, 1),
-            .sendFailed: (.failed, false, 0),
-            .streamEnded: (.failed, true, 0)
+            .sendFailed: (.failed, true, 1),
+            .streamEnded: (.failed, true, 1)
         ]
         for way in Way.allCases {
             let adapter = FakeHarnessAdapter(kind: .openCode)
@@ -432,6 +433,9 @@ final class AppModelTests: XCTestCase {
             XCTAssertEqual(model.store.sessions.first?.hasUnreadUpdate, want.unread, way.rawValue)
             XCTAssertEqual(notifications.posts.count, want.notifications, way.rawValue)
             XCTAssertEqual(model.errorBySessionID[task.id] != nil, way != .providerReady && way != .providerFailed, way.rawValue)
+            if let error = model.errorBySessionID[task.id] {
+                XCTAssertEqual(notifications.posts.first?.body, L10n.format("%@ failed: %@", way.rawValue, error), way.rawValue)
+            }
             model.coordinationLog.flush()
             let ended = try String(contentsOf: log, encoding: .utf8).split(separator: "\n")
                 .map { try JSONDecoder().decode(TaskCoordinationLog.Entry.self, from: Data($0.utf8)) }

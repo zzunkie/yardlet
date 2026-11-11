@@ -334,9 +334,14 @@ final class TaskContinuationCoordinator {
 
     /// Gives a task with a waiting context limit its runtime back, once the task settles as an account
     /// move waits for it to. One that stays busy, with a background command say, takes the limit
-    /// the next time it starts.
+    /// the next time it starts, and so does one whose runtime is gone meanwhile: nothing is started for it.
     func restartForContextLimit(_ id: UUID) async {
-        guard let model, contextLimitRestarts[id] != nil, let task = model.store.sessions.first(where: { $0.id == id }),
+        guard let model, contextLimitRestarts[id] != nil else { return }
+        guard model.handlesBySessionID[id] != nil else {
+            contextLimitRestarts[id] = nil
+            return
+        }
+        guard let task = model.store.sessions.first(where: { $0.id == id }),
               model.settlesForAccountMove(task), model.switchingAccounts.insert(id).inserted else { return }
         defer { model.switchingAccounts.remove(id) }
         contextLimitRestarts[id] = nil
@@ -925,7 +930,8 @@ final class TaskContinuationCoordinator {
         } catch {
             guard model.store.sessions.contains(where: { $0.id == id }) else { return false }
             forgetConnectionResume(id)
-            await model.turnEnded(id, as: .failed, cause: .continuationEnded)
+            await model.turnEnded(id, as: .failed, cause: .continuationEnded,
+                                  notificationDetail: error.localizedDescription)
             model.errorBySessionID[id] = error.localizedDescription
             return false
         }
@@ -1050,7 +1056,8 @@ final class TaskContinuationCoordinator {
             }
         } catch {
             guard model.store.sessions.contains(where: { $0.id == id }) else { return false }
-            await model.turnEnded(id, as: .failed, cause: .continuationEnded)
+            await model.turnEnded(id, as: .failed, cause: .continuationEnded,
+                                  notificationDetail: error.localizedDescription)
             model.errorBySessionID[id] = error.localizedDescription
         }
         return false
