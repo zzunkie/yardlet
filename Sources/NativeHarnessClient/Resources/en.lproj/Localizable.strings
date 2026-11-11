@@ -2254,6 +2254,10 @@
 "Schedule messages to a task that runs without asking" = "Schedule messages to a task that runs without asking";
 "Schedule messages to another project's task" = "Schedule messages to another project's task";
 "Schedule a task in another project" = "Schedule a task in another project";
+"Run a scheduled task with more permissions than this task" = "Run a scheduled task with more permissions than this task";
+"Delete a scheduled task with more permissions than this task" = "Delete a scheduled task with more permissions than this task";
+"Resume a scheduled task with more permissions than this task" = "Resume a scheduled task with more permissions than this task";
+"Reschedule a scheduled task with more permissions than this task" = "Reschedule a scheduled task with more permissions than this task";
 "Run a subagent outside this task's folders" = "Run a subagent outside this task's folders";
 "Open a file outside this task's folders?" = "Open a file outside this task's folders?";
 "Archive %lld tasks" = "Archive %lld tasks";

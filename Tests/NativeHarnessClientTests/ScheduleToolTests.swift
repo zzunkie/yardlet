@@ -533,6 +533,39 @@ final class ScheduleToolTests: XCTestCase {
                                  from: fixture.caller)
         XCTAssertFalse(renamed.isError, renamed.text)
         XCTAssertNil(model.scheduledTasks.schedule(id: mine.id)?.agentTaskID)
+        // When its runs come, and whether they come, is the person's to say as well: running it now, moving its
+        // time, resuming it and deleting it ask first. Pausing it asks nothing.
+        let paused = await call(model, "update_scheduled_task", ["scheduleId": mine.id.uuidString, "enabled": false],
+                                from: fixture.caller)
+        XCTAssertFalse(paused.isError, paused.text)
+        XCTAssertTrue(model.approvalsAreEmpty(in: fixture.caller.id))
+        let held = try XCTUnwrap(model.scheduledTasks.schedule(id: mine.id))
+        let asked: [(tool: String, arguments: [String: Any], title: String)] = [
+            ("run_scheduled_task", [:], "Run a scheduled task with more permissions than this task"),
+            ("update_scheduled_task", ["cronExpression": "0 5 * * *"],
+             "Reschedule a scheduled task with more permissions than this task"),
+            ("update_scheduled_task", ["enabled": true], "Resume a scheduled task with more permissions than this task"),
+            ("delete_scheduled_task", [:], "Delete a scheduled task with more permissions than this task")
+        ]
+        for change in asked {
+            let arguments = change.arguments.merging(["scheduleId": mine.id.uuidString]) { first, _ in first }
+            let pending = Task { await self.call(model, change.tool, arguments, from: fixture.caller) }
+            let card = try await waitForApproval(in: fixture.caller.id, model: model)
+            XCTAssertEqual(card.request.title, L10n.string(change.title))
+            XCTAssertTrue(card.request.detail?.contains(
+                L10n.format("Its runs will use %@ mode.", L10n.string("Bypass permissions"))) == true, card.request.detail ?? "")
+            XCTAssertTrue(model.sessionTools.answer(card.id, allow: false))
+            let refused = await pending.value
+            XCTAssertTrue(refused.isError && refused.text.contains("did not approve"), refused.text)
+            XCTAssertEqual(model.scheduledTasks.schedule(id: mine.id), held, change.title)
+        }
+        let deleting = Task { await self.call(model, "delete_scheduled_task", ["scheduleId": mine.id.uuidString],
+                                              from: fixture.caller) }
+        let deleteCard = try await waitForApproval(in: fixture.caller.id, model: model)
+        XCTAssertTrue(model.sessionTools.answer(deleteCard.id, allow: true))
+        let deleted = await deleting.value
+        XCTAssertFalse(deleted.isError, deleted.text)
+        XCTAssertNil(model.scheduledTasks.schedule(id: mine.id))
         await model.shutdown()
 
         let auto = try Fixture(root: root, calendar: seoul, now: date(17, 20), claudeMode: "auto")

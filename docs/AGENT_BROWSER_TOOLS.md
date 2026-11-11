@@ -366,7 +366,9 @@ choose it in New Task" (`sessionToolPermission`). Both harnesses are measured on
 Approve for me (a classifier or Codex's reviewer answers in place of the person), then bypassPermissions, Full access and
 Custom (whatever `config.toml` says). A caller on another harness counts as acceptEdits, or plan when it reads only, and
 a Codex task as the freer of that and its own permission, Custom counting as acceptEdits. A Codex task keeps it as
-`codex.runLocation`, which its thread starts with.
+`codex.runLocation`, which its thread starts with. What a caller that reads only starts reads only as well, also when
+that caller is a read-only subagent of a task that may do more, and `create_task` on a harness Yardlet cannot start read
+only is refused for it, as `run_agent` is ("this task is read only, and Yardlet cannot run … read only").
 
 The model a child or subagent starts with is one its harness offers; `list_accounts` names those it last offered
 (`models`). One the session does not take starts nothing on the harness's default model: `run_agent` answers
@@ -621,7 +623,12 @@ Times in results are ISO 8601 in the Mac's time zone (with the offset).
   harness's own MCP approval. Yardlet has cards of its own. Where the harness did not ask (Claude Code in Auto, or
   another harness), a schedule an agent makes or changes that continues another task asks as `send_message_to_task`
   does ("Schedule messages to …"), and one whose new tasks start in another project or a folder outside the caller's
-  asks as `create_task` does ("Schedule a task in another project"); a task that runs without asking is not asked. In a
+  asks as `create_task` does ("Schedule a task in another project"); a task that runs without asking is not asked. A
+  schedule whose runs do more without asking than the caller may, measured as above (`scheduleRunFreedom`: the
+  permission its new tasks start with, or that of the task its runs continue), is the person's to start and stop: where
+  the harness did not ask, running it now, deleting it, changing when it runs and resuming it ask with a card ("Run a
+  scheduled task with more permissions than this task", and the like for the other three). Pausing it and renaming it
+  ask nothing. In a
   task a schedule started, when Claude Code is in a mode that does not ask (Auto or bypass permissions), a call that
   changes things is asked with the session tool approval card (the Claude app's `unattended`). That is a task a run
   started as a new task: each run keeps whether it started its task or continued one, so a task a run only continued

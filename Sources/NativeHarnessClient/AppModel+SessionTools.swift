@@ -679,6 +679,12 @@ extension AppModel: SessionToolHandling {
         if let refusal = sessionToolSpawnRefusal(caller: caller) {
             return .failure("Not created: \(refusal)", .refused, retry: .no)
         }
+        // A read-only caller's child reads only too (`sessionToolInheritedOptions`), so it starts only on a
+        // harness Yardlet can start that way, as `run_agent` has it.
+        if caller.permission == .readOnly, Self.readOnlyOptions(for: harness) == nil {
+            return .failure("Not created: this task is read only, and Yardlet cannot run "
+                + "\(harness.displayName) read only.", .refused, retry: .no)
+        }
         var options: [String: String]
         switch Self.providerOptions(for: harness, model: arguments["model"]?.stringValue,
                                     effort: arguments["effort"]?.stringValue) {
@@ -1407,16 +1413,20 @@ extension AppModel: SessionToolHandling {
     /// and permission mode as its task keeps them, under what the call chose (decision of
     /// 2026-10-22: a child session inherits them unless the call says otherwise). A chosen model drops the
     /// caller's effort, which that model may not take. Another harness starts on its own defaults.
+    /// What a read-only caller starts reads only, also where the caller is a read-only subagent of a
+    /// task that may do more.
     func sessionToolInheritedOptions(harness: HarnessKind, caller: SessionToolCaller,
                                      chosen: [String: String]) -> [String: String] {
         guard let host = store.sessions.first(where: { $0.id == caller.hostTaskID }) else { return chosen }
+        let readOnly = caller.permission == .readOnly ? Self.permissionOptions(for: harness, level: .readOnly) : [:]
         // Another harness reads none of the caller's options, but runs as freely as the caller does,
         // in its own words: a Codex task with full access starts a Claude child that does not ask.
         guard harness == caller.harness else {
             return Self.permissionOptions(for: harness, level: sessionToolPermission(of: host))
-                .merging(chosen) { _, new in new }
+                .merging(readOnly) { _, new in new }.merging(chosen) { _, new in new }
         }
-        return Self.inheritedOptions(host.providerOptions, harness: harness, chosen: chosen)
+        return Self.inheritedOptions(host.providerOptions.merging(readOnly) { _, new in new },
+                                     harness: harness, chosen: chosen)
     }
 
     /// A harness's own option for a permission level: what runs without asking (Claude Code's
