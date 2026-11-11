@@ -65,9 +65,7 @@ jobs:
       - name: Connect to the fixture host
         shell: pwsh
         run: |
-          # The lock's wrangler asks for newer Workers types than the lock holds, an optional peer that only
-          # type checks use, so its check is left out to run the relay.
-          npm ci --prefix relay --legacy-peer-deps
+          npm ci --prefix relay
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           swift build -c release --product yardlet-remote-fixture --force-resolved-versions
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
