@@ -255,12 +255,8 @@ extension AppModel {
             return
         }
         do {
-            try target.validate(for: task.harness)
-            // The task resumes under the target's own login, so that CLI must report one first.
-            let status = try await AccountCommandRunner.run(executableURL: task.runtimeExecutableURL,
-                arguments: ["auth", "status"], environment: target.environment)
-            guard HarnessAccountBroker.commandAccountState(for: .claudeCode, result: status) == .signedIn,
-                  let current = store.sessions.first(where: { $0.id == task.id }), current.connection == task.connection,
+            _ = try await taskReadyToResume(task, under: target)
+            guard let current = store.sessions.first(where: { $0.id == task.id }), current.connection == task.connection,
                   canMoveAutomatically(current), settlesForAccountMove(current) else { return }
             try await moveSettledTask(current, to: target)
         } catch {

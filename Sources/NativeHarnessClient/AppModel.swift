@@ -5409,13 +5409,8 @@ final class AppModel {
         switchingAccounts.insert(current.id)
         defer { switchingAccounts.remove(current.id) }
         do {
-            try connection.validate(for: current.harness)
-            // The task resumes under the target's own login, so that CLI must report one first.
-            let status = try await AccountCommandRunner.run(executableURL: current.runtimeExecutableURL,
-                arguments: ["auth", "status"], environment: connection.environment)
-            guard HarnessAccountBroker.commandAccountState(for: .claudeCode, result: status) == .signedIn
-            else { throw ProviderConnectionError.signedOut }
-            try await rebind(current, to: connection)
+            let task = try await taskReadyToResume(current, under: connection)
+            try await rebind(task, to: connection)
             // The task goes on under the new account, not at the old one's reset; a switch refused
             // above leaves it waiting there, with what waits for that continue.
             continuations.cancelUsageLimitAutoContinue(for: current.id)
@@ -5425,6 +5420,24 @@ final class AppModel {
             guard let updated = store.sessions.first(where: { $0.id == current.id }) else { return }
             try await attach(updated, resumesExistingSession: updated.providerSessionID != nil)
         } catch { errorBySessionID[current.id] = error.localizedDescription }
+    }
+
+    /// The task as it resumes under `connection`: that account's own login must be signed in first, as
+    /// the task's CLI reports it. The CLI asked is the one the task will start, so a recorded runtime
+    /// that is gone is followed first, as before an attach (`sessionWithAvailableRuntime`): a desktop
+    /// app that bundles the CLI removes the version a task recorded when it updates, also while
+    /// Yardlet runs. With nowhere to follow, the refusal names the missing path, as an attach's does.
+    func taskReadyToResume(_ task: SessionRecord, under connection: ProviderConnection) async throws -> SessionRecord {
+        try connection.validate(for: task.harness)
+        let task = await sessionWithAvailableRuntime(task)
+        guard ExecutableLookup.current.isProgram(task.runtimeExecutableURL) else {
+            throw HarnessAdapterError.runtimeNotFound(task.runtimeExecutableURL)
+        }
+        let status = try await AccountCommandRunner.run(executableURL: task.runtimeExecutableURL,
+            arguments: ["auth", "status"], environment: connection.environment)
+        guard HarnessAccountBroker.commandAccountState(for: .claudeCode, result: status) == .signedIn
+        else { throw ProviderConnectionError.signedOut }
+        return task
     }
 
     /// Closes an idle task's runtime and binds it to another account that keeps the same conversations
@@ -5891,7 +5904,7 @@ final class AppModel {
     /// moved it or removed its old version, the task continues with where the runtime now lives,
     /// or else with the harness's current runtime. The provider session and its home stay as they
     /// were, and a recorded runtime that still exists is never replaced.
-    private func sessionWithAvailableRuntime(_ session: SessionRecord) async -> SessionRecord {
+    func sessionWithAvailableRuntime(_ session: SessionRecord) async -> SessionRecord {
         guard let replacement = runtimeReplacement(for: session),
               let updated = try? await store.updateRuntimeExecutable(id: session.id, to: replacement)
         else { return session }

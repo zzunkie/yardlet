@@ -168,9 +168,11 @@ for Claude Code, the ChatGPT app for Codex); a user-managed CLI that disappeared
 replaces its runtime while Yardlet runs (the Claude app deletes the previous version when it updates),
 `RuntimeSelectionStore.selectedURL` returns the successor path right away, as the next launch would. A task whose
 recorded runtime no longer exists is pointed at that successor, or else at the harness's current selection, when the
-index is restored and before it attaches (`AppModel.sessionWithAvailableRuntime`); a recorded runtime that still exists
-is not changed. Only the executable changes: the provider ID, storage scope, account binding and native history stay,
-no credentials are copied and there is no sign-in.
+index is restored and before Yardlet runs the task's CLI: before the task attaches, before a move to another account
+asks that CLI whether the target account is signed in, and before a title is asked of it
+(`AppModel.sessionWithAvailableRuntime`); a recorded runtime that still exists is not changed. Only the executable
+changes: the provider ID, storage scope, account binding and native history stay, no credentials are copied and there
+is no sign-in.
 
 ## Opening a saved task
 

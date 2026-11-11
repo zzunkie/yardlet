@@ -9,8 +9,10 @@ import XCTest
     func testContinuingUnderAnotherAccountSwitchesThenAsksClaudeToPickUp() async throws {
         let fixture = try makeFixture()
         let model = fixture.model
+        // The task runs the CLI the Claude app bundles, at that app's versioned path.
+        let bundled = try bundledCLI("2.1.290", beside: fixture.cli)
         let created = await model.createSession(harness: .claudeCode, workspaceURL: fixture.shared,
-            runtimeExecutableURL: fixture.cli, title: "Limit", connection: fixture.first)
+            runtimeExecutableURL: bundled, title: "Limit", connection: fixture.first)
         let task = try XCTUnwrap(created, model.errorBySessionID.values.first ?? "Missing task")
         let providerID = try XCTUnwrap(task.providerSessionID)
         model.composerDrafts.tasks.draft(for: task.id).text = "Keep my draft"
@@ -41,11 +43,16 @@ import XCTest
         XCTAssertTrue(nothingSent.isEmpty)
         XCTAssertEqual(model.transcriptBySessionID[task.id]?.last?.id, card)
 
+        // The Claude app has updated meanwhile and removed the version the task recorded. The next
+        // account's login is asked of the CLI the task resumes with, where the app keeps it now.
+        let updated = try bundledCLI("2.1.291", beside: fixture.cli)
+        try FileManager.default.removeItem(at: task.runtimeExecutableURL)
         await model.continueAfterUsageLimit(using: fixture.next, for: task)
         XCTAssertNil(model.usageLimitSwitchErrorBySessionID[task.id])
 
         let switched = try XCTUnwrap(model.store.sessions.first)
         XCTAssertEqual(switched.connection, fixture.next)
+        XCTAssertEqual(switched.runtimeExecutableURL.path, updated.path)
         XCTAssertEqual(switched.providerSessionID, providerID)
         XCTAssertEqual(model.composerDrafts.tasks.draft(for: task.id).text, "Keep my draft")
         let resumedTransport = try XCTUnwrap(fixture.transports.all.last)
@@ -381,7 +388,9 @@ import XCTest
         var rested: SessionRecord?, recent: SessionRecord?
         let fixture = try makeFixture { first, cli in
             let workspace = cli.deletingLastPathComponent()
-            rested = SessionRecord(harness: .claudeCode, workspaceURL: workspace, runtimeExecutableURL: cli,
+            // It recorded a version of the Claude app's CLI that the app has removed since.
+            rested = SessionRecord(harness: .claudeCode, workspaceURL: workspace,
+                runtimeExecutableURL: Self.bundledCLIPath("2.1.290", beside: cli),
                 title: "Rested", updatedAt: Date().addingTimeInterval(-2 * 3_600), providerSessionID: "rested",
                 connection: first)
             recent = SessionRecord(harness: .claudeCode, workspaceURL: workspace, runtimeExecutableURL: cli,
@@ -391,6 +400,7 @@ import XCTest
         }
         let model = fixture.model
         let (restedTask, recentTask) = try (XCTUnwrap(rested), XCTUnwrap(recent))
+        let updated = try bundledCLI("2.1.291", beside: fixture.cli)
         try await model.store.restore()
         func task(_ id: UUID) -> SessionRecord? { model.store.sessions.first { $0.id == id } }
 
@@ -404,6 +414,7 @@ import XCTest
         read(fixture.next, used: 0.2, in: model)
         try await waitUntil { task(restedTask.id)?.connection == fixture.next }
         XCTAssertEqual(task(restedTask.id)?.providerSessionID, "rested")
+        XCTAssertEqual(task(restedTask.id)?.runtimeExecutableURL.path, updated.path, "The login was asked of the CLI it resumes with")
         XCTAssertEqual(model.accountAssignments.assignment(for: restedTask.id)?.replacedAccountName, fixture.first.name)
         XCTAssertEqual(task(recentTask.id)?.connection, fixture.first, "Its cache lives")
         XCTAssertEqual(model.accountMoveLook?.at, task(recentTask.id).map {
@@ -872,6 +883,20 @@ import XCTest
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         return root
+    }
+
+    /// Where the Claude app keeps the CLI it bundles under `version`, in the fixture's folder.
+    private static func bundledCLIPath(_ version: String, beside cli: URL) -> URL {
+        cli.deletingLastPathComponent().appending(path: "Claude/claude-code/\(version)/claude.app/Contents/MacOS/claude")
+            .standardizedFileURL
+    }
+
+    /// A copy of the fixture CLI at `bundledCLIPath`, as the Claude app installs a version.
+    private func bundledCLI(_ version: String, beside cli: URL) throws -> URL {
+        let url = Self.bundledCLIPath(version, beside: cli)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: cli, to: url)
+        return url
     }
 
     private func account(linkingTo projects: URL, signedIn: Bool) throws -> URL {
