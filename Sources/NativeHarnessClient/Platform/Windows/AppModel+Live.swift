@@ -55,6 +55,7 @@ extension AppModel {
             )
             model.accountAssignments = AccountAssignmentLog(
                 fileURL: storageRootURL.appending(path: AccountAssignmentLog.fileName))
+            model.followRuntimeChoices()
             return model
         } catch {
             return storageUnavailable(error, codexEnvironmentManager: codexEnvironmentManager,

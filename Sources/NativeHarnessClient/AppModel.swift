@@ -3144,9 +3144,9 @@ final class AppModel {
         handlesBySessionID[sessionID] != nil
     }
 
-    /// A harness's CLI changed under Yardlet (updated, or back to an earlier version): tasks that
-    /// attach from now on start it again, and so does each idle attached task at its next message,
-    /// as after a sign-in (`continueTasks(afterSignInOf:)`). A process keeps running the version it
+    /// A harness's CLI changed under Yardlet (updated, back to an earlier version, or another chosen in
+    /// Settings): tasks that attach from now on start it, and so does each idle attached task at its
+    /// next message, as after a sign-in (`continueTasks(afterSignInOf:)`). A process keeps running the version it
     /// started from, and an update may remove that version's files: a Codex App Server looks for its
     /// helpers in its own version folder, which `brew upgrade --cask` deletes. A task in a turn, or
     /// with work its runtime holds, keeps the process it has until that runtime ends.
@@ -3154,6 +3154,15 @@ final class AppModel {
         await registry.invalidate(harness: harness)
         for session in store.sessions where session.harness == harness && handlesBySessionID[session.id] != nil {
             await endRuntimeToSaveMemory(session.id, evenOnScreen: true, reason: .cliChanged)
+        }
+    }
+
+    /// The person chose another runtime for a harness in Settings (Harnesses or CLI Updates), here
+    /// or from a remote window: its tasks move to it as after an update (`harnessRuntimeChanged`).
+    /// The app follows choices; tests and fixtures that pick a runtime for their tasks do not.
+    func followRuntimeChoices() {
+        runtimeSelections.runtimeChosen = { [weak self] harness in
+            Task { await self?.harnessRuntimeChanged(harness) }
         }
     }
 

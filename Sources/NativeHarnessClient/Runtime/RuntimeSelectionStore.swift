@@ -24,6 +24,10 @@ final class RuntimeSelectionStore {
     var remoteRuntimes: [HarnessKind: RemoteHarnessRuntime]?
     var canSelectRemoteRuntime = true
     @ObservationIgnored var onSelectRemoteRuntime: ((HarnessKind, String) -> Void)?
+    /// After the person's choice (`select`, `useNewest`, `selectAutomatic`) changed a harness's
+    /// runtime; not when discovery finds a newer install. The app moves that harness's tasks to it
+    /// (`AppModel.followRuntimeChoices`).
+    @ObservationIgnored var runtimeChosen: (@MainActor (HarnessKind) -> Void)?
     /// The harnesses whose runtime the person chose.
     @ObservationIgnored private var chosen: Set<HarnessKind>
     private let defaults: UserDefaults
@@ -112,12 +116,14 @@ final class RuntimeSelectionStore {
     }
 
     func selectAutomatic(for harness: HarnessKind) {
+        let before = selectedURL(for: harness)
         chosen.remove(harness)
         defaults.removeObject(forKey: Self.key(for: harness))
         newerInstalls[harness] = nil
         if let newest = automaticURL(for: harness) {
             selectedURLs[harness] = newest
         }
+        noteChoice(for: harness, changedFrom: before)
     }
 
     var connectedDescriptors: [HarnessDescriptor] {
@@ -130,6 +136,8 @@ final class RuntimeSelectionStore {
         guard Self.isCompatibleRuntime(standardized, for: harness) else {
             return
         }
+        let before = selectedURL(for: harness)
+        defer { noteChoice(for: harness, changedFrom: before) }
         selectedURLs[harness] = standardized
         chosen.insert(harness)
         newerInstalls[harness] = nil
@@ -143,10 +151,16 @@ final class RuntimeSelectionStore {
     /// the newer one Settings offered, and later whichever install is newest.
     func useNewest(for harness: HarnessKind) {
         guard let newer = newerInstalls[harness] else { return }
+        let before = selectedURL(for: harness)
         chosen.remove(harness)
         defaults.removeObject(forKey: Self.key(for: harness))
         selectedURLs[harness] = newer.url
         newerInstalls[harness] = nil
+        noteChoice(for: harness, changedFrom: before)
+    }
+
+    private func noteChoice(for harness: HarnessKind, changedFrom before: URL?) {
+        if selectedURL(for: harness) != before { runtimeChosen?(harness) }
     }
 
     /// Reads the versions of each harness's installs, off the main thread and each file only when

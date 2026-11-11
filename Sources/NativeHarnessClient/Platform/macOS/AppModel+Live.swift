@@ -105,6 +105,7 @@ extension AppModel {
                 fileURL: storageRootURL.appending(path: AccountAssignmentLog.fileName))
             model.personalAgentReadings = PersonalAgentReadings(cache: PersonalAgentCacheFiles.live)
             model.coordinationLog.fileURL = storageRootURL.appending(path: "logs/task-coordination.log")
+            model.followRuntimeChoices()
             return model
         } catch {
             return storageUnavailable(error, codexEnvironmentManager: codexEnvironmentManager,

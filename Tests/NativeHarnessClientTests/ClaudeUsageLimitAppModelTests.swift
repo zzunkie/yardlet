@@ -470,12 +470,12 @@ import XCTest
     }
 
     /// Yardlet takes a task's runtime off it in several ways: its account changes, it starts again
-    /// for a context limit, its CLI changed under it, or the task is archived. Whichever it is, its
-    /// CLI is stopped once, the task is left ready with no error, and what still ran in that CLI
-    /// reads as stopped. A change the task goes on from at once (an account, a context limit) has
-    /// its next runtime by then; a changed CLI starts one at the task's next message, and that one
-    /// runs the harness's new CLI, which a turn under way did not stop for. (A stream that
-    /// ends by itself is `AppModelTests.testEndedReadyStreamDetachesWithoutManufacturingFailure`.)
+    /// for a context limit, the person chose another CLI for its harness in Settings (as an update
+    /// changes it, `AccountChoiceTests`), or the task is archived. Whichever it is, its CLI is
+    /// stopped once, the task is left ready with no error, and what still ran in that CLI reads as
+    /// stopped. A change the task goes on from at once (an account, a context limit) has its next
+    /// runtime by then; another CLI starts at the task's next message, and it is the one chosen.
+    /// (A stream that ends by itself is `AppModelTests.testEndedReadyStreamDetachesWithoutManufacturingFailure`.)
     /// Each goes through `AppModel.detachRuntime`, and the coordination log says why the runtime went.
     func testEachWayATaskLosesItsRuntimeStopsItsCLIOnceAndLeavesTheTaskReady() async throws {
         enum Way: String, CaseIterable { case accountChange, contextLimit, cliChanged, archived }
@@ -499,12 +499,6 @@ import XCTest
 
             await first.emit(try json(#"{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_start","message":{}},"session_id":"s"}"#))
             try await waitUntil { model.store.sessions.first?.status == .running }
-            // The harness's CLI changes during the turn: an update to another path, or the person's choice.
-            let newer = fixture.shared.appending(path: "claude-newer")
-            if way == .cliChanged {
-                try FileManager.default.copyItem(at: fixture.cli, to: newer)
-                model.runtimeSelections.select(newer, for: .claudeCode)
-            }
             if runsBackgroundWork {
                 await first.emit(try json(#"{"type":"system","subtype":"task_started","task_id":"t-shell","tool_use_id":"shell","description":"npm run dev","task_type":"local_bash","is_backgrounded":true}"#))
             }
@@ -513,11 +507,16 @@ import XCTest
                 model.store.sessions.first?.status == .ready && backgroundRows() == (runsBackgroundWork ? 1 : 0)
             }
             let current = try XCTUnwrap(model.store.sessions.first)
+            let newer = fixture.shared.appending(path: "claude-newer")
 
             switch way {
             case .accountChange: await model.switchAccount(to: fixture.next, for: current)
             case .contextLimit: await model.continuations.chooseContextLimit("200000", for: current)
-            case .cliChanged: await model.harnessRuntimeChanged(.claudeCode)
+            case .cliChanged:
+                model.followRuntimeChoices()
+                try FileManager.default.copyItem(at: fixture.cli, to: newer)
+                model.runtimeSelections.select(newer, for: .claudeCode)
+                try await waitUntil { await first.stopCount == 1 && !model.isAttached(task.id) }
             case .archived: await model.archive(current)
             }
 
@@ -550,7 +549,7 @@ import XCTest
                 XCTAssertTrue(model.isAttached(task.id))
                 XCTAssertEqual(fixture.transports.all.count, 2)
                 XCTAssertEqual(model.store.sessions.first?.runtimeExecutableURL, newer.standardizedFileURL,
-                               "The next start runs the harness's new CLI")
+                               "The next start runs the CLI the person chose")
             }
         }
     }

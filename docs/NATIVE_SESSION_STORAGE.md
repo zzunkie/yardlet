@@ -202,9 +202,12 @@ and Codex tasks of one account one App Server, whatever CLI each recorded. An ea
 an update that failed its check (`CLIRuntimeOverrides`) is keyed on the runtime asked for, so every task of the harness
 starts it.
 
-When the runtime changes (the person chooses another, or a newer install is found), a task already attached keeps the
-process it has, and its next start uses the new runtime; no turn is cut off. An update or a return to an earlier version
-that Yardlet makes also ends each idle attached task's runtime (`AppModel.harnessRuntimeChanged`). The task's row is
+When the runtime changes, a task already attached keeps the process it has, and its next start uses the new runtime; no
+turn is cut off. When the person chooses another runtime in Settings (Harnesses or CLI Updates, also from a remote
+window), and when a CLI update, made by Yardlet or found by its check, passes or is returned to an earlier version, each
+idle attached task of that harness also ends its runtime at once (`AppModel.harnessRuntimeChanged`); a task in a turn,
+or with work its runtime holds, keeps its process until that runtime ends. Another install that discovery finds newer
+is used from each task's next start. The task's row is
 pointed at the CLI it starts with before the task attaches, before a move to another account asks that CLI whether the
 target account is signed in, before a title is asked of it, and before a fork, an edit or a file restore attaches it
 (`AppModel.sessionWithCurrentRuntime`), but not while it is attached; restoring the index and the reads write nothing.
