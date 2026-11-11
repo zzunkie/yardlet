@@ -3590,6 +3590,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.followUps.queue(for: session.id).isEmpty)
         XCTAssertNil(model.transcriptBySessionID[session.id])
         XCTAssertNil(model.errorBySessionID[session.id])
+        StateFileWriter.shared.flush()
         XCTAssertNil(defaults.object(forKey: "queue.\(session.id.uuidString)"))
         let probeCount = await adapter.probeCount
         XCTAssertEqual(probeCount, probeCountAfterDelete)
@@ -3743,6 +3744,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.store.sessions.isEmpty)
         XCTAssertTrue(model.followUps.queue(for: session.id).isEmpty)
         XCTAssertNil(model.errorBySessionID[session.id])
+        StateFileWriter.shared.flush()
         XCTAssertNil(defaults.object(forKey: "queue.\(session.id.uuidString)"))
         await model.shutdown()
     }

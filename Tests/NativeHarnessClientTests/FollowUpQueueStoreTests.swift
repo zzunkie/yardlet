@@ -139,6 +139,8 @@ final class FollowUpQueueStoreTests: XCTestCase {
         store.pause(task)
         store.saveShellDeliveries([ClaudeShellDelivery(entryID: UUID(), text: "<bash-input>ls</bash-input>")], for: task)
 
+        // The changes are set on the writer's queue, which quitting waits for.
+        StateFileWriter.shared.flush()
         let saved = try XCTUnwrap(defaults.data(forKey: "NativeHarnessClient.codexQueue.\(task.uuidString)"))
         XCTAssertTrue(defaults.bool(forKey: "NativeHarnessClient.codexQueue.paused.\(task.uuidString)"))
         XCTAssertNotNil(defaults.data(forKey: "NativeHarnessClient.codexQueue.shell.\(task.uuidString)"))
@@ -199,6 +201,7 @@ final class FollowUpQueueStoreTests: XCTestCase {
 
         store.remove(second, from: task)
         XCTAssertEqual(emptied, [task])
+        StateFileWriter.shared.flush()
         XCTAssertNil(defaults.data(forKey: "queue.\(task.uuidString)"))
         XCTAssertTrue(store.queue(for: task).isEmpty)
     }

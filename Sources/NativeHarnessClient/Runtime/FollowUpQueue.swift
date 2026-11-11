@@ -138,7 +138,9 @@ protocol CodexQueueRepository {
     func saveShellDeliveries(_ deliveries: [ClaudeShellDelivery], for sessionID: UUID)
 }
 
-/// `NativeHarnessClient.codexQueue.<task>`, `….paused.<task>` and `….shell.<task>`.
+/// `NativeHarnessClient.codexQueue.<task>`, `….paused.<task>` and `….shell.<task>`. A change is encoded
+/// and set on `StateFileWriter`'s queue, since setting a preference can wait on cfprefsd while it writes
+/// the whole domain; a read waits for the changes handed over before it, and quitting waits for them all.
 struct UserDefaultsCodexQueueRepository: CodexQueueRepository {
     let defaults: UserDefaults
     let keyPrefix: String
@@ -149,43 +151,52 @@ struct UserDefaultsCodexQueueRepository: CodexQueueRepository {
     }
 
     func load(for sessionID: UUID) -> [QueuedFollowUp] {
+        StateFileWriter.shared.flush()
         guard let data = defaults.data(forKey: keyPrefix + sessionID.uuidString) else { return [] }
         return (try? JSONDecoder().decode([QueuedFollowUp].self, from: data)) ?? []
     }
 
     func save(_ queue: [QueuedFollowUp], for sessionID: UUID) {
-        guard let data = try? JSONEncoder().encode(queue) else { return }
-        defaults.set(data, forKey: keyPrefix + sessionID.uuidString)
+        change(keyPrefix + sessionID.uuidString) { defaults, key in
+            guard let data = try? JSONEncoder().encode(queue) else { return }
+            defaults.set(data, forKey: key)
+        }
     }
 
     func remove(for sessionID: UUID) {
-        defaults.removeObject(forKey: keyPrefix + sessionID.uuidString)
+        change(keyPrefix + sessionID.uuidString) { $0.removeObject(forKey: $1) }
         setPaused(false, for: sessionID)
     }
 
     func isPaused(for sessionID: UUID) -> Bool {
-        defaults.bool(forKey: pausedKey(for: sessionID))
+        StateFileWriter.shared.flush()
+        return defaults.bool(forKey: pausedKey(for: sessionID))
     }
 
     func setPaused(_ paused: Bool, for sessionID: UUID) {
-        if paused {
-            defaults.set(true, forKey: pausedKey(for: sessionID))
-        } else {
-            defaults.removeObject(forKey: pausedKey(for: sessionID))
-        }
+        change(pausedKey(for: sessionID)) { paused ? $0.set(true, forKey: $1) : $0.removeObject(forKey: $1) }
     }
 
     func loadShellDeliveries(for sessionID: UUID) -> [ClaudeShellDelivery] {
+        StateFileWriter.shared.flush()
         guard let data = defaults.data(forKey: shellDeliveriesKey(for: sessionID)) else { return [] }
         return (try? JSONDecoder().decode([ClaudeShellDelivery].self, from: data)) ?? []
     }
 
     func saveShellDeliveries(_ deliveries: [ClaudeShellDelivery], for sessionID: UUID) {
-        guard !deliveries.isEmpty, let data = try? JSONEncoder().encode(deliveries) else {
-            defaults.removeObject(forKey: shellDeliveriesKey(for: sessionID))
-            return
+        change(shellDeliveriesKey(for: sessionID)) { defaults, key in
+            guard !deliveries.isEmpty, let data = try? JSONEncoder().encode(deliveries) else {
+                defaults.removeObject(forKey: key)
+                return
+            }
+            defaults.set(data, forKey: key)
         }
-        defaults.set(data, forKey: shellDeliveriesKey(for: sessionID))
+    }
+
+    /// Encodes and sets or removes `key` on the writer's queue.
+    private func change(_ key: String, _ apply: @escaping @Sendable (UserDefaults, String) -> Void) {
+        nonisolated(unsafe) let defaults = defaults
+        StateFileWriter.shared.write(key, in: defaults) { apply(defaults, key) }
     }
 
     private func pausedKey(for sessionID: UUID) -> String {
