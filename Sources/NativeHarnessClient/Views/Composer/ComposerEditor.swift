@@ -342,7 +342,11 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
                     return .ignored
                 }
                 fieldContext.composedReturn = nil
-                guard key != .send else { return .ignored }
+                // A typed list's row takes a plain Return here, as it takes Tab. The field can go on
+                // calling the `onSubmit` of an earlier evaluation until its text changes, and that
+                // one chooses from the list as it was then: nothing, when the list was read after
+                // the last keystroke.
+                guard key != .send || typedListTakesReturn else { return .ignored }
                 takeReturn(key)
                 return .handled
             }
@@ -419,6 +423,11 @@ struct ComposerEditor<Draft: ComposerDraftEditing, Header: View, Chips: View, Fo
         }
         fileMentions.moveHighlight(by: offset)
         return .handled
+    }
+
+    /// Whether a typed list shows whose row takes a Return (`takeReturn`).
+    private var typedListTakesReturn: Bool {
+        typedCommandQuery != nil || (typedMention != nil && fileMentions.highlightedMatch != nil)
     }
 
     /// One Return, after any composition: a typed list's row takes it whatever its modifiers,
