@@ -95,18 +95,49 @@ final class CodexProcessTransportTests: XCTestCase {
     }
 
     /// An App Server that exits while a request waits ends that request with its exit status and
-    /// the last thing it wrote to stderr.
+    /// the last thing it wrote to stderr. Its exit ends only what was sent to it: a request that
+    /// started the App Server again before that exit was reported is answered by the new one.
     func testAnAppServerThatExitsEndsTheWaitingRequestWithItsOwnWords() async throws {
-        let executable = try script("""
+        let executable = try script(#"""
         #!/bin/sh
+        if [ ! -e "$0.started" ]; then
+          touch "$0.started"
+          # Something it started keeps its output open, so its exit is reported only after the drain grace.
+          sleep 30 &
+          printf '%s' $! > "$0.child"
+          IFS= read -r request
+          touch "$0.read"
+          echo 'fatal: state database is locked' >&2
+          exit 3
+        fi
         IFS= read -r request
-        echo 'fatal: state database is locked' >&2
-        exit 3
-        """)
-        defer { try? FileManager.default.removeItem(at: executable.deletingLastPathComponent()) }
+        i=0
+        while [ ! -e "$0.answer" ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i + 1)); done
+        printf '%s\n' '{"id":22,"result":{"restarted":true}}'
+        """#)
+        defer {
+            if let child = try? String(contentsOf: URL(filePath: executable.path + ".child"), encoding: .utf8),
+               let pid = pid_t(child) {
+                kill(pid, SIGKILL)
+            }
+            try? FileManager.default.removeItem(at: executable.deletingLastPathComponent())
+        }
         let transport = CodexProcessTransport(executableURL: executable, requestTimeout: .seconds(20))
+        let first = Task { try await transport.request(.init(id: 21, method: "thread/resume", params: .object([:]))) }
+        try await waitUntil { FileManager.default.fileExists(atPath: executable.path + ".read") }
+        // The App Server has ended; its exit waits for the output its child keeps open.
+        try await waitUntil {
+            do {
+                try await transport.sendResponse(.init(id: .integer(0), result: .null))
+                return false
+            } catch {
+                return error is HarnessAdapterError
+            }
+        }
+        let second = Task { try await transport.request(.init(id: 22, method: "thread/list", params: .object([:]))) }
+
         do {
-            _ = try await transport.request(.init(id: 21, method: "thread/resume", params: .object([:])))
+            _ = try await first.value
             XCTFail("A request whose App Server exited must not report success")
         } catch let error as HarnessAdapterError {
             guard case let .processExited(code, message) = error else { return XCTFail("\(error)") }
@@ -114,6 +145,10 @@ final class CodexProcessTransportTests: XCTestCase {
             XCTAssertTrue(message.contains("fatal: state database is locked"), message)
             XCTAssertTrue(error.localizedDescription.contains("fatal: state database is locked"))
         }
+        // The second App Server answers only now, after the first one's exit was reported.
+        FileManager.default.createFile(atPath: executable.path + ".answer", contents: nil)
+        let response = try await second.value
+        XCTAssertEqual(response.result?["restarted"], .bool(true))
         await transport.stop()
     }
 
