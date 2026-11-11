@@ -29,21 +29,9 @@ actor CodexProcessTransport: CodexTransport {
     private let notificationStream: AsyncStream<CodexRawFrame>
     private let notificationContinuation: AsyncStream<CodexRawFrame>.Continuation
 
-    private var process: Process?
-    private var stdinHandle: FileHandle?
-    private var stdoutHandle: FileHandle?
-    private var stderrHandle: FileHandle?
-    private var chunkContinuation: AsyncStream<Data>.Continuation?
+    private var channel: LineDelimitedProcessChannel?
     private var readerTask: Task<Void, Never>?
-    /// The reader has seen the end of the process's stdout.
-    private var stdoutReachedEnd = false
-    private var stderrContinuation: AsyncStream<Data>.Continuation?
-    private var stderrTask: Task<Void, Never>?
-    /// The stderr reader has seen the end of the process's stderr.
-    private var stderrReachedEnd = false
     private var pending: [Int64: PendingRequest] = [:]
-    private var stdoutBuffer = Data()
-    private var stderrBuffer = Data()
     private var stopped = false
     /// The App Server row its process tree counts toward in Task Resource Usage, when it serves tasks.
     private let resourceOwner: TaskResourceOwner?
@@ -70,7 +58,7 @@ actor CodexProcessTransport: CodexTransport {
 
     func start() async throws {
         await LoginShellPath.ready()
-        if let process, process.isRunning { return }
+        if let channel, channel.isRunning { return }
         guard !stopped else {
             throw HarnessAdapterError.processExited(
                 code: -1,
@@ -78,60 +66,22 @@ actor CodexProcessTransport: CodexTransport {
             )
         }
 
-        let process = Process()
-        let stdinPipe = Pipe.childInput()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.executableURL = executableURL
-        process.arguments = ["app-server", "--stdio"]
-        if let environmentManager {
-            process.environment = try await environmentManager.processEnvironment(
-                scope: environmentScope
-            ).values
-        }
-        process.standardInput = stdinPipe
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        let chunks = AsyncStream<Data>.makeStream()
-        chunkContinuation = chunks.continuation
-        stdoutPipe.fileHandleForReading.readChunks(into: chunks.continuation)
-        let errors = AsyncStream<Data>.makeStream()
-        stderrContinuation = errors.continuation
-        stderrPipe.fileHandleForReading.readChunks(into: errors.continuation)
-        let owner = resourceOwner
-        let registry = processRegistry
-        process.terminationHandler = { [weak self] process in
-            if let owner { registry.unregister(process.processIdentifier, owner: owner) }
-            Task { await self?.processDidTerminate(code: process.terminationStatus) }
-        }
-
-        do {
-            try NativeProcessTree.run(process)
-        } catch {
-            stdoutPipe.fileHandleForReading.readabilityHandler = nil
-            stderrPipe.fileHandleForReading.readabilityHandler = nil
-            throw error
-        }
-        if let owner, process.isRunning { registry.register(process.processIdentifier, owner: owner) }
-
-        self.process = process
-        stdinHandle = stdinPipe.fileHandleForWriting
-        stdoutHandle = stdoutPipe.fileHandleForReading
-        stderrHandle = stderrPipe.fileHandleForReading
-        stdoutReachedEnd = false
+        // Without a manager the App Server starts with Yardlet's own environment.
+        let environment = try await environmentManager?.processEnvironment(scope: environmentScope).values
+        let channel = try LineDelimitedProcessChannel(
+            .init(executableURL: executableURL,
+                  arguments: ["app-server", "--stdio"],
+                  environment: environment,
+                  resourceOwner: resourceOwner,
+                  processRegistry: processRegistry),
+            stderrLimit: 16 * 1024
+        )
+        self.channel = channel
+        let events = channel.events
         readerTask = Task { [weak self] in
-            for await chunk in chunks.stream {
-                await self?.acceptStdoutChunk(chunk)
+            for await event in events {
+                await self?.accept(event)
             }
-            await self?.stdoutDidEnd()
-        }
-        stderrReachedEnd = false
-        stderrTask = Task { [weak self] in
-            for await data in errors.stream {
-                await self?.appendStderr(data)
-            }
-            await self?.stderrDidEnd()
         }
     }
 
@@ -155,7 +105,7 @@ actor CodexProcessTransport: CodexTransport {
             )
 
             do {
-                try stdinHandle?.write(contentsOf: data)
+                try channel?.write(data)
             } catch {
                 timeoutTask.cancel()
                 pending.removeValue(forKey: id)
@@ -165,23 +115,11 @@ actor CodexProcessTransport: CodexTransport {
     }
 
     func sendResponse(_ response: CodexRPCResponse) async throws {
-        guard process?.isRunning == true else {
-            throw HarnessAdapterError.processExited(
-                code: process?.terminationStatus ?? -1,
-                message: "Codex App Server is not running"
-            )
-        }
-        try stdinHandle?.write(contentsOf: codec.encodeLine(response))
+        try runningChannel().write(codec.encodeLine(response))
     }
 
     func sendErrorResponse(_ response: CodexRPCErrorResponse) async throws {
-        guard process?.isRunning == true else {
-            throw HarnessAdapterError.processExited(
-                code: process?.terminationStatus ?? -1,
-                message: "Codex App Server is not running"
-            )
-        }
-        try stdinHandle?.write(contentsOf: codec.encodeLine(response))
+        try runningChannel().write(codec.encodeLine(response))
     }
 
     func notifications() async -> AsyncStream<CodexRawFrame> {
@@ -191,26 +129,8 @@ actor CodexProcessTransport: CodexTransport {
     func stop() async {
         guard !stopped else { return }
         stopped = true
-
-        stdoutHandle?.readabilityHandler = nil
-        stderrHandle?.readabilityHandler = nil
-        chunkContinuation?.finish()
         readerTask?.cancel()
-        stderrContinuation?.finish()
-        try? stdinHandle?.close()
-
-        let exitCode: Int32
-        if let process {
-            if process.isRunning {
-                exitCode = NativeProcessTree.terminate(process: process)
-            } else {
-                exitCode = process.terminationStatus
-            }
-            if let resourceOwner { processRegistry.unregister(process.processIdentifier, owner: resourceOwner) }
-        } else {
-            exitCode = 0
-        }
-
+        let exitCode = channel?.stop() ?? 0
         failPending(
             HarnessAdapterError.processExited(
                 code: exitCode,
@@ -220,20 +140,19 @@ actor CodexProcessTransport: CodexTransport {
         notificationContinuation.finish()
     }
 
-    private func acceptStdoutChunk(_ chunk: Data) {
-        // Only the new chunk can hold the end of the line being read: a large response (a whole
-        // thread with its turns) arrives in many chunks, and looking through everything buffered on
-        // each of them made reading it grow with the square of its size.
-        let scanned = stdoutBuffer.count
-        stdoutBuffer.append(chunk)
-        var searchStart = stdoutBuffer.startIndex + scanned
+    private func runningChannel() throws -> LineDelimitedProcessChannel {
+        guard let channel, channel.isRunning else {
+            throw HarnessAdapterError.processExited(
+                code: channel?.exitCode ?? -1,
+                message: "Codex App Server is not running"
+            )
+        }
+        return channel
+    }
 
-        while let newline = stdoutBuffer[searchStart...].firstIndex(of: 0x0A) {
-            let line = Data(stdoutBuffer[..<newline])
-            stdoutBuffer.removeSubrange(...newline)
-            searchStart = stdoutBuffer.startIndex
-            guard !line.isEmpty else { continue }
-
+    private func accept(_ event: LineDelimitedProcessChannel.Event) {
+        switch event {
+        case let .line(line):
             do {
                 let message = try codec.decodeLine(line)
                 accept(message: message, rawData: line)
@@ -252,6 +171,9 @@ actor CodexProcessTransport: CodexTransport {
                     )
                 )
             }
+        case let .exited(code, stderr):
+            failPending(HarnessAdapterError.processExited(code: code, message: stderr))
+            notificationContinuation.finish()
         }
     }
 
@@ -282,35 +204,6 @@ actor CodexProcessTransport: CodexTransport {
                             pendingRequest.method, requestTimeout.components.seconds)
             )
         )
-    }
-
-    private func stdoutDidEnd() { stdoutReachedEnd = true }
-
-    private func stderrDidEnd() { stderrReachedEnd = true }
-
-    private func appendStderr(_ data: Data) {
-        stderrBuffer.append(data)
-        let limit = 16 * 1024
-        if stderrBuffer.count > limit {
-            stderrBuffer.removeFirst(stderrBuffer.count - limit)
-        }
-    }
-
-    private func processDidTerminate(code: Int32) async {
-        // A response written just before the process exits can still be in the pipe when the exit
-        // is reported, and so can its last words on stderr. Let the readers reach the pipes' ends by
-        // themselves, then drain buffered frames before publishing notification EOF; a child holding
-        // a pipe open is given one second.
-        for _ in 0..<100 where (readerTask != nil && !stdoutReachedEnd) || (stderrTask != nil && !stderrReachedEnd) {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        chunkContinuation?.finish()
-        await readerTask?.value
-        stderrContinuation?.finish()
-        await stderrTask?.value
-        let message = String(data: stderrBuffer, encoding: .utf8) ?? ""
-        failPending(HarnessAdapterError.processExited(code: code, message: message))
-        notificationContinuation.finish()
     }
 
     private func failPending(_ error: Error) {
