@@ -73,6 +73,8 @@ enum SidebarTaskStatus: Equatable, Sendable {
 /// One mark at the end of a sidebar row. The row draws `SidebarTaskIndicatorProjection
 /// .trailingItems` in order, so a new mark is one more case there, placed by that function.
 enum SidebarRowTrailingItem: Equatable, Sendable {
+    /// The task was started by a scheduled task.
+    case scheduled
     /// The Codex worktree mark: the task runs in a linked worktree.
     case worktree
     /// The task's pull request while it still needs something (`TaskPullRequestRowMark`).
@@ -116,12 +118,14 @@ enum SidebarTaskIndicatorProjection {
     /// Everything a row shows at its end, in order: the worktree mark, the pull request, the CPU,
     /// then the state.
     static func trailingItems(
+        isScheduledRun: Bool = false,
         isWorktree: Bool = false,
         pullRequest: TaskPullRequestRowMark? = nil,
         cpuPercent: Int? = nil,
         status: SidebarTaskStatus?
     ) -> [SidebarRowTrailingItem] {
         var items: [SidebarRowTrailingItem] = []
+        if isScheduledRun { items.append(.scheduled) }
         if isWorktree { items.append(.worktree) }
         if let pullRequest { items.append(.pullRequest(pullRequest)) }
         if let cpuPercent { items.append(.cpu(cpuPercent)) }

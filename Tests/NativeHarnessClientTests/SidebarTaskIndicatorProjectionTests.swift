@@ -136,8 +136,9 @@ final class SidebarTaskIndicatorProjectionTests: XCTestCase {
     }
 
     func testTheRowEndListsItsMarksInOneOrder() {
-        XCTAssertEqual(SidebarTaskIndicatorProjection.trailingItems(isWorktree: true, cpuPercent: 142, status: .running),
-                       [.worktree, .cpu(142), .status(.running)])
+        XCTAssertEqual(SidebarTaskIndicatorProjection.trailingItems(isScheduledRun: true, isWorktree: true, cpuPercent: 142,
+                                                                    status: .running),
+                       [.scheduled, .worktree, .cpu(142), .status(.running)])
         XCTAssertEqual(SidebarTaskIndicatorProjection.trailingItems(cpuPercent: 64, status: .awaitingApproval),
                        [.cpu(64), .status(.awaitingApproval)], "The CPU stays beside any state")
         XCTAssertEqual(SidebarTaskIndicatorProjection.trailingItems(status: .unread), [.status(.unread)])
