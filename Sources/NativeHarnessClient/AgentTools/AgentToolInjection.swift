@@ -96,12 +96,7 @@ struct AgentToolServerLaunch: Equatable, Sendable {
         let url = privateDirectory.appending(path: "claude-\(localSessionID.uuidString.lowercased()).json")
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(claudeConfig)
-        let path = url.path(percentEncoded: false)
-        if FileManager.default.fileExists(atPath: path) { try FileManager.default.removeItem(at: url) }
-        guard FileManager.default.createFile(atPath: path, contents: data, attributes: [.posixPermissions: 0o600]) else {
-            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: path])
-        }
+        try StateFile.write(encoder.encode(claudeConfig), to: url, isPrivate: true)
         return url
     }
 }

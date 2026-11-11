@@ -608,16 +608,10 @@ final class SessionToolCenter {
                                   startedAt: run.startedAt, state: run.state.word, answer: run.answer,
                                   entries: run.codexState.map(CodexTranscriptSnapshotProjection.entries(from:))
                                       ?? run.entries)
-        do {
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
-                                                    attributes: [.posixPermissions: 0o700])
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            let data = try encoder.encode(record)
-            let url = folder.appending(path: "\(run.id.uuidString.lowercased()).json")
-            FileManager.default.createFile(atPath: url.path(percentEncoded: false), contents: data,
-                                           attributes: [.posixPermissions: 0o600])
-        } catch {}
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try? StateFile.write(encoder.encode(record), to: folder.appending(path: "\(run.id.uuidString.lowercased()).json"),
+                             isPrivate: true)
     }
 }
 

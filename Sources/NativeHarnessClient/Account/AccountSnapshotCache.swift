@@ -108,10 +108,7 @@ struct AccountSnapshotCache {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             encoder.outputFormatting = [.sortedKeys]
-            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            try encoder.encode(file).write(to: fileURL, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+            try StateFile.write(encoder.encode(file), to: fileURL, isPrivate: true)
         }
     }
 }

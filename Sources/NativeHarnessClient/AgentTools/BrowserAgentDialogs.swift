@@ -99,8 +99,7 @@ enum BrowserAgentWorkspaceFile {
         try FileManager.default.createDirectory(at: place, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
         let copy = place.appending(path: name)
-        guard FileManager.default.createFile(atPath: copy.path(percentEncoded: false), contents: nil,
-                                             attributes: [.posixPermissions: 0o600]) else {
+        do { try StateFile.write(Data(), to: copy, isPrivate: true) } catch {
             throw BrowserAgentToolError("Yardlet could not prepare \(name) for the upload.")
         }
         let output = try FileHandle(forWritingTo: copy)

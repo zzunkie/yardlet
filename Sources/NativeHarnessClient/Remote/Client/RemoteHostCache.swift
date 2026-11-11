@@ -202,8 +202,8 @@ final class RemoteHostCache {
         try? files.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path(percentEncoded: false))
         let encoder = JSONEncoder()
         func put(_ data: Data?, at url: URL) {
-            guard let data, (try? data.write(to: url, options: [.atomic])) != nil else { return }
-            try? files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path(percentEncoded: false))
+            guard let data else { return }
+            try? StateFile.write(data, to: url, isPrivate: true)
         }
         for page in pages { put(try? encoder.encode(page), at: file(for: page.taskID, in: folder)) }
         for taskID in gone { try? files.removeItem(at: file(for: taskID, in: folder)) }

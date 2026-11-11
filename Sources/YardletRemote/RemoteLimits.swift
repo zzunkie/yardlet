@@ -169,11 +169,8 @@ public final class RemoteAuditLog: @unchecked Sendable {
             encoder.outputFormatting = [.sortedKeys]
             guard var line = try? encoder.encode(entry) else { return }
             line.append(0x0A)
-            let manager = FileManager.default
-            try? manager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true,
-                                         attributes: [.posixPermissions: 0o700])
-            if !manager.fileExists(atPath: fileURL.path) {
-                manager.createFile(atPath: fileURL.path, contents: nil, attributes: [.posixPermissions: 0o600])
+            if !FileManager.default.fileExists(atPath: fileURL.path) {
+                try? RemotePrivateFile.write(Data(), to: fileURL)
             }
             guard let handle = try? FileHandle(forWritingTo: fileURL) else { return }
             defer { try? handle.close() }
@@ -185,8 +182,7 @@ public final class RemoteAuditLog: @unchecked Sendable {
                 let lines = data.split(separator: 0x0A, omittingEmptySubsequences: true)
                 if lines.count > keptLines + keptLines / 4 {
                     let kept = lines.suffix(keptLines).joined(separator: [0x0A]) + [0x0A]
-                    try? Data(kept).write(to: fileURL, options: .atomic)
-                    try? manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+                    try? RemotePrivateFile.write(Data(kept), to: fileURL)
                     nextTrimCheck = 0
                 } else {
                     nextTrimCheck = size + size / 4

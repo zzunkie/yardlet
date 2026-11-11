@@ -57,10 +57,7 @@ enum ComposerAttachmentIntake {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: privateFolder)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: privateFolder)
         let file = folder.appending(path: "image.\(fileExtension)")
-        guard FileManager.default.createFile(
-            atPath: file.path(percentEncoded: false), contents: data,
-            attributes: [.posixPermissions: 0o600]
-        ) else { throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: file.path(percentEncoded: false)]) }
+        try StateFile.write(data, to: file, isPrivate: true)
         return file
     }
 }

@@ -737,10 +737,7 @@ final class ProviderConnectionStore {
     }
 
     private static func write(_ connections: [ProviderConnection], to fileURL: URL) throws {
-        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700])
-        try JSONEncoder().encode(connections).write(to: fileURL, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        try StateFile.write(JSONEncoder().encode(connections), to: fileURL, isPrivate: true)
     }
 
     /// Shows a saved account's reading that was read outside `check(...)`; a check of that account

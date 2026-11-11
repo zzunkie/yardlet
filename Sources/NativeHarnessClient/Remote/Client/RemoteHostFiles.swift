@@ -117,8 +117,7 @@ final class RemoteHostFiles {
                                         attributes: [.posixPermissions: 0o700])
             try? manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path(percentEncoded: false))
             let url = directory.appending(path: safe)
-            guard manager.createFile(atPath: url.path(percentEncoded: false), contents: nil,
-                                     attributes: [.posixPermissions: 0o600]) else { return nil }
+            try StateFile.write(Data(), to: url, isPrivate: true)
             return (url, try FileHandle(forWritingTo: url))
         } catch {
             return nil

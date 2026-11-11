@@ -183,10 +183,7 @@ actor RoutingLedgerWriter {
         line.append(0x0A)
         let manager = FileManager.default
         if !manager.fileExists(atPath: url.path(percentEncoded: false)) {
-            try? manager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
-                                         attributes: [.posixPermissions: 0o700])
-            manager.createFile(atPath: url.path(percentEncoded: false), contents: nil,
-                               attributes: [.posixPermissions: 0o600])
+            try? StateFile.write(Data(), to: url, isPrivate: true)
         }
         guard let handle = try? FileHandle(forWritingTo: url) else { return }
         defer { try? handle.close() }
@@ -207,8 +204,7 @@ actor RoutingLedgerWriter {
     }
 
     private static func writePrivately(_ data: Data, to url: URL) {
-        try? data.write(to: url, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path(percentEncoded: false))
+        try? StateFile.write(data, to: url, isPrivate: true)
     }
 
     /// Removes the ledger's folder and everything in it.

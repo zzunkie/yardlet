@@ -187,19 +187,20 @@ final class PersonalAgentDraft {
             try manager.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path(percentEncoded: false))
             switch incoming {
-            case let .file(source): try manager.copyItem(at: source.url, to: target)
-            case .data: try bytes.write(to: target, options: .withoutOverwriting)
+            case let .file(source):
+                try manager.copyItem(at: source.url, to: target)
+                try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path(percentEncoded: false))
+            case .data: try StateFile.write(bytes, to: target, isPrivate: true)
             }
-            try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path(percentEncoded: false))
             // The size of what was copied, which the original may have changed since it was measured.
             guard let size = try target.resourceValues(forKeys: [.fileSizeKey]).fileSize,
                   PersonalAgentFileRules.accepts(size: size) else { throw CocoaError(.fileReadTooLarge) }
             let mimeType = PersonalAgentFileRules.mimeType(name: name, declared: declared)
             // What the copy is, beside it, so a copy the draft could not save yet is not lost on restart.
             let note = folder.appending(path: noteName)
-            try JSONEncoder().encode(SavedFile(id: id, name: name, mimeType: mimeType, sizeBytes: size,
-                                               copyName: copyName, uploaded: nil)).write(to: note, options: .withoutOverwriting)
-            try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: note.path(percentEncoded: false))
+            try StateFile.write(JSONEncoder().encode(SavedFile(id: id, name: name, mimeType: mimeType, sizeBytes: size,
+                                                               copyName: copyName, uploaded: nil)),
+                                to: note, isPrivate: true)
             return .init(id: id, name: name, mimeType: mimeType, sizeBytes: size, copy: target, state: .queued)
         } catch {
             try? manager.removeItem(at: folder)
@@ -417,8 +418,7 @@ final class PersonalAgentDraft {
             let attached = !saved.isEmpty || pending?.attachments.isEmpty == false
             let version = pending?.replyTarget != nil ? 3 : attached ? 2 : 1
             let record = Record(version: version, text: editor.text, pending: pending, files: attached ? saved : nil)
-            try JSONEncoder().encode(record).write(to: file, options: .atomic)
-            try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+            try StateFile.write(JSONEncoder().encode(record), to: file, isPrivate: true)
             storageFailed = false
             let kept = Set(files.map { $0.copy.deletingLastPathComponent().lastPathComponent })
             for folder in discarded where !kept.contains(folder.lastPathComponent) { try? manager.removeItem(at: folder) }

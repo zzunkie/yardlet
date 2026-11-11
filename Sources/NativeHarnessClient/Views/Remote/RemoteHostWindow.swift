@@ -810,13 +810,8 @@ final class RemoteComposerDrafts {
         if !newText.isEmpty { words[Self.newTaskKey] = newText }
         guard words != savedWords else { return }
         savedWords = words
-        let manager = FileManager.default
-        let folder = file.deletingLastPathComponent()
-        if !manager.fileExists(atPath: folder.path(percentEncoded: false)) {
-            try? manager.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        }
         guard let data = try? JSONEncoder().encode(words) else { return }
-        manager.createFile(atPath: file.path(percentEncoded: false), contents: data, attributes: [.posixPermissions: 0o600])
+        try? StateFile.write(data, to: file, isPrivate: true)
     }
 }
 

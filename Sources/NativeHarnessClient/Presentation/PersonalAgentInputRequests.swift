@@ -211,8 +211,7 @@ final class PersonalAgentOptionReply {
             try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             if let pending {
                 let record = Record(version: threadRootID == nil ? 1 : 2, pending: pending, threadRootID: threadRootID)
-                try JSONEncoder().encode(record).write(to: file, options: .atomic)
-                try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+                try StateFile.write(JSONEncoder().encode(record), to: file, isPrivate: true)
             } else if manager.fileExists(atPath: file.path) {
                 try manager.removeItem(at: file)
             }

@@ -151,10 +151,7 @@ public final class RemoteHostStore: @unchecked Sendable {
                 // The file goes with its last host.
                 if manager.fileExists(atPath: fileURL.path) { try manager.removeItem(at: fileURL) }
             } else {
-                try manager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true,
-                                            attributes: [.posixPermissions: 0o700])
-                try JSONEncoder.remoteDates.encode(File(hosts: hosts)).write(to: fileURL, options: [.atomic])
-                try? manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+                try RemotePrivateFile.write(JSONEncoder.remoteDates.encode(File(hosts: hosts)), to: fileURL)
             }
         } catch {
             saved = false

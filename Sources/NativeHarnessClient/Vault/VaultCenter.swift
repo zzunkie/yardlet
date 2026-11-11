@@ -121,8 +121,7 @@ struct FileVaultRepository: VaultRepository {
         lines.removeAll { $0.at < cutoff }
         let text = lines.compactMap { try? Self.encoder.encode($0) }
             .compactMap { String(data: $0, encoding: .utf8) }.joined(separator: "\n") + "\n"
-        try? Data(text.utf8).write(to: usesURL, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: usesURL.path(percentEncoded: false))
+        try? StateFile.write(Data(text.utf8), to: usesURL, isPrivate: true)
     }
 
     private func readUses() -> [VaultUse] {

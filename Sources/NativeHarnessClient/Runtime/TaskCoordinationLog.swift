@@ -71,14 +71,13 @@ final class TaskCoordinationLog: @unchecked Sendable {
             kept = Data(kept.suffix(limit / 2))
             if let line = kept.firstIndex(of: 0x0A) { kept = Data(kept[kept.index(after: line)...]) }
             kept.append(data)
-            try? kept.write(to: file, options: .atomic)
+            try? StateFile.write(kept, to: file, isPrivate: true)
         } else if let handle = try? FileHandle(forWritingTo: file) {
             defer { try? handle.close() }
             _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: data)
         } else {
-            try? data.write(to: file, options: .atomic)
+            try? StateFile.write(data, to: file, isPrivate: true)
         }
-        try? manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
     }
 }

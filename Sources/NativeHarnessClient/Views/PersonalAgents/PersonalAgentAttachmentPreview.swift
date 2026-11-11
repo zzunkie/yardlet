@@ -16,8 +16,7 @@ final class PersonalAgentPreviewFile: Identifiable {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
                                                attributes: [.posixPermissions: 0o700])
         do {
-            try download.data.write(to: url, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            try StateFile.write(download.data, to: url, isPrivate: true)
         } catch {
             try? FileManager.default.removeItem(at: directory)
             throw error

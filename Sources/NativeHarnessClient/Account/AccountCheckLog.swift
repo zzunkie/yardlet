@@ -69,8 +69,7 @@ enum AccountCheckLog {
                 if let line = kept.firstIndex(of: 0x0A) { kept = Data(kept[kept.index(after: line)...]) }
             }
             kept.append(data)
-            try? kept.write(to: file, options: .atomic)
-            try? manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path(percentEncoded: false))
+            try? StateFile.write(kept, to: file, isPrivate: true)
         }
     }
 

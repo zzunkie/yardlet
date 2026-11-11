@@ -48,7 +48,7 @@ enum StateFile {
     /// Writes `file`'s contents now, on the caller's thread, making its folder; nil removes the file.
     /// For a store that writes on a queue of its own, which then calls `report`. A store that keeps its
     /// own file outside the app, as the paired computers' does, follows the same rule and calls `report`
-    /// and `reportUnreadable`.
+    /// and `reportUnreadable`. Any other file Yardlet keeps to the person is written here with `isPrivate`.
     static func write(_ contents: Data?, to file: URL, isPrivate: Bool = false) throws {
         let manager = FileManager.default
         guard let contents else {
@@ -57,10 +57,38 @@ enum StateFile {
         }
         try manager.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true,
                                     attributes: isPrivate ? [.posixPermissions: 0o700] : nil)
-        try contents.write(to: file, options: .atomic)
         if isPrivate {
-            try? manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path(percentEncoded: false))
+            try writePrivately(contents, to: file)
+        } else {
+            try contents.write(to: file, options: .atomic)
         }
+    }
+
+    /// Replaces `file` with `contents` through a temporary file beside it that is readable by the person
+    /// alone (0600) from the moment it is created, then renamed over `file`. A file written and then
+    /// narrowed, as `Data.write` and `FileManager.createFile` do, has the process's default permissions
+    /// until it is narrowed. Like an atomic write, a reader sees the old contents or the new ones.
+    private static func writePrivately(_ contents: Data, to file: URL) throws {
+        #if os(Windows)
+        // Windows has no POSIX permissions to give the file.
+        try contents.write(to: file, options: .atomic)
+        #else
+        let temporary = file.deletingLastPathComponent()
+            .appending(path: ".\(file.lastPathComponent).\(UUID().uuidString).tmp").path(percentEncoded: false)
+        let descriptor = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        do {
+            let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+            try handle.write(contentsOf: contents)
+            try handle.close()
+            guard rename(temporary, file.path(percentEncoded: false)) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+        } catch {
+            unlink(temporary)
+            throw error
+        }
+        #endif
     }
 
     /// Notes whether a `write` of `file` succeeded, from any thread.

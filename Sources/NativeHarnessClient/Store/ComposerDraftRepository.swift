@@ -194,9 +194,7 @@ struct FileComposerDraftRepository: ComposerDraftRepository {
             try manager.createDirectory(at: directoryURL, withIntermediateDirectories: true,
                                         attributes: [.posixPermissions: 0o700])
             try manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directoryURL.path)
-            let data = try JSONEncoder().encode(snapshot)
-            try data.write(to: fileURL, options: .atomic)
-            try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+            try StateFile.write(JSONEncoder().encode(snapshot), to: fileURL, isPrivate: true)
         }
     }
 }

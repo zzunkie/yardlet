@@ -116,10 +116,7 @@ struct RemoteUploadStore {
             return .failure(RemoteError(.internal, "The file could not be written"))
         }
         do {
-            guard FileManager.default.createFile(atPath: upload.partial.path(percentEncoded: false), contents: part.data,
-                                                 attributes: [.posixPermissions: 0o600]) else {
-                throw CocoaError(.fileWriteUnknown)
-            }
+            try RemotePrivateFile.write(part.data, to: upload.partial)
             if upload.isFinished { try finish(upload) }
         } catch {
             // Only the folder this part made goes.
@@ -159,8 +156,7 @@ struct RemoteUploadStore {
     mutating func release(_ ids: [String]) {
         for id in ids {
             guard let upload = uploads.removeValue(forKey: id.uppercased()) else { continue }
-            FileManager.default.createFile(atPath: upload.taken.path(percentEncoded: false), contents: nil,
-                                           attributes: [.posixPermissions: 0o600])
+            try? RemotePrivateFile.write(Data(), to: upload.taken)
         }
     }
 
@@ -208,6 +204,5 @@ struct RemoteUploadStore {
 
     private func finish(_ upload: Upload) throws {
         try FileManager.default.moveItem(at: upload.partial, to: upload.file)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: upload.file.path(percentEncoded: false))
     }
 }

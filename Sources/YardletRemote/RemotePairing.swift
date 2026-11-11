@@ -1,12 +1,5 @@
 import Crypto
 import Foundation
-#if canImport(Darwin)
-import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#elseif os(Windows)
-import WinSDK
-#endif
 #if canImport(Security)
 import Security
 #endif
@@ -457,7 +450,7 @@ public actor RemoteDeviceStore {
                     $0.deviceID == $1.deviceID ? $0.permission.rawValue < $1.permission.rawValue : $0.deviceID < $1.deviceID
                 }
                 let data = try JSONEncoder().encode(RecoveryFile(denied: sorted))
-                try Self.writePrivateData(data, to: recoveryFileURL)
+                try RemotePrivateFile.write(data, to: recoveryFileURL)
             }
             durableRecoveryDenials = denied
             return true
@@ -538,46 +531,7 @@ public actor RemoteDeviceStore {
 
     private static func writeChecked(_ devices: [RemoteDevice], to fileURL: URL?) throws {
         guard let fileURL else { return }
-        try writePrivateData(JSONEncoder.remoteDates.encode(File(devices: devices)), to: fileURL)
-    }
-
-    private static func writePrivateData(_ data: Data, to fileURL: URL) throws {
-        let folder = fileURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
-                                                attributes: [.posixPermissions: 0o700])
-        let temporary = folder.appendingPathComponent(".remote-state-" + UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        try Data().write(to: temporary, options: [.withoutOverwriting])
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporary.path)
-        let handle = try FileHandle(forWritingTo: temporary)
-        do {
-            try handle.write(contentsOf: data)
-            try handle.synchronize()
-            try handle.close()
-        } catch {
-            try? handle.close()
-            throw error
-        }
-        #if canImport(Darwin) || canImport(Glibc)
-        guard rename(temporary.path, fileURL.path) == 0 else {
-            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
-        }
-        #elseif os(Windows)
-        let source = Array(temporary.path.utf16) + [0]
-        let destination = Array(fileURL.path.utf16) + [0]
-        let replaced = source.withUnsafeBufferPointer { from in
-            destination.withUnsafeBufferPointer { to in
-                MoveFileExW(from.baseAddress, to.baseAddress, DWORD(MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-            }
-        }
-        guard replaced else { throw NSError(domain: "Win32", code: Int(GetLastError())) }
-        #else
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary, options: [.usingNewMetadataOnly])
-        } else {
-            try FileManager.default.moveItem(at: temporary, to: fileURL)
-        }
-        #endif
+        try RemotePrivateFile.write(JSONEncoder.remoteDates.encode(File(devices: devices)), to: fileURL)
     }
 
 }
