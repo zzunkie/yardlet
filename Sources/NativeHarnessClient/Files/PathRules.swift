@@ -60,6 +60,18 @@ struct PathRules: Equatable, Sendable {
         return path.names.dropFirst(folder.names.count).joined(separator: "/")
     }
 
+    /// `path` for comparing, never for showing: two spellings these rules read as one place give the same key. On
+    /// POSIX it is `path` itself, so a Mac compares paths as it always has. On Windows an absolute path is its root
+    /// and names with `.` and `..` taken out, each in the case NTFS compares it, so `C:\Repo`, `c:/repo/` and
+    /// `\\?\C:\Repo` are one key; any other path is its names folded the same way.
+    func key(_ path: String) -> String {
+        guard isWindows else { return path }
+        guard let parsed = parsed(path) else {
+            return names(path).map(Self.foldedName).joined(separator: "/")
+        }
+        return (parsed.root + parsed.names).map(Self.foldedName).joined(separator: "/")
+    }
+
     /// Whether `path` is `folder` or lies inside it.
     func isInside(_ path: String, folder: String) -> Bool {
         relativePath(of: path, in: folder) != nil
@@ -170,6 +182,12 @@ struct PathRules: Equatable, Sendable {
 
     private func same(_ first: String, _ second: String) -> Bool {
         isWindows ? Self.folded(first) == Self.folded(second) : first == second
+    }
+
+    private static func foldedName(_ name: String) -> String {
+        var view = String.UnicodeScalarView()
+        view.append(contentsOf: folded(name))
+        return String(view)
     }
 
     /// A Windows name as NTFS compares it: each UTF-16 character in its upper case where that is one character too,

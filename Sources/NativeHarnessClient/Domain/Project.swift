@@ -93,8 +93,8 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
     var hasMultipleRoots: Bool { roots.count > 1 }
 
     func contains(root: URL) -> Bool {
-        let path = ProjectSidebarPresentation.normalizedPath(for: root)
-        return roots.contains { ProjectSidebarPresentation.normalizedPath(for: $0) == path }
+        let key = ProjectSidebarPresentation.folderKey(for: root)
+        return roots.contains { ProjectSidebarPresentation.folderKey(for: $0) == key }
     }
 
     @discardableResult
@@ -132,8 +132,7 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
     }
 
     static func isSamePath(_ lhs: URL, _ rhs: URL) -> Bool {
-        ProjectSidebarPresentation.normalizedPath(for: lhs)
-            == ProjectSidebarPresentation.normalizedPath(for: rhs)
+        ProjectSidebarPresentation.folderKey(for: lhs) == ProjectSidebarPresentation.folderKey(for: rhs)
     }
 
     static func normalizedName(_ value: String, fallback: URL) -> String {
@@ -148,7 +147,7 @@ struct Project: Identifiable, Codable, Hashable, Sendable {
         var result: [URL] = []
         for url in urls {
             let canonical = Project.canonical(url)
-            guard seen.insert(canonical.path(percentEncoded: false)).inserted else { continue }
+            guard seen.insert(ProjectSidebarPresentation.folderKey(for: canonical)).inserted else { continue }
             result.append(canonical)
         }
         return result
@@ -192,15 +191,15 @@ enum ProjectProjection {
             var byPath: [String: Int] = [:]
             for (offset, project) in projects.enumerated() {
                 for root in project.roots {
-                    let path = ProjectSidebarPresentation.normalizedPath(for: root)
-                    if byPath[path] == nil { byPath[path] = offset }
+                    let key = ProjectSidebarPresentation.folderKey(for: root)
+                    if byPath[key] == nil { byPath[key] = offset }
                 }
             }
             self.byPath = byPath
         }
 
         func project(containing url: URL) -> Project? {
-            byPath[ProjectSidebarPresentation.normalizedPath(for: url)].map { projects[$0] }
+            byPath[ProjectSidebarPresentation.folderKey(for: url)].map { projects[$0] }
         }
 
         private static let lock = NSLock()
@@ -255,7 +254,7 @@ enum ProjectProjection {
             let project = project(for: session, in: projects)
             if project == nil, listsInChats(session, home: home) { continue }
             let groupURL = project?.primaryRoot ?? session.workspaceURL.standardizedFileURL
-            let key = ProjectSidebarPresentation.normalizedPath(for: groupURL)
+            let key = ProjectSidebarPresentation.folderKey(for: groupURL)
             urlByKey[key] = groupURL
             if let project { projectsByKey[key] = project }
             sessionsByKey[key, default: []].append(session)
@@ -305,16 +304,30 @@ enum ProjectProjection {
 }
 
 /// One spelling per folder path, shared by projects, tasks, and the sidebar so the same folder
-/// compares and renders identically wherever it appears.
+/// renders identically wherever it appears, and one key per folder, so it compares as the same
+/// folder however it was written.
 enum ProjectSidebarPresentation {
     /// The sidebar compares every task's folder with every project root on each redraw, and
     /// standardizing a URL is the costly part, so each spelling's answer is kept.
     static func normalizedPath(for workspaceURL: URL) -> String {
-        let key = workspaceURL.absoluteString
-        if let known = normalizedPaths.value(for: key) { return known }
+        folder(workspaceURL).path
+    }
+
+    /// The folder `workspaceURL` names, for deciding whether two folders are one (a task's project,
+    /// a sidebar group, the tasks in a folder) and never for showing: on Windows a folder written in
+    /// another case or with other separators is the same folder (`PathRules.key`). On macOS it is
+    /// `normalizedPath(for:)` itself.
+    static func folderKey(for workspaceURL: URL) -> String {
+        folder(workspaceURL).key
+    }
+
+    private static func folder(_ workspaceURL: URL) -> (path: String, key: String) {
+        let spelling = workspaceURL.absoluteString
+        if let known = normalizedPaths.value(for: spelling) { return known }
         let path = withoutTrailingSlash(workspaceURL.standardizedFileURL.path(percentEncoded: false))
-        normalizedPaths.set(path, for: key)
-        return path
+        let folder = (path: path, key: PathRules.current.key(path))
+        normalizedPaths.set(folder, for: spelling)
+        return folder
     }
 
     private static let normalizedPaths = NormalizedPaths()
@@ -323,16 +336,16 @@ enum ProjectSidebarPresentation {
     /// table starts over past `limit` so a long run of new folders cannot grow it without end.
     private final class NormalizedPaths: @unchecked Sendable {
         private let lock = NSLock()
-        private var values: [String: String] = [:]
+        private var values: [String: (path: String, key: String)] = [:]
         private let limit = 8_192
 
-        func value(for key: String) -> String? {
+        func value(for key: String) -> (path: String, key: String)? {
             lock.lock()
             defer { lock.unlock() }
             return values[key]
         }
 
-        func set(_ value: String, for key: String) {
+        func set(_ value: (path: String, key: String), for key: String) {
             lock.lock()
             defer { lock.unlock() }
             if values.count >= limit { values.removeAll(keepingCapacity: true) }

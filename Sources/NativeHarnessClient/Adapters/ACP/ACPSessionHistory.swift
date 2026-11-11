@@ -104,7 +104,7 @@ struct ACPSessionHistory: Sendable {
     static func conversation(_ session: JSONValue, harness: HarnessKind, in workspaceURL: URL) -> ImportableConversation? {
         guard let id = session["sessionId"]?.stringValue, !id.isEmpty else { return nil }
         let folder = session["cwd"]?.stringValue.map { URL(filePath: $0, directoryHint: .isDirectory) } ?? workspaceURL
-        guard path(of: folder) == path(of: workspaceURL) else { return nil }
+        guard key(of: folder) == key(of: workspaceURL) else { return nil }
         let title = session["title"]?.stringValue?.split(whereSeparator: \.isNewline).first
             .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
         return ImportableConversation(harness: harness, providerSessionID: id,
@@ -121,8 +121,8 @@ struct ACPSessionHistory: Sendable {
         return value?.doubleValue.map { Date(timeIntervalSince1970: $0 > 1e12 ? $0 / 1_000 : $0) }
     }
 
-    private static func path(of folder: URL) -> String {
-        ProjectSidebarPresentation.normalizedPath(for: folder.resolvingSymlinksInPath())
+    private static func key(of folder: URL) -> String {
+        ProjectSidebarPresentation.folderKey(for: folder.resolvingSymlinksInPath())
     }
 }
 

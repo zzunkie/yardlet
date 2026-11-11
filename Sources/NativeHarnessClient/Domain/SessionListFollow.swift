@@ -118,12 +118,12 @@ enum SessionListFollow {
     /// conversation's last activity. A native Codex task's thread is listed as soon as it starts,
     /// a moment before the task records its ID; it is left for the next pass.
     static func mayBeStarting(_ conversation: ImportableConversation, tasks: [SessionRecord], now: Date) -> Bool {
-        let folder = ProjectSidebarPresentation.normalizedPath(for: conversation.workspaceURL)
+        let folder = ProjectSidebarPresentation.folderKey(for: conversation.workspaceURL)
         return tasks.contains { task in
             task.harness == conversation.harness && task.providerSessionID == nil
                 && now.timeIntervalSince(task.createdAt) < interval
                 && task.createdAt <= conversation.updatedAt.addingTimeInterval(60)
-                && ProjectSidebarPresentation.normalizedPath(for: task.workspaceURL) == folder
+                && ProjectSidebarPresentation.folderKey(for: task.workspaceURL) == folder
         }
     }
 

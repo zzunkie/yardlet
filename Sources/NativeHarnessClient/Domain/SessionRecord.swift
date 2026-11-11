@@ -209,10 +209,9 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
     /// A folder is never its own origin, and a blank value is the same as no record at all.
     private static func normalizedOrigin(_ value: String?, excluding workspaceURL: URL) -> String? {
         guard let label = normalizedLabel(value) else { return nil }
-        let origin = ProjectSidebarPresentation.normalizedPath(
-            for: URL(filePath: label, directoryHint: .isDirectory)
-        )
-        return origin == ProjectSidebarPresentation.normalizedPath(for: workspaceURL) ? nil : origin
+        let origin = URL(filePath: label, directoryHint: .isDirectory)
+        guard !Project.isSamePath(origin, workspaceURL) else { return nil }
+        return ProjectSidebarPresentation.normalizedPath(for: origin)
     }
 
     private static func normalizedLabel(_ value: String?) -> String? {
@@ -222,15 +221,12 @@ struct SessionRecord: Identifiable, Codable, Hashable, Sendable {
     }
 
     private static func normalizedRoots(_ roots: [String], excluding workspaceURL: URL) -> [String] {
-        let cwd = ProjectSidebarPresentation.normalizedPath(for: workspaceURL)
-        var seen: Set<String> = [cwd]
+        var seen: Set<String> = [ProjectSidebarPresentation.folderKey(for: workspaceURL)]
         var result: [String] = []
         for root in roots {
-            let path = ProjectSidebarPresentation.normalizedPath(
-                for: URL(filePath: root, directoryHint: .isDirectory)
-            )
-            guard seen.insert(path).inserted else { continue }
-            result.append(path)
+            let url = URL(filePath: root, directoryHint: .isDirectory)
+            guard seen.insert(ProjectSidebarPresentation.folderKey(for: url)).inserted else { continue }
+            result.append(ProjectSidebarPresentation.normalizedPath(for: url))
         }
         return result
     }

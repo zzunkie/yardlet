@@ -68,7 +68,7 @@ private actor GitLeftWorkReadings {
     private let git = GitDiffService(processTimeout: .seconds(10))
 
     func reading(of folder: URL) async -> GitLeftWork? {
-        let key = ProjectSidebarPresentation.normalizedPath(for: folder)
+        let key = ProjectSidebarPresentation.folderKey(for: folder)
         if let kept = readings[key], ContinuousClock.now - kept.at < GitLeftWork.readingLifetime { return kept.work }
         let work = try? await Task.detached(priority: .utility) { [git] in try await git.leftWork(workspaceURL: folder) }.value
         readings[key] = (work, .now)
@@ -269,9 +269,9 @@ enum NewTaskHomeListsProjection {
         pullRequest: (UUID) -> TaskPullRequest? = { _ in nil }
     ) -> [NewTaskFolderRow] {
         guard let folder, !startsChat else { return [] }
-        let path = ProjectSidebarPresentation.normalizedPath(for: folder)
+        let key = ProjectSidebarPresentation.folderKey(for: folder)
         let here = sessions
-            .filter { ProjectSidebarPresentation.normalizedPath(for: $0.workspaceURL) == path }
+            .filter { ProjectSidebarPresentation.folderKey(for: $0.workspaceURL) == key }
             .sorted { $0.updatedAt != $1.updatedAt ? $0.updatedAt > $1.updatedAt : $0.id.uuidString < $1.id.uuidString }
         var rows: [NewTaskFolderRow] = []
 
@@ -426,8 +426,7 @@ enum NewTaskHomeListsProjection {
     static func belongs(_ schedule: ScheduledTask, to project: Project) -> Bool {
         if schedule.destination.projectID == project.id { return true }
         guard let folder = schedule.destination.workspaceURL else { return false }
-        let path = ProjectSidebarPresentation.normalizedPath(for: folder)
-        return project.roots.contains { ProjectSidebarPresentation.normalizedPath(for: $0) == path }
+        return project.contains(root: folder)
     }
 
     /// The home's projects, then the chats: each with what its tasks need, what they finished today,
@@ -592,8 +591,8 @@ enum NewTaskHomeListsProjection {
         var picked = Array(recent.prefix(pullRequestCandidateLimit))
         var more: [SessionRecord] = []
         if let folder {
-            let path = ProjectSidebarPresentation.normalizedPath(for: folder)
-            more += recent.lazy.filter { ProjectSidebarPresentation.normalizedPath(for: $0.workspaceURL) == path }
+            let key = ProjectSidebarPresentation.folderKey(for: folder)
+            more += recent.lazy.filter { ProjectSidebarPresentation.folderKey(for: $0.workspaceURL) == key }
                 .prefix(folderPullRequestCandidateLimit)
         }
         more += idle.prefix(idlePullRequestCandidateLimit)

@@ -4322,7 +4322,7 @@ final class AppModel {
             let owner = projects.project(containingRoot: root)
                 ?? store.workspaceOrigin(for: root).originWorkspaceURL.flatMap { projects.project(containingRoot: $0) }
             if let owner { return ConversationImportDestination(id: owner.id.uuidString, name: owner.name) }
-            return ConversationImportDestination(id: ProjectSidebarPresentation.normalizedPath(for: root),
+            return ConversationImportDestination(id: ProjectSidebarPresentation.folderKey(for: root),
                                                  name: root.lastPathComponent)
         }
     }
