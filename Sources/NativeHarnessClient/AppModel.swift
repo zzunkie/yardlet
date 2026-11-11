@@ -864,7 +864,7 @@ final class AppModel {
         } catch {
             if let id = createdSessionID {
                 guard store.sessions.contains(where: { $0.id == id }) else { return nil }
-                await turnEnded(id, as: .failed, cause: .notStarted)
+                await turnEnded(id, as: .failed, cause: .notStarted, notificationDetail: error.localizedDescription)
                 errorBySessionID[id] = error.localizedDescription
             } else {
                 bootstrapError = error.localizedDescription
@@ -883,7 +883,7 @@ final class AppModel {
             return true
         } catch {
             guard store.sessions.contains(where: { $0.id == session.id }) else { return false }
-            await turnEnded(session.id, as: .failed, cause: .notStarted)
+            await turnEnded(session.id, as: .failed, cause: .notStarted, notificationDetail: error.localizedDescription)
             errorBySessionID[session.id] = error.localizedDescription
             return false
         }
@@ -1113,7 +1113,7 @@ final class AppModel {
             try await attach(session, resumesExistingSession: session.providerSessionID != nil)
         } catch {
             guard store.sessions.contains(where: { $0.id == session.id }) else { return }
-            await turnEnded(session.id, as: .failed, cause: .notStarted)
+            await turnEnded(session.id, as: .failed, cause: .notStarted, notificationDetail: error.localizedDescription)
             errorBySessionID[session.id] = error.localizedDescription
         }
     }
@@ -1255,7 +1255,7 @@ final class AppModel {
             try await contextWasDelivered(to: session.id)
         } catch {
             guard store.sessions.contains(where: { $0.id == session.id }) else { return }
-            await turnEnded(session.id, as: .failed, cause: .notStarted)
+            await turnEnded(session.id, as: .failed, cause: .notStarted, notificationDetail: error.localizedDescription)
             errorBySessionID[session.id] = error.localizedDescription
             recordLocalError(error.localizedDescription, for: session.id)
             // The message stays in the conversation as sent; the diff comments it carried wait again.
@@ -1422,7 +1422,7 @@ final class AppModel {
             guard store.sessions.contains(where: { $0.id == session.id }) else { return }
             // A rejected steer leaves the running turn as it was; the draft is kept below.
             if action == .automatic, !steersRunningTurn {
-                await turnEnded(session.id, as: .failed, cause: .notStarted)
+                await turnEnded(session.id, as: .failed, cause: .notStarted, notificationDetail: error.localizedDescription)
             }
             queueCodexDraft(draft, for: session, failureMessage: error.localizedDescription)
             errorBySessionID[session.id] = error.localizedDescription
@@ -1719,7 +1719,7 @@ final class AppModel {
             }
         } catch {
             guard store.sessions.contains(where: { $0.id == session.id }) else { return }
-            await turnEnded(session.id, as: .failed, cause: .notStarted)
+            await turnEnded(session.id, as: .failed, cause: .notStarted, notificationDetail: error.localizedDescription)
             markFollowUpFailed(itemID, message: error.localizedDescription, in: session.id)
         }
     }
@@ -2071,7 +2071,7 @@ final class AppModel {
             try await contextWasDelivered(to: sessionID)
         } catch {
             guard store.sessions.contains(where: { $0.id == sessionID }) else { return }
-            await turnEnded(sessionID, as: .failed, cause: .notStarted)
+            await turnEnded(sessionID, as: .failed, cause: .notStarted, notificationDetail: error.localizedDescription)
             errorBySessionID[sessionID] = error.localizedDescription
             recordLocalError(error.localizedDescription, for: sessionID)
         }
@@ -2197,7 +2197,7 @@ final class AppModel {
             guard matchingSession(session) != nil else { return }
             if store.sessions.first(where: { $0.id == session.id })?.status == .running,
                codexPresentationBySessionID[session.id]?.activeTurnID == nil {
-                await turnEnded(session.id, as: .failed, cause: .notStarted)
+                await turnEnded(session.id, as: .failed, cause: .notStarted, notificationDetail: error.localizedDescription)
             }
             updateCodexActionError(error, for: session.id)
         }
@@ -6237,7 +6237,7 @@ final class AppModel {
             let message = errorBySessionID[id] ?? L10n.format("Connection to %@ ended.", session.harness.displayName)
             if errorBySessionID[id] == nil { recordLocalError(message, for: id) }
             errorBySessionID[id] = message
-            await turnEnded(id, as: .failed, cause: .streamEnded)
+            await turnEnded(id, as: .failed, cause: .streamEnded, notificationDetail: message)
         }
         await closing?.value
     }
@@ -7636,7 +7636,7 @@ extension AppModel {
             if store.sessions.contains(where: { $0.id == source.id }), draft.editState?.id == edit.id {
                 draft.notice = error.localizedDescription
                 if store.sessions.first(where: { $0.id == source.id })?.status == .running {
-                    await turnEnded(source.id, as: .failed, cause: .notStarted)
+                    await turnEnded(source.id, as: .failed, cause: .notStarted, notificationDetail: error.localizedDescription)
                 }
             }
         }

@@ -14,15 +14,19 @@ enum TurnEndCause: String, Sendable, CaseIterable {
     /// A turn something cut off was to continue, and the provider had nothing to continue or could not.
     case continuationEnded = "continuation-ended"
 
-    /// What Yardlet does after a turn that ended this way. Only the provider's own report of the
-    /// task's state runs everything that waits for a turn's end. The other ways run what they ran
-    /// when each wrote the task's status itself: adding one here is how a way gains a follow-up.
+    /// What Yardlet does after a turn that ended this way. The provider's own report of the task's
+    /// state runs everything that waits for a turn's end. A provider error runs what it ran when it
+    /// wrote the task's status itself: the provider's report of the state follows it. A stream that
+    /// ended, a message that did not go and a continuation that did not are the last word on the
+    /// turn, so what waited for the task to be free goes then too, and a task off screen says it
+    /// failed. Not the queue or a pull request's auto-fix: they would send again after a send that
+    /// just failed.
     var followUps: TurnFollowUps {
         switch self {
         case .providerStatus: .all
         case .providerError: [.unreadMark, .notification, .toolChanges]
-        case .streamEnded: [.unreadMark]
-        case .notStarted, .continuationEnded: []
+        case .streamEnded, .notStarted, .continuationEnded:
+            [.unreadMark, .notification, .toolChanges, .accountMove, .contextLimit, .shellOutput, .dueConnectionResumes]
         }
     }
 }
