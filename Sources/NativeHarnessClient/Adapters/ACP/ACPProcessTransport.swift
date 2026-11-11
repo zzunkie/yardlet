@@ -43,15 +43,9 @@ actor ACPProcessTransport: ACPTransport {
     private let messageStream: AsyncStream<ACPRawFrame>
     private let messageContinuation: AsyncStream<ACPRawFrame>.Continuation
 
-    private var process: Process?
-    private var stdinHandle: FileHandle?
-    private var stdoutHandle: FileHandle?
-    private var stderrHandle: FileHandle?
-    private var chunkContinuation: AsyncStream<Data>.Continuation?
+    private var channel: LineDelimitedProcessChannel?
     private var readerTask: Task<Void, Never>?
     private var pending: [Int64: PendingRequest] = [:]
-    private var stdoutBuffer = Data()
-    private var stderrBuffer = Data()
     private var stopped = false
 
     init(executableURL: URL, requestTimeout: Duration = .seconds(300)) {
@@ -64,7 +58,7 @@ actor ACPProcessTransport: ACPTransport {
 
     func start(_ configuration: ACPLaunchConfiguration) async throws {
         await LoginShellPath.ready()
-        if let process, process.isRunning { return }
+        if let channel, channel.isRunning { return }
         guard !stopped else {
             throw HarnessAdapterError.processExited(
                 code: -1,
@@ -72,47 +66,22 @@ actor ACPProcessTransport: ACPTransport {
             )
         }
 
-        let process = Process()
-        let stdinPipe = Pipe.childInput()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.executableURL = executableURL
-        process.arguments = configuration.arguments
-        process.currentDirectoryURL = configuration.workspaceURL.standardizedFileURL
         var environment = RuntimeProcessEnvironment.app
         for (key, value) in configuration.environmentOverrides {
             environment[key] = value
         }
-        process.environment = RuntimeProcessEnvironment.accountScoped(environment)
-        process.standardInput = stdinPipe
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        let chunks = AsyncStream<Data>.makeStream()
-        chunkContinuation = chunks.continuation
-        stdoutPipe.fileHandleForReading.readChunks(into: chunks.continuation)
-        stderrPipe.fileHandleForReading.readChunks { [weak self] data in
-            Task { await self?.appendStderr(data) }
-        }
-        process.terminationHandler = { [weak self] process in
-            Task { await self?.processDidTerminate(code: process.terminationStatus) }
-        }
-
-        do {
-            try NativeProcessTree.run(process)
-        } catch {
-            stdoutPipe.fileHandleForReading.readabilityHandler = nil
-            stderrPipe.fileHandleForReading.readabilityHandler = nil
-            throw error
-        }
-
-        self.process = process
-        stdinHandle = stdinPipe.fileHandleForWriting
-        stdoutHandle = stdoutPipe.fileHandleForReading
-        stderrHandle = stderrPipe.fileHandleForReading
+        let channel = try LineDelimitedProcessChannel(
+            .init(executableURL: executableURL,
+                  arguments: configuration.arguments,
+                  currentDirectoryURL: configuration.workspaceURL.standardizedFileURL,
+                  environment: RuntimeProcessEnvironment.accountScoped(environment)),
+            stderrLimit: 64 * 1024
+        )
+        self.channel = channel
+        let events = channel.events
         readerTask = Task { [weak self] in
-            for await chunk in chunks.stream {
-                await self?.acceptStdoutChunk(chunk)
+            for await event in events {
+                await self?.accept(event)
             }
         }
     }
@@ -130,7 +99,7 @@ actor ACPProcessTransport: ACPTransport {
         id: Int64,
         timeout: Duration?
     ) async throws -> JSONValue {
-        try requireRunning()
+        let channel = try runningChannel()
         let data = try codec.encodeLine(value)
         return try await withCheckedThrowingContinuation { continuation in
             let timeoutTask = timeout.map { timeout in
@@ -142,7 +111,7 @@ actor ACPProcessTransport: ACPTransport {
             }
             pending[id] = PendingRequest(continuation: continuation, timeoutTask: timeoutTask)
             do {
-                try stdinHandle?.write(contentsOf: data)
+                try channel.write(data)
             } catch {
                 timeoutTask?.cancel()
                 pending.removeValue(forKey: id)
@@ -152,8 +121,7 @@ actor ACPProcessTransport: ACPTransport {
     }
 
     func send(_ value: JSONValue) async throws {
-        try requireRunning()
-        try stdinHandle?.write(contentsOf: codec.encodeLine(value))
+        try runningChannel().write(codec.encodeLine(value))
     }
 
     func messages() async -> AsyncStream<ACPRawFrame> { messageStream }
@@ -161,33 +129,17 @@ actor ACPProcessTransport: ACPTransport {
     func stop() async {
         guard !stopped else { return }
         stopped = true
-        stdoutHandle?.readabilityHandler = nil
-        stderrHandle?.readabilityHandler = nil
-        chunkContinuation?.finish()
         readerTask?.cancel()
-        try? stdinHandle?.close()
-        let exitCode: Int32
-        if let process {
-            if process.isRunning {
-                exitCode = NativeProcessTree.terminate(process: process)
-            } else {
-                exitCode = process.terminationStatus
-            }
-        } else {
-            exitCode = 0
-        }
+        let exitCode = channel?.stop() ?? 0
         failPending(
             HarnessAdapterError.processExited(code: exitCode, message: "ACP transport stopped")
         )
         messageContinuation.finish()
     }
 
-    private func acceptStdoutChunk(_ chunk: Data) {
-        stdoutBuffer.append(chunk)
-        while let newline = stdoutBuffer.firstIndex(of: 0x0A) {
-            let line = Data(stdoutBuffer[..<newline])
-            stdoutBuffer.removeSubrange(...newline)
-            guard !line.isEmpty else { continue }
+    private func accept(_ event: LineDelimitedProcessChannel.Event) {
+        switch event {
+        case let .line(line):
             do {
                 let value = try codec.decodeLine(line)
                 accept(value, rawData: line)
@@ -202,6 +154,9 @@ actor ACPProcessTransport: ACPTransport {
                     )
                 )
             }
+        case let .exited(code, stderr):
+            failPending(HarnessAdapterError.processExited(code: code, message: stderr))
+            messageContinuation.finish()
         }
     }
 
@@ -224,25 +179,15 @@ actor ACPProcessTransport: ACPTransport {
         messageContinuation.yield(ACPRawFrame(value: value, data: rawData))
     }
 
-    private func requireRunning() throws {
-        guard process?.isRunning == true else {
+    private func runningChannel() throws -> LineDelimitedProcessChannel {
+        guard let channel, channel.isRunning else {
+            let stderrText = channel?.stderrText ?? ""
             throw HarnessAdapterError.processExited(
-                code: process?.terminationStatus ?? -1,
+                code: channel?.exitCode ?? -1,
                 message: stderrText.isEmpty ? L10n.string("ACP agent is not running") : stderrText
             )
         }
-    }
-
-    private func appendStderr(_ data: Data) {
-        stderrBuffer.append(data)
-        if stderrBuffer.count > 64 * 1024 {
-            stderrBuffer = Data(stderrBuffer.suffix(64 * 1024))
-        }
-    }
-
-    private var stderrText: String {
-        String(decoding: stderrBuffer, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return channel
     }
 
     private func timeoutRequest(_ id: Int64) {
@@ -252,11 +197,6 @@ actor ACPProcessTransport: ACPTransport {
                 L10n.string("ACP request timed out")
             )
         )
-    }
-
-    private func processDidTerminate(code: Int32) {
-        failPending(HarnessAdapterError.processExited(code: code, message: stderrText))
-        messageContinuation.finish()
     }
 
     private func failPending(_ error: Error) {
