@@ -464,6 +464,65 @@ import XCTest
         XCTAssertNil(model.accountSwitchesAfterTurn[task.id])
     }
 
+    /// Yardlet takes a task's runtime off it in several ways: its account changes, it starts again
+    /// for a context limit, its CLI changed under it, or the task is archived. Whichever it is, its
+    /// CLI is stopped once, the task is left ready with no error, and what still ran in that CLI
+    /// reads as stopped. A change the task goes on from at once (an account, a context limit) has
+    /// its next runtime by then; a changed CLI starts one at the task's next message. (A stream that
+    /// ends by itself is `AppModelTests.testEndedReadyStreamDetachesWithoutManufacturingFailure`.)
+    func testEachWayATaskLosesItsRuntimeStopsItsCLIOnceAndLeavesTheTaskReady() async throws {
+        enum Way: String, CaseIterable { case accountChange, contextLimit, cliChanged, archived }
+        for way in Way.allCases {
+            let fixture = try makeFixture()
+            let model = fixture.model
+            let created = await model.createSession(harness: .claudeCode, workspaceURL: fixture.shared,
+                runtimeExecutableURL: fixture.cli, title: way.rawValue, connection: fixture.first)
+            let task = try XCTUnwrap(created, model.errorBySessionID.values.first ?? "Missing task")
+            let first = try XCTUnwrap(fixture.transports.all.first)
+            func backgroundRows() -> Int {
+                BackgroundTasksProjection(entries: model.transcriptBySessionID[task.id] ?? []).rows.count
+            }
+            // A context limit and a changed CLI wait for background work instead of ending it, and an
+            // archived task takes its conversation along.
+            let runsBackgroundWork = way == .accountChange
+
+            await first.emit(try json(#"{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_start","message":{}},"session_id":"s"}"#))
+            try await waitUntil { model.store.sessions.first?.status == .running }
+            if runsBackgroundWork {
+                await first.emit(try json(#"{"type":"system","subtype":"task_started","task_id":"t-shell","tool_use_id":"shell","description":"npm run dev","task_type":"local_bash","is_backgrounded":true}"#))
+            }
+            await first.emit(try json(#"{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"s"}"#))
+            try await waitUntil {
+                model.store.sessions.first?.status == .ready && backgroundRows() == (runsBackgroundWork ? 1 : 0)
+            }
+            let current = try XCTUnwrap(model.store.sessions.first)
+
+            switch way {
+            case .accountChange: await model.switchAccount(to: fixture.next, for: current)
+            case .contextLimit: await model.continuations.chooseContextLimit("200000", for: current)
+            case .cliChanged: await model.harnessRuntimeChanged(.claudeCode)
+            case .archived: await model.archive(current)
+            }
+
+            XCTAssertNil(model.errorBySessionID[task.id], way.rawValue)
+            switch way {
+            case .accountChange, .contextLimit:
+                XCTAssertTrue(model.isAttached(task.id), way.rawValue)
+                XCTAssertEqual(fixture.transports.all.count, 2, way.rawValue)
+                XCTAssertEqual(model.store.sessions.first?.status, .ready, way.rawValue)
+            case .cliChanged:
+                XCTAssertFalse(model.isAttached(task.id), way.rawValue)
+                XCTAssertEqual(fixture.transports.all.count, 1, way.rawValue)
+                XCTAssertEqual(model.store.sessions.first?.status, .ready, way.rawValue)
+            case .archived:
+                XCTAssertTrue(model.store.sessions.isEmpty, way.rawValue)
+            }
+            if way != .archived { XCTAssertEqual(backgroundRows(), 0, way.rawValue) }
+            let stops = await first.stopCount
+            XCTAssertEqual(stops, 1, "\(way.rawValue): its CLI is stopped once")
+        }
+    }
+
     /// A move Yardlet chose itself never holds up the person and never waits forever (2026-11-11). An
     /// idle task on a nearly spent account whose cache has expired, with a background command running,
     /// waits to move to the account with room, and the line above the composer says it waits for that
