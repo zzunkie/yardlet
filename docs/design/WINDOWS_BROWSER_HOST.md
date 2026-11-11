@@ -1,8 +1,10 @@
 # Windows browser host design (WebView2)
 
-Written: 2026-09-28. It rests on the product decision (CEF on macOS, WebView2 on Windows) and the [portability
-review](PLATFORM_PORTABILITY.md). Windows code cannot be built or run on this Mac, so this document is the design to
-follow as it is when the Windows app is built, and it is not implemented or verified yet. API names follow Microsoft's
+A design that is not built yet. The Windows app has no browser host
+([PLATFORM_PORTABILITY](../PLATFORM_PORTABILITY.md), "The Windows app"); this is the design to follow when it gets one,
+and nothing here has been run on Windows. It rests on the product decision (CEF on macOS, WebView2 on Windows). How the
+browser works on macOS today is in [BROWSER_HOST](../BROWSER_HOST.md); where this design describes the macOS side, that
+document is right. API names follow Microsoft's
 [WebView2 documentation](https://learn.microsoft.com/microsoft-edge/webview2/) and are to be checked again against the
 SDK version at implementation time.
 
@@ -18,8 +20,8 @@ SDK version at implementation time.
   mode WebView2 handles input, the Korean IME, the cursor, `<select>` popups, the context menu and accessibility (UI
   Automation) on its own. The input forwarding and accessibility bridge built by hand on macOS are not needed on
   Windows.
-- The Windows UI technology (Swift + WinUI 3, or another technology) is not decided yet. This design applies whatever
-  the UI technology, as long as the panel can give one HWND.
+- The Windows app's screens are WinUI 3, and its bindings already project WebView2's types (`Windows/Bindings`). The
+  design needs only that the panel can give one HWND.
 
 ## 2. Protocol mapping
 
@@ -49,22 +51,22 @@ SDK version at implementation time.
 | `loading` | `NavigationStarting` and `NavigationCompleted`, and `CanGoBack` and `CanGoForward` on `HistoryChanged` |
 | `loadEnd`, `loadError` | `IsSuccess`, `WebErrorStatus` and `HttpStatusCode` of `NavigationCompleted` |
 | `console` | CDP `Runtime.consoleAPICalled` received through the DevTools event receiver (the same path as on macOS) |
-| `popupBlocked` or a new window | Handle `NewWindowRequested` and open it in the same tab (the same policy as on macOS) |
+| `popupBlocked` or a new window | Handle `NewWindowRequested` with the macOS policy ([BROWSER_HOST](../BROWSER_HOST.md) section 3, "New windows"): a permitted new window becomes a tab of the task |
 | `terminated`, `failed` | `ProcessFailed`, and the environment's `BrowserProcessExited` |
 | `frame`, `popup`, `cursor`, `contextMenu`, `compositionBounds` | Do not occur in windowed hosting |
 
-JS dialogs, file choosing and downloads, which the macOS productization adds, map to `ScriptDialogOpening` (with the
+JS dialogs, file choosing and downloads, which the macOS host has, map to `ScriptDialogOpening` (with the
 default dialog turned off, shown as a Yardlet sheet), the WebView2 default file chooser, and `DownloadStarting`
 respectively.
 
 ## 3. Lifetime and memory
 
-- The host lifetime rules are the same as on macOS. While the panel is open, or when the agent used that task's browser
-  in the last 5 minutes, the tab stays; when neither holds, that tab's controller closes after a 60-second grace period.
-  When the last controller is closed and the environment is released, the runtime ends the browser process, and
+- The host lifetime rules are the same as on macOS ([BROWSER_HOST](../BROWSER_HOST.md) section 3, "Host lifetime"): a
+  task's tabs stay until the task is archived or deleted, and a tab that is not visible is hidden. When the last
+  controller is closed and the environment is released, the runtime ends the browser process, and
   `BrowserProcessExited` confirms that the memory was returned.
-- The profile is `%LOCALAPPDATA%\Yardlet\Browser\Default`, which every task shares. WebView2 handles cookie encryption
-  with DPAPI, so no compromise like the mock keychain on macOS is needed.
+- The default profile is `%LOCALAPPDATA%\Yardlet\Browser\Default`. WebView2 handles cookie encryption with DPAPI, so
+  no compromise like the mock keychain on macOS is needed.
 
 ## 4. Agent tools and the MCP server
 
@@ -84,7 +86,7 @@ respectively.
 
 ## 6. Open decisions and prerequisites
 
-- Choosing the Windows UI technology (the panel must be able to give an HWND).
-- Clearing the blockers in the [portability review](PLATFORM_PORTABILITY.md): ending process trees (job object), finding
-  executables (PATHEXT and `.cmd`), and the account sign-in terminal (ConPTY).
+- How a WinUI 3 panel gives the controller its HWND, or whether the panel hosts WinUI's own WebView2 control instead.
+- Profiles of a task's own ([BROWSER_SESSION_ISOLATION](../BROWSER_SESSION_ISOLATION.md)): which WebView2 profile or
+  user data folder a task that takes its own profile gets.
 - Checking the behavior of the mapping tables above on a real Windows device.
