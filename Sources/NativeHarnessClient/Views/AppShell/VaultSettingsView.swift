@@ -6,7 +6,8 @@ import UniformTypeIdentifiers
 /// `browser_fill_credential`, a search over the lists, the current two-factor codes as an authenticator app lists
 /// them, the codes with no site to link to theirs, the saved items with their sites, kinds, agent use and last use,
 /// adding one, importing a browser's CSV export or an authenticator app's export QR code, and emptying the vault.
-/// Rows follow Settings → General and Connectors.
+/// "Import from Another Browser…" opens the browser panel's import sheet (docs/BROWSER_SESSION_ISOLATION.md 10), which
+/// brings sign-ins into the default profile, with no site chosen first. Rows follow Settings → General and Connectors.
 struct VaultSettingsView: View {
     @ObservedObject var vault: VaultCenter
     @State private var editing: Editing?
@@ -22,9 +23,15 @@ struct VaultSettingsView: View {
     @State private var linkFailure: String?
     /// The search over the lists (design §16): by name, username or site, as Chrome's and the Passwords app's.
     @State private var query: String
+    /// Another browser's sign-ins and history, which need the browser host.
+    private let importsFromBrowsers: Bool
+    @State private var browserImport: BrowserLoginImportRequest?
+    /// What the import sheet brought, said once it has closed.
+    @State private var browserImportNotice: String?
 
-    init(vault: VaultCenter, query: String = "") {
+    init(vault: VaultCenter, query: String = "", importsFromBrowsers: Bool = MacBrowserHost.isAvailable) {
         self.vault = vault
+        self.importsFromBrowsers = importsFromBrowsers
         _query = State(initialValue: query)
     }
 
@@ -52,18 +59,25 @@ struct VaultSettingsView: View {
             VStack(alignment: .trailing, spacing: 8) {
                 itemList
                 HStack(spacing: 8) {
-                    Button(L10n.string("Import QR Code…"), action: importQRCodes)
-                    Button(L10n.string("Import CSV…"), action: importCSV)
-                    Button {
-                        editing = Editing(item: nil)
-                    } label: {
-                        Image(systemName: "plus")
+                    if importsFromBrowsers {
+                        Button(L10n.string("Import from Another Browser…")) {
+                            browserImport = BrowserLoginImportRequest(site: nil, forTask: false)
+                        }
                     }
-                    .help(L10n.string("Add sign-in"))
-                    .accessibilityLabel(L10n.string("Add sign-in"))
+                    Group {
+                        Button(L10n.string("Import QR Code…"), action: importQRCodes)
+                        Button(L10n.string("Import CSV…"), action: importCSV)
+                        Button {
+                            editing = Editing(item: nil)
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .help(L10n.string("Add sign-in"))
+                        .accessibilityLabel(L10n.string("Add sign-in"))
+                    }
+                    .disabled(!vault.isAllowedBuild)
                 }
                 .controlSize(.small)
-                .disabled(!vault.isAllowedBuild)
                 .alert(imported?.title ?? "",
                        isPresented: Binding(get: { imported != nil }, set: { if !$0 { imported = nil } }),
                        presenting: imported) { result in
@@ -106,6 +120,18 @@ struct VaultSettingsView: View {
         }
         .sheet(item: $editing) { editing in
             VaultItemSheet(vault: vault, item: editing.item) { self.editing = nil }
+        }
+        .sheet(item: $browserImport, onDismiss: {
+            guard let notice = browserImportNotice else { return }
+            browserImportNotice = nil
+            imported = Imported(title: notice, count: 0, files: [])
+        }) { request in
+            BrowserLoginImportSheet(request: request) { profile, sites, history in
+                browserImportNotice = try await MacBrowserHost.shared.client.importFromBrowser(
+                    profile, sites: sites, history: history, into: [nil])
+            } onDone: {
+                browserImport = nil
+            }
         }
     }
 

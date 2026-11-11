@@ -3028,8 +3028,8 @@
 "Blue" = "파란색";
 "Black" = "검은색";
 "Undo" = "실행 취소";
-"Import Sign-ins from Another Browser…" = "다른 브라우저에서 로그인 가져오기…";
-"Import Sign-ins from Another Browser" = "다른 브라우저에서 로그인 가져오기";
+"Import from Another Browser…" = "다른 브라우저에서 가져오기…";
+"Import from Another Browser" = "다른 브라우저에서 가져오기";
 "The sites you choose open signed in, in this task and in new tasks. Their cookies already in Yardlet are replaced." = "고른 사이트는 이 작업과 새 작업에서 로그인된 채로 열립니다. Yardlet에 있던 그 사이트의 쿠키는 가져온 것으로 바뀝니다.";
 "No browser to import from was found on this Mac. Sign-ins import from Chromium and Firefox browsers such as Whale, Chrome, Arc, Comet and Zen." = "이 Mac에서 가져올 브라우저를 찾지 못했습니다. Whale, Chrome, Arc, Comet, Zen 같은 Chromium·Firefox 계열 브라우저에서 가져올 수 있습니다.";
 "macOS lets only apps with Full Disk Access read %@'s data, so it is not listed." = "%@의 데이터는 macOS가 전체 디스크 접근 권한이 있는 앱에만 열어 주어 목록에 없습니다.";
@@ -3037,6 +3037,7 @@
 "When you import, macOS asks whether Yardlet may use “%@” in your keychain. Allow it to import." = "가져오기를 누르면 macOS가 키체인의 “%@” 항목을 써도 되는지 묻습니다. 허용해야 가져옵니다.";
 "This profile has no sites with cookies." = "이 프로필에는 쿠키가 있는 사이트가 없습니다.";
 "No sites match." = "맞는 사이트가 없습니다.";
+"1 site chosen" = "사이트 1곳 선택";
 "%lld sites chosen" = "사이트 %lld곳 선택";
 "Imported the sign-in for %@ from %@." = "%2$@에서 %1$@ 로그인을 가져왔습니다.";
 "Imported sign-ins for %lld sites from %@." = "%2$@에서 사이트 %1$lld곳의 로그인을 가져왔습니다.";
@@ -3045,6 +3046,13 @@
 "Nothing was imported: access to %@'s keychain item was not allowed." = "%@ 키체인 항목에 접근하도록 허용하지 않아 가져오지 않았습니다.";
 "The browser's cookies could not be decrypted with its key." = "브라우저의 키로 쿠키를 풀지 못했습니다.";
 "Yardlet's browser did not take the sign-ins. Try again." = "Yardlet 브라우저가 로그인을 넣지 못했습니다. 다시 시도하세요.";
+"The sites you choose open signed in, in new tasks. Their cookies already in Yardlet are replaced." = "고른 사이트는 새 작업에서 로그인된 채로 열립니다. Yardlet에 있던 그 사이트의 쿠키는 가져온 것으로 바뀝니다.";
+"Import visit history" = "방문 기록 가져오기";
+"The profile's whole history from the last %lld days, up to %lld pages, not only the sites above. The address field suggests pages from it." = "위에서 고른 사이트만이 아니라 이 프로필의 최근 %lld일 방문 기록 전체를 최대 %lld페이지까지 가져옵니다. 주소창이 이 기록에서 페이지를 추천합니다.";
+"Imported 1 page of visit history from %@." = "%@에서 방문 기록 1페이지를 가져왔습니다.";
+"Imported %lld pages of visit history from %@." = "%2$@에서 방문 기록 %1$lld페이지를 가져왔습니다.";
+"%@ had no new visit history." = "%@에 새로 가져올 방문 기록이 없었습니다.";
+"The browser's visit history could not be read. Try again in a moment." = "브라우저의 방문 기록을 읽지 못했습니다. 잠시 뒤 다시 시도하세요.";
 
 
 /* Apple connectors: App Store Connect, the Mac's calendars, reminders, and contacts, and Xcode (docs/CONNECTORS.md, "Apple"). */

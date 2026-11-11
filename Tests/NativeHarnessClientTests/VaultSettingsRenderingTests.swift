@@ -22,6 +22,11 @@ import XCTest
 ///   key button list on a site's page, searched, searched for a code from the code bar, and on a site with nothing.
 /// - `vault-picker-aws-passwords-*`, `-codes-*`, `-any-*`, `-search-*`: the list on a cloud console's sign-in at a
 ///   password field, at a code field, with no field, and searched.
+/// - `settings-vault-browser-import-<language>-*`: the page with "Import from Another Browser…" beside its own imports.
+/// - `browser-import-sheet-<language>-*`, `browser-import-sheet-settings-<language>-*`, `browser-panel-menu-<language>-*`:
+///   that import's sheet over made-up Whale and Firefox folders, from a task's panel (the page's site chosen) and from
+///   Settings (none chosen), and the browser panel's ⋯ menu that also opens it. `<language>` is the one the run draws
+///   in (`-AppleLanguages '(ko)'` for Korean).
 @MainActor
 final class VaultSettingsRenderingTests: XCTestCase {
     private static let github = VaultItem(
@@ -76,18 +81,91 @@ final class VaultSettingsRenderingTests: XCTestCase {
         }
         for capture in captures { XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6)) }
 
-        let host = WindowlessRender.Host(VaultSettingsView(vault: vault).padding(20)
-            .frame(width: 600, height: 520, alignment: .top), size: NSSize(width: 600, height: 520))
+        // With the browser host, which a test build has not, "Import from Another Browser…" comes first.
+        let page = VaultSettingsView(vault: vault, importsFromBrowsers: true).padding(20)
+            .frame(width: 600, height: 620, alignment: .top)
+        try WindowlessRender.hostedInBothAppearances("settings-vault-browser-import-\(Self.language)", in: directory,
+                                                     size: NSSize(width: 600, height: 620)) { appearance in
+            page.environment(\.colorScheme, appearance.colorScheme).background(ParityTheme.canvas)
+        }
+        let host = WindowlessRender.Host(page, size: NSSize(width: 600, height: 620))
         defer { host.close() }
         host.settle()
         let spoken = host.accessibilityElements().map { "\($0.label) \($0.value)" }
         for text in ["GitHub (work)", "Vercel", "Example Bank", "github.com", L10n.string("Password manager for agents"),
                      L10n.string("Every time"), L10n.string("While unlocked"), Self.github.kindsTitle,
                      L10n.string("Import CSV…"), L10n.string("Add sign-in"), L10n.string("Delete all passwords…"),
-                     L10n.string("Two-factor codes"), L10n.string("Import QR Code…"), L10n.string("Copy Code")] {
+                     L10n.string("Two-factor codes"), L10n.string("Import QR Code…"), L10n.string("Copy Code"),
+                     L10n.string("Import from Another Browser…")] {
             XCTAssertTrue(spoken.contains { $0.contains(text) }, "No \(text): \(spoken)")
         }
         XCTAssertFalse(spoken.contains { $0.contains("not-a-real-password") }, "A secret reached the page: \(spoken)")
+    }
+
+    /// The language this run draws in, for the file names.
+    private static var language: String { L10n.string("Cancel") == "Cancel" ? "en" : "ko" }
+
+    /// The import sheet (docs/BROWSER_SESSION_ISOLATION.md 10) over made-up Whale and Firefox folders, never a real
+    /// browser's: from a task's panel the page's site is chosen first; from Settings none is, and the sheet says the
+    /// sign-ins reach new tasks. Both offer the profile's whole visit history, checked as in Chrome's import dialog.
+    /// Then the panel's ⋯ menu, drawn as the system lays out its items, since a SwiftUI menu builds them only once open.
+    func testTheBrowserImportSheetAndMenuDraw() async throws {
+        let directory = try WindowlessRender.directory("vault-qa")
+        let support = FileManager.default.temporaryDirectory.appending(path: "VaultBrowserImport-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: support) }
+        let now = Date()
+        try ChromiumProfileFixture.make(at: support.appending(path: "Naver/Whale"), profiles: [
+            .init(folder: "Default", name: "Personal", cookies: ["example.com", "github.com", "naver.com", "notion.so",
+                                                                 "vercel.com", "linear.app"].enumerated().map { index, site in
+                .init(host: "." + site, name: "session\(index)", value: "made-up")
+            }, visits: [.init(url: "https://github.com/", title: "GitHub", date: now.addingTimeInterval(-3600))])
+        ], lastUsed: "Default", password: Data("qa-safe-storage-not-real".utf8))
+        try FirefoxProfileFixture.make(at: support.appending(path: "Firefox"), profiles: [
+            .init(path: "Profiles/qa.default-release", name: "default-release",
+                  cookies: [.init(host: ".example.net", name: "session", value: "made-up")],
+                  visits: [.init(url: "https://example.net/", date: now.addingTimeInterval(-3600))])
+        ], installed: "Profiles/qa.default-release")
+
+        for (name, request) in [("browser-import-sheet", BrowserLoginImportRequest(site: "example.com")),
+                                ("browser-import-sheet-settings", BrowserLoginImportRequest(site: nil, forTask: false))] {
+            for appearance in WindowlessRender.Appearance.allCases {
+                let sheet = BrowserLoginImportSheet(request: request, applicationSupport: support) { _, _, _ in } onDone: {}
+                    .environment(\.colorScheme, appearance.colorScheme)
+                let host = WindowlessRender.Host(sheet, size: NSSize(width: 520, height: 700), appearance: appearance)
+                defer { host.close() }
+                // The history's choice shows once the profiles are read; the sites follow, in place of a spinner.
+                await host.settle(until: {
+                    let elements = host.accessibilityElements()
+                    return elements.contains { $0.label.contains(L10n.string("Import visit history")) }
+                        && !elements.contains { ["AXProgressIndicator", "AXBusyIndicator"].contains($0.role) }
+                })
+                host.window.setContentSize(host.hosting.fittingSize)
+                host.settle()
+                let spoken = host.accessibilityElements().map { "\($0.label) \($0.value)" }
+                let history = spoken.first { $0.contains(L10n.string("Import visit history")) } ?? ""
+                XCTAssertTrue(history.hasSuffix(" 1"), "the history is checked at first: \(spoken)")
+                XCTAssertTrue(spoken.contains { $0.contains(request.forTask
+                    ? L10n.string("The sites you choose open signed in, in this task and in new tasks. Their cookies already in Yardlet are replaced.")
+                    : L10n.string("The sites you choose open signed in, in new tasks. Their cookies already in Yardlet are replaced.")) },
+                              "\(spoken)")
+                XCTAssertEqual(spoken.contains { $0.contains(L10n.string("1 site chosen")) }, request.site != nil,
+                               "only the page's site is chosen first: \(host.accessibilityElements())")
+                try WindowlessRender.writePNG(try host.capture().bitmap,
+                                              to: directory.appending(path: "\(name)-\(Self.language)-\(appearance.suffix).png"))
+            }
+        }
+
+        let viewport = NSMenuItem(title: L10n.string("Viewport"), action: nil, keyEquivalent: "")
+        viewport.submenu = NSMenu()
+        let lines = MenuLine.lines([viewport, .separator(),
+                                    NSMenuItem(title: L10n.string("Import from Another Browser…"), action: nil, keyEquivalent: "")])
+        let size = NSSize(width: 300, height: MenuPanel.height(lines) + 40)
+        try WindowlessRender.hostedInBothAppearances("browser-panel-menu-\(Self.language)", in: directory, size: size) { appearance in
+            MenuPanel(lines: lines, width: 260, highlighted: 2)
+                .frame(width: size.width, height: size.height)
+                .background(appearance == .dark ? Color(white: 0.1) : Color(white: 0.85))
+                .environment(\.colorScheme, appearance.colorScheme)
+        }
     }
 
     /// Codes an authenticator app brought over with no site (design §14.3): each row holds the site the vault

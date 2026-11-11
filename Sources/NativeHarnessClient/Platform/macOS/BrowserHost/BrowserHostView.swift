@@ -850,7 +850,7 @@ final class BrowserHostView: NSView, @preconcurrency NSTextInputClient, MouseHis
     // MARK: Context menu
 
     /// Yardlet's own items after the page's (the vault's "Add to Password Manager…" and "Make a Yardlet Passkey", and
-    /// "Import Sign-ins from Another Browser…").
+    /// "Import from Another Browser…").
     var extraContextMenuItems: (() -> [(title: String, action: () -> Void)])?
     private var extraMenuAction: (() -> Void)?
 

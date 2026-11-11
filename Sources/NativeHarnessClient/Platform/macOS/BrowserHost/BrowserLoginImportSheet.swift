@@ -1,14 +1,17 @@
 import AppKit
 import SwiftUI
 
-/// The sheet of "Import Sign-ins from Another Browser…" (docs/BROWSER_SESSION_ISOLATION.md 10): a browser's profile
-/// with the browser app's icon, the sites it has cookies for to choose from (the page's own chosen first) with a
-/// search, and Import. Only the sites the person ticks are imported; for a Chromium browser Import reads its keychain
-/// item, which macOS asks about. A browser whose folder macOS keeps from Yardlet is named, not listed.
+/// The sheet of "Import from Another Browser…" (docs/BROWSER_SESSION_ISOLATION.md 10): a browser's profile with the
+/// browser app's icon, the sites it has cookies for to choose from (the page's own chosen first) with a search, the
+/// profile's visit history, and Import. Only the sites the person ticks bring their sign-ins; for a Chromium browser
+/// Import then reads its keychain item, which macOS asks about. The history is the whole profile's, checked at first as
+/// in Chrome's import dialog. A browser whose folder macOS keeps from Yardlet is named, not listed.
 struct BrowserLoginImportSheet: View {
     let request: BrowserLoginImportRequest
-    /// Imports the chosen sites from a profile; the sheet shows what it throws.
-    let onImport: (BrowserLoginImport.Profile, [String]) async throws -> Void
+    /// Where the browsers' folders are; a made-up one in tests.
+    var applicationSupport = BrowserLoginImport.applicationSupport
+    /// Imports the chosen sites from a profile, and its visit history when asked; the sheet shows what it throws.
+    let onImport: (BrowserLoginImport.Profile, [String], Bool) async throws -> Void
     let onDone: () -> Void
     @State private var profiles: [BrowserLoginImport.Profile]?
     @State private var unreadable: [BrowserLoginImport.Browser] = []
@@ -19,22 +22,20 @@ struct BrowserLoginImportSheet: View {
     @State private var search = ""
     @State private var failure: String?
     @State private var isImporting = false
+    @State private var importsHistory = true
 
     private var profile: BrowserLoginImport.Profile? { profiles?.first { $0.id == profileID } }
+    private var withHistory: Bool { importsHistory && profile?.history != nil }
 
     var body: some View {
         VStack(spacing: 0) {
-            Text(L10n.string("Import Sign-ins from Another Browser"))
+            Text(L10n.string("Import from Another Browser"))
                 .font(.title3.weight(.semibold))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
             Divider()
             VStack(alignment: .leading, spacing: 12) {
-                Text(L10n.string("The sites you choose open signed in, in this task and in new tasks. Their cookies already in Yardlet are replaced."))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
                 if let profiles, profiles.isEmpty {
                     Text(L10n.string("No browser to import from was found on this Mac. Sign-ins import from Chromium and Firefox browsers such as Whale, Chrome, Arc, Comet and Zen."))
                         .font(.callout)
@@ -47,15 +48,22 @@ struct BrowserLoginImportSheet: View {
                         }
                     }
                     .fixedSize()
+                    Text(request.forTask
+                         ? L10n.string("The sites you choose open signed in, in this task and in new tasks. Their cookies already in Yardlet are replaced.")
+                         : L10n.string("The sites you choose open signed in, in new tasks. Their cookies already in Yardlet are replaced."))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     TextField(L10n.string("Search sites"), text: $search)
                         .textFieldStyle(.roundedBorder)
                     siteList
-                    if let service = profile?.browser.keychainService {
+                    if !chosen.isEmpty, let service = profile?.browser.keychainService {
                         Text(L10n.format("When you import, macOS asks whether Yardlet may use “%@” in your keychain. Allow it to import.", service))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    if profile?.history != nil { historyChoice }
                 }
                 if !unreadable.isEmpty {
                     Text(L10n.format("macOS lets only apps with Full Disk Access read %@'s data, so it is not listed.",
@@ -78,7 +86,8 @@ struct BrowserLoginImportSheet: View {
         .frame(width: 520)
         .background(ParityTheme.canvas)
         .task {
-            let found = await Task.detached { BrowserLoginImport.find() }.value
+            let support = applicationSupport
+            let found = await Task.detached { BrowserLoginImport.find(in: support) }.value
             for browser in Set(found.profiles.map(\.browser)) {
                 guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.bundleID) else { continue }
                 let image = NSWorkspace.shared.icon(forFile: app.path(percentEncoded: false))
@@ -90,6 +99,21 @@ struct BrowserLoginImportSheet: View {
             profileID = found.profiles.first?.id
         }
         .task(id: profileID) { await loadSites() }
+    }
+
+    /// The whole profile's visit history, apart from the sites chosen above.
+    private var historyChoice: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Toggle(L10n.string("Import visit history"), isOn: $importsHistory)
+                .toggleStyle(.checkbox)
+            Text(L10n.format("The profile's whole history from the last %lld days, up to %lld pages, not only the sites above. The address field suggests pages from it.",
+                             Int64(BrowserAddressHistory.keptDays), Int64(BrowserAddressHistory.maxPages)))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, 20)
+        }
+        .padding(.top, 4)
     }
 
     /// The browser app's icon, or a globe when its app is not on this Mac.
@@ -131,7 +155,7 @@ struct BrowserLoginImportSheet: View {
             if isImporting {
                 ProgressView().controlSize(.small)
             } else if !chosen.isEmpty {
-                Text(L10n.format("%lld sites chosen", Int64(chosen.count)))
+                Text(chosen.count == 1 ? L10n.string("1 site chosen") : L10n.format("%lld sites chosen", Int64(chosen.count)))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -140,7 +164,7 @@ struct BrowserLoginImportSheet: View {
                 .keyboardShortcut(.cancelAction)
             Button(L10n.string("Import"), action: start)
                 .keyboardShortcut(.defaultAction)
-                .disabled(chosen.isEmpty || profile == nil || isImporting)
+                .disabled((chosen.isEmpty && !withHistory) || profile == nil || isImporting)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
@@ -168,11 +192,12 @@ struct BrowserLoginImportSheet: View {
     private func start() {
         guard let profile else { return }
         let picked = (sites ?? []).map(\.domain).filter(chosen.contains)
+        let history = withHistory
         isImporting = true
         failure = nil
         Task {
             do {
-                try await onImport(profile, picked)
+                try await onImport(profile, picked, history)
                 onDone()
             } catch {
                 failure = error.localizedDescription

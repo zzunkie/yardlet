@@ -9,7 +9,8 @@ import Foundation
 /// browser's data. A made-up Chrome folder whose `Local State` cannot be read stands for one macOS 27 keeps from
 /// Yardlet. In the task's browser panel the page's menu opens the sheet (drawn to `import-sheet.png`), and each import
 /// puts the chosen sites' cookies in the default profile and the task's profile of its own (the task takes one before
-/// the panel opens, as its agent's first sign-in would), each once, as the other browser stores them. Checks land in
+/// the panel opens, as its agent's first sign-in would), each once, as the other browser stores them. Whale's profile
+/// also brings its visit history into the address field's history, once however often it is imported. Checks land in
 /// `result.json`.
 @MainActor
 final class BrowserHostLoginImportQA {
@@ -25,6 +26,7 @@ final class BrowserHostLoginImportQA {
     nonisolated private static let password = Data("qa-safe-storage-not-real".utf8)
     private static let marker = "qa-imported-"
     private static let accounts = "https://accounts.example.com/"
+    private static let visited = "https://qa-history.example.com/visited"
 
     init(output: URL, base: String, panelSession: UUID) {
         self.output = output
@@ -59,6 +61,11 @@ final class BrowserHostLoginImportQA {
                           expires: Date().addingTimeInterval(-60)),
                     .init(host: "localhost", name: "qa_local", value: Self.marker + "local", secure: false, httpOnly: false, sameSite: 1),
                     .init(host: "www.other.test", name: "qa_other", value: Self.marker + "other")
+                ], visits: [
+                    // After the run before's newest visit, which the QA home keeps as imported.
+                    .init(url: Self.visited, title: "QA visited", date: Date().addingTimeInterval(-2), transition: 0x3000_0001),
+                    .init(url: Self.visited, date: Date().addingTimeInterval(-3)),
+                    .init(url: "https://www.google.com/search?q=qa%20imported%20search", date: Date().addingTimeInterval(-1))
                 ])
             ], lastUsed: "Profile 1", password: Self.password)
             try FirefoxProfileFixture.make(at: support.appending(path: "Firefox", directoryHint: .isDirectory), profiles: [
@@ -140,7 +147,7 @@ final class BrowserHostLoginImportQA {
         // The page's menu has the item (read, not opened: QA never opens a real menu), which opens the sheet with the
         // page's site chosen.
         let menu = controller.view?.extraContextMenuItems?().map(\.title) ?? []
-        check("the page's menu offers the import", menu.contains(L10n.string("Import Sign-ins from Another Browser…")), "\(menu)")
+        check("the page's menu offers the import", menu.contains(L10n.string("Import from Another Browser…")), "\(menu)")
         controller.startLoginImport()
         let shown = await waitUntil(.seconds(10)) { controller.view?.window?.attachedSheet != nil }
         try? await Task.sleep(for: .seconds(2))
@@ -152,14 +159,35 @@ final class BrowserHostLoginImportQA {
         check("the page's menu opens the sheet with the page's own site", shown && controller.loginImport?.site == "localhost",
               "sheet \(shown), site \(controller.loginImport?.site ?? "none")")
 
+        // The QA home keeps the run before's imported page and search.
+        MacBrowserHost.shared.addressHistory.remove(page: Self.visited)
+        MacBrowserHost.shared.addressHistory.remove(search: "qa imported search")
         do {
-            try await controller.importLogins(from: work, sites: ["example.com", "localhost"], password: { Self.password })
+            try await controller.importLogins(from: work, sites: ["example.com", "localhost"], history: true,
+                                              password: { Self.password })
         } catch {
             check("the import runs", false, error.localizedDescription)
         }
         controller.loginImport = nil
         let notice = controller.notice ?? ""
-        check("the panel says what it imported", notice.contains("Whale"), notice)
+        check("the panel says what it imported", notice.contains("Whale")
+                && notice.contains(L10n.format("Imported %lld pages of visit history from %@.", Int64(2), "Whale")), notice)
+
+        // The profile's history came into the address field's, under its rules; importing it again adds nothing.
+        let history = MacBrowserHost.shared.addressHistory
+        let visitedPage = history.pages[Self.visited]
+        check("Whale's visits are in the address field's history, typed as Whale recorded them",
+              visitedPage?.visitCount == 2 && visitedPage?.typedCount == 1 && visitedPage?.title == "QA visited"
+                && history.searches["qa imported search"]?.count == 1,
+              "\(visitedPage.map { "\($0.visitCount)/\($0.typedCount) \($0.title)" } ?? "none") / \(history.searches.keys.sorted())")
+        do {
+            try await controller.importLogins(from: work, sites: [], history: true)
+        } catch {
+            check("the history imports again", false, error.localizedDescription)
+        }
+        let again = controller.notice ?? ""
+        check("importing the profile again adds no visit twice",
+              history.pages[Self.visited]?.visitCount == 2 && again == L10n.format("%@ had no new visit history.", "Whale"), again)
 
         // Each profile now holds the other browser's cookies of the chosen sites, once, as Whale stores them.
         let expected = [Self.marker + "signin", Self.marker + "host", Self.marker + "session"]

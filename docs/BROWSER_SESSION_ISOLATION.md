@@ -283,11 +283,42 @@ cookies across host restarts.
   exists only in another browser (iCloud Keychain, Whale, Chrome). Importing that browser's sign-in cookies lets Yardlet
   enter the site, and after one more Yardlet passkey is registered in the site's settings, Yardlet alone is enough from
   then on.
-- **What the person does:** Right-click on the page in the browser panel → "Import Sign-ins from Another Browser…" →
-  choose the browser and profile → check the sites (the current page's site is at the top, already checked) → Import →
-  allow in the macOS keychain prompt ("Yardlet wants to use your confidential information stored in 'Whale Safe Storage'
-  in your keychain."). When it is done, the panel shows "Imported the sign-in for … from Whale", and reloads the page if
-  it is on that site.
+- **What the person does:** "Import from Another Browser…" opens one sheet from three places: the page's right-click
+  menu in the browser panel, the panel's ⋯ menu under Viewport (Chrome keeps its import in its ⋮ menu and Safari in its
+  File menu, not only on a page), and Settings › Passwords beside "Import CSV…". Choose the browser and profile → check
+  the sites (from the panel, the current page's site is at the top, already checked; from Settings none is) → keep or
+  clear "Import visit history" → Import → when sites are checked from a Chromium browser, allow in the macOS keychain
+  prompt ("Yardlet wants to use your confidential information stored in 'Whale Safe Storage' in your keychain."). When it
+  is done, the panel shows "Imported the sign-in for … from Whale" and "Imported N pages of visit history from Whale",
+  and reloads the page if it is on that site; Settings shows the same in an alert once the sheet closes. From Settings
+  the sign-ins go into the default profile alone, so the sheet says they open signed in "in new tasks" rather than "in
+  this task and in new tasks". Settings shows the button only in builds with the browser host, and it works while the
+  vault is off.
+- **Visit history:** Sign-ins come only for the checked sites; the history is the profile's whole history, within the
+  address field's limits, and the sheet says so under the choice. It goes into the address field's history
+  (`BrowserAddressHistory`, [BROWSER_HOST](BROWSER_HOST.md) section 3, "Address suggestions"), which the suggestions
+  and the start page's sites read. The choice is checked when the sheet opens, as Chrome's import dialog checks its
+  "Browsing history" (`kImportDialogHistory` is registered `true` in Chromium's `settings_ui.cc`); Yardlet does not
+  remember it, so there is no setting. Bookmarks are not imported.
+  - Reading: Chromium's `<profile>/History` (`urls`, `visits`) and Firefox's `places.sqlite` (`moz_places`,
+    `moz_historyvisits`), copied and opened read-only as the cookie databases are, newest visit first, in one query off
+    the main thread; no keychain item is read for them. Only the visits each browser shows in its own history count:
+    Chromium's visible visits (`VisitDatabase::GetVisibleVisitsInRange`: `CHAIN_END` set, so a redirect's source is
+    left out, and no frame or keyword-generated visit) of addresses that are not hidden, without reloads, typed when the
+    core transition is `TYPED`; Firefox's visits of pages that are not hidden, without embeds, downloads, framed links
+    and reloads (the visit types its `visit_count` leaves out), typed when the type is `TRANSITION_TYPED`.
+  - Rules, the address history's own: web pages and files only, with user names and passwords dropped from the
+    address; a Google results page counts as its search; visits older than 90 days are not read; at most the newest 5000
+    pages come in, each with its newest 10 visits. A page's counts are its visits in that window, not the browser's
+    all-time count.
+  - Merging: once, on the main thread. A page or search Yardlet already has takes the other's visits beside its own
+    (the counts add up, the newest 10 visits stay, Yardlet's title stays); the rest are added. The file keeps each
+    imported profile's newest visit (`imports` in `AddressHistory.json`), so importing the same profile again, for
+    another site's sign-in for example, adds only the visits made since and never counts one twice; a page removed with
+    ⇧fn⌫ comes back only when it is visited again there. The file is written by the history's own writer, off the main
+    thread.
+  - Both the cookies and the history are read before anything is written, so a refused keychain item or a database that
+    cannot be read imports nothing ("The browser's visit history could not be read. Try again in a moment.").
 - **Browsers it looks for:** In `~/Library/Application Support` it looks, in this order, for the
   Chromium family Whale, Chrome, Edge, Brave, Arc, Comet, Vivaldi, Opera, Opera GX, Yandex, Helium and Chromium, and the
   Firefox family Firefox, Zen, Floorp, LibreWolf and Waterfox. Folder and keychain names and the evidence are in the
@@ -352,14 +383,15 @@ cookies across host restarts.
 - **Why delete and then insert:** If the other browser's sign-in mixes with cookies of the same site already in Yardlet,
   the cookies of two sessions go to one site. The Google account site blocked such a state with `/CookieMismatch`
   (sections 8 and 9). The Claude app's import overwrites without deleting.
-- **Security:** For the Chromium family, the keychain is read once, at the moment the person presses Import
-  (`SecItemCopyMatching`, service name only, on a background thread), and the password and key are used only in memory
-  and then zeroed. The Firefox family does not read the keychain. The browser may be writing to the cookie DB, so the DB
-  is copied with `-journal` and `-wal` to a private folder (0700) in `$TMPDIR` and opened read-only; if the copy was
-  taken mid-write and does not open, it is copied again after 0.3 seconds (up to three times). The copy is deleted right
-  after reading (it is not sent to the Trash, even though the values are still encrypted). The original is never opened.
-  Cookie values travel only through the pipe between the app and the host, and stay out of the screen, logs, the model
-  and files (the host's command log records only command names). There is no agent tool.
+- **Security:** For the Chromium family, the keychain is read once, at the moment the person presses Import with sites
+  checked (`SecItemCopyMatching`, service name only, on a background thread), and the password and key are used only in
+  memory and then zeroed. The Firefox family, and the history of either family, do not read the keychain. The browser
+  may be writing to the cookie or history DB, so the DB is copied with `-journal` and `-wal` to a private folder (0700)
+  in `$TMPDIR` and opened read-only; if the copy was taken mid-write and does not open, it is copied again after 0.3
+  seconds (up to three times). The copy is deleted right after reading (it is not sent to the Trash, even though the
+  values are still encrypted). The original is never opened. Cookie values travel only through the pipe between the
+  app and the host, and stay out of the screen, logs, the model and files (the host's command log records only command
+  names). Imported history is written only to the address history's file. There is no agent tool.
 - **Limits:** Sites that keep the sign-in in localStorage or IndexedDB do not come along (the Claude app's import moves
   localStorage as well). Chromium shortens the expiry of inserted cookies to at most 400 days from insertion (source
   evidence, not measured with QA). Imported cookies share that browser's session, so on some sites signing out on one
@@ -378,7 +410,11 @@ cookies across host restarts.
   are gone; the stored shapes are `__Host-qa_signin accounts.example.com Secure HttpOnly Lax`,
   `qa_plain .example.com non-Secure Lax session`, `qa_session .example.com Secure HttpOnly None`,
   `qa_signin accounts.example.com Secure HttpOnly None`; `keep.test` stays as it was and `other.test` does not come in;
-  the panel page reloads and sees `qa_local`; no values are in the app or host logs.
+  the panel page reloads and sees `qa_local`; no values are in the app or host logs. The same profile has a `History`
+  (one page visited twice, once typed, and a Google search, dated just before the run, after the earlier run's import
+  that the QA home keeps): the import also brings the page with 2 visits, 1 typed, and its title, and the search, and
+  the panel says "Imported 2 pages of visit history from Whale." (a search counts as its results page); importing the profile again with no site brings
+  nothing and says "Whale had no new visit history."
   **Firefox and unreadable browsers:** in the same QA home it adds a fake Firefox folder (two profiles in `profiles.ini`,
   where the one the install uses differs from `Default=1`; a schema 17 `cookies.sqlite` left in WAL: a host-only Strict
   cookie on `accounts.example.net`, SameSite-unspecified, Secure None and non-Secure None cookies on `.example.net`, a

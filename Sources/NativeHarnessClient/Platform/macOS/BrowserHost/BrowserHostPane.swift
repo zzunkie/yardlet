@@ -88,7 +88,7 @@ final class BrowserHostPaneController {
     var isVaultFilling = false
     var isMakingPasskey = false
     var vaultDraft: BrowserVaultDraft?
-    /// "Import Sign-ins from Another Browser…" from the page's menu, while its sheet is open.
+    /// "Import from Another Browser…" from the page's menu, while its sheet is open.
     var loginImport: BrowserLoginImportRequest?
     /// Two-factor codes (§14): a code field to fill the current code into; a setup QR code to save.
     var vaultCodeOffer: BrowserVaultCodeOffer?
@@ -1371,8 +1371,8 @@ struct BrowserHostPane: View {
             }
         }
         .sheet(item: $controller.loginImport) { request in
-            BrowserLoginImportSheet(request: request) { profile, sites in
-                try await controller.importLogins(from: profile, sites: sites)
+            BrowserLoginImportSheet(request: request) { profile, sites, history in
+                try await controller.importLogins(from: profile, sites: sites, history: history)
             } onDone: {
                 controller.loginImport = nil
             }
@@ -1387,6 +1387,7 @@ struct BrowserHostPane: View {
 
     /// The Claude app's Browser pane settings menu and its Viewport submenu: the panel's own size (Responsive), two
     /// desktop sizes, a phone and a tablet, and the size in use when it is none of them; one the agent set says so.
+    /// Then "Import from Another Browser…", where Chrome's and Safari's menus keep their import.
     private var settingsMenu: some View {
         Menu {
             Menu(L10n.string("Viewport")) {
@@ -1403,6 +1404,8 @@ struct BrowserHostPane: View {
                 .pickerStyle(.inline)
                 .labelsHidden()
             }
+            Divider()
+            Button(L10n.string("Import from Another Browser…")) { controller.startLoginImport() }
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 13, weight: .semibold))

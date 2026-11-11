@@ -3028,8 +3028,8 @@
 "Blue" = "Blue";
 "Black" = "Black";
 "Undo" = "Undo";
-"Import Sign-ins from Another Browser…" = "Import Sign-ins from Another Browser…";
-"Import Sign-ins from Another Browser" = "Import Sign-ins from Another Browser";
+"Import from Another Browser…" = "Import from Another Browser…";
+"Import from Another Browser" = "Import from Another Browser";
 "The sites you choose open signed in, in this task and in new tasks. Their cookies already in Yardlet are replaced." = "The sites you choose open signed in, in this task and in new tasks. Their cookies already in Yardlet are replaced.";
 "No browser to import from was found on this Mac. Sign-ins import from Chromium and Firefox browsers such as Whale, Chrome, Arc, Comet and Zen." = "No browser to import from was found on this Mac. Sign-ins import from Chromium and Firefox browsers such as Whale, Chrome, Arc, Comet and Zen.";
 "macOS lets only apps with Full Disk Access read %@'s data, so it is not listed." = "macOS lets only apps with Full Disk Access read %@'s data, so it is not listed.";
@@ -3037,6 +3037,7 @@
 "When you import, macOS asks whether Yardlet may use “%@” in your keychain. Allow it to import." = "When you import, macOS asks whether Yardlet may use “%@” in your keychain. Allow it to import.";
 "This profile has no sites with cookies." = "This profile has no sites with cookies.";
 "No sites match." = "No sites match.";
+"1 site chosen" = "1 site chosen";
 "%lld sites chosen" = "%lld sites chosen";
 "Imported the sign-in for %@ from %@." = "Imported the sign-in for %@ from %@.";
 "Imported sign-ins for %lld sites from %@." = "Imported sign-ins for %lld sites from %@.";
@@ -3045,6 +3046,13 @@
 "Nothing was imported: access to %@'s keychain item was not allowed." = "Nothing was imported: access to %@'s keychain item was not allowed.";
 "The browser's cookies could not be decrypted with its key." = "The browser's cookies could not be decrypted with its key.";
 "Yardlet's browser did not take the sign-ins. Try again." = "Yardlet's browser did not take the sign-ins. Try again.";
+"The sites you choose open signed in, in new tasks. Their cookies already in Yardlet are replaced." = "The sites you choose open signed in, in new tasks. Their cookies already in Yardlet are replaced.";
+"Import visit history" = "Import visit history";
+"The profile's whole history from the last %lld days, up to %lld pages, not only the sites above. The address field suggests pages from it." = "The profile's whole history from the last %lld days, up to %lld pages, not only the sites above. The address field suggests pages from it.";
+"Imported 1 page of visit history from %@." = "Imported 1 page of visit history from %@.";
+"Imported %lld pages of visit history from %@." = "Imported %lld pages of visit history from %@.";
+"%@ had no new visit history." = "%@ had no new visit history.";
+"The browser's visit history could not be read. Try again in a moment." = "The browser's visit history could not be read. Try again in a moment.";
 
 
 /* Apple connectors: App Store Connect, the Mac's calendars, reminders, and contacts, and Xcode (docs/CONNECTORS.md, "Apple"). */
