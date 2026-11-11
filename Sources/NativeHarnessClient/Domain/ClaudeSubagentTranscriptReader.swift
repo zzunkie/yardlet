@@ -309,7 +309,9 @@ struct ClaudeSubagentTranscriptReader: Sendable {
         var previousAssistant: String?
         var points: [(Int, String, String, String?, Bool, [CodexUserInput]?, String)] = []
         for (index, value) in chain.enumerated() {
+            // A compaction's summary is the model's next context, not a request the person made.
             guard value["isMeta"]?.boolValue != true, value["isSidechain"]?.boolValue != true,
+                  value["isCompactSummary"]?.boolValue != true,
                   value["parent_tool_use_id"]?.stringValue?.isEmpty != false, !Self.isClaudesOwnNotice(value),
                   let uuid = value["uuid"]?.stringValue, UUID(uuidString: uuid) != nil else { continue }
             if value["type"]?.stringValue == "assistant" { previousAssistant = uuid; continue }
@@ -323,8 +325,9 @@ struct ClaudeSubagentTranscriptReader: Sendable {
             let text = ClaudeHostNotice.stripped(content?.stringValue ?? blocks.compactMap {
                 $0["type"]?.stringValue == "text" ? $0["text"]?.stringValue : nil
             }.joined(separator: "\n"))
-            // The output half of a CLI `!` command belongs to its command, which is the point.
-            if ClaudeBashMessage.isOutputOnly(text) { continue }
+            // The output half of a CLI `!` command belongs to its command, which is the point. A slash
+            // command and what it printed are no request to edit.
+            if ClaudeBashMessage.isOutputOnly(text) || ClaudeLocalCommand.parse(text) != nil { continue }
             var images: [CodexUserInput] = []
             var supported = true
             for block in blocks where block["type"]?.stringValue != "text" {
@@ -713,7 +716,18 @@ struct ClaudeSubagentTranscriptReader: Sendable {
                 identities[entry.id] = (stableID, timestamp, sourceID)
             }
         }
+        // Claude saves a compaction before the `/compact` that ran it; the marker waits for the next record
+        // it shows, so it follows that command as the live stream showed them.
+        var heldCompaction: JSONValue?
+        func showHeldCompaction() {
+            guard let held = heldCompaction else { return }
+            heldCompaction = nil
+            let lastID = builder.entries.last?.id
+            for payload in projection.payloads(from: held) { builder.apply(payload) }
+            record(added(after: lastID), from: held)
+        }
         for value in chain {
+            if heldCompaction != nil, !Self.followsItsCompaction(value) { showHeldCompaction() }
             // A message sent while a turn ran is saved as the command Claude read into that turn,
             // not as a user record; it stays in that turn, as the live stream showed it (D13).
             if value["type"]?.stringValue == "attachment", let text = Self.messageReadIntoTurn(value["attachment"]) {
@@ -765,9 +779,27 @@ struct ClaudeSubagentTranscriptReader: Sendable {
                           let data = source?["data"]?.stringValue else { return TranscriptImageAttachment(url: nil, name: nil) }
                     return TranscriptImageAttachment(url: InlineImageInput.url(mimeType: mimeType, base64: data), name: nil)
                 }
+                // A slash command reads as the request Yardlet sent, and what it printed as the stream's card.
+                if images.isEmpty, let command = ClaudeLocalCommand.parse(text) {
+                    switch command {
+                    case let .request(line):
+                        builder.appendUser(line)
+                        if heldCompaction != nil {
+                            record(added(after: lastID), from: value)
+                            showHeldCompaction()
+                            continue
+                        }
+                    case let .output(output):
+                        guard !output.isEmpty, let uuid = value["uuid"]?.stringValue else { continue }
+                        let printed = JSONValue.object(["type": .string("system"), "subtype": .string("local_command_output"),
+                                                        "content": .string(output), "uuid": .string(uuid)])
+                        for payload in projection.payloads(from: printed) { builder.apply(payload) }
+                        record(added(after: lastID), from: value)
+                        continue
+                    }
                 // The CLI's own `!` saves the command and its output as two records; they read
                 // as one command, as the Claude app's single bash message does.
-                if images.isEmpty, let last = builder.entries.last, case let .user(previous, nil) = last.content,
+                } else if images.isEmpty, let last = builder.entries.last, case let .user(previous, nil) = last.content,
                    let joined = ClaudeBashMessage.joining(input: previous, output: text) {
                     builder.replaceUserText(of: last.id, with: joined)
                 } else if !text.isEmpty || !images.isEmpty {
@@ -784,9 +816,14 @@ struct ClaudeSubagentTranscriptReader: Sendable {
                 object["compact_metadata"] = .object(["pre_tokens": saved["preTokens"] ?? .null,
                                                       "post_tokens": saved["postTokens"] ?? .null])
             }
+            if isCompaction {
+                heldCompaction = .object(object)
+                continue
+            }
             for payload in projection.payloads(from: .object(object)) { builder.apply(payload) }
             record(added(after: lastID), from: value)
         }
+        showHeldCompaction()
         builder.apply(.turnCompleted)
         var entries = builder.entries.suffix(limit).map { entry in
             let identity = identities[entry.id]
@@ -814,6 +851,20 @@ struct ClaudeSubagentTranscriptReader: Sendable {
                 hasEarlierRecords: hasEarlierRecords),
             firstSource: entries.first.flatMap { sources[$0.id] },
             leadingPartEnd: leadingPartEnd, firstTurnSource: firstTurnSource)
+    }
+
+    /// Whether a record leaves a compaction saved before it still waiting for its `/compact`: the summary
+    /// and notes Claude saves after a compaction show nothing, and the command it ran shows before it.
+    static func followsItsCompaction(_ value: JSONValue) -> Bool {
+        if value["isMeta"]?.boolValue == true || value["isCompactSummary"]?.boolValue == true
+            || value["isVisibleInTranscriptOnly"]?.boolValue == true { return true }
+        guard value["type"]?.stringValue == "user" else { return false }
+        let content = value["message"]?["content"]
+        let text = content?.stringValue ?? content?.arrayValue?.compactMap {
+            $0["type"]?.stringValue == "text" ? $0["text"]?.stringValue : nil
+        }.joined(separator: "\n") ?? ""
+        guard case let .request(line)? = ClaudeLocalCommand.parse(ClaudeHostNotice.stripped(text)) else { return false }
+        return line == ClaudeLocalCommand.compactName || line.hasPrefix(ClaudeLocalCommand.compactName + " ")
     }
 
     /// The text of a `user` record Claude Code wrote to start a turn when a background command or

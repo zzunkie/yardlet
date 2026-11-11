@@ -602,6 +602,13 @@ nothing to show while it is read shows as loading instead of "Start a conversati
     marker (`.compaction`, with the token count from `compactMetadata`), and the summary (`isCompactSummary`,
     `isVisibleInTranscriptOnly`) is hidden. Edit and fork points (`readSession`, `conversationPoints`) still stop at
     compaction.
+  - A slash command is saved as two `user` records of Claude Code's own (2.1.322): the command,
+    `<command-name>/compact</command-name>` with its `<command-message>` and `<command-args>`, and what it printed,
+    `<local-command-stdout>` or `<local-command-stderr>`, after an `isMeta` `<local-command-caveat>`. They read as the
+    live stream showed them (`ClaudeLocalCommand`): the command as the request it was sent as (`/compact` with its
+    arguments), and the output as the stream's `local_command_output` card. Claude saves a compaction before the
+    `/compact` that ran it; its marker is shown after that command, as it was live. None of them, nor a compaction's
+    summary, is an edit or rewind point.
   - For an attached task, everything from the first turn on (including what the runtime streamed) stays as it is, and
     the turns read are put before the boundary entry (`TranscriptBuilder.replaceEntries(before:)`). In the conversation
     this is `ConversationEarlierTurns.providerFile`, and the marker disappears once the read reaches the start.

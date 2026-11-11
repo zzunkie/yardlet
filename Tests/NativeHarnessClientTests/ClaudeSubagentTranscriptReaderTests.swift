@@ -432,6 +432,40 @@ final class ClaudeSubagentTranscriptReaderTests: XCTestCase {
         XCTAssertEqual(try reader.conversationPoints(sessionID: parent).map(\.text), ["Open the CS sessions.", "Anything else?"])
         XCTAssertEqual(ClaudeHostNotice.stripped("Plain <b>text</b>"), "Plain <b>text</b>")
         XCTAssertFalse(ClaudeHostNotice.isOnlyNotice("Anything else?"))
+
+        // A slash command, as 2.1.322 saves the `/compact` Yardlet sends: the compaction first, then the
+        // command and what it printed as records of their own. They read as the live stream showed them:
+        // the request, its compaction's marker, the output's card; and none is a request to edit.
+        let caveat = "<local-command-caveat>The command below was run directly in Claude Code.</local-command-caveat>"
+        let command = #"<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>"#
+        try mainLog(root, [
+            #"{"type":"user","uuid":"00000000-0000-4000-8000-000000000011","parentUuid":null,"origin":{"kind":"human"},"message":{"role":"user","content":"Run the tests."}}"#,
+            #"{"type":"assistant","uuid":"00000000-0000-4000-8000-000000000012","parentUuid":"00000000-0000-4000-8000-000000000011","message":{"id":"m5","role":"assistant","content":[{"type":"text","text":"All green."}]}}"#,
+            #"{"type":"system","subtype":"compact_boundary","uuid":"00000000-0000-4000-8000-000000000013","parentUuid":null,"logicalParentUuid":"00000000-0000-4000-8000-000000000012","content":"Conversation compacted","compactMetadata":{"trigger":"manual","preTokens":254503,"postTokens":20114}}"#,
+            #"{"type":"user","uuid":"00000000-0000-4000-8000-000000000014","parentUuid":"00000000-0000-4000-8000-000000000013","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"This session is being continued from a previous conversation."}}"#,
+            #"{"type":"user","uuid":"00000000-0000-4000-8000-000000000015","parentUuid":"00000000-0000-4000-8000-000000000014","isMeta":true,"message":{"role":"user","content":"\#(caveat)"}}"#,
+            #"{"type":"user","uuid":"00000000-0000-4000-8000-000000000016","parentUuid":"00000000-0000-4000-8000-000000000015","message":{"role":"user","content":"\#(command)"}}"#,
+            #"{"type":"user","uuid":"00000000-0000-4000-8000-000000000017","parentUuid":"00000000-0000-4000-8000-000000000016","message":{"role":"user","content":"<local-command-stdout>Compacted </local-command-stdout>"}}"#,
+            #"{"type":"user","uuid":"00000000-0000-4000-8000-000000000018","parentUuid":"00000000-0000-4000-8000-000000000017","origin":{"kind":"human"},"message":{"role":"user","content":"Now the docs."}}"#,
+            #"{"type":"assistant","uuid":"00000000-0000-4000-8000-000000000019","parentUuid":"00000000-0000-4000-8000-000000000018","message":{"id":"m6","role":"assistant","content":[{"type":"text","text":"Updated."}]}}"#
+        ])
+        let compacted = try XCTUnwrap(reader.readConversation(sessionID: parent)).entries.compactMap { entry -> String? in
+            switch entry.content {
+            case let .user(text, _): "user: \(text)"
+            case let .assistant(text, _): "assistant: \(text)"
+            case let .compaction(compaction): "compaction: \(compaction.tokensBefore ?? 0) → \(compaction.tokensAfter ?? 0)"
+            case let .activity(activity, _): "\(activity.title): \(activity.output ?? "")"
+            default: nil
+            }
+        }
+        XCTAssertEqual(compacted, ["user: Run the tests.", "assistant: All green.", "user: /compact",
+                                   "compaction: 254503 → 20114", "\(L10n.string("Command output")): Compacted",
+                                   "user: Now the docs.", "assistant: Updated."])
+        XCTAssertEqual(try reader.conversationPoints(sessionID: parent).map(\.text), ["Now the docs."],
+                       "Neither the compaction's summary nor the command or its output is a request to edit")
+        XCTAssertEqual(ClaudeLocalCommand.parse(#"<command-name>/compact</command-name><command-args> keep the API notes </command-args>"#),
+                       .request("/compact keep the API notes"))
+        XCTAssertNil(ClaudeLocalCommand.parse("<command-name>/compact</command-name> and more words"), "Words of the person's own")
     }
 
     /// A child conversation as the reader reads it draws in the subtask panel (plan M8): its request,
