@@ -17,6 +17,8 @@ protocol CodexTransport: Actor {
 actor CodexProcessTransport: CodexTransport {
     private struct PendingRequest {
         let method: String
+        /// The App Server the request was written to, by `launches`; its exit ends the request.
+        let launch: Int
         let continuation: CheckedContinuation<CodexRPCIncomingMessage, Error>
         let timeoutTask: Task<Void, Never>
     }
@@ -30,6 +32,8 @@ actor CodexProcessTransport: CodexTransport {
     private let notificationContinuation: AsyncStream<CodexRawFrame>.Continuation
 
     private var channel: LineDelimitedProcessChannel?
+    /// How many App Servers this transport has started; `channel` is the last of them.
+    private var launches = 0
     private var readerTask: Task<Void, Never>?
     private var pending: [Int64: PendingRequest] = [:]
     private var stopped = false
@@ -59,15 +63,13 @@ actor CodexProcessTransport: CodexTransport {
     func start() async throws {
         await LoginShellPath.ready()
         if let channel, channel.isRunning { return }
-        guard !stopped else {
-            throw HarnessAdapterError.processExited(
-                code: -1,
-                message: "Codex transport cannot restart after being stopped"
-            )
-        }
+        try requireNotStopped()
 
         // Without a manager the App Server starts with Yardlet's own environment.
         let environment = try await environmentManager?.processEnvironment(scope: environmentScope).values
+        // Another request may have started it, or `stop()` ended the transport, while this one waited.
+        if let channel, channel.isRunning { return }
+        try requireNotStopped()
         let channel = try LineDelimitedProcessChannel(
             .init(executableURL: executableURL,
                   arguments: ["app-server", "--stdio"],
@@ -76,12 +78,23 @@ actor CodexProcessTransport: CodexTransport {
                   processRegistry: processRegistry),
             stderrLimit: 16 * 1024
         )
+        launches += 1
+        let launch = launches
         self.channel = channel
         let events = channel.events
         readerTask = Task { [weak self] in
             for await event in events {
-                await self?.accept(event)
+                await self?.accept(event, from: launch)
             }
+        }
+    }
+
+    private func requireNotStopped() throws {
+        guard !stopped else {
+            throw HarnessAdapterError.processExited(
+                code: -1,
+                message: "Codex transport cannot restart after being stopped"
+            )
         }
     }
 
@@ -100,6 +113,7 @@ actor CodexProcessTransport: CodexTransport {
             }
             pending[id] = PendingRequest(
                 method: request.method,
+                launch: launches,
                 continuation: continuation,
                 timeoutTask: timeoutTask
             )
@@ -150,7 +164,7 @@ actor CodexProcessTransport: CodexTransport {
         return channel
     }
 
-    private func accept(_ event: LineDelimitedProcessChannel.Event) {
+    private func accept(_ event: LineDelimitedProcessChannel.Event, from launch: Int) {
         switch event {
         case let .line(line):
             do {
@@ -172,7 +186,10 @@ actor CodexProcessTransport: CodexTransport {
                 )
             }
         case let .exited(code, stderr):
-            failPending(HarnessAdapterError.processExited(code: code, message: stderr))
+            // The exit is reported once the App Server's output has been read, so a request may already
+            // have started the next one: only what was sent to this one ends. The notifications end
+            // either way, as when the exit comes first, since the connection they belong to has ended.
+            failPending(HarnessAdapterError.processExited(code: code, message: stderr), sentTo: launch)
             notificationContinuation.finish()
         }
     }
@@ -206,10 +223,11 @@ actor CodexProcessTransport: CodexTransport {
         )
     }
 
-    private func failPending(_ error: Error) {
-        let requests = pending.values
-        pending.removeAll()
-        for request in requests {
+    /// Ends the requests that wait on the App Server `launch` started, or on any App Server.
+    private func failPending(_ error: Error, sentTo launch: Int? = nil) {
+        let ended = pending.filter { launch == nil || $0.value.launch == launch }
+        for id in ended.keys { pending.removeValue(forKey: id) }
+        for request in ended.values {
             request.timeoutTask.cancel()
             request.continuation.resume(throwing: error)
         }
