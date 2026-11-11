@@ -194,7 +194,7 @@ batch's, with its `action` number and `tool`; a batch that holds a picture keeps
 ### Vault tools
 
 The agent fills a sign-in the person saved in the Yardlet vault into the page without seeing the values
-(`VaultToolCatalog`). The design and decisions are in [BROWSER_VAULT_DESIGN](BROWSER_VAULT_DESIGN.md). The tool is in
+(`VaultToolCatalog`). How the vault works is in [BROWSER_VAULT_DESIGN](BROWSER_VAULT_DESIGN.md). The tool is in
 the list only for a task with browser tools, while the vault is on and holds at least one item (otherwise it is not in
 the list, and a call is refused with "off or empty"). When the vault is turned on or off, or its first item appears or
 its last item goes, `tools/watch` reports it. It cannot go in a batch (`browser_batch`). It is not in the fallback list
