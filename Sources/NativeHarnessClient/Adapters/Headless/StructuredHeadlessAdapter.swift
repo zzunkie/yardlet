@@ -208,7 +208,8 @@ actor StructuredHeadlessAdapter: HarnessAdapter, ProviderCapabilityProviding, Ha
     func interrupt(_ session: HarnessSessionHandle) async throws {
         guard let process = processes[session.localSessionID], process.isRunning else { return }
         interruptedSessionIDs.insert(session.localSessionID)
-        process.interrupt()
+        // A print-mode turn is the process itself and has no cancel request of its own.
+        NativeProcessTree.interrupt(process: process)
     }
 
     func respond(

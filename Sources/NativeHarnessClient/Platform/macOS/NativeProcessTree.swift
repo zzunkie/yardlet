@@ -11,6 +11,12 @@ enum NativeProcessTree {
         try process.run()
     }
 
+    /// Stops a process the way Control-C would, for a CLI whose turn is the process itself and that has no request
+    /// to cancel one: SIGINT, which lets it end the turn and save it.
+    static func interrupt(process: Process) {
+        process.interrupt()
+    }
+
     static func terminate(rootPID: pid_t) {
         guard rootPID > 0 else { return }
 
