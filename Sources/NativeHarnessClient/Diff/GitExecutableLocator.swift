@@ -64,8 +64,23 @@ enum GitExecutableLocator {
     /// status, a credential helper, a signing program. A GUI launch's PATH has only the system's
     /// folders, so with it a Homebrew Git cannot find the `git-lfs` installed beside it, and a
     /// checkout in a repository with LFS files fails with "the remote end hung up unexpectedly".
+    ///
+    /// The file system monitor is off for the run (`withFileSystemMonitorOff`).
     static func environment(for executableURL: URL, overrides: [String: String] = [:]) -> [String: String] {
-        RuntimeProcessEnvironment.values(executableURL: executableURL, overrides: overrides)
+        withFileSystemMonitorOff(RuntimeProcessEnvironment.values(executableURL: executableURL, overrides: overrides))
+    }
+
+    /// `environment` with `core.fsmonitor` false for the run, whatever the repository's own config says. That
+    /// setting may name a program, which Git starts on a status, a diff or a file listing, and Yardlet reads
+    /// folders the person has only opened. Config given through the environment (Git 2.31 and later) is read
+    /// over every config file and under a `-c` option; pairs the environment already carries stay ahead of it.
+    static func withFileSystemMonitorOff(_ environment: [String: String]) -> [String: String] {
+        var environment = environment
+        let count = max(0, environment["GIT_CONFIG_COUNT"].flatMap(Int.init) ?? 0)
+        environment["GIT_CONFIG_KEY_\(count)"] = "core.fsmonitor"
+        environment["GIT_CONFIG_VALUE_\(count)"] = "false"
+        environment["GIT_CONFIG_COUNT"] = String(count + 1)
+        return environment
     }
 
     private static func join(_ folder: String, _ name: String) -> String {

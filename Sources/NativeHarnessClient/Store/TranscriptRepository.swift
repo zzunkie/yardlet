@@ -196,7 +196,8 @@ final class FileTranscriptRepository: TranscriptRepository, @unchecked Sendable 
         stored[sessionID] = nil
         guard let data = try? JSONEncoder().encode(entries) else { return }
         do {
-            try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true,
+                                            attributes: [.posixPermissions: 0o700])
             // The changes go first: stopped between the two, the folder holds the older snapshot
             // whole rather than changes made to it read onto the newer one.
             removeChanges(for: sessionID)

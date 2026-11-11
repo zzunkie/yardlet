@@ -58,5 +58,14 @@ final class ProductIdentityTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: existing.appending(path: "session-index.sqlite3").path()
         ))
+
+        // The folder is the person's alone, also one that was made open to the Mac's other accounts.
+        func permissions() throws -> Int? {
+            try FileManager.default.attributesOfItem(atPath: destination.path(percentEncoded: false))[.posixPermissions] as? Int
+        }
+        XCTAssertEqual(try permissions(), 0o700)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path(percentEncoded: false))
+        _ = try YardletProduct.storageRootURL(homeURL: home, applicationSupportBaseURL: support)
+        XCTAssertEqual(try permissions(), 0o700)
     }
 }

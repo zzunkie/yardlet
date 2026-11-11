@@ -104,7 +104,9 @@ folder. Codex, Kimi Code and Grok Build account folders keep their own history.
 ## Yardlet's own records
 
 Yardlet keeps its link index in `~/.yardlet/session-index.sqlite3`, together with drafts and read caches. This data is
-separate from the harness's native conversations and session IDs.
+separate from the harness's native conversations and session IDs. `~/.yardlet` is the person's alone: Yardlet makes it
+with mode 0700 and sets that mode again at each launch (`YardletProduct.storageRootURL`), so the Mac's other accounts
+read nothing in it, whatever mode the files inside have.
 
 - **When the index cannot be opened at launch:** Yardlet does not know which tasks exist, so it runs with an empty task
   list and keeps every record it would keep beside the index (window layout and tabs, projects, schedules, drafts, task

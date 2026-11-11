@@ -784,6 +784,8 @@ final class ConnectorTests: XCTestCase {
         repository.save([record])
         repository.finishSaving()
         XCTAssertEqual(repository.load(), [record])
+        XCTAssertEqual(try FileManager.default.attributesOfItem(
+            atPath: directory.appending(path: "connectors.json").path(percentEncoded: false))[.posixPermissions] as? Int, 0o600)
         let text = try String(contentsOf: directory.appending(path: "connectors.json"), encoding: .utf8)
         XCTAssertFalse(text.contains("access"), text)
         XCTAssertTrue(text.contains("\"version\" : 1"))
