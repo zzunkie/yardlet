@@ -314,7 +314,8 @@ final class MainWindow {
         Task { await model.send(text, to: session) }
     }
 
-    /// A request's answer from its card, carried out as the Mac's card does (`ConversationActions.respond`).
+    /// A request's answer from its card, carried out as the Mac's card does (`ConversationActions.respond`); a form's
+    /// answer comes with the route the card made of what was entered.
     private func answer(_ request: ConversationRequest, _ response: ConversationRequestResponse) {
         guard let session = selectedSession else { return }
         log.write("answered: \(response.title)")
@@ -322,8 +323,9 @@ final class MainWindow {
             switch response.route {
             case let .decision(decision): await model.respond(to: request.id, decision: decision, in: session)
             case let .providerAction(action): await model.respond(to: request.id, action: action, in: session)
+            case let .answer(answer): await model.respond(to: request.id, answer: answer, in: session)
             case let .codex(reply): await model.respondCodex(to: request.id, response: reply, in: session)
-            case .answer, .structured: break
+            case .structured: break
             }
         }
     }

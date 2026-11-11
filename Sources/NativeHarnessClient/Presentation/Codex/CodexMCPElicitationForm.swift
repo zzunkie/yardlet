@@ -155,6 +155,25 @@ struct CodexMCPElicitationForm: Equatable, Sendable {
         return input[field.id] ?? field.defaultValue
     }
 
+    /// The values a choice field holds.
+    func picked(_ field: Field, in input: [String: CodexMCPElicitationFieldValue]) -> Set<String> {
+        if case let .picked(picked)? = value(of: field, in: input) { return picked }
+        return []
+    }
+
+    /// A choice field's value once `choice` is pressed: a multiple choice adds or drops it, a single
+    /// choice takes it, and pressing an optional single choice's pick again leaves it empty.
+    func toggling(_ choice: String, in field: Field,
+                  input: [String: CodexMCPElicitationFieldValue]) -> CodexMCPElicitationFieldValue {
+        var picked = picked(field, in: input)
+        if case .choices = field.kind {
+            if picked.contains(choice) { picked.remove(choice) } else { picked.insert(choice) }
+        } else {
+            picked = picked.contains(choice) && !field.isRequired ? [] : [choice]
+        }
+        return .picked(picked)
+    }
+
     /// The form as its request stands: an answered one reads as the `content` Codex was sent.
     func answered(_ resolution: CodexServerRequestResolution) -> CodexMCPElicitationForm {
         var form = self
@@ -309,6 +328,63 @@ struct CodexMCPElicitationForm: Equatable, Sendable {
                 ? [.withInternetDateTime, .withFractionalSeconds] : [.withInternetDateTime]
             return formatter.date(from: text.uppercased()) != nil
         }
+    }
+
+    // MARK: - Words
+
+    /// What an answered form's field reads as: the value sent, or nil when none was.
+    func sentText(of field: Field) -> String? {
+        switch value(of: field, in: [:]) {
+        case let .text(text)?: return text
+        case let .flag(flag)?: return flag ? L10n.string("Yes") : L10n.string("No")
+        case let .picked(picked)?:
+            let options: [Option] = switch field.kind {
+            case let .choice(options), let .choices(options, _, _): options
+            default: []
+            }
+            let titles = options.filter { picked.contains($0.value) }.map(\.title)
+            return titles.isEmpty ? nil : titles.joined(separator: ", ")
+        case nil: return nil
+        }
+    }
+
+    /// The placeholder of a field the person types in.
+    static func placeholder(_ kind: Kind) -> String {
+        switch kind {
+        case .text(.email?, _, _): "name@example.com"
+        case .text(.uri?, _, _): "https://"
+        case .text(.date?, _, _): L10n.string("YYYY-MM-DD")
+        case .text(.dateTime?, _, _): L10n.string("YYYY-MM-DDThh:mm:ssZ")
+        case .number(true, _, _): L10n.string("Whole number")
+        case .number(false, _, _): L10n.string("Number")
+        default: L10n.string("Answer")
+        }
+    }
+
+    /// What a field takes besides its type, under its control: a length, a range or a count of choices.
+    static func hint(_ kind: Kind) -> String? {
+        switch kind {
+        case let .text(_, minLength?, maxLength?):
+            L10n.format("%1$lld to %2$lld characters", Int64(minLength), Int64(maxLength))
+        case let .text(_, minLength?, nil): L10n.format("At least %lld characters", Int64(minLength))
+        case let .text(_, nil, maxLength?): L10n.format("Up to %lld characters", Int64(maxLength))
+        case let .number(_, minimum?, maximum?):
+            L10n.format("From %1$@ to %2$@", text(minimum), text(maximum))
+        case let .number(_, minimum?, nil): L10n.format("%@ or more", text(minimum))
+        case let .number(_, nil, maximum?): L10n.format("%@ or less", text(maximum))
+        case let .choices(_, minItems?, maxItems?):
+            L10n.format("Choose %1$lld to %2$lld", Int64(minItems), Int64(maxItems))
+        case let .choices(_, minItems?, nil): L10n.format("Choose at least %lld", Int64(minItems))
+        case let .choices(_, nil, maxItems?): L10n.format("Choose up to %lld", Int64(maxItems))
+        case .choices: L10n.string("Choose one or more")
+        default: nil
+        }
+    }
+
+    /// The field's issue once it holds something: an empty required field only keeps Submit off.
+    func shownIssue(of field: Field, in input: [String: CodexMCPElicitationFieldValue]) -> Issue? {
+        guard let issue = issue(of: field, in: input), issue != .missing else { return nil }
+        return issue
     }
 
     /// A limit as the card writes it: without a fraction when it has none.

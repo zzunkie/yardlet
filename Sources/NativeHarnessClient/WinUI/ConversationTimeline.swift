@@ -21,8 +21,10 @@ final class ConversationTimeline {
     private var drawn: [String: (turn: ConversationTurn, element: StackPanel)] = [:]
     private var order: [String] = []
     private var placeholder: String?
-    /// Carries out the answer a request's button chose, where the conversation can be answered here; without it a
-    /// request shows `requestNote` instead of its buttons.
+    /// The request cards, by turn and request, so what a form holds stays while its turn redraws.
+    private var cards: [String: RequestCard] = [:]
+    /// Carries out the answer a request's card sent, with the route its form made, where the conversation can be
+    /// answered here; without it a request shows `requestNote` instead of its answers.
     var respond: ((ConversationRequest, ConversationRequestResponse) -> Void)?
     /// Asks the provider or the host for the turns before the loaded ones, once the window shows every loaded turn.
     var loadEarlier: (() -> Void)?
@@ -52,6 +54,7 @@ final class ConversationTimeline {
             turnsPanel.children.clear()
             drawn = [:]
             order = []
+            cards = [:]
         }
         guard let presentation, !presentation.turns.isEmpty else {
             shown = nil
@@ -123,40 +126,15 @@ final class ConversationTimeline {
         let panel = StackPanel()
         panel.spacing = 8
         for item in turn.prompt + turn.notices + turn.work + turn.answers {
-            if let element = Self.element(for: item, harness: harness, workspaceURL: workspaceURL) {
+            // An answered request is an item of the work, where it happened, and reads as its answer.
+            if case let .request(request) = item.kind {
+                card(for: request, in: turn, requestNote: requestNote).place(in: panel)
+            } else if let element = Self.element(for: item, harness: harness, workspaceURL: workspaceURL) {
                 panel.children.append(element)
             }
         }
-        for request in turn.requests where request.state == .pending {
-            panel.children.append(Self.text(request.title))
-            if let detail = request.detail ?? request.command { panel.children.append(Self.text(detail, muted: true)) }
-            // A form's answers (questions, a plan's review) are not drawn here yet; the card's buttons are.
-            let answers = request.responses.filter {
-                switch $0.route {
-                case .decision, .providerAction, .codex: true
-                case .structured, .answer: false
-                }
-            }
-            if let respond, !answers.isEmpty {
-                let row = StackPanel()
-                row.orientation = .horizontal
-                row.spacing = 8
-                for response in answers {
-                    let button = Button()
-                    button.content = response.title
-                    button.click.addHandler { [weak row] _, _ in
-                        // One answer per request: the row stops taking clicks, and the card redraws once the task
-                        // takes the answer.
-                        row?.isHitTestVisible = false
-                        row?.opacity = 0.6
-                        respond(request, response)
-                    }
-                    row.children.append(button)
-                }
-                panel.children.append(row)
-            } else if let requestNote {
-                panel.children.append(Self.text(requestNote, muted: true))
-            }
+        for request in turn.requests {
+            card(for: request, in: turn, requestNote: requestNote).place(in: panel)
         }
         if case let .error(error) = turn.outcome {
             panel.children.append(Self.text([error.title, error.summary].compactMap { $0 }.joined(separator: "\n")))
@@ -167,6 +145,18 @@ final class ConversationTimeline {
         case .none: break
         }
         return panel
+    }
+
+    /// The card for `request` as it stands, the same one while the request is in the turn.
+    private func card(for request: ConversationRequest, in turn: ConversationTurn, requestNote: String?) -> RequestCard {
+        let key = turn.id + "\n" + request.id
+        if let card = cards[key] {
+            card.update(request, respond: respond, note: requestNote)
+            return card
+        }
+        let card = RequestCard(request: request, respond: respond, note: requestNote)
+        cards[key] = card
+        return card
     }
 
     private static func element(for item: ConversationItem, harness: HarnessKind, workspaceURL: URL?) -> UIElement? {

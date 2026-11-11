@@ -363,6 +363,6 @@ struct ConversationQuestionSummary: View {
     /// What a question was answered with as the card reads it: the values joined with ", ", a
     /// secret hidden.
     static func text(_ answer: ConversationQuestionAnswer, isSecret: Bool) -> String {
-        isSecret ? String(repeating: "•", count: 8) : answer.values.joined(separator: ", ")
+        answer.text(isSecret: isSecret)
     }
 }

@@ -156,21 +156,7 @@ struct ConversationRequestCard: View {
     }
 
     /// An answerable card is not an approval, so its resolved state reads as the answer it was.
-    private var stateTitle: String {
-        switch (formKind, request.state) {
-        case (.question, .pending): L10n.string("Answer required")
-        case (.question, .allowed), (.question, .answered): L10n.string("Answered")
-        case (.plan, .pending): L10n.string("Plan review")
-        case (.plan, .allowed): L10n.string("Plan approved")
-        case (.plan, .denied): L10n.string("Planning continued")
-        case (_, .pending): L10n.string("Approval required")
-        case (_, .allowed): L10n.string("Allowed")
-        case (_, .denied): L10n.string("Denied")
-        case (_, .answered): L10n.string("Resolved")
-        case (_, .expired): L10n.string("Expired")
-        case (_, .rejected): L10n.string("Rejected")
-        }
-    }
+    private var stateTitle: String { request.stateTitle }
 
     private var icon: String {
         switch (formKind, request.state) {

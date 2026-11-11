@@ -573,6 +573,11 @@ struct ConversationQuestionAnswer: Equatable, Sendable {
     var custom: String? = nil
 
     var values: [String] { options + (custom.map { [$0] } ?? []) }
+
+    /// The answer as an answered card reads it: the values joined with ", ", a secret hidden.
+    func text(isSecret: Bool) -> String {
+        isSecret ? String(repeating: "•", count: 8) : values.joined(separator: ", ")
+    }
 }
 
 /// The questions a Codex turn ended on (`request_user_input_async`) once the person answered them,

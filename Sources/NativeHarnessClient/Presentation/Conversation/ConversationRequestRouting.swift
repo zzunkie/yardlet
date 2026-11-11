@@ -113,6 +113,29 @@ enum ConversationRequestResponses {
     }
 }
 
+// MARK: - Words
+
+extension ConversationRequest {
+    /// What the card says above the request's title, for every platform's card: a question or form
+    /// reads as the answer it got, a plan review as the plan's fate, anything else as an approval.
+    var stateTitle: String {
+        switch (form, state) {
+        case (.choices?, .pending), (.freeText?, .pending), (.mcpForm?, .pending): L10n.string("Answer required")
+        case (.choices?, .allowed), (.freeText?, .allowed), (.mcpForm?, .allowed),
+             (.choices?, .answered), (.freeText?, .answered), (.mcpForm?, .answered): L10n.string("Answered")
+        case (.planReview?, .pending): L10n.string("Plan review")
+        case (.planReview?, .allowed): L10n.string("Plan approved")
+        case (.planReview?, .denied): L10n.string("Planning continued")
+        case (_, .pending): L10n.string("Approval required")
+        case (_, .allowed): L10n.string("Allowed")
+        case (_, .denied): L10n.string("Denied")
+        case (_, .answered): L10n.string("Resolved")
+        case (_, .expired): L10n.string("Expired")
+        case (_, .rejected): L10n.string("Rejected")
+        }
+    }
+}
+
 // MARK: - Order
 
 extension ConversationRequest {
