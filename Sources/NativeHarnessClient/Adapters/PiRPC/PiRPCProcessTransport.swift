@@ -26,15 +26,9 @@ actor PiRPCProcessTransport: PiRPCTransport {
     private let messageStream: AsyncStream<PiRPCRawFrame>
     private let messageContinuation: AsyncStream<PiRPCRawFrame>.Continuation
 
-    private var process: Process?
-    private var stdinHandle: FileHandle?
-    private var stdoutHandle: FileHandle?
-    private var stderrHandle: FileHandle?
-    private var chunkContinuation: AsyncStream<Data>.Continuation?
+    private var channel: LineDelimitedProcessChannel?
     private var readerTask: Task<Void, Never>?
     private var pending: [String: PendingRequest] = [:]
-    private var stdoutBuffer = Data()
-    private var stderrBuffer = Data()
     private var stopped = false
 
     init(executableURL: URL, environmentOverrides: [String: String] = [:], requestTimeout: Duration = .seconds(60)) {
@@ -48,7 +42,7 @@ actor PiRPCProcessTransport: PiRPCTransport {
 
     func start(_ configuration: PiRPCLaunchConfiguration) async throws {
         await LoginShellPath.ready()
-        if let process, process.isRunning { return }
+        if let channel, channel.isRunning { return }
         guard !stopped else {
             throw HarnessAdapterError.processExited(
                 code: -1,
@@ -56,48 +50,25 @@ actor PiRPCProcessTransport: PiRPCTransport {
             )
         }
 
-        let process = Process()
-        let stdinPipe = Pipe.childInput()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.executableURL = executableURL
-        process.arguments = configuration.arguments
-        process.currentDirectoryURL = configuration.workspaceURL.standardizedFileURL
-        process.environment = RuntimeProcessEnvironment.values(executableURL: executableURL, overrides: environmentOverrides)
-        process.standardInput = stdinPipe
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        let chunks = AsyncStream<Data>.makeStream()
-        chunkContinuation = chunks.continuation
-        stdoutPipe.fileHandleForReading.readChunks(into: chunks.continuation)
-        stderrPipe.fileHandleForReading.readChunks { [weak self] data in
-            Task { await self?.appendStderr(data) }
-        }
-        process.terminationHandler = { [weak self] process in
-            Task { await self?.processDidTerminate(code: process.terminationStatus) }
-        }
-
-        do {
-            try NativeProcessTree.run(process)
-        } catch {
-            stdoutPipe.fileHandleForReading.readabilityHandler = nil
-            stderrPipe.fileHandleForReading.readabilityHandler = nil
-            throw error
-        }
-        self.process = process
-        stdinHandle = stdinPipe.fileHandleForWriting
-        stdoutHandle = stdoutPipe.fileHandleForReading
-        stderrHandle = stderrPipe.fileHandleForReading
+        let channel = try LineDelimitedProcessChannel(
+            .init(executableURL: executableURL,
+                  arguments: configuration.arguments,
+                  currentDirectoryURL: configuration.workspaceURL.standardizedFileURL,
+                  environment: RuntimeProcessEnvironment.values(executableURL: executableURL,
+                                                                overrides: environmentOverrides)),
+            stderrLimit: 64 * 1024
+        )
+        self.channel = channel
+        let events = channel.events
         readerTask = Task { [weak self] in
-            for await chunk in chunks.stream {
-                await self?.acceptStdoutChunk(chunk)
+            for await event in events {
+                await self?.accept(event)
             }
         }
     }
 
     func request(_ value: JSONValue, id: String) async throws -> JSONValue {
-        try requireRunning()
+        let channel = try runningChannel()
         let data = try codec.encodeLine(value)
         return try await withCheckedThrowingContinuation { continuation in
             let timeoutTask = Task { [weak self, requestTimeout] in
@@ -107,7 +78,7 @@ actor PiRPCProcessTransport: PiRPCTransport {
             }
             pending[id] = PendingRequest(continuation: continuation, timeoutTask: timeoutTask)
             do {
-                try stdinHandle?.write(contentsOf: data)
+                try channel.write(data)
             } catch {
                 timeoutTask.cancel()
                 pending.removeValue(forKey: id)
@@ -117,8 +88,7 @@ actor PiRPCProcessTransport: PiRPCTransport {
     }
 
     func send(_ value: JSONValue) async throws {
-        try requireRunning()
-        try stdinHandle?.write(contentsOf: codec.encodeLine(value))
+        try runningChannel().write(codec.encodeLine(value))
     }
 
     func messages() async -> AsyncStream<PiRPCRawFrame> { messageStream }
@@ -126,21 +96,8 @@ actor PiRPCProcessTransport: PiRPCTransport {
     func stop() async {
         guard !stopped else { return }
         stopped = true
-        stdoutHandle?.readabilityHandler = nil
-        stderrHandle?.readabilityHandler = nil
-        chunkContinuation?.finish()
         readerTask?.cancel()
-        try? stdinHandle?.close()
-        let exitCode: Int32
-        if let process {
-            if process.isRunning {
-                exitCode = NativeProcessTree.terminate(process: process)
-            } else {
-                exitCode = process.terminationStatus
-            }
-        } else {
-            exitCode = 0
-        }
+        let exitCode = channel?.stop() ?? 0
         failPending(
             HarnessAdapterError.processExited(
                 code: exitCode,
@@ -150,13 +107,9 @@ actor PiRPCProcessTransport: PiRPCTransport {
         messageContinuation.finish()
     }
 
-    private func acceptStdoutChunk(_ chunk: Data) {
-        stdoutBuffer.append(chunk)
-        while let newline = stdoutBuffer.firstIndex(of: 0x0A) {
-            var line = Data(stdoutBuffer[..<newline])
-            stdoutBuffer.removeSubrange(...newline)
-            if line.last == 0x0D { line.removeLast() }
-            guard !line.isEmpty else { continue }
+    private func accept(_ event: LineDelimitedProcessChannel.Event) {
+        switch event {
+        case let .line(line):
             do {
                 let value = try codec.decodeLine(line)
                 accept(value, rawData: line)
@@ -171,6 +124,9 @@ actor PiRPCProcessTransport: PiRPCTransport {
                     )
                 )
             }
+        case let .exited(code, stderr):
+            failPending(HarnessAdapterError.processExited(code: code, message: stderr))
+            messageContinuation.finish()
         }
     }
 
@@ -193,25 +149,15 @@ actor PiRPCProcessTransport: PiRPCTransport {
         messageContinuation.yield(PiRPCRawFrame(value: value, data: rawData))
     }
 
-    private func requireRunning() throws {
-        guard process?.isRunning == true else {
+    private func runningChannel() throws -> LineDelimitedProcessChannel {
+        guard let channel, channel.isRunning else {
+            let stderrText = channel?.stderrText ?? ""
             throw HarnessAdapterError.processExited(
-                code: process?.terminationStatus ?? -1,
+                code: channel?.exitCode ?? -1,
                 message: stderrText.isEmpty ? L10n.string("Pi RPC agent is not running") : stderrText
             )
         }
-    }
-
-    private func appendStderr(_ data: Data) {
-        stderrBuffer.append(data)
-        if stderrBuffer.count > 64 * 1024 {
-            stderrBuffer = Data(stderrBuffer.suffix(64 * 1024))
-        }
-    }
-
-    private var stderrText: String {
-        String(decoding: stderrBuffer, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return channel
     }
 
     private func timeoutRequest(_ id: String) {
@@ -221,11 +167,6 @@ actor PiRPCProcessTransport: PiRPCTransport {
                 L10n.string("Pi RPC request timed out")
             )
         )
-    }
-
-    private func processDidTerminate(code: Int32) {
-        failPending(HarnessAdapterError.processExited(code: code, message: stderrText))
-        messageContinuation.finish()
     }
 
     private func failPending(_ error: Error) {
