@@ -200,7 +200,8 @@ if [[ -n "$SPARKLE_FEED_URL" || -n "$SPARKLE_PUBLIC_KEY" ]]; then
     /usr/libexec/PlistBuddy -c "Add :SUFeedURL string $SPARKLE_FEED_URL" \
         -c "Add :SUPublicEDKey string $SPARKLE_PUBLIC_KEY" \
         -c "Add :SUEnableAutomaticChecks bool true" \
-        -c "Add :SUAutomaticallyUpdate bool true" "$CONTENTS_DIR/Info.plist"
+        -c "Add :SUAutomaticallyUpdate bool true" \
+        -c "Add :SUVerifyUpdateBeforeExtraction bool true" "$CONTENTS_DIR/Info.plist"
     echo "Sparkle updates: $SPARKLE_FEED_URL" >&2
 else
     echo "Sparkle updates: off (no YARDLET_SPARKLE_FEED_URL and YARDLET_SPARKLE_PUBLIC_KEY)" >&2

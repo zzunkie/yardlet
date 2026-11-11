@@ -24,9 +24,13 @@ enum YardletUpdater {
 
     enum Problem: LocalizedError, Equatable {
         case nothingStaged, otherApp, alreadyInstalled, unverifiedSignature, otherSigner, linked
+        /// The staged build's number is below the installed app's (`isEarlier`), each named as its bundle names it.
+        case earlier(staged: String, installed: String)
 
         var errorDescription: String? {
             switch self {
+            case let .earlier(staged, installed):
+                L10n.format("The staged build (%@) is earlier than the installed Yardlet (%@), so Yardlet does not install it. To go back to an earlier build, replace the app yourself.", staged, installed)
             case .nothingStaged: L10n.string("Build a release bundle and stage it with scripts/stage-update.sh, then choose Install Update… again.")
             case .otherApp: L10n.string("The staged build is not a Yardlet build.")
             case .alreadyInstalled: L10n.string("The staged build is already installed.")
@@ -59,12 +63,45 @@ enum YardletUpdater {
         guard let identifier = info["CFBundleIdentifier"] as? String, identifier == bundleIdentifier,
               let digest = digests.digest(of: bundle) else { throw Problem.otherApp }
         guard digest != digests.digest(of: installedBundle) else { throw Problem.alreadyInstalled }
+        let installedInfo = NSDictionary(contentsOf: installedBundle.appending(path: "Contents/Info.plist")) as? [String: Any]
+        if isEarlier(info["CFBundleVersion"] as? String, than: installedInfo?["CFBundleVersion"] as? String) {
+            throw Problem.earlier(staged: versionName(info), installed: versionName(installedInfo ?? [:]))
+        }
         let manifest = (try? Data(contentsOf: folder.appending(path: "manifest.json")))
             .flatMap { try? JSONDecoder().decode(JSONValue.self, from: $0) }
         return Candidate(bundleURL: bundle, commit: manifest?["commit"]?.stringValue,
             hasUncommittedChanges: manifest?["dirty"]?.boolValue == true,
             builtAt: manifest?["builtAt"]?.stringValue.flatMap { ISO8601DateFormatter().date(from: $0) },
             executableDigest: digest)
+    }
+
+    /// Whether a staged build's number (`CFBundleVersion`: "33", or numbers between dots) is below the installed
+    /// app's, so installing it would go back. Install Update… only goes forward or sideways, to another build of
+    /// the same number: an earlier build of the same developer passes every signature check and may lack fixes
+    /// the installed one has, and what stages a build may not be the person. An installed app with no number, as
+    /// a build made without one has, is replaced by anything; a staged build with none counts as earlier than one
+    /// that has it. The installer checks the same once the app has quit.
+    static func isEarlier(_ staged: String?, than installed: String?) -> Bool {
+        guard let installed = buildNumbers(installed) else { return false }
+        guard let staged = buildNumbers(staged) else { return true }
+        for index in 0..<max(staged.count, installed.count) {
+            let ours = index < staged.count ? staged[index] : 0, theirs = index < installed.count ? installed[index] : 0
+            if ours != theirs { return ours < theirs }
+        }
+        return false
+    }
+
+    private static func buildNumbers(_ version: String?) -> [Int]? {
+        guard let version, !version.isEmpty else { return nil }
+        let numbers = version.split(separator: ".", omittingEmptySubsequences: false).map { Int($0) }
+        return numbers.contains(nil) ? nil : numbers.compactMap { $0 }
+    }
+
+    /// A bundle's version as the person reads it: "0.11.11 (33)".
+    private static func versionName(_ info: [String: Any]) -> String {
+        let build = info["CFBundleVersion"] as? String
+        guard let version = info["CFBundleShortVersionString"] as? String else { return build ?? "-" }
+        return build.map { "\(version) (\($0))" } ?? version
     }
 
     /// The staged build's signature must verify, and when the installed app is signed by a team
@@ -213,6 +250,24 @@ enum YardletUpdater {
       if [ -z "$requirement" ] || ! /usr/bin/codesign --verify --strict -R "=$requirement" "$pending" 2>>"$log"; then
         say "The staged build is not signed by the installed app's developer ($team); nothing changed"; reopen; exit 1
       fi
+    fi
+    # An earlier build than the installed one is not installed; going back is the person's to do by hand.
+    number() { /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$1/Contents/Info.plist" 2>/dev/null; }
+    numeric() { case $1 in ''|*[!0-9.]*|.*|*.|*..*) return 1 ;; esac; }
+    earlier() {
+      a=$1 b=$2
+      while [ -n "$a" ] || [ -n "$b" ]; do
+        x=${a%%.*} y=${b%%.*}
+        case $a in *.*) a=${a#*.} ;; *) a= ;; esac
+        case $b in *.*) b=${b#*.} ;; *) b= ;; esac
+        if [ "${x:-0}" -lt "${y:-0}" ]; then return 0; fi
+        if [ "${x:-0}" -gt "${y:-0}" ]; then return 1; fi
+      done
+      return 1
+    }
+    installed=$(number "$target") staged=$(number "$pending")
+    if numeric "$installed" && { ! numeric "$staged" || earlier "$staged" "$installed"; }; then
+      say "The staged build ($staged) is earlier than the installed one ($installed); nothing changed"; reopen; exit 1
     fi
     /bin/mkdir -p "$root/Previous"
     /bin/rm -rf "$previous.old"

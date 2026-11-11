@@ -1502,6 +1502,7 @@
 "The staged build's signature could not be verified." = "준비된 빌드의 서명을 확인할 수 없습니다.";
 "The staged build is not signed by the developer who signed the installed Yardlet." = "준비된 빌드가 설치된 Yardlet과 같은 개발자의 서명이 아닙니다.";
 "The staged build is a link to another folder, so Yardlet does not install it." = "대기 중인 빌드가 다른 폴더를 가리키는 링크라서 설치하지 않습니다.";
+"The staged build (%@) is earlier than the installed Yardlet (%@), so Yardlet does not install it. To go back to an earlier build, replace the app yourself." = "준비된 빌드(%@)가 설치된 Yardlet(%@)보다 이전 빌드라서 설치하지 않습니다. 이전 빌드로 돌아가려면 앱을 직접 바꿔 넣으세요.";
 "This Yardlet has no developer's signature, so Yardlet cannot tell who made the staged build. Install it only if you built it." = "지금 Yardlet에는 개발자 서명이 없어서, 대기 중인 빌드를 누가 만들었는지 확인할 수 없습니다. 직접 만든 빌드일 때만 설치하세요.";
 "with uncommitted changes" = "(커밋하지 않은 변경 포함)";
 "Install the staged Yardlet build?" = "준비된 Yardlet 빌드를 설치할까요?";

@@ -27,6 +27,27 @@ if [[ -d "$INSTALLED" ]]; then
             exit 1
         }
     fi
+    # Install Update… goes forward or to another build of the same number, never back.
+    installed_build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$INSTALLED/Contents/Info.plist" 2>/dev/null || true)
+    staged_build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST" 2>/dev/null || true)
+    numbers='^[0-9]+(\.[0-9]+)*$'
+    if [[ "$installed_build" =~ $numbers ]]; then
+        earlier=1
+        if [[ "$staged_build" =~ $numbers ]]; then
+            earlier=0
+            ours=(${(s:.:)staged_build}) theirs=(${(s:.:)installed_build})
+            for (( index = 1; index <= ${#ours} || index <= ${#theirs}; index++ )); do
+                if (( ${ours[index]:-0} != ${theirs[index]:-0} )); then
+                    if (( ${ours[index]:-0} < ${theirs[index]:-0} )); then earlier=1; fi
+                    break
+                fi
+            done
+        fi
+        if (( earlier )); then
+            print -u2 "error: $APP is build ${staged_build:-without a number}, earlier than $INSTALLED (build $installed_build); Install Update… does not go back to an earlier build"
+            exit 1
+        fi
+    fi
 fi
 
 executable=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$PLIST")

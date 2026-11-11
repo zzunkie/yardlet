@@ -107,7 +107,7 @@ Turn off **Settings > General > Automatically check for updates** and Yardlet as
 you check yourself.
 
 An update installs only if it is signed with the release key built into Yardlet and with the same
-Developer ID. Sparkle keeps its settings in Yardlet's own preferences (keys starting with `SU`) and
+Developer ID, and the download is checked against the release key before it is opened. Sparkle keeps its settings in Yardlet's own preferences (keys starting with `SU`) and
 downloads under `~/Library/Caches/com.zzunkie.yardlet/org.sparkle-project.Sparkle/`. It installs no
 login item, launch agent or system helper: its installer runs only while an update is put in place.
 
@@ -254,7 +254,10 @@ Staging verifies the bundle and copies it to `~/Library/Application Support/Yard
 it never touches the installed app. Install Update… asks for confirmation, quits Yardlet through the
 normal quit path (which warns about running tasks), and a detached installer swaps the bundle once the
 app has exited, keeps the previous one in `Updates/Previous`, and reopens Yardlet. Tasks, drafts and
-history live outside the bundle. The installer log is `Updates/install.log`. While tasks run, Install Update…
+history live outside the bundle. The installer log is `Updates/install.log`. Install Update… goes forward, or to
+another build with the same build number (`CFBundleVersion`): a staged build with a lower one than the installed app
+is refused when it is staged, when it would be offered, and again by the installer. To go back to an earlier build,
+replace the app yourself; the previous bundle is in `Updates/Previous`. While tasks run, Install Update…
 also offers **Restart When Tasks Finish**: Yardlet waits until no task or subagent has run for a few seconds, checks
 that the staged build is still the one chosen, and installs through the same quit; the Yardlet menu shows the wait
 and **Cancel Update** ends it.
@@ -262,8 +265,8 @@ and **Cancel Update** ends it.
 Yardlet shows a staged build without being asked, as the Claude app shows a downloaded update: **Restart to
 update** above the account button at the bottom of the sidebar, and the same line above Quit in the menu bar
 menu, both opening Install Update…. It looks when the window opens, when Yardlet comes to the front and once
-a minute, and only checks that the staged build is Yardlet's and not the one installed; the signature is
-checked when you install. A build that updates with Sparkle does not look.
+a minute, and only checks that the staged build is Yardlet's, not the one installed and not an earlier build; the
+signature is checked when you install. A build that updates with Sparkle does not look.
 
 The bundle script uses SwiftPM's native build engine to retain its established resource layout.
 On toolchains that default to Swift Build, use `swift test --build-system native` for the same

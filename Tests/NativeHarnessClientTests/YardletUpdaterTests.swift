@@ -39,6 +39,23 @@ final class YardletUpdaterTests: XCTestCase {
         XCTAssertEqual(candidate.builtAt, Date(timeIntervalSince1970: 1_791_291_600))
         XCTAssertNoThrow(try YardletUpdater.verifySignature(of: candidate.bundleURL))
 
+        // Install Update… does not go back: a staged build numbered below the installed one is not offered, by
+        // number and not by spelling; one of the same number or a later one is.
+        let numbered = try bundle(at: root.appending(path: "Numbered/Yardlet.app"), marker: "installed", version: "100")
+        for (version, isOffered) in [("99", false), ("9.9", false), ("100", true), ("100.1", true), ("101", true)] {
+            try FileManager.default.removeItem(at: staged)
+            try bundle(at: staged, marker: "new", executableSuffix: "build \(version)", version: version)
+            let offer = Result { try YardletUpdater.pending(root: updates, bundleIdentifier: identifier, installedBundle: numbered) }
+            switch offer {
+            case .success: XCTAssertTrue(isOffered, version)
+            case let .failure(error):
+                XCTAssertEqual(error as? YardletUpdater.Problem, .earlier(staged: version, installed: "100"), version)
+                XCTAssertFalse(isOffered, version)
+            }
+        }
+        XCTAssertTrue(YardletUpdater.isEarlier(nil, than: "100"), "A build without a number does not replace one with it")
+        XCTAssertFalse(YardletUpdater.isEarlier("1", than: nil))
+
         // A link to a build elsewhere is not moved into place.
         let elsewhere = root.appending(path: "Elsewhere/Yardlet.app")
         try FileManager.default.createDirectory(at: elsewhere.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -108,6 +125,21 @@ final class YardletUpdaterTests: XCTestCase {
         XCTAssertNotNil(candidate.builtAt)
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: updates.path).filter { $0.hasPrefix(".incoming") }
         XCTAssertEqual(leftovers, [])
+
+        // A build numbered below the installed app's is refused here, before anything is copied.
+        let newer = try bundle(at: root.appending(path: "Newer/Yardlet.app"), marker: "installed", version: "34")
+        let older = try bundle(at: root.appending(path: "older/Yardlet.app"), marker: "older", executableSuffix: "older",
+                               version: "33")
+        let refused = try run("/bin/zsh", [script.path, older.path],
+                              environment: ["YARDLET_UPDATES_DIR": root.appending(path: "OtherUpdates").path,
+                                            "YARDLET_INSTALLED_APP": newer.path])
+        XCTAssertNotEqual(refused.status, 0, refused.output)
+        XCTAssertTrue(refused.output.contains("earlier than"), refused.output)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appending(path: "OtherUpdates/Pending").path))
+        let same = try run("/bin/zsh", [script.path, older.path],
+                           environment: ["YARDLET_UPDATES_DIR": root.appending(path: "OtherUpdates").path,
+                                         "YARDLET_INSTALLED_APP": older.path])
+        XCTAssertEqual(same.status, 0, same.output)
     }
 
     func testInstallerSwapsAfterTheAppQuitsAndKeepsThePreviousApp() throws {
@@ -151,6 +183,21 @@ final class YardletUpdaterTests: XCTestCase {
         XCTAssertEqual(try marker(target), "old")
         XCTAssertTrue(try String(contentsOf: updates.appending(path: "install.log"), encoding: .utf8)
             .contains("holds a link"))
+
+        // Nor does a build numbered below the installed one, staged while the app was quitting.
+        let current = try bundle(at: root.appending(path: "Current/Yardlet.app"), marker: "current", version: "34")
+        try FileManager.default.removeItem(at: staged)
+        try bundle(at: staged, marker: "older", executableSuffix: "older", version: "33.9")
+        let back = try YardletUpdater.launchInstaller(target: current, processID: 999_999, root: updates, relaunch: false)
+        XCTAssertNotEqual(exitStatus(back), 0)
+        XCTAssertEqual(try marker(current), "current")
+        XCTAssertTrue(try String(contentsOf: updates.appending(path: "install.log"), encoding: .utf8)
+            .contains("is earlier than the installed one"))
+        try FileManager.default.removeItem(at: staged)
+        try bundle(at: staged, marker: "same number", executableSuffix: "same number", version: "34")
+        let sideways = try YardletUpdater.launchInstaller(target: current, processID: 999_999, root: updates, relaunch: false)
+        XCTAssertEqual(exitStatus(sideways), 0)
+        XCTAssertEqual(try marker(current), "same number")
     }
 
     // MARK: - Fixtures
@@ -160,12 +207,13 @@ final class YardletUpdaterTests: XCTestCase {
     /// A minimal ad-hoc signed app bundle whose resources carry a marker.
     @discardableResult
     private func bundle(at url: URL, marker: String, identifier: String = "com.zzunkie.yardlet",
-                        executableSuffix: String = "") throws -> URL {
+                        executableSuffix: String = "", version: String? = nil) throws -> URL {
         let contents = url.appending(path: "Contents")
         try FileManager.default.createDirectory(at: contents.appending(path: "MacOS"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: contents.appending(path: "Resources"), withIntermediateDirectories: true)
-        let info: [String: Any] = ["CFBundleIdentifier": identifier, "CFBundleExecutable": "Yardlet",
+        var info: [String: Any] = ["CFBundleIdentifier": identifier, "CFBundleExecutable": "Yardlet",
                                    "CFBundlePackageType": "APPL", "CFBundleName": "Yardlet"]
+        info["CFBundleVersion"] = version
         try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
             .write(to: contents.appending(path: "Info.plist"))
         let executable = contents.appending(path: "MacOS/Yardlet")
