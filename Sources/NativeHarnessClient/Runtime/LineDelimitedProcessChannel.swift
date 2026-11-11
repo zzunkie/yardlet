@@ -25,7 +25,10 @@ final class LineDelimitedProcessChannel: @unchecked Sendable {
 
     enum Event: Equatable, Sendable {
         /// One line of standard output without its line ending (`\n` or `\r\n`). Empty lines are
-        /// skipped, and so is a last line the process never ended.
+        /// skipped, and so is a last line the process never ended. Under a line limit, a longer
+        /// line arrives cut to one byte more than the limit, as soon as it has grown that long,
+        /// and the rest of it is dropped: its owner can tell it was too long, and no more of it
+        /// is ever held.
         case line(Data)
         /// The process ended by itself, with this status and these last words on standard error.
         /// Always the last event.
@@ -39,8 +42,10 @@ final class LineDelimitedProcessChannel: @unchecked Sendable {
     private let input: FileHandle
     private let output: Output
 
-    /// Starts the process. `stderrLimit` is how many bytes of the end of its standard error are kept.
-    init(_ launch: Launch, stderrLimit: Int, drainGrace: Duration = .seconds(1)) throws {
+    /// Starts the process. `stderrLimit` is how many bytes of the end of its standard error are
+    /// kept, and `lineLimit` the longest line taken whole from a process that is not trusted to
+    /// keep its lines short; nil takes a line of any length.
+    init(_ launch: Launch, stderrLimit: Int, lineLimit: Int? = nil, drainGrace: Duration = .seconds(1)) throws {
         let process = Process()
         let stdinPipe = Pipe.childInput()
         let stdoutPipe = Pipe()
@@ -55,7 +60,7 @@ final class LineDelimitedProcessChannel: @unchecked Sendable {
 
         let (events, continuation) = AsyncStream.makeStream(of: Event.self)
         let output = Output(stdout: stdoutPipe.fileHandleForReading, stderr: stderrPipe.fileHandleForReading,
-                            stderrLimit: stderrLimit, continuation: continuation,
+                            stderrLimit: stderrLimit, lineLimit: lineLimit, continuation: continuation,
                             resourceOwner: launch.resourceOwner, processRegistry: launch.processRegistry)
         self.events = events
         self.process = process
@@ -76,6 +81,8 @@ final class LineDelimitedProcessChannel: @unchecked Sendable {
     }
 
     var isRunning: Bool { process.isRunning }
+
+    var processIdentifier: Int32 { process.processIdentifier }
 
     /// The status the process ended with; nil while it runs.
     var exitCode: Int32? { process.isRunning ? nil : process.terminationStatus }
@@ -116,19 +123,20 @@ final class LineDelimitedProcessChannel: @unchecked Sendable {
         private let continuation: AsyncStream<Event>.Continuation
         private let resourceOwner: TaskResourceOwner?
         private let processRegistry: TaskProcessRegistry
-        private var lines = LineSplitter()
+        private var lines: LineSplitter
         private var stderrTail = Data()
         private var stdoutEnded = false
         private var stderrEnded = false
         private var exitCode: Int32?
         private var finished = false
 
-        init(stdout: FileHandle, stderr: FileHandle, stderrLimit: Int,
+        init(stdout: FileHandle, stderr: FileHandle, stderrLimit: Int, lineLimit: Int?,
              continuation: AsyncStream<Event>.Continuation,
              resourceOwner: TaskResourceOwner?, processRegistry: TaskProcessRegistry) {
             self.stdout = stdout
             self.stderr = stderr
             self.stderrLimit = max(0, stderrLimit)
+            lines = LineSplitter(limit: lineLimit.map { max(1, $0) })
             self.continuation = continuation
             self.resourceOwner = resourceOwner
             self.processRegistry = processRegistry
@@ -230,10 +238,19 @@ final class LineDelimitedProcessChannel: @unchecked Sendable {
 
 /// Splits bytes into the lines they hold, as they arrive in chunks.
 private struct LineSplitter {
+    /// The longest line handed over whole; nil for any length.
+    let limit: Int?
     /// What has arrived of the line still being read.
     private var partial = Data()
+    /// The line being read was handed over cut, and the rest of it is dropped as it arrives.
+    private var droppingRestOfLine = false
 
-    /// The lines `chunk` completes, without their line endings (`\n` or `\r\n`). Empty lines are skipped.
+    init(limit: Int? = nil) {
+        self.limit = limit
+    }
+
+    /// The lines `chunk` completes, without their line endings (`\n` or `\r\n`). Empty lines are
+    /// skipped. A line longer than the limit comes cut to one byte more than the limit.
     mutating func append(_ chunk: Data) -> [Data] {
         // Only the new chunk can hold the end of the line being read: a large line (a whole thread
         // with its turns, a picture) arrives in many chunks, and looking through everything
@@ -244,12 +261,27 @@ private struct LineSplitter {
         var lineStart = partial.startIndex
         var searchStart = partial.startIndex + scanned
         while let newline = partial[searchStart...].firstIndex(of: 0x0A) {
-            var lineEnd = newline
-            if lineEnd > lineStart, partial[lineEnd - 1] == 0x0D { lineEnd -= 1 }
-            if lineEnd > lineStart { lines.append(Data(partial[lineStart..<lineEnd])) }
+            if droppingRestOfLine {
+                droppingRestOfLine = false
+            } else {
+                var lineEnd = newline
+                if lineEnd > lineStart, partial[lineEnd - 1] == 0x0D { lineEnd -= 1 }
+                if let limit, lineEnd - lineStart > limit { lineEnd = lineStart + limit + 1 }
+                if lineEnd > lineStart { lines.append(Data(partial[lineStart..<lineEnd])) }
+            }
             lineStart = newline + 1
             searchStart = lineStart
         }
+        if let limit, !droppingRestOfLine {
+            let held = partial.endIndex - lineStart
+            // A line of exactly the limit can still be waiting for the newline after its carriage return.
+            let awaitsNewline = held == limit + 1 && partial[partial.endIndex - 1] == 0x0D
+            if held > limit, !awaitsNewline {
+                lines.append(Data(partial[lineStart..<(lineStart + limit + 1)]))
+                droppingRestOfLine = true
+            }
+        }
+        if droppingRestOfLine { lineStart = partial.endIndex }
         if lineStart == partial.endIndex {
             // Nothing is left of a line: let go of the buffer, which a large line made large.
             partial = Data()
