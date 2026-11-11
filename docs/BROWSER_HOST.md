@@ -1,7 +1,8 @@
 # In-window browser (macOS browser host)
 
 How the in-window browser works on macOS: the CEF host process, the panel, input, accessibility, build and signing,
-security, known limits and QA. The Windows design is [WINDOWS_BROWSER_HOST](WINDOWS_BROWSER_HOST.md).
+security, known limits and QA. The Windows design, not built yet, is
+[WINDOWS_BROWSER_HOST](design/WINDOWS_BROWSER_HOST.md).
 
 ## 1. Overview
 
