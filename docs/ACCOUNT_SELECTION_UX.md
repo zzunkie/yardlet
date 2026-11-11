@@ -21,17 +21,20 @@ storage. Different CLI sign-ins are not merged because they share an email or a 
   ago", and Yardlet looks them up again in the background and updates each one as its answer arrives. A signed-out
   account shows as signed out, and a lookup that could not finish shows "Couldn't refresh · updated N min. ago". Every
   harness uses the same rows, limits and wording.
-- There is one account list (`AccountList`), and it shows in four places with the same rows, limits, update wording and
+- There is one account list (`AccountList`), and it shows in four places with the same rows, update wording and
   refresh position (2026-10-08, B5): the popover of the new task's account chip (that harness's default sign-in and
   saved accounts), a task's **Choose account** sheet (only accounts that share that task's history, most remaining limit
   first), the limit card's **Continue with another account** popover (the same list) and Settings › Harness Accounts (harness
-  filter and search, grouped by account). An account with only one connection is one row, and when several connections
+  filter and search, grouped by account). Where an account is chosen for a task, its limits are bars with their reset
+  times. Settings › Harness Accounts is about the accounts themselves (sign-in, which account new tasks use, adding and
+  removing), so it says the limits on one line in the menus' words ("5h 72% left · Weekly 41% left", a nearly spent
+  window in orange); the bars, resets and pace are in Settings › Usage. An account with only one connection is one row, and when several connections
   are the same account, their connection rows sit under an account header. In the list for moving a task, the current
   account is only shown, accounts that came out signed out at the last check cannot be chosen, and there is no sign-in
   button.
 - Account name, harness/provider, remaining limit and reset time are compared in short rows. Long explanations, nested
   cards and repeated select buttons are cut back. Clicking the limit area shows every limit with its exact reset time
-  and the last lookup time. When there are more than two items, the list shows +N so nothing is hidden.
+  and the last lookup time. When there are more items than the row shows, it says +N so nothing is hidden.
 - The account is chosen next to the project and harness in the new task composer. The picker shows the default
   connection and additional accounts together, and **Add another account** and **Manage accounts** open directly for
   that harness.

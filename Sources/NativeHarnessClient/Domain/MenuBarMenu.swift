@@ -235,10 +235,7 @@ enum MenuBarMenuProjection {
         usageReadings(choices: choices).map { account in
             let label = account.group.identity.displayLabel
             let windows = account.metrics.map { (kind: windowKind(of: $0), window: AccountLimitWindow(metric: $0)) }
-            var parts = [LimitWindowKind.fiveHour, .weekly].compactMap { kind in
-                windows.first { $0.kind == kind }.map { "\(kind.title) \(leftText($0.window))" }
-            }
-            if parts.isEmpty { parts = windows.map { "\($0.window.name) \(leftText($0.window))" } }
+            var parts = windowSummary(account.metrics).map(\.text)
             // As the Codex app's profile menu counts them ("2 available resets").
             if let resets = account.group.choices.compactMap({ $0.snapshot?.usageResets?.availableCount }).max(),
                resets > 0 {
@@ -263,6 +260,17 @@ enum MenuBarMenuProjection {
                 detail: detail.joined(separator: " · ")
             )
         }
+    }
+
+    /// A reading's five-hour and weekly windows in a Usage line's words ("5h 72% left", "Weekly 41% left"); a
+    /// reading with neither lists its windows by their own names. Settings › Harness Accounts says an account's
+    /// limits in the same words.
+    static func windowSummary(_ metrics: [AccountUsageMetric]) -> [(text: String, window: AccountLimitWindow)] {
+        let windows = metrics.map { (kind: windowKind(of: $0), window: AccountLimitWindow(metric: $0)) }
+        let named = [LimitWindowKind.fiveHour, .weekly].compactMap { kind in
+            windows.first { $0.kind == kind }.map { (text: "\(kind.title) \(leftText($0.window))", window: $0.window) }
+        }
+        return named.isEmpty ? windows.map { (text: "\($0.window.name) \(leftText($0.window))", window: $0.window) } : named
     }
 
     /// A reading older than this says its age on its line: an hour is a fifth of the shortest window.

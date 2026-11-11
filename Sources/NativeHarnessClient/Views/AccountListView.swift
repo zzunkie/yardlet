@@ -2,8 +2,9 @@ import SwiftUI
 
 /// The one account list. The new-task account chip, a task's account sheet, a limit card's
 /// "Continue with another account" and Settings › Harness Accounts all show it, each in its own mode: the
-/// same rows, limits, freshness wording and refresh button in the same places for every harness.
-/// Readings and checks belong to the `ProviderConnectionStore`.
+/// same rows, freshness wording and refresh button in the same places for every harness. Where an account
+/// is chosen for a task its limits are bars with their resets; Settings › Harness Accounts says them on one
+/// line, and Settings › Usage has the bars. Readings and checks belong to the `ProviderConnectionStore`.
 struct AccountList: View {
     let mode: AccountListMode
     @Bindable var store: ProviderConnectionStore
@@ -291,7 +292,7 @@ struct AccountListSection: View {
                 .background(ParityTheme.subtleFill, in: RoundedRectangle(cornerRadius: 10))
         } else {
             VStack(alignment: .leading, spacing: 2) {
-                AccountGroupHeader(group: group, freshness: freshness)
+                AccountGroupHeader(group: group, freshness: freshness, summarizesLimits: mode == .manage)
                 ForEach(group.choices) { choice in row(choice, style: .member) }
             }
             .padding(.bottom, 6)
@@ -309,6 +310,7 @@ struct AccountListSection: View {
         return AccountRow(choice: choice, style: style, memberTitle: group.memberTitle(choice),
             selected: AccountListProjection.isSelected(choice, mode: mode, store: store),
             canChoose: canChoose,
+            summarizesLimits: mode == .manage,
             selectedValue: mode.session == nil ? L10n.string("Selected for new tasks") : L10n.string("Current account"),
             showsHarness: showsHarness,
             freshness: style == .account ? freshness : nil,
@@ -365,6 +367,8 @@ struct AccountRow: View {
     var accountLine: String? = nil
     let selected: Bool
     var canChoose = true
+    /// Settings › Harness Accounts: the limits on one line (`AccountUsageBlockView.isSummary`).
+    var summarizesLimits = false
     /// What the selected mark means to VoiceOver.
     var selectedValue = L10n.string("Selected for new tasks")
     var showsHarness = false
@@ -497,7 +501,8 @@ struct AccountRow: View {
         if let usage, !usage.usageBlocks.isEmpty {
             VStack(alignment: .trailing, spacing: 8) {
                 ForEach(usage.usageBlocks) { block in
-                    AccountUsageBlockView(title: choice.title, block: block, resetChoice: usage.resetChoice(for: block))
+                    AccountUsageBlockView(title: choice.title, block: block, resetChoice: usage.resetChoice(for: block),
+                                          isSummary: summarizesLimits)
                 }
             }
         } else {
@@ -515,6 +520,7 @@ struct AccountRow: View {
 private struct AccountGroupHeader: View {
     let group: AccountGroup
     let freshness: AccountFreshness
+    var summarizesLimits = false
     private var organization: String? { group.choices.lazy.compactMap(\.organizationTitle).first }
 
     var body: some View {
@@ -536,7 +542,7 @@ private struct AccountGroupHeader: View {
                 VStack(alignment: .trailing, spacing: 8) {
                     ForEach(group.usageBlocks) { block in
                         AccountUsageBlockView(title: group.identity.displayLabel, block: block,
-                                              resetChoice: group.resetChoice(for: block))
+                                              resetChoice: group.resetChoice(for: block), isSummary: summarizesLimits)
                     }
                 }
             }
@@ -694,6 +700,9 @@ struct AccountUsageBlockView: View {
     let block: AccountUsageBlock
     /// The connection whose harness reported resets of these limits.
     var resetChoice: AccountChoice? = nil
+    /// Settings › Harness Accounts: what is left on one line, in the menus' words. The bars, resets and pace
+    /// are Settings › Usage's.
+    var isSummary = false
     @State private var showsAllLimits = false
 
     var body: some View {
@@ -702,18 +711,24 @@ struct AccountUsageBlockView: View {
                 Text(harnessTitle).font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1)
             }
             Button { showsAllLimits = true } label: {
-                HStack(spacing: 10) {
-                    AccountLimitWindowList(metrics: Array(block.metrics.prefix(2)), reset: .time,
-                                           shortensLongNames: true)
-                    VStack(spacing: 5) {
-                        Image(systemName: "chevron.down")
-                        if block.metrics.count > 2 {
-                            Text("+\(block.metrics.count - 2)").monospacedDigit()
+                Group {
+                    if isSummary {
+                        summary
+                    } else {
+                        HStack(spacing: 10) {
+                            AccountLimitWindowList(metrics: Array(block.metrics.prefix(2)), reset: .time,
+                                                   shortensLongNames: true)
+                            VStack(spacing: 5) {
+                                Image(systemName: "chevron.down")
+                                if block.metrics.count > 2 {
+                                    Text("+\(block.metrics.count - 2)").monospacedDigit()
+                                }
+                            }.font(.caption2).foregroundStyle(.secondary).fixedSize()
                         }
-                    }.font(.caption2).foregroundStyle(.secondary).fixedSize()
+                        // As wide as its limits need, or narrower where the account's address needs the room.
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                // As wide as its limits need, or narrower where the account's address needs the room.
-                .fixedSize(horizontal: false, vertical: true)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -725,6 +740,24 @@ struct AccountUsageBlockView: View {
             }
             if let resetChoice { UsageResetButton(choice: resetChoice) }
         }
+    }
+
+    /// "5h 72% left · Weekly 41% left", a nearly spent window in orange, and how many windows it leaves out.
+    private var summary: some View {
+        let parts = MenuBarMenuProjection.windowSummary(block.metrics)
+        let line = parts.enumerated().reduce(Text(verbatim: "")) { line, part in
+            line + Text(verbatim: part.offset == 0 ? "" : " · ")
+                + Text(verbatim: part.element.text)
+                .foregroundStyle(part.element.window.isNearlySpent ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+        }
+        return HStack(spacing: 6) {
+            line.font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary).lineLimit(1)
+            if block.metrics.count > parts.count {
+                Text("+\(block.metrics.count - parts.count)").font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+            }
+            Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.secondary)
+        }
+        .fixedSize()
     }
 
     private var lastChecked: String {

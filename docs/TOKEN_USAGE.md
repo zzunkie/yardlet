@@ -16,7 +16,8 @@ the menu bar menu and the sidebar's account menu. Nothing is sent anywhere and n
   starting the account's CLI again (`AccountCheckPolicy.ifOlderThan`).
 - **Settings › Usage** (after Harness Accounts), as the Claude and Codex apps put usage in Settings:
   - **Plan limits:** every account with a limit, each window on the bar grid every limit uses, with when it resets or,
-    in orange, when it runs out first at this pace.
+    in orange, when it runs out first at this pace. This is where Settings shows the limits in full; Settings › Harness
+    Accounts says each account's on one line.
   - **Token usage** for Today, 7 days or 30 days: tokens, API-equivalent cost, requests and the share of input read
     from the cache; the last 30 days as bars of their cost with the chosen range in the accent; the range's tokens and
     cost by kind (cache reads, new input, cache writes, output: two bars and a table); and where it went, by model,
