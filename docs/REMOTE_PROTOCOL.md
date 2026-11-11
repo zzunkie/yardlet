@@ -11,8 +11,10 @@ turn, and marks a task read. It also answers questions and plan reviews, startin
 harness, model and worktree the phone picks), images, a line's output and diffs, suggested and queued messages,
 continuing a task a plan limit stopped under another account, answering a browser handoff, seeing and using a
 task's browser tab (§15.25), push notifications, and a task's model, effort and permission mode, slash commands,
-edit and fork (§15.23). Nothing else: no app settings, connectors, file browsing or terminals. Yardlet on another
-computer is a client of the same protocol, as a phone is (§18).
+edit and fork (§15.23). A device also reads a task's workspace files (§15.27) and, with the permissions the person
+gave it at the Mac (§15.28), uses the task's terminals (§15.29); Yardlet on another Mac shows the host's Settings,
+accounts, runtimes and connectors and, with the permission, changes them (§15.36, §15.37). Yardlet on another computer
+is a client of the same protocol, as a phone is (§18).
 
 **One version.** The JSON messages of §2 and §4–§8 travel inside a Noise IK channel (§11–§16), over any
 path: the same network (port 47616 on every interface, found with Bonjour), Tailscale, or the Yardlet relay.

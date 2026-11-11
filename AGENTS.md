@@ -60,3 +60,6 @@ Maintainers keep working notes outside this repository, in the ignored folder `d
   out of tracked files and commit messages.
 - The documents in `docs/` describe how Yardlet works now. When a fact changes, update the document
   that owns it rather than adding a dated note.
+- `docs/design/` holds design records: a design for something not built yet, or one kept for the
+  reasons behind what was built. Each says so in its first lines and names the document that
+  describes the behavior. A design record is not kept current; behavior goes in that document.
