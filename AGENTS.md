@@ -22,6 +22,8 @@ Maintainers keep working notes outside this repository, in the ignored folder `d
   package targets: [Package.swift](Package.swift).
 - Building needs Xcode 27.1 or later. Build with `swift build --build-system native`: the default
   build system also compiles SwiftTerm's Metal shaders and stops when the Metal toolchain is missing.
+- The product targets build without compiler warnings, and CI fails on one
+  (`scripts/product-warnings.sh`). The test target's warnings are not counted.
 - Fix a cause where it lives, in the shared rule or path, rather than patching the one case that
   showed it. Add a test only when it pins a contract that could otherwise break unnoticed; prefer
   extending an existing test.

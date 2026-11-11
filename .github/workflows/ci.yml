@@ -63,8 +63,15 @@ jobs:
           sw_vers
           xcodebuild -version
           swift --version
+      # A compiler warning in a product target fails the run. The checkout is fresh, so this build
+      # compiles every product file and prints its warnings; the test target is built by the step
+      # after this one, and its warnings are not counted.
       - name: Build
-        run: swift build --build-system native
+        run: |
+          set -o pipefail
+          mkdir -p .build/ci
+          swift build --build-system native 2>&1 | tee .build/ci/build.log
+          ./scripts/product-warnings.sh .build/ci/build.log
       # `-v` keeps every test's XCTest output: its time and, when skipped, why. test-report.py shows
       # only the failed tests' output here and writes the rest to the run's summary and an artifact.
       - name: Test
