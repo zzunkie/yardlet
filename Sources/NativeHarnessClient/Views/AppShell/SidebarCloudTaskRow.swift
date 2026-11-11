@@ -42,7 +42,7 @@ struct SidebarCloudTaskRow: View, @MainActor Equatable {
         .buttonStyle(.plain)
         .parityPointer()
         .background(isHovering ? ParityTheme.hoverFill : .clear, in: SidebarMetrics.rowShape())
-        .onHover { isHovering = $0 }
+        .onRestingHover { isHovering = $0 }
         .help(details)
         .accessibilityLabel("\(item.title), Codex")
         .accessibilityValue(details)

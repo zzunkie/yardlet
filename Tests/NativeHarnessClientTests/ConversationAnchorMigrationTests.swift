@@ -223,7 +223,7 @@ final class ConversationAnchorMigrationTests: XCTestCase {
         renamed.bookmark = .init(anchorID: opening, fraction: 0.5, followsLatest: false)
         let reading = TranscriptReadingTracker()
         reading.start(record: renamed, itemIDs: [opening, "snapshot-turn-3"]) { $0 }
-        reading.measure(id: opening, frame: CGRect(x: 0, y: -400, width: 500, height: 800))
+        reading.measure(id: opening, frame: CGRect(x: 0, y: 0, width: 500, height: 800))
         reading.observe(offset: 400, height: 3_000, viewport: CGSize(width: 500, height: 400), followsLatest: false,
                         userDriven: false)
         reading.settleGeometry()

@@ -6,11 +6,45 @@ import XCTest
 /// What a scroll costs each frame beyond moving what is already laid out: the conversation's turns
 /// telling the reading tracker where they are, and the sidebar's rows taking the pointer as they pass
 /// under it. Each step of a trackpad gesture lays out and draws the unshown window and turns the run
-/// loop for 16 ms, as a display cycle would. Run with `NHC_PERF_BENCH=1`; the benchmarks print their
-/// numbers and check nothing else.
+/// loop for 16 ms, as a display cycle would. The benchmarks run with `NHC_PERF_BENCH=1`, print their
+/// numbers and check nothing else; the rule the sidebar's rows take the pointer by is checked always.
 @MainActor
 final class ScrollFrameCostTests: XCTestCase {
     private typealias TaskSpec = ConversationBlankFrameTests.TaskSpec
+
+    /// Rows passing under a pointer at rest while their list scrolls take no hover: the row the
+    /// pointer was on loses it at once, and the row it is on when the scroll rests takes it then
+    /// (`ScrollHoverRest`). A list at rest hands hover on as it comes.
+    func testARowTakesThePointerOnceItsListRests() {
+        final class Row {}
+        let rest = ScrollHoverRest()
+        let first = Row(), second = Row(), third = Row()
+        var hovers: [String] = []
+        func pointer(_ isOver: Bool, _ row: Row, _ name: String) {
+            rest.pointer(isOver: isOver, row) { hovers.append("\(name) \($0)") }
+        }
+        pointer(true, first, "first")
+        XCTAssertEqual(hovers, ["first true"], "a list at rest")
+
+        rest.scrolls(true)
+        pointer(false, first, "first")
+        pointer(true, second, "second")
+        pointer(false, second, "second")
+        pointer(true, third, "third")
+        XCTAssertEqual(hovers, ["first true", "first false", "second false"],
+                       "the row left loses the pointer; rows passing under it take none")
+        rest.scrolls(false)
+        XCTAssertEqual(hovers.last, "third true", "the row under the pointer takes it once the list rests")
+        XCTAssertEqual(hovers.count, 4)
+
+        // A row that went away while the list scrolled takes nothing.
+        rest.scrolls(true)
+        pointer(false, third, "third")
+        pointer(true, first, "first")
+        rest.forget(first)
+        rest.scrolls(false)
+        XCTAssertEqual(hovers.last, "third false")
+    }
 
     /// A reader's scroll through a conversation of 200 short turns with 60 of them drawn, 16 points a
     /// step, 150 steps up and 150 back, three times. A step counts the turns that told the reading

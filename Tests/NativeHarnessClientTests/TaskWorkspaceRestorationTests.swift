@@ -326,19 +326,22 @@ final class TaskWorkspaceRestorationTests: XCTestCase {
     func testBookmarkUsesStableRowAndInternalPositionInsteadOfDocumentPercentage() {
         let frames = ["first": CGRect(x: 0, y: 24, width: 500, height: 400),
                       "second": CGRect(x: 0, y: 448, width: 500, height: 600)]
-        let bookmark = TranscriptReadingTracker.bookmark(offset: 748, frames: frames, itemIDs: ["first", "second"])
+        let bookmark = TranscriptReadingTracker.bookmark(offset: 748, itemIDs: ["first", "second"]) { frames[$0] }
         XCTAssertEqual(bookmark, .init(anchorID: "second", fraction: 0.5, followsLatest: false))
-        XCTAssertEqual(TranscriptReadingTracker.bookmark(offset: 430, frames: frames, itemIDs: ["first", "second"])?.anchorID, "second")
+        XCTAssertEqual(TranscriptReadingTracker.bookmark(offset: 430, itemIDs: ["first", "second"]) { frames[$0] }?.anchorID,
+                       "second")
     }
 
-    func testStaleLazyFramesDoNotWinBookmarkOverVisibleMessageAfterLargeJump() {
+    /// The rows' frames are in the conversation's content: the tracker reads where they are in the
+    /// viewport from how far the conversation has scrolled.
+    func testRowsFarAboveDoNotWinBookmarkOverVisibleMessageAfterLargeJump() {
         let record = TranscriptReadingPosition()
         let tracker = TranscriptReadingTracker()
         tracker.start(record: record, itemIDs: ["old-request", "old-answer", "long-answer"])
         tracker.measure(id: "old-request", frame: CGRect(x: 0, y: -8, width: 600, height: 26))
         tracker.measure(id: "old-answer", frame: CGRect(x: 0, y: 36, width: 600, height: 407))
-        tracker.measure(id: "long-answer", frame: CGRect(x: 0, y: -1_200, width: 600, height: 2_400))
-        // Prefetched rows retained their initial frames after a large jump.
+        tracker.measure(id: "long-answer", frame: CGRect(x: 0, y: 7_800, width: 600, height: 2_400))
+        // A large jump leaves the first rows far above the viewport.
         tracker.updateVisibleItems(["long-answer"])
         tracker.observe(offset: 9_000, height: 10_062, viewport: CGSize(width: 659, height: 531),
                         followsLatest: false, userDriven: true)
@@ -346,12 +349,29 @@ final class TaskWorkspaceRestorationTests: XCTestCase {
         XCTAssertEqual(record.bookmark, .init(anchorID: "long-answer", fraction: 0.5, followsLatest: false))
     }
 
+    /// A scroll tells the tracker only how far it went. The rows say nothing while they move under
+    /// the reader, and the place follows from where they are in the conversation.
+    func testAScrollAloneMovesThePlaceThroughRowsThatSaidNothingNew() {
+        let record = TranscriptReadingPosition()
+        let tracker = TranscriptReadingTracker()
+        tracker.start(record: record, itemIDs: ["first", "second"])
+        tracker.measure(id: "first", frame: CGRect(x: 0, y: 0, width: 500, height: 1_000))
+        tracker.measure(id: "second", frame: CGRect(x: 0, y: 1_000, width: 500, height: 1_000))
+        for (offset, row, fraction) in [(250.0, "first", 0.25), (1_500.0, "second", 0.5), (500.0, "first", 0.5)] {
+            tracker.observe(offset: offset, height: 2_000, viewport: CGSize(width: 500, height: 400),
+                            followsLatest: false, userDriven: true)
+            tracker.settleGeometry()
+            XCTAssertEqual(record.bookmark, .init(anchorID: row, fraction: fraction, followsLatest: false))
+            XCTAssertEqual(tracker.visibleAnchorID, row)
+        }
+    }
+
     func testVisibilityArrivingAfterScrollStillCapturesTheCurrentMessage() {
         let record = TranscriptReadingPosition()
         let tracker = TranscriptReadingTracker()
         tracker.start(record: record, itemIDs: ["answer"])
         tracker.updateVisibleItems([])
-        tracker.measure(id: "answer", frame: CGRect(x: 0, y: -600, width: 600, height: 1_200))
+        tracker.measure(id: "answer", frame: CGRect(x: 0, y: 0, width: 600, height: 1_200))
         tracker.observe(offset: 600, height: 1_200, viewport: CGSize(width: 600, height: 400),
                         followsLatest: false, userDriven: true)
         tracker.settleGeometry()
@@ -371,7 +391,7 @@ final class TaskWorkspaceRestorationTests: XCTestCase {
         tracker.measure(id: "row", frame: CGRect(x: 0, y: 1_000, width: 500, height: 800))
         tracker.settleGeometry()
         XCTAssertEqual(tracker.request, .offset(1_200))
-        tracker.measure(id: "row", frame: CGRect(x: 0, y: -200, width: 500, height: 800))
+        // The scroll there moves the row in the viewport; the row says nothing new.
         tracker.observe(offset: 1_200, height: 3_000, viewport: CGSize(width: 500, height: 400), followsLatest: false, userDriven: false)
         tracker.settleGeometry()
         XCTAssertFalse(tracker.isRestoring)
@@ -416,7 +436,7 @@ final class TaskWorkspaceRestorationTests: XCTestCase {
         record.bookmark = .init(anchorID: "old", fraction: 0.9, followsLatest: false)
         let tracker = TranscriptReadingTracker()
         tracker.start(record: record, itemIDs: ["old", "new"])
-        tracker.measure(id: "new", frame: CGRect(x: 0, y: -400, width: 500, height: 800))
+        tracker.measure(id: "new", frame: CGRect(x: 0, y: 1_000, width: 500, height: 800))
         tracker.observe(offset: 1_400, height: 3_000, viewport: CGSize(width: 500, height: 400), followsLatest: false, userDriven: true)
         tracker.settleGeometry()
         XCTAssertFalse(tracker.isRestoring)
@@ -425,7 +445,7 @@ final class TaskWorkspaceRestorationTests: XCTestCase {
 
     func testRowReflowBeforeScrollGeometryDoesNotReplaceSavedReadingPosition() {
         let (tracker, record) = restoredTracker()
-        tracker.measure(id: "row", frame: CGRect(x: 0, y: 1_500, width: 350, height: 1_200))
+        tracker.measure(id: "row", frame: CGRect(x: 0, y: 2_700, width: 350, height: 1_200))
         tracker.settleGeometry()
         XCTAssertEqual(record.bookmark.fraction, 0.25)
         tracker.observe(offset: 1_200, height: 8_000, viewport: CGSize(width: 350, height: 400), followsLatest: false, userDriven: false)
@@ -444,7 +464,7 @@ final class TaskWorkspaceRestorationTests: XCTestCase {
         tracker.observe(offset: 1_000, height: 3_500, viewport: CGSize(width: 500, height: 400), followsLatest: false, userDriven: false)
         tracker.settleGeometry()
         XCTAssertEqual(tracker.anchorRevision, 2)
-        tracker.measure(id: "row", frame: CGRect(x: 0, y: 100, width: 500, height: 800))
+        tracker.measure(id: "row", frame: CGRect(x: 0, y: 1_100, width: 500, height: 800))
         tracker.settleGeometry()
         XCTAssertEqual(tracker.request, .offset(1_300))
     }
@@ -469,7 +489,7 @@ final class TaskWorkspaceRestorationTests: XCTestCase {
         record.bookmark = .init(anchorID: "row", fraction: 0.25, followsLatest: false)
         let tracker = TranscriptReadingTracker()
         tracker.start(record: record, itemIDs: ["before", "row", "after"])
-        tracker.measure(id: "row", frame: CGRect(x: 0, y: 100, width: 340, height: 800))
+        tracker.measure(id: "row", frame: CGRect(x: 0, y: 500, width: 340, height: 800))
         tracker.observe(offset: 400, height: 1_000, viewport: CGSize(width: 340, height: 600), followsLatest: false, userDriven: false)
         tracker.settleGeometry()
         XCTAssertTrue(tracker.isRestoring)
@@ -477,11 +497,10 @@ final class TaskWorkspaceRestorationTests: XCTestCase {
         XCTAssertEqual(tracker.anchorRevision, 1)
 
         // Locating the message replaces the temporary document height with measured geometry.
-        tracker.measure(id: "row", frame: CGRect(x: 0, y: 0, width: 340, height: 800))
+        tracker.measure(id: "row", frame: CGRect(x: 0, y: 1_000, width: 340, height: 800))
         tracker.observe(offset: 1_000, height: 3_000, viewport: CGSize(width: 340, height: 600), followsLatest: false, userDriven: false)
         tracker.settleGeometry()
         XCTAssertEqual(tracker.request, .offset(1_200))
-        tracker.measure(id: "row", frame: CGRect(x: 0, y: -200, width: 340, height: 800))
         tracker.observe(offset: 1_200, height: 3_000, viewport: CGSize(width: 340, height: 600), followsLatest: false, userDriven: false)
         tracker.settleGeometry()
         XCTAssertFalse(tracker.isRestoring)
@@ -493,7 +512,7 @@ final class TaskWorkspaceRestorationTests: XCTestCase {
         record.bookmark = .init(anchorID: "last", fraction: 0.8, followsLatest: false)
         let tracker = TranscriptReadingTracker()
         tracker.start(record: record, itemIDs: ["first", "last"])
-        tracker.measure(id: "last", frame: CGRect(x: 0, y: 100, width: 340, height: 200))
+        tracker.measure(id: "last", frame: CGRect(x: 0, y: 500, width: 340, height: 200))
         tracker.observe(offset: 400, height: 1_000, viewport: CGSize(width: 340, height: 600), followsLatest: false, userDriven: false)
         tracker.settleGeometry()
         XCTAssertFalse(tracker.isRestoring)
@@ -543,7 +562,7 @@ final class TaskWorkspaceRestorationTests: XCTestCase {
         record.bookmark = .init(anchorID: "row", fraction: 0.25, followsLatest: false)
         let tracker = TranscriptReadingTracker()
         tracker.start(record: record, itemIDs: ["row"])
-        tracker.measure(id: "row", frame: CGRect(x: 0, y: -200, width: 500, height: 800))
+        tracker.measure(id: "row", frame: CGRect(x: 0, y: 1_000, width: 500, height: 800))
         tracker.observe(offset: 1_200, height: 3_000, viewport: CGSize(width: 500, height: 400), followsLatest: false, userDriven: false)
         tracker.settleGeometry()
         return (tracker, record)

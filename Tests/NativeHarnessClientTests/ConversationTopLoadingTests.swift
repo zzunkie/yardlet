@@ -68,19 +68,20 @@ final class ConversationTopLoadingTests: XCTestCase {
 
     /// The first item in view goes back to where it was: a scroll anchor lines up the same point of
     /// the item and of the viewport, so the anchor puts its top `y` points into the viewport again.
+    /// The items' frames are in the conversation's content, 1,000 points of which are scrolled away.
     func testThePlaceToKeepPutsTheFirstItemInViewBackWhereItWas() async {
         let tracker = TranscriptReadingTracker()
         tracker.start(record: nil, itemIDs: ["t1", "t2", "t3"])
         tracker.observe(offset: 1_000, height: 4_000, viewport: CGSize(width: 600, height: 600),
                         followsLatest: false, userDriven: true)
-        tracker.measure(id: "t1", frame: CGRect(x: 0, y: -50, width: 560, height: 300))
-        tracker.measure(id: "t2", frame: CGRect(x: 0, y: 274, width: 560, height: 500))
+        tracker.measure(id: "t1", frame: CGRect(x: 0, y: 950, width: 560, height: 300))
+        tracker.measure(id: "t2", frame: CGRect(x: 0, y: 1_274, width: 560, height: 500))
         let place = tracker.placeToKeep()
         XCTAssertEqual(place?.id, "t1")
         XCTAssertEqual(Double(place?.anchor.y ?? 0) * (600 - 300), -50, accuracy: 0.001)
 
         // An item exactly as tall as the viewport cannot say where it was; the next one does.
-        tracker.measure(id: "t1", frame: CGRect(x: 0, y: -50, width: 560, height: 600))
+        tracker.measure(id: "t1", frame: CGRect(x: 0, y: 950, width: 560, height: 600))
         let next = tracker.placeToKeep()
         XCTAssertEqual(next?.id, "t2")
         XCTAssertEqual(Double(next?.anchor.y ?? 0) * (600 - 500), 274, accuracy: 0.001)
@@ -178,6 +179,35 @@ final class ConversationTopLoadingTests: XCTestCase {
         XCTAssertEqual(drawn.last, 30, "the wheel went on until every turn that arrived was drawn")
         let mostAtOnce = zip(drawn, drawn.dropFirst()).map { $1 - $0 }.max() ?? 0
         XCTAssertLessThanOrEqual(mostAtOnce, 4, "a few turns at a time, not all that were waiting: \(drawn)")
+    }
+
+    /// A reader's scroll through turns already laid out moves them and nothing more: no turn tells the
+    /// reading tracker where it is again, and neither the timeline nor a turn is drawn again as the
+    /// reading passes from one turn to the next (the rail beside them marks the turn read).
+    func testAScrollThroughLaidOutTurnsDrawsNothingAgain() throws {
+        try requireAwakeDisplay()
+        let mounted = mount(ConversationTimeline(source: .transcript(
+            entries: Self.transcript(turns: 90), harness: .claudeCode, status: .ready, latestTurnIsComplete: true
+        )))
+        defer { mounted.window.close() }
+        let scroll = try XCTUnwrap(scrollView(in: mounted.hosting))
+        pump(mounted.hosting, passes: 12)
+        // Away from the latest output first: leaving it ends following, which the timeline draws.
+        userScroll(scroll, up: 300, in: mounted.hosting)
+        let start = scroll.contentView.bounds.minY
+        XCTAssertGreaterThan(start, 800, "room to scroll up through turns without reaching the top")
+
+        ViewBodyCensus.isEnabled = true
+        ViewBodyCensus.reset()
+        userScroll(scroll, up: 600, steps: 12, in: mounted.hosting)
+        let counts = ViewBodyCensus.counts
+        ViewBodyCensus.isEnabled = false
+        ViewBodyCensus.reset()
+        XCTAssertLessThan(scroll.contentView.bounds.minY, start - 500, "the conversation moved")
+        XCTAssertEqual(drawnTurnCount(mounted.hosting), 10, "nothing arrived")
+        XCTAssertNil(counts[.conversationTurnPlaced], "a turn told its place again")
+        XCTAssertNil(counts[.conversationTimeline], "the timeline was drawn again")
+        XCTAssertNil(counts[.conversationTurn], "a turn was drawn again")
     }
 
     /// A Codex thread with loaded turns the window leaves out brings those in first and then asks for
