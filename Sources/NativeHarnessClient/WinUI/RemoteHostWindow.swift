@@ -84,6 +84,11 @@ final class RemoteHostWindow {
         try? window.activate()
     }
 
+    /// Closes the window, as its close button does.
+    func close() {
+        try? window.close()
+    }
+
     private func followConnection() {
         let connection = withObservationTracking {
             model.connection

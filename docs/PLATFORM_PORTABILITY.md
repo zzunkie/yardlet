@@ -128,11 +128,16 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
 
 - **Assembly.** `Platform/Windows/AppModel+Live.swift` makes the model with its stores in `%LOCALAPPDATA%\Yardlet`
   and no browser host. `WinUI/YardletApp.swift` makes it once WinUI has started and opens `WinUI/MainWindow.swift`:
-  the store's tasks in the sidebar, followed through Observation, with their titles as the Mac's rows show them, and a
-  composer that sends through the model. New task at the top lists the harnesses whose CLI Yardlet found and starts a
-  chat with the chosen one from the message typed there. Choosing a task reads its saved history as the Mac does
-  (`refreshConversationStatus`, which starts no turn), and its conversation draws from the projection the Mac's
-  timeline reads; a request in it shows its card's answers as buttons, carried out as the Mac's card carries them out.
+  the store's tasks in the sidebar, followed through Observation, with their titles and harness marks as the Mac's
+  rows show them, and a composer that sends through the model, with Stop beside it while the task's turn runs, which
+  stops it through the harness's own cancel (`AppModel.interrupt`). New task at the top (`WinUI/NewTaskPane.swift`)
+  starts a task as the Mac's new-task screen does, from the Mac's home draft: a harness whose CLI Yardlet found,
+  where it works (a project, a folder chosen in Windows' own folder dialog, `Platform/Windows/WindowsFolderPicker.swift`,
+  or a chat with no project), and the model, effort and permission the harness takes before its task exists, from
+  the menus the Mac's controls read and with the Mac's question before a choice that skips asking. Choosing a task
+  reads its saved history as the Mac does (`refreshConversationStatus`, which starts no turn), and its conversation
+  draws from the projection the Mac's timeline reads; a change to files opens to each file's diff, and a request in it
+  shows its card's answers as buttons, carried out as the Mac's card carries them out.
 - **Conversations.** `WinUI/ConversationTimeline.swift` draws the engine's `ConversationPresentation` turn by turn,
   for a task's own conversation and a host's: what was sent, a line for each step of the work, the answers, the
   requests waiting and how the turn ended. A turn that did not change keeps what it drew. As on the Mac, only the
@@ -155,7 +160,8 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   24H2 and later); a Windows without that call keeps the console windows.
 - **Another computer's Yardlet.** Connect to a Mac, below the tasks in the main window, pairs with the link a host
   copies in Settings › Remote, as File › Connect to Mac… does on the Mac (docs/REMOTE_PROTOCOL.md, "Yardlet as a
-  client"), and `WinUI/RemoteHostWindow.swift` opens each paired host in a window of its own: the host's tasks as it
+  client"), and lists the paired Macs with Open and Remove…, which forgets the host and asks it to forget this
+  computer when it can be reached. `WinUI/RemoteHostWindow.swift` opens each paired host in a window of its own: the host's tasks as it
   lists them, the chosen task's conversation as it streams, and a composer that sends to the host. The client is the
   engine's `RemoteHostDirectory` and `RemoteHostModel`; `Platform/Windows/WindowsRemoteClientKeys.swift` keeps each
   host's key in Credential Manager and the list and cache under `%LOCALAPPDATA%\Yardlet`. Without Bonjour, a host is
@@ -268,9 +274,9 @@ bindings; fork it and keep only the fixes the app needs; as a last resort, write
 keep the engine in Swift, which needs a layer that carries the engine's state and events to the C# screens.
 
 **What the Windows app does not have yet:** a Windows layer for the rest of what `Platform/Portable/` stands in for:
-the ConPTY terminal for sign-in and the terminal panel, notifications, credential storage for the vault and
-Antigravity, and the harnesses' icons (`HarnessKind.symbolName` names SF Symbols); a request's answers given in a
-form (questions, a plan's review); a project's folder for a new task, which starts as a chat; and a browser host. A
+the ConPTY terminal for sign-in and the terminal panel, notifications, and credential storage for the vault and
+Antigravity; a request's answers given in a form (questions, a plan's review); a new task's account, attachments,
+worktree and slash commands; and a browser host. A
 connector's program gets a POSIX environment (`Connectors/ConnectorProgram.swift`), and npm's `npx.cmd`, which is not
 one of npm's shims, is refused. A host's window shows a request card's words without its answers, and none of the
 host's panels, new tasks or Settings. The remote has no relay account to sign in to or link through
@@ -329,7 +335,7 @@ Other macOS-specific values that the check does not catch:
 | `Diff/GitDiffService.swift` | `/dev/null` as a Git argument (`hash-object -t tree`, `diff --no-index`) | Whether Git for Windows accepts this path is not confirmed. For the empty tree, a way without a path, such as `git hash-object -t tree --stdin`. The `/dev/null` that `UnifiedDiffParser` reads is Git's output format and stays |
 | `Files/PathRules.swift`: `isReadAsAnotherNameOnWindows` | A name is the file or folder its text spells | On Windows a name that ends in a period or a space is read without them, and a device's name (`NUL`, `CON`, `COM1`, also before an extension or a colon) is that device in any folder. The text of a path with such a name does not say where it leads, so the path is in no folder (`relativePath(of:in:)` is nil) |
 | `Files/PathRules.swift`: `isAbsolute`, `isRelative`, `names`, `url(for:in:)` | An absolute path starts with `/`, and `/` separates names | One rule for every engine check. On Windows an absolute path starts with a drive (`C:\`, or `/C:/` as a file URL's path writes it) or names a share (`\\server\share`, also in the `\\?\` forms), `\x` and `C:x` are neither absolute nor relative, and `\` and `/` both separate names. Paths from another computer (a remote host's, a personal agent's execution host's) keep their own checks |
-| `Files/PathRules.swift`: `relativePath(of:in:)`, `isInside`, `isStrictlyInside` | Whether a path is in a folder is decided by whole names after `.` and `..` are taken out by their text, never by a string prefix; nothing is looked up, so a check that must not follow links resolves them first. macOS and Linux compare names as Swift compares strings | On Windows names compare in any case, one character for one, as NTFS compares them, and keep their composition. The Windows rules are pure functions over strings, so the Mac tests run them (`WorkspaceFileTests`). A folder's identity (which project a task is in, `ProjectSidebarPresentation.normalizedPath`) still compares the whole path as written |
+| `Files/PathRules.swift`: `relativePath(of:in:)`, `isInside`, `isStrictlyInside` | Whether a path is in a folder is decided by whole names after `.` and `..` are taken out by their text, never by a string prefix; nothing is looked up, so a check that must not follow links resolves them first. macOS and Linux compare names as Swift compares strings | On Windows names compare in any case, one character for one, as NTFS compares them, and keep their composition. The Windows rules are pure functions over strings, so the Mac tests run them (`WorkspaceFileTests`). A folder's identity (which project a task is in, a sidebar group, the tasks in one folder) compares `ProjectSidebarPresentation.folderKey`, which is `PathRules.key`: on Windows `C:\Repo`, `c:/repo` and `\\?\C:\Repo` are one folder, and on macOS the key is the path as written, as before. What is shown and passed to a CLI keeps the path's own spelling (`normalizedPath`) |
 | `Account/HarnessAccountBroker.swift` | Finds the Grok home from the `HOME` environment variable (usually missing on Windows) | Use `homeDirectoryForCurrentUser` |
 | `Store/SessionRepository.swift`, `Domain/ProviderSessionTitleResolver.swift` | Pass the `URL.path(percentEncoded: false)` string to SQLite | `withUnsafeFileSystemRepresentation`. Whether `path()` becomes `/C:/…` on Windows is not confirmed |
 
@@ -342,7 +348,7 @@ location there (AppData, the registry and so on) is not confirmed.
 | --- | --- | --- |
 | `Process.run()` | Quotes the arguments by MSVCRT's rules and passes the command line to `CreateProcessW` with no application name and only `CREATE_UNICODE_ENVIRONMENT` (confirmed in its source). `CreateProcessW` starts a `.cmd` or `.bat` through `cmd.exe`, which reads the arguments by its own rules (the BatBadBut family) | Yardlet never starts a batch file: lookup prefers a real `.exe`, and for npm's shim (cmd-shim's format, `Runtime/NPMCommandShim.swift`) `NativeProcessTree.run(_:)` starts Node.js, the `node.exe` beside the shim or else the first in `Path`, on the script under `node_modules` the shim names, with the same arguments. Any other batch file is refused with an error that says so |
 | `isExecutableFile(atPath:)` | swift-foundation decides with `SHGetFileInfoW(SHGFI_EXETYPE)` | Not used on Windows: a program is a file with one of PATHEXT's `.exe`, `.com`, `.cmd` and `.bat` (`ExecutableLookup`). Whether `SHGetFileInfoW` treats a `.cmd` as executable is not confirmed |
-| `terminate()` / `interrupt()` | Both are `TerminateProcess` and end only the root (confirmed) | `NativeProcessTree.terminate(process:)` ends the job above. `Adapters/Headless/StructuredHeadlessAdapter.swift` stops a turn with `process.interrupt()` (SIGINT on macOS), which becomes an immediate kill of the root on Windows: use the harness's own cancel first, and otherwise consider `CREATE_NEW_PROCESS_GROUP` with `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT)`. Whether each CLI treats that as a stop is not confirmed |
+| `terminate()` / `interrupt()` | Both are `TerminateProcess` and end only the root (confirmed) | `NativeProcessTree.terminate(process:)` ends the job above. A turn stops through the harness's own cancel, which ends no process: Codex's `turn/interrupt`, Claude Code's `interrupt` control request, ACP's `session/cancel`, Pi's `abort` and MSP's `turn/interrupt`. Only Cursor Agent's print mode, whose turn is the process itself, has no cancel; `Adapters/Headless/StructuredHeadlessAdapter.swift` stops it with `NativeProcessTree.interrupt(process:)`, SIGINT on macOS and Linux and the end of the process's job on Windows. Windows has no SIGINT, and a Control-C or Control-Break event would reach every program in the console the app's children share. Whether Cursor Agent keeps a turn stopped that way in its chat is not confirmed |
 | A write to a child's standard input after it stopped reading | No SIGPIPE on Windows: the write fails with an error | `Runtime/ChildInputPipe.swift` (`Pipe.childInput()`, used for every child's standard input) sets `F_SETNOSIGPIPE` on macOS only (`#if canImport(Darwin)`), so a CLI that exits before it reads fails the write instead of ending Yardlet. Linux has no such flag: ignore SIGPIPE in the app and restore it for children. Every writer already handles the error. It also marks Yardlet's end close-on-exec, because a terminal's shell is forked with everything Yardlet has open, and a shell that outlived Yardlet would keep the child's input open. On Windows the same end must not be inheritable by other children; whether Foundation's pipes are is not confirmed |
 | `readabilityHandler` | Supported through `DuplicateHandle`, `_open_osfhandle` and a Dispatch read source (confirmed: [`FileHandle.swift`](https://github.com/swiftlang/swift-corelibs-foundation/blob/main/Sources/Foundation/FileHandle.swift)) | No change needed |
 | `process.environment` | Windows environment variable names are case-insensitive. Foundation adds the app's own `Path` to a child's environment that has none under exactly that name (confirmed in its source) | `NativeProcessTree.run(_:)` names each variable once, the search path as `Path` (`ExecutableLookup.normalized`) |
