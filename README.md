@@ -140,7 +140,8 @@ through a connector is sent to that agent's provider under your account with it.
 check asks `yardlet.app` for the appcast with Yardlet's and Sparkle's versions in its user agent and
 sends no system profile; updates download from GitHub Releases. When Yardlet's main thread stays
 busy for more than 250 ms, it writes the time and the stack (function names only) to
-`~/Library/Logs/Yardlet/hangs.log`, kept under 2 MB and sent nowhere;
+`~/Library/Logs/Yardlet/hangs.log`, with earlier entries in `hangs.1.log` to `hangs.4.log`, kept to
+about 20 MB in all and sent nowhere;
 `defaults write com.zzunkie.yardlet Yardlet.debug.hangLog -bool NO` turns it off from the next
 launch. See the
 [privacy policy](https://yardlet.app/privacy.html).

@@ -26,14 +26,19 @@ enum MainThreadHangLog {
         return UserDefaults.yardlet.object(forKey: defaultsKey) as? Bool ?? true
     }
 
-    /// The log in real use. It is kept under `maximumFileSize`; the entries before go to `hangs.1.log`.
+    /// The log in real use. It is kept under `maximumFileSize`; the entries before go to `hangs.1.log`,
+    /// and those before them to `hangs.2.log` and on, up to `previousFileCount` files.
     static var fileURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "Library/Logs/Yardlet", directoryHint: .isDirectory)
             .appending(path: "hangs.log")
     }
 
-    static let maximumFileSize = 1_000_000
+    static let maximumFileSize = 4_000_000
+
+    /// At least 16 MB of entries are kept, about 2,000 hangs: more than a day even on a day with many,
+    /// so one day can be compared with the next, in about 20 MB in all.
+    static let previousFileCount = 4
 
     @MainActor private static var watchdog: MainThreadWatchdog?
 
@@ -53,9 +58,12 @@ enum MainThreadHangLog {
         let path = url.path(percentEncoded: false)
         try? manager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         if let size = (try? manager.attributesOfItem(atPath: path))?[.size] as? Int, size > maximumFileSize {
-            let previous = url.deletingLastPathComponent().appending(path: "hangs.1.log")
-            try? manager.removeItem(at: previous)
-            try? manager.moveItem(at: url, to: previous)
+            let previous = { (number: Int) in url.deletingLastPathComponent().appending(path: "hangs.\(number).log") }
+            try? manager.removeItem(at: previous(previousFileCount))
+            for number in stride(from: previousFileCount - 1, through: 1, by: -1) {
+                try? manager.moveItem(at: previous(number), to: previous(number + 1))
+            }
+            try? manager.moveItem(at: url, to: previous(1))
         }
         if !manager.fileExists(atPath: path) { manager.createFile(atPath: path, contents: nil) }
         guard let handle = try? FileHandle(forWritingTo: url) else { return }
