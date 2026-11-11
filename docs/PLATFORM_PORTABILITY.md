@@ -3,9 +3,10 @@
 Yardlet runs on macOS. Windows is in progress: the engine is kept in cross-platform Swift, and each platform gets its
 own screens. The engine builds on its own on macOS, Linux and Windows. The Windows app, the engine with WinUI 3
 screens ("The Windows app" below), builds and opens its window on Windows, finds, starts and ends harness CLIs by
-Windows' rules, starts tasks of its own as chats with them and reads their saved history, follows another computer's
-Yardlet over the remote protocol, and serves its own tasks to other devices from Settings › Remote; what it does not
-have yet is listed at the end of that section. For dependencies and Foundation behavior on Windows, what was checked
+Windows' rules, signs in to them, starts tasks of its own with them and reads their saved history, answers
+their requests in the Mac's forms, notifies when a task waits or finishes, follows another computer's Yardlet over the
+remote protocol, and serves its own tasks to other devices from Settings › Remote; what it does not have yet is listed
+at the end of that section. For dependencies and Foundation behavior on Windows, what was checked
 in the official source or a build is marked "confirmed"; the rest is "not confirmed".
 
 ## Engine and platform layers
@@ -59,9 +60,12 @@ platform's layer has to provide:
 The phone remote itself, `RemoteControlService` (`Remote/RemoteControlService.swift`), is engine code on every
 platform, with its keys behind `RemoteIdentityStoring`: the Keychain on the Mac, Credential Manager on Windows.
 
-The Windows layer provides `NativeProcessTree` (`Platform/Windows/NativeProcessTree.swift`) and
-`RemoteHostPlatform.current` (`Platform/Windows/WindowsRemoteHost.swift`), so the Windows app leaves
-`PortableProcesses.swift` and `PortableRemoteHost.swift` out (`portableFilesWindowsReplaces` in `Package.swift`).
+The Windows layer provides `NativeProcessTree` (`Platform/Windows/NativeProcessTree.swift`),
+`RemoteHostPlatform.current` (`Platform/Windows/WindowsRemoteHost.swift`), `LocalSystemNotificationCenter`
+(`Platform/Windows/WindowsNotifications.swift`) and `HarnessAccountBroker.antigravityCredentialState`
+(`Platform/Windows/WindowsAccounts.swift`), so the Windows app leaves `PortableProcesses.swift`,
+`PortableRemoteHost.swift`, `PortableNotifications.swift` and `PortableAccounts.swift` out
+(`portableFilesWindowsReplaces` in `Package.swift`).
 
 `Platform/Portable/PortableFoundation.swift` also holds the few names Foundation outside Apple's platforms lacks
 (`InlinePresentationIntent`, Combine's `ObservableObject` and `Published`, `autoreleasepool`), and
@@ -136,8 +140,7 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   or a chat with no project), and the model, effort and permission the harness takes before its task exists, from
   the menus the Mac's controls read and with the Mac's question before a choice that skips asking. Choosing a task
   reads its saved history as the Mac does (`refreshConversationStatus`, which starts no turn), and its conversation
-  draws from the projection the Mac's timeline reads; a change to files opens to each file's diff, and a request in it
-  shows its card's answers as buttons, carried out as the Mac's card carries them out.
+  draws from the projection the Mac's timeline reads; a change to files opens to each file's diff.
 - **Conversations.** `WinUI/ConversationTimeline.swift` draws the engine's `ConversationPresentation` turn by turn,
   for a task's own conversation and a host's: what was sent, a line for each step of the work, the answers, the
   requests waiting and how the turn ended. A turn that did not change keeps what it drew. As on the Mac, only the
@@ -145,6 +148,40 @@ the engine-only builds leave `WinUI/` and `Platform/Windows/` out. When the Wind
   update compares and draws in the window is bounded by those turns however long the history. Answers draw their
   Markdown from the engine's reading of it (`WinUI/MarkdownView.swift`, `TranscriptMarkdownDocument`): bold,
   italic, code, struck and linked words, lists, quotes, code blocks, tables and rules.
+- **Requests.** `WinUI/RequestCard.swift` draws the `ConversationRequest` the Mac's request card draws, waiting or
+  answered where it happened in the work: an approval with the provider's own options; questions one at a time with
+  their options as radio buttons or check boxes, the person's own answer, Skip and Next (`ConversationQuestionStepper`);
+  a plan with what to change; and an MCP form field by field with what each field takes and why it cannot be sent yet
+  (`CodexMCPElicitationForm`). An answer goes back by the route the form makes of what was entered
+  (`ConversationRequest.route(for:input:)`), carried out as the Mac's card carries it out, and an answered form reads
+  as its answers. The card's state title and an MCP field's words come from the engine, as the Mac's do. The timeline
+  keeps one card per request, so a form keeps what was entered while its turn redraws.
+- **Sign-in.** Each harness keeps its own login, and Yardlet runs its own sign-in and reads the result
+  (`WinUI/HarnessSignIn.swift`). New task says when the chosen harness's account reads signed out and offers Sign
+  in, by the reading the Mac's new task uses, and a turn that failed for its sign-in offers it too. Codex signs in in
+  the browser as a Codex client starts it (`Account/CodexBrowserSignIn.swift`): its App Server's
+  `account/login/start` hosts the callback and answers with the address Yardlet opens, and `account/login/completed`
+  says how that login ended. Every other harness, and a Codex whose App Server starts no browser sign-in, runs its
+  sign-in command (`HarnessAccountBroker.loginCommand`) in a console window of its own, which Windows opens in the
+  default terminal (`Platform/Windows/WindowsSignInConsole.swift`); the CLI opens the browser itself, and the login
+  is read again once the window closes, or while it is open for a CLI that stays open after signing in (Antigravity,
+  Pi). Whether the Antigravity CLI is signed in is read from Credential Manager, where its keyring library
+  (go-keyring, as on the Mac) keeps the generic credential `gemini:antigravity`; only whether it exists is asked.
+- **Notifications.** The engine decides when to notify by the Mac's rules (`AppModel+SystemNotifications.swift`): a
+  task that waits for an approval, finished a turn the person asked for, or failed, while it is not the task the main
+  window shows. `Platform/Windows/WindowsNotifications.swift` posts them as the Windows App SDK's app notifications:
+  none while a Yardlet window is in front, as the Mac shows none while Yardlet is active, an approval's with "Allow
+  once", withdrawn once its request is answered, and a click brings the main window forward and shows its task
+  (`Platform/Windows/WindowsApplicationAttention.swift`). Whether they show is the person's switch in Windows'
+  Settings › System › Notifications, which the app reads; Windows asks no permission first. A new approval while
+  Yardlet is behind flashes the main window's taskbar button until it comes forward, as the Mac bounces its Dock icon.
+  An app without a package registers at launch (`AppNotificationManager.Register()`), which writes its entry under
+  `HKCU\Software\Classes` (`AppUserModelId` and the click's COM activator under `CLSID`) and takes its name and icon
+  from its Start menu shortcut, else from its executable; `UnregisterAll()` removes the entry. A click after the app
+  quit opens it without choosing the task. The Windows App SDK offers app notifications only to a process that is not
+  elevated (`AppNotificationManager.IsSupported()`, confirmed in its source), so Yardlet run as administrator shows
+  none, nor does the app on a GitHub Actions runner, whose processes run elevated (its event log says
+  `notifications: not supported`).
 - **Language.** The app's words follow Windows' display language, as WinUI's own controls do. Foundation outside
   Apple's platforms looks for the preferred languages only in `AppleLanguages`, which nothing writes on Windows, so
   it answered in English on a Korean Windows while WinUI drew Settings and its switches in Korean (seen on a PC).
@@ -275,9 +312,11 @@ bindings; fork it and keep only the fixes the app needs; as a last resort, write
 keep the engine in Swift, which needs a layer that carries the engine's state and events to the C# screens.
 
 **What the Windows app does not have yet:** a Windows layer for the rest of what `Platform/Portable/` stands in for:
-the ConPTY terminal for sign-in and the terminal panel, notifications, and credential storage for the vault and
-Antigravity; a request's answers given in a form (questions, a plan's review); a new task's account, attachments,
-worktree and slash commands; and a browser host. A
+the ConPTY terminal for the terminal panel, credential storage for the vault, and a taskbar badge (which needs a
+package identity); an accounts page (signing in to a saved account, signing out); answering the questions Codex asks
+in a message while it works (`request_user_input_async`); a new task's account, attachments, worktree and slash
+commands; and a browser host. Until the app is installed with a Start menu shortcut, its notifications carry the
+executable's name. A
 connector's program gets a POSIX environment (`Connectors/ConnectorProgram.swift`), and npm's `npx.cmd`, which is not
 one of npm's shims, is refused. A host's window shows a request card's words without its answers, and none of the
 host's panels, new tasks or Settings. The remote has no relay account to sign in to or link through
@@ -323,7 +362,7 @@ Other macOS-specific values that the check does not catch:
 - `Domain/HarnessKind.swift`: `symbolName` holds SF Symbols names. The screen layer should pick the icon by harness ID;
   Windows uses the logo assets.
 - `Account/HarnessAccountBroker.swift`: the user-facing text names macOS Keychain as the Antigravity CLI credential
-  location. Where Antigravity CLI keeps credentials on Windows is not confirmed.
+  location, which on Windows is Credential Manager. The Windows app does not show that text yet.
 
 ## Paths and executable lookup
 
