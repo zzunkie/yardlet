@@ -245,7 +245,10 @@ extension AppModel: ScheduleToolHandling {
     /// nothing above it and is never asked.
     private func freerScheduleRefusal(_ schedule: ScheduledTask, _ change: FreerScheduleChange,
                                       caller: SessionToolCaller) async -> String? {
-        guard scheduleRunFreedom(schedule) > scheduleModeCeiling(caller),
+        // A schedule that continues the calling task sends that task its own messages, however free it is.
+        let continuesCaller = schedule.destination.mode == .continueTask && caller.id == caller.hostTaskID
+            && schedule.destination.targetTaskID == caller.hostTaskID
+        guard !continuesCaller, scheduleRunFreedom(schedule) > scheduleModeCeiling(caller),
               !harnessAskedBeforeScheduleCall(caller) else { return nil }
         let title: String
         var trigger = schedule.trigger
