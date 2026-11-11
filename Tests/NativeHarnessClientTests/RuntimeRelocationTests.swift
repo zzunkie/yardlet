@@ -127,15 +127,18 @@ final class RuntimeRelocationTests: XCTestCase {
         let recorded = try executable(at: app.appending(path: "Contents/Resources/codex"))
         let task = SessionRecord(harness: .codex, workspaceURL: root, runtimeExecutableURL: recorded, title: "Codex",
                                  providerSessionID: "thread-1")
-        let started = Box<[URL]>([])
+        // The CLI each adapter was made for. What the model asked for while the recorded CLI was there
+        // (restoring the index reads the task's saved thread) is its own adapter and no concern here.
+        let made = Box<[ObjectIdentifier: URL]>([:])
         let suite = testDefaultsSuite("Yardlet.RuntimeRelocationTests.running")
         let model = AppModel(
             store: SessionStore(repository: InMemorySessionRepository(sessions: [task])),
             runtimeSelections: RuntimeSelectionStore(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)),
                                                      discoversRuntimes: false),
             registry: HarnessRegistry(factory: { harness, url in
-                started.value.append(url)
-                return UnsupportedHarnessAdapter(kind: harness, executableURL: url)
+                let adapter = UnsupportedHarnessAdapter(kind: harness, executableURL: url)
+                made.value[ObjectIdentifier(adapter)] = url
+                return adapter
             }),
             transcriptRepository: FileTranscriptRepository(directoryURL: URL(filePath: "/nonexistent/transcripts")),
             restoresIndexOnLaunch: true
@@ -149,8 +152,9 @@ final class RuntimeRelocationTests: XCTestCase {
 
         XCTAssertEqual(model.runtime(of: task), moved)
         XCTAssertEqual(model.runtimeKey(of: task).executableURL, moved)
-        _ = await model.registryAdapter(for: task)
-        XCTAssertEqual(started.value, [moved], "The adapter a detached task is read with runs the CLI that is there")
+        let adapter = await model.registryAdapter(for: task)
+        XCTAssertEqual(made.value[ObjectIdentifier(adapter as AnyObject)], moved,
+                       "The adapter a detached task is read with runs the CLI that is there")
         let startedExecutable = await model.startedExecutable(of: task)
         XCTAssertEqual(startedExecutable, moved)
         XCTAssertEqual(model.store.sessions.first?.runtimeExecutableURL, recorded, "Asking leaves the row as it was")
