@@ -9,8 +9,10 @@ import XCTest
     func testContinuingUnderAnotherAccountSwitchesThenAsksClaudeToPickUp() async throws {
         let fixture = try makeFixture()
         let model = fixture.model
-        // The task runs the CLI the Claude app bundles, at that app's versioned path.
+        // The harness's runtime, which the task runs, is the CLI the Claude app bundles, at that app's
+        // versioned path.
         let bundled = try bundledCLI("2.1.290", beside: fixture.cli)
+        model.runtimeSelections.select(bundled, for: .claudeCode)
         let created = await model.createSession(harness: .claudeCode, workspaceURL: fixture.shared,
             runtimeExecutableURL: bundled, title: "Limit", connection: fixture.first)
         let task = try XCTUnwrap(created, model.errorBySessionID.values.first ?? "Missing task")
@@ -44,7 +46,8 @@ import XCTest
         XCTAssertEqual(model.transcriptBySessionID[task.id]?.last?.id, card)
 
         // The Claude app has updated meanwhile and removed the version the task recorded. The next
-        // account's login is asked of the CLI the task resumes with, where the app keeps it now.
+        // account's login is asked of the CLI the task resumes with, the harness's runtime, which
+        // follows the app to where it keeps the CLI now.
         let updated = try bundledCLI("2.1.291", beside: fixture.cli)
         try FileManager.default.removeItem(at: task.runtimeExecutableURL)
         await model.continueAfterUsageLimit(using: fixture.next, for: task)
@@ -400,7 +403,9 @@ import XCTest
         }
         let model = fixture.model
         let (restedTask, recentTask) = try (XCTUnwrap(rested), XCTUnwrap(recent))
+        // The newest install, so the harness's runtime, which the rested task resumes with.
         let updated = try bundledCLI("2.1.291", beside: fixture.cli)
+        model.runtimeSelections.select(updated, for: .claudeCode)
         try await model.store.restore()
         func task(_ id: UUID) -> SessionRecord? { model.store.sessions.first { $0.id == id } }
 
@@ -468,7 +473,8 @@ import XCTest
     /// for a context limit, its CLI changed under it, or the task is archived. Whichever it is, its
     /// CLI is stopped once, the task is left ready with no error, and what still ran in that CLI
     /// reads as stopped. A change the task goes on from at once (an account, a context limit) has
-    /// its next runtime by then; a changed CLI starts one at the task's next message. (A stream that
+    /// its next runtime by then; a changed CLI starts one at the task's next message, and that one
+    /// runs the harness's new CLI, which a turn under way did not stop for. (A stream that
     /// ends by itself is `AppModelTests.testEndedReadyStreamDetachesWithoutManufacturingFailure`.)
     /// Each goes through `AppModel.detachRuntime`, and the coordination log says why the runtime went.
     func testEachWayATaskLosesItsRuntimeStopsItsCLIOnceAndLeavesTheTaskReady() async throws {
@@ -493,6 +499,12 @@ import XCTest
 
             await first.emit(try json(#"{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_start","message":{}},"session_id":"s"}"#))
             try await waitUntil { model.store.sessions.first?.status == .running }
+            // The harness's CLI changes during the turn: an update to another path, or the person's choice.
+            let newer = fixture.shared.appending(path: "claude-newer")
+            if way == .cliChanged {
+                try FileManager.default.copyItem(at: fixture.cli, to: newer)
+                model.runtimeSelections.select(newer, for: .claudeCode)
+            }
             if runsBackgroundWork {
                 await first.emit(try json(#"{"type":"system","subtype":"task_started","task_id":"t-shell","tool_use_id":"shell","description":"npm run dev","task_type":"local_bash","is_backgrounded":true}"#))
             }
@@ -519,6 +531,8 @@ import XCTest
                 XCTAssertFalse(model.isAttached(task.id), way.rawValue)
                 XCTAssertEqual(fixture.transports.all.count, 1, way.rawValue)
                 XCTAssertEqual(model.store.sessions.first?.status, .ready, way.rawValue)
+                XCTAssertEqual(model.store.sessions.first?.runtimeExecutableURL, fixture.cli.standardizedFileURL,
+                               "The row keeps the CLI the task last started with")
             case .archived:
                 XCTAssertTrue(model.store.sessions.isEmpty, way.rawValue)
             }
@@ -531,6 +545,13 @@ import XCTest
                 .filter { $0.event == "runtime-detached" }
             XCTAssertEqual(detached, [TaskCoordinationLog.Entry(event: "runtime-detached", task: task.id.uuidString,
                 harness: "claude-code", reason: reasons[way]?.rawValue)], way.rawValue)
+            if way == .cliChanged {
+                await model.send(HarnessUserInput(text: "Next"), to: task)
+                XCTAssertTrue(model.isAttached(task.id))
+                XCTAssertEqual(fixture.transports.all.count, 2)
+                XCTAssertEqual(model.store.sessions.first?.runtimeExecutableURL, newer.standardizedFileURL,
+                               "The next start runs the harness's new CLI")
+            }
         }
     }
 
@@ -813,7 +834,7 @@ import XCTest
         let homes = [first, next, signedOut, separate].map(connection)
         let makeModel: @MainActor (SessionStore) -> AppModel = { store in
             let model = AppModel(store: store,
-                runtimeSelections: RuntimeSelectionStore(discoversRuntimes: false),
+                runtimeSelections: RuntimeSelectionStore(defaults: defaults, discoversRuntimes: false),
                 registry: HarnessRegistry { _, url in
                     YHPProviderCompatibilityAdapter(
                         adapter: ClaudeAdapter(executableURL: url, transportFactory: { _ in transports.make() }),

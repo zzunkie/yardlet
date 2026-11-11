@@ -668,7 +668,6 @@ final class AppModel {
         isRestoringIndex = true
         do {
             try await store.restore()
-            await relocateMissingRuntimes()
             importFolderPreferencesIfNeeded(legacyFolderPreferences)
             taskWorkspaces.restoreSelection(in: store)
             splits.restore(
@@ -1182,7 +1181,7 @@ final class AppModel {
             let submittedDraft = sourceDraft.snapshot
             let commandName = input.text.split(whereSeparator: \.isWhitespace).first
             if commandName != "/clear", providerCapabilitiesBySessionID[session.id] == nil {
-                session = await sessionWithAvailableRuntime(session)
+                session = await sessionWithCurrentRuntime(session)
                 await loadProviderCapabilities(for: session)
                 if let state = providerCapabilitiesBySessionID[session.id], !state.errors.isEmpty {
                     sourceDraft.notice = state.errors.joined(separator: "\n")
@@ -3977,7 +3976,7 @@ final class AppModel {
                     throw HarnessAdapterError.capabilityUnavailable(L10n.string("This turn cannot be forked."))
                 }
             }
-            session = await sessionWithAvailableRuntime(session)
+            session = await sessionWithCurrentRuntime(session)
             guard matchingSession(session) != nil else { return nil }
             let (adapter, provider, handle) = try await codexProvider(for: session)
             guard let attached = matchingSession(session, allowingInitialAttachment: true) else { return nil }
@@ -5420,13 +5419,12 @@ final class AppModel {
     }
 
     /// The task as it resumes under `connection`: that account's own login must be signed in first, as
-    /// the task's CLI reports it. The CLI asked is the one the task will start, so a recorded runtime
-    /// that is gone is followed first, as before an attach (`sessionWithAvailableRuntime`): a desktop
-    /// app that bundles the CLI removes the version a task recorded when it updates, also while
-    /// Yardlet runs. With nowhere to follow, the refusal names the missing path, as an attach's does.
+    /// the task's CLI reports it. The CLI asked is the one the task will start, its harness's current
+    /// runtime, and the row is pointed at it first, as before an attach (`sessionWithCurrentRuntime`).
+    /// With no runtime there, the refusal names the missing path, as an attach's does.
     func taskReadyToResume(_ task: SessionRecord, under connection: ProviderConnection) async throws -> SessionRecord {
         try connection.validate(for: task.harness)
-        let task = await sessionWithAvailableRuntime(task)
+        let task = await sessionWithCurrentRuntime(task)
         let runtime = runtime(of: task)
         guard ExecutableLookup.current.isProgram(runtime) else {
             throw HarnessAdapterError.runtimeNotFound(runtime)
@@ -5968,14 +5966,6 @@ final class AppModel {
         return connectorCenter?.withYardletStandIns(scope) ?? scope
     }
 
-    /// Restoration points tasks at moved runtimes up front, so task details and the next attach
-    /// read the runtime the task will actually use.
-    private func relocateMissingRuntimes() async {
-        for session in store.sessions {
-            _ = await sessionWithAvailableRuntime(session)
-        }
-    }
-
     /// Starts a task's runtime unless it has one. Starts of one task never overlap: one asked for while
     /// another is under way, such as another task's message arriving as the person's own message
     /// starts the runtime, waits for it and goes on with the runtime it started. The harness keeps
@@ -6021,7 +6011,7 @@ final class AppModel {
         if HarnessCatalog.retired.contains(session.harness) { throw UnsupportedHarnessAdapter.unavailable(session.harness) }
         // A harness starts in the task's folder; one that is gone is the reason, not the launch's words.
         if let missing = taskFolderMissing(session) { throw missing }
-        let session = await sessionWithAvailableRuntime(session)
+        let session = await sessionWithCurrentRuntime(session)
         // A login just read as signed out is the reason, before a CLI starts and a turn says the same.
         // A Codex thread needs no login, and what a task reads from one still works; `submitCodex`
         // stops its turn instead.
@@ -7618,7 +7608,7 @@ extension AppModel {
                 }
                 _ = try outgoing.encodedImages()
             }
-            session = await sessionWithAvailableRuntime(session)
+            session = await sessionWithCurrentRuntime(session)
             if edit.preparedProviderSessionID == nil, let planned = edit.plannedProviderSessionID,
                session.providerSessionID == planned {
                 guard session.harness == .claudeCode,
@@ -7755,7 +7745,7 @@ extension AppModel {
         }
         let points = try await loadClaudeFilePoints(in: session)
         guard let point = points.first(where: { $0.id == pointID }) else { throw HarnessAdapterError.invalidProviderEvent("Unknown file checkpoint") }
-        session = await sessionWithAvailableRuntime(session)
+        session = await sessionWithCurrentRuntime(session)
         if handlesBySessionID[session.id] == nil { try await attach(session, resumesExistingSession: true) }
         guard let adapter = adaptersBySessionID[session.id] as? any HarnessFileRewinding,
               let handle = handlesBySessionID[session.id] else { throw HarnessAdapterError.capabilityUnavailable("File restore is unavailable") }

@@ -1,41 +1,35 @@
 import Foundation
 
-// The CLI a task runs on (docs/NATIVE_SESSION_STORAGE.md, "Runtime paths"). A task records the path
-// of the CLI it was created with, and that file can go while Yardlet runs: a desktop app that
-// bundles the CLI removes the recorded version when it updates. So the recorded path is a record,
-// not something to run. Whatever starts a task's CLI, asks it a question or looks up the adapter
-// kept for it gets the CLI here, where a missing one is followed by one rule; nothing else passes
-// `SessionRecord.runtimeExecutableURL` on as an executable (`TaskRuntimeLintTests`).
+// The CLI a task runs on (docs/NATIVE_SESSION_STORAGE.md, "Runtime paths"): its harness's current
+// runtime, the one the person chose in Settings › Harnesses or else the newest install found, as the
+// Codex and Claude apps open every conversation with the CLI they have now. A task records the path of
+// the CLI it last started with. That path is a record, not something to run: a desktop app that
+// bundles the CLI removes the recorded version when it updates, and another install may be the
+// harness's runtime now. Whatever starts a task's CLI, asks it a question or looks up the adapter kept
+// for it gets the CLI here; nothing else passes `SessionRecord.runtimeExecutableURL` on as an
+// executable (`TaskRuntimeLintTests`).
 extension AppModel {
-    /// The CLI a task runs on now: the one it recorded while that exists, else where the desktop app
-    /// that bundles it moved it, else the harness's current runtime. With nowhere to follow it is the
-    /// recorded path, which the caller then finds missing. Nothing is written.
+    /// The CLI a task runs on now: its harness's current runtime. A harness with none (no install
+    /// found and none chosen) leaves the recorded path, which the caller runs or finds missing.
+    /// Nothing is written.
     func runtime(of session: SessionRecord) -> URL {
-        runtimeReplacement(for: session) ?? session.runtimeExecutableURL
+        runtimeSelections.selectedURL(for: session.harness) ?? session.runtimeExecutableURL
     }
 
-    /// Where a task whose recorded runtime is gone continues: where the desktop app that bundles the
-    /// runtime moved it, or else the harness's current runtime. Nil while the recorded one exists.
-    func runtimeReplacement(for session: SessionRecord) -> URL? {
-        guard !ExecutableLookup.current.isProgram(session.runtimeExecutableURL) else { return nil }
-        return RuntimeRelocation.successor(of: session.runtimeExecutableURL, for: session.harness)
-            ?? runtimeSelections.selectedURL(for: session.harness)
-    }
-
-    /// A task keeps the runtime it was created with. When a desktop app that bundles that runtime
-    /// moved it or removed its old version, the task continues with where the runtime now lives,
-    /// or else with the harness's current runtime, and its row says so from then on. The provider
-    /// session and its home stay as they were, and a recorded runtime that still exists is never
-    /// replaced.
-    func sessionWithAvailableRuntime(_ session: SessionRecord) async -> SessionRecord {
-        guard let replacement = runtimeReplacement(for: session),
-              let updated = try? await store.updateRuntimeExecutable(id: session.id, to: replacement)
+    /// The task with its row pointed at the CLI it starts with now, before its runtime starts or its
+    /// CLI is asked something. An attached task keeps the record of the CLI its runtime runs until that
+    /// runtime ends. The provider session, its home and its account stay as they were.
+    func sessionWithCurrentRuntime(_ session: SessionRecord) async -> SessionRecord {
+        let current = runtime(of: session).standardizedFileURL
+        guard current != session.runtimeExecutableURL, handlesBySessionID[session.id] == nil,
+              let updated = try? await store.updateRuntimeExecutable(id: session.id, to: current)
         else { return session }
         return updated
     }
 
     /// What the registry keeps a task's adapter under: its harness, the CLI it runs on now, its
-    /// storage and its account.
+    /// storage and its account. Tasks of one harness and account share one key whatever CLI each
+    /// recorded, so Codex tasks of an account share one App Server.
     func runtimeKey(of session: SessionRecord) -> HarnessRegistry.Key {
         HarnessRegistry.Key(harness: session.harness, executableURL: runtime(of: session),
                             environmentScope: session.environmentScope, connection: session.connection)

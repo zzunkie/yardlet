@@ -20,8 +20,8 @@ extension AppModel {
     /// task's account: Claude Code's latest Haiku through `claude -p`, Codex's newest luna on a side
     /// thread of the account's App Server.
     func recentConversationTitle(for session: SessionRecord, excerpt: String) async throws -> String {
-        // Asked of the CLI the task runs now, not of a recorded one that is gone.
-        let session = await sessionWithAvailableRuntime(session)
+        // Asked of the CLI the task runs now, its harness's current runtime.
+        let session = await sessionWithCurrentRuntime(session)
         switch session.harness {
         case .claudeCode:
             let executable = await startedExecutable(of: session)

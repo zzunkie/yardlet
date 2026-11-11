@@ -124,7 +124,7 @@ actor HarnessRegistry {
             return adapter
         }
         let harness = key.harness
-        // The task keeps the runtime path it recorded; only the process started for it changes.
+        // The key names the runtime asked for; an earlier version held in its place is what starts.
         let started = startedExecutable(for: harness, requested: key.executableURL)
         let antigravityPrintMode = factory == nil && harness == .antigravityCLI
             ? !(await servesACP(.antigravityCLI, executableURL: started)) : false
@@ -176,9 +176,8 @@ actor HarnessRegistry {
     }
 
     /// Drops `adapter` from wherever it is kept, so the next request for its harness, CLI, storage
-    /// and account makes a new one. What it is kept under is the registry's to know: a task's
-    /// recorded CLI may have changed since the task got the adapter. An adapter made in its place
-    /// since stays.
+    /// and account makes a new one. What it is kept under is the registry's to know: the harness's
+    /// CLI may have changed since the task got the adapter. An adapter made in its place since stays.
     func invalidate(_ adapter: any HarnessAdapter) {
         let identity = ObjectIdentifier(adapter as AnyObject)
         adapters = adapters.filter { ObjectIdentifier($0.value as AnyObject) != identity }

@@ -2,11 +2,11 @@ import Foundation
 import Observation
 import YardletRemote
 
-/// The runtime each harness's new tasks start with. One the person chose (Settings › Harnesses ›
-/// Choose…) stays until they choose another. Any other harness uses the newest version among the
-/// installs found on this Mac, as the Codex and Claude apps run their newest bundled runtime: the
-/// version read when the file changed (`RuntimeVersionCache`), and among equal or unreadable
-/// versions the first in candidate order. A task keeps the runtime it was created with.
+/// The runtime each harness's tasks start with, new ones and saved ones alike (`AppModel.runtime(of:)`).
+/// One the person chose (Settings › Harnesses › Choose…) stays until they choose another. Any other
+/// harness uses the newest version among the installs found on this Mac, as the Codex and Claude apps
+/// run their newest bundled runtime: the version read when the file changed (`RuntimeVersionCache`),
+/// and among equal or unreadable versions the first in candidate order.
 @MainActor
 @Observable
 final class RuntimeSelectionStore {
@@ -208,9 +208,9 @@ final class RuntimeSelectionStore {
 
     /// Where a store looks for installs when its caller names no places: this Mac's
     /// (`candidates(for:home:)`), or, in a test process, nowhere. A test store that looked found the
-    /// person's own CLI, and a task the test started, or a fixture task whose made-up runtime was
-    /// missing (`runtimeReplacement(for:)`), ran a real turn under their sign-in. A test that needs
-    /// an install passes `candidates` or names the runtime itself.
+    /// person's own CLI, and a task the test started, or a fixture task, which runs on its harness's
+    /// runtime (`AppModel.runtime(of:)`), ran a real turn under their sign-in. A test that needs an
+    /// install passes `candidates` or names the runtime itself.
     nonisolated static func defaultCandidates(for harness: HarnessKind) -> [URL] {
         NSClassFromString("XCTestCase") == nil ? candidates(for: harness) : []
     }

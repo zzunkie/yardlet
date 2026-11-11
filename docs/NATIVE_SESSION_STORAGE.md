@@ -191,15 +191,26 @@ for Claude Code, the ChatGPT app for Codex); a user-managed CLI that disappeared
 replaces its runtime while Yardlet runs (the Claude app deletes the previous version when it updates),
 `RuntimeSelectionStore.selectedURL` returns the successor path right away, as the next launch would.
 
-The path a task recorded is a record, and one rule says which CLI the task runs on now (`AppModel.runtime(of:)`): the
-recorded one while it exists, else that successor, else the harness's current selection. Everything that starts a
-task's CLI, asks it something or looks up the adapter kept for it uses that rule: an attach, the login check before a
-move to another account, a title request, and the reads of a detached or archived task (a Codex thread and its limits,
-a search result's places, an ACP agent's replay). The task's row is pointed at the CLI it continues with when the index
-is restored, before the task attaches, before a move to another account asks that CLI whether the target account is
-signed in, and before a title is asked of it (`AppModel.sessionWithAvailableRuntime`); the reads write nothing. A
-recorded runtime that still exists is not changed. Only the executable changes: the provider ID, storage scope, account
-binding and native history stay, no credentials are copied and there is no sign-in.
+A task runs on its harness's current runtime each time its runtime starts (`AppModel.runtime(of:)`): the one the person
+chose in Settings › Harnesses, or else the newest install found, as the Claude app and the Codex app open every
+conversation with the CLI they have now. The path a task recorded is the CLI it last started with and is not run; only
+a harness with no runtime at all leaves it, and an attach then names it as missing. Everything that starts a task's
+CLI, asks it something or looks up the adapter kept for it uses that rule: an attach, the login check before a move to
+another account, a title request, and the reads of a detached or archived task (a Codex thread and its limits, a search
+result's places, an ACP agent's replay). Tasks of one harness, storage scope and account therefore share one adapter,
+and Codex tasks of one account one App Server, whatever CLI each recorded. An earlier version Yardlet holds in place of
+an update that failed its check (`CLIRuntimeOverrides`) is keyed on the runtime asked for, so every task of the harness
+starts it.
+
+When the runtime changes (the person chooses another, or a newer install is found), a task already attached keeps the
+process it has, and its next start uses the new runtime; no turn is cut off. An update or a return to an earlier version
+that Yardlet makes also ends each idle attached task's runtime (`AppModel.harnessRuntimeChanged`). The task's row is
+pointed at the CLI it starts with before the task attaches, before a move to another account asks that CLI whether the
+target account is signed in, before a title is asked of it, and before a fork, an edit or a file restore attaches it
+(`AppModel.sessionWithCurrentRuntime`), but not while it is attached; restoring the index and the reads write nothing.
+Only the executable changes: the provider ID, storage scope, account binding and native history stay, no credentials are
+copied and there is no sign-in. Choosing an older runtime opens conversations a newer version wrote; neither provider
+documents that this works, and Yardlet does not check it.
 
 ## Opening a saved task
 

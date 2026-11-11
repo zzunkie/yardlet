@@ -13,8 +13,8 @@ extension AppModel {
         defer { reading.finishReading() }
         guard reading.outcome == .reading, !isVisualFixture, let providerID = reading.session.providerSessionID
         else { return }
-        // As restoring the task would, a runtime its desktop app moved is read where it lives now
-        // (`runtime(of:)`); the archived row keeps the path it recorded.
+        // As restoring the task would, the reads use the harness's current runtime (`runtime(of:)`);
+        // the archived row keeps the path it recorded.
         let session = reading.session
         switch session.harness {
         case .claudeCode:

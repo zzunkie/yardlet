@@ -514,6 +514,8 @@ final class ScheduledTaskTests: XCTestCase {
         let clock = Clock(date(16, 20))
         let accounts = try claudeAccounts(shared: ["work", "roomy"], separate: ["own"])
         let model = makeModel(adapter: adapter, connections: accounts.store, clock: clock)
+        // A move asks the task's CLI, the harness's runtime, whether the next account is signed in.
+        model.runtimeSelections.select(accounts.cli, for: .claudeCode)
         accounts.read("work", used: 0.97)
         accounts.read("roomy", used: 0.2)
         accounts.read("own", used: 0.97)

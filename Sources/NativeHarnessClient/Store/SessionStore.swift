@@ -365,7 +365,7 @@ final class SessionStore {
         }
     }
 
-    /// Points a task at the runtime it continues with after the recorded one disappeared. The
+    /// Records the runtime a task starts with now (`AppModel.sessionWithCurrentRuntime`). The
     /// provider session, its storage scope, and its account binding stay exactly as they were.
     @discardableResult
     func updateRuntimeExecutable(id: UUID, to url: URL) async throws -> SessionRecord? {

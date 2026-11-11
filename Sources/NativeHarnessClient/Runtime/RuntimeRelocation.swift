@@ -1,8 +1,8 @@
 import Foundation
 
 /// Desktop apps that bundle a harness runtime update it on their own schedule and may move it or
-/// delete the version a task was created with. A recorded path inside such an app names where the
-/// same runtime now lives, not a runtime that is gone. Paths the user manages are never guessed.
+/// delete the version Yardlet chose. A saved path inside such an app names where the same runtime
+/// now lives, not a runtime that is gone. Paths the user manages are never guessed.
 enum RuntimeRelocation {
     /// Where the runtime recorded at `url` lives now, when `url` no longer exists and belongs to
     /// a desktop app Yardlet knows how that app lays out its bundled runtime.

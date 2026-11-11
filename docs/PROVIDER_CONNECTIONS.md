@@ -139,7 +139,7 @@ overrides. HOME and the general development tool environment are kept. A provide
 harness's own settings, but Yardlet does not guarantee an arbitrary provider connection for an arbitrary engine.
 Existing tasks are not moved to another account folder, and native conversations are not duplicated.
 
-Each harness has one runtime that reads its accounts and starts its new tasks. Unless the person chose
+Each harness has one runtime that reads its accounts and starts its tasks, new and saved. Unless the person chose
 one, it is the newest version among the installs on this Mac; a runtime the person chose is kept, and Settings ›
 CLI Updates offers a newer install found elsewhere. Installs are looked for in the desktop apps' bundles and where the
 person's shell would find them, not only in Yardlet's own `PATH`, which has only the system's folders when Yardlet
@@ -152,8 +152,9 @@ runtime's version: the App Server's `model/list` answered one user's older Codex
 versions are read off the main thread at launch, only for installs that changed since the last launch; until then the
 choice rests on the versions read before. The window and the task list do not wait for the read, but the launch's
 work that starts a runtime does (work a quit cut off, scheduled tasks, following the Claude app's and Codex's lists),
-so it neither starts an older install nor keeps that install's App Server for the session. Creating a
-task records its runtime on the task only; it does not become the harness's choice. Choosing a runtime with Choose…
+so it neither starts an older install nor keeps that install's App Server for the session. A task records the
+runtime it last started with, as a record only: it is not run and does not become the harness's choice
+(docs/NATIVE_SESSION_STORAGE.md, "Runtime paths"). Choosing a runtime with Choose…
 under Runtime and connection details checks the accounts again with `restart`.
 
 Switching accounts rechecks the binding and task state, closes that handle and resumes with the same provider session
