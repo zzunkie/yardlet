@@ -489,24 +489,70 @@ import XCTest
         }
     }
 
+    /// A message another task sends while the person's own message is still starting the task's
+    /// runtime waits for that runtime and goes into it. It neither starts a second one for the same
+    /// conversation nor fails with "already attached" (2026-11-11).
+    func testAMessageArrivingWhileTheRuntimeStartsWaitsForThatRuntime() async throws {
+        let fixture = try await makeFixture()
+        let model = fixture.model, task = fixture.task
+        await fixture.transport.emit(try json(result))
+        try await waitUntil { model.store.sessions.first?.status == .ready }
+        await model.closeIdleRuntime(of: task.id)
+        XCTAssertNil(model.handlesBySessionID[task.id])
+
+        fixture.transports.holdNextHandshakes()
+        let persons = Task { await model.send(HarnessUserInput(text: "Next request"), to: task) }
+        try await waitUntil {
+            guard fixture.transports.all.count == 2 else { return false }
+            return await fixture.transports.all[1].hasHeldInitialize
+        }
+        let current = try XCTUnwrap(model.store.sessions.first)
+        let delivery = Task {
+            await model.deliverTaskMessage(
+                TaskMessage(senderID: UUID().uuidString, senderName: "Schedule", body: "Reddit answered 403"),
+                to: current)
+        }
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(fixture.transports.all.count, 2, "No second runtime while the first starts")
+        XCTAssertNil(model.errorBySessionID[task.id])
+
+        let restarted = fixture.transports.all[1]
+        await restarted.answerHeldInitialize()
+        await persons.value
+        let outcome = await delivery.value
+        XCTAssertEqual(fixture.transports.all.count, 2)
+        XCTAssertNil(model.errorBySessionID[task.id], "No error card")
+        if case let .undelivered(reason) = outcome { XCTFail(reason) }
+        let sent = await restarted.sentValues.compactMap { $0["message"]?["content"]?.stringValue }
+        XCTAssertEqual(sent.count, 2, "Both messages reach the one runtime: \(sent)")
+        XCTAssertTrue(sent.contains("Next request"), "\(sent)")
+        XCTAssertTrue(sent.contains { TaskMessage.parse($0) != nil }, "\(sent)")
+    }
+
     // MARK: - Fixture
 
     private struct Fixture {
         let model: AppModel
         let task: SessionRecord
         let transport: FakeClaudeTransport
+        let transports: TransportLog
         let queueRepository: UserDefaultsCodexQueueRepository
     }
 
     private final class TransportLog: @unchecked Sendable {
         private let lock = NSLock()
         private var transports: [FakeClaudeTransport] = []
+        private var holdsInitialize = false
         func make() -> FakeClaudeTransport {
-            let transport = FakeClaudeTransport()
-            lock.withLock { transports.append(transport) }
-            return transport
+            lock.withLock {
+                let transport = FakeClaudeTransport(holdsInitialize: holdsInitialize)
+                transports.append(transport)
+                return transport
+            }
         }
         var all: [FakeClaudeTransport] { lock.withLock { transports } }
+        /// Runtimes started from now on wait in their handshake until it is answered.
+        func holdNextHandshakes() { lock.withLock { holdsInitialize = true } }
     }
 
     /// A Claude task on the product route whose first turn is running.
@@ -551,7 +597,7 @@ import XCTest
                 && model.store.sessions.first?.status == .running
         }
         return Fixture(model: model, task: try XCTUnwrap(model.store.sessions.first), transport: transport,
-                       queueRepository: queueRepository)
+                       transports: transports, queueRepository: queueRepository)
     }
 
     private func lines(_ model: AppModel, _ task: SessionRecord) -> [String] {

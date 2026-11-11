@@ -158,6 +158,8 @@ final class AppModel {
     @ObservationIgnored private var memoryPressureSource: AnyObject?
     /// Runtimes the memory saver is closing; a new attach of the task waits for its close to finish.
     @ObservationIgnored private var memorySaverClosings: [UUID: Task<Void, Never>] = [:]
+    /// The runtime start under way for each task (`attach`); another start of the task waits for it.
+    @ObservationIgnored private var runtimeStarts: [UUID: Task<Void, Error>] = [:]
     @ObservationIgnored var harnessMemorySaverTiming = HarnessMemorySaver.Timing()
     /// The tasks the phone shows now (`AppModelRemoteBridge`), which the memory saver counts as on screen.
     @ObservationIgnored var remoteWatchedTaskIDs = Set<UUID>()
@@ -5912,7 +5914,26 @@ final class AppModel {
         }
     }
 
+    /// Starts a task's runtime unless it has one. Starts of one task never overlap: one asked for while
+    /// another is under way, such as another task's message arriving as the person's own message
+    /// starts the runtime, waits for it and goes on with the runtime it started. The harness keeps
+    /// one runtime per conversation and refuses a second start of a session it holds.
     func attach(
+        _ session: SessionRecord,
+        resumesExistingSession: Bool
+    ) async throws {
+        while let starting = runtimeStarts[session.id] { _ = await starting.result }
+        // The start waited for may have run under the task's new account; its runtime is the task's.
+        if handlesBySessionID[session.id] != nil { return }
+        let start = Task { @MainActor in
+            defer { runtimeStarts[session.id] = nil }
+            try await startRuntime(session, resumesExistingSession: resumesExistingSession)
+        }
+        runtimeStarts[session.id] = start
+        try await withTaskCancellationHandler { try await start.value } onCancel: { start.cancel() }
+    }
+
+    private func startRuntime(
         _ session: SessionRecord,
         resumesExistingSession: Bool
     ) async throws {

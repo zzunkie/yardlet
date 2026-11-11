@@ -625,10 +625,16 @@ actor FakeClaudeTransport: ClaudeTransport {
     private var holdsInterrupt = false
     private var heldInterrupt: CheckedContinuation<Void, Never>?
     var hasHeldInterrupt: Bool { heldInterrupt != nil }
+    /// Holds the `initialize` answer until `answerHeldInitialize()`: a runtime still starting.
+    private var holdsInitialize: Bool
+    private var heldInitialize: CheckedContinuation<Void, Never>?
+    var hasHeldInitialize: Bool { heldInitialize != nil }
 
     init(initializeResponse: JSONValue = .object(["models": .array([])]),
-         effectiveSettings: [String: JSONValue] = [:], appliedSettings: [String: JSONValue] = [:]) {
+         effectiveSettings: [String: JSONValue] = [:], appliedSettings: [String: JSONValue] = [:],
+         holdsInitialize: Bool = false) {
         self.initializeResponse = initializeResponse
+        self.holdsInitialize = holdsInitialize
         self.flagValues = effectiveSettings
         self.appliedValues = appliedSettings
         let pair = AsyncStream<ClaudeRawFrame>.makeStream()
@@ -646,6 +652,7 @@ actor FakeClaudeTransport: ClaudeTransport {
         requestedValues.append(value)
         if subtype == "stop_task", let taskControlError { throw taskControlError }
         if subtype == "initialize" {
+            if holdsInitialize { await withCheckedContinuation { heldInitialize = $0 } }
             return initializeResponse
         }
         if subtype == "get_context_usage", let contextUsageResponse {
@@ -701,6 +708,11 @@ actor FakeClaudeTransport: ClaudeTransport {
     /// Holds the next `interrupt` answers until `answerHeldInterrupt()`, as when the stopped turn's
     /// result is read before the CLI's answer.
     func holdInterrupt() { holdsInterrupt = true }
+    func answerHeldInitialize() {
+        holdsInitialize = false
+        heldInitialize?.resume()
+        heldInitialize = nil
+    }
     func answerHeldInterrupt() {
         holdsInterrupt = false
         heldInterrupt?.resume()
