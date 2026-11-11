@@ -108,11 +108,17 @@ enum ConversationWorkGrouping {
         return bounds
     }
 
-    /// What a folded turn keeps of its work (`ConversationTurn.workKeptWhenFolded`) but the calls the
-    /// live line stands for, in the runs the listed work has: consecutive calls still one summary line,
-    /// suggested tasks one card.
-    static func runsKeptWhenFolded(_ turn: ConversationTurn, live: ConversationLiveWork?) -> [Run] {
-        let liveIDs = Set(live?.items.map(\.id) ?? [])
-        return runs(turn.workKeptWhenFolded.filter { !liveIDs.contains($0.id) })
+    /// What a folded turn draws of its work (`ConversationTurn.workStretches`) but the calls the live
+    /// line stands for. Drawn in the runs the listed work has: consecutive calls still one summary
+    /// line, suggested tasks one card.
+    static func stretchesWhenFolded(_ turn: ConversationTurn, live: ConversationLiveWork?) -> [ConversationWorkStretch] {
+        let stretches = turn.workStretches
+        // The live line's calls are the turn's last run, so they end its last stretch.
+        guard let first = live?.items.first, var last = stretches.last,
+              let start = last.work.lastIndex(where: { $0.id == first.id }) else { return stretches }
+        let liveIDs = Set(last.work[start...].map(\.id))
+        last.work = last.work[..<start]
+        last.kept.removeAll { liveIDs.contains($0.id) }
+        return stretches.dropLast() + [last]
     }
 }

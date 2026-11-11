@@ -15,6 +15,8 @@ import Foundation
 ///   it, the other messages sent into it that no finished final answer followed, the questions it
 ///   asked, the calls refused for want of an approval, and while it runs, everything after the latest
 ///   final answer it finished (`ConversationTurn.workKeptWhenFolded`).
+/// - A message sent into the turn that stays in view parts the fold: the work before it folds under
+///   the turn header, the work after it on a line of its own (`ConversationTurn.workStretches`).
 ///
 /// What differs between harnesses is only how each projection classifies what its provider wrote:
 /// working notes (`ConversationItemKind.commentary`), what is said to the person
@@ -125,25 +127,89 @@ extension ConversationTurn {
     ///   task, a schedule an agent created, and an error or limit the turn went on past, which a final
     ///   answer never hides.
     var workKeptWhenFolded: [ConversationItem] {
-        let answered = answers.contains(where: ConversationTurnLayout.isFinishedAnswer)
-            ? work.count : work.lastIndex(where: ConversationTurnLayout.isFinishedAnswer) ?? -1
+        let answered = finishedAnswerIndex
         return work.enumerated().compactMap { index, item in
-            if status == .running, answered >= 0, index > answered { return item }
-            if item.wasRefusedForApproval { return item }
-            switch item.kind {
-            case .answer:
-                return ConversationTurnLayout.isAnswer(item) ? item : nil
-            case .userMessage where item.isPersonMessage:
-                return item
-            case .userMessage, .scheduledTaskMessage:
-                return index >= answered ? item : nil
-            case .taskSuggestion, .scheduleCreated, .settingChanged, .outcome:
-                return item
-            case let .request(request):
-                return request.isQuestion ? item : nil
-            default:
-                return nil
+            keepsInViewWhenFolded(item, at: index, answered: answered) ? item : nil
+        }
+    }
+
+    /// A folded turn's work, parted at each message sent into the turn that stays in view
+    /// (`workKeptWhenFolded`): the work before the first such message, which the turn header folds,
+    /// then each message with the work after it up to the next, which folds on a line of its own. One
+    /// fold above the person's message read as if the message came after all the work and the answer
+    /// replied to it alone, when it was sent while the work went on. A message folded with the work
+    /// (one a finished final answer followed, from another task or a schedule) parts nothing, as it is
+    /// not in view to part it.
+    var workStretches: [ConversationWorkStretch] {
+        let answered = finishedAnswerIndex
+        var stretches: [ConversationWorkStretch] = []
+        var message: ConversationItem?, start = 0, kept: [ConversationItem] = []
+        for (index, item) in work.enumerated() where keepsInViewWhenFolded(item, at: index, answered: answered) {
+            if item.isSentIntoTurn {
+                stretches.append(ConversationWorkStretch(message: message, work: work[start..<index], kept: kept))
+                message = item
+                start = index + 1
+                kept = []
+            } else {
+                kept.append(item)
             }
+        }
+        stretches.append(ConversationWorkStretch(message: message, work: work[start...], kept: kept))
+        return stretches
+    }
+
+    /// Where in the work the latest finished final answer is: past the work when the closing answer
+    /// has ended, -1 when there is none.
+    private var finishedAnswerIndex: Int {
+        answers.contains(where: ConversationTurnLayout.isFinishedAnswer)
+            ? work.count : work.lastIndex(where: ConversationTurnLayout.isFinishedAnswer) ?? -1
+    }
+
+    private func keepsInViewWhenFolded(_ item: ConversationItem, at index: Int, answered: Int) -> Bool {
+        if status == .running, answered >= 0, index > answered { return true }
+        if item.wasRefusedForApproval { return true }
+        switch item.kind {
+        case .answer:
+            return ConversationTurnLayout.isAnswer(item)
+        case .userMessage where item.isPersonMessage:
+            return true
+        case .userMessage, .scheduledTaskMessage:
+            return index >= answered
+        case .taskSuggestion, .scheduleCreated, .settingChanged, .outcome:
+            return true
+        case let .request(request):
+            return request.isQuestion
+        default:
+            return false
+        }
+    }
+}
+
+/// A stretch of a folded turn's work (`ConversationTurn.workStretches`): the message sent into the
+/// turn that opens it, the work after that message up to the next, and what of that work stays in
+/// view while it folds.
+struct ConversationWorkStretch: Identifiable {
+    /// The message that opens the stretch; nil for the first, whose work the turn header folds.
+    var message: ConversationItem?
+    /// The work after the message, in its order: what the fold hides and what it keeps. A part of the
+    /// turn's work, not a copy of it, as a turn can hold thousands of items.
+    var work: ArraySlice<ConversationItem>
+    /// What of `work` stays in view while the stretch folds.
+    var kept: [ConversationItem]
+
+    var id: String { message.map { "stretch-" + $0.id } ?? "stretch" }
+
+    /// The fold hides some of the stretch's work.
+    var hidesWork: Bool { kept.count < work.count }
+}
+
+private extension ConversationItem {
+    /// A message sent into the turn: the person's, another task's, a background command's or a
+    /// schedule's.
+    var isSentIntoTurn: Bool {
+        switch kind {
+        case .userMessage, .scheduledTaskMessage: true
+        default: false
         }
     }
 }

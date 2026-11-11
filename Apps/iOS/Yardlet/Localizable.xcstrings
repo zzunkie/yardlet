@@ -2073,6 +2073,16 @@
         }
       }
     },
+    "Work details": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "작업 과정"
+          }
+        }
+      }
+    },
     "Worked for %@": {
       "localizations": {
         "ko": {

@@ -171,13 +171,17 @@ struct ItemContext {
 }
 
 /// One turn: what was sent, the turn's header, its work (folded once finished, as on the Mac), its answers and the
-/// requests still waiting.
+/// requests still waiting. As on the Mac, a message sent into the turn that stays in view parts the folded work
+/// (`RemoteTurnFold`).
 struct TurnView: View, @MainActor Equatable {
     let turn: ConversationState.Turn
     let isWorkOpen: Bool
     let context: ItemContext
     let toggleWork: () -> Void
     let openDetail: (RemoteItem) -> Void
+
+    /// The messages whose folded work the person opened.
+    @State private var openedStretches: Set<String> = []
 
     static func == (lhs: TurnView, rhs: TurnView) -> Bool {
         lhs.turn == rhs.turn && lhs.isWorkOpen == rhs.isWorkOpen && lhs.context.task == rhs.context.task
@@ -186,13 +190,40 @@ struct TurnView: View, @MainActor Equatable {
     var body: some View {
         let folds = turn.header?.foldsWork == true && !isWorkOpen
         VStack(alignment: .leading, spacing: 12) {
-            ForEach(turn.items, id: \.id) { item in
-                if !(folds && item.inWork == true) {
+            ForEach(RemoteTurnFold.rows(turn.items, folds: folds, opened: openedStretches), id: \.id) { row in
+                switch row {
+                case let .item(item):
                     ItemView(item: item, context: context, isWorkOpen: isWorkOpen, toggleWork: toggleWork,
                              openDetail: openDetail)
+                case let .fold(message):
+                    StretchFoldView(isOpen: openedStretches.contains(message)) {
+                        if openedStretches.contains(message) {
+                            openedStretches.remove(message)
+                        } else {
+                            openedStretches.insert(message)
+                        }
+                    }
                 }
             }
         }
+    }
+}
+
+/// The fold of the work after a message sent into a folded turn, as the turn's header reads its fold.
+struct StretchFoldView: View {
+    let isOpen: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 4) {
+                Text("Work details")
+                Image(systemName: isOpen ? "chevron.down" : "chevron.right").font(.caption2.weight(.semibold))
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
     }
 }
 

@@ -17,6 +17,15 @@ extension NSView {
         return pressFirstButton { label, value in isLiveLine(label) && value == L10n.string("Collapsed") }
     }
 
+    /// Presses the turn header's fold, as an assistive app would: the button labelled with the work
+    /// time, or "Work details" where the turn reads none.
+    func pressTurnHeader() -> Bool {
+        pressButton { label in
+            ConversationDrawing.isWorkTime(label) || label.hasPrefix(L10n.string("Work details"))
+                || label.contains(L10n.format("Working for %lld seconds", Int64(0)).prefix(4))
+        }
+    }
+
     /// Presses the first button labelled `label`, as a click on it would.
     @discardableResult
     func pressButton(labeled label: String) -> Bool {

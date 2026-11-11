@@ -364,7 +364,7 @@ Every item has:
 | `id` | stable within the task; prefixes `turn:`, `i:`, `req:`, `plan:`, `outcome:`, `queued:` keep kinds apart |
 | `turnId` | the turn it belongs to |
 | `kind` | `turn`, `user`, `assistant`, `activity`, `approval`, `plan`, `error`, `notice` |
-| `inWork` | true for the turn's work: hide it under the turn header while that turn's `foldsWork` is true, as the Mac folds a finished turn's work, unless the person opens it |
+| `inWork` | true for the turn's work: hide it while that turn's `foldsWork` is true, as the Mac folds a finished turn's work, unless the person opens it. A `user` item after the turn header that is not `inWork` (a message sent into the turn, which stays in view) parts the fold: the work before the first such message folds under the turn header, and the work after each one, up to the next, under a fold of its own drawn right under the message, which opens only that work (`RemoteTurnFold`) |
 
 Unknown kinds: skip them. Text fields are capped (`truncated: true` when cut).
 
