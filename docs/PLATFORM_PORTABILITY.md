@@ -228,8 +228,9 @@ probe on it, which starts it through Node.js for `--version` and the ACP handsha
 a detached process of its own, which outlives a stop of the stand-in alone, as the check shows first without the
 app; the check passes when that process ended with the app's stop (`Windows/scripts/check-harness.ps1`). With that
 stand-in, which serves one ACP turn that asks to edit a file, the app then starts a task from New task, allows the
-request from its card, waits for the answer to stream in, and opens again to find the answer kept
-(`Windows/scripts/check-local.ps1`); while the stand-in runs, no console window opens beside the ones already there,
+request from its card, opens the edit's line to its diff, waits for the answer to stream in, and opens again to find
+the answer kept; a second turn is then stopped with Stop while it waits on its request, which must reach the stand-in
+as ACP's `session/cancel`, end the turn and leave the stand-in running (`Windows/scripts/check-local.ps1`); while the stand-in runs, no console window opens beside the ones already there,
 which a console program started on its own first shows the count would see. That task is then served to phones
 on the engine's client connection (`yardlet-remote-fixture --pair`, `Windows/scripts/check-remote-host.ps1`): the app
 neither listens nor holds a room while the remote is off, turns it on in Settings › Remote, pairs and copies the link;

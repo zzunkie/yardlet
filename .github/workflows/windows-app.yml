@@ -83,7 +83,8 @@ jobs:
         shell: pwsh
         run: Windows/scripts/check-harness.ps1 -Executable "$env:APP_BIN\NativeHarnessClient.exe" -OutDirectory window-check
       # The stand-in the step before installed, in a task of its own: started from New task, its request
-      # allowed from its card, its answer streamed in and kept when the app opens again.
+      # allowed from its card, its edit opened to its diff, its answer streamed in and kept when the app opens
+      # again, and a second turn stopped with Stop through ACP's session/cancel, the stand-in still running.
       - name: Start a task with the stand-in harness
         shell: pwsh
         run: |

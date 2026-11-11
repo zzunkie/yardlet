@@ -2,9 +2,10 @@
 // A stand-in for an ACP harness installed with npm, for Windows/scripts/check-harness.ps1 and
 // check-local.ps1. It answers --version; under `acp` it starts a detached process of its own, which would
 // outlive it, writes both process IDs beside itself and serves ACP: initialize, a new session, loading a saved
-// one (whose turns it does not replay), and a prompt that reads a file, asks to edit it, and streams its answer
-// once allowed (or a short one once denied). Its tool call and its request are worded as Kimi Code's ACP bridge
-// words them. It keeps running once its input ends, so it ends only when whoever started it ends it.
+// one (whose turns it does not replay), and a prompt that reads a file, asks to edit it, and once allowed reports the
+// edit with its diff and streams its answer (or a short one once denied). A turn the client cancels ends as
+// cancelled, and each cancel is written beside it (cancels.log). Its tool call and its request are worded as Kimi
+// Code's ACP bridge words them. It keeps running once its input ends, so it ends only when whoever started it ends it.
 'use strict'
 const { spawn } = require('child_process')
 const fs = require('fs')
@@ -51,6 +52,9 @@ const waiting = new Map()
 let nextRequest = 1
 let sessions = 0
 let turns = 0
+// Each session's folder, and the sessions whose turn the client cancelled.
+const folders = new Map()
+const cancelled = new Set()
 
 function ask(method, params) {
   const id = 'stand-in-' + nextRequest++
@@ -71,15 +75,19 @@ function handle(message) {
       break
     case 'session/new':
       sessions += 1
+      folders.set('stand-in-session-' + sessions, message.params.cwd)
       send({ id: message.id, result: { sessionId: 'stand-in-session-' + sessions } })
       break
     case 'session/load':
+      folders.set(message.params.sessionId, message.params.cwd)
       send({ id: message.id, result: null })
       break
     case 'session/prompt':
       prompt(message)
       break
     case 'session/cancel':
+      cancelled.add(message.params.sessionId)
+      fs.appendFileSync(path.join(__dirname, 'cancels.log'), message.params.sessionId + '\n')
       break
     default:
       if (message.id !== undefined) send({ id: message.id, error: { code: -32601, message: 'not served by the stand-in' } })
@@ -91,6 +99,12 @@ async function prompt(message) {
   const text = (message.params.prompt || []).map((part) => part.text || '').join(' ')
   // Each turn's calls are its own, as an agent's are.
   turns += 1
+  cancelled.delete(sessionId)
+  const stopped = () => {
+    if (!cancelled.has(sessionId)) return false
+    send({ id: message.id, result: { stopReason: 'cancelled' } })
+    return true
+  }
   update(sessionId, { sessionUpdate: 'tool_call', toolCallId: 'read-' + turns, title: 'Reading README.md', kind: 'read', status: 'completed' })
   await sleep(300)
   const answer = await ask('session/request_permission', {
@@ -103,10 +117,19 @@ async function prompt(message) {
     ]
   })
   const allowed = answer && answer.outcome && answer.outcome.optionId === 'allow'
+  if (stopped()) return
+  if (allowed) {
+    const file = path.join(folders.get(sessionId) || process.cwd(), 'README.md')
+    update(sessionId, { sessionUpdate: 'tool_call', toolCallId: 'edit-' + turns, title: 'Edit README.md', kind: 'edit',
+      status: 'completed', locations: [{ path: file }],
+      content: [{ type: 'diff', path: file, oldText: '# Project\n\nA project.\n',
+        newText: '# Project\n\nA project.\n\n## Install\n\n    npm install\n' }] })
+  }
   const words = allowed
     ? ('Done. I updated **README.md** for “' + text.slice(0, 80) + '”:\n\n- Added the `install` steps.\n- Checked the links.').split(' ')
     : ['Okay,', 'I', 'left', 'README.md', 'as', 'it', 'was.']
   for (let index = 0; index < words.length; index += 1) {
+    if (stopped()) return
     update(sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: (index ? ' ' : '') + words[index] } })
     await sleep(120)
   }

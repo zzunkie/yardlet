@@ -1,7 +1,10 @@
 # Starts a task in the Windows app with the stand-in harness check-harness.ps1 installed (fake-harness/, an
 # ACP harness the app knows as Kimi Code): New task, the harness, a message and Enter; then the stand-in's
 # request is allowed from its card and its answer streams in, with no console window opened for the stand-in's
-# node. The app is then opened again, and the task's conversation must show the same answer from its saved history. It drives the window through UI Automation
+# node, and its edit's line opens to the diff. The app is then opened again, and the task's conversation must show
+# the same answer from its saved history. A second message's turn is then stopped with Stop while it waits on its
+# request: the stand-in must get ACP's session/cancel, the turn must end, and the stand-in must still run, since
+# stopping a turn ends no process. It drives the window through UI Automation
 # and reads the window's own event log (YARDLET_QA_EVENT_LOG); it writes screenshots, the log and a summary
 # to -OutDirectory. Runs in Windows PowerShell 5.1, which has UI Automation and System.Drawing; the file stays
 # ASCII because 5.1 reads a script without a byte order mark in the system code page.
@@ -118,6 +121,10 @@ function Find-Typed($root, $type) {
     $root.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($UIA::ControlTypeProperty, $type)))
 }
 
+function Find-Class($root, [string] $class) {
+    $root.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($UIA::ClassNameProperty, $class)))
+}
+
 function Select-Named($root, [string] $text) {
     $item = Find-Named $root $text $Types::ListItem
     if (-not $item) { return $false }
@@ -145,7 +152,7 @@ function Finish([string] $result) {
     if ($script:process -and -not $script:process.HasExited) { $script:process.Kill() }
     $summary | ConvertTo-Json | Set-Content (Join-Path $OutDirectory "$Name-summary.json") -Encoding UTF8
     $summary | ConvertTo-Json
-    if ($result -ne 'answered and kept') { exit 1 }
+    if ($result -ne 'answered, kept and stopped') { exit 1 }
     exit 0
 }
 
@@ -201,6 +208,14 @@ $summary.answer = "$answer"
 if (-not $answer) { Finish 'no answer' }
 Start-Sleep -Seconds 1
 Save-Screen 'answered'
+# The edit's line, opened to its diff.
+$change = Find-Class $main 'Expander'
+$summary.fileChange = [bool]$change
+if ($change) {
+    $change.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+    Start-Sleep -Seconds 1
+    Save-Screen 'file-change'
+}
 $process.Kill()
 $process.WaitForExit()
 
@@ -211,4 +226,28 @@ $kept = Wait-For { Read-Events | Where-Object { $_ -like 'answer: Done. I update
 $summary.kept = "$kept"
 Save-Screen 'again'
 if (-not $kept) { Finish 'the answer was not kept' }
-Finish 'answered and kept'
+
+# Stop: a second turn, stopped while it waits on its request.
+$standIn = Join-Path $env:APPDATA 'npm\node_modules\yardlet-fake-harness'
+$cancels = Join-Path $standIn 'cancels.log'
+Remove-Item $cancels -ErrorAction SilentlyContinue
+$composer = Wait-For { Find-Typed $main $Types::Edit } 10
+if (-not $composer) { Finish 'no composer' }
+$composer.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Stop before the edit')
+[void][LocalDesktop]::BringForward($process.MainWindowHandle)
+$composer.SetFocus()
+[LocalDesktop]::Press(0x0D)
+if (-not (Wait-For { Find-Named $main 'Allow' $Types::Button } 60)) { Finish 'no request card in the second turn' }
+$stop = Wait-For { Find-Named $main 'Stop' $Types::Button } 10
+if (-not $stop) { Finish 'no Stop while the turn ran' }
+Save-Screen 'stop'
+$stop.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+$summary.cancelled = [bool](Wait-For { Test-Path $cancels } 15)
+if (-not $summary.cancelled) { Finish 'the stand-in got no session/cancel' }
+$summary.stopped = [bool](Wait-For { -not (Find-Named $main 'Stop' $Types::Button) } 20)
+Save-Screen 'stopped'
+if (-not $summary.stopped) { Finish 'the turn did not end after Stop' }
+$standInID = [int](Get-Content (Join-Path $standIn 'cli.pid'))
+$summary.standInRunning = [bool](Get-Process -Id $standInID -ErrorAction SilentlyContinue)
+if (-not $summary.standInRunning) { Finish 'Stop ended the harness' }
+Finish 'answered, kept and stopped'
