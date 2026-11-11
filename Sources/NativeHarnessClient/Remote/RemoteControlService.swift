@@ -27,7 +27,7 @@ final class RemoteControlService {
     static let relayURLEnvironmentKey = "YARDLET_REMOTE_RELAY_URL"
     /// The Yardlet relay a build carries (`RemoteHostPlatform.builtInRelay`): `YardletRelayURL` in the Mac's
     /// Info.plist, or a file of that name beside the Windows app's executable, written from Packaging/RelayURL,
-    /// which stays out of git (REMOTE_V2_DESIGN.md §12).
+    /// which stays out of git (relay/README.md).
     nonisolated static let builtInRelayURLKey = "YardletRelayURL"
     /// A second address of the same relay, which the Mac's room socket races against the first (§14.2): the
     /// environment's beside the environment's relay, the default beside the default, and `YardletRelayAlternateURL`

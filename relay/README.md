@@ -77,7 +77,11 @@ Worker's Domains tab after one). To run your own:
      `npx wrangler deploy --secrets-file <file>` uploads secrets with the first deploy.
    - Next: Sign in with Apple and e-mail links are not implemented yet.
 5. Put the relay's address on the first line of `Packaging/RelayURL` (or `YARDLET_RELAY_URL`) before
-   `scripts/build-app.sh`; the bundle carries it as `YardletRelayURL`.
+   `scripts/build-app.sh`; the bundle carries it as `YardletRelayURL`. Without either the bundle carries no
+   relay and phones reach the Mac only directly. A Windows build gets the same address from the same places
+   through `Windows/scripts/place-relay.ps1`, as a `YardletRelayURL` file beside its executable. A running app
+   uses `YARDLET_REMOTE_RELAY_URL` from its environment, or else its `Yardlet.remote.relayURL` setting, before
+   the relay its build carries.
 6. A second, nearer address (optional). On a free-plan zone some networks reach the relay through a far
    Cloudflare location (Korean networks through Los Angeles or Hong Kong, for example), while a `*.pages.dev`
    address is served from the nearest one. `pages/` is a Pages project that hands every request to the Worker
@@ -90,5 +94,7 @@ Worker's Domains tab after one). To run your own:
    address against the main one, which stays the address for accounts and sign-in. Rooms are placed by the
    country of the request that first opens them (`src/placement.ts`), so a room lives near its Mac whichever
    address it came in through. For the Mac, put the address on the first line of `Packaging/RelayAlternateURL`
-   (or `YARDLET_RELAY_ALTERNATE_URL`); the bundle carries it as `YardletRelayAlternateURL`, and the Mac races it
-   against the main address for its room (docs/REMOTE_PROTOCOL.md §14.2).
+   (or `YARDLET_RELAY_ALTERNATE_URL`); the bundle carries it as `YardletRelayAlternateURL` (only beside a main
+   address), and the Mac races it against the main address for its room (docs/REMOTE_PROTOCOL.md §14.2). A
+   relay set in the environment or the setting takes its second address from the same place
+   (`YARDLET_REMOTE_RELAY_ALTERNATE_URL`, `Yardlet.remote.relayAlternateURL`), never the built-in one's.

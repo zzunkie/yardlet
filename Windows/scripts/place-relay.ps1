@@ -1,5 +1,5 @@
 # Puts the Yardlet relay a Windows build carries beside its executable, as scripts/build-app.sh puts the Mac's in
-# Info.plist (docs/REMOTE_V2_DESIGN.md, section 12): YARDLET_RELAY_URL, or else the first line of Packaging/RelayURL
+# Info.plist (relay/README.md): YARDLET_RELAY_URL, or else the first line of Packaging/RelayURL
 # (out of git), in YardletRelayURL; and with it YARDLET_RELAY_ALTERNATE_URL, or else the first line of
 # Packaging/RelayAlternateURL, in YardletRelayAlternateURL. A build without a relay carries none, and any left in
 # -Destination goes. The addresses are not printed: one may name the account that deployed the relay.

@@ -22,7 +22,7 @@ public protocol SleepDisabledRecord: AnyObject {
     func remove()
 }
 
-/// What Yardlet's lid helper does (docs/REMOTE_V2_DESIGN.md §6.5): the Mac stays awake
+/// What Yardlet's lid helper does (docs/SLEEP_PREVENTION.md): the Mac stays awake
 /// with its lid closed only while a connected Yardlet says its tasks are working and the battery and
 /// the heat allow it, and the setting goes back as soon as either stops, the connection ends or the
 /// helper starts or stops. The helper applies the battery and heat rule itself too, so a Yardlet that
