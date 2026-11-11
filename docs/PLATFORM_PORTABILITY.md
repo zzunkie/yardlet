@@ -75,7 +75,7 @@ own sessions do.
 **Foundation outside Apple's platforms.** Where the engine uses something only Apple's Foundation has, it keeps that
 under `#if canImport(Darwin)` and says the same thing another way elsewhere: `L10n` takes plain string keys,
 `RelativeTime` uses `Date.RelativeFormatStyle`, `NSNumber` tells JSON booleans and fractions apart by `objCType`
-(`JSONNumberKind`), Gmail's charsets go through `String.Encoding(ianaName:)`. Files that use `URLSession` import
+(`Domain/JSONNumberKind.swift`), Gmail's charsets go through `String.Encoding(ianaName:)`. Files that use `URLSession` import
 `FoundationNetworking` when it exists, and files that use `@Observable` import `Observation`.
 
 **Cryptography.** The engine and the phone remote import `Crypto` from swift-crypto, which has CryptoKit's API: on
@@ -91,20 +91,20 @@ turned off (seen on the CI runner). Winsock hands it bytes, so it speaks the Web
 only for a WebSocket upgrade without Origin, and the phone's frames read back into whole messages, so the Windows
 listener needs none of the piece joining below. The Mac's listener shares its Origin rule, its accepted header and how
 a phone's address names its path (`RemoteAddressSelection.path(ofPeer:)`). Elsewhere the remote serves the relay
-alone (`RemoteHostPlatform.current` in `Platform/Portable/`). `RemoteAddresses` builds everywhere: it reads an
+alone (`RemoteHostPlatform.current` in `Platform/Portable/`). `RemoteAddressSelection` builds everywhere: it reads an
 address with `inet_pton`; the Mac lists its interfaces with `getifaddrs`, Windows with `GetAdaptersAddresses` and
 watches them with IP Helper's change notifications, and both look up the MagicDNS name. The rest of `YardletRemote`
 builds: its random bytes fall back to `SystemRandomNumberGenerator`, its free-space check to
-`attributesOfFileSystem`, and `RemoteLimits.host(of:)` exists only with Network.framework. Foundation there hands a
+`attributesOfFileSystem`, and `RemoteHandshakeAdmission.host(of:)` exists only with Network.framework. Foundation there hands a
 WebSocket frame over in the pieces libcurl reads it in, each as a message of its own (`WebSocketURLProtocol` drops
 `curl_ws_meta`'s `bytesleft`), so the remote's sockets join a piece that does not read (a Noise frame that does not
 decrypt, a relay message that is not JSON) to the next one before reading it again, up to the frame's limit
 (`RemoteFramePieces`); with Apple's Foundation a frame that does not read is refused at once.
 
-**Where it has been built.** On Linux in the `swift:6.4-bookworm` image (confirmed, 2026-10-31), and since 2026-11-09
-in GitHub Actions: `.github/workflows/linux-engine.yml` makes the build in that image, pinned by digest, for the same
-pull requests and `main` as the Windows build below, as a check to read. Without it a name only Darwin has went
-unnoticed (`memmem`, which Glibc's module leaves out). On a Mac, a folder on the desktop cannot be mounted into Docker,
+**Where it is built.** On Linux in the `swift:6.4-bookworm` image, in GitHub Actions:
+`.github/workflows/linux-engine.yml` makes the build in that image, pinned by digest, for the same pull requests and
+`main` as the Windows build below, as a check to read. It catches a name only Darwin has (`memmem`, for one, which
+Glibc's module leaves out). On a Mac, a folder on the desktop cannot be mounted into Docker,
 so the sources go in as an archive:
 
 ```sh
@@ -112,7 +112,7 @@ tar --exclude ./.build --exclude ./.git --exclude ./docs -cf - . | docker run -i
   'mkdir /src && tar -xf - -C /src && cd /src && YARDLET_ENGINE_ONLY=1 swift build --target NativeHarnessClient'
 ```
 
-On Windows (x64, Swift 6.4.1 from swift.org's installer) in GitHub Actions (confirmed, 2026-10-31):
+On Windows (x64, Swift 6.4.1 from swift.org's installer) in GitHub Actions:
 `.github/workflows/windows-engine.yml` makes the same build for every pull request that changes more than documents,
 `main` and `windows-*` branches; a commit a pull request's run built is not built again when it lands on `main`.
 It is a check to read, not a required one. A run's logs need a GitHub sign-in, so a failed run also reports its
@@ -282,7 +282,7 @@ build folder out of reach, and uploads it (`windows-app-bin`), to open on a PC t
 no Swift.
 
 **Why the screens are Swift.** Before the app target, the same window (sidebar, conversation, composer) was built in
-Swift and in C# with WinUI 3 and opened on a GitHub Actions Windows runner (2026-10-31). Both held 28–30 MB of private
+Swift and in C# with WinUI 3 and opened on a GitHub Actions Windows runner. Both held 28–30 MB of private
 memory idle and sent Korean typed through the Microsoft Korean IME as typed. C# with Native AOT shipped 6.6 MB and built
 in under a minute; Swift shipped a 50 MB executable with its bindings, plus the Swift runtime (56 MB, 37 MB of it ICU,
 which the engine needs in any case), and built in about five minutes. Swift was chosen because its screens share the
@@ -352,7 +352,7 @@ step with its cipher's nonce and has to connect again.
 | `NativeTerminalSession`, `TaskShellProcess` | SwiftTerm `LocalProcess` and a PTY | ConPTY and a Windows terminal view |
 | `ScopedFiles`, `WorkspaceFileReplacement` | No-follow descriptors | Opening without following reparse points (`FILE_FLAG_OPEN_REPARSE_POINT`); the portable versions refuse |
 | `CanonicalPath` (`Files/CanonicalPath.swift`) | `realpath(3)` | An opened file's final path (`GetFinalPathNameByHandleW`); for now Foundation resolves the links |
-| The file chooser's private copy (`BrowserAgentDialogs.privateCopy`) | `openat` one folder at a time without following links | The same with reparse points refused; refused on Windows until then |
+| The file chooser's private copy (`BrowserAgentWorkspaceFile.privateCopy`) | `openat` one folder at a time without following links | The same with reparse points refused; refused on Windows until then |
 | Removing an account folder's links (`ClaudeAccountHome.unlinkShared`) | `unlink(2)`, which never follows the link | `DeleteFileW` for a file link and `RemoveDirectoryW` for a folder link, never a recursive removal; refused on Windows until then |
 | Claude Code's background task output (`ClaudeTaskOutputReader`) | `claude-<uid>` under the temporary folders | Where the CLI keeps it on Windows is not confirmed; nothing is looked up there |
 | SQLite | The macOS SDK's libsqlite3 | Windows's own `winsqlite3` with the Windows SDK's header (`Sources/CSQLiteWindows`), chosen in `Package.swift` when building on Windows |

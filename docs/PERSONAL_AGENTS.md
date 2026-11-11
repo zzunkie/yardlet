@@ -236,9 +236,11 @@ nor announced. Clicking a notification brings Yardlet forward and shows Personal
 agents with that dot chosen, under the account it came from.
 
 A dropped connection, sleep and a lost network reconnect after a wait that doubles up
-to 30 seconds, as the window's subscription does. A changed or ended login, or a
-runtime that cannot start, stops the watch and clears its marks; it starts again only
-when a window reads that account's dots. Settings › Notifications › **Personal agent
+to 30 seconds, as the window's subscription does; when the dots cannot be read to
+begin with, the read is tried again after a wait that doubles up to a minute. A
+changed or ended login, or a runtime that cannot start, stops the watch and clears its
+marks; it starts again only when a window reads that account's dots. Settings ›
+Notifications › **Personal agent
 messages** turns it off (it is on by default): the reader stops, the marks go and the
 remembered account is forgotten.
 

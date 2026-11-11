@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/zzunkie/yardlet?label=release)](https://github.com/zzunkie/yardlet/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/zzunkie/yardlet)](LICENSE)
 [![macOS 15+](https://img.shields.io/badge/macOS-15%2B-000000?logo=apple&logoColor=white)](#requirements)
-[![Swift 6.2](https://img.shields.io/badge/Swift-6.2-F05138?logo=swift&logoColor=white)](Package.swift)
+[![Swift 6.4](https://img.shields.io/badge/Swift-6.4-F05138?logo=swift&logoColor=white)](#development)
 [![Homebrew](https://img.shields.io/badge/Homebrew-tap-FBB040?logo=homebrew&logoColor=white)](https://github.com/zzunkie/homebrew-tap)
 
 <a href="https://www.producthunt.com/products/yardlet-2"><picture>
@@ -178,9 +178,10 @@ Three helpers in the app bundle do work outside the main process:
 - The Intel version is new. It has been tried on one Intel Mac, a 2018 Mac mini with Intel UHD
   Graphics 630 on macOS 15.8, where it starts, streams a task and draws the built-in browser; other
   Intel graphics (Iris, AMD Radeon) and macOS 26 on Intel have not been tried. CI starts it on Intel
-  macOS 15 and 26 with every change to `main`, but those Macs have only a virtual GPU, on which the
-  built-in browser often stops before it draws. If you use Yardlet on an Intel Mac, please tell us how
-  it goes, especially if the built-in browser closes or stays blank: a
+  macOS 15 and 26 every night and when a change touches how the bundle is built, but those Macs have
+  only a virtual GPU, on which the built-in browser often stops before it draws. If you use Yardlet
+  on an Intel Mac, please tell us how it goes, especially if the built-in browser closes or stays
+  blank: a
   [bug report](../../issues/new?template=bug_report.yml) with "Intel" chosen, or a note in
   [Discussions](../../discussions).
 - On Intel Macs the built-in browser plays no H.264 video or AAC audio, such as many sites' MP4
@@ -446,7 +447,7 @@ profile remains valid; the outer app and helpers still use QA identifiers. Launc
 mocked, but Touch ID QA uses the real keychain access groups and requires the person to authenticate.
 On a public test site such as `webauthn.io`, confirm both registration and authentication with the
 platform authenticator. A valid signature or an available authenticator alone does not establish
-that either ceremony succeeded. Both ceremonies were verified with Touch ID on 2026-10-23.
+that either ceremony succeeded.
 This does not enable iCloud Keychain passkeys (docs/BROWSER_HOST.md §7).
 
 Runtime paths are selected per session and the local index is restored without eagerly starting either harness.
@@ -464,7 +465,7 @@ Yardlet's sidebar index and local UI state remain separate from provider storage
 See [native session storage](docs/NATIVE_SESSION_STORAGE.md) for what each task
 stores and what Yardlet reads.
 
-Additional provider accounts can be registered under Connections → Accounts.
+Additional provider accounts can be registered in Settings › Harness Accounts.
 Choose an account for a new task by its available quota; saved tasks retain their selected CLI
 environment.
 See [provider connections](docs/PROVIDER_CONNECTIONS.md) for the supported boundaries.

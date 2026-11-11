@@ -1,15 +1,15 @@
-# Harness, model provider and account connections (2026-09-15)
+# Harness, model provider and account connections
 
-The need: see the remaining usage of several accounts, choose the account directly, and use a structure that is not
-limited to ChatGPT. Harness connections are kept apart from model provider authentication, and each harness is
+Yardlet shows the remaining usage of several accounts and lets the person choose the account for each task, for every
+harness rather than one provider. Harness connections are kept apart from model provider authentication, and each harness is
 connected only through the paths it actually supports. No arbitrary model proxy and no OAuth token conversion or
 copying are added.
 
-The latest screen flow and design decisions follow [ACCOUNT_SELECTION_UX.md](ACCOUNT_SELECTION_UX.md).
+The screen flow is in [ACCOUNT_SELECTION_UX.md](ACCOUNT_SELECTION_UX.md).
 
 ## What the user does
 
-- In **Settings › Harness Accounts → Add account** (the sidebar's **Connections** opens this section), the user connects a
+- In **Settings › Harness Accounts → Add account** (the sidebar's account menu opens this section too), the user connects a
   separate account, or points to an existing CLI account folder in the advanced settings. Existing sign-ins appear in
   the same list, and the name and folder are optional. A new folder is created and the harness's official sign-in and
   provider setup opens. A new Claude folder keeps only the sign-in's own files and links the rest to the default folder
@@ -28,7 +28,7 @@ The latest screen flow and design decisions follow [ACCOUNT_SELECTION_UX.md](ACC
 - Resuming, forking and side chats of a task use the saved account environment together with the native session ID.
   Changing the default account for new tasks does not change the account of existing tasks.
 - Claude Code can switch, from **Choose account** in the task menu, only to an account that uses the same conversation
-  history folder (2026-10-06). It is allowed only when the `projects` of the two account folders point, through links,
+  history folder. It is allowed only when the `projects` of the two account folders point, through links,
   to the same real folder, so the session ID and history location stay the same and no file is moved or copied. Session
   Switch account folders have this structure (`projects` and the like link to `~/.claude`, and only the sign-in is kept
   per account). If the CLI of the target account does not confirm the sign-in in `auth status`, the switch does not
@@ -54,7 +54,7 @@ The latest screen flow and design decisions follow [ACCOUNT_SELECTION_UX.md](ACC
   Claude app has the same notice for a task that moves to another computer ("Moving to {place} after this turn"); for
   accounts it keeps one account for the whole app and lets a switch go ahead, keeping working sessions of the previous
   account running out of the list, and Codex also keeps one account for all threads. Evidence: the strings and code in
-  their app bundles, 2026-11-02.
+  their app bundles.
 - When usage is not published, it is shown as not available. Short-term and long-term limits are shown separately,
   not combined, and a limit without a number is not turned into 0.
 - A login that cannot work says so before anything is sent ("Signing in when a login is missing" below): the account
@@ -76,9 +76,9 @@ The latest screen flow and design decisions follow [ACCOUNT_SELECTION_UX.md](ACC
 An extra account environment is offered only where the CLI officially moves its sign-in and its history together
 ("Which CLIs can keep a second account" below).
 
-The Gemini CLI entry was removed in an earlier installed build, and it is separate from choosing a Google model
-provider in other harnesses such as Pi. Gajae Code and Oh My Pi (including Deep Agents Code) were dropped from the
-default list on 2026-10-23. The Gajae records in the evidence section below stay as the evidence of that time.
+Gemini CLI, Gajae Code, Oh My Pi and Deep Agents Code are no longer built in (`HarnessKind.retired`): their saved
+tasks still load under their identifiers, and Yardlet's own settings for them are dropped. Choosing a Google model
+provider in another harness such as Pi is separate from the removed Gemini CLI entry.
 
 For OpenCode, Yardlet hosts the provider and authentication method choice of the official `auth login`. For Pi, it
 looks up the provider that the user specifies or that is set in Pi's own settings.json. Without a setting, it does not
@@ -98,7 +98,7 @@ nothing in a terminal one row tall.
 and API keys are never read or copied. The file uses atomic write and 0600 permissions, and a failed read never
 overwrites the original file. A new account folder is 0700.
 
-`account-snapshots.json` in the same folder (2026-10-08) holds the latest lookup results, so the account list shows
+`account-snapshots.json` in the same folder holds the latest lookup results, so the account list shows
 them as soon as it opens. For each connection ID (`native:<harness>` for the default sign-in) it keeps only whether the
 account is signed in (`signedIn`/`signedOut`), the account name, organization and plan line that the CLI reported, the
 limit rows (name, used ratio, display text, reset time and kind of evidence) and the lookup time. It keeps no tokens,
@@ -111,15 +111,14 @@ runtime, it shows that state as is. A sign-in remembered from the last run is no
 replacing the default account of new tasks (`replaceSignedOutDefaultSelection`). Only what this run confirmed is used.
 The account chip in the new task composer uses the account name remembered with a signed-in state in the same file. So
 the name stays visible while the next run checks again. This name is for display only and has nothing to do with
-binding, selection or credentials. Before the check, with no remembered name, it shows "Checking account…". (The
-`account-labels.json` that a branch kept separately was folded into this file at merge and is not created.)
+binding, selection or credentials. Before the check, with no remembered name, it shows "Checking account…".
 
-Reading and checking have one owner, `ProviderConnectionStore` (2026-10-08, B5). It holds the values of the default
+Reading and checking have one owner, `ProviderConnectionStore`. It holds the values of the default
 sign-ins and saved accounts, `AccountReadingStatus` and the checking indicator, and the account screen
 (`AccountCenterModel`) handles only the sign-in console. A check starts only through
 `check(defaultsOf:savedOf:connectionIDs:policy:checkUsage:runtimeSelections:)`.
-- If a check of the same account (`native:<harness>` for the default sign-in, the connection ID for a saved account,
-  the per-account-home list for GJC) is already running, no new CLI process starts; it waits for that check.
+- If a check of the same account (`native:<harness>` for the default sign-in, the connection ID for a saved account)
+  is already running, no new CLI process starts; it waits for that check.
 - There is one freshness rule: a value that a check in this run confirmed as "current" within the last minute is not
   checked again when the list opens (`ifStale`). Values remembered from the last run and "Couldn't refresh" values are
   always checked again. The refresh button (`refresh`) checks again even when the value is fresh, but joins a check
@@ -132,15 +131,15 @@ sign-ins and saved accounts, `AccountReadingStatus` and the checking indicator, 
 
 SQLite's nullable `connection_binding` preserves `SessionRecord.connection`. A null value in past tasks keeps the
 existing native/yardlet scope meaning. Importing native history does not treat tasks with a different provider ID,
-scope or account binding as the same task. If a registered folder has disappeared or a GJC account is gone, it does not
-fall back to the default account.
+scope or account binding as the same task. If a registered folder has disappeared, it does not fall back to the default
+account.
 
 A separate environment does not receive the parent process's model API keys, OAuth overrides or model routing
 overrides. HOME and the general development tool environment are kept. A provider adapter can be configured in the
 harness's own settings, but Yardlet does not guarantee an arbitrary provider connection for an arbitrary engine.
 Existing tasks are not moved to another account folder, and native conversations are not duplicated.
 
-Each harness has one runtime that reads its accounts and starts its new tasks (2026-10-27). Unless the person chose
+Each harness has one runtime that reads its accounts and starts its new tasks. Unless the person chose
 one, it is the newest version among the installs on this Mac; a runtime the person chose is kept, and Settings ›
 CLI Updates offers a newer install found elsewhere. Installs are looked for in the desktop apps' bundles and where the
 person's shell would find them, not only in Yardlet's own `PATH`, which has only the system's folders when Yardlet
@@ -157,32 +156,8 @@ so it neither starts an older install nor keeps that install's App Server for th
 task records its runtime on the task only; it does not become the harness's choice. Choosing a runtime with Choose…
 under Runtime and connection details checks the accounts again with `restart`.
 
-GJC lookup runs only the public `accounts list --json` automatically. Pressing **Refresh usage** runs the CLI-owned
-`accounts check --json` and then reads the list again. It never opens the auth DB or credential payload directly, and
-it does not pass API-key/env rows off as OAuth multi-accounts.
 Switching accounts rechecks the binding and task state, closes that handle and resumes with the same provider session
 ID. Other tasks' handles and drafts stay. A closed ACP transport is not reused.
-
-## Verification
-
-- Full `swift test`: 669 tests, 660 passed, 9 opt-in live tests excluded, 0 failures.
-- With three Codex account folders (including spaces in the path), creation, restart, resume with the same ID, fork and
-  keeping the original native home were verified through subprocess + YHP + AppModel + SQLite. It is a fixture without
-  authentication.
-- With GJC's public inventory and a real ACP subprocess fixture, switching A→B→A, keeping another B task connected, the
-  same session ID, keeping the draft, refusing a deleted account and keeping the permission/abort policy were verified.
-  No model prompt was sent.
-- On the real installed Codex 0.153.4 and Claude Code 2.1.270, empty separate account environments were read with
-  `login status`/`auth status`, and they were confirmed not to inherit the existing account.
-- Real OAuth sign-ins of the user's three accounts, paid model turns and really exhausting each account's limits were
-  not done. Each CLI performs the user's sign-in.
-- In a native UI fixture, comparing the limits of three accounts, choosing the default account of a new task and the
-  popover's choice of another account taking effect were verified.
-
-Evidence: the accounts CLI, account-inventory and root flags in the official Gajae Code v0.16.0 source; the docs and
-CLI source of the installed Pi 0.84.1; the official OpenAI App Server account docs.
-Reproduction logs are in `.build/provider-connections-*.log`, and the fixture is in `scripts/fixtures/codex-session-home.py`
-(`gjc-account-selection.py` for Gajae was deleted together with Gajae Code on 2026-10-23).
 
 ## Which CLIs can keep a second account
 
@@ -259,7 +234,7 @@ schedule lists, the scratch folders' path, and the bundled CLI it can run.
   exists (identity only, never its value) and the shell variables above by name. It holds no credential, address or CLI
   output, and nothing sends it.
 
-## Claude plan limit lookup (2026-10-06)
+## Claude plan limit lookup
 
 When a Claude account is signed in, Yardlet runs the official CLI in that account's environment with
 `-p --input-format stream-json --output-format stream-json --verbose --strict-mcp-config` and sends only the
@@ -411,11 +386,12 @@ off), `testAnIdleTaskLeavesANearlySpentAccountOnceItsCacheHasExpired`,
 (`.build/claude-provider-notices-qa/automatic-move-*.png`) and Settings › Harness Accounts in
 `AccountListRenderingTests.testEachModeDrawsTheSameRows` (`.build/account-list-qa/manage-*.png`).
 
-## Account folder shape, finding sign-ins and removing accounts (2026-10-27)
+## Account folder shape, finding sign-ins and removing accounts
 
-The user asked that Yardlet alone give the multi-account experience Session Switch gives (continuing a conversation
-under another account, automatic assignment), for people who do not use Session Switch; that sign-ins in folders other
-than the default (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`) be recognized; and asked whether an account can be removed.
+Yardlet alone gives the multi-account experience Session Switch gives (continuing a conversation under another account,
+automatic assignment), for people who do not use Session Switch. This section covers the shape of the account folders
+it makes, how sign-ins in folders other than the default (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`) are found, and how an
+account is removed.
 
 ### Claude account folders: what stays per account and what is shared
 
@@ -424,7 +400,7 @@ A Claude folder that **Settings › Harness Accounts → Add another account →
 default folder (the config folder of Yardlet's default sign-in: `CLAUDE_CONFIG_DIR`, else `~/.claude`) that is not
 per-account below becomes a link to it, and Claude Code makes the per-account entries inside the folder. The new
 account's `projects` therefore resolves to the same real folder as the default sign-in's, and it takes part in a task's
-account switch (the 2026-10-06 exception) and in automatic assignment from the start. Code:
+account switch and in automatic assignment from the start. Code:
 `Account/ClaudeAccountHome.swift`.
 
 | Entry | Placement | Why |
@@ -491,8 +467,7 @@ as it is. For a Claude folder whose history is apart or whose links are missing,
 change and offers **Add As It Is** and **Link and Add**. **Choose existing account folder…**, where the person picks a
 folder, stays.
 
-Parallely, a multi-account tool a user reported, is not installed on this Mac, and no public documentation for it was
-found (web search, 2026-10-27). It is handled by the general rules 4 and 6 instead of by name: once one of its folders is
+A multi-account tool Yardlet does not know by name is handled by the general rules 4 and 6: once one of its folders is
 saved as an account, the others appear under Accounts You Can Add.
 
 ### The organization on an account row
@@ -524,7 +499,7 @@ account's folder.
   scope. The confirmation is short: "The login and its folder stay. The N tasks on this account go on in that folder as
   before." N counts archived tasks too, since they keep the binding as well. This is the only removal for a Session
   Switch folder.
-- **Moving the tasks first (2026-10-30):** when a Claude account with tasks has another saved folder signed in to the
+- **Moving the tasks first:** when a Claude account with tasks has another saved folder signed in to the
   same account, Remove from List opens a sheet (`Views/AccountRemovalSheet.swift`) instead of the confirmation, as account
   tools offer to hand a removed account's work to another account. It chooses between moving the tasks to that folder
   (the default, with a picker when there are several) and leaving them in this one (Remove from List as above). A folder
@@ -584,12 +559,10 @@ keychain item presence, the row says "Unknown account". Yardlet never reads the 
 - Both import sheets (conversations from other apps, and per folder) list found folders in the account choice, marked
   "(folder found)". Importing a conversation under one saves the folder as an account first
   (`ProviderConnectionStore.saveIfFound`). History is not moved or copied.
-- "Import Conversations from Other Apps" now chooses a Codex account too; it used to read only the default Codex
-  sign-in's threads.
+- "Import Conversations from Other Apps" chooses a Codex account too, not only the default Codex sign-in's threads.
 - In the same sheet the Claude list adds, after the Claude app's open sessions, the 200 most recent other conversations in
-  the chosen account folder's `projects` (`ClaudeConversationCatalog.recentConversations`). It used to read only the
-  Claude app's list, so conversations held in another folder through a terminal or another tool did not appear even when
-  that account was chosen. Each conversation's folder is the `cwd` its transcript records.
+  the chosen account folder's `projects` (`ClaudeConversationCatalog.recentConversations`), so
+  conversations held in that folder through a terminal or another tool appear too. Each conversation's folder is the `cwd` its transcript records.
 
 ### Codex: not given the same shape
 
