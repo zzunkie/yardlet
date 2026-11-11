@@ -621,14 +621,23 @@ final class AppleConnectorTests: XCTestCase {
         await client.close()
     }
 
-    /// A real child process over pipes: a reply holding U+2028 stays one message, and the reason a
-    /// server writes to standard error before it exits is the error.
+    /// A real child process over pipes: a reply holding U+2028 stays one message, closing the server
+    /// ends what it started too, and the reason a server writes to standard error before it exits is
+    /// the error.
     func testTheStdioClientSpeaksToARealProcess() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "stdio-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let script = root.appending(path: "server.sh")
         try Data(#"""
+        # The first server starts something in a process group of its own, as a server may start a
+        # browser, and waits for it once its input ends.
+        if [ ! -e "$0.child" ]; then
+          set -m
+          sleep 60 &
+          set +m
+          printf '%s' $! > "$0.child"
+        fi
         while IFS= read -r line; do
           id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
           [ -z "$id" ] && continue
@@ -638,11 +647,17 @@ final class AppleConnectorTests: XCTestCase {
             *) echo "error: Xcode MCP access is disabled; turn it on in Xcode Settings > Intelligence > Model Context Protocol." >&2; exit 1 ;;
           esac
         done
+        wait
         """#.utf8).write(to: script)
         let client = MCPStdioClient(launcher: ProcessMCPStdioLauncher(executable: URL(filePath: "/bin/sh"), arguments: [script.path]),
                                     clientVersion: "9.9")
         let tools = try await client.listTools()
         XCTAssertEqual(tools.first?["description"], .string("Builds\u{2028}the project"))
+        let child = try XCTUnwrap(pid_t(String(contentsOf: URL(filePath: script.path + ".child"), encoding: .utf8)))
+        await client.close()
+        try await waitUntil { kill(child, 0) != 0 }
+        if kill(child, 0) == 0 { kill(child, SIGKILL) }
+        // The next request starts the server again.
         do {
             _ = try await client.callTool(name: "BuildProject", arguments: .object([:]))
             XCTFail("The server exits")

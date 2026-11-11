@@ -269,10 +269,12 @@ final class ProcessMCPStdioChannel: MCPStdioChannel, @unchecked Sendable {
         channel.stderrText
     }
 
-    /// A server is asked to end and left to do it in its own way: its input closes and it is
-    /// signalled, where a harness's CLI is ended at once with everything it started.
+    /// A server is asked to end the way MCP has a client end a stdio server, by closing its input,
+    /// and has a second to do it. Then it is ended with everything it started, as a harness's CLI
+    /// is: a server that npx, uvx or a shell runs is that process's child, and what a server starts
+    /// can be in a process group of its own.
     func terminate() {
-        channel.askToEnd()
+        channel.end(after: .seconds(1))
     }
 
     deinit {
