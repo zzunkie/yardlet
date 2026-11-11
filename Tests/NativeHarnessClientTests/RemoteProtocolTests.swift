@@ -125,12 +125,62 @@ final class RemoteProtocolTests: XCTestCase {
             .setHostSetting(setting: "follow_up_behavior", value: "steer", confirmed: true),
             .saveHostInstructions(text: "Keep tests fast."),
             .hostCLIUpdate(action: "check", harness: "codex"),
-            .hostCLIUpdate(action: "checkAll")
+            .hostCLIUpdate(action: "checkAll"),
+            .openTerminal(taskID: "T1"),
+            .openTerminal(taskID: "T1", columns: 132, rows: 40),
+            .terminalInput(taskID: "T1", terminalID: "term-1", data: Data("ls\r".utf8)),
+            .terminalResize(taskID: "T1", terminalID: "term-1", columns: 100, rows: 30),
+            .terminalStatus(taskID: "T1", terminalID: "term-1"),
+            .closeTerminal(taskID: "T1", terminalID: "term-1"),
+            .terminalOutputAck(taskID: "T1", terminalID: "term-1", sequence: 7),
+            .hostAccounts(),
+            .hostAccounts(watching: false, refreshHarnesses: ["codex", "claude-code"]),
+            .setHostAccount(harness: "codex", accountID: "account-1"),
+            .setHostAccount(harness: "codex", automaticAssignment: true),
+            .setHostAccount(settingID: "move_tasks_with_room", enabled: false),
+            .setHostHarnessRuntime(harness: "codex", choiceID: "choice-1"),
+            .setHostConnector(id: "connector-id", enabled: true),
+            .taskRail(taskID: "T1"),
+            .taskRail(taskID: "T1", watching: false),
+            .railAction(taskID: "T1", action: "stop"),
+            .railAction(taskID: "T1", action: "stop", targetID: "agent-1", confirmed: true),
+            .taskAction(taskID: "T1", action: RemoteTaskAction(.rename, value: "A better title")),
+            .taskAction(taskID: "T1", action: RemoteTaskAction(.delete, confirmed: true)),
+            .projectAction(projectID: "P", pinned: true, archive: false),
+            .projectAction(projectID: "P", pinned: nil, archive: true),
+            .readReview(taskID: "T1", query: RemoteReviewQuery(.diff, repository: "/tmp/repo", target: "staged",
+                                                               path: "README.md")),
+            .presence(active: true),
+            .archivedTasks(cursor: nil),
+            .archivedTasks(cursor: "40"),
+            .taskAccounts(taskID: "T1"),
+            .taskAccounts(taskID: "T1", refresh: true),
+            .openOriginalConversation(taskID: "T1")
         ]
         for (index, request) in requests.enumerated() {
             let envelope = RemoteRequestEnvelope(id: "\(index)", request: request)
             XCTAssertEqual(try RemoteRequestEnvelope.decode(envelope.encoded()).get(), envelope, "\(request)")
         }
+        // "Every": a case added to `RemoteRequest` fails here until the list above has a request of it.
+        let covered = Set(requests.map { Mirror(reflecting: $0).children.first?.label ?? "\($0)" })
+        let declared = try Self.declaredRequestCases()
+        XCTAssertEqual(declared.subtracting(covered).sorted(), [], "Requests this test does not encode and decode")
+        XCTAssertEqual(covered.subtracting(declared).sorted(), [], "Requests the declaration was not read for")
+    }
+
+    /// The names of `RemoteRequest`'s cases, read from its declaration: an enum whose cases carry values
+    /// cannot list them itself.
+    private static func declaredRequestCases() throws -> Set<String> {
+        let file = URL(filePath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appending(path: "Sources/YardletRemote/RemoteProtocol.swift")
+        let source = try String(contentsOf: file, encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "public enum RemoteRequest"))
+        let end = try XCTUnwrap(source.range(of: "public var type: String", range: start.upperBound..<source.endIndex))
+        let cases = try NSRegularExpression(pattern: #"^\s*case (\w+)"#, options: .anchorsMatchLines)
+        let declaration = String(source[start.upperBound..<end.lowerBound])
+        return Set(cases.matches(in: declaration, range: NSRange(declaration.startIndex..., in: declaration)).compactMap {
+            Range($0.range(at: 1), in: declaration).map { String(declaration[$0]) }
+        })
     }
 
     func testTheDocumentedRequestsDecode() throws {
