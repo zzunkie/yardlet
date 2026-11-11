@@ -552,6 +552,9 @@ struct ConversationWorkLine: View, Equatable {
                 toolDetails(tool, images: images, isLoading: isLoading)
             }
         }
+        // A line drawn before its connector's tools were read (at launch, or before the connector was connected)
+        // starts again, open on its view, once the call turns out to have one: where a line starts is read once.
+        .id(tool.view != nil)
     }
 
     /// What an opened call's line holds: its input and output, images, result and changes.

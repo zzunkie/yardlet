@@ -65,14 +65,15 @@ final class ConversationProjectionCache {
     let codexItems = CodexItemMemo()
     /// The last Codex conversation and the state it came from.
     var lastCodex: (state: CodexTaskState, workspaceURL: URL, historySelection: CodexHistorySearchSelection?,
-                    presentation: ConversationPresentation)?
+                    connectorLabels: Int, presentation: ConversationPresentation)?
     /// The requests and tool calls of the last shared transcript projected, counted over its turns.
     var transcriptRequests = TranscriptRequestIndex()
     /// The last shared-transcript conversation and the very turns it came from. The turns are kept, so
     /// an unchanged transcript is known by its turns without comparing its entries: a long conversation
     /// shown again is not projected again.
     var lastTranscript: (transcript: TranscriptTurns, harness: HarnessKind, status: SessionStatus,
-                         latestTurnIsComplete: Bool, latestTurnWasCutOff: Bool, presentation: ConversationPresentation)?
+                         latestTurnIsComplete: Bool, latestTurnWasCutOff: Bool, connectorLabels: Int,
+                         presentation: ConversationPresentation)?
 
     init() {}
 

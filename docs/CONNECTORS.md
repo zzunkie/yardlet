@@ -1383,7 +1383,7 @@ Tests:
 | `Tests/NativeHarnessClientTests/MCPRegistryTests.swift` | Recorded registry answers (`Fixtures/mcp-registry-*.json`), checks on someone else's data, order, the client's requests, commands from packages, program connectors with a fake stdio server (keys only in Keychain, a harness's own copy, removal), a key in a named header, other apps' settings and one program's launch |
 | `Tests/NativeHarnessClientTests/ConnectorRegistryRenderingTests.swift` | Draws the registry list, a search, a program's page and programs offered from other apps under `.build/connector-registry-qa/`, light and dark |
 | `Tests/NativeHarnessClientTests/ConnectorSetupAssistantTests.swift` | The Slack manifest and link encoding, Google and Slack step state, field checks, suggestions read by name only |
-| `Tests/NativeHarnessClientTests/MCPAppConnectorTests.swift`, `MCPAppViewRenderingTests.swift` | MCP Apps with a fake server (`FakeAppServer`): view-only tools, reading and checking a view, kept results per harness's row, a view's calls and the question before a write, the policy's sources, the bridge's order; a view drawn by the real web view in its row (isolation probes, height, both appearances, `.build/mcp-apps-qa/`), a long conversation, and GitHub's own views (opt-in `YARDLET_MCP_APPS_REAL_VIEW`) |
+| `Tests/NativeHarnessClientTests/MCPAppConnectorTests.swift`, `MCPAppViewRenderingTests.swift` | MCP Apps with a fake server (`FakeAppServer`): view-only tools, reading and checking a view, kept results per harness's row, a view's calls and the question before a write, the policy's sources, the bridge's order; a view drawn by the real web view in its row (isolation probes, height, both appearances, `.build/mcp-apps-qa/`), and a long conversation |
 | `Tests/NativeHarnessClientTests/ConnectorIconTests.swift` | Icon order, themes and source limits, fetching, cache and waiting after a failure (opt-in `YARDLET_CONNECTOR_ICONS_LIVE=1` fetches from the real service sites and draws them) |
 | `Tests/NativeHarnessClientTests/ConnectorsRenderingTests.swift`, `ConnectorsEasyQARenderingTests.swift`, `PlusConnectorsQARenderingTests.swift`, `GmailSetupRenderingTests.swift`, `AppleConnectorsRenderingTests.swift`, `MicrosoftZoomRenderingTests.swift` | Draws settings, the add sheet, the assistants, the composer list and the App Store Connect page under `.build/`, in light and dark. The Apple connection flow runs with accessibility presses in a transparent off-screen window |
 
@@ -1401,6 +1401,15 @@ Tests:
   login keychain. Then `drive-mcp.py` starts `yardlet-mcp` like a harness and checks the list and calls.
   `run-check.sh finish …` quits the app, launches it again with `YARDLET_CONNECTOR_QA_REMOVE_ALL=1` to remove the
   connectors, and then stops the server.
+- `mcp-apps-server.py`: a server without sign-in whose tools name MCP App views, and the views (the "MCP Apps"
+  section): a profile card that reports its height at once and, with `--github-views <folder>`, GitHub's own profile
+  and new pull request views as its MCP server release ships them (kept outside the repository). A QA bundle launched
+  with `qa-launch.sh` adds it as "QA Apps" (`YARDLET_CONNECTOR_QA_ADD`) in a temporary home, and a second launch with
+  `--ui-fixture=connector-views` (`ConnectorViewsFixture`; `--ui-fixture-connector-views=github|pull-request|long`)
+  opens a task whose conversation called those tools, so the views are drawn in the app's own window. The window of a
+  QA bundle is clear and off every screen, so a capture of the display shows nothing of it:
+  `--ui-fixture-connector-views-report=<folder>` writes each view's state and height (`views.log`), the window as the
+  app draws it (`window.png`) and each view whole (`view-N.png`).
 - `drive-codex.py`: puts the server into the Codex app-server of an empty temporary `CODEX_HOME` through the `config` of
   an ephemeral `thread/start`, and sends `mcpServerStatus/list` and `mcpServer/tool/call`.
 
@@ -1634,7 +1643,9 @@ not part of this. The design record is [MCP_APPS_CONNECTORS](design/MCP_APPS_CON
   tool that changes something stays text then, since GitHub's write views draw their form for a result they cannot
   read as finished.
 - **In the conversation.** A completed call whose tool has a view is a tool row whose detail is the view, open unless
-  the person folds it. It joins no group of calls, and a folded turn keeps it in view. A running or failed call is an
+  the person folds it. A conversation drawn before the connectors' tools were read (at launch) or before the connector
+  was connected reads its rows again when they change (`ConnectorToolLabels.generation`), and a row that turns out to
+  have a view opens on it. It joins no group of calls, and a folded turn keeps it in view. A running or failed call is an
   ordinary row. The view is as tall as it reports (`ui/notifications/size-changed`), up to 600 points, then scrolls
   inside; scrolling over a view that fits scrolls the conversation. `prefersBorder` true or absent draws a hairline
   frame. The Windows app and the phone remote show the row's text.

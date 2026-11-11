@@ -63,8 +63,16 @@ enum TranscriptConversationProjection {
         /// The tool calls whose approval changed since the update before (`TranscriptRequestIndex.update(to:)`).
         let changedApprovals: Set<String>
 
+        /// The connectors' tool names and views the turns were read with (`ConnectorToolLabels.generation`).
+        var connectorLabels = ConnectorToolLabels.shared.generation
+
+        struct Shared: Equatable {
+            let harness: HarnessKind
+            let connectorLabels: Int
+        }
+
         var count: Int { turns.count }
-        var shared: HarnessKind { harness }
+        var shared: Shared { Shared(harness: harness, connectorLabels: connectorLabels) }
 
         func id(at index: Int) -> UUID { turns[index].id }
 
@@ -619,9 +627,10 @@ extension ConversationProjectionCache {
         latestTurnIsComplete: Bool,
         latestTurnWasCutOff: Bool = false
     ) -> ConversationPresentation {
+        let connectorLabels = ConnectorToolLabels.shared.generation
         if let last = lastTranscript, last.harness == harness, last.status == status,
            last.latestTurnIsComplete == latestTurnIsComplete, last.latestTurnWasCutOff == latestTurnWasCutOff,
-           last.transcript == transcript {
+           last.connectorLabels == connectorLabels, last.transcript == transcript {
             return keptWhole(last.presentation)
         }
         let presentation = TranscriptConversationProjection.presentation(
@@ -630,7 +639,8 @@ extension ConversationProjectionCache {
         ) { inputs in
             turns(of: inputs, project: TranscriptConversationProjection.turn)
         }
-        lastTranscript = (transcript, harness, status, latestTurnIsComplete, latestTurnWasCutOff, presentation)
+        lastTranscript = (transcript, harness, status, latestTurnIsComplete, latestTurnWasCutOff, connectorLabels,
+                          presentation)
         return presentation
     }
 

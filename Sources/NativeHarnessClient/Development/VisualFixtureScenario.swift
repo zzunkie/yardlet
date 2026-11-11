@@ -81,6 +81,9 @@ struct VisualFixtureScenario: Sendable {
         if arguments.contains(ShowcaseFixture.argument) {
             return ShowcaseFixture.scenario(root: ShowcaseFixture.root(arguments: arguments))
         }
+        if arguments.contains("--ui-fixture=connector-views") {
+            return makeConnectorViews(arguments: arguments, workspaceURL: defaultFixtureWorkspace)
+        }
         let isConversationFixture = arguments.contains("--ui-fixture=conversation")
             || arguments.contains("--ui-fixture=workspace")
             || arguments.contains("--ui-fixture=task-search")

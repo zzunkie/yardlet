@@ -144,8 +144,24 @@ final class MCPAppConnectorTests: XCTestCase {
     func testEveryHarnessesConnectorRowCarriesItsViewOnceTheCallCompleted() async throws {
         let server = FakeAppServer()
         let (_, record) = try await connectedCenter(server)
+        // A conversation drawn before the connectors were read (at launch) gets its views once they are.
+        ConnectorToolLabels.shared.update([])
+        let cache = ConversationProjectionCache()
+        let entries = [TranscriptEntry(content: .user(text: "Who am I?")), TranscriptEntry(content: .activity(
+            HarnessActivity(id: "early", kind: "mcp__yardlet__viewer_get_profile", title: "x", input: nil, output: "o"),
+            state: .completed))]
+        func drawnView() -> ConversationConnectorView? {
+            let items = cache.transcript(TranscriptTurns(entries), harness: .claudeCode, status: .ready,
+                                         latestTurnIsComplete: true).turns.flatMap { $0.work + $0.answers }
+            return items.compactMap { item -> ConversationConnectorView? in
+                if case let .tool(tool) = item.kind { return tool.view }
+                return nil
+            }.first
+        }
+        XCTAssertNil(drawnView())
         ConnectorToolLabels.shared.update([record])
         defer { ConnectorToolLabels.shared.update([]) }
+        XCTAssertEqual(drawnView()?.tool, "viewer_get_profile")
 
         func view(_ kind: ConversationItemKind) -> ConversationConnectorView? {
             if case let .tool(tool) = kind { return tool.view }
@@ -289,16 +305,7 @@ final class FakeAppServer: ConnectorHTTPTransport, @unchecked Sendable {
         get { lock.withLock { answers["get_profile"] } }
         set { lock.withLock { answers["get_profile"] = newValue } }
     }
-    /// What `send_note` answers, in place of its default.
-    var noteResult: ToolJSON? {
-        get { lock.withLock { answers["send_note"] } }
-        set { lock.withLock { answers["send_note"] = newValue } }
-    }
-    /// The `_meta.ui` every view is served with.
-    var viewUI: ToolJSON {
-        get { lock.withLock { ui } }
-        set { lock.withLock { ui = newValue } }
-    }
+
     /// The HTML every view is served with.
     var viewHTML: String {
         get { lock.withLock { html } }
@@ -358,7 +365,7 @@ final class FakeAppServer: ConnectorHTTPTransport, @unchecked Sendable {
                                   "structuredContent": .object(["login": .string("octo")])])
             case "send_note":
                 let text = params["arguments"]?["text"]?.stringValue ?? ""
-                result = noteResult ?? .object(["content": .array([.object(["type": .string("text"), "text": .string("sent \(text)")])])])
+                result = .object(["content": .array([.object(["type": .string("text"), "text": .string("sent \(text)")])])])
             default:
                 result = .object(["content": .array([.object(["type": .string("text"), "text": .string("labels")])])])
             }
@@ -369,7 +376,7 @@ final class FakeAppServer: ConnectorHTTPTransport, @unchecked Sendable {
                 "uri": .string(uri),
                 "mimeType": .string(serveText ? "text/plain" : MCPAppView.mimeType),
                 "text": .string(viewHTML),
-                "_meta": .object(["ui": viewUI])
+                "_meta": .object(["ui": ui])
             ])])])
         default:
             result = .object([:])
