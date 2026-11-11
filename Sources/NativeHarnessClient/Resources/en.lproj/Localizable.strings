@@ -1947,7 +1947,9 @@
 "Send a message to see context usage." = "Send a message to see context usage.";
 "Compact session" = "Compact session";
 "Context limit" = "Context limit";
-"Claude Code compacts this task before its context reaches this size. Other tasks keep their own." = "Claude Code compacts this task before its context reaches this size. Other tasks keep their own.";
+"Claude Code compacts this task before its context reaches this size. Default follows Settings › General." = "Claude Code compacts this task before its context reaches this size. Default follows Settings › General.";
+"Default (%@)" = "Default (%@)";
+"Default (Claude Code)" = "Default (Claude Code)";
 "Available when %@ finishes this turn" = "Available when %@ finishes this turn";
 "Available when reconnected" = "Available when reconnected";
 "Manage connectors" = "Manage connectors";
@@ -2334,6 +2336,10 @@
 "Next message suggestions" = "Next message suggestions";
 "Shows a suggested next message in the empty message box after a reply. Each one takes one more model request." = "Shows a suggested next message in the empty message box after a reply. Each one takes one more model request.";
 "Codex tasks follow it from their next reply, Claude Code tasks from their next start or resume" = "Codex tasks follow it from their next reply, Claude Code tasks from their next start or resume";
+/* Settings › General › Tasks: the context limit a Claude Code task without its own takes when it starts. */
+"Context limit for Claude Code tasks" = "Context limit for Claude Code tasks";
+"Claude Code compacts a task before its context reaches this size. A limit chosen in the task comes first, and a change applies from the task's next start." = "Claude Code compacts a task before its context reaches this size. A limit chosen in the task comes first, and a change applies from the task's next start.";
+"Claude Code default" = "Claude Code default";
 "Puts this message in the message box without sending it" = "Puts this message in the message box without sending it";
 
 

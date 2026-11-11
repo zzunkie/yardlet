@@ -243,23 +243,33 @@ struct ComposerContextUsageDetails: View {
 
     private func limitRow(_ limit: Limit) -> some View {
         let selector = limit.slot.selector
+        let name = Text(selector.name)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        // A menu, as Default names the limit it stands for and four segments would not fit the rail. A menu is
+        // as wide as its longest item, so where it leaves the name no room the name goes above it.
+        let menu = Picker(selector.name, selection: Binding(get: { selector.currentValue }, set: limit.choose)) {
+            ForEach(selector.choices) { choice in
+                Text(choice.name).tag(choice.value)
+            }
+        }
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .controlSize(.small)
+        .fixedSize()
+        .help(selector.description ?? "")
         return VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Text(selector.name)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                Picker(selector.name, selection: Binding(get: { selector.currentValue }, set: limit.choose)) {
-                    ForEach(selector.choices) { choice in
-                        Text(choice.name).tag(choice.value)
-                    }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    name
+                    Spacer(minLength: 8)
+                    menu
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.small)
-                .fixedSize()
-                .help(selector.description ?? "")
+                VStack(alignment: .leading, spacing: 4) {
+                    name
+                    menu
+                }
             }
             if let note = limit.slot.note {
                 Text(note)

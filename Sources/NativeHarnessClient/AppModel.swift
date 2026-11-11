@@ -207,6 +207,10 @@ final class AppModel {
     @ObservationIgnored var accountMovePreferenceObserver: (any NSObjectProtocol)?
     /// The setting as followed from launch (`startAccountMoves`); nil until then.
     @ObservationIgnored var followedAccountMovePreference: Bool?
+    /// Settings' context limit for Claude Code tasks, which a task's Default stands for, as followed
+    /// from launch (`followClaudeContextLimit`); nil for Claude Code's own.
+    var claudeDefaultContextLimit: UInt64?
+    @ObservationIgnored var claudeContextLimitObserver: (any NSObjectProtocol)?
     private(set) var sideChatErrors: [UUID: String] = [:]
     private(set) var bootstrapError: String?
     /// Why this run keeps no tasks, when the task index could not be opened at launch
@@ -527,6 +531,7 @@ final class AppModel {
         )
         self.followUps = FollowUpQueueStore(repository: codexQueueRepository)
         self.preferences = preferences
+        self.claudeDefaultContextLimit = ClaudeContextLimitPreference.tokens(in: preferences)
         AccountHarnessScope.SubagentUse.prune(in: preferences)
         self.sessionRailPreferences = SessionRailPreferenceStore(defaults: preferences)
         self.pullRequestDetails = PullRequestDetailCenter(autoFix: PullRequestAutoFixStore(defaults: preferences))
@@ -5150,9 +5155,30 @@ final class AppModel {
     /// from that list without connecting.
     func composerProviderCapabilities(for session: SessionRecord) -> ProviderCapabilityState? {
         var state = composerCapabilities(for: session)
-        if session.harness == .claudeCode, !store.isTemporary(session.id) { state?.offersContextLimit = true }
+        if session.harness == .claudeCode, !store.isTemporary(session.id) {
+            state?.offersContextLimit = true
+            state?.defaultContextLimit = claudeDefaultContextLimit
+        }
         if continuations.contextLimitRestarts[session.id] != nil { state?.contextLimitAppliesLater = true }
         return state
+    }
+
+    /// Follows Settings' context limit for Claude Code tasks from now on, so a task's Default says the
+    /// limit it now stands for, here and on a paired device. A task's runtime reads it when it starts.
+    func followClaudeContextLimit() {
+        guard claudeContextLimitObserver == nil else { return }
+        nonisolated(unsafe) let watched = preferences
+        claudeContextLimitObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: watched, queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor in
+                // Any setting posts this; only this one changes anything here.
+                let limit = ClaudeContextLimitPreference.tokens(in: watched)
+                guard let self, limit != self.claudeDefaultContextLimit else { return }
+                self.claudeDefaultContextLimit = limit
+            }
+        }
+        claudeDefaultContextLimit = ClaudeContextLimitPreference.tokens(in: watched)
     }
 
     private func composerCapabilities(for session: SessionRecord) -> ProviderCapabilityState? {
@@ -7058,6 +7084,7 @@ final class AppModel {
                                       workspaceURL: session.workspaceURL)?.model
         let current = providerUsageBySessionID[session.id]
         let limit = ClaudeLaunchOption.contextLimitTokens(session.providerOptions[ClaudeLaunchOption.contextLimit])
+            ?? claudeDefaultContextLimit
         guard let modelWindow = read.model.flatMap({
                   modelCatalogs.claudeContextWindow(forResponseModel: $0, chosenModel: chosen)
               }) ?? current?.contextWindowTokens, case let window = min(modelWindow, limit ?? modelWindow), window > 0,

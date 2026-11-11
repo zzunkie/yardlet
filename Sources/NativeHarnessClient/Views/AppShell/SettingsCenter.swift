@@ -1056,7 +1056,7 @@ private struct SettingsPreferenceRow<Icon: View>: View {
                     }
                 }
                 .labelsHidden()
-                .pickerStyle(.segmented)
+                .settingsChoiceStyle(count: setting.choices.count)
                 .fixedSize()
                 .controlSize(.small)
             case .app:
@@ -1124,8 +1124,15 @@ private struct PreferenceSegments: View {
             }
         }
         .labelsHidden()
-        .pickerStyle(.segmented)
+        .settingsChoiceStyle(count: choices.count)
         .fixedSize()
         .controlSize(.small)
+    }
+}
+
+private extension View {
+    /// Segments for up to three choices; a menu for more, as each segment is as wide as the longest one.
+    @ViewBuilder func settingsChoiceStyle(count: Int) -> some View {
+        if count > 3 { pickerStyle(.menu) } else { pickerStyle(.segmented) }
     }
 }

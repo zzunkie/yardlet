@@ -49,6 +49,9 @@ struct ProviderCapabilityState: Equatable, Sendable {
     var offersContextLimit = false
     /// The task chose a context limit its running process does not have yet.
     var contextLimitAppliesLater = false
+    /// The limit Settings gives a task without its own, which its Default stands for; nil for the
+    /// harness's own.
+    var defaultContextLimit: UInt64?
 
     static let empty = ProviderCapabilityState()
 }

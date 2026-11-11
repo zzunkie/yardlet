@@ -15,6 +15,9 @@ import XCTest
 ///   opens: Manage connectors, then Yardlet's connectors and, under their heading, the session's MCP
 ///   servers.
 /// - `composer-ring-*`: the task composer with the ring beside the model menu.
+/// - `context-limit-*`: a Claude Code task's context limit on its Default, which names the 600k Settings
+///   gives it, in the context window and, as `context-limit-rail-*`, in the session rail's narrower card;
+///   `context-limit-rail-claude-*` with Claude Code's own default, the longest name Default has.
 @MainActor
 final class ComposerContextConnectorsRenderingTests: XCTestCase {
     private typealias Fixtures = ComposerContextAndConnectorsTests
@@ -86,6 +89,40 @@ final class ComposerContextConnectorsRenderingTests: XCTestCase {
         let summary = try XCTUnwrap(ComposerContextSummary.make(usage: usage, reportsContextWindow: true))
         try drawDetails("context-codex", summary: summary, usage: usage, breakdowns: ComposerUsageBreakdown.codex(tokens),
                         height: 420, expected: ["64k / 256k (25%)", L10n.string("Last turn"), L10n.string("Cumulative")])
+    }
+
+    /// The limit is a menu, so Default fits with the limit it names in the rail's card too. The menu is
+    /// not opened; its items are the projection's (`ComposerContextAndConnectorsTests`).
+    func testTheContextLimitNamesTheLimitItsDefaultStandsFor() throws {
+        let directory = try WindowlessRender.directory("composer-context-qa")
+        let usage = try XCTUnwrap(ClaudeProtocol.contextUsage(from: Fixtures.claudeContextUsage))
+        let summary = try XCTUnwrap(ComposerContextSummary.make(usage: usage, reportsContextWindow: true))
+        let cases: [(name: String, width: CGFloat, isInline: Bool, setting: UInt64?)] = [
+            ("context-limit", 340, false, 600_000), ("context-limit-rail", 232, true, 600_000),
+            ("context-limit-rail-claude", 232, true, nil)
+        ]
+        for (name, width, isInline, setting) in cases {
+            let slot = ComposerContextLimitSlot.claude(saved: nil, defaultLimit: setting, appliesLater: false)
+            let defaultName = setting == nil ? L10n.string("Default (Claude Code)") : L10n.format("Default (%@)", "600k")
+            let size = NSSize(width: width, height: 340)
+            func details() -> some View {
+                ComposerContextUsageDetails(summary: summary, usage: usage, breakdowns: [],
+                                            limit: .init(slot: slot, choose: { _ in }), isInline: isInline)
+                    .frame(width: size.width, height: size.height, alignment: .top)
+            }
+            let captures = try WindowlessRender.hostedInBothAppearances(name, in: directory, size: size) { appearance in
+                details()
+                    .environment(\.colorScheme, appearance.colorScheme)
+                    .background(isInline ? ParityTheme.canvas : ParityTheme.elevated)
+            }
+            for capture in captures { XCTAssertTrue(WindowlessRender.drawsContent(capture.bitmap, step: 6)) }
+            let host = WindowlessRender.Host(details(), size: size)
+            defer { host.close() }
+            host.settle()
+            XCTAssertTrue(host.accessibilityElements().contains {
+                $0.role == NSAccessibility.Role.popUpButton.rawValue && $0.label == L10n.string("Context limit")
+                    && $0.value == defaultName }, "\(name): \(host.accessibilityElements())")
+        }
     }
 
     func testContextWindowBeforeTheFirstTurn() throws {
