@@ -91,6 +91,23 @@ final class ConnectorTests: XCTestCase {
         XCTAssertEqual(plan.server.authorizationEndpoint.absoluteString, "https://mcp.example.test/authorize")
         XCTAssertEqual(plan.resource, "https://mcp.example.test/mcp")
         XCTAssertNil(plan.scope)
+
+        // The sign-in page a server names is opened only when it is a web page: https, or http on this Mac.
+        for page in ["https://auth.example.test/authorize", "http://127.0.0.1:8080/authorize", "http://localhost/authorize"] {
+            XCTAssertTrue(ConnectorOAuth.isSignInPage(try XCTUnwrap(URL(string: page))), page)
+        }
+        for page in ["http://auth.example.test/authorize", "file:///Applications/Calculator.app", "smb://files.example.test/share",
+                     "x-apple.systempreferences:com.apple.preference.security", "https:///authorize"] {
+            XCTAssertFalse(ConnectorOAuth.isSignInPage(try XCTUnwrap(URL(string: page))), page)
+        }
+        let elsewhere = FakeConnectorServer(publishesResourceMetadata: false, authorizationEndpoint: "file:///tmp/authorize")
+        do {
+            _ = try await ConnectorOAuth.discover(serverURL: FakeConnectorServer.mcpURL,
+                                                  challenge: BearerChallenge(error: "invalid_token"), http: elsewhere)
+            XCTFail("A sign-in page that is no web page is not used")
+        } catch {
+            XCTAssertEqual(error as? ConnectorOAuthError, .noAuthorizationServer)
+        }
     }
 
     /// Protected resource metadata is the server's only when it names the server, or its origin or a
@@ -911,7 +928,7 @@ final class ConnectorTests: XCTestCase {
     }
 
     func testTheLoopbackListenerTakesTheRedirectAndRefusesOtherPaths() async throws {
-        let loopback = try await MacOAuthLoopback.start()
+        let loopback = try await MacOAuthLoopback.start(state: "xyz")
         defer { loopback.stop() }
         XCTAssertEqual(loopback.redirectURI.host(), "127.0.0.1")
         XCTAssertEqual(loopback.redirectURI.path(), "/callback")
@@ -920,6 +937,14 @@ final class ConnectorTests: XCTestCase {
         other.path = "/favicon.ico"
         let (_, otherResponse) = try await session.data(from: other.url!)
         XCTAssertEqual((otherResponse as? HTTPURLResponse)?.statusCode, 404)
+
+        // Any page in the browser can ask for the redirect path. Without this sign-in's state it is not the
+        // answer: it gets 404 and the wait goes on.
+        for query in ["?error=access_denied", "?code=abc&state=other", ""] {
+            let stray = URL(string: loopback.redirectURI.absoluteString + query)!
+            let (_, strayResponse) = try await session.data(from: stray)
+            XCTAssertEqual((strayResponse as? HTTPURLResponse)?.statusCode, 404, query)
+        }
 
         async let callback = loopback.callback()
         let redirect = URL(string: loopback.redirectURI.absoluteString + "?code=abc&state=xyz")!
@@ -931,7 +956,7 @@ final class ConnectorTests: XCTestCase {
     }
 
     func testWaitingForTheRedirectEndsWhenCancelled() async throws {
-        let loopback = try await MacOAuthLoopback.start()
+        let loopback = try await MacOAuthLoopback.start(state: "xyz")
         defer { loopback.stop() }
         let waiting = Task { try await loopback.callback() }
         try await Task.sleep(for: .milliseconds(20))
@@ -1037,7 +1062,7 @@ final class FakeUserAgent: OAuthUserAgent, @unchecked Sendable {
         }
     }
 
-    func startLoopback(port: UInt16?) async throws -> any OAuthLoopbackReceiving {
+    func startLoopback(port: UInt16?, state: String) async throws -> any OAuthLoopbackReceiving {
         lock.withLock { ports.append(port) }
         return loopback
     }
@@ -1117,11 +1142,14 @@ final class FakeConnectorServer: ConnectorHTTPTransport, @unchecked Sendable {
     let authorizationHost: String
     /// The MCP server's host; its endpoint is `/mcp` there.
     let serverHost: String
+    /// The sign-in page the authorization server names, where it is not its own `/authorize`.
+    let authorizationEndpoint: String?
 
     init(requiresToken: Bool = true, publishesResourceMetadata: Bool = true, supportsRegistration: Bool = true,
          authMethods: [String] = ["none", "client_secret_basic"], listsToolsToAnyone: Bool = false,
          queryTokenName: String? = nil, authorizationHost: String = "auth.example.test",
-         serverHost: String = "mcp.example.test") {
+         serverHost: String = "mcp.example.test", authorizationEndpoint: String? = nil) {
+        self.authorizationEndpoint = authorizationEndpoint
         self.authorizationHost = authorizationHost
         self.serverHost = serverHost
         self.requiresToken = requiresToken
@@ -1217,7 +1245,7 @@ final class FakeConnectorServer: ConnectorHTTPTransport, @unchecked Sendable {
             let base = "https://\(url.host()!)"
             var metadata: [String: ToolJSON] = [
                 "issuer": .string(base),
-                "authorization_endpoint": .string("\(base)/authorize"),
+                "authorization_endpoint": .string(authorizationEndpoint ?? "\(base)/authorize"),
                 "token_endpoint": .string("\(base)/token"),
                 "token_endpoint_auth_methods_supported": .array(authMethods.map { .string($0) }),
                 "code_challenge_methods_supported": .array([.string("S256")])

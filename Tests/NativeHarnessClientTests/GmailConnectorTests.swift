@@ -909,9 +909,9 @@ final class LoopbackBrowser: OAuthUserAgent, @unchecked Sendable {
     var redirects: [URL] { lock.withLock { followed } }
     var pages: [String] { lock.withLock { bodies } }
 
-    func startLoopback(port: UInt16?) async throws -> any OAuthLoopbackReceiving {
+    func startLoopback(port: UInt16?, state: String) async throws -> any OAuthLoopbackReceiving {
         lock.withLock { ports.append(port) }
-        return try await MacOAuthLoopback.start(port: nil)
+        return try await MacOAuthLoopback.start(port: nil, state: state)
     }
 
     func open(_ url: URL) async -> Bool {

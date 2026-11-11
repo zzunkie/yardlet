@@ -73,7 +73,9 @@ OAuth steps (the MCP authorization spec):
    (`ConnectorOAuth.sameSite`). A directory entry still at its own address does not ask about a page host checked for
    it (`ConnectorPreset.signInHosts`, the "Directory" section); another host, or the entry at another address, asks.
    Cancel ends the sign-in as Cancel on the page does, before a client is registered. Continue is kept for that server
-   address and page host (`approvedSignIn`), so signing in again does not ask again.
+   address and page host (`approvedSignIn`), so signing in again does not ask again. Metadata whose authorization page
+   is not a web page (https, or http on this Mac) is not used (`ConnectorOAuth.isSignInPage`), since the browser is
+   asked to open that address as it stands.
 4. Client:
    - Dynamic client registration (RFC 7591): every sign-in registers a new redirect URI, `/callback` on a random port of
      `127.0.0.1`. If the server accepts `none`, it is a public client; otherwise it uses whichever of
@@ -87,10 +89,12 @@ OAuth steps (the MCP authorization spec):
    8707), `scope` (the connector's scope, else the header's value, else the metadata's `scopes_supported`) and the
    directory entry's extra authorization parameters. The user's existing browser sign-in is used as is, and Yardlet
    never sees the password.
-6. When the loopback listener gets the first `GET /callback`, it returns a "Connected to Yardlet" page and brings
-   Yardlet to the front. It ends if nothing arrives within 5 minutes or the user cancels. Cancel on the authorization
-   page (`error=access_denied`) is the same as "Cancel" in Yardlet and is not kept as an error
-   (`ConnectorOAuthError.declined`). A different `state` is refused.
+6. When the loopback listener gets the first `GET /callback` that carries this sign-in's `state`, it returns a
+   "Connected to Yardlet" page and brings Yardlet to the front. A request without that `state` is answered 404 like any
+   other path and the wait goes on: any page open in the browser can send one. The listener holds its port alone while
+   it waits. It ends if nothing arrives within 5 minutes or the user cancels. Cancel on the authorization page
+   (`error=access_denied`) is the same as "Cancel" in Yardlet and is not kept as an error
+   (`ConnectorOAuthError.declined`).
 7. A token request gets the access and refresh tokens, which are stored in Keychain, and then `initialize` and
    `tools/list` are sent again.
 

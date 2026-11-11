@@ -5,9 +5,9 @@ import YardletRemote
 
 /// The platform half of a sign-in: a loopback listener for the redirect and the user's browser.
 protocol OAuthUserAgent: Sendable {
-    /// Listens on a loopback address for one redirect: on `port`, for a client whose redirect URI
-    /// the user registered, otherwise on any free port.
-    func startLoopback(port: UInt16?) async throws -> any OAuthLoopbackReceiving
+    /// Listens on a loopback address for the redirect that answers the sign-in whose request carries
+    /// `state`: on `port`, for a client whose redirect URI the user registered, otherwise on any free port.
+    func startLoopback(port: UInt16?, state: String) async throws -> any OAuthLoopbackReceiving
     /// Opens the sign-in page in the user's browser.
     func open(_ url: URL) async -> Bool
     /// Asks the person whether to go on to a sign-in page on another site than the server's; true
@@ -17,8 +17,9 @@ protocol OAuthUserAgent: Sendable {
 
 protocol OAuthLoopbackReceiving: Sendable {
     var redirectURI: URL { get }
-    /// The first request to the redirect path, with its query. Ends with `CancellationError`
-    /// when the waiting task is cancelled.
+    /// The first request to the redirect path that carries the sign-in's `state`, with its query. A
+    /// request without it is not the answer, whoever sent it, and the wait goes on. Ends with
+    /// `CancellationError` when the waiting task is cancelled.
     func callback() async throws -> URL
     func stop()
 }
@@ -1039,7 +1040,9 @@ final class ConnectorCenter: ConnectorToolProviding {
         } else {
             nil
         }
-        let loopback = try await userAgent.startLoopback(port: registered == nil ? nil : ConnectorOAuth.registeredClientRedirectPort)
+        let state = ConnectorOAuth.randomToken()
+        let loopback = try await userAgent.startLoopback(
+            port: registered == nil ? nil : ConnectorOAuth.registeredClientRedirectPort, state: state)
         defer { loopback.stop() }
         let client: OAuthClient = if let registered {
             registered
@@ -1047,7 +1050,6 @@ final class ConnectorCenter: ConnectorToolProviding {
             try await ConnectorOAuth.register(with: plan.server, redirectURI: loopback.redirectURI, http: http)
         }
         let verifier = ConnectorOAuth.randomToken()
-        let state = ConnectorOAuth.randomToken()
         let url = ConnectorOAuth.authorizationURL(
             plan: plan,
             client: client,
@@ -1321,10 +1323,10 @@ final class ConnectorCenter: ConnectorToolProviding {
             client = ConnectorOAuth.registeredClient(id: app.clientID, secret: nil, server: plan.server)
             parameters = MicrosoftOAuth.authorizationParameters(account: address)
         }
-        let loopback = try await userAgent.startLoopback(port: ConnectorOAuth.registeredClientRedirectPort)
+        let state = ConnectorOAuth.randomToken()
+        let loopback = try await userAgent.startLoopback(port: ConnectorOAuth.registeredClientRedirectPort, state: state)
         defer { loopback.stop() }
         let verifier = ConnectorOAuth.randomToken()
-        let state = ConnectorOAuth.randomToken()
         let url = ConnectorOAuth.authorizationURL(
             plan: plan,
             client: client,
