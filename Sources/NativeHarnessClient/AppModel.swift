@@ -4696,7 +4696,8 @@ final class AppModel {
         var seen: DetachedConversationStamp?
         while !Task.isCancelled {
             guard let session = matchingSession(source), handlesBySessionID[session.id] == nil else { return }
-            let stamp = detachedConversationStamp(for: session)
+            let stamp = await detachedConversationStamp(for: session)
+            guard !Task.isCancelled, handlesBySessionID[session.id] == nil else { return }
             if let stamp, let previous = seen, stamp != previous {
                 // The record changed since any read in flight began: read it again after that one.
                 switch session.harness {
@@ -4712,23 +4713,28 @@ final class AppModel {
         }
     }
 
-    private func detachedConversationStamp(for session: SessionRecord) -> DetachedConversationStamp? {
-        let file: URL?
+    /// The provider file's size and modification time, looked up off the main actor: the follow
+    /// loop asks every `detachedFollowInterval`, and a stat on a slow or busy disk can take seconds.
+    private func detachedConversationStamp(for session: SessionRecord) async -> DetachedConversationStamp? {
+        let locate: @Sendable () -> URL?
         switch session.harness {
         case .claudeCode:
-            file = session.providerSessionID.flatMap {
-                ClaudeConversationCatalog.transcriptURL(sessionID: $0, workspace: session.workspaceURL,
-                    configDirectory: ClaudeSubagentTranscriptReader.configDirectory(connection: session.connection,
-                                                                                     workspaceURL: session.workspaceURL))
-            }
+            guard let id = session.providerSessionID else { return nil }
+            let workspace = session.workspaceURL
+            let config = ClaudeSubagentTranscriptReader.configDirectory(connection: session.connection,
+                                                                       workspaceURL: workspace)
+            locate = { ClaudeConversationCatalog.transcriptURL(sessionID: id, workspace: workspace, configDirectory: config) }
         case .codex:
-            file = codexRolloutPathBySessionID[session.id].map { URL(filePath: $0) }
+            guard let path = codexRolloutPathBySessionID[session.id] else { return nil }
+            locate = { URL(filePath: path) }
         case .antigravityCLI:
-            file = session.providerSessionID.flatMap { antigravityConversationStore.transcriptURL(conversationID: $0) }
+            guard let id = session.providerSessionID else { return nil }
+            let store = antigravityConversationStore
+            locate = { store.transcriptURL(conversationID: id) }
         default:
-            file = nil
+            return nil
         }
-        return file.flatMap(DetachedConversationStamp.init(file:))
+        return await Task.detached(priority: .utility) { locate().flatMap(DetachedConversationStamp.init(file:)) }.value
     }
 
     /// Where a Codex task opened from the import list shows its search match: the provider's
