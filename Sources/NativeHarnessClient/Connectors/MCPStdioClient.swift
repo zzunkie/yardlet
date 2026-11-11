@@ -74,6 +74,11 @@ actor MCPStdioClient {
         try await request("tools/call", .object(["name": .string(name), "arguments": arguments]))
     }
 
+    /// The server's `ReadResourceResult` for one URI, as sent: an MCP App's view (`MCPAppView`).
+    func readResource(uri: String) async throws -> ToolJSON {
+        try await request("resources/read", .object(["uri": .string(uri)]))
+    }
+
     /// Ends the server; the next request starts it again.
     func close() {
         let channel = channel

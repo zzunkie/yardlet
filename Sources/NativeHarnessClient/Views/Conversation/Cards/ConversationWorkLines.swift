@@ -336,6 +336,7 @@ struct ConversationWorkLine: View, Equatable {
 
     @Environment(\.yardletInterfaceScale) private var interfaceScale
     @Environment(\.conversationDisclosureChoices) private var choices
+    @Environment(\.connectorViews) private var connectorViews
 
     /// Where the line starts: folded unless it failed or the person opened it, here or wherever
     /// it was drawn before in the turn.
@@ -517,7 +518,7 @@ struct ConversationWorkLine: View, Equatable {
             words: tool.kind.wordedLines ?? [ConversationLineWording.tool(tool, phase: item.phase, harness: harness, workspaceURL: workspaceURL)],
             phase: item.phase,
             hasDetail: !texts.isEmpty || tool.mcpResult?.isEmpty == false || tool.diff != nil || !tool.diffs.isEmpty
-                || !tool.images.isEmpty || tool.loadsDetailOnOpen,
+                || !tool.images.isEmpty || tool.loadsDetailOnOpen || tool.view != nil,
             startsOpen: startsOpen,
             accessibilityLabel: tool.name.isEmpty ? tool.kind.label : tool.name,
             // A worded line holding a change's diff opens for a review render, as a file change's line does; a
@@ -543,6 +544,18 @@ struct ConversationWorkLine: View, Equatable {
         } actions: {
             ConversationCopyDetailsButton(details: item.copyDetails)
         } detail: {
+            if let view = tool.view, let host = connectorViews, host.result(for: view) != nil {
+                ConnectorViewCard(key: host.taskID.uuidString + " " + item.id, view: view, host: host) {
+                    toolDetails(tool, images: images, isLoading: isLoading)
+                }
+            } else {
+                toolDetails(tool, images: images, isLoading: isLoading)
+            }
+        }
+    }
+
+    /// What an opened call's line holds: its input and output, images, result and changes.
+    private func toolDetails(_ tool: ConversationTool, images: [ConversationToolImage], isLoading: Bool) -> some View {
             VStack(alignment: .leading, spacing: 10) {
                 if let input = tool.input, !input.isEmpty {
                     ConversationActivitySection(title: L10n.string("Input"), text: input,
@@ -589,7 +602,6 @@ struct ConversationWorkLine: View, Equatable {
                         .accessibilityLabel(L10n.string("Loading"))
                 }
             }
-        }
     }
 }
 

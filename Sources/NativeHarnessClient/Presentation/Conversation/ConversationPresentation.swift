@@ -416,6 +416,9 @@ struct ConversationTool: Equatable, Sendable {
     var images: [TranscriptImageAttachment] = []
     /// The Yardlet connector whose tool this is, for its name and icon on the row.
     var connector: ConnectorToolLabels.Label? = nil
+    /// The MCP App view the connector's tool names, drawn as the row's detail once the call completed
+    /// (docs/CONNECTORS.md, "MCP Apps").
+    var view: ConversationConnectorView? = nil
 }
 
 struct ConversationSubagent: Equatable, Sendable {

@@ -625,6 +625,10 @@ final class ConnectorToolLabels: @unchecked Sendable {
         var icons: ConnectorIconSources = .none
         /// A tool its service's accounts share: each call names its account (`ConnectorToolNaming.accountArgument`).
         var takesAccount = false
+        /// The `ui://` view the tool names, drawn under its calls (`MCPAppTool.viewURI`).
+        var view: String? = nil
+        /// The tool changes nothing (`readOnlyHint`).
+        var readOnly = false
 
         /// The account a call acts in: the one it names, for a tool its service's accounts share, else
         /// the connector's own (a name from before the accounts shared their tools).
@@ -655,7 +659,9 @@ final class ConnectorToolLabels: @unchecked Sendable {
                 guard let original = tool["name"]?.stringValue else { continue }
                 next[ConnectorToolNaming.name(slug: record.slug, tool: original)] =
                     Label(connector: record.name, presetID: record.presetID, tool: original, account: record.account,
-                          localService: record.localService, icons: record.iconSources)
+                          localService: record.localService, icons: record.iconSources,
+                          view: MCPAppTool.viewURI(of: tool),
+                          readOnly: tool["annotations"]?["readOnlyHint"] == .bool(true))
             }
             if let service = record.localService, service.sharesToolsAcrossAccounts, sharedBy[service] == nil {
                 sharedBy[service] = record
@@ -683,6 +689,27 @@ final class ConnectorToolLabels: @unchecked Sendable {
         let prefix = "mcp__\(AgentToolEnvironment.serverName)__"
         guard name.hasPrefix(prefix) else { return nil }
         return label(forTool: String(name.dropFirst(prefix.count)))
+    }
+
+    /// The label and Yardlet's name for a tool as a harness names it in its conversation: Claude Code
+    /// `mcp__yardlet__<name>`, Antigravity `mcp_yardlet_<name>`, or `mcp_yardlet_<8 hex>_<name>` for a session after
+    /// the first in one process (`ConnectorToolNaming`).
+    func label(forHarnessTool name: String) -> (name: String, label: Label)? {
+        let server = AgentToolEnvironment.serverName
+        var candidates: [String] = []
+        for prefix in ["mcp__\(server)__", "mcp_\(server)_"] where name.hasPrefix(prefix) {
+            let rest = String(name.dropFirst(prefix.count))
+            candidates.append(rest)
+            // The 8 hex digits Antigravity puts before the name of each server after its first.
+            if prefix.hasSuffix("_"), rest.count > 9, rest.dropFirst(8).first == "_",
+               rest.prefix(8).allSatisfy(\.isHexDigit) {
+                candidates.append(String(rest.dropFirst(9)))
+            }
+        }
+        for candidate in candidates {
+            if let label = label(forTool: candidate) { return (candidate, label) }
+        }
+        return nil
     }
 
     /// The tool's words: "create issue" for `create_issue`.

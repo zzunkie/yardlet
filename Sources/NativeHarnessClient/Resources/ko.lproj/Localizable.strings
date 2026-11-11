@@ -3921,3 +3921,6 @@
 "Signed in to %@." = "%@에 로그인했습니다.";
 "%@ is still not signed in." = "%@에 아직 로그인되어 있지 않습니다.";
 "The sign-in window could not open: %@" = "로그인 창을 열지 못했습니다: %@";
+"Allow the %@ view to %@?" = "%1$@ 화면에서 %2$@ 도구를 실행할까요?";
+"Show view again" = "화면 다시 보기";
+"Connector view" = "커넥터 화면";

@@ -340,7 +340,9 @@ registry package, or a server that another app or harness starts (the "Harnesses
   part and an 8-character FNV-1a of the original name. Characters outside `[A-Za-z0-9_-]` become `_`.
 - Titles start with `Linear: …` and descriptions with `[Linear] …`; a tool its service's accounts share starts with the
   service alone (`Gmail: …`, `[Gmail] …`). `inputSchema`, `outputSchema` and `annotations` are exactly what the server
-  gave, with `account` added to a shared tool's input.
+  gave, with `account` added to a shared tool's input. A tool only a server's views may call (`_meta.ui.visibility`
+  without `"model"`, GitHub's `ui_get`) is left out, and the view a tool names (`_meta.ui`) is taken off the copy a
+  harness gets, since Yardlet draws it (the "MCP Apps" section).
 - Results pass on the server's `content` items (text, images, audio, resource links and others), `structuredContent` and
   `isError` as they are. The server's JSON-RPC errors and connection failures become `isError` results. Yardlet leaves
   checking a server's arguments to the server; a refusal in the MCP SDKs' own words (TypeScript "Invalid arguments for
@@ -1304,7 +1306,7 @@ registered OAuth app can offer a sign-in button. Yardlet signs in with the devic
 - The Browserbase key goes in the request address, as Browserbase specifies (it may stay in server logs). It is not in
   Yardlet's files, UI or error text.
 - Not supported: the old HTTP+SSE transport (2024-11-05), Client ID Metadata Document (Yardlet has no https document
-  address), resources and prompts, requests the server sends inside a stream (elicitation, sampling, roots), showing
+  address), resources and prompts (other than reading a tool's view, the "MCP Apps" section), requests the server sends inside a stream (elicitation, sampling, roots), showing
   progress notifications, blocking individual tools and `notifications/tools/list_changed` sent by connector servers
   (remote MCP) themselves (server lists are read again when connecting and every 12 hours).
 - Program connectors run someone else's code with the person's access; macOS gives them no sandbox from Yardlet. The
@@ -1348,6 +1350,7 @@ registered OAuth app can offer a sign-in button. Yardlet signs in with the devic
 | `Sources/NativeHarnessClient/Connectors/SlackAppManifest.swift` | The Slack app manifest and its create link | engine |
 | `Sources/NativeHarnessClient/Connectors/GitHubDeviceSignIn.swift` | GitHub device code sign-in, the client ID in Info.plist | engine |
 | `Sources/NativeHarnessClient/Connectors/ConnectorIcons.swift` | `MCPServerIcon` (`serverInfo.icons`), icon source order (`ConnectorIconSources`), own-site check (`ConnectorIconSite`), directory icon addresses | engine |
+| `Sources/NativeHarnessClient/Connectors/MCPAppViews.swift`, `MCPAppBridge.swift`, `ConnectorViewHost.swift` | MCP Apps: a tool's view and who may call it (`MCPAppTool`), the checked view (`MCPAppView`) and its policy (`MCPAppCSP`), the kept results (`ConnectorAppCalls`), a row's view (`ConversationConnectorView`), the JSON-RPC a view speaks (`MCPAppBridge`, `MCPAppHostContext`), one task's views (`ConnectorViewHost`) | engine |
 | `Sources/NativeHarnessClient/AgentTools/AgentToolBroker.swift` | `tools/list` and the connector call path, per-task scope, injection conditions, `tools/watch` | engine |
 | `Sources/NativeHarnessClient/AgentTools/AgentToolInjection.swift` | Injection documents, the `deniedMcpServers` setting, `ClaudeAIConnectorPreference` | engine |
 | `Sources/NativeHarnessClient/AgentTools/GmailToolApproval.swift`, `GoogleToolApproval.swift`, `MicrosoftToolApproval.swift`, `AppleToolApproval.swift` | Text of Claude Code request cards for Gmail, Calendar and Drive writes (Docs, Sheets and Slides included), for Outlook, OneDrive and Teams writes, and for App Store Connect and Mac calendar and reminder writes | engine |
@@ -1362,6 +1365,7 @@ registered OAuth app can offer a sign-in button. Yardlet signs in with the devic
 | `Sources/NativeHarnessClient/Views/AppShell/AppStoreConnectSetupPage.swift` | The App Store Connect page (steps, key type, choosing the `.p8`, ID fields, key list, the Trash question) | views |
 | `Sources/NativeHarnessClient/Views/AppShell/MailAccountSetupPage.swift` | The Mail (IMAP) page (the service from the address, its steps, the app password, other servers, the account list) | views |
 | `Sources/NativeHarnessClient/Views/Composer/ComposerPlusMenu.swift` | Rows and keys of the composer "+" menu (`ComposerMenuList`), the "+" order (`ComposerPlusMenu`), the connector list (`ComposerConnectorsMenu`) | views |
+| `Sources/NativeHarnessClient/Views/Conversation/Cards/ConnectorViewCard.swift`, `ConnectorViewWeb.swift`, `AppModel+ConnectorViews.swift` | A row's view (`ConnectorViewCard`), its web view, documents, bridge script and policy (`MCPAppViewController`, `MCPAppSchemeHandler`), the views live at once (`MCPAppViewPool`), the request card for a view's write | views |
 | `Sources/NativeHarnessClient/Views/Composer/ComposerConnectorsMenu.swift`, `Presentation/Composer/ComposerConnectorList.swift` | The connector environment, `ConnectorIcon`, session rail rows, list state | views |
 
 Tests:
@@ -1378,6 +1382,7 @@ Tests:
 | `Tests/NativeHarnessClientTests/MCPRegistryTests.swift` | Recorded registry answers (`Fixtures/mcp-registry-*.json`), checks on someone else's data, order, the client's requests, commands from packages, program connectors with a fake stdio server (keys only in Keychain, a harness's own copy, removal), a key in a named header, other apps' settings and one program's launch |
 | `Tests/NativeHarnessClientTests/ConnectorRegistryRenderingTests.swift` | Draws the registry list, a search, a program's page and programs offered from other apps under `.build/connector-registry-qa/`, light and dark |
 | `Tests/NativeHarnessClientTests/ConnectorSetupAssistantTests.swift` | The Slack manifest and link encoding, Google and Slack step state, field checks, suggestions read by name only |
+| `Tests/NativeHarnessClientTests/MCPAppConnectorTests.swift`, `MCPAppViewRenderingTests.swift` | MCP Apps with a fake server (`FakeAppServer`): view-only tools, reading and checking a view, kept results per harness's row, a view's calls and the question before a write, the policy's sources, the bridge's order; a view drawn by the real web view in its row (isolation probes, height, both appearances, `.build/mcp-apps-qa/`), a long conversation, and GitHub's own views (opt-in `YARDLET_MCP_APPS_REAL_VIEW`) |
 | `Tests/NativeHarnessClientTests/ConnectorIconTests.swift` | Icon order, themes and source limits, fetching, cache and waiting after a failure (opt-in `YARDLET_CONNECTOR_ICONS_LIVE=1` fetches from the real service sites and draws them) |
 | `Tests/NativeHarnessClientTests/ConnectorsRenderingTests.swift`, `ConnectorsEasyQARenderingTests.swift`, `PlusConnectorsQARenderingTests.swift`, `GmailSetupRenderingTests.swift`, `AppleConnectorsRenderingTests.swift`, `MicrosoftZoomRenderingTests.swift` | Draws settings, the add sheet, the assistants, the composer list and the App Store Connect page under `.build/`, in light and dark. The Apple connection flow runs with accessibility presses in a transparent off-screen window |
 
@@ -1597,3 +1602,73 @@ what belongs to connectors.
   the address and a new app password, and the row's menu has **Mail accounts…** at any time.
 - **Turning off and removing.** Remove deletes the record and the Keychain item and closes the connection. The app
   password stays valid at the service until the person deletes it there.
+
+## 19. MCP Apps
+
+A connector's tool may name an HTML view for its results (MCP Apps, extension `io.modelcontextprotocol/ui`, spec
+`2026-01-26`): `_meta.ui.resourceUri`, a `ui://` resource. Yardlet draws it in the conversation under the call, the same
+way in every harness, for connectors it reaches as an MCP client (remote servers and programs; Yardlet's own Google,
+Microsoft and Apple servers name no views). Servers a harness loads itself, and a harness's own MCP Apps support, are
+not part of this. The design record is [MCP_APPS_CONNECTORS](design/MCP_APPS_CONNECTORS.md).
+
+- **Saying so.** Yardlet's `initialize` does not name the extension, so every tool runs as it did before Yardlet drew
+  views: GitHub's `create_pull_request`, `update_pull_request` and `issue_write` make the change, and their views show
+  what was made. GitHub, and any server that keeps view data for a client that does not say either way, still lists
+  its views. A server that leaves them out for such a client shows text.
+- **Who may call what** (`MCPAppTool`). `_meta.ui.visibility` defaults to both. A tool without `"model"` is not in any
+  harness's list, and a model's call to its name answers as no tool's. A view may call only tools with `"app"` of the
+  connector that served it. `_meta.ui` is taken off the copy a harness gets, because the Yardlet MCP server serves no
+  resources.
+- **Reading the view** (`ConnectorCenter.appView`). `resources/read` through the connector's session (sign-in renewal
+  included) or its program, within 30 seconds. Only a `ui://` URI the tool names; a `text/html` content item (with or
+  without `;profile=mcp-app`) in `text` or base64 `blob`, at most 5 MB. Its `_meta.ui` gives the origins it may use
+  (`csp`) and `prefersBorder`. The last eight views read are kept in memory for the app's run.
+- **The result a view shows.** A model's call to a tool with a view keeps its whole result in memory
+  (`ConnectorAppCalls`: `content`, `structuredContent`, `isError`; not the result's `_meta`), under the task, Yardlet's
+  tool name and the arguments as sorted JSON: 20 per task, 200 in all, none over 1 MB. A row finds it by the tool name
+  its harness wrote (Claude Code `mcp__yardlet__<name>`, Codex `yardlet` and `<name>`, Antigravity
+  `mcp_yardlet_<name>` or `mcp_yardlet_<8 hex>_<name>`, in the call's kind or title) and the arguments it shows; two
+  calls with the same arguments show the newer result. A row with none kept (a conversation from before Yardlet
+  started) shows its view only for a read-only tool, from what its harness kept: Codex's result, or the row's text. A
+  tool that changes something stays text then, since GitHub's write views draw their form for a result they cannot
+  read as finished.
+- **In the conversation.** A completed call whose tool has a view is a tool row whose detail is the view, open unless
+  the person folds it. It joins no group of calls, and a folded turn keeps it in view. A running or failed call is an
+  ordinary row. The view is as tall as it reports (`ui/notifications/size-changed`), up to 600 points, then scrolls
+  inside; scrolling over a view that fits scrolls the conversation. `prefersBorder` true or absent draws a hairline
+  frame. The Windows app and the phone remote show the row's text.
+- **Hosting** (`MCPAppViewController`). One `WKWebView` per drawn view, in its own non-persistent data store, so it
+  shares no cookies or storage with the browser, other views or tasks, and Yardlet's files are not reachable. Two
+  documents come from Yardlet's scheme `yardlet-mcp-view` at two random hosts, so two origins: the outer page holds
+  only `<iframe sandbox="allow-scripts allow-same-origin">`, and the view's HTML is served with the Content Security
+  Policy built from its `csp` as a response header (`MCPAppCSP`): `default-src 'none'`; scripts and styles inline or
+  from `resourceDomains`; images, fonts and media also as `data:`; `connect-src` and `frame-src` only to the declared
+  origins (`'none'` without); `object-src 'none'`; `base-uri 'self'` unless declared; `form-action 'none'`. Only plain
+  `https` or `wss` origins (with a `*.` subdomain or a port at most) are taken from a server. The bridge script runs in
+  an isolated content world of the outer page, the only place its message handler exists; it passes on what the
+  view's frame posts and posts Yardlet's answers into that frame. Each document loads once and every other navigation
+  is cancelled; `window.open` makes nothing, downloads are cancelled, camera and microphone are refused, and dialogs
+  answer at once. A link the person clicks in a view opens as the view's `ui/open-link` does. A web process that ends,
+  or a view that does not send `ui/initialize` within ten seconds, leaves the row's text with "Show view again".
+- **The bridge** (`MCPAppBridge`). `ui/initialize` answers protocol `2026-01-26`, `hostInfo` Yardlet, the capabilities
+  `openLinks`, `serverTools`, `serverResources` and `logging`, and `hostContext`: the tool as its server listed it,
+  `theme`, style variables as `light-dark()` pairs, `displayMode` `inline`, `maxHeight` 600, locale, time zone and
+  `desktop`. Only after `ui/notifications/initialized` does Yardlet send `tool-input` and `tool-result`. A theme change
+  sends `host-context-changed`; `ui/resource-teardown` goes before a view is taken down, which waits up to a second.
+  `tools/call` and `resources/read` (only `ui://` of the same connector) run at most four at a time per view.
+  `ui/open-link` opens `http` and `https` as a link in the conversation opens (the task's browser panel), one a second
+  at most. `ui/request-display-mode` answers `inline`. `ui/message` and `ui/update-model-context` are refused: nothing
+  a view says reaches the task. Logs are dropped, and messages over 1 MB or not JSON-RPC are not read.
+- **A view's calls** (`ConnectorCenter.callFromView`). They run through `callConnectorTool` under the task, with the
+  checks a model's call gets: the connector on in the task and connected, Yardlet's own servers' schemas, one time
+  limit, a change never sent twice. A tool not marked `readOnlyHint: true` first asks the person on the task's request
+  card ("Allow the GitHub view to create pull request?", with the arguments), in every permission mode: the view's
+  script can call without a click, so a click in it is not consent. Declining answers the view with an error. A view
+  drawn again asks again. Nothing a view calls reaches the harness or the model.
+- **Cost.** A view's web view is made only when its row is on screen, told by the row's AppKit container from the
+  conversation's scroll view (each turn is drawn in a hosting view of its own). At most four are live across the app
+  (`MCPAppViewPool`); past that the least recently seen one off screen is torn down and keeps its height until seen
+  again. The row compares equal on its item, so a streamed turn does not redraw it, and nothing but the bridge's
+  messages reaches a live view.
+- **Leaving nothing behind.** There is no setting. Kept results, read views, web views and their data stores are in
+  memory only.

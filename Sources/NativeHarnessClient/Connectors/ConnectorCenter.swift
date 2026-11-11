@@ -515,6 +515,10 @@ final class ConnectorCenter: ConnectorToolProviding {
     @ObservationIgnored private var connectTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var toolRefreshes: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var pendingDeletion: Task<Void, Never>?
+    /// The whole results of this run's calls to tools with a view (docs/CONNECTORS.md, "MCP Apps").
+    @ObservationIgnored let appCalls = ConnectorAppCalls()
+    /// Views read this run, by connector and URI, the most recently used last.
+    @ObservationIgnored private var appViews: [(key: String, view: MCPAppView)] = []
 
     /// - Parameter saved: what the repository holds, read already; nil reads it here.
     init(environment: Environment, saved: ConnectorSavedSettings? = nil) {
@@ -2045,12 +2049,34 @@ final class ConnectorCenter: ConnectorToolProviding {
     /// that the connection gave out. A call that changes something is never sent again by Yardlet once it
     /// may have reached the server; a read is, once, when the server could not answer it.
     func callConnectorTool(named name: String, arguments: ToolJSON, for context: ConnectorToolContext) async -> AgentToolResult? {
+        await callConnectorTool(named: name, arguments: arguments, for: context, caller: .model)
+    }
+
+    /// Who makes a call: the task's model, through its harness, or a view of one of the connector's tools
+    /// (`callFromView`). Each may call only the tools the server lets it (`MCPAppTool`); everything else is checked
+    /// the same.
+    enum ToolCaller: Equatable {
+        case model
+        case view
+    }
+
+    func callConnectorTool(named name: String, arguments: ToolJSON, for context: ConnectorToolContext,
+                           caller: ToolCaller) async -> AgentToolResult? {
         guard let (owner, toolName) = owner(ofTool: name) else { return nil }
         let record: ConnectorRecord
+        let calledArguments = arguments
         var arguments = arguments
         switch owner {
         case .connector(let only):
             record = only
+            let listed = only.offeredTools.first { $0["name"]?.stringValue == toolName }
+            switch caller {
+            // A tool only views may call is not the model's: its name answers as no tool's.
+            case .model where !MCPAppTool.isForModel(listed): return nil
+            case .view where !MCPAppTool.isForViews(listed):
+                return .failure("\(record.name) does not let its views call \(toolName).", .refused, retry: .no)
+            default: break
+            }
         case .accounts(let service, let accounts):
             // The account is checked first: there is no default to act in, so a call that names none, or
             // one Yardlet does not have, is refused before anything is sent.
@@ -2107,6 +2133,9 @@ final class ConnectorCenter: ConnectorToolProviding {
         let limit = environment.toolCallLimit
         let answer = await Self.answer(within: limit) { [self] in
             await runConnectorTool(record, tool: toolName, arguments: arguments, readOnly: readOnly, context: context)
+        }
+        if let answer, caller == .model, let taskID = context.taskID, MCPAppTool.viewURI(of: tool) != nil {
+            keepForView(answer, task: taskID, tool: name, arguments: calledArguments)
         }
         guard let answer else {
             let seconds = Int(limit.components.seconds)
@@ -2317,8 +2346,13 @@ final class ConnectorCenter: ConnectorToolProviding {
 
     /// The server's tool under Yardlet's name, its description led by the connector's name (and
     /// account, where it has one) so the model knows which account it acts in.
+    /// A tool only views may call (`MCPAppTool.isForModel`) is left out, and the view a tool names is the app's to
+    /// draw, so it is left out of the copy too.
     static func exposedTool(_ tool: ToolJSON, of record: ConnectorRecord) -> ToolJSON? {
-        guard var fields = tool.objectValue, let name = fields["name"]?.stringValue else { return nil }
+        guard var fields = tool.objectValue, let name = fields["name"]?.stringValue, MCPAppTool.isForModel(tool) else {
+            return nil
+        }
+        MCPAppTool.removingViewMeta(from: &fields)
         fields["name"] = .string(ConnectorToolNaming.name(slug: record.slug, tool: name))
         let title = fields["title"]?.stringValue ?? fields["annotations"]?["title"]?.stringValue ?? name
         fields["title"] = .string("\(record.displayName): \(title)")
@@ -2506,6 +2540,121 @@ final class ConnectorCenter: ConnectorToolProviding {
     }
 }
 
+// MARK: MCP Apps
+
+/// Why a tool's view could not be read or a view's request was refused (docs/CONNECTORS.md, "MCP Apps").
+enum MCPAppViewFailure: Error, Equatable {
+    /// No connector now has this tool, or the tool names no view.
+    case noView
+    case notConnected(String)
+    /// The server did not answer within `ConnectorCenter.viewReadLimit`.
+    case timedOut
+    case refused(String)
+}
+
+extension ConnectorCenter {
+    /// Yardlet's version, which a view's bridge names (`hostInfo`).
+    var clientVersion: String { environment.clientVersion }
+
+    /// How many views read this run are kept.
+    static let keptViews = 8
+    /// A view is read before it is drawn, so the person waits for it.
+    static let viewReadLimit: Duration = .seconds(30)
+    /// The largest result kept for a view (`ConnectorAppCalls`).
+    static let largestKeptResult = 1024 * 1024
+
+    /// The connector behind a tool of Yardlet's name and the tool as its server listed it, when the tool names a view.
+    /// Only connectors Yardlet reaches as an MCP client have views: remote servers and programs.
+    private func viewOwner(ofTool name: String) -> (record: ConnectorRecord, tool: ToolJSON, uri: String)? {
+        guard let (owner, toolName) = owner(ofTool: name), case .connector(let record) = owner,
+              record.localService == nil,
+              let tool = record.offeredTools.first(where: { $0["name"]?.stringValue == toolName }),
+              let uri = MCPAppTool.viewURI(of: tool) else { return nil }
+        return (record, tool, uri)
+    }
+
+    /// A model's call to a tool with a view returned: its whole result is kept for the view, unless it is too large to
+    /// keep.
+    fileprivate func keepForView(_ answer: AgentToolResult, task: UUID, tool: String, arguments: ToolJSON) {
+        let result = answer.callToolResult
+        guard let size = try? JSONEncoder().encode(result).count, size <= Self.largestKeptResult else { return }
+        appCalls.record(result, task: task, tool: tool, arguments: arguments)
+    }
+
+    /// The view a tool names and the tool as its server listed it, read from the tool's connector the first time and
+    /// kept for the app's run.
+    func appView(forTool name: String) async throws -> (view: MCPAppView, tool: ToolJSON) {
+        guard let owner = viewOwner(ofTool: name) else { throw MCPAppViewFailure.noView }
+        guard owner.record.status == .connected else { throw MCPAppViewFailure.notConnected(owner.record.name) }
+        let key = owner.record.id.uuidString + " " + owner.uri
+        if let index = appViews.firstIndex(where: { $0.key == key }) {
+            let kept = appViews.remove(at: index)
+            appViews.append(kept)
+            return (kept.view, owner.tool)
+        }
+        let result = try await readResource(owner.record, uri: owner.uri)
+        let view = try MCPAppView.read(result, uri: owner.uri)
+        appViews.removeAll { $0.key == key }
+        appViews.append((key, view))
+        if appViews.count > Self.keptViews { appViews.removeFirst(appViews.count - Self.keptViews) }
+        return (view, owner.tool)
+    }
+
+    /// A `resources/read` a view of the tool `viewTool` makes: only a `ui://` resource of the same connector.
+    func readFromView(viewTool: String, uri: String) async throws -> ToolJSON {
+        guard let owner = viewOwner(ofTool: viewTool) else { throw MCPAppViewFailure.noView }
+        guard uri.lowercased().hasPrefix("ui://") else {
+            throw MCPAppViewFailure.refused("A view may read only ui:// resources of its own connector.")
+        }
+        guard owner.record.status == .connected else { throw MCPAppViewFailure.notConnected(owner.record.name) }
+        return try await readResource(owner.record, uri: uri)
+    }
+
+    /// A `tools/call` a view of the tool `viewTool` makes, by the server's own name for the tool. Only a tool of the
+    /// same connector that its views may call runs, through the same checks as a model's call to it
+    /// (`callConnectorTool`). One that may change something runs only once `ask` says the person allowed it: the
+    /// view's script can call without a click, so a click in it is not consent.
+    func callFromView(viewTool: String, tool toolName: String, arguments: ToolJSON, context: ConnectorToolContext,
+                      ask: @MainActor (_ connector: String, _ tool: String, _ arguments: ToolJSON) async -> Bool)
+        async throws -> ToolJSON {
+        guard let owner = viewOwner(ofTool: viewTool) else { throw MCPAppViewFailure.noView }
+        guard let tool = owner.record.offeredTools.first(where: { $0["name"]?.stringValue == toolName }),
+              MCPAppTool.isForViews(tool) else {
+            throw MCPAppViewFailure.refused("\(owner.record.name) has no tool \(toolName) its views may call.")
+        }
+        if tool["annotations"]?["readOnlyHint"] != .bool(true),
+           !(await ask(owner.record.displayName, toolName, arguments)) {
+            throw MCPAppViewFailure.refused("The person did not allow \(toolName).")
+        }
+        let name = ConnectorToolNaming.name(slug: owner.record.slug, tool: toolName)
+        guard let answer = await callConnectorTool(named: name, arguments: arguments, for: context, caller: .view) else {
+            throw MCPAppViewFailure.noView
+        }
+        return answer.callToolResult
+    }
+
+    private func readResource(_ record: ConnectorRecord, uri: String) async throws -> ToolJSON {
+        let read: @Sendable () async throws -> ToolJSON
+        if record.program != nil {
+            let client = try await programClient(record)
+            read = { try await client.readResource(uri: uri) }
+        } else {
+            let session = session(for: record)
+            read = { try await session.readResource(uri: uri) }
+        }
+        return try await withThrowingTaskGroup(of: ToolJSON.self) { group in
+            group.addTask { try await read() }
+            group.addTask {
+                try await Task.sleep(for: Self.viewReadLimit)
+                throw MCPAppViewFailure.timedOut
+            }
+            defer { group.cancelAll() }
+            guard let first = try await group.next() else { throw MCPAppViewFailure.timedOut }
+            return first
+        }
+    }
+}
+
 /// One connector's MCP client and credential. It adds the bearer token (or the query token a
 /// server asks for), refreshes an OAuth token that is about to expire or that the server
 /// refused, and retries once after a refresh. Only one refresh runs at a time, since a server
@@ -2602,6 +2751,10 @@ actor ConnectorSession {
 
     func callTool(name: String, arguments: ToolJSON) async throws -> ToolJSON {
         try await authorized { try await $0.callTool(name: name, arguments: arguments) }
+    }
+
+    func readResource(uri: String) async throws -> ToolJSON {
+        try await authorized { try await $0.readResource(uri: uri) }
     }
 
     private func authorized<T: Sendable>(_ operation: @Sendable (MCPHTTPClient) async throws -> T) async throws -> T {

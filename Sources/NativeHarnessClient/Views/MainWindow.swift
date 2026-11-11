@@ -1704,7 +1704,8 @@ struct MainWindow: View {
             },
             stopSubtask: { activity in
                 try await model.stopClaudeSubtask(activityID: activity.id, from: session)
-            }
+            },
+            connectorViews: model.connectorViewHost(for: session.id)
         )
     }
 

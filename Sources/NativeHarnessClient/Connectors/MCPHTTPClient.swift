@@ -93,11 +93,12 @@ enum MCPHTTPError: Error, Equatable, LocalizedError {
     }
 }
 
-/// The client half of MCP's Streamable HTTP transport, for tools only: `initialize`,
-/// `tools/list` (every page), and `tools/call`. Each request is a POST whose answer is JSON or a
-/// short event stream; the server's `Mcp-Session-Id` is sent back until the server forgets it,
-/// and then the client initializes again once. The client declares no capabilities, so a server
-/// has no reason to send it requests of its own.
+/// The client half of MCP's Streamable HTTP transport, for tools and the views they name:
+/// `initialize`, `tools/list` (every page), `tools/call`, and `resources/read` for an MCP App's
+/// view. Each request is a POST whose answer is JSON or a short event stream; the server's
+/// `Mcp-Session-Id` is sent back until the server forgets it, and then the client initializes
+/// again once. The client declares no capabilities, so a server has no reason to send it requests
+/// of its own, and does not say it draws MCP Apps views (docs/CONNECTORS.md, "MCP Apps").
 actor MCPHTTPClient {
     static let protocolVersion = "2025-11-25"
 
@@ -169,6 +170,11 @@ actor MCPHTTPClient {
     /// The server's `CallToolResult` as sent.
     func callTool(name: String, arguments: ToolJSON) async throws -> ToolJSON {
         try await request("tools/call", .object(["name": .string(name), "arguments": arguments]))
+    }
+
+    /// The server's `ReadResourceResult` for one URI, as sent: an MCP App's view (`MCPAppView`).
+    func readResource(uri: String) async throws -> ToolJSON {
+        try await request("resources/read", .object(["uri": .string(uri)]))
     }
 
     /// Forgets the MCP session, as when the credential changes.

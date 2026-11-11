@@ -616,7 +616,12 @@ enum CodexConversationProjection {
                     } ?? "\(tool.server) · \(tool.tool)",
                     status: tool.status, input: tool.arguments.readableText, errorMessage: tool.errorMessage,
                     mcpResult: CodexMCPResultProjection(result: tool.result, itemID: item.id),
-                    connector: connector
+                    connector: connector,
+                    view: !failed && tool.status == "completed" ? connector.flatMap { label in
+                        ConversationConnectorView.of(tool: tool.tool, label: label, arguments: ToolJSON(tool.arguments),
+                                                     harnessResult: tool.result.map(ToolJSON.init)
+                                                        ?? ConversationConnectorView.textResult(nil))
+                    } : nil
                 ))
             }
             if failed { phase = .failed }

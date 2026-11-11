@@ -46,6 +46,7 @@ struct ConversationItemView: View {
                                  subtaskControls: context.actions.subtaskControls,
                                  loadDetail: context.actions.loadLineDetail)
                 .equatable()
+                .environment(\.connectorViews, context.actions.connectorViews)
         case let .subagent(subagent):
             ConversationSubagentCard(subagent: subagent, phase: item.phase, actions: context.actions,
                                      copyDetails: item.copyDetails, isHistoryMatch: item.isHistoryMatch)

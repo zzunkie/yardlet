@@ -394,6 +394,8 @@ final class AppModel {
     /// What each task's harness was found to load itself when the task was last injected, so its
     /// composer can say which of Yardlet's connectors the harness's own server stands in for.
     private(set) var connectorScopeBySessionID: [UUID: ConnectorTaskScope] = [:]
+    /// Each task's way to its connectors' views (`connectorViewHost(for:)`), kept so its conversation keeps one.
+    @ObservationIgnored var connectorViewHosts: [UUID: ConnectorViewHost] = [:]
     /// The phone remote (Settings › Remote, docs/REMOTE_PROTOCOL.md). The app sets it after restoring
     /// the index; nil in tests and fixtures.
     var remoteControl: RemoteControlService?

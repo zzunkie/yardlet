@@ -13,10 +13,12 @@ import Foundation
 /// requests stay pinned under the turn (D1), and a background command stays in the line above the
 /// composer.
 enum ConversationWorkDisclosure {
-    /// A call's line, or the provider's thinking: a failed one opens on what went wrong; anything
-    /// else starts folded, while it runs too, unless the person opened it (`choice`).
+    /// A call's line, or the provider's thinking: a failed one opens on what went wrong, and a connector call
+    /// that draws a view opens on the view unless the person folded it; anything else starts folded, while
+    /// it runs too, unless the person opened it (`choice`).
     static func lineStartsOpen(_ item: ConversationItem, choice: Bool? = nil) -> Bool {
-        item.phase == .failed || choice == true
+        if case let .tool(tool) = item.kind, tool.view != nil { return choice ?? true }
+        return item.phase == .failed || choice == true
     }
 
     /// A run of calls opens when one of its calls failed, when the person opened it (`choice`), and
