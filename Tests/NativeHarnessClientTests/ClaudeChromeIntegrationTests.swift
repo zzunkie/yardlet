@@ -49,8 +49,10 @@ final class ClaudeChromeIntegrationTests: XCTestCase {
     }
 
     /// A context limit is the CLI's own `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, in the environment of the
-    /// task that chose it and of no other, and only a limit the menu offers gets there.
-    func testAContextLimitGoesInTheEnvironmentOnlyWhenTheTaskChoseOne() async throws {
+    /// task's own process. The task's choice comes first; a task without one takes the limit in
+    /// Settings, read as the CLI starts, and with Claude Code's default there the variable stays
+    /// unset. Only a limit the menu offers gets there.
+    func testAContextLimitGoesInTheEnvironmentFromTheTaskOrElseFromSettings() async throws {
         let variable = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
         XCTAssertNil(ClaudeProcessTransport.environment(base: [:], overrides: [:])[variable])
         XCTAssertEqual(ClaudeProcessTransport.environment(base: [:], overrides: [:], contextLimit: 200_000)[variable],
@@ -58,19 +60,36 @@ final class ClaudeChromeIntegrationTests: XCTestCase {
         XCTAssertEqual(ClaudeProcessTransport.environment(base: [variable: "500000"], overrides: [:])[variable], "500000",
                        "One the person set outside Yardlet stays for a task that chose nothing")
 
-        for (saved, launched) in [("400000", UInt64(400_000)), ("123", nil), ("default", nil)] as [(String, UInt64?)] {
+        let cases: [(setting: UInt64?, saved: String?, launched: UInt64?)] = [
+            (nil, "400000", 400_000), (nil, "600000", 600_000), (nil, "123", nil), (nil, "default", nil), (nil, nil, nil),
+            (600_000, nil, 600_000), (600_000, "default", 600_000), (600_000, "200000", 200_000), (600_000, "123", 600_000)
+        ]
+        for (setting, saved, launched) in cases {
             let transport = FakeClaudeTransport()
-            let adapter = ClaudeAdapter(executableURL: URL(filePath: "/tmp/fake-claude"), transportFactory: { _ in transport })
+            let adapter = ClaudeAdapter(executableURL: URL(filePath: "/tmp/fake-claude"), transportFactory: { _ in transport },
+                                        defaultContextLimit: { setting })
             let id = UUID()
-            await adapter.setLaunchOptions([ClaudeLaunchOption.contextLimit: saved], for: id)
+            await adapter.setLaunchOptions(saved.map { [ClaudeLaunchOption.contextLimit: $0] } ?? [:], for: id)
             let handle = try await adapter.createSession(
                 CreateHarnessSessionRequest(localSessionID: id, workspaceURL: workspace, initialPrompt: nil))
             let configuration = await transport.configuration
-            XCTAssertEqual(configuration?.contextLimit, launched)
+            XCTAssertEqual(configuration?.contextLimit, launched, "Settings \(String(describing: setting)), task \(saved ?? "none")")
             // Restoring the saved options after the launch is not refused.
-            _ = try await adapter.setProviderOption(id: ClaudeLaunchOption.contextLimit, value: saved, in: handle)
+            if let saved {
+                _ = try await adapter.setProviderOption(id: ClaudeLaunchOption.contextLimit, value: saved, in: handle)
+            }
             await adapter.close(handle)
         }
+
+        // Settings writes the limit where the launch reads it, and its Claude Code default reads as none.
+        let context = YardletSettingsContext(defaults: try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("ContextLimit"))))
+        XCTAssertEqual(YardletSetting.claudeContextLimit.value(in: context), ClaudeLaunchOption.defaultContextLimit)
+        XCTAssertNil(ClaudeContextLimitPreference.tokens(in: context.defaults))
+        XCTAssertEqual(YardletSetting.claudeContextLimit.choices.map(\.value), ["default", "200000", "400000", "600000"])
+        _ = await YardletSetting.claudeContextLimit.set("600000", in: context)
+        XCTAssertEqual(ClaudeContextLimitPreference.tokens(in: context.defaults), 600_000)
+        _ = await YardletSetting.claudeContextLimit.set(ClaudeLaunchOption.defaultContextLimit, in: context)
+        XCTAssertNil(ClaudeContextLimitPreference.tokens(in: context.defaults))
     }
 
     func testTheChromeOptionIsOneOffOrOnSelectorThatStartsOff() async throws {

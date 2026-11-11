@@ -1523,7 +1523,8 @@ message's Edit message, and Fork from here. Each acts through the path the Mac's
   Mac's language. `role` says which control holds each: `mode` (the provider's own mode menu), `plan` (Codex's Plan
   indicator, sent only while Plan mode is on, with no choices; the `plan-mode` command below turns it off),
   `permission`, `model`, `effort` and `speed`, which share the model menu, and `contextLimit`, the Claude Code task's
-  own context limit in the context window, whose `note` says the running task takes it later. Absent roles are left
+  own context limit in the context window, whose Default choice names the limit it stands for and whose `note` says the
+  running task takes it later. Absent roles are left
   out of the row, and a role a phone does not know is skipped. `elevated: true`: the value now lifts the sandbox or skips asking (the
   Mac draws it in orange). A permission control with nothing to choose has no choices, `value` `""`, its words in
   `title` and what its menu says in `note`. A choice with `confirm` is one the Mac's menu asks about first (Bypass

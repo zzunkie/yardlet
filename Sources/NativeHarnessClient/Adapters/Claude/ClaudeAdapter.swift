@@ -13,11 +13,12 @@ enum ClaudeLaunchOption {
     /// `off` for a session no one types into (a `run_agent` subagent), whose suggested next message
     /// would be a model request no one reads. Absent, Yardlet's "Next message suggestions" decides.
     static let nextMessageSuggestions = "nextMessageSuggestions"
-    /// The task's own context limit, in tokens. Absent, the CLI decides, as it does for every task
-    /// that never chose one. It is the task's alone: `AppModel.inheritedOptions` leaves it behind.
+    /// The task's own context limit, in tokens. Absent, the task takes the one in Settings
+    /// (`ClaudeContextLimitPreference`) when its CLI starts, which is the CLI's own unless the person
+    /// set one. It is the task's alone: `AppModel.inheritedOptions` leaves it behind.
     static let contextLimit = "contextLimit"
-    /// The limits a task can choose; `defaultContextLimit` is the CLI's own.
-    static let contextLimits: [UInt64] = [200_000, 400_000]
+    /// The limits a task, or Settings, can choose; `defaultContextLimit` is the task's without one.
+    static let contextLimits: [UInt64] = [200_000, 400_000, 600_000]
     static let defaultContextLimit = "default"
     static let on = "on"
     static let off = "off"
@@ -74,6 +75,8 @@ actor ClaudeAdapter:
     private let transportFactory: @Sendable (UUID) -> any ClaudeTransport
     /// Yardlet's "Next message suggestions", read as each session's CLI starts.
     private let asksForNextMessageSuggestions: @Sendable () -> Bool
+    /// The context limit a task without its own starts with (`ClaudeContextLimitPreference`).
+    private let defaultContextLimit: @Sendable () -> UInt64?
     /// Sessions launched with `nextMessageSuggestions: off`, which never ask whatever the setting.
     private var sessionsWithoutNextMessageSuggestions = Set<UUID>()
 
@@ -152,12 +155,14 @@ actor ClaudeAdapter:
         runtimeCompatibility: ClaudeRuntimeCompatibility = .restorationBaseline,
         environmentOverrides: [String: String] = [:],
         transportFactory: (@Sendable (UUID) -> any ClaudeTransport)? = nil,
-        asksForNextMessageSuggestions: @escaping @Sendable () -> Bool = { NextMessageSuggestionPreference.isOn() }
+        asksForNextMessageSuggestions: @escaping @Sendable () -> Bool = { NextMessageSuggestionPreference.isOn() },
+        defaultContextLimit: @escaping @Sendable () -> UInt64? = { ClaudeContextLimitPreference.tokens() }
     ) {
         let executableURL = executableURL.standardizedFileURL
         self.executableURL = executableURL
         self.runtimeCompatibility = runtimeCompatibility
         self.asksForNextMessageSuggestions = asksForNextMessageSuggestions
+        self.defaultContextLimit = defaultContextLimit
         // Each task's CLI counts toward that task in Task Resource Usage, with everything it starts.
         self.transportFactory = transportFactory ?? { localSessionID in
             ClaudeProcessTransport(executableURL: executableURL, environmentOverrides: environmentOverrides,
@@ -910,7 +915,7 @@ actor ClaudeAdapter:
                     resumesExistingSession: resumesExistingSession && newSessionIDs[handle.localSessionID] == nil,
                     additionalRoots: additionalRootsByLocalSessionID[handle.localSessionID] ?? [],
                     chromeIntegration: chromeIntegrationByLocalSessionID[handle.localSessionID] ?? false,
-                    contextLimit: contextLimitByLocalSessionID[handle.localSessionID],
+                    contextLimit: contextLimitByLocalSessionID[handle.localSessionID] ?? defaultContextLimit(),
                     agentToolConfigPath: agentToolConfigPath(for: handle.localSessionID),
                     forkSource: forkSources[handle.localSessionID],
                     permissionMode: permissionModeByLocalSessionID[handle.localSessionID],

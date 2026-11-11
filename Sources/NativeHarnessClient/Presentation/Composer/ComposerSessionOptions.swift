@@ -54,24 +54,28 @@ enum ComposerCompactPath: Equatable, Sendable {
     case codexCommand
 }
 
-/// A task's own context limit, as the context window offers it: Default leaves the harness's own.
+/// A task's own context limit, as the context window offers it: Default leaves the limit in Settings,
+/// and its name says which that is.
 struct ComposerContextLimitSlot: Equatable {
     var selector: ProviderCapabilitySelector
     /// Why the choice has not reached the running task yet.
     var note: String?
 
-    static func claude(saved: String?, appliesLater: Bool) -> Self {
+    /// - Parameter defaultLimit: the limit in Settings, nil for Claude Code's own.
+    static func claude(saved: String?, defaultLimit: UInt64?, appliesLater: Bool) -> Self {
         let limits = ClaudeLaunchOption.contextLimits.map {
             ProviderCapabilityChoice(value: String($0), name: ComposerContextSummary.tokenText($0), description: nil)
         }
+        let defaultName = defaultLimit.map { L10n.format("Default (%@)", ComposerContextSummary.tokenText($0)) }
+            ?? L10n.string("Default (Claude Code)")
         return ComposerContextLimitSlot(
             selector: ProviderCapabilitySelector(
                 id: ClaudeLaunchOption.contextLimit, name: L10n.string("Context limit"),
-                description: L10n.string("Claude Code compacts this task before its context reaches this size. Other tasks keep their own."),
+                description: L10n.string("Claude Code compacts this task before its context reaches this size. Default follows Settings › General."),
                 category: "contextLimit",
                 currentValue: saved ?? ClaudeLaunchOption.defaultContextLimit,
                 choices: [ProviderCapabilityChoice(value: ClaudeLaunchOption.defaultContextLimit,
-                                                   name: L10n.string("Default"), description: nil)] + limits),
+                                                   name: defaultName, description: nil)] + limits),
             note: appliesLater ? L10n.string("Claude Code applies this setting the next time the task starts") : nil)
     }
 }
@@ -359,6 +363,7 @@ enum ComposerSessionOptionsProjection {
         options.refreshesStatusOnAttach = true
         if providerCapabilities?.offersContextLimit == true {
             options.contextLimit = .claude(saved: session.providerOptions[ClaudeLaunchOption.contextLimit],
+                                           defaultLimit: providerCapabilities?.defaultContextLimit,
                                            appliesLater: providerCapabilities?.contextLimitAppliesLater == true)
         }
         let selectors = ConversationSessionStatusProjection.inlineSelectors(from: providerCapabilities)

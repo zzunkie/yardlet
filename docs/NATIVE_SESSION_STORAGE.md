@@ -152,12 +152,17 @@ read nothing in it, whatever mode the files inside have.
   Default. If saving fails, the provider choice goes back to the previous mode. Forks and the pass-through of
   new-conversation options follow the stored value as is. The Codex service tier is an optional field in the same
   selection JSON. The provider ID, account, scope, native history and drafts are not moved or changed.
-- **Claude context limit per task:** a limit chosen in the context window is stored as `contextLimit` (tokens) in the
-  task's provider options, and Default removes the key. It reaches Claude Code only as `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
-  in the environment of that task's process, so no settings file changes and other tasks keep their own window. The CLI
-  reads it when it starts, so a task with a runtime gets one back on the same conversation, with no turn: at once when
-  idle, when the turn ends otherwise, and at its next start if a background command still keeps it busy. Child tasks,
-  forks and side chats start without it; a conversation `/clear` starts in its place keeps it.
+- **Claude context limit per task:** a limit chosen in the context window (200k, 400k or 600k) is stored as
+  `contextLimit` (tokens) in the task's provider options, and Default removes the key. A task without the key takes
+  Settings › General › "Context limit for Claude Code tasks" (`YardletClaudeContextLimit` in Yardlet's preferences),
+  read each time its CLI starts and never copied into the task; its shipped value, Claude Code's default, sets nothing.
+  Default in the context window names what it stands for now: "Default (600k)" or "Default (Claude Code)". Either limit
+  reaches Claude Code only as `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in the environment of that task's process, so no settings
+  file changes and other tasks keep their own window. The CLI reads it when it starts, so a task that chooses a limit
+  with a runtime gets one back on the same conversation, with no turn: at once when idle, when the turn ends otherwise,
+  and at its next start if a background command still keeps it busy. Changing the setting restarts nothing: a task
+  without its own limit takes it at its next start. Child tasks, forks and side chats start without the parent's own
+  limit and so take the setting's; a conversation `/clear` starts in its place keeps the task's own.
 - **Next message suggestions (Settings › General):** only the tasks the person looks at ask for them, as Claude Code's
   terminal suggests only while its window has focus. On screen is what the memory saver counts: the window's task or
   split panes, the side chat it shows, and the tasks the phone shows. A Claude Code CLI asks in its `initialize` when it

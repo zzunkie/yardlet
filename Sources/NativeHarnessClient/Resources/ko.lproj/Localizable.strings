@@ -1947,7 +1947,9 @@
 "Send a message to see context usage." = "컨텍스트 사용량을 확인하려면 메시지를 보내세요.";
 "Compact session" = "세션 압축";
 "Context limit" = "컨텍스트 한도";
-"Claude Code compacts this task before its context reaches this size. Other tasks keep their own." = "Claude Code가 이 작업의 컨텍스트가 이 크기에 닿기 전에 압축합니다. 다른 작업은 각자의 설정을 유지합니다.";
+"Claude Code compacts this task before its context reaches this size. Default follows Settings › General." = "Claude Code가 이 작업의 컨텍스트가 이 크기에 닿기 전에 압축합니다. 기본값은 설정 › 일반을 따릅니다.";
+"Default (%@)" = "기본값 (%@)";
+"Default (Claude Code)" = "기본값 (Claude Code)";
 "Available when %@ finishes this turn" = "%@가 이번 차례를 마치면 사용할 수 있습니다";
 "Available when reconnected" = "다시 연결되면 사용할 수 있습니다";
 "Manage connectors" = "커넥터 관리";
@@ -2334,6 +2336,10 @@
 "Next message suggestions" = "다음 메시지 추천";
 "Shows a suggested next message in the empty message box after a reply. Each one takes one more model request." = "응답이 끝나면 빈 입력창에 다음 메시지를 추천합니다. 추천마다 모델 요청이 한 번 더 듭니다.";
 "Codex tasks follow it from their next reply, Claude Code tasks from their next start or resume" = "Codex 작업은 다음 응답부터, Claude Code 작업은 다음에 시작하거나 다시 열 때부터 따릅니다";
+/* Settings › General › Tasks: the context limit a Claude Code task without its own takes when it starts. */
+"Context limit for Claude Code tasks" = "Claude Code 작업의 컨텍스트 한도";
+"Claude Code compacts a task before its context reaches this size. A limit chosen in the task comes first, and a change applies from the task's next start." = "작업의 컨텍스트가 이 크기에 닿기 전에 Claude Code가 압축합니다. 작업에서 고른 한도가 먼저이고, 바꾼 값은 작업이 다음에 시작할 때부터 적용됩니다.";
+"Claude Code default" = "Claude Code 기본값";
 "Puts this message in the message box without sending it" = "보내지 않고 입력창에 넣습니다";
 
 

@@ -181,9 +181,11 @@ import XCTest
         let root = try directory()
         let cli = try script(root, "exit 0")
         let adapters = AdapterLog()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("ContextLimitRestart")))
         let model = AppModel(store: SessionStore(repository: InMemorySessionRepository()),
             runtimeSelections: RuntimeSelectionStore(discoversRuntimes: false),
-            registry: HarnessRegistry { kind, _ in adapters.make(kind) }, restoresIndexOnLaunch: false)
+            registry: HarnessRegistry { kind, _ in adapters.make(kind) }, preferences: defaults,
+            restoresIndexOnLaunch: false)
         addTeardownBlock { await model.shutdown() }
         let created = await model.createSession(harness: .claudeCode, workspaceURL: root, runtimeExecutableURL: cli,
                                                 title: "Task")
@@ -204,6 +206,18 @@ import XCTest
         XCTAssertEqual(model.composerProviderCapabilities(for: sideChat)?.offersContextLimit, false)
         try await model.store.discardSession(id: sideChat.id)
         XCTAssertNotEqual(model.composerProviderCapabilities(for: ComposerUnificationFixtures.session(.openCode))?.offersContextLimit, true)
+
+        // Default stands for the limit in Settings as it changes. Nothing of it is kept with the task, and
+        // the runtime is not restarted for it: the CLI reads it when it next starts.
+        model.followClaudeContextLimit()
+        XCTAssertNil(model.composerProviderCapabilities(for: task)?.defaultContextLimit)
+        defaults.set("600000", forKey: ClaudeContextLimitPreference.key)
+        try await waitUntil { model.composerProviderCapabilities(for: task)?.defaultContextLimit == 600_000 }
+        defaults.set(ClaudeLaunchOption.defaultContextLimit, forKey: ClaudeContextLimitPreference.key)
+        try await waitUntil { model.composerProviderCapabilities(for: task)?.defaultContextLimit == nil }
+        XCTAssertNil(saved())
+        let afterSetting = await adapters.resumedIDs()
+        XCTAssertEqual(afterSetting, [])
 
         await model.setProviderOption(key, value: "123", for: task)
         XCTAssertNil(saved(), "Only a limit the menu offers is kept")

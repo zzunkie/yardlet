@@ -409,6 +409,15 @@ extension YardletSetting {
         hint: L10n.string("Codex tasks follow it from their next reply, Claude Code tasks from their next start or resume"),
         values: .onOff, storage: .flag(key: NextMessageSuggestionPreference.key, defaultValue: true))
 
+    /// Read when a task's Claude Code starts, so changing it leaves nothing in the tasks.
+    static let claudeContextLimit = YardletSetting(
+        id: "claude_code_context_limit", section: .general, generalGroup: .tasks, symbol: "arrow.down.right.and.arrow.up.left",
+        title: L10n.string("Context limit for Claude Code tasks"),
+        detail: L10n.string("Claude Code compacts a task before its context reaches this size. A limit chosen in the task comes first, and a change applies from the task's next start."),
+        values: .choices([Choice(value: ClaudeLaunchOption.defaultContextLimit, title: L10n.string("Claude Code default"))]
+            + ClaudeLaunchOption.contextLimits.map { Choice(value: String($0), title: ComposerContextSummary.tokenText($0)) }),
+        storage: .choice(key: ClaudeContextLimitPreference.key, defaultValue: ClaudeLaunchOption.defaultContextLimit))
+
     static let autoFixFailingCI = YardletSetting(
         id: "auto_fix_failing_ci", section: .general, generalGroup: .tasks, symbol: "wrench.and.screwdriver",
         title: L10n.string("Auto-fix failing CI"),
@@ -601,7 +610,7 @@ extension YardletSetting {
 enum YardletSettingCatalog {
     static let all: [YardletSetting] = [
         .language, .showInMenuBar, .mailbox, .checkForUpdates,
-        .followUpBehavior, .nextMessageSuggestions, .autoFixFailingCI, .showTaskServers, .continueAfterRestart,
+        .followUpBehavior, .nextMessageSuggestions, .claudeContextLimit, .autoFixFailingCI, .showTaskServers, .continueAfterRestart,
         .keepScreenUnlocked, .keepWorkingWithLidClosed,
         .agentBrowserTools, .keepCookies, .searchSuggestions, .pageSuggestions, .memorySaver, .memorySaverLevel,
         .hideKeysAndTokens,

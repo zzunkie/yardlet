@@ -618,6 +618,7 @@ struct NativeHarnessClientApp: App {
                         }
                         // Idle tasks' runtimes end while the memory saver is on, and resume at the next message.
                         model.startHarnessMemorySaver()
+                        model.followClaudeContextLimit()
                         // And what a lost connection cuts off, once the network is back.
                         appDelegate.networkWatch.start(reporting: model)
                         model.startRoutingEvaluationLoop()

@@ -163,8 +163,15 @@ final class ComposerContextAndConnectorsTests: XCTestCase {
             harness: .claudeCode,
             session: ComposerUnificationFixtures.session(.claudeCode, options: [ClaudeLaunchOption.contextLimit: "200000"]),
             providerCapabilities: waiting, providerUsage: nil, isAttached: true)
-        XCTAssertEqual(limited.contextLimit?.selector.choices.map(\.name), [L10n.string("Default"), "200k", "400k"])
+        XCTAssertEqual(limited.contextLimit?.selector.choices.map(\.name),
+                       [L10n.string("Default (Claude Code)"), "200k", "400k", "600k"])
         XCTAssertEqual(limited.contextLimit?.selector.currentValue, "200000")
+        // Default names the limit in Settings it stands for.
+        waiting.defaultContextLimit = 600_000
+        XCTAssertEqual(ComposerSessionOptionsProjection.make(
+            harness: .claudeCode, session: ComposerUnificationFixtures.session(.claudeCode),
+            providerCapabilities: waiting, providerUsage: nil, isAttached: true).contextLimit?.selector.choices.first?.name,
+                       L10n.format("Default (%@)", "600k"))
         XCTAssertNotNil(limited.contextLimit?.note)
         let remote = RemoteTaskSettingsProjection.options(AppModelRemoteBridge.taskSettings(limited), task: nil)
         XCTAssertEqual(remote.contextLimit?.selector.choices, limited.contextLimit?.selector.choices)
