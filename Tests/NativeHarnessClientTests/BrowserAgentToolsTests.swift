@@ -398,6 +398,26 @@ final class BrowserAgentToolsTests: XCTestCase {
         XCTAssertThrowsError(try BrowserAgentWorkspaceFile.privateCopy(of: fifo, roots: [root], in: uploads),
                              "A pipe is refused without waiting for a writer")
 
+        // A folder goes as its path, so one that holds a link out of the task's folders does not go; a link
+        // that stays inside them does.
+        try FileManager.default.createDirectory(at: root.appending(path: "site/assets"), withIntermediateDirectories: true)
+        try Data("page".utf8).write(to: root.appending(path: "site/index.html"))
+        try FileManager.default.createSymbolicLink(at: root.appending(path: "site/assets/b.txt"),
+                                                   withDestinationURL: root.appending(path: "b.txt"))
+        page.receive(.fileDialog(tab: 4, dialog: BrowserFileDialog(id: 6, mode: .openFolder, title: "Upload a folder",
+                                                                   defaultPath: "", extensions: [])))
+        let sent = hostCommands.count
+        let folder = await run(AgentToolCatalog.fileUpload, ["paths": .array([.string("site")])])
+        XCTAssertEqual(folder.text, "Gave the file chooser “site”.")
+        XCTAssertEqual(hostCommands.count, sent + 1)
+        try FileManager.default.createSymbolicLink(at: root.appending(path: "site/assets/notes.txt"), withDestinationURL: outside)
+        page.receive(.fileDialog(tab: 4, dialog: BrowserFileDialog(id: 7, mode: .openFolder, title: "Upload a folder",
+                                                                   defaultPath: "", extensions: [])))
+        let leaking = await run(AgentToolCatalog.fileUpload, ["paths": .array([.string("site")])])
+        XCTAssertTrue(leaking.isError && leaking.text.contains("holds a link that leads outside"), leaking.text)
+        XCTAssertEqual(hostCommands.count, sent + 1, "The chooser is not answered")
+        _ = await run(AgentToolCatalog.fileUpload, ["paths": .array([])])
+
         // The chooser a click opens reaches Yardlet a moment after the click's result; the upload right after waits for it.
         tools.fileChooserWait = .seconds(10)
         let page = page!
