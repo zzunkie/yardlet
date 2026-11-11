@@ -252,6 +252,9 @@ struct SessionRailAgents: Equatable {
     /// Claude Code's subagent calls, which carry their subtask once the CLI names the agent.
     static let claudeAgentTools: Set<String> = ["Agent", "Task"]
 
+    /// One row per agent: the provider's task when it names one, else the call. A call that continues
+    /// an agent (Claude Code's SendMessage to a finished subagent) carries the same task as the call
+    /// that started it, and its state is the agent's latest.
     private static func subtasks(in entries: [TranscriptEntry], harness: HarnessKind) -> [Agent] {
         var order: [String] = []
         var latest: [String: (activity: HarnessActivity, state: TranscriptActivityState, startedAt: Date)] = [:]
@@ -261,11 +264,12 @@ struct SessionRailAgents: Equatable {
             let isAgent = activity.subtask.map(\.isAgent)
                 ?? (harness == .claudeCode && claudeAgentTools.contains(activity.kind))
             guard isAgent else { continue }
-            if let known = latest[activity.id] {
-                latest[activity.id] = (activity, state, known.startedAt)
+            let id = activity.subtask?.taskID.map { "subtask:\($0)" } ?? "activity:\(activity.id)"
+            if let known = latest[id] {
+                latest[id] = (activity, state, known.startedAt)
             } else {
-                order.append(activity.id)
-                latest[activity.id] = (activity, state, entry.createdAt)
+                order.append(id)
+                latest[id] = (activity, state, entry.createdAt)
             }
         }
         let taskIDs = Set(order.compactMap { latest[$0]?.activity.subtask?.taskID })
@@ -283,8 +287,7 @@ struct SessionRailAgents: Equatable {
             case .stopped: .stopped
             }
             let nested = activity.subtask?.parentTaskID.map(taskIDs.contains) == true
-            return Agent(id: activity.subtask?.taskID.map { "subtask:\($0)" } ?? "activity:\(activity.id)",
-                         kind: .harnessSubtask(activity), title: activity.title, model: activity.subtask?.model,
+            return Agent(id: id, kind: .harnessSubtask(activity), title: activity.title, model: activity.subtask?.model,
                          status: status, startedAt: startedAt, depth: nested ? 1 : 0,
                          canStop: status == .running && activity.subtask?.taskID != nil)
         }

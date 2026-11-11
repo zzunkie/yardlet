@@ -45,6 +45,29 @@ final class SessionRailAgentsTests: XCTestCase {
         XCTAssertEqual(rail.rollup(.backgroundTasks), L10n.format("%lld running", 1))
     }
 
+    /// A SendMessage that continues a subagent carries the subagent's task, as its first Agent call
+    /// does: the rail lists the agent once, in the state of its latest call, since SwiftUI needs
+    /// each row's ID once.
+    func testAContinuedClaudeSubagentIsOneAgent() throws {
+        var projection = ClaudeSessionProjection()
+        var builder = TranscriptBuilder()
+        builder.appendUser("Research it")
+        func apply(_ json: String) throws {
+            for payload in projection.payloads(from: try ClaudeWireCodec().decodeLine(Data(json.utf8))) {
+                builder.apply(payload)
+            }
+        }
+        try apply(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"research","name":"Agent","input":{"description":"Research the APIs","prompt":"Research","run_in_background":true}}]}}"#)
+        try apply(#"{"type":"system","subtype":"task_started","task_id":"a-research","tool_use_id":"research","description":"Research the APIs","task_type":"local_agent","is_backgrounded":true}"#)
+        try apply(#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"more","name":"SendMessage","input":{"to":"a-research","message":"Please continue"}}]}}"#)
+        try apply(#"{"type":"system","subtype":"task_started","task_id":"a-research","tool_use_id":"more","description":"Research the APIs","task_type":"local_agent","is_backgrounded":true}"#)
+
+        let agents = try XCTUnwrap(SessionRailAgents.make(harness: .claudeCode, entries: builder.entries, codexState: nil))
+        XCTAssertEqual(agents.agents.map(\.id), ["subtask:a-research"])
+        guard case let .harnessSubtask(activity) = agents.agents.first?.kind else { return XCTFail("Not a subagent") }
+        XCTAssertEqual(activity.id, "more", "The row reads the agent's latest call")
+    }
+
     /// A `run_agent` call reads its state from the subagent the app holds, its request with it; one
     /// from an earlier launch keeps how its call ended; one its own subagent ran is listed too.
     func testYardletSubagentsReadTheirRunAndCarryTheirRequests() throws {
