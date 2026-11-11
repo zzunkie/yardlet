@@ -53,6 +53,8 @@
     "Microsoft.UI.Xaml.Markup.IXamlMetadataProvider",
     "Microsoft.UI.Xaml.Hosting.WindowsXamlManager",
     "Microsoft.UI.Dispatching.DispatcherQueueController",
+    "Microsoft.Windows.AppNotifications.AppNotificationManager",
+    "Microsoft.Windows.AppNotifications.AppNotification",
     "Microsoft.UI.Windowing.AppWindow"
   ],
   "exclude": []

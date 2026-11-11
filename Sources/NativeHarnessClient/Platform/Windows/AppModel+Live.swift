@@ -4,7 +4,7 @@ import Foundation
 /// what stays on the machine. Platform/Portable stands in for the services the Windows layer does not
 /// provide yet, and there is no browser host (docs/PLATFORM_PORTABILITY.md, "The Windows app").
 extension AppModel {
-    static func live() -> AppModel {
+    static func live(applicationAttention: (any ApplicationAttention)? = nil) -> AppModel {
         let codexEnvironmentManager = CodexEnvironmentManager(
             paths: CodexEnvironmentPaths.live()
         )
@@ -50,13 +50,15 @@ extension AppModel {
                 scheduleRepository: FileScheduledTaskRepository(
                     fileURL: storageRootURL.appending(path: "schedules.json")
                 ),
-                legacyProjectFolderPreferences: LegacyProjectFolderPreferences.stored(in: defaults)
+                legacyProjectFolderPreferences: LegacyProjectFolderPreferences.stored(in: defaults),
+                applicationAttention: applicationAttention
             )
             model.accountAssignments = AccountAssignmentLog(
                 fileURL: storageRootURL.appending(path: AccountAssignmentLog.fileName))
             return model
         } catch {
-            return storageUnavailable(error, codexEnvironmentManager: codexEnvironmentManager)
+            return storageUnavailable(error, codexEnvironmentManager: codexEnvironmentManager,
+                                      applicationAttention: applicationAttention)
         }
     }
 

@@ -44,16 +44,24 @@ final class MainWindow {
     private let connectStatus = TextBlock()
     private var pairedMacs: PairedMacsList?
     private var remoteSettings: RemoteSettingsPane?
-    /// What the window shows beside the sidebar, so redrawing the tasks keeps what the person chose.
+    /// What the window shows beside the sidebar, so redrawing the tasks keeps what the person chose. The model
+    /// learns whether it shows a task, which decides, as on the Mac, whether a task's news is a notification.
     private enum Shown { case task, newTask, other }
-    private var shown = Shown.task
+    private var shown = Shown.task {
+        didSet { model.setShowsTasks(shown == .task, inWindow: windowID) }
+    }
+    private let windowID = UUID()
 
     init(model: AppModel, directory: RemoteHostDirectory) {
         self.model = model
         self.directory = directory
     }
 
+    /// The window's handle (`HWND`), which a window's ID holds.
+    var handle: UInt64 { window.appWindow.id.value }
+
     func open() {
+        model.setShowsTasks(true, inWindow: windowID)
         window.title = YardletProduct.name
         try? window.appWindow.resize(SizeInt32(width: 1000, height: 680))
 
@@ -170,6 +178,13 @@ final class MainWindow {
         case .other: break
         }
         if let selected { choose(selected) } else { showConversation() }
+    }
+
+    /// The task the model chose (a notification's click), shown and chosen in the sidebar.
+    func showSelectedTask() {
+        shown = .task
+        navigation.content = taskPane
+        navigation.selectedItem = items.first { $0.id == model.store.selectedSessionID }?.item
     }
 
     private static func activityText(_ date: Date, now: Date) -> String {

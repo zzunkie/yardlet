@@ -6,13 +6,6 @@ import Foundation
 // this folder defines is what a new platform's layer has to provide. Where the platform has nothing
 // to offer, these do nothing and report nothing.
 
-/// System notifications: none are shown.
-final class LocalSystemNotificationCenter: SystemNotificationCenter {
-    func authorization() async -> SystemNotificationAuthorization { .denied }
-    func requestAuthorization() async -> Bool { false }
-    func post(title: String, body: String, identifier: String) async {}
-}
-
 /// The process table: empty, so Task Resource Usage counts nothing.
 struct LiveProcessTable: ProcessTableReading {
     func entries() -> [ProcessTableEntry] { [] }

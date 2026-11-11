@@ -151,6 +151,42 @@ struct SystemNotificationResponse: Equatable, Sendable {
     let action: SystemNotificationAction
 }
 
+extension SystemNotificationResponse {
+    private static let actionKey = "yardletAction"
+    /// Letters, digits and `-._~`: what a URL leaves unescaped, so `&` and `=` only ever separate.
+    private static let unescaped = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
+    /// The click's words where a notification carries text rather than a dictionary (a Windows app notification's
+    /// `launch` and its button's `arguments`): the target's `userInfo` and the action, each escaped as in a URL's
+    /// query.
+    var argument: String {
+        var pairs = target.userInfo.sorted { $0.key < $1.key }
+        pairs.append((Self.actionKey, action == .allowOnce ? "allowOnce" : "open"))
+        return pairs.map { Self.escaped($0.key) + "=" + Self.escaped($0.value) }.joined(separator: "&")
+    }
+
+    /// The click `argument` names; nil for words Yardlet did not write.
+    init?(argument: String) {
+        var info: [AnyHashable: Any] = [:]
+        for pair in argument.split(separator: "&") {
+            let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2, let key = parts[0].removingPercentEncoding,
+                  let value = parts[1].removingPercentEncoding else { return nil }
+            info[key] = value
+        }
+        guard let target = SystemNotificationTarget(userInfo: info) else { return nil }
+        switch info[Self.actionKey] as? String {
+        case "open": self.init(target: target, action: .open)
+        case "allowOnce": self.init(target: target, action: .allowOnce)
+        default: return nil
+        }
+    }
+
+    private static func escaped(_ text: String) -> String {
+        text.addingPercentEncoding(withAllowedCharacters: unescaped) ?? ""
+    }
+}
+
 @MainActor
 protocol SystemNotificationCenter: AnyObject {
     func authorization() async -> SystemNotificationAuthorization

@@ -103,6 +103,17 @@ final class NotificationRoutingTests: XCTestCase {
             actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: ["other": "app"]
         ))
         XCTAssertNil(SystemNotificationTarget(userInfo: [SystemNotificationTarget.sessionKey: sessionID.uuidString])?.requestID)
+
+        // Where a notification carries words instead (Windows), a click and "Allow once" read back the same, and
+        // what an ID or a dot's JSON holds never splits them.
+        let dot = SystemNotificationTarget(personalAgent: PersonalAgentReveal(
+            agent: PersonalAgentIdentity(accountID: "a&b=c", userID: "u", agentID: "ag", roomID: "r%20"),
+            accountChoiceID: "x y"))
+        for (target, action) in [(target, SystemNotificationAction.open), (target, .allowOnce), (dot, .open)] {
+            let response = SystemNotificationResponse(target: target, action: action)
+            XCTAssertEqual(SystemNotificationResponse(argument: response.argument), response)
+        }
+        XCTAssertNil(SystemNotificationResponse(argument: "launch=other"))
     }
 
     /// A dot's notification carries its dot and account, not a task; its click brings Yardlet forward
