@@ -57,7 +57,7 @@ extension RemoteHostDirectory {
         let hello = RemoteHandshakeHello(
             name: Host.current().localizedName ?? "Mac", platform: "macos",
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")
-        return RemoteHostDirectory(store: RemoteHostStore(fileURL: file), keys: KeychainRemoteClientKeys.live(), hello: hello,
+        return RemoteHostDirectory(store: .file(file), keys: KeychainRemoteClientKeys.live(), hello: hello,
                                    cacheRoot: caches, discovery: .bonjour)
     }
 }

@@ -2830,7 +2830,7 @@ struct MainWindow: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            if let bootstrapError = model.bootstrapError ?? model.storageFailure {
+            if let bootstrapError = model.bootstrapError ?? model.storageFailure ?? StateFileFailures.shared.notice {
                 Label(bootstrapError, systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.red)

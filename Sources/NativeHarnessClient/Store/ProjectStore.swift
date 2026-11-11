@@ -55,7 +55,8 @@ final class InMemoryProjectRepository: ProjectRepository {
 
 /// Projects are Yardlet-owned records and live beside the other `~/.yardlet` files, using the
 /// same storage shape as `FileSplitRepository`. They carry folder paths only — never credentials
-/// or conversation content.
+/// or conversation content. A file this build cannot read is kept aside before a save replaces it,
+/// and saves are encoded and written on `StateFileWriter`'s queue (`StateFile`).
 struct FileProjectRepository: ProjectRepository {
     let fileURL: URL
 
@@ -70,19 +71,15 @@ struct FileProjectRepository: ProjectRepository {
     }
 
     func load() -> ProjectSnapshot? {
-        guard let data = try? Data(contentsOf: fileURL),
-              let snapshot = try? JSONDecoder().decode(ProjectSnapshot.self, from: data),
-              snapshot.version == 1 else { return nil }
-        return snapshot
+        try? StateFile.read(fileURL) { data in
+            let snapshot = try JSONDecoder().decode(ProjectSnapshot.self, from: data)
+            guard snapshot.version == 1 else { throw CocoaError(.coderReadCorrupt) }
+            return snapshot
+        }
     }
 
     func save(_ snapshot: ProjectSnapshot) {
-        guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        try? FileManager.default.createDirectory(
-            at: fileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try? data.write(to: fileURL, options: .atomic)
+        StateFile.save(fileURL) { try JSONEncoder().encode(snapshot) }
     }
 }
 

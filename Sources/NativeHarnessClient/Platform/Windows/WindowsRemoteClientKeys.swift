@@ -79,7 +79,7 @@ extension RemoteHostDirectory {
         let hello = RemoteHandshakeHello(
             name: ProcessInfo.processInfo.environment["COMPUTERNAME"] ?? "Windows", platform: "windows",
             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")
-        return RemoteHostDirectory(store: RemoteHostStore(fileURL: file), keys: WindowsRemoteClientKeys.live(), hello: hello,
+        return RemoteHostDirectory(store: .file(file), keys: WindowsRemoteClientKeys.live(), hello: hello,
                                    cacheRoot: caches)
     }
 }

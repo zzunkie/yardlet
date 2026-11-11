@@ -327,6 +327,19 @@ final class RemoteHostClientTests: XCTestCase {
         XCTAssertEqual(reread.all().first?.deviceID, "D1")
         reread.remove(host.id)
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+
+        // A file this version cannot read is kept aside, not lost to the next save, and the app hears of both.
+        try Data("{\"version\": 2, \"computers\": []}".utf8).write(to: file)
+        final class Events: @unchecked Sendable { var all: [RemoteHostStore.FileEvent] = [] }
+        let events = Events()
+        let later = RemoteHostStore(fileURL: file) { events.all.append($0) }
+        XCTAssertTrue(later.all().isEmpty)
+        later.save(host)
+        XCTAssertEqual(events.all, [.unreadable, .saved(true)])
+        let aside = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix("hosts-unreadable-") }
+        XCTAssertEqual(aside.count, 1)
+        XCTAssertEqual(try Data(contentsOf: folder.appending(path: try XCTUnwrap(aside.first))),
+                       Data("{\"version\": 2, \"computers\": []}".utf8))
     }
 }
 

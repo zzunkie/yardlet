@@ -650,7 +650,8 @@ What the person does (per service):
 - `connectors.json` holds every tool list and can run to a megabyte, so it is read and written off the main thread: read
   once at launch, then written after each change, in order, with changes made close together written once. Quitting
   waits for the last write. A file that is there but cannot be read is left as it is, and Settings says that changes
-  made there are lost when Yardlet quits.
+  made there are lost when Yardlet quits. A write that fails is named at the bottom of the main window until a later
+  one succeeds, and what it held is written with the next change.
 - Disconnect deletes the token (and keeps your own client). Remove deletes the Keychain item. Yardlet does not ask the
   server to revoke tokens (RFC 7009). Permissions that macOS gave for the three Mac services stay after removal (the
   "Apple" section).

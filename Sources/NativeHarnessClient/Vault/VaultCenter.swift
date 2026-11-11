@@ -72,7 +72,8 @@ protocol VaultRepository {
     func removeAll()
 }
 
-/// `~/.yardlet/vault/items.json` and `usage.jsonl` (90 days).
+/// `~/.yardlet/vault/items.json` and `usage.jsonl` (90 days). An items file this build cannot read is
+/// kept aside before a save replaces it, and saves are written on `StateFileWriter`'s queue (`StateFile`).
 struct FileVaultRepository: VaultRepository {
     let directory: URL
     var keepUses: TimeInterval = 90 * 24 * 60 * 60
@@ -105,15 +106,11 @@ struct FileVaultRepository: VaultRepository {
     }
 
     func loadItems() -> [VaultItem] {
-        guard let data = try? Data(contentsOf: itemsURL) else { return [] }
-        return (try? Self.decoder.decode([VaultItem].self, from: data)) ?? []
+        (try? StateFile.read(itemsURL) { try Self.decoder.decode([VaultItem].self, from: $0) }) ?? []
     }
 
     func saveItems(_ items: [VaultItem]) {
-        prepareDirectory()
-        guard let data = try? Self.encoder.encode(items) else { return }
-        try? data.write(to: itemsURL, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: itemsURL.path(percentEncoded: false))
+        StateFile.save(itemsURL, isPrivate: true) { try Self.encoder.encode(items) }
     }
 
     func appendUse(_ use: VaultUse) {
@@ -140,7 +137,8 @@ struct FileVaultRepository: VaultRepository {
     func allUses() -> [VaultUse] { readUses() }
 
     func removeAll() {
-        try? FileManager.default.removeItem(at: itemsURL)
+        // After any save of the items still on its way, which would otherwise bring them back.
+        StateFile.save(itemsURL) { nil }
         try? FileManager.default.removeItem(at: usesURL)
     }
 }

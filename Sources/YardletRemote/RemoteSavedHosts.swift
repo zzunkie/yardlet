@@ -61,7 +61,19 @@ public struct RemoteSavedHost: Codable, Equatable, Identifiable, Sendable {
 /// The hosts this computer paired with, in a file only the person can read (`~/.yardlet/remote/hosts.json`
 /// for the app; tests keep them in memory). Nothing else about a host is stored: its tasks and
 /// conversations stay on the host.
+///
+/// A file that is not there is an empty list. One that is there but cannot be read (damaged, kept from this
+/// user, or written by a later version in a form this one cannot decode) is not: it is kept aside before a
+/// save replaces it, so no pairing is lost to an older build. `onFile` hears of that and of every save, for
+/// the app to tell the person.
 public final class RemoteHostStore: @unchecked Sendable {
+    public enum FileEvent: Equatable, Sendable {
+        /// The file was there but could not be read, and was kept aside.
+        case unreadable
+        /// The file was written, or removed with its last host; false when that failed.
+        case saved(Bool)
+    }
+
     private struct File: Codable {
         var version = 1
         var hosts: [RemoteSavedHost]
@@ -69,16 +81,33 @@ public final class RemoteHostStore: @unchecked Sendable {
 
     private let lock = NSLock()
     private let fileURL: URL?
-    private var hosts: [RemoteSavedHost]
+    /// Called on the thread that opened or changed the store, which holds the store's lock for a save.
+    private let onFile: (@Sendable (FileEvent) -> Void)?
+    private var hosts: [RemoteSavedHost] = []
 
-    public init(fileURL: URL?) {
+    public init(fileURL: URL?, onFile: (@Sendable (FileEvent) -> Void)? = nil) {
         self.fileURL = fileURL
-        if let fileURL, let data = try? Data(contentsOf: fileURL),
-           let file = try? JSONDecoder.remoteDates.decode(File.self, from: data) {
-            hosts = file.hosts
-        } else {
-            hosts = []
+        self.onFile = onFile
+        guard let fileURL else { return }
+        do {
+            hosts = try JSONDecoder.remoteDates.decode(File.self, from: Data(contentsOf: fileURL)).hosts
+        } catch CocoaError.fileReadNoSuchFile {
+        } catch {
+            Self.keepAside(fileURL)
+            onFile?(.unreadable)
         }
+    }
+
+    /// Copies `file` to `hosts-unreadable-<the second it was last written>.json` beside it, once for each
+    /// version of the file. A file that cannot be copied either is moved there instead, since the next save
+    /// would replace it where it is.
+    private static func keepAside(_ file: URL) {
+        let manager = FileManager.default
+        let written = (try? manager.attributesOfItem(atPath: file.path))?[.modificationDate] as? Date
+        let name = "\(file.deletingPathExtension().lastPathComponent)-unreadable-\(Int((written ?? Date()).timeIntervalSince1970))"
+        let aside = file.deletingLastPathComponent().appendingPathComponent(name).appendingPathExtension(file.pathExtension)
+        guard !manager.fileExists(atPath: aside.path) else { return }
+        do { try manager.copyItem(at: file, to: aside) } catch { try? manager.moveItem(at: file, to: aside) }
     }
 
     public func all() -> [RemoteSavedHost] {
@@ -115,17 +144,22 @@ public final class RemoteHostStore: @unchecked Sendable {
 
     private func write() {
         guard let fileURL else { return }
-        let folder = fileURL.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
-                                                 attributes: [.posixPermissions: 0o700])
-        // The file goes with its last host.
-        if hosts.isEmpty {
-            try? FileManager.default.removeItem(at: fileURL)
-            return
+        let manager = FileManager.default
+        var saved = true
+        do {
+            if hosts.isEmpty {
+                // The file goes with its last host.
+                if manager.fileExists(atPath: fileURL.path) { try manager.removeItem(at: fileURL) }
+            } else {
+                try manager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                            attributes: [.posixPermissions: 0o700])
+                try JSONEncoder.remoteDates.encode(File(hosts: hosts)).write(to: fileURL, options: [.atomic])
+                try? manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+            }
+        } catch {
+            saved = false
         }
-        guard let data = try? JSONEncoder.remoteDates.encode(File(hosts: hosts)) else { return }
-        try? data.write(to: fileURL, options: [.atomic])
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        onFile?(.saved(saved))
     }
 }
 

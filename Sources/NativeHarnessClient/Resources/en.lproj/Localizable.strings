@@ -1407,6 +1407,8 @@
 "Error" = "Error";
 "Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account." = "Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account.";
 "Yardlet couldn't read %@, so your saved connectors aren't shown. The file is left as it is, and changes made here are lost when Yardlet quits." = "Yardlet couldn't read %@, so your saved connectors aren't shown. The file is left as it is, and changes made here are lost when Yardlet quits.";
+"Yardlet couldn't read %@, so what it holds isn't shown. A copy is kept in the same folder." = "Yardlet couldn't read %@, so what it holds isn't shown. A copy is kept in the same folder.";
+"Yardlet couldn't save %@. Changes made since then are lost when Yardlet quits." = "Yardlet couldn't save %@. Changes made since then are lost when Yardlet quits.";
 "Your connectors" = "Your connectors";
 "No connectors yet" = "No connectors yet";
 "Connect a service such as Linear, Notion, or GitHub, and every task can use its tools." = "Connect a service such as Linear, Notion, or GitHub, and every task can use its tools.";

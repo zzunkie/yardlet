@@ -181,7 +181,7 @@ final class YardletInstructionsStore {
         self.directory = directory
         self.defaults = defaults
         isEnabled = defaults.object(forKey: Self.enabledKey) as? Bool ?? true
-        text = (try? String(contentsOf: directory.appending(path: "instructions.md"), encoding: .utf8)) ?? ""
+        text = Self.read(directory.appending(path: "instructions.md")) ?? ""
         defaults.removeObject(forKey: Self.retiredSeededKey)
         disabledProjects = Set(((defaults.object(forKey: Self.disabledProjectsKey) as? [String]) ?? []).compactMap(UUID.init(uuidString:)))
         var texts: [UUID: String] = [:]
@@ -189,7 +189,7 @@ final class YardletInstructionsStore {
         for file in (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
         where file.pathExtension == "md" {
             guard let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent),
-                  let saved = try? String(contentsOf: file, encoding: .utf8) else { continue }
+                  let saved = Self.read(file) else { continue }
             texts[id] = saved
         }
         projectTexts = texts
@@ -209,7 +209,7 @@ final class YardletInstructionsStore {
         let url = projectFileURL(for: projectID)
         if value.isEmpty {
             projectTexts.removeValue(forKey: projectID)
-            try? FileManager.default.removeItem(at: url)
+            Self.write(nil, to: url)
         } else {
             projectTexts[projectID] = value
             Self.write(value, to: url)
@@ -239,8 +239,19 @@ final class YardletInstructionsStore {
         return YardletInstructionsDelivery(text: YardletInstructionsLaunch.combined(global: text, project: routing) ?? text)
     }
 
-    private static func write(_ text: String, to url: URL) {
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? Data(text.utf8).write(to: url, options: .atomic)
+    /// A text file's words, or nil when there is no file. One that cannot be read as text is kept aside
+    /// before the person's next words replace it (`StateFile`).
+    private static func read(_ url: URL) -> String? {
+        try? StateFile.read(url) { data in
+            guard let text = String(data: data, encoding: .utf8) else {
+                throw CocoaError(.fileReadInapplicableStringEncoding)
+            }
+            return text
+        }
+    }
+
+    /// Saves a text on `StateFileWriter`'s queue, one write for a burst of typing; nil removes its file.
+    private static func write(_ text: String?, to url: URL) {
+        StateFile.save(url) { text.map { Data($0.utf8) } }
     }
 }

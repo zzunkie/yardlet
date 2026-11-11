@@ -295,14 +295,13 @@ struct FileConnectorRepository: ConnectorRepository {
             }
             for change in changes { change(&next) }
             guard let encoded = try? encoder.encode(next) else { return true }
-            if encoded != data {
-                try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try? encoded.write(to: fileURL, options: .atomic)
-                // Account addresses, mail hosts and each connector's tools: the person's alone.
-                try? FileManager.default.setAttributes([.posixPermissions: 0o600],
-                                                       ofItemAtPath: fileURL.path(percentEncoded: false))
-            }
-            known = (encoded, next)
+            var saved = true
+            // Account addresses, mail hosts and each connector's tools: the person's alone.
+            if encoded != data { saved = (try? StateFile.write(encoded, to: fileURL, isPrivate: true)) != nil }
+            // The person is told of a write that failed, until a later one succeeds or none is needed.
+            StateFile.report(fileURL, saved: saved)
+            // A write that failed leaves what it held as where the next one starts, which then writes it.
+            if saved { known = (encoded, next) } else if let data { known = (data, next) }
             return true
         }
     }

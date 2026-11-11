@@ -603,6 +603,55 @@ final class VaultTests: XCTestCase {
             XCTAssertEqual(fills.fills.count, recorded, "\(expected)")
         }
     }
+
+    /// `items.json` is the only list of the person's items. One this build cannot read is kept aside,
+    /// not read as an empty vault that the next save writes over it, and the person is told of it and of
+    /// a save that failed, until a later save succeeds.
+    func testAnItemsFileThisBuildCannotReadIsKeptAsideAndAFailedSaveIsTold() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "yardlet-vault-file-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let failures = StateFileFailures.shared
+        failures.isOn = true
+        defer {
+            failures.isOn = false
+            failures.reset()
+        }
+        let folder = root.appending(path: "vault", directoryHint: .isDirectory)
+        let file = folder.appending(path: "items.json")
+        let repository = FileVaultRepository(directory: folder)
+        let created = Date(timeIntervalSince1970: 1_792_000_000)
+        let saved = VaultItem(name: "GitHub", sites: ["github.com"], username: "ada", policy: .everyTime, createdAt: created)
+        repository.saveItems([saved])
+        XCTAssertEqual(repository.loadItems(), [saved])
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int, 0o600)
+
+        // As a later Yardlet writes it: an agent policy this build does not know.
+        let later = try String(contentsOf: file, encoding: .utf8).replacingOccurrences(of: "\"everyTime\"", with: "\"onlyAtNight\"")
+        try Data(later.utf8).write(to: file)
+        XCTAssertTrue(repository.loadItems().isEmpty)
+        XCTAssertTrue(repository.loadItems().isEmpty)
+        repository.saveItems([VaultItem(name: "Vercel", sites: [], username: "ada@example.test", createdAt: created)])
+        XCTAssertEqual(repository.loadItems().map(\.name), ["Vercel"])
+        let aside = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix("items-unreadable-") }
+        XCTAssertEqual(aside.count, 1, "Kept once, however often it was read")
+        XCTAssertEqual(try String(contentsOf: folder.appending(path: try XCTUnwrap(aside.first)), encoding: .utf8), later)
+        try await waitUntil { failures.unreadable.contains(file) }
+        XCTAssertEqual(failures.notice?.contains("/vault/items.json"), true)
+
+        // A folder that cannot be made: the save fails, and the person is told which file.
+        let blocker = root.appending(path: "blocked")
+        try Data().write(to: blocker)
+        let blocked = FileVaultRepository(directory: blocker.appending(path: "vault", directoryHint: .isDirectory))
+        let blockedFile = blocker.appending(path: "vault/items.json")
+        blocked.saveItems([saved])
+        try await waitUntil { failures.unsaved.contains(blockedFile) }
+        XCTAssertEqual(failures.notice?.contains("blocked/vault/items.json"), true)
+        try FileManager.default.removeItem(at: blocker)
+        blocked.saveItems([saved])
+        try await waitUntil { !failures.unsaved.contains(blockedFile) }
+        XCTAssertEqual(blocked.loadItems(), [saved])
+    }
 }
 
 extension UserDefaults {

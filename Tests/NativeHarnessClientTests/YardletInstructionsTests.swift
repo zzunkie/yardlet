@@ -316,6 +316,7 @@ final class YardletInstructionsTests: XCTestCase {
                        "The same bytes on every launch and turn until the person edits a text")
 
         first.setProjectText("", for: project)
+        StateFileWriter.shared.flush()
         XCTAssertFalse(FileManager.default.fileExists(atPath: first.projectFileURL(for: project).path(percentEncoded: false)),
                        "Empty project text leaves no file")
     }

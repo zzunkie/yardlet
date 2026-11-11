@@ -679,7 +679,10 @@ installed app needs separate approval.
 ## 13. What changed during implementation
 
 - **Storage location:** the item list and usage log live not in `~/Library/Application Support/Yardlet/Vault/` but in
-  `~/.yardlet/vault/`, like Yardlet's other storage (`items.json`, `usage.jsonl`, folder 0700 and files 0600).
+  `~/.yardlet/vault/`, like Yardlet's other storage (`items.json`, `usage.jsonl`, folder 0700 and files 0600). An
+  `items.json` this build cannot read (damaged, or written by a later Yardlet) is not an empty vault: it is copied to
+  `items-unreadable-<time>.json` beside it before a save replaces it, and the main window names the file. It names a
+  save that failed too, until a later one succeeds.
 - **Scope of masking and refusal:** only password and code fields count. A username is not a secret, so it is not masked
   in screenshots, and on a first sign-in screen where only the username was filled, `browser_evaluate` keeps working (QA
   "a first step takes the username alone").

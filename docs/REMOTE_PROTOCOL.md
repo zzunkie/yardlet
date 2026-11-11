@@ -2706,7 +2706,8 @@ chooses Connect), and each paired host opens in a window of its own. The host li
 - **Order:** responses and events are applied in the order they arrive, so a subscription's page comes before the
   changes to it (§5.3). It keeps at most 6 conversations subscribed, letting go of the one shown longest ago.
 - **What stays on the client:** `~/.yardlet/remote/hosts.json` (each host's name, static key, direct addresses,
-  relay room and device ID; removed with the last host), one Keychain item per host for its private key, and what
+  relay room and device ID; removed with the last host; one this build cannot read is copied aside as
+  `hosts-unreadable-<time>.json` before a save replaces it), one Keychain item per host for its private key, and what
   each host's window last showed, in `~/Library/Caches/<bundle identifier>/remote/<host>/` (folder 0700, files
   0600): the snapshot's projects and tasks, and the latest page of each conversation open last (at most 6, each cut
   to the size of Yardlet's first page, §4.2: 10 whole turns, 120 items, about 384 KB), and the words of its unsent

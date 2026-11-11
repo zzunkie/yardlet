@@ -40,29 +40,21 @@ struct FileScheduledTaskRepository: ScheduledTaskRepository {
         )
     }
 
-    /// A file this build cannot read (a later version, or damaged) is copied aside before the next
-    /// save replaces it, so no schedule is lost to an older build.
+    /// A file this build cannot read (a later version, or damaged) is kept aside before the next
+    /// save replaces it, so no schedule is lost to an older build (`StateFile`).
     func load() -> ScheduleSnapshot? {
-        StateFileWriter.shared.flush()
-        guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        if let snapshot = try? JSONDecoder().decode(ScheduleSnapshot.self, from: data), snapshot.version == 1 {
+        try? StateFile.read(fileURL) { data in
+            let snapshot = try JSONDecoder().decode(ScheduleSnapshot.self, from: data)
+            guard snapshot.version == 1 else { throw CocoaError(.coderReadCorrupt) }
             return snapshot
         }
-        let stamp = Int(Date().timeIntervalSince1970)
-        let aside = fileURL.deletingLastPathComponent().appending(path: "schedules-unreadable-\(stamp).json")
-        try? FileManager.default.copyItem(at: fileURL, to: aside)
-        return nil
     }
 
     func save(_ snapshot: ScheduleSnapshot) {
-        let fileURL = fileURL
-        StateFileWriter.shared.write(fileURL) {
+        StateFile.save(fileURL) {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
-            let data = try encoder.encode(snapshot)
-            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
-                                                    withIntermediateDirectories: true)
-            try data.write(to: fileURL, options: .atomic)
+            return try encoder.encode(snapshot)
         }
     }
 }

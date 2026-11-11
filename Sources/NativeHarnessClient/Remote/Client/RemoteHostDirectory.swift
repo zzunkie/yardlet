@@ -5,6 +5,19 @@ import FoundationNetworking
 import Observation
 import YardletRemote
 
+extension RemoteHostStore {
+    /// The hosts in `file`, with the person told of a file that could not be read or saved as they are of
+    /// Yardlet's other state files (`StateFile`). The store keeps its own file: the phone app shares it.
+    static func file(_ file: URL) -> RemoteHostStore {
+        RemoteHostStore(fileURL: file) { event in
+            switch event {
+            case .unreadable: StateFile.reportUnreadable(file)
+            case .saved(let saved): StateFile.report(file, saved: saved)
+            }
+        }
+    }
+}
+
 /// The other Macs this one paired with as a client, and the ones open in windows now (File › Connect to
 /// Mac…). Nothing runs until a host's window opens: no listener, no daemon, no login item, only outgoing
 /// connections while a window is open. What stays on this Mac is the list of hosts
