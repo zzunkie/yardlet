@@ -340,7 +340,7 @@ final class TaskContinuationCoordinator {
               model.settlesForAccountMove(task), model.switchingAccounts.insert(id).inserted else { return }
         defer { model.switchingAccounts.remove(id) }
         contextLimitRestarts[id] = nil
-        await model.closeIdleRuntime(of: id)
+        await model.detachRuntime(of: id, reason: .contextLimit)?.value
         guard let current = model.store.sessions.first(where: { $0.id == id }) else { return }
         do { try await model.attach(current, resumesExistingSession: current.providerSessionID != nil) }
         catch { model.errorBySessionID[id] = error.localizedDescription }
@@ -1080,7 +1080,9 @@ final class TaskContinuationCoordinator {
             guard session.status != .running, session.status != .waitingForApproval else { continue }
             let failedForSignIn = model.errorBySessionID[session.id].map(ProviderSignIn.asksToSignIn) == true
             guard failedForSignIn || !isFirstReading else { continue }
-            if model.handlesBySessionID[session.id] != nil { await model.endRuntimeToSaveMemory(session.id, evenOnScreen: true) }
+            if model.handlesBySessionID[session.id] != nil {
+                await model.endRuntimeToSaveMemory(session.id, evenOnScreen: true, reason: .signIn)
+            }
             if failedForSignIn {
                 model.errorBySessionID.removeValue(forKey: session.id)
                 try? await model.store.updateSession(id: session.id, status: .ready)

@@ -157,6 +157,11 @@ separate from the harness's native conversations and session IDs.
   idle, when the turn ends otherwise, and at its next start if a background command still keeps it busy. Child tasks,
   forks and side chats start without it; a conversation `/clear` starts in its place keeps it.
 - Per-file drafts in Files are stored in app-owned workspace preferences.
+- **Why a task lost its runtime:** `~/.yardlet/logs/task-coordination.log` (one JSON object a line, 0600, the newest
+  half kept past 512 KiB) gets a line each time Yardlet takes a runtime off a task (`AppModel.detachRuntime`): the time,
+  the task's ID, its harness and the reason (`RuntimeDetachReason`: the task was removed, its account changed, a context
+  limit, the memory saver, a changed CLI, a sign-in, its stream ended, an edited message). It holds nothing of the
+  conversation, no path, account or credential, is written off the main thread, and nothing sends it.
 
 ## Runtime paths
 

@@ -156,8 +156,11 @@ final class AppModel {
     @ObservationIgnored private var lastMemoryPressureSweep: Date?
     @ObservationIgnored private var harnessMemorySaverTask: Task<Void, Never>?
     @ObservationIgnored private var memoryPressureSource: AnyObject?
-    /// Runtimes the memory saver is closing; a new attach of the task waits for its close to finish.
-    @ObservationIgnored private var memorySaverClosings: [UUID: Task<Void, Never>] = [:]
+    /// The close under way of the runtime last taken off each task (`detachRuntime`); the task's next
+    /// start waits for it to finish.
+    @ObservationIgnored private var runtimeClosings: [UUID: Task<Void, Never>] = [:]
+    /// What Yardlet decided about tasks' runtimes, kept on this Mac (`TaskCoordinationLog`).
+    @ObservationIgnored let coordinationLog = TaskCoordinationLog()
     /// The runtime start under way for each task (`attach`); another start of the task waits for it.
     @ObservationIgnored private var runtimeStarts: [UUID: Task<Void, Error>] = [:]
     @ObservationIgnored var harnessMemorySaverTiming = HarnessMemorySaver.Timing()
@@ -2971,8 +2974,7 @@ final class AppModel {
            let child = store.sessions.first(where: { $0.id == side }) {
             await removeSessionState(for: child, removal: .discard)
         }
-        eventTasksBySessionID.removeValue(forKey: session.id)?.cancel()
-        followUpDrainTasks.removeValue(forKey: session.id)?.cancel()
+        let closing = detachRuntime(of: session.id, reason: .taskRemoved)
         discardShellCommands(for: session.id)
         sessionTitleResolutionTasks.removeValue(forKey: session.id)?.cancel()
         sessionTitleRefreshes.removeValue(forKey: session.id)
@@ -2983,15 +2985,7 @@ final class AppModel {
         sessionJobsBySessionID.removeValue(forKey: session.id)
         clearBackgroundNotificationDeduplication(for: session.id)
         agentTools?.releaseAgentTools(for: session.id)
-        if let adapter = adaptersBySessionID.removeValue(forKey: session.id),
-           let handle = handlesBySessionID.removeValue(forKey: session.id) {
-            await adapter.close(handle)
-            let closedIdentity = ObjectIdentifier(adapter as AnyObject)
-            let remainsInUse = adaptersBySessionID.values.contains {
-                ObjectIdentifier($0 as AnyObject) == closedIdentity
-            }
-            if !remainsInUse { await registry.invalidate(adapter) }
-        }
+        await closing?.value
         // The split view lets go of the task first, so the window moves to the split's remaining
         // pane instead of to whichever task the index would select next.
         splits.removeSession(session.id)
@@ -3022,7 +3016,6 @@ final class AppModel {
             errorBySessionID.removeValue(forKey: session.id)
             codexCapabilitiesBySessionID.removeValue(forKey: session.id)
             codexStatusBySessionID.removeValue(forKey: session.id)
-            codexPresentationTasks.removeValue(forKey: session.id)?.cancel()
             codexTurnPageLoads.remove(session.id)
             codexItemPageLoads = codexItemPageLoads.filter {
                 !$0.hasPrefix("\(session.id.uuidString):")
@@ -3142,7 +3135,7 @@ final class AppModel {
     func harnessRuntimeChanged(_ harness: HarnessKind) async {
         await registry.invalidate(harness: harness)
         for session in store.sessions where session.harness == harness && handlesBySessionID[session.id] != nil {
-            await endRuntimeToSaveMemory(session.id, evenOnScreen: true)
+            await endRuntimeToSaveMemory(session.id, evenOnScreen: true, reason: .cliChanged)
         }
     }
 
@@ -5439,26 +5432,65 @@ final class AppModel {
         guard stillIdle(), TaskAccountSwitch.allows(connection, for: current) else {
             throw ProviderConnectionError.invalidBinding
         }
-        // The adapter of the account it leaves goes with its runtime: the one it ran on, or else the
-        // one kept for its runtime.
-        let attached = adaptersBySessionID[current.id]
-        await closeIdleRuntime(of: current.id)
-        if let attached { await registry.invalidate(attached) } else { await registry.invalidate(runtimeKey(of: current)) }
+        await detachRuntime(of: current.id, reason: .accountChange)?.value
         guard stillIdle() else {
             throw ProviderConnectionError.invalidBinding
         }
         try await store.updateConnection(id: current.id, connection: connection)
     }
 
-    /// Ends an idle task's runtime. What still ran in its process, such as a background command, ends
-    /// with it, and the conversation says so, as when the memory saver closes it or the process exits:
-    /// left running, its row would keep an account move, and the messages behind it, waiting forever.
-    func closeIdleRuntime(of id: UUID) async {
-        eventTasksBySessionID.removeValue(forKey: id)?.cancel()
-        flushTranscriptDeltas(for: id)
-        mutateTranscript(for: id, publishImmediately: true) { $0.endRuntime() }
-        if let adapter = adaptersBySessionID.removeValue(forKey: id),
-           let handle = handlesBySessionID.removeValue(forKey: id) { await adapter.close(handle) }
+    /// Takes a task's runtime off it. This is the one way a task loses its runtime, whatever the
+    /// reason (`RuntimeDetachReason`), so that nothing the runtime held outlives it in Yardlet:
+    ///
+    /// - the tasks relaying its events, its Codex state and its queue stop;
+    /// - unless the conversation goes or is replaced with the runtime, the messages the provider held
+    ///   unread come back to Yardlet's queue, a Codex thread's open turn is closed and saved, and
+    ///   what still ran in the process (a background command, an agent) reads as stopped: left
+    ///   running, such a row would keep an account move, and the messages behind it, waiting forever;
+    /// - the runtime is closed, and its adapter leaves the registry once no task uses it. It may have
+    ///   ended its process for good (a Codex App Server stops with its last task), so the next start
+    ///   makes a new one, as after archiving.
+    ///
+    /// The close runs after this returns and is what is returned: the task's next start waits for it
+    /// (`startRuntime`), since it clears the task's state in the adapter, and a caller that goes on
+    /// with the task waits for it too. Nil when the task had no runtime; its conversation is settled
+    /// all the same. The coordination log says which runtime went and why.
+    @discardableResult
+    func detachRuntime(of id: UUID, reason: RuntimeDetachReason,
+                       finalCodexState: CodexTaskState? = nil) -> Task<Void, Never>? {
+        // A stream that ended is the event task itself, which goes on to finish.
+        let events = eventTasksBySessionID.removeValue(forKey: id)
+        if reason != .streamEnded { events?.cancel() }
+        codexPresentationTasks.removeValue(forKey: id)?.cancel()
+        followUpDrainTasks.removeValue(forKey: id)?.cancel()
+        if reason.keepsConversation {
+            followUps.holdAllSent(in: id)
+            if var state = finalCodexState ?? codexPresentationBySessionID[id] {
+                mergePersistedCodexServerRequests(into: &state, for: id)
+                mergePersistedCodexTimelineItems(into: &state, for: id)
+                CodexTaskReducer().endRuntime(in: &state)
+                codexPresentations[id] = state
+                persistCodexServerRequests(state, for: id)
+                persistCodexTimelineItems(state, for: id)
+                persistCodexTranscriptSnapshot(state, for: id)
+            }
+            mutateTranscript(for: id, publishImmediately: true) { $0.endRuntime() }
+        }
+        guard let adapter = adaptersBySessionID.removeValue(forKey: id),
+              let handle = handlesBySessionID.removeValue(forKey: id) else { return nil }
+        coordinationLog.record(.init(event: "runtime-detached", task: id.uuidString,
+                                     harness: store.sessions.first { $0.id == id }?.harness.rawValue,
+                                     reason: reason.rawValue))
+        let closing = Task { @MainActor [registry] in
+            defer { self.runtimeClosings[id] = nil }
+            await adapter.close(handle)
+            let identity = ObjectIdentifier(adapter as AnyObject)
+            if !self.adaptersBySessionID.values.contains(where: { ObjectIdentifier($0 as AnyObject) == identity }) {
+                await registry.invalidate(adapter)
+            }
+        }
+        runtimeClosings[id] = closing
+        return closing
     }
 
     /// Moves every task on a saved Claude account, archived ones included, to another of the same
@@ -5801,7 +5833,8 @@ final class AppModel {
     /// (`eventStreamEnded`), but the task stays ready and its next message resumes the same provider session. Nothing
     /// is sent to the conversation. A Codex thread with a background terminal stays, and so does one whose terminals the
     /// App Server could not list.
-    func endRuntimeToSaveMemory(_ id: UUID, evenOnScreen: Bool = false) async {
+    func endRuntimeToSaveMemory(_ id: UUID, evenOnScreen: Bool = false,
+                                reason: RuntimeDetachReason = .memorySaver) async {
         guard let adapter = adaptersBySessionID[id], let handle = handlesBySessionID[id],
               let session = store.sessions.first(where: { $0.id == id }),
               (evenOnScreen ? workKeepingRuntime(of: session) : memorySaverKeeps(session)) == nil else { return }
@@ -5817,35 +5850,7 @@ final class AppModel {
         // The person may have come back to it meanwhile.
         guard handlesBySessionID[id] == handle, let current = store.sessions.first(where: { $0.id == id }),
               (evenOnScreen ? workKeepingRuntime(of: current) : memorySaverKeeps(current)) == nil else { return }
-        eventTasksBySessionID.removeValue(forKey: id)?.cancel()
-        codexPresentationTasks.removeValue(forKey: id)?.cancel()
-        followUpDrainTasks.removeValue(forKey: id)?.cancel()
-        flushTranscriptDeltas(for: id)
-        followUps.holdAllSent(in: id)
-        if var state = finalState ?? codexPresentationBySessionID[id] {
-            mergePersistedCodexServerRequests(into: &state, for: id)
-            mergePersistedCodexTimelineItems(into: &state, for: id)
-            CodexTaskReducer().endRuntime(in: &state)
-            codexPresentations[id] = state
-            persistCodexServerRequests(state, for: id)
-            persistCodexTimelineItems(state, for: id)
-            persistCodexTranscriptSnapshot(state, for: id)
-        }
-        mutateTranscript(for: id, publishImmediately: true) { $0.endRuntime() }
-        handlesBySessionID.removeValue(forKey: id)
-        adaptersBySessionID.removeValue(forKey: id)
-        // An adapter no task uses any more may have ended its process for good (a Codex App Server stops with its
-        // last task): the next attach, which waits for this, makes a new one, as after archiving.
-        let closing = Task { @MainActor [registry] in
-            await adapter.close(handle)
-            let identity = ObjectIdentifier(adapter as AnyObject)
-            if !self.adaptersBySessionID.values.contains(where: { ObjectIdentifier($0 as AnyObject) == identity }) {
-                await registry.invalidate(adapter)
-            }
-        }
-        memorySaverClosings[id] = closing
-        await closing.value
-        memorySaverClosings[id] = nil
+        await detachRuntime(of: id, reason: reason, finalCodexState: finalState)?.value
     }
 
     /// Hands the adapter Yardlet instructions for this launch or session request — the global text, then
@@ -5922,9 +5927,8 @@ final class AppModel {
                 L10n.string("Task was deleted during harness attach")
             )
         }
-        // The memory saver's close of the task's last runtime ends before another starts: it clears the task's state in
-        // the adapter.
-        if let closing = memorySaverClosings[session.id] { await closing.value }
+        // The close of the task's last runtime ends before another starts: it clears the task's state in the adapter.
+        if let closing = runtimeClosings[session.id] { await closing.value }
         // An ACP agent replaying the conversation for the view (`replayACPConversation`) has its own
         // process load it; that one ends before the task's loads the same conversation.
         if let replay = savedConversationReadTasks["acp|\(session.id)"] { await replay.value }
@@ -6227,23 +6231,8 @@ final class AppModel {
         await registry.invalidate(adapter)
         guard !Task.isCancelled, handlesBySessionID[id] == handle,
               store.sessions.contains(where: { $0.id == id }) else { return }
-        eventTasksBySessionID.removeValue(forKey: id)
-        codexPresentationTasks.removeValue(forKey: id)?.cancel()
-        followUpDrainTasks.removeValue(forKey: id)?.cancel()
-        followUps.holdAllSent(in: id)
         let interrupted = session.status == .running || session.status == .waitingForApproval
-        if var state = finalState ?? codexPresentationBySessionID[id] {
-            mergePersistedCodexServerRequests(into: &state, for: id)
-            mergePersistedCodexTimelineItems(into: &state, for: id)
-            CodexTaskReducer().endRuntime(in: &state)
-            codexPresentations[id] = state
-            persistCodexServerRequests(state, for: id)
-            persistCodexTimelineItems(state, for: id)
-            persistCodexTranscriptSnapshot(state, for: id)
-        }
-        mutateTranscript(for: id, publishImmediately: true) { $0.endRuntime() }
-        handlesBySessionID.removeValue(forKey: id)
-        adaptersBySessionID.removeValue(forKey: id)
+        let closing = detachRuntime(of: id, reason: .streamEnded, finalCodexState: finalState)
         if interrupted {
             let message = errorBySessionID[id] ?? L10n.format("Connection to %@ ended.", session.harness.displayName)
             if errorBySessionID[id] == nil { recordLocalError(message, for: id) }
@@ -6251,7 +6240,7 @@ final class AppModel {
             try? await store.updateSession(id: id, status: .failed,
                 hasUnreadUpdate: !isSessionVisible(id) ? true : nil)
         }
-        await adapter.close(handle)
+        await closing?.value
     }
 
     private func startCodexPresentationCollection(
@@ -7581,10 +7570,7 @@ extension AppModel {
                     // original identity/cache and survives a failed launch or first submission.
                     try await store.updateSession(id: session.id, status: .ready, providerSessionID: newID,
                         setProviderSessionID: true, inheritedContext: context, setInheritedContext: true)
-                    eventTasksBySessionID.removeValue(forKey: session.id)?.cancel()
-                    handlesBySessionID.removeValue(forKey: session.id)
-                    adaptersBySessionID.removeValue(forKey: session.id)
-                    await adapter.close(handle)
+                    await detachRuntime(of: session.id, reason: .conversationEdit)?.value
                     transcriptBuilders[session.id] = TranscriptBuilder(entries: point.precedingEntries)
                     publishTranscript(for: session.id)
                     edit.preparedProviderSessionID = newID

@@ -497,7 +497,7 @@ import XCTest
         let model = fixture.model, task = fixture.task
         await fixture.transport.emit(try json(result))
         try await waitUntil { model.store.sessions.first?.status == .ready }
-        await model.closeIdleRuntime(of: task.id)
+        await model.detachRuntime(of: task.id, reason: .memorySaver)?.value
         XCTAssertNil(model.handlesBySessionID[task.id])
 
         fixture.transports.holdNextHandshakes()

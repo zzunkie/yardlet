@@ -470,11 +470,16 @@ import XCTest
     /// reads as stopped. A change the task goes on from at once (an account, a context limit) has
     /// its next runtime by then; a changed CLI starts one at the task's next message. (A stream that
     /// ends by itself is `AppModelTests.testEndedReadyStreamDetachesWithoutManufacturingFailure`.)
+    /// Each goes through `AppModel.detachRuntime`, and the coordination log says why the runtime went.
     func testEachWayATaskLosesItsRuntimeStopsItsCLIOnceAndLeavesTheTaskReady() async throws {
         enum Way: String, CaseIterable { case accountChange, contextLimit, cliChanged, archived }
+        let reasons: [Way: RuntimeDetachReason] = [.accountChange: .accountChange, .contextLimit: .contextLimit,
+                                                   .cliChanged: .cliChanged, .archived: .taskRemoved]
         for way in Way.allCases {
             let fixture = try makeFixture()
             let model = fixture.model
+            let log = fixture.shared.appending(path: "task-coordination.log")
+            model.coordinationLog.fileURL = log
             let created = await model.createSession(harness: .claudeCode, workspaceURL: fixture.shared,
                 runtimeExecutableURL: fixture.cli, title: way.rawValue, connection: fixture.first)
             let task = try XCTUnwrap(created, model.errorBySessionID.values.first ?? "Missing task")
@@ -520,6 +525,12 @@ import XCTest
             if way != .archived { XCTAssertEqual(backgroundRows(), 0, way.rawValue) }
             let stops = await first.stopCount
             XCTAssertEqual(stops, 1, "\(way.rawValue): its CLI is stopped once")
+            model.coordinationLog.flush()
+            let lines = try String(contentsOf: log, encoding: .utf8).split(separator: "\n").map {
+                try JSONDecoder().decode(TaskCoordinationLog.Entry.self, from: Data($0.utf8))
+            }
+            XCTAssertEqual(lines, [TaskCoordinationLog.Entry(event: "runtime-detached", task: task.id.uuidString,
+                harness: "claude-code", reason: reasons[way]?.rawValue)], way.rawValue)
         }
     }
 
