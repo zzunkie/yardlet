@@ -457,6 +457,7 @@ final class AppModelRemoteBridge: RemoteBridge {
     func setWatchedTasks(_ taskIDs: Set<String>) {
         watched = Set(taskIDs.compactMap(UUID.init(uuidString:)))
         model?.remoteWatchedTaskIDs = watched
+        model?.noteMemorySaverScreen()
         for id in Array(projectionCaches.keys) where !watched.contains(id) {
             projectionCaches[id] = nil
             for detail in [RemoteConversationDetail.basic, .full] {
@@ -530,7 +531,7 @@ final class AppModelRemoteBridge: RemoteBridge {
             if let followUp, session.status == .running || session.status == .waitingForApproval {
                 Task { await model.submitFollowUp(input, action: followUp == .steer ? .steer : .queue, to: session) }
             } else {
-                Task { await model.send(input, to: session) }
+                Task { await model.sendPersonsMessage(input, to: session) }
             }
             return nil
         case let .answerApproval(taskID, requestID, answer, note):
@@ -1205,7 +1206,7 @@ final class AppModelRemoteBridge: RemoteBridge {
             originalText: text, attachments: attachments, harness: harness, workspaceURL: folder, projectID: project?.id,
             runtimeURL: runtime, connection: account.map(\.connection) ?? connection,
             accountAssignment: account?.assignment, startsInNewWorktree: worktree,
-            providerOptions: providerOptions, selectsTask: false)
+            providerOptions: providerOptions, selectsTask: false, sentByPerson: true)
         let previousError = model.bootstrapError
         do {
             guard let created = try await model.createTask(submission) else {

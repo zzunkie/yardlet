@@ -688,6 +688,69 @@ final class RestartResumeTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// Next-message suggestions follow the tasks the person looks at, as Claude Code's terminal suggests only while it
+    /// has focus. A CLI started for the task on screen or for the person's own message asks; one started for a task off
+    /// screen (another task's message, a continuation) does not, and starts again asking once its task comes on
+    /// screen, with nothing sent: at once when idle, when its turn ends otherwise. A CLI that asks is paused while its
+    /// task is off screen and resumed when it is back.
+    func testNextMessageSuggestionsFollowTheTasksOnScreen() async throws {
+        let fixture = try ClaudeFixture()
+        let tasks = ["Shown", "Idle", "Working", "Own"].map { fixture.session(title: $0, status: .ready, updatedAt: Date()) }
+        let store = SessionStore(sessions: tasks, repository: InMemorySessionRepository(sessions: tasks))
+        store.selectedSessionID = tasks[0].id
+        let model = fixture.model(store: store)
+        model.noteMemorySaverScreen()
+        /// Each CLI started for a task, in order: whether it asked, how many messages were sent to it, whether it was
+        /// stopped, and the pauses it was told.
+        func processes(_ task: SessionRecord) async -> [(asked: Bool, sent: Int, stopped: Bool, paused: [Bool])] {
+            var found: [(Bool, Int, Bool, [Bool])] = []
+            for transport in fixture.transports.all where await transport.configuration?.providerSessionID == task.providerSessionID {
+                let requests = await transport.requestedValues.compactMap { $0["request"] }
+                found.append((requests.first?["promptSuggestions"] == .bool(true), await transport.sentValues.count,
+                              await transport.stopCount > 0,
+                              requests.filter { $0["subtype"]?.stringValue == "set_prompt_suggestions_paused" }
+                                  .compactMap { $0["paused"]?.boolValue }))
+            }
+            return found
+        }
+        func asked(_ task: SessionRecord) async -> [Bool] { await processes(task).map(\.asked) }
+
+        await model.resume(tasks[0])
+        await model.resume(tasks[1])
+        await model.send(HarnessUserInput(text: "From another task"), to: tasks[2])
+        await model.sendPersonsMessage(HarnessUserInput(text: "From the phone"), to: tasks[3])
+        var launched: [[Bool]] = []
+        for task in tasks { launched.append(await asked(task)) }
+        XCTAssertEqual(launched, [[true], [false], [false], [true]],
+                       "On screen or the person's own message asks; off screen otherwise does not")
+
+        store.selectedSessionID = tasks[1].id
+        try await waitUntil { await asked(tasks[1]) == [false, true] }
+        var idle = await processes(tasks[1])
+        XCTAssertEqual(idle.map(\.sent), [0, 0], "Started again with no turn")
+        XCTAssertEqual(idle.map(\.stopped), [true, false], "The first CLI ended, the new one runs")
+        try await waitUntil { await processes(tasks[0]).map(\.paused) == [[true]] }
+
+        store.selectedSessionID = tasks[2].id
+        try await waitUntil { await processes(tasks[1]).last?.paused == [true] }
+        let stillWorking = await asked(tasks[2])
+        XCTAssertEqual(stillWorking, [false], "A CLI in a turn keeps it")
+        let working = try await fixture.transport(for: tasks[2].providerSessionID!)
+        await working.emit(try JSONDecoder().decode(JSONValue.self, from: Data(
+            #"{"type":"result","subtype":"success","is_error":false,"result":"Done.","session_id":"s"}"#.utf8)))
+        try await waitUntil { await asked(tasks[2]) == [false, true] }
+        let afterTurn = await processes(tasks[2])
+        XCTAssertEqual(afterTurn.map(\.sent), [1, 0], "Only the message that started the turn was ever sent")
+
+        store.selectedSessionID = tasks[0].id
+        try await waitUntil { await processes(tasks[0]).map(\.paused) == [[true, false]] }
+        idle = await processes(tasks[1])
+        XCTAssertEqual(idle.count, 2, "Leaving the screen starts nothing again")
+        let own = await asked(tasks[3])
+        XCTAssertEqual(own, [true])
+        await model.shutdown()
+    }
+
     /// Claude Code's frames for a turn that calls one tool, then ends.
     private func finishTurn(on transport: FakeClaudeTransport, calling tool: String, input: [String: Any]) async throws {
         let call: [String: Any] = ["type": "tool_use", "id": "toolu_\(tool)", "name": tool, "input": input]

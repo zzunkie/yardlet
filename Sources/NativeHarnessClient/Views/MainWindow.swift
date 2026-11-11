@@ -1739,7 +1739,7 @@ struct MainWindow: View {
     private func composerActions(for session: SessionRecord) -> ComposerActions {
         let wiring = ComposerSessionOptionsProjection.wiring(for: session.harness)
         var actions = ComposerActions(
-            send: { input in Task { await model.send(input, to: session) } },
+            send: { input in Task { await model.sendPersonsMessage(input, to: session) } },
             interrupt: { Task { await model.interrupt(session) } },
             refreshProviderStatus: {
                 await model.refreshConversationStatus(for: session)

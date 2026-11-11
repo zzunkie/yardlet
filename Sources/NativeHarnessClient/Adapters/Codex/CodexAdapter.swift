@@ -1,6 +1,6 @@
 import Foundation
 
-actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationProviding, CodexThreadReading, CodexComposerProviding, CodexConversationEditing, CodexTurnRecovering, CodexPendingServerRequestValidating, HarnessWorkspaceRootsConfiguring, HarnessInstructionSourceReporting, HarnessAgentToolConfiguring, HarnessYardletInstructionsConfiguring, HarnessMCPServerStatusReading, HarnessInterruptedTurnContinuing, HarnessHistoryFreeSessionConfiguring, HarnessLaunchOptionConfiguring, CodexBackgroundTerminalControlling {
+actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationProviding, CodexThreadReading, CodexComposerProviding, CodexConversationEditing, CodexTurnRecovering, CodexPendingServerRequestValidating, HarnessWorkspaceRootsConfiguring, HarnessInstructionSourceReporting, HarnessAgentToolConfiguring, HarnessYardletInstructionsConfiguring, HarnessMCPServerStatusReading, HarnessInterruptedTurnContinuing, HarnessHistoryFreeSessionConfiguring, HarnessLaunchOptionConfiguring, CodexBackgroundTerminalControlling, HarnessTaskSightReceiving {
     private struct ApprovalContext: Sendable {
         let localSessionID: UUID
         let rpcID: CodexRPCID
@@ -84,6 +84,8 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
     private var modelProviderByLocalSessionID: [UUID: String] = [:]
     /// The one prediction a task waits for: the turn it follows. A newer turn replaces it.
     private var predictionBySessionID: [UUID: PendingPrediction] = [:]
+    /// When each task off screen was last on it (`setUnseen`); a task not listed is on screen.
+    private var unseenSinceBySessionID: [UUID: Date] = [:]
     /// The fork turns that make predictions, keyed by their ephemeral thread.
     private var predictionTurns: [String: PredictionTurn] = [:]
 
@@ -1071,12 +1073,18 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
 
     // MARK: - Next-message prediction
 
+    func setUnseen(since date: Date?, for localSessionID: UUID) {
+        unseenSinceBySessionID[localSessionID] = date
+    }
+
     /// After a turn of a saved thread ends, as the Codex app asks. Never for a thread kept nowhere
     /// (`run_agent`, whose fork mode the App Server refuses anyway), in Plan mode, or on another
-    /// provider than OpenAI's (the app's own exclusions), and not at all with the setting off.
+    /// provider than OpenAI's (the app's own exclusions), not for a task no one has looked at within
+    /// `NextMessageSuggestionPreference.unseenWindow`, and not at all with the setting off.
     private func schedulePrediction(after sourceTurnID: String, for localSessionID: UUID) {
         cancelPrediction(for: localSessionID)
         guard predictsNextMessages, asksForNextMessageSuggestions(),
+              NextMessageSuggestionPreference.isSeen(unseenSince: unseenSinceBySessionID[localSessionID]),
               let session = handles[localSessionID],
               !historyFreeSessionIDs.contains(localSessionID),
               collaborationPresetByLocalSessionID[localSessionID]?.mode != "plan",
@@ -1603,6 +1611,7 @@ actor CodexAdapter: HarnessAdapter, CodexCapabilityProviding, CodexPresentationP
         agentToolServerByLocalSessionID.removeValue(forKey: session.localSessionID)
         yardletInstructionsByLocalSessionID.removeValue(forKey: session.localSessionID)
         historyFreeSessionIDs.remove(session.localSessionID)
+        unseenSinceBySessionID.removeValue(forKey: session.localSessionID)
         instructionSourcesByLocalSessionID.removeValue(forKey: session.localSessionID)
         serverRequestContexts = serverRequestContexts.filter {
             $0.value.localSessionID != session.localSessionID

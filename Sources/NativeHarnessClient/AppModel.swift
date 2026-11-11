@@ -154,6 +154,13 @@ final class AppModel {
     @ObservationIgnored private var lastOnScreen: [UUID: Date] = [:]
     @ObservationIgnored private var memorySaverOnScreen = Set<UUID>()
     @ObservationIgnored private var lastMemoryPressureSweep: Date?
+    /// Next-message suggestions for the tasks the person looks at (`NextMessageSuggestionPreference`): the tasks
+    /// whose runtime start now asks for them though off screen (the person's own message, `restartToSuggest`), the
+    /// Claude Code runtimes that started without them while the setting was on, and those of them waiting to start
+    /// again with them once nothing keeps them busy.
+    @ObservationIgnored private var startsAskingForSuggestions = Set<UUID>()
+    @ObservationIgnored private var runtimesWithoutSuggestions = Set<UUID>()
+    @ObservationIgnored private var suggestionRestarts = Set<UUID>()
     @ObservationIgnored private var harnessMemorySaverTask: Task<Void, Never>?
     @ObservationIgnored private var memoryPressureSource: AnyObject?
     /// The close under way of the runtime last taken off each task (`detachRuntime`); the task's next
@@ -738,7 +745,7 @@ final class AppModel {
                 initialPrompt: submission.prompt, initialAttachments: submission.attachments,
                 connection: submission.connection, providerOptions: submission.providerOptions,
                 selectsSession: submission.selectsTask, parentTaskID: submission.parentTaskID,
-                takesDraftWorkspace: submission.takesDraftWorkspace
+                takesDraftWorkspace: submission.takesDraftWorkspace, sentByPerson: submission.sentByPerson
             )
             // A chat that never came to exist takes its still empty folder with it.
             if created == nil, !store.sessions.contains(where: { Project.isSamePath($0.workspaceURL, chatFolder) }),
@@ -757,7 +764,7 @@ final class AppModel {
                 connection: submission.connection, projectID: submission.projectID,
                 providerOptions: submission.providerOptions,
                 selectsSession: submission.selectsTask, parentTaskID: submission.parentTaskID,
-                takesDraftWorkspace: submission.takesDraftWorkspace
+                takesDraftWorkspace: submission.takesDraftWorkspace, sentByPerson: submission.sentByPerson
             )
         }
         // A start that would fail anyway should not leave a worktree behind first.
@@ -772,7 +779,7 @@ final class AppModel {
             connection: submission.connection, projectID: project?.id,
             sourceFolder: folder, providerOptions: submission.providerOptions,
             selectsSession: submission.selectsTask, parentTaskID: submission.parentTaskID,
-            takesDraftWorkspace: submission.takesDraftWorkspace
+            takesDraftWorkspace: submission.takesDraftWorkspace, sentByPerson: submission.sentByPerson
         )
         // A task that started but then failed keeps its worktree, like any failed task keeps its
         // folder. One that never came to exist takes its worktree with it.
@@ -810,7 +817,8 @@ final class AppModel {
         parentTaskID: UUID? = nil,
         takesDraftWorkspace: Bool = false,
         holdsInitialPrompt: Bool = false,
-        isMovedToChats: Bool = false
+        isMovedToChats: Bool = false,
+        sentByPerson: Bool = false
     ) async -> SessionRecord? {
         // The task records its runtime; the harness's runtime stays the person's choice or the
         // newest install (`RuntimeSelectionStore`), not whichever runtime the last task started with.
@@ -851,6 +859,9 @@ final class AppModel {
                 parentTaskID: parentTaskID
             )
             createdSessionID = session.id
+            // The person's own first message asks for next-message suggestions though the task starts off screen.
+            let marked = sentByPerson && startsAskingForSuggestions.insert(session.id).inserted
+            defer { if marked { startsAskingForSuggestions.remove(session.id) } }
             // Before anything waits, so the window shows the task with the new-task screen's panels.
             if takesDraftWorkspace { handOffDraftWorkspace(to: session.id) }
             if holdsInitialPrompt { return store.sessions.first(where: { $0.id == session.id }) ?? session }
@@ -1125,6 +1136,14 @@ final class AppModel {
             return
         }
         await send(HarnessUserInput(text: prompt), to: session)
+    }
+
+    /// A message the person wrote, in a task's composer on the Mac or the phone: sent as `send` sends,
+    /// and a runtime it starts asks for next-message suggestions though the task is off screen.
+    func sendPersonsMessage(_ input: HarnessUserInput, to session: SessionRecord) async {
+        let marked = startsAskingForSuggestions.insert(session.id).inserted
+        defer { if marked { startsAskingForSuggestions.remove(session.id) } }
+        await send(input, to: session)
     }
 
     /// The composer's submission, attachments included. Text-only input takes exactly the path
@@ -5476,6 +5495,8 @@ final class AppModel {
             }
             mutateTranscript(for: id, publishImmediately: true) { $0.endRuntime() }
         }
+        runtimesWithoutSuggestions.remove(id)
+        suggestionRestarts.remove(id)
         guard let adapter = adaptersBySessionID.removeValue(forKey: id),
               let handle = handlesBySessionID.removeValue(forKey: id) else { return nil }
         coordinationLog.record(.init(event: "runtime-detached", task: id.uuidString,
@@ -5727,6 +5748,8 @@ final class AppModel {
     /// macOS reports memory pressure.
     func startHarnessMemorySaver() {
         guard harnessMemorySaverTask == nil else { return }
+        // The tasks on screen now are where the first look starts from.
+        noteMemorySaverScreen()
         harnessMemorySaverTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let interval = self?.harnessMemorySaverTiming.checkInterval else { return }
@@ -5744,6 +5767,8 @@ final class AppModel {
     func checkHarnessMemory(now: Date = Date(), pressure: MacLoad.MemoryPressure = MacConditionReader.memoryPressure(),
                             physicalMemory: UInt64 = ProcessInfo.processInfo.physicalMemory) async {
         noteMemorySaverScreen(now: now)
+        // What kept a runtime waiting to start again with suggestions may have settled since.
+        for id in suggestionRestarts { await restartToSuggest(id, now: now) }
         guard MemorySaverPreference.isOn(in: preferences) else { return }
         let runtimes = store.sessions.compactMap { session -> HarnessMemorySaver.Runtime? in
             guard handlesBySessionID[session.id] != nil else { return nil }
@@ -5779,11 +5804,22 @@ final class AppModel {
     }
 
     /// Records which tasks are on screen: the window's task or split panes, the side chat it shows, and the tasks the
-    /// phone shows. A task that leaves the screen starts its idle time then.
+    /// phone shows. A task that leaves the screen starts its idle time then. The harness of a task that came on screen
+    /// or left it is told, for its next-message suggestions, and a runtime started without them starts again with them.
     func noteMemorySaverScreen(now: Date = Date()) {
         let onScreen = memorySaverOnScreenIDs()
         for id in onScreen.union(memorySaverOnScreen) { lastOnScreen[id] = now }
+        let changed = onScreen.symmetricDifference(memorySaverOnScreen)
         memorySaverOnScreen = onScreen
+        for id in changed {
+            guard let sight = adaptersBySessionID[id] as? any HarnessTaskSightReceiving else { continue }
+            let since = onScreen.contains(id) ? nil : now
+            Task { await sight.setUnseen(since: since, for: id) }
+        }
+        for id in changed.intersection(runtimesWithoutSuggestions) where onScreen.contains(id) {
+            suggestionRestarts.insert(id)
+            Task { await restartToSuggest(id) }
+        }
     }
 
     /// What keeps an attached task's runtime whatever the memory saver's rules say, in a word for the log and tests;
@@ -5851,6 +5887,47 @@ final class AppModel {
         guard handlesBySessionID[id] == handle, let current = store.sessions.first(where: { $0.id == id }),
               (evenOnScreen ? workKeepingRuntime(of: current) : memorySaverKeeps(current)) == nil else { return }
         await detachRuntime(of: id, reason: reason, finalCodexState: finalState)?.value
+    }
+
+    // MARK: Next-message suggestions for the tasks the person looks at
+
+    /// Whether a Claude Code runtime starting now asks for next-message suggestions (the setting decides
+    /// whether any does): when its task is on screen or the person's own message starts it, as Claude
+    /// Code's terminal suggests only while its window has focus. Another task's message, a schedule, a
+    /// continuation or an account move start a task off screen without them (`restartToSuggest`).
+    private func asksForSuggestionsAtLaunch(_ id: UUID) -> Bool {
+        startsAskingForSuggestions.contains(id) || memorySaverOnScreenIDs().contains(id)
+    }
+
+    /// Since when the person has not looked at a task, for its harness: nil while it is on screen.
+    private func unseenSince(_ id: UUID) -> Date? {
+        memorySaverOnScreenIDs().contains(id) ? nil : lastOnScreen[id] ?? .distantPast
+    }
+
+    /// Starts again, with next-message suggestions, a Claude Code runtime that started without them, now
+    /// that its task came on screen, as a context limit restarts one: at once when nothing needs the runtime
+    /// (`workKeepingRuntime`), else once that settles, at its turn's end or the memory saver's next look,
+    /// while the task was on screen within `NextMessageSuggestionPreference.unseenWindow`. No turn starts.
+    /// Nothing starts again to turn suggestions off: a runtime keeps them until it ends.
+    private func restartToSuggest(_ id: UUID, now: Date = Date()) async {
+        guard suggestionRestarts.contains(id) else { return }
+        let seen = memorySaverOnScreenIDs().contains(id)
+            || NextMessageSuggestionPreference.isSeen(unseenSince: lastOnScreen[id] ?? .distantPast, now: now)
+        guard seen, runtimesWithoutSuggestions.contains(id), handlesBySessionID[id] != nil,
+              NextMessageSuggestionPreference.isOn(in: preferences),
+              let session = store.sessions.first(where: { $0.id == id }) else {
+            suggestionRestarts.remove(id)
+            return
+        }
+        guard workKeepingRuntime(of: session) == nil else { return }
+        suggestionRestarts.remove(id)
+        let marked = startsAskingForSuggestions.insert(id).inserted
+        defer { if marked { startsAskingForSuggestions.remove(id) } }
+        await detachRuntime(of: id, reason: .nextMessageSuggestions)?.value
+        // A message sent meanwhile has started the runtime itself. One that cannot start now is left as the memory
+        // saver leaves a task: the next message starts it and says why it could not.
+        guard handlesBySessionID[id] == nil, let current = store.sessions.first(where: { $0.id == id }) else { return }
+        try? await attach(current, resumesExistingSession: current.providerSessionID != nil)
     }
 
     /// Hands the adapter Yardlet instructions for this launch or session request — the global text, then
@@ -6020,8 +6097,11 @@ final class AppModel {
             }
             // Options the provider reads as launch flags have to be in place before the process
             // starts; the in-session ones are restored after the handle exists.
+            let withoutSuggestions = session.harness == .claudeCode && !asksForSuggestionsAtLaunch(session.id)
             if let launchConfigurable = adapter as? any HarnessLaunchOptionConfiguring {
-                await launchConfigurable.setLaunchOptions(session.providerOptions, for: session.id)
+                var options = session.providerOptions
+                if withoutSuggestions { options[ClaudeLaunchOption.nextMessageSuggestions] = ClaudeLaunchOption.off }
+                await launchConfigurable.setLaunchOptions(options, for: session.id)
             }
             // The Yardlet MCP server goes in with the session request itself and nowhere else.
             await configureAgentTools(on: adapter, for: session)
@@ -6096,6 +6176,17 @@ final class AppModel {
             }
             adaptersBySessionID[session.id] = adapter
             handlesBySessionID[session.id] = handle
+            // Held back for being off screen with the setting on, it gets them once the task is on screen.
+            if withoutSuggestions, NextMessageSuggestionPreference.isOn(in: preferences), !store.isTemporary(session.id) {
+                runtimesWithoutSuggestions.insert(session.id)
+            } else {
+                runtimesWithoutSuggestions.remove(session.id)
+            }
+            suggestionRestarts.remove(session.id)
+            if let sight = adapter as? any HarnessTaskSightReceiving {
+                let since = unseenSince(session.id)
+                Task { await sight.setUnseen(since: since, for: session.id) }
+            }
             // What it streams from here is Yardlet's own, richer than Antigravity's log, so a later
             // detached read starts over and keeps it unless the log has more requests.
             antigravityHistoryShown.removeValue(forKey: session.id)
@@ -6519,6 +6610,10 @@ final class AppModel {
         }
         if follows.contains(.contextLimit), continuations.contextLimitRestarts[id] != nil {
             Task { await continuations.restartForContextLimit(id) }
+        }
+        // As for a context limit, a runtime waiting to start again with next-message suggestions does.
+        if follows.contains(.contextLimit), suggestionRestarts.contains(id) {
+            Task { await restartToSuggest(id) }
         }
         // A shell command's output waits for the turn to end, however it ended.
         if follows.contains(.shellOutput) { scheduleShellDelivery(for: id) }

@@ -4,7 +4,8 @@ import Foundation
 /// adapter still owns the process it launches and the session request it sends, so a launch flag,
 /// a project's extra roots, the Yardlet MCP server and Yardlet instructions have to reach it before the session starts,
 /// earlier than any session-scoped YHP request. Only the wrapped adapter also learns which
-/// instruction files the provider actually loaded. A facet the wrapped adapter lacks is skipped.
+/// instruction files the provider actually loaded. Whether the person is looking at a task goes to it
+/// too: it decides the next-message suggestions it asks for. A facet the wrapped adapter lacks is skipped.
 struct WrappedAdapterLaunchFacets: Sendable {
     private let launchOptions: (any HarnessLaunchOptionConfiguring)?
     private let workspaceRoots: (any HarnessWorkspaceRootsConfiguring)?
@@ -12,6 +13,7 @@ struct WrappedAdapterLaunchFacets: Sendable {
     private let agentTools: (any HarnessAgentToolConfiguring)?
     private let yardletInstructions: (any HarnessYardletInstructionsConfiguring)?
     private let history: (any HarnessHistoryFreeSessionConfiguring)?
+    private let sight: (any HarnessTaskSightReceiving)?
 
     init(wrapping adapter: any HarnessAdapter) {
         launchOptions = adapter as? any HarnessLaunchOptionConfiguring
@@ -20,6 +22,11 @@ struct WrappedAdapterLaunchFacets: Sendable {
         agentTools = adapter as? any HarnessAgentToolConfiguring
         yardletInstructions = adapter as? any HarnessYardletInstructionsConfiguring
         history = adapter as? any HarnessHistoryFreeSessionConfiguring
+        sight = adapter as? any HarnessTaskSightReceiving
+    }
+
+    func setUnseen(since date: Date?, for localSessionID: UUID) async {
+        await sight?.setUnseen(since: date, for: localSessionID)
     }
 
     func keepNoHistory(for localSessionID: UUID) async -> Bool {
@@ -48,14 +55,15 @@ struct WrappedAdapterLaunchFacets: Sendable {
 }
 
 /// A YHP wrapper whose launch settings go through `WrappedAdapterLaunchFacets`. Conforming gives
-/// the wrapper the five launch protocols with this one forwarding.
+/// the wrapper the launch protocols with this one forwarding.
 protocol WrappedAdapterLaunchForwarding:
     HarnessLaunchOptionConfiguring,
     HarnessWorkspaceRootsConfiguring,
     HarnessInstructionSourceReporting,
     HarnessAgentToolConfiguring,
     HarnessYardletInstructionsConfiguring,
-    HarnessHistoryFreeSessionConfiguring
+    HarnessHistoryFreeSessionConfiguring,
+    HarnessTaskSightReceiving
 {
     nonisolated var launchFacets: WrappedAdapterLaunchFacets { get }
 }
@@ -83,5 +91,9 @@ extension WrappedAdapterLaunchForwarding {
 
     func keepNoHistory(for localSessionID: UUID) async -> Bool {
         await launchFacets.keepNoHistory(for: localSessionID)
+    }
+
+    func setUnseen(since date: Date?, for localSessionID: UUID) async {
+        await launchFacets.setUnseen(since: date, for: localSessionID)
     }
 }

@@ -173,6 +173,9 @@ final class NewTaskDraft {
         var titleOverride: String? = nil
         /// Whether the window goes to the new task. A scheduled run starts beside the person's work.
         var selectsTask = true
+        /// The person wrote it, in a new-task composer on the Mac or the phone, rather than a schedule or a
+        /// suggested task: its first runtime asks for next-message suggestions though the task starts off screen.
+        var sentByPerson = false
         /// The task the new one nests under in the sidebar.
         var parentTaskID: UUID? = nil
         /// Sent from the new-task screen that shows the draft's terminal, browser and side panel: the
@@ -253,7 +256,7 @@ final class NewTaskDraft {
             // A chat's folder is made for it; it has no repository to make a worktree of.
             startsInNewWorktree: workspaceURL != nil && startsInNewWorktree,
             providerOptions: modelChoices[harness]?.providerOptions(for: harness) ?? [:],
-            suggestion: suggestion
+            suggestion: suggestion, sentByPerson: true
         )
         pendingSubmission = submission
         creationFailed = false

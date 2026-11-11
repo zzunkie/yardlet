@@ -158,14 +158,27 @@ read nothing in it, whatever mode the files inside have.
   reads it when it starts, so a task with a runtime gets one back on the same conversation, with no turn: at once when
   idle, when the turn ends otherwise, and at its next start if a background command still keeps it busy. Child tasks,
   forks and side chats start without it; a conversation `/clear` starts in its place keeps it.
+- **Next message suggestions (Settings › General):** only the tasks the person looks at ask for them, as Claude Code's
+  terminal suggests only while its window has focus. On screen is what the memory saver counts: the window's task or
+  split panes, the side chat it shows, and the tasks the phone shows. A Claude Code CLI asks in its `initialize` when it
+  starts for a task on screen or for the person's own message (a task's composer or a new task, on the Mac or the
+  phone); one started for a task off screen (another task's message, a schedule, a continuation, an account move) does
+  not. Once that task comes on screen, its CLI starts again on the same conversation with no turn, as for a context
+  limit: at once when nothing keeps it busy by the memory saver's rules, otherwise when that settles (its turn's end or
+  the memory saver's next look), if the task was on screen within the last three hours. Nothing starts again to turn
+  suggestions off: a CLI keeps them until it ends. A CLI that asks is sent `set_prompt_suggestions_paused` when its task
+  leaves the screen and again when it comes back; Claude Code 2.1.322 acknowledges it, and goes on suggesting until its
+  own feature flag enables the pause. A Codex task asks for a prediction after a turn only while it is on screen or was
+  within the last three hours. The setting stays the switch for all of it.
 - Per-file drafts in Files are stored in app-owned workspace preferences.
 - **Why a task lost its runtime, and what ended its turn:** `~/.yardlet/logs/task-coordination.log` (one JSON object a
   line, 0600, the newest half kept past 512 KiB) gets a line each time Yardlet takes a runtime off a task
   (`AppModel.detachRuntime`): the time, the task's ID, its harness and the reason (`RuntimeDetachReason`: the task was
-  removed, its account changed, a context limit, the memory saver, a changed CLI, a sign-in, its stream ended, an edited
-  message). It gets one each time a turn ends too (`AppModel.turnEnded`), with what ended it (`TurnEndCause`: the
-  provider's report of the task's state, a provider error, the stream ending, a turn that never started, a continuation
-  that had nothing to continue) and the status it left. It holds nothing of the conversation, no path, account or
+  removed, its account changed, a context limit, the memory saver, next-message suggestions for a task back on screen, a
+  changed CLI, a sign-in, its stream ended, an edited message). It gets one each time a turn ends too
+  (`AppModel.turnEnded`), with what ended it (`TurnEndCause`: the provider's report of the task's state, a provider
+  error, the stream ending, a turn that never started, a continuation that had nothing to continue) and the status it
+  left. It holds nothing of the conversation, no path, account or
   credential, is written off the main thread, and nothing sends it.
 
 ## Runtime paths

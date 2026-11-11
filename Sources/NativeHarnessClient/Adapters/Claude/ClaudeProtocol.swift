@@ -359,6 +359,16 @@ enum ClaudeProtocol {
         return controlRequest(id: id, request: .object(request))
     }
 
+    /// Pauses (true) or resumes a CLI's next-message suggestions while its task is off screen
+    /// (2.1.322). The CLI acknowledges with an empty success; one where the pause is not enabled yet
+    /// acknowledges and goes on suggesting, and an older one answers an unknown-subtype error. A new
+    /// process starts unpaused.
+    static func setPromptSuggestionsPaused(id: String, paused: Bool) -> JSONValue {
+        controlRequest(id: id, request: .object([
+            "subtype": .string("set_prompt_suggestions_paused"), "paused": .bool(paused)
+        ]))
+    }
+
     /// `{"type":"prompt_suggestion","suggestion":…,"uuid":…,"session_id":…}`: the CLI's predicted
     /// next user message (2.1.295, 2.1.299), sent a moment after a turn's `result` when the session
     /// was started with `promptSuggestions`. It comes from a forked request on the session's model

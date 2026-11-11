@@ -268,6 +268,8 @@ final class CodexMessagePredictionTests: XCTestCase {
         await adapter.close(handle)
     }
 
+    /// Nor for a task no one has looked at within `NextMessageSuggestionPreference.unseenWindow`, as Claude Code's
+    /// terminal suggests only while it has focus; one off screen for less still asks.
     func testNothingIsAskedWithTheSettingOffForAThreadKeptNowhereInPlanModeOrOnAnotherProvider() async throws {
         func turnEnds(asks: Bool = true, provider: String = "openai",
                       prepare: (CodexAdapter, UUID) async throws -> Void = { _, _ in }) async throws -> [String] {
@@ -294,6 +296,14 @@ final class CodexMessagePredictionTests: XCTestCase {
         XCTAssertEqual(keptNowhere, ["initialize", "thread/start", "turn/start"], "A run_agent thread is never predicted")
         let otherProvider = try await turnEnds(provider: "ollama")
         XCTAssertEqual(otherProvider, ["initialize", "thread/start", "turn/start"], "The app predicts only on OpenAI's provider")
+        let unseen = try await turnEnds { adapter, id in
+            await adapter.setUnseen(since: Date().addingTimeInterval(-NextMessageSuggestionPreference.unseenWindow), for: id)
+        }
+        XCTAssertEqual(unseen, ["initialize", "thread/start", "turn/start"], "Not seen for the window: no prediction")
+        let recentlySeen = try await turnEnds { adapter, id in
+            await adapter.setUnseen(since: Date().addingTimeInterval(-60), for: id)
+        }
+        XCTAssertTrue(recentlySeen.contains("thread/prediction/request"), "Seen a minute ago: it still asks")
 
         // Plan mode, as the app leaves it out.
         let transport = Self.scriptedTransport()

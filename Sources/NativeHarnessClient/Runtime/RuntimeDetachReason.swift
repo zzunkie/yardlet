@@ -11,6 +11,8 @@ enum RuntimeDetachReason: String, Sendable, CaseIterable {
     case contextLimit = "context-limit"
     /// Nothing needs the runtime and the memory saver lets it go.
     case memorySaver = "memory-saver"
+    /// The task came on screen and starts again with next-message suggestions it started without.
+    case nextMessageSuggestions = "next-message-suggestions"
     /// The harness's CLI changed under it, so its next message starts the CLI that is there now.
     case cliChanged = "cli-changed"
     /// Its login was signed in after its CLI found none.
@@ -25,7 +27,7 @@ enum RuntimeDetachReason: String, Sendable, CaseIterable {
     var keepsConversation: Bool {
         switch self {
         case .taskRemoved, .conversationEdit: false
-        case .accountChange, .contextLimit, .memorySaver, .cliChanged, .signIn, .streamEnded: true
+        case .accountChange, .contextLimit, .memorySaver, .nextMessageSuggestions, .cliChanged, .signIn, .streamEnded: true
         }
     }
 }

@@ -126,6 +126,10 @@ actor ClaudeAdapter:
     private var followUpsTakenAtTurnEnd = Set<UUID>()
     /// What the CLI said it supports, from `initialize` and each main `system/init`.
     private var capabilitiesByLocalSessionID: [UUID: Set<String>] = [:]
+    /// Sessions whose CLI asked for next-message suggestions at `initialize`, and those of them Yardlet
+    /// has paused while their task is off screen (`setUnseen`).
+    private var sessionsAskingForSuggestions = Set<UUID>()
+    private var pausedSuggestionSessions = Set<UUID>()
     /// Follow-ups the CLI reported `queued`: in its queue, where Send now can find them.
     private var queuedFollowUps: [UUID: Set<String>] = [:]
     /// Send now requests waiting for the CLI to report their message's first lifecycle state.
@@ -860,6 +864,8 @@ actor ClaudeAdapter:
         agentToolServerByLocalSessionID.removeValue(forKey: session.localSessionID)
         yardletInstructionsByLocalSessionID.removeValue(forKey: session.localSessionID)
         historyFreeSessionIDs.remove(session.localSessionID)
+        sessionsAskingForSuggestions.remove(session.localSessionID)
+        pausedSuggestionSessions.remove(session.localSessionID)
         forkSources.removeValue(forKey: session.localSessionID)
         newSessionIDs.removeValue(forKey: session.localSessionID)
         initialResponses.removeValue(forKey: session.localSessionID)
@@ -930,12 +936,10 @@ actor ClaudeAdapter:
                 await self?.transportStreamEnded(for: handle.localSessionID)
             }
             let requestID = takeRequestID(prefix: "initialize")
+            let asksForSuggestions = !sessionsWithoutNextMessageSuggestions.contains(handle.localSessionID)
+                && asksForNextMessageSuggestions()
             let response = try await transport.request(
-                ClaudeProtocol.initialize(
-                    id: requestID,
-                    promptSuggestions: !sessionsWithoutNextMessageSuggestions.contains(handle.localSessionID)
-                        && asksForNextMessageSuggestions()
-                ),
+                ClaudeProtocol.initialize(id: requestID, promptSuggestions: asksForSuggestions),
                 id: requestID
             )
             guard response.objectValue != nil else {
@@ -944,6 +948,13 @@ actor ClaudeAdapter:
                 )
             }
             initialResponses[handle.localSessionID] = response
+            // A new process suggests until it is paused.
+            pausedSuggestionSessions.remove(handle.localSessionID)
+            if asksForSuggestions {
+                sessionsAskingForSuggestions.insert(handle.localSessionID)
+            } else {
+                sessionsAskingForSuggestions.remove(handle.localSessionID)
+            }
             // The members already settled at connect time; the rest arrive on `system/init`.
             if let settled = response["capabilities"]?.arrayValue {
                 capabilitiesByLocalSessionID[handle.localSessionID, default: []]
@@ -1452,5 +1463,26 @@ actor ClaudeAdapter:
 
     private func readVersion() throws -> String {
         try ClaudeRuntimeCompatibility.readVersionOutput(executableURL: executableURL)
+    }
+}
+
+extension ClaudeAdapter: HarnessTaskSightReceiving {
+    /// Pauses a CLI that asks for suggestions while its task is off screen, as Claude Code's terminal
+    /// suggests only while it has focus, and resumes it when the task is back. A CLI with the pause not
+    /// enabled yet acknowledges and goes on; the answer is not waited for.
+    func setUnseen(since date: Date?, for localSessionID: UUID) {
+        let paused = date != nil
+        guard sessionsAskingForSuggestions.contains(localSessionID), let transport = transports[localSessionID],
+              paused != pausedSuggestionSessions.contains(localSessionID) else { return }
+        if paused {
+            pausedSuggestionSessions.insert(localSessionID)
+        } else {
+            pausedSuggestionSessions.remove(localSessionID)
+        }
+        let requestID = takeRequestID(prefix: "suggestions")
+        Task {
+            _ = try? await transport.request(
+                ClaudeProtocol.setPromptSuggestionsPaused(id: requestID, paused: paused), id: requestID)
+        }
     }
 }

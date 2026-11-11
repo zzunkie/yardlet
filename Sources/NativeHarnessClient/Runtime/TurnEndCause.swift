@@ -57,7 +57,7 @@ struct TurnFollowUps: OptionSet, Sendable {
     static let toolChanges = TurnFollowUps(rawValue: 1 << 9)
     /// An account move that waited for the turn goes, and one Yardlet may choose is looked for.
     static let accountMove = TurnFollowUps(rawValue: 1 << 10)
-    /// A context limit that waited for the turn restarts the runtime.
+    /// A context limit, or next-message suggestions, that waited for the turn restart the runtime.
     static let contextLimit = TurnFollowUps(rawValue: 1 << 11)
     /// Shell output that waited for the turn is delivered.
     static let shellOutput = TurnFollowUps(rawValue: 1 << 12)

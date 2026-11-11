@@ -70,6 +70,15 @@ protocol HarnessLaunchOptionConfiguring: Actor {
     func setLaunchOptions(_ options: [String: String], for localSessionID: UUID) async
 }
 
+/// Optional surface for whether the person is looking at a task, which decides whether its harness
+/// suggests a next message after a turn (`NextMessageSuggestionPreference`). Yardlet says so when the
+/// task's runtime starts and each time the task comes on screen or leaves it.
+protocol HarnessTaskSightReceiving: Actor {
+    /// `since` is nil while the task is on screen, else when it was last on screen (`distantPast` when
+    /// it has not been since Yardlet started).
+    func setUnseen(since: Date?, for localSessionID: UUID) async
+}
+
 /// Optional surface for a session that leaves no history of its own with the provider: nothing
 /// saved where the provider's app, its CLI or Yardlet's import would list it. `run_agent` asks
 /// for it before the session is created, as its conversation is kept with the calling task, and a
