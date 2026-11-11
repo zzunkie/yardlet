@@ -204,8 +204,8 @@ final class ComposerEditorTests: XCTestCase {
         XCTAssertEqual(home.text, "!", "The new-task draft keeps a typed `!`")
 
         let probe = TaskProbe()
-        let mounted = try mount(taskComposer(probe))
-        try type("!", into: mounted)
+        let mounted = try mount(taskComposer(probe), editing: probe.draft)
+        try type("!", into: mounted, until: { probe.draft.isBashMode })
         XCTAssertTrue(probe.draft.isBashMode)
         XCTAssertEqual(probe.draft.text, "")
         XCTAssertEqual(try editor(mounted).string, "")
@@ -257,59 +257,62 @@ final class ComposerEditorTests: XCTestCase {
 
     @MainActor private struct Mounted {
         let host: WindowlessRender.Host<AnyView>
+        /// The draft the composer edits.
+        let draft: any ComposerDraftEditing
         var window: NSWindow { host.window }
 
         var elements: [WindowlessRender.AccessibilityElement] { host.accessibilityElements() }
 
         func shows(_ label: String) -> Bool { elements.contains { $0.label == label } }
+
+        /// Whether the field shows the draft's text: what was typed has reached the draft, and what a key
+        /// did to the draft has reached the field.
+        var fieldShowsDraft: Bool { (window.firstResponder as? NSTextView)?.string == draft.text }
     }
 
-    private func mount(_ view: some View, focus: Bool = true) throws -> Mounted {
+    /// Mounts a composer that edits `draft`, with its field focused.
+    private func mount(_ view: some View, editing draft: any ComposerDraftEditing) throws -> Mounted {
         let host = WindowlessRender.Host(AnyView(view.frame(width: 760, height: 460, alignment: .bottom)
             .background(ParityTheme.canvas)), size: NSSize(width: 760, height: 460))
         addTeardownBlock { @MainActor in host.close() }
-        host.settle()
-        if focus {
-            let field = try XCTUnwrap(views(NSTextField.self, in: host.hosting).first { $0.isEditable })
-            XCTAssertTrue(host.window.makeFirstResponder(field))
-            host.settle(passes: 4)
-        }
-        return Mounted(host: host)
+        var field: NSTextField?
+        host.settle(until: {
+            field = self.views(NSTextField.self, in: host.hosting).first { $0.isEditable }
+            return field != nil
+        })
+        XCTAssertTrue(host.window.makeFirstResponder(try XCTUnwrap(field)))
+        // The composer learns of the focus a few turns of the run loop later and shows nothing for it.
+        host.settle(passes: 4)
+        return Mounted(host: host, draft: draft)
     }
 
     private func editor(_ mounted: Mounted) throws -> NSTextView {
         try XCTUnwrap(mounted.window.firstResponder as? NSTextView)
     }
 
-    /// Types `text`. A typed list comes from a file search or a catalog read that takes its own time, so a test that goes
-    /// on to use one names a row of it in `showing`.
-    private func type(_ text: String, into mounted: Mounted, showing row: String? = nil) throws {
+    /// Types `text` at the end of the field in one insertion, as an input method commits a phrase, and
+    /// waits until the draft has it. What the text brings takes its own time, so a test that goes on to use
+    /// it names it: a row of a typed list (a file search, a catalog read) in `showing`, anything else in
+    /// `isDone`. A test that checks the text brought nothing settles for a fixed time after this.
+    private func type(_ text: String, into mounted: Mounted, showing row: String? = nil,
+                      until isDone: () -> Bool = { true }, file: StaticString = #filePath, line: UInt = #line) throws {
         let editor = try editor(mounted)
-        for character in text {
-            editor.insertText(String(character), replacementRange: NSRange(location: (editor.string as NSString).length,
-                                                                           length: 0))
-            mounted.host.settle(passes: 2)
-        }
-        guard let row else {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.4))
-            mounted.host.settle()
-            return
-        }
-        let deadline = Date().addingTimeInterval(testWaitLimitSeconds)
-        while !mounted.shows(row), Date() < deadline {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
-            mounted.host.settle(passes: 1)
-        }
+        editor.insertText(text, replacementRange: NSRange(location: (editor.string as NSString).length, length: 0))
+        mounted.host.settle(until: { mounted.fieldShowsDraft && (row.map(mounted.shows) ?? true) && isDone() },
+                            file: file, line: line)
     }
 
+    /// Presses a key and waits until the field shows what the key did to the draft, and until `isDone` for
+    /// what else the key brought.
     private func press(_ characters: String, keyCode: UInt16, modifiers: NSEvent.ModifierFlags = [],
-                       in mounted: Mounted) throws {
+                       in mounted: Mounted, until isDone: () -> Bool = { true },
+                       file: StaticString = #filePath, line: UInt = #line) throws {
         let event = try XCTUnwrap(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime,
             windowNumber: mounted.window.windowNumber, context: nil, characters: characters,
             charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode))
         mounted.window.sendEvent(event)
-        mounted.host.settle()
+        mounted.host.settle(until: { mounted.fieldShowsDraft && isDone() }, file: file, line: line)
     }
 
     private let down = String(UnicodeScalar(NSDownArrowFunctionKey)!)
@@ -362,8 +365,9 @@ final class ComposerEditorTests: XCTestCase {
         let workspace = try makeFolder()
         let task = TaskProbe(), home = HomeProbe()
         let composers: [(String, any ComposerDraftEditing, () throws -> Mounted)] = [
-            ("task", task.draft, { try self.mount(self.taskComposer(task)) }),
-            ("new task", home.draft, { try self.mount(self.homeComposer(home, workspace: workspace)) })
+            ("task", task.draft, { try self.mount(self.taskComposer(task), editing: task.draft) }),
+            ("new task", home.draft,
+             { try self.mount(self.homeComposer(home, workspace: workspace), editing: home.draft) })
         ]
         for (name, draft, make) in composers {
             let mounted = try make()
@@ -372,12 +376,12 @@ final class ComposerEditorTests: XCTestCase {
             XCTAssertTrue(mounted.shows("/release-notes"), name)
             try press(down, keyCode: 125, in: mounted)
             XCTAssertEqual(draft.text, "/re", "↓ moves the highlight, not the text (\(name))")
-            try press("\r", keyCode: 36, in: mounted)
+            try press("\r", keyCode: 36, in: mounted, until: { !mounted.shows("/review") })
             XCTAssertEqual(draft.text, "/release-notes ", "Return chooses the highlighted row (\(name))")
             XCTAssertFalse(mounted.shows("/review"), name)
 
             draft.text = ""
-            mounted.host.settle()
+            mounted.host.settle(until: { mounted.fieldShowsDraft })
             try type("/re", into: mounted, showing: "/review")
             try press("\t", keyCode: 48, in: mounted)
             XCTAssertEqual(draft.text, "/review ", "Tab chooses the first row (\(name))")
@@ -390,34 +394,36 @@ final class ComposerEditorTests: XCTestCase {
     func testEscapeClosesTheTypedListsAndReturnThenSubmitsInBothComposers() throws {
         let workspace = try makeFolder()
         let task = TaskProbe(), home = HomeProbe()
-        let composers: [(String, () throws -> Mounted)] = [
-            ("task", { try self.mount(self.taskComposer(task, roots: [workspace])) }),
-            ("new task", { try self.mount(self.homeComposer(home, workspace: workspace)) })
+        let composers: [(String, () throws -> Mounted, () -> [String])] = [
+            ("task", { try self.mount(self.taskComposer(task, roots: [workspace]), editing: task.draft) },
+             { task.sent.map(\.text) }),
+            ("new task", { try self.mount(self.homeComposer(home, workspace: workspace), editing: home.draft) },
+             { home.created })
         ]
-        for (name, make) in composers {
+        for (name, make, submitted) in composers {
             let mounted = try make()
             try type("Explain @read", into: mounted, showing: "README.md")
             XCTAssertTrue(mounted.shows("README.md"), "The `@` list shows (\(name))")
-            try press("\u{1b}", keyCode: 53, in: mounted)
+            try press("\u{1b}", keyCode: 53, in: mounted, until: { !mounted.shows("README.md") })
             XCTAssertFalse(mounted.shows("README.md"), "Escape closes it (\(name))")
-            try press("\r", keyCode: 36, in: mounted)
+            try press("\r", keyCode: 36, in: mounted, until: { !submitted().isEmpty })
+            XCTAssertEqual(submitted(), ["Explain @read"], "Return submits the text as typed (\(name))")
         }
-        XCTAssertEqual(task.sent.map(\.text), ["Explain @read"], "Return sends the text as typed")
-        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
-        XCTAssertEqual(home.created, ["Explain @read"], "Return starts the task with the text as typed")
     }
 
     func testBothComposersChooseAFileFromTheTypedMentionList() throws {
         let workspace = try makeFolder()
         let task = TaskProbe(), home = HomeProbe()
         let composers: [(String, any ComposerDraftEditing, () throws -> Mounted)] = [
-            ("task", task.draft, { try self.mount(self.taskComposer(task, roots: [workspace])) }),
-            ("new task", home.draft, { try self.mount(self.homeComposer(home, workspace: workspace)) })
+            ("task", task.draft,
+             { try self.mount(self.taskComposer(task, roots: [workspace]), editing: task.draft) }),
+            ("new task", home.draft,
+             { try self.mount(self.homeComposer(home, workspace: workspace), editing: home.draft) })
         ]
         for (name, draft, make) in composers {
             let mounted = try make()
             try type("Explain @sess", into: mounted, showing: "Session.swift")
-            try press("\r", keyCode: 36, in: mounted)
+            try press("\r", keyCode: 36, in: mounted, until: { !draft.attachments.isEmpty })
             XCTAssertEqual(draft.text, "Explain", name)
             XCTAssertEqual(draft.attachments, [.mention(name: "Session.swift",
                 path: workspace.appending(path: "Sources/App/Session.swift").standardizedFileURL)], name)
@@ -431,8 +437,10 @@ final class ComposerEditorTests: XCTestCase {
         let image = workspace.appending(path: "shot.png"), source = workspace.appending(path: "README.md")
         let task = TaskProbe(), home = HomeProbe()
         let composers: [(String, any ComposerDraftEditing, () throws -> Mounted)] = [
-            ("task", task.draft, { try self.mount(self.taskComposer(task, roots: [workspace])) }),
-            ("new task", home.draft, { try self.mount(self.homeComposer(home, workspace: workspace)) })
+            ("task", task.draft,
+             { try self.mount(self.taskComposer(task, roots: [workspace]), editing: task.draft) }),
+            ("new task", home.draft,
+             { try self.mount(self.homeComposer(home, workspace: workspace), editing: home.draft) })
         ]
         let expected: [CodexUserInput] = [.localImage(image.standardizedFileURL, detail: .auto),
                                           .mention(name: "README.md", path: source.standardizedFileURL)]
@@ -452,23 +460,24 @@ final class ComposerEditorTests: XCTestCase {
                 charactersIgnoringModifiers: "v", isARepeat: false, keyCode: 9))
             XCTAssertTrue(target.handlePaste(paste, pasteboard: pasteboard), name)
             XCTAssertEqual(draft.attachments, expected, "A paste attaches what is not attached yet (\(name))")
-            mounted.host.settle()
-            XCTAssertEqual(mounted.elements.filter { $0.label == L10n.string("Attached input") }.count, 2,
-                           "Both chips show (\(name))")
+            let chips = { mounted.elements.filter { $0.label == L10n.string("Attached input") }.count }
+            mounted.host.settle(until: { chips() == 2 })
+            XCTAssertEqual(chips(), 2, "Both chips show (\(name))")
         }
     }
 
     func testBashModeIsTheTaskComposersAlone() throws {
         let workspace = try makeFolder()
         let task = TaskProbe(), home = HomeProbe()
-        let taskMounted = try mount(taskComposer(task, roots: [workspace]))
-        try type("!", into: taskMounted)
+        let taskMounted = try mount(taskComposer(task, roots: [workspace]), editing: task.draft)
+        try type("!", into: taskMounted, until: { taskMounted.shows(L10n.string("Enter a shell command")) })
         XCTAssertTrue(task.draft.isBashMode)
         XCTAssertEqual(task.draft.text, "")
         XCTAssertTrue(taskMounted.shows(L10n.string("Enter a shell command")))
 
-        let homeMounted = try mount(homeComposer(home, workspace: workspace))
+        let homeMounted = try mount(homeComposer(home, workspace: workspace), editing: home.draft)
         try type("!", into: homeMounted)
+        homeMounted.host.settle()
         XCTAssertEqual(home.draft.text, "!", "The new-task composer keeps `!` as text")
     }
 
@@ -477,18 +486,20 @@ final class ComposerEditorTests: XCTestCase {
         let task = TaskProbe(), home = HomeProbe()
         task.draft.text = "/re"
         home.draft.text = "/re"
-        let taskMounted = try mount(taskComposer(task))
-        XCTAssertEqual(task.reads, 0, "Focusing a restored `/` draft reads nothing")
+        let taskMounted = try mount(taskComposer(task), editing: task.draft)
+        taskMounted.host.settle(until: { taskMounted.shows("/review") })
         XCTAssertTrue(taskMounted.shows("/review"), "The list shows what the session already listed")
-        try type("v", into: taskMounted)
+        XCTAssertEqual(task.reads, 0, "Focusing a restored `/` draft reads nothing")
+        try type("v", into: taskMounted, until: { task.reads == 1 })
         XCTAssertEqual(task.reads, 1, "A typed slash reads the detached task's catalog")
         taskMounted.host.close()
 
-        let homeMounted = try mount(homeComposer(home, workspace: workspace))
+        let homeMounted = try mount(homeComposer(home, workspace: workspace), editing: home.draft)
         XCTAssertEqual(home.reads, 0, "Focusing a restored `/` draft reads nothing")
-        try type("i", into: homeMounted)
+        try type("i", into: homeMounted, until: { home.reads == 1 })
         XCTAssertEqual(home.reads, 1, "A typed slash reads the new task's catalog")
         try type("e", into: homeMounted)
+        homeMounted.host.settle()
         XCTAssertEqual(home.reads, 1, "Once per project, runtime and account")
     }
 
@@ -498,11 +509,13 @@ final class ComposerEditorTests: XCTestCase {
         draft.text = "/mo"
         let mounted = try mount(PromptComposer(
             harness: .codex, composerDraft: draft, modelCatalog: ComposerUnificationFixtures.codexCatalog,
-            isRunning: false, actions: ComposerActions(runCodexCommand: { _ in }, prepareCodexCommands: { reads += 1 })))
-        XCTAssertEqual(reads, 1, "Focusing a `/` draft opens Codex's list, which reads Plan mode, Fast and skills")
+            isRunning: false, actions: ComposerActions(runCodexCommand: { _ in }, prepareCodexCommands: { reads += 1 })), editing: draft)
         let listRow = WindowlessRender.AccessibilityElement(role: "AXButton", label: L10n.string("Model"), value: "")
+        mounted.host.settle(until: { reads == 1 && mounted.elements.contains(listRow) })
+        XCTAssertEqual(reads, 1, "Focusing a `/` draft opens Codex's list, which reads Plan mode, Fast and skills")
         XCTAssertTrue(mounted.elements.contains(listRow), "\(mounted.elements)")
         try type("d", into: mounted)
+        mounted.host.settle()
         XCTAssertEqual(reads, 1, "Typing within the open list reads nothing more")
         XCTAssertTrue(mounted.elements.contains(listRow))
     }
@@ -595,18 +608,20 @@ final class ComposerEditorTests: XCTestCase {
     func testWhileATurnRunsReturnSendsNowAndCommandReturnQueuesInBothHarnesses() throws {
         for harness in [HarnessKind.claudeCode, .codex] {
             let probe = FollowUpProbe()
-            let mounted = try mount(followUpComposer(harness, probe, preferred: .steer))
+            let mounted = try mount(followUpComposer(harness, probe, preferred: .steer), editing: probe.draft)
+            let submitted = { probe.sent.count + probe.followUps.count }
             try type("Use Python", into: mounted)
-            try press("\r", keyCode: 36, in: mounted)
+            try press("\r", keyCode: 36, in: mounted, until: { submitted() == 1 })
             try type("Then update the README", into: mounted)
-            try press("\r", keyCode: 36, modifiers: .command, in: mounted)
+            try press("\r", keyCode: 36, modifiers: .command, in: mounted, until: { submitted() == 2 })
             XCTAssertEqual(probe.draft.text, "", "\(harness)")
 
             try type("Two", into: mounted)
-            try press("\r", keyCode: 36, modifiers: .shift, in: mounted)
+            try press("\r", keyCode: 36, modifiers: .shift, in: mounted, until: { probe.draft.text == "Two\n" })
             XCTAssertEqual(probe.draft.text, "Two\n", "Shift-Return adds a line while a turn runs (\(harness))")
             try type("lines", into: mounted)
-            try press("\r", keyCode: 36, modifiers: .option, in: mounted)
+            try press("\r", keyCode: 36, modifiers: .option, in: mounted,
+                      until: { probe.draft.text == "Two\nlines\n" })
             XCTAssertEqual(probe.draft.text, "Two\nlines\n", "Option-Return adds a line (\(harness))")
             if harness == .codex {
                 // Codex's typed draft takes Return's automatic send, which steers by the setting.
@@ -622,27 +637,29 @@ final class ComposerEditorTests: XCTestCase {
 
     func testWithQueueingSetCommandReturnSendsNowAndWithoutATurnItIsReturn() throws {
         let queued = FollowUpProbe()
-        let mounted = try mount(followUpComposer(.claudeCode, queued, preferred: .queue))
+        let mounted = try mount(followUpComposer(.claudeCode, queued, preferred: .queue), editing: queued.draft)
         try type("Stop and use Python", into: mounted)
-        try press("\r", keyCode: 36, modifiers: .command, in: mounted)
+        try press("\r", keyCode: 36, modifiers: .command, in: mounted, until: { !queued.followUps.isEmpty })
         XCTAssertEqual(queued.followUps, ["steer: Stop and use Python"])
         mounted.host.close()
 
         let idle = FollowUpProbe()
-        let idleMounted = try mount(followUpComposer(.claudeCode, idle, preferred: .steer, isRunning: false))
+        let idleMounted = try mount(followUpComposer(.claudeCode, idle, preferred: .steer, isRunning: false),
+                                    editing: idle.draft)
         try type("Next", into: idleMounted)
-        try press("\r", keyCode: 36, modifiers: .shift, in: idleMounted)
+        try press("\r", keyCode: 36, modifiers: .shift, in: idleMounted, until: { idle.draft.text == "Next\n" })
         XCTAssertEqual(idle.draft.text, "Next\n", "With no turn running Shift-Return still adds a line")
         try type("request", into: idleMounted)
-        try press("\r", keyCode: 36, modifiers: .command, in: idleMounted)
+        try press("\r", keyCode: 36, modifiers: .command, in: idleMounted, until: { !idle.sent.isEmpty })
         XCTAssertEqual(idle.sent, ["Next\nrequest"], "With no turn running ⌘Return sends as Return does")
         XCTAssertEqual(idle.followUps, [])
         idleMounted.host.close()
 
         let unsteerable = FollowUpProbe()
-        let waiting = try mount(followUpComposer(.codex, unsteerable, preferred: .queue, canSteer: false))
+        let waiting = try mount(followUpComposer(.codex, unsteerable, preferred: .queue, canSteer: false),
+                                editing: unsteerable.draft)
         try type("Later", into: waiting)
-        try press("\r", keyCode: 36, modifiers: .command, in: waiting)
+        try press("\r", keyCode: 36, modifiers: .command, in: waiting, until: { !unsteerable.followUps.isEmpty })
         XCTAssertEqual(unsteerable.followUps, ["automatic: Later"], "No turn to steer yet: it goes as Return sends")
     }
 
@@ -652,43 +669,44 @@ final class ComposerEditorTests: XCTestCase {
     func testShiftReturnAddsALineInTheNewTaskComposerTooAndALongDraftScrolls() throws {
         let workspace = try makeFolder()
         let home = HomeProbe()
-        let mounted = try mount(homeComposer(home, workspace: workspace))
+        let mounted = try mount(homeComposer(home, workspace: workspace), editing: home.draft)
         try type("Plan", into: mounted)
-        try press("\r", keyCode: 36, modifiers: .shift, in: mounted)
+        try press("\r", keyCode: 36, modifiers: .shift, in: mounted, until: { home.draft.text == "Plan\n" })
         XCTAssertEqual(home.draft.text, "Plan\n")
         try type("then build", into: mounted)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        mounted.host.settle()
         XCTAssertEqual(home.created, [], "Shift-Return starts nothing")
-        try press("\r", keyCode: 36, in: mounted)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        try press("\r", keyCode: 36, in: mounted, until: { !home.created.isEmpty })
         XCTAssertEqual(home.created, ["Plan\nthen build"])
 
         let task = TaskProbe()
         task.draft.text = (1...12).map { "Line \($0)" }.joined(separator: "\n")
-        let composer = try mount(taskComposer(task))
+        let composer = try mount(taskComposer(task), editing: task.draft)
         let editor = try editor(composer)
         editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
-        try press("\r", keyCode: 36, modifiers: .shift, in: composer)
-        try type("Line 13", into: composer)
         let scroll = try XCTUnwrap(editor.enclosingScrollView)
         let document = try XCTUnwrap(scroll.documentView)
+        try press("\r", keyCode: 36, modifiers: .shift, in: composer)
+        try type("Line 13", into: composer, until: {
+            document.frame.height > scroll.contentView.bounds.height + 50
+                && abs(scroll.contentView.bounds.maxY - document.frame.height) <= 1
+        })
         XCTAssertGreaterThan(document.frame.height, scroll.contentView.bounds.height + 50,
                              "The field grows past what the composer shows")
         XCTAssertEqual(scroll.contentView.bounds.maxY, document.frame.height, accuracy: 1,
                        "Typing on at the end keeps the caret's line in view")
         editor.setSelectedRange(NSRange(location: 0, length: 0))
-        composer.host.settle()
+        composer.host.settle(until: { scroll.contentView.bounds.minY <= 1 })
         XCTAssertEqual(scroll.contentView.bounds.minY, 0, accuracy: 1, "The caret moved to the start brings it into view")
         try requireAwakeDisplay()
         let wheel = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: -3,
                                           wheel2: 0, wheel3: 0).flatMap(NSEvent.init(cgEvent:)))
         editor.scrollWheel(with: wheel)
         // AppKit moves the scroll view on the display's next refresh, later still on a busy Mac.
-        let deadline = Date().addingTimeInterval(testWaitLimitSeconds)
-        while scroll.contentView.bounds.minY <= 1, Date() < deadline { composer.host.settle(passes: 1) }
+        composer.host.settle(until: { scroll.contentView.bounds.minY > 1 })
         XCTAssertGreaterThan(scroll.contentView.bounds.minY, 1, "The wheel scrolls the field")
         task.draft.text = "Short"
-        composer.host.settle()
+        composer.host.settle(until: { abs(scroll.frame.height - document.frame.height) <= 1 })
         XCTAssertEqual(scroll.frame.height, document.frame.height, accuracy: 1, "A short draft shows whole again")
     }
 
@@ -698,7 +716,7 @@ final class ComposerEditorTests: XCTestCase {
     /// below wrapped too, and the composer jumped a line too tall and back (`scrollsPastLines`).
     func testTypingThatWrapsTheFirstLineGrowsTheComposerOnceWhereScrollersTakeWidth() throws {
         let task = TaskProbe()
-        let composer = try mount(taskComposer(task))
+        let composer = try mount(taskComposer(task), editing: task.draft)
         let editor = try editor(composer)
         let scroll = try XCTUnwrap(editor.enclosingScrollView)
         scroll.scrollerStyle = .legacy
@@ -722,7 +740,11 @@ final class ComposerEditorTests: XCTestCase {
         let start = scroll.frame.height
         for character in "lorem" {
             let before = scroll.frame.height
-            let taken = try heights(of: scroll) { try press(String(character), keyCode: 0, in: composer) }
+            let taken = try heights(of: scroll) {
+                try press(String(character), keyCode: 0, in: composer)
+                // Every height the composer takes after the key counts, so this watches for a fixed time.
+                composer.host.settle()
+            }
             XCTAssertLessThanOrEqual(taken.count, 1, "One keystroke, one new height: \(before) then \(taken)")
             XCTAssertGreaterThanOrEqual(scroll.frame.height, before, "Typing never shrinks the composer")
         }
@@ -750,10 +772,10 @@ final class ComposerEditorTests: XCTestCase {
     func testTheTypedListsTakeShiftAndCommandReturnAsTheyTakeReturnWhileATurnRuns() throws {
         for modifiers in [NSEvent.ModifierFlags.shift, .command] {
             let probe = FollowUpProbe()
-            let mounted = try mount(followUpComposer(.claudeCode, probe, preferred: .steer))
+            let mounted = try mount(followUpComposer(.claudeCode, probe, preferred: .steer), editing: probe.draft)
             try type("/re", into: mounted, showing: "/review")
             XCTAssertTrue(mounted.shows("/review"))
-            try press("\r", keyCode: 36, modifiers: modifiers, in: mounted)
+            try press("\r", keyCode: 36, modifiers: modifiers, in: mounted, until: { probe.draft.text == "/review " })
             XCTAssertEqual(probe.draft.text, "/review ", "The modified Return chooses the highlighted row")
             XCTAssertEqual(probe.sent, [])
             XCTAssertEqual(probe.followUps, [])

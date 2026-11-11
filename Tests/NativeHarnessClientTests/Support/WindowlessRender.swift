@@ -172,6 +172,24 @@ enum WindowlessRender {
             }
         }
 
+        /// `settle(until:)` for a test that is not `async`. Such a test does not hold the main actor, so
+        /// the view's tasks run while the run loop turns here and there is nothing to await. Swift picks
+        /// this one or the `async` one by where it is called. Use it instead of a fixed `settle()` before
+        /// asserting that something happened; a check that nothing happened still settles for a fixed time.
+        func settle(
+            until isDone: () -> Bool, timeout: TimeInterval = testWaitLimitSeconds,
+            file: StaticString = #filePath, line: UInt = #line
+        ) {
+            let deadline = Date().addingTimeInterval(timeout)
+            while true {
+                settle(passes: 1, interval: 0.01)
+                if isDone() { return }
+                guard Date() < deadline else {
+                    return XCTFail("The view did not settle in \(timeout) seconds", file: file, line: line)
+                }
+            }
+        }
+
         /// The view as it is now drawn, after any pending layout.
         func capture(file: StaticString = #filePath, line: UInt = #line) throws -> Capture {
             Capture(bitmap: try WindowlessRender.capture(hosting, file: file, line: line),
