@@ -27,6 +27,9 @@ final class NewTaskPane {
     private let chooseFolderButton = Button()
     /// The menus, two to a row.
     private let settingsGrid = Grid()
+    /// The menus shown, kept so their handlers find them: the bindings keep no Swift object alive for an element
+    /// XAML holds.
+    private var settingBoxes: [ComboBox] = []
     private let prompt = TextBox()
     private let status = TextBlock()
     /// The harnesses the list shows, in its order.
@@ -259,6 +262,7 @@ final class NewTaskPane {
 
     private func showSettings() {
         settingsGrid.children.clear()
+        settingBoxes = []
         settingsGrid.rowDefinitions.clear()
         guard let harness = chosenHarness else { return }
         let settings = AppModelRemoteBridge.taskSettings(options(for: harness)).filter { !$0.choices.isEmpty }
@@ -270,6 +274,7 @@ final class NewTaskPane {
                 settingsGrid.rowDefinitions.append(row)
             }
             let box = settingBox(setting, harness: harness)
+            settingBoxes.append(box)
             try? Grid.setRow(box, Int32(index / 2))
             try? Grid.setColumn(box, Int32(index % 2))
             settingsGrid.children.append(box)

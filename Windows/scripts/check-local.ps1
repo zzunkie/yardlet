@@ -221,6 +221,10 @@ $change.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pat
 Start-Sleep -Seconds 1
 $summary.fileChange = "$($change.Current.ClassName)"
 Save-Screen 'file-change'
+# Opened, it holds more than its own line: the file's name and the diff's lines.
+$texts = Wait-For { $found = @($change.FindAll($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($UIA::ControlTypeProperty, $Types::Text)))); if ($found.Count -ge 3) { $found } } 10
+$summary.fileChangeTexts = @($texts | ForEach-Object { $_.Current.Name }) -join ' | '
+if (-not $texts) { Finish 'the file change opened empty' }
 $process.Kill()
 $process.WaitForExit()
 
