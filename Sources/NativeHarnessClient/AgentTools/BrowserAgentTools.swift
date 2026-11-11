@@ -1593,7 +1593,8 @@ final class BrowserAgentTools {
             throw BrowserAgentToolError("This file chooser takes one \(chooser.mode == .openFolder ? "folder" : "file").")
         }
         var paths = try requested.map { try BrowserAgentWorkspaceFile.resolve($0, roots: page.workspaceRoots, mode: chooser.mode) }
-        // A file goes as a copy read from the path just checked; a folder or a place to save stays a path.
+        // A file goes as a copy read from the path just checked; a folder or a place to save stays a path, a
+        // folder only when no link in it leads out of the task's folders.
         if chooser.mode == .open || chooser.mode == .openMultiple {
             let checked = paths, roots = page.workspaceRoots, folder = uploadFolder
             paths = try await Task.detached(priority: .userInitiated) {
@@ -1601,6 +1602,14 @@ final class BrowserAgentTools {
             }.value
             guard page.fileDialog?.id == chooser.id else {
                 throw BrowserAgentToolError("The file chooser closed while the files were being read.")
+            }
+        } else if chooser.mode == .openFolder {
+            let checked = paths, roots = page.workspaceRoots
+            try await Task.detached(priority: .userInitiated) {
+                try checked.forEach { try BrowserAgentWorkspaceFile.checkFolder($0, roots: roots) }
+            }.value
+            guard page.fileDialog?.id == chooser.id else {
+                throw BrowserAgentToolError("The file chooser closed while the folder was being read.")
             }
         }
         _ = page.answerFileDialog(paths: paths)

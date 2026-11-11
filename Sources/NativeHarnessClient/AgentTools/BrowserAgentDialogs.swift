@@ -112,6 +112,26 @@ enum BrowserAgentWorkspaceFile {
         #endif
     }
 
+    /// Refuses a folder `resolve` let through that holds a symbolic link leading out of `roots`. A folder goes to
+    /// the chooser as its path, and whatever reads it for the page follows the links in it, so such a link would
+    /// take a file from the rest of the disk along with the folder. A link that stays in the task's folders, or
+    /// leads nowhere, is left alone. It walks the folder: run it off the main thread.
+    static func checkFolder(_ path: String, roots: [URL]) throws {
+        let canonicalRoots = roots.compactMap { canonicalPath($0.path(percentEncoded: false)) }.map { URL(filePath: $0) }
+        let folder = URL(filePath: path, directoryHint: .isDirectory)
+        guard let entries = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isSymbolicLinkKey]) else {
+            throw BrowserAgentToolError("\(path) could not be read.")
+        }
+        for case let entry as URL in entries {
+            guard (try? entry.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true,
+                  let target = canonicalPath(entry.path(percentEncoded: false)),
+                  !canonicalRoots.contains(where: { contains($0, URL(filePath: target)) }) else { continue }
+            throw BrowserAgentToolError("\(path) holds a link that leads outside this task's project folders "
+                + "(\(entry.lastPathComponent)), which an upload of the folder would follow. Remove the link, or "
+                + "upload the folder's files themselves.", outsideFolders(retry: .withChanges))
+        }
+    }
+
     /// The path with every link and `..` resolved by the system, `/private` included; nil when it does not exist.
     static func canonicalPath(_ path: String) -> String? {
         CanonicalPath.resolve(path)
