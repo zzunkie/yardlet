@@ -1181,6 +1181,12 @@ struct SidebarRowTrailingItemsView: View {
     var body: some View {
         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
             switch item {
+            case .scheduled:
+                Image(systemName: "clock")
+                    .font(.system(size: 10 * interfaceScale, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 14, height: 14)
+                    .accessibilityHidden(true)
             case .worktree:
                 Image(systemName: "arrow.triangle.branch")
                     .font(.system(size: 10 * interfaceScale, weight: .medium))
@@ -1997,7 +2003,8 @@ private struct TaskRow: View {
     }
 
     private var trailingItems: [SidebarRowTrailingItem] {
-        SidebarTaskIndicatorProjection.trailingItems(isWorktree: worktreeDetail != nil, pullRequest: pullRequestMark,
+        SidebarTaskIndicatorProjection.trailingItems(isScheduledRun: isScheduledRun,
+                                                     isWorktree: worktreeDetail != nil, pullRequest: pullRequestMark,
                                                      cpuPercent: cpuPercent, status: status)
     }
 
@@ -2052,13 +2059,6 @@ private struct TaskRow: View {
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
-                    }
-                    if isScheduledRun {
-                        Image(systemName: "clock")
-                            .font(.system(size: 10 * interfaceScale, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.leading, 5)
-                            .accessibilityHidden(true)
                     }
                     Spacer(minLength: 3)
                     if isRenaming {

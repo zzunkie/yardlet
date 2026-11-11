@@ -410,6 +410,8 @@ final class SidebarNestingRenderingTests: XCTestCase {
                 onArchive: { _ in }, onDelete: { _ in }, onRename: { _ in }, onMarkRead: { _ in },
                 disclosure: disclosure)
                 .environment(\.shellBusyTaskIDs, [shellBusy.id])
+                // A scheduled run's clock sits with the row's end marks, whatever the title's length.
+                .environment(\.scheduledTaskIDs, [unread.id, selected.id, shellBusy.id])
         }
 
         // The same sidebar with "Show more" pressed and the collapsed project opened.
