@@ -176,10 +176,10 @@ enum NewTaskFolderConflict {
         sessions: [SessionRecord]
     ) -> SessionRecord? {
         guard let folder, isInRepository, !startsInNewWorktree, !startsChat else { return nil }
-        let path = ProjectSidebarPresentation.normalizedPath(for: folder)
+        let key = ProjectSidebarPresentation.folderKey(for: folder)
         return sessions.first { session in
             (session.status == .running || session.status == .waitingForApproval)
-                && ProjectSidebarPresentation.normalizedPath(for: session.workspaceURL) == path
+                && ProjectSidebarPresentation.folderKey(for: session.workspaceURL) == key
         }
     }
 }

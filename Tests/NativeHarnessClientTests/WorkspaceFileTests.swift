@@ -90,6 +90,17 @@ final class WorkspaceFileTests: XCTestCase {
         }
         XCTAssertEqual(windows.path(of: URL(string: "file://server/share/x")!), "//server/share/x")
         XCTAssertEqual(posix.path(of: URL(string: "file://server/share/x")!), "/share/x")
+
+        // One folder is one key however it is written, which is what makes it one project; a Mac's key is the path.
+        for path in ["/Work/App", "/work/app/", "C:\\Repo"] { XCTAssertEqual(posix.key(path), path) }
+        let repo = windows.key("C:\\Users\\Me\\Repo")
+        for path in ["c:/users/me/repo", "/C:/Users/me/Repo/", "\\\\?\\C:\\Users\\Me\\Repo", "C:\\Users\\Me\\src\\..\\Repo"] {
+            XCTAssertEqual(windows.key(path), repo, path)
+        }
+        XCTAssertEqual(windows.key("\\\\Server\\Share\\Repo"), windows.key("\\\\?\\UNC\\server\\share\\repo"))
+        for path in ["D:\\Users\\Me\\Repo", "C:\\Users\\Me\\Repo2", "\\\\C:\\Users\\Me\\Repo", "C:\\Users\\Me\\Re\u{301}po"] {
+            XCTAssertNotEqual(windows.key(path), repo, path)
+        }
     }
 
     /// A link the person clicks opens any file on the Mac, as the Codex and Claude apps do: one outside

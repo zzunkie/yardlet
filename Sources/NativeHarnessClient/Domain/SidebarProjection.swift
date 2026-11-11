@@ -553,7 +553,7 @@ enum SidebarProjection {
     /// group that belongs to none.
     static func disclosureKey(for group: WorkspaceGroup) -> String {
         if let project = group.project { return "project:\(project.id.uuidString)" }
-        return "folder:\(ProjectSidebarPresentation.normalizedPath(for: group.workspaceURL))"
+        return "folder:\(ProjectSidebarPresentation.folderKey(for: group.workspaceURL))"
     }
 
     /// The first `limit` rows, as the Codex app lists a project: the selected row stays listed
