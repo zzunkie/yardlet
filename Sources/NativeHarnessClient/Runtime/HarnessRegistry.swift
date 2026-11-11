@@ -54,11 +54,20 @@ struct HarnessRoutingPolicy: Sendable {
 }
 
 actor HarnessRegistry {
+    /// What an adapter is kept for: a harness, the CLI it runs, the storage and the account.
     struct Key: Hashable, Sendable {
         let harness: HarnessKind
         let executableURL: URL
         let environmentScope: SessionEnvironmentScope
         let connection: ProviderConnection?
+
+        init(harness: HarnessKind, executableURL: URL, environmentScope: SessionEnvironmentScope = .native,
+             connection: ProviderConnection? = nil) {
+            self.harness = harness
+            self.executableURL = executableURL.standardizedFileURL
+            self.environmentScope = environmentScope
+            self.connection = connection
+        }
     }
 
     typealias Factory = @Sendable (HarnessKind, URL) -> any HarnessAdapter
@@ -105,15 +114,16 @@ actor HarnessRegistry {
         environmentScope: SessionEnvironmentScope = .native,
         connection: ProviderConnection? = nil
     ) async -> any HarnessAdapter {
-        let key = Key(
-            harness: harness,
-            executableURL: executableURL.standardizedFileURL,
-            environmentScope: environmentScope,
-            connection: connection
-        )
+        await adapter(for: Key(harness: harness, executableURL: executableURL, environmentScope: environmentScope,
+                               connection: connection))
+    }
+
+    /// The adapter kept for `key`, made when there is none. Asking starts no runtime.
+    func adapter(for key: Key) async -> any HarnessAdapter {
         if let adapter = adapters[key] {
             return adapter
         }
+        let harness = key.harness
         // The task keeps the runtime path it recorded; only the process started for it changes.
         let started = startedExecutable(for: harness, requested: key.executableURL)
         let antigravityPrintMode = factory == nil && harness == .antigravityCLI
@@ -126,8 +136,8 @@ actor HarnessRegistry {
             ?? makeDefaultAdapter(
                 harness: harness,
                 executableURL: started,
-                environmentScope: environmentScope,
-                connection: connection,
+                environmentScope: key.environmentScope,
+                connection: key.connection,
                 antigravityPrintMode: antigravityPrintMode
             )
         adapters[key] = adapter
@@ -160,15 +170,18 @@ actor HarnessRegistry {
     }
 
     /// Drops the adapter kept for one harness, CLI, storage and account, so the next request for
-    /// them makes a new one; other accounts and storages keep theirs. Given `adapter`, only that one
-    /// goes: an adapter made in its place since stays.
-    func invalidate(harness: HarnessKind, executableURL: URL, environmentScope: SessionEnvironmentScope,
-                    connection: ProviderConnection?, ifStill adapter: (any HarnessAdapter)? = nil) {
-        let key = Key(harness: harness, executableURL: executableURL.standardizedFileURL,
-                      environmentScope: environmentScope, connection: connection)
-        if let adapter, let kept = adapters[key],
-           ObjectIdentifier(kept as AnyObject) != ObjectIdentifier(adapter as AnyObject) { return }
+    /// them makes a new one; other accounts and storages keep theirs.
+    func invalidate(_ key: Key) {
         adapters.removeValue(forKey: key)
+    }
+
+    /// Drops `adapter` from wherever it is kept, so the next request for its harness, CLI, storage
+    /// and account makes a new one. What it is kept under is the registry's to know: a task's
+    /// recorded CLI may have changed since the task got the adapter. An adapter made in its place
+    /// since stays.
+    func invalidate(_ adapter: any HarnessAdapter) {
+        let identity = ObjectIdentifier(adapter as AnyObject)
+        adapters = adapters.filter { ObjectIdentifier($0.value as AnyObject) != identity }
     }
 
     private func makeDefaultAdapter(

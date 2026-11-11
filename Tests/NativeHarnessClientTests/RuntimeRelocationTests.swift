@@ -118,6 +118,45 @@ final class RuntimeRelocationTests: XCTestCase {
         await model.shutdown()
     }
 
+    /// A desktop app removes the CLI a task recorded while Yardlet runs too, so whatever runs or asks
+    /// a task's CLI between attaches follows it the same way (`AppModel.runtime(of:)`): reading a
+    /// detached task, its limits, a title request. Asking writes nothing to the task's row.
+    func testATaskCLIRemovedWhileYardletRunsIsFollowedWithoutAnAttach() async throws {
+        let root = temporaryDirectory()
+        let app = root.appending(path: "Applications/ChatGPT.app", directoryHint: .isDirectory)
+        let recorded = try executable(at: app.appending(path: "Contents/Resources/codex"))
+        let task = SessionRecord(harness: .codex, workspaceURL: root, runtimeExecutableURL: recorded, title: "Codex",
+                                 providerSessionID: "thread-1")
+        let started = Box<[URL]>([])
+        let suite = testDefaultsSuite("Yardlet.RuntimeRelocationTests.running")
+        let model = AppModel(
+            store: SessionStore(repository: InMemorySessionRepository(sessions: [task])),
+            runtimeSelections: RuntimeSelectionStore(defaults: try XCTUnwrap(UserDefaults(suiteName: suite)),
+                                                     discoversRuntimes: false),
+            registry: HarnessRegistry(factory: { harness, url in
+                started.value.append(url)
+                return UnsupportedHarnessAdapter(kind: harness, executableURL: url)
+            }),
+            transcriptRepository: FileTranscriptRepository(directoryURL: URL(filePath: "/nonexistent/transcripts")),
+            restoresIndexOnLaunch: true
+        )
+        await model.restoreIndex()
+        XCTAssertEqual(model.runtime(of: task), recorded, "A recorded CLI that exists is the task's")
+
+        // The ChatGPT app updates: the recorded CLI goes and the bundle's new layout holds it.
+        try FileManager.default.removeItem(at: recorded)
+        let moved = try executable(at: app.appending(path: "Contents/Resources/codex-cli/bin/codex"))
+
+        XCTAssertEqual(model.runtime(of: task), moved)
+        XCTAssertEqual(model.runtimeKey(of: task).executableURL, moved)
+        _ = await model.registryAdapter(for: task)
+        XCTAssertEqual(started.value, [moved], "The adapter a detached task is read with runs the CLI that is there")
+        let startedExecutable = await model.startedExecutable(of: task)
+        XCTAssertEqual(startedExecutable, moved)
+        XCTAssertEqual(model.store.sessions.first?.runtimeExecutableURL, recorded, "Asking leaves the row as it was")
+        await model.shutdown()
+    }
+
     private func executable(at url: URL) throws -> URL {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("#!/bin/sh\nexit 0\n".utf8).write(to: url)

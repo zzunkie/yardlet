@@ -13,9 +13,9 @@ extension AppModel {
         defer { reading.finishReading() }
         guard reading.outcome == .reading, !isVisualFixture, let providerID = reading.session.providerSessionID
         else { return }
-        var session = reading.session
-        // As restoring the task would: a runtime its desktop app moved is read where it lives now.
-        if let runtime = runtimeReplacement(for: session) { session.runtimeExecutableURL = runtime }
+        // As restoring the task would, a runtime its desktop app moved is read where it lives now
+        // (`runtime(of:)`); the archived row keeps the path it recorded.
+        let session = reading.session
         switch session.harness {
         case .claudeCode:
             let reader = claudeSessionReader(for: session)
@@ -41,7 +41,7 @@ extension AppModel {
         default:
             guard ACPSessionHistory.reads(session.harness) else { return }
             let history = acpSessionHistory
-            let executable = await registry.startedExecutable(for: session.harness, requested: session.runtimeExecutableURL)
+            let executable = await startedExecutable(of: session)
             guard let entries = try? await Task.detached(priority: .utility, operation: {
                 try await history.conversation(of: session.harness, executableURL: executable,
                     connection: session.connection, providerSessionID: providerID, workspaceURL: session.workspaceURL)
@@ -58,8 +58,7 @@ extension AppModel {
               let providerID = reading.session.providerSessionID else { return }
         reading.isReadingEarlier = true
         defer { reading.isReadingEarlier = false }
-        var session = reading.session
-        if let runtime = runtimeReplacement(for: session) { session.runtimeExecutableURL = runtime }
+        let session = reading.session
         if var state = reading.codexState, let cursor = state.thread?.turnsNextCursor {
             guard let reader = await detachedCodexThreadReader(for: session),
                   let page = try? await reader.readThreadTurns(threadID: providerID, cursor: cursor,

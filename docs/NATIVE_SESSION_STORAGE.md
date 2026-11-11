@@ -166,13 +166,17 @@ the older flat path and completed packages that have a regular `.verified` marke
 linked directories are excluded. The helper knows only the layouts of desktop apps that bundle a runtime (the Claude app
 for Claude Code, the ChatGPT app for Codex); a user-managed CLI that disappeared is not guessed. When such an app
 replaces its runtime while Yardlet runs (the Claude app deletes the previous version when it updates),
-`RuntimeSelectionStore.selectedURL` returns the successor path right away, as the next launch would. A task whose
-recorded runtime no longer exists is pointed at that successor, or else at the harness's current selection, when the
-index is restored and before Yardlet runs the task's CLI: before the task attaches, before a move to another account
-asks that CLI whether the target account is signed in, and before a title is asked of it
-(`AppModel.sessionWithAvailableRuntime`); a recorded runtime that still exists is not changed. Only the executable
-changes: the provider ID, storage scope, account binding and native history stay, no credentials are copied and there
-is no sign-in.
+`RuntimeSelectionStore.selectedURL` returns the successor path right away, as the next launch would.
+
+The path a task recorded is a record, and one rule says which CLI the task runs on now (`AppModel.runtime(of:)`): the
+recorded one while it exists, else that successor, else the harness's current selection. Everything that starts a
+task's CLI, asks it something or looks up the adapter kept for it uses that rule: an attach, the login check before a
+move to another account, a title request, and the reads of a detached or archived task (a Codex thread and its limits,
+a search result's places, an ACP agent's replay). The task's row is pointed at the CLI it continues with when the index
+is restored, before the task attaches, before a move to another account asks that CLI whether the target account is
+signed in, and before a title is asked of it (`AppModel.sessionWithAvailableRuntime`); the reads write nothing. A
+recorded runtime that still exists is not changed. Only the executable changes: the provider ID, storage scope, account
+binding and native history stay, no credentials are copied and there is no sign-in.
 
 ## Opening a saved task
 

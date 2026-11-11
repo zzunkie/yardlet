@@ -943,7 +943,7 @@ final class AppModel {
         if let adapter = adaptersBySessionID[session.id] {
             return (adapter as? any HarnessSessionBranching)?.sessionBranchMethod != nil
         }
-        let key = branchRuntimeKey(for: session)
+        let key = recordedRuntimeKey(of: session)
         if let known = branchMethodsByRuntime[key] { return known != nil }
         if resolvingBranchMethods.insert(key).inserted {
             Task { _ = await branchMethod(for: session) }
@@ -951,21 +951,15 @@ final class AppModel {
         return false
     }
 
-    private func branchRuntimeKey(for session: SessionRecord) -> HarnessRegistry.Key {
-        HarnessRegistry.Key(harness: session.harness, executableURL: session.runtimeExecutableURL.standardizedFileURL,
-            environmentScope: session.environmentScope, connection: session.connection)
-    }
-
     /// The task's attached adapter, or the one the registry would attach it with. Asking does not
     /// start the runtime.
     private func branchMethod(for session: SessionRecord) async -> HarnessSessionBranchMethod? {
-        let key = branchRuntimeKey(for: session)
+        let key = recordedRuntimeKey(of: session)
         let adapter: any HarnessAdapter
         if let attached = adaptersBySessionID[session.id] {
             adapter = attached
         } else {
-            adapter = await registry.adapter(for: session.harness, executableURL: session.runtimeExecutableURL,
-                environmentScope: session.environmentScope, connection: session.connection)
+            adapter = await registryAdapter(for: session)
         }
         let method = (adapter as? any HarnessSessionBranching)?.sessionBranchMethod
         branchMethodsByRuntime[key] = .some(method)
@@ -2380,8 +2374,7 @@ final class AppModel {
         if let attached = adaptersBySessionID[session.id] {
             adapter = attached
         } else {
-            adapter = await registry.adapter(for: session.harness, executableURL: session.runtimeExecutableURL,
-                                             environmentScope: session.environmentScope, connection: session.connection)
+            adapter = await registryAdapter(for: session)
         }
         guard let provider = adapter as? any CodexCapabilityProviding else { return nil }
         return try? await provider.accountRateLimits()
@@ -2817,9 +2810,7 @@ final class AppModel {
             if archived.isProviderArchived, !isVisualFixture,
                let providerSessionID = session.providerSessionID {
                 try session.connection?.validate(for: session.harness)
-                let runtime = runtimeReplacement(for: session) ?? session.runtimeExecutableURL
-                let adapter = await registry.adapter(for: session.harness, executableURL: runtime,
-                    environmentScope: session.environmentScope, connection: session.connection)
+                let adapter = await registryAdapter(for: session)
                 _ = try await adapter.probeRuntime()
                 guard let provider = adapter as? any HarnessSessionLifecycleProviding else {
                     throw HarnessAdapterError.capabilityUnavailable(
@@ -2999,11 +2990,7 @@ final class AppModel {
             let remainsInUse = adaptersBySessionID.values.contains {
                 ObjectIdentifier($0 as AnyObject) == closedIdentity
             }
-            if !remainsInUse {
-                await registry.invalidate(harness: session.harness, executableURL: session.runtimeExecutableURL,
-                                          environmentScope: session.environmentScope, connection: session.connection,
-                                          ifStill: adapter)
-            }
+            if !remainsInUse { await registry.invalidate(adapter) }
         }
         // The split view lets go of the task first, so the window moves to the split's remaining
         // pane instead of to whichever task the index would select next.
@@ -3712,7 +3699,7 @@ final class AppModel {
         beginSavedConversationRead(session.id)
         defer { endSavedConversationRead(session.id) }
         let history = acpSessionHistory
-        let executable = await registry.startedExecutable(for: session.harness, requested: session.runtimeExecutableURL)
+        let executable = await startedExecutable(of: session)
         do {
             let entries = try await Task.detached(priority: .utility) {
                 try await history.conversation(of: session.harness, executableURL: executable,
@@ -3884,13 +3871,12 @@ final class AppModel {
     }
 
     func detachedCodexThreadReader(for session: SessionRecord) async -> (any CodexThreadReading)? {
-        guard ExecutableLookup.current.isProgram(session.runtimeExecutableURL),
+        let key = runtimeKey(of: session)
+        guard ExecutableLookup.current.isProgram(key.executableURL),
               session.connection.map({ (try? $0.validate(for: .codex)) != nil }) ?? true,
               session.connection?.homePath.map({ FileManager.default.fileExists(atPath: $0) }) ?? true
         else { return nil }
-        let adapter = await registry.adapter(for: .codex, executableURL: session.runtimeExecutableURL,
-                                             environmentScope: session.environmentScope, connection: session.connection)
-        return adapter as? any CodexThreadReading
+        return await registry.adapter(for: key) as? any CodexThreadReading
     }
 
     /// What a detached thread read shows beside the provider's turns: the task's saved requests and
@@ -4756,8 +4742,7 @@ final class AppModel {
         if let attached = adaptersBySessionID[sessionID] {
             adapter = attached
         } else {
-            adapter = await registry.adapter(for: .codex, executableURL: session.runtimeExecutableURL,
-                environmentScope: session.environmentScope, connection: session.connection)
+            adapter = await registryAdapter(for: session)
         }
         guard let provider = adapter as? any CodexCapabilityProviding else {
             return selection
@@ -5430,10 +5415,11 @@ final class AppModel {
     func taskReadyToResume(_ task: SessionRecord, under connection: ProviderConnection) async throws -> SessionRecord {
         try connection.validate(for: task.harness)
         let task = await sessionWithAvailableRuntime(task)
-        guard ExecutableLookup.current.isProgram(task.runtimeExecutableURL) else {
-            throw HarnessAdapterError.runtimeNotFound(task.runtimeExecutableURL)
+        let runtime = runtime(of: task)
+        guard ExecutableLookup.current.isProgram(runtime) else {
+            throw HarnessAdapterError.runtimeNotFound(runtime)
         }
-        let status = try await AccountCommandRunner.run(executableURL: task.runtimeExecutableURL,
+        let status = try await AccountCommandRunner.run(executableURL: runtime,
             arguments: ["auth", "status"], environment: connection.environment)
         guard HarnessAccountBroker.commandAccountState(for: .claudeCode, result: status) == .signedIn
         else { throw ProviderConnectionError.signedOut }
@@ -5453,9 +5439,11 @@ final class AppModel {
         guard stillIdle(), TaskAccountSwitch.allows(connection, for: current) else {
             throw ProviderConnectionError.invalidBinding
         }
+        // The adapter of the account it leaves goes with its runtime: the one it ran on, or else the
+        // one kept for its runtime.
+        let attached = adaptersBySessionID[current.id]
         await closeIdleRuntime(of: current.id)
-        await registry.invalidate(harness: current.harness, executableURL: current.runtimeExecutableURL,
-            environmentScope: current.environmentScope, connection: current.connection)
+        if let attached { await registry.invalidate(attached) } else { await registry.invalidate(runtimeKey(of: current)) }
         guard stillIdle() else {
             throw ProviderConnectionError.invalidBinding
         }
@@ -5852,9 +5840,7 @@ final class AppModel {
             await adapter.close(handle)
             let identity = ObjectIdentifier(adapter as AnyObject)
             if !self.adaptersBySessionID.values.contains(where: { ObjectIdentifier($0 as AnyObject) == identity }) {
-                await registry.invalidate(harness: session.harness, executableURL: session.runtimeExecutableURL,
-                                          environmentScope: session.environmentScope, connection: session.connection,
-                                          ifStill: adapter)
+                await registry.invalidate(adapter)
             }
         }
         memorySaverClosings[id] = closing
@@ -5898,25 +5884,6 @@ final class AppModel {
     func connectorScope(for session: SessionRecord) -> ConnectorTaskScope {
         let scope = ConnectorCenter.scope(for: session)
         return connectorCenter?.withYardletStandIns(scope) ?? scope
-    }
-
-    /// A task keeps the runtime it was created with. When a desktop app that bundles that runtime
-    /// moved it or removed its old version, the task continues with where the runtime now lives,
-    /// or else with the harness's current runtime. The provider session and its home stay as they
-    /// were, and a recorded runtime that still exists is never replaced.
-    func sessionWithAvailableRuntime(_ session: SessionRecord) async -> SessionRecord {
-        guard let replacement = runtimeReplacement(for: session),
-              let updated = try? await store.updateRuntimeExecutable(id: session.id, to: replacement)
-        else { return session }
-        return updated
-    }
-
-    /// Where a task whose recorded runtime is gone continues: where the desktop app that bundles the
-    /// runtime moved it, or else the harness's current runtime. Nil while the recorded one exists.
-    func runtimeReplacement(for session: SessionRecord) -> URL? {
-        guard !ExecutableLookup.current.isProgram(session.runtimeExecutableURL) else { return nil }
-        return RuntimeRelocation.successor(of: session.runtimeExecutableURL, for: session.harness)
-            ?? runtimeSelections.selectedURL(for: session.harness)
     }
 
     /// Restoration points tasks at moved runtimes up front, so task details and the next attach
@@ -5990,12 +5957,7 @@ final class AppModel {
                 throw ProviderConnectionError.invalidBinding
             }
         }
-        let adapter = await registry.adapter(
-            for: session.harness,
-            executableURL: session.runtimeExecutableURL,
-            environmentScope: session.environmentScope,
-            connection: session.connection
-        )
+        let adapter = await registryAdapter(for: session)
         do {
             _ = try await adapter.probeRuntime()
             guard store.sessions.contains(where: { $0.id == session.id && $0.connection == session.connection }) else {
@@ -6187,9 +6149,7 @@ final class AppModel {
                 startCodexPresentationCollection(provider: provider, handle: handle)
             }
         } catch {
-            await registry.invalidate(harness: session.harness, executableURL: session.runtimeExecutableURL,
-                                      environmentScope: session.environmentScope, connection: session.connection,
-                                      ifStill: adapter)
+            await registry.invalidate(adapter)
             throw error
         }
     }
@@ -6264,9 +6224,7 @@ final class AppModel {
         }
         // Drop the dead adapter from the registry before a new attachment can reuse it. Its account's
         // and storage's only: another account's App Server on the same CLI is alive.
-        await registry.invalidate(harness: session.harness, executableURL: session.runtimeExecutableURL,
-                                  environmentScope: session.environmentScope, connection: session.connection,
-                                  ifStill: adapter)
+        await registry.invalidate(adapter)
         guard !Task.isCancelled, handlesBySessionID[id] == handle,
               store.sessions.contains(where: { $0.id == id }) else { return }
         eventTasksBySessionID.removeValue(forKey: id)

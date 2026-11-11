@@ -24,7 +24,7 @@ extension AppModel {
         let session = await sessionWithAvailableRuntime(session)
         switch session.harness {
         case .claudeCode:
-            let executable = await registry.startedExecutable(for: .claudeCode, requested: session.runtimeExecutableURL)
+            let executable = await startedExecutable(of: session)
             guard ExecutableLookup.current.isProgram(executable) else {
                 throw HarnessAdapterError.runtimeNotFound(executable)
             }
@@ -35,9 +35,7 @@ extension AppModel {
         default:
             // The adapter the task attaches with, or the one its detached history is read with.
             try session.connection?.validate(for: session.harness)
-            let adapter = await registry.adapter(for: session.harness, executableURL: session.runtimeExecutableURL,
-                                                 environmentScope: session.environmentScope,
-                                                 connection: session.connection)
+            let adapter = await registryAdapter(for: session)
             guard let suggesting = adapter as? any HarnessTaskTitleSuggesting else {
                 throw HarnessAdapterError.capabilityUnavailable(
                     L10n.format("%@ did not suggest a name.", session.harness.displayName))
