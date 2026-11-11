@@ -2,7 +2,7 @@ import XCTest
 import YardletLidSleep
 
 /// The lid helper's rules with the system setting and its record in memory: the helper never touches
-/// the Mac's power settings in a test (docs/REMOTE_V2_DESIGN.md §6.5).
+/// the Mac's power settings in a test (docs/SLEEP_PREVENTION.md).
 final class LidSleepGuardTests: XCTestCase {
     private final class Setting: SleepDisabledSetting {
         var isOn = false

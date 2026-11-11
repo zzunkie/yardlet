@@ -110,7 +110,7 @@ swift_build() {
 swift_build --product NativeHarnessClient
 # The Yardlet MCP server harnesses start over stdio (docs/AGENT_BROWSER_TOOLS.md).
 swift_build --product yardlet-mcp
-# The launch daemon behind "Keep tasks working with the lid closed" (docs/REMOTE_V2_DESIGN.md §6.5).
+# The launch daemon behind "Keep tasks working with the lid closed" (docs/SLEEP_PREVENTION.md).
 swift_build --product yardlet-lid-helper
 if [[ -n "$CEF_DIR" ]]; then
     swift_build --product YardletCEFHelper
@@ -206,7 +206,7 @@ if [[ -n "$SPARKLE_FEED_URL" || -n "$SPARKLE_PUBLIC_KEY" ]]; then
 else
     echo "Sparkle updates: off (no YARDLET_SPARKLE_FEED_URL and YARDLET_SPARKLE_PUBLIC_KEY)" >&2
 fi
-# The Yardlet relay for phones away from this network (relay/, docs/REMOTE_V2_DESIGN.md §12):
+# The Yardlet relay for phones away from this network (relay/README.md):
 # YARDLET_RELAY_URL, which scripts/release.sh sets to https://relay.yardlet.app, or the first line of
 # Packaging/RelayURL (out of git, for other builds). Without either the bundle carries none and phones
 # reach the Mac directly.

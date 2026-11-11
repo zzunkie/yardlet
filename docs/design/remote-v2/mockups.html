@@ -156,7 +156,7 @@
 <body>
 <div class="intro">
   <h1>Yardlet phone app v2 mockups</h1>
-  <p>Design: docs/REMOTE_V2_DESIGN.md section 8. The top row is light, the bottom row dark. A waiting request sits right above the composer, and a new task starts from the input bar at the bottom of home.
+  <p>Design: docs/design/REMOTE_V2_DESIGN.md section 8. The top row is light, the bottom row dark. A waiting request sits right above the composer, and a new task starts from the input bar at the bottom of home.
   Status dots match the Mac sidebar: green approval, orange question, gray running, blue unread, red failed.</p>
 </div>
 
@@ -184,7 +184,7 @@
 <div class="row" id="extra"></div>
 
 <script>
-const L = (h) => `../../Sources/NativeHarnessClient/Resources/HarnessLogos/${h}.png`;
+const L = (h) => `../../../Sources/NativeHarnessClient/Resources/HarnessLogos/${h}.png`;
 const status = () => document.getElementById('t-status').innerHTML;
 const icon = (id, cls = 'ic', style = '') => `<svg class="${cls}" style="${style}"><use href="#${id}"/></svg>`;
 const phone = (label, inner, extraClass = '') =>

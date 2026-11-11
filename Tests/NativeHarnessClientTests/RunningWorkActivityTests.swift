@@ -16,7 +16,7 @@ import YardletLidSleep
     }
 
     /// The display is held only while tasks work with the setting on, and lets go on a low battery,
-    /// which it says; a hot Mac keeps it (REMOTE_V2_DESIGN.md §6.5).
+    /// which it says; a hot Mac keeps it (docs/SLEEP_PREVENTION.md).
     func testTheScreenStaysOnOnlyWhileWorkingWithTheSettingOnAndPowerToSpare() throws {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: testDefaultsSuite("RunningWorkActivity")))
         var conditions = PowerConditions(onBattery: true, batteryPercent: 80)

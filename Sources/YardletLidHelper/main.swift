@@ -2,7 +2,7 @@ import Foundation
 import YardletLidSleep
 
 // yardlet-lid-helper: Yardlet's launch daemon for Settings › General › "Keep tasks working with the
-// lid closed" (docs/REMOTE_V2_DESIGN.md §6.5). It runs as root only while that setting is
+// lid closed" (docs/SLEEP_PREVENTION.md). It runs as root only while that setting is
 // on (`SMAppService.daemon`), starts when Yardlet connects and once at startup, keeps the Mac awake
 // with the lid closed only while a connected Yardlet says its tasks are working, and exits when it has
 // nothing to do.

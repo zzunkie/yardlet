@@ -2,7 +2,7 @@
 
 Status: the contract (protocol 2; protocol 1 has been removed, §1). The Mac side (Yardlet) implements it in `Sources/YardletRemote` and
 `Sources/NativeHarnessClient/Remote`; the phone apps implement the client side against this file; the relay
-in `relay/` implements §14. The design is in [REMOTE_V2_DESIGN](REMOTE_V2_DESIGN.md).
+in `relay/` implements §14. The design record is in [REMOTE_V2_DESIGN](design/REMOTE_V2_DESIGN.md).
 
 A phone watches and drives the tasks running in Yardlet on the person's Mac: it lists projects and tasks
 with the sidebar's attention states, reads a task's conversation (latest first, older on scroll, live while
@@ -425,7 +425,7 @@ Unknown kinds: skip them. Text fields are capped (`truncated: true` when cut).
 - `activity`: `command`, `fileChange`, `tool`, `subagent`, `reasoning`, `taskSuggestion`, `other`.
 - `title` (≤ 300 characters): the line the Mac shows, in the provider app's words and the Mac's
   language ("Read Parser.swift", "Edited Package.swift", "Searched TODO", "Thinking").
-- `words` (optional, since 2026-11-03): the same line in parts, one entry per line the Mac draws (a command the
+- `words` (optional): the same line in parts, one entry per line the Mac draws (a command the
   Mac reads as several, such as two files read in one `&&`): `{"leading": "…", "verb": "Read", "trailing":
   "Parser.swift"}`, `leading` and `trailing` absent when empty, each part ≤ 300 characters. The Mac draws `verb`
   muted and the rest plain, in the order its language puts them; `title` is the parts joined with spaces, and the
@@ -455,7 +455,7 @@ Unknown kinds: skip them. Text fields are capped (`truncated: true` when cut).
 - A pending request's `command` is cut at 200,000 characters rather than 2,000 in every subscription, as full detail
   cuts it (§15.24): the person reads the whole command to answer it. Once answered it is cut at 2,000 again. A phone
   does not allow a `command` that came `truncated`.
-- `message` (≤ 1,000, optional, since 2026-11-03): the provider's own words the Mac's card shows above its form or
+- `message` (≤ 1,000, optional): the provider's own words the Mac's card shows above its form or
   answers: a Codex request's message and reason, such as the sentence an MCP form (§15.19) asks with, joined by a
   blank line. Absent when the request sends none.
 - `options` (pending only): what the phone may answer — `allowOnce`, `deny`, both, or none.
@@ -615,93 +615,8 @@ swift run --build-system native yardlet-remote-fixture --secure-port 47700 --sin
 
 ## 10. Revisions
 
-Every revision of protocol 2 only adds optional fields or states a rule, except where it says otherwise.
-
-- 2026-11-10: refusal `reason` values for the state a command met (§8), and the rule that only `failed` and `form` make
-  `message` the person's (§2); a task's `notices.error` (§15.31) and the Mac composer's `notice` (§15.33); next steps,
-  a subagent's Stop and Open child task, and a created schedule's row in every subscription, not only in full detail
-  (§15.24, §15.31); a request Yardlet holds answered whether or not its task is connected (§4.4); `createTask` with a
-  user command the new-task slash list offers (§15.5); why a suggested task's Start failed, `suggestionFailure`
-  (§15.9). Not only additions: `archiveTask` archives a running task as the Mac's sidebar does, and a failed archive,
-  rename, delete, restore, Resume or account choice answers `internal` rather than `ok` or `unavailable` (§15.10,
-  §15.32).
-- 2026-11-10: a suggested task's Options from another device: `suggestionOptions`, and Start with the client's
-  choices, advertised by the snapshot's `suggestionOptions` (§15.9).
-- 2026-11-08: a connection waiting on a link request is held to 65,536 bytes a message (§7, §13.2). At most 40 finished
-  files wait per device, and a message being sent keeps its files, which another message then finds `busy` (§15.20).
-- 2026-11-05: a second address of the same relay, `a` in the pairing link (§12) and `alternate` in message 2's `relay`
-  (§13.1); the Mac races it against the first for its room and answers only the socket whose challenge came first
-  (§14.2). The account API stays on the first.
-- 2026-11-05: a pending request's `command` up to 200,000 characters in every subscription, not only in full detail
-  (§6.5), so a phone can read and allow a long command; an answered request's stays at 2,000.
-- 2026-11-04: host accounts, harness runtimes and connectors in Settings (§15.37).
-- 2026-11-04: desktop conversation next steps and remaining content (§15.31).
-- 2026-11-04: optional composer extensions, scoped file mentions, task connectors, queue controls, suggestions and new-task choices (§15.33).
-- 2026-11-04: per-task session rail facts and actions, and cached home task lines (§15.34).
-
-- 2026-11-04: per-task session rail facts and actions, and cached home task lines (§15.34).
-- 2026-11-04: optional `taskActions`, sidebar and title actions, host account selection and paged archived tasks (§15.32).
-
-- 2026-11-04: schedule editing, full detail and Claude Code session schedules (§15.35).
-- 2026-11-04: host Settings (General, Yardlet Instructions, CLI Updates and Usage) in a remote window (§15.36).
-- 2026-11-04: §15.26 adds read-only Review, advertised by optional `reviewReading`; no mutation request is added.
-- 2026-11-04: workspace file listing (§15.27), with the existing bounded `readFile` requests for content.
-
-
-- 2026-11-04: host-managed per-device permissions, all off by default, with coalesced current-state persistence and denial recovery (§15.28).
-- 2026-11-04: permission-gated terminal sessions (§15.29).
-
-- 2026-10-16, after the first Android client build:
-  - §5.3: `after` always names an item the phone holds once it has applied what came before in order;
-    a phone that cannot find it subscribes again. A `loadOlder` page is followed by the changes its
-    newer turns went through meanwhile.
-  - §6.2: `queued` (and `queueFailed`) user items for messages waiting in a task's follow-up queue.
-  - §4.1: `running` is true while a turn waits on a request (`waiting` implies `running`); the fixture's
-    waiting tasks now say so and `stopTurn` expires their request.
-  - §5.2: `summary` on `attention` events while `waiting` (≤ 120 characters, secrets masked).
-  - §2, §3.2, §3.3, §4.1: `serverTime` on the `pair`, `hello` and `snapshot` responses, for clock skew.
-- 2026-10-24: protocol v2 (§11–§16) beside v1. v1 is unchanged on the wire; a v1 connection never sees
-  the v2 answers in `options` (§15.12).
-- 2026-10-27, v2 only: allow for the session and a note with a denial (§15.13), images (§15.14, and phone
-  messages up to 8 MiB in §13.2), choosing steer or queue and the queue's actions (§15.15), choosing a new task's
-  harness, model, effort, permission mode and worktree (§15.16), continuing a task a plan limit stopped (§15.17),
-  and answering a browser handoff (§15.18). Later the same day: every answer the Mac's card gives, MCP forms and
-  secret answers (§15.19), and files in resumable parts (§15.20).
-- 2026-10-27, not only additions: protocol 1 removed (§1); a link request commits to a nonce and reveals it
-  (§12.1), and older link requests get `unsupportedVersion`; limits on connections that are still authenticating
-  (§7, §13.1, §14.3).
-- 2026-11-02, v2 only: scheduled tasks, Run now, Pause and Resume, and their change event (§15.21); a task's outputs
-  and the files in its folders (§15.22).
-- 2026-11-03: `presence` and held pushes (§16, §18).
-- 2026-11-03: a line's words in parts, `words` (§6.4), and a choice's catalog key, `text` (§15.19). Later the same day:
-  a subscription's full detail (§15.24), with the snapshot's `fullConversation`; a `conversation` event's changes may
-  come in several events in a row (§5.3, §15.24).
-- 2026-11-03: a request's own words, `message` (§6.5), which the Mac's card shows above an MCP form's fields.
-- 2026-11-03: `sender` (§6.2) in every subscription, not only in full detail: who sent a message that is not the
-  person's, another task, a background command's notice or Claude Code's own schedule. Later the same day: a task
-  sender's `taskId`, which opens the task that sent it.
-- 2026-11-02, a rule restated: `parentTaskId` (§4.1) is the task the Mac's sidebar draws the task under, so a task
-  whose parent is in another list, pinned apart or in a split view comes without one, as the sidebar lists it.
-  Before, it was the task it was started from whenever that task was listed anywhere.
-- 2026-11-03, timings and a rule: the Mac pings the relay every 15 s instead of 30 s and gives up on it after 45 s
-  instead of 90 s, and opens its room again at once after it stayed open (§14.2); a phone whose connection was up
-  and closes with 4404, 4409 or no code tries again quietly for about 10 s (§14.3).
-- 2026-11-03, v2 only: a task's settings, slash commands, Edit message and Fork from here, and their change event
-  (§15.23).
-- 2026-11-03, v2 only: a task's browser tabs, a watched tab's frames and the person's input to it (§15.25), and `tabId`
-  on a browser handoff's item (§15.18). A limit on the messages the Mac holds unhandled per connection and in all (§7).
-- 2026-11-03: `announces` (§5.2) on a finish the Mac does not announce itself, which pushes (§16) no longer ring for;
-  `createTask` takes `"chats"` before the snapshot lists Chats (§15.5).
-- 2026-11-03, not only additions: pushes to iOS through APNs. `registerPush`'s `provider` is `fcm`, `apns` or
-  `apns-sandbox`, and the Mac refuses any other with `badRequest` (§15.6); the Mac's `push` to the relay names the
-  `provider`, and the relay sends `apns` and `apns-sandbox` pushes through APNs (§14.2, §16). A push's `collapse` is
-  at most 64 bytes rather than 64 characters.
-
-- 2026-11-04, v2 only: optional `tabControls` and watched-task address opening and tab closing (§15.30).
-- 2026-11-06, v2 only: optional `tabLists` and `watchTab`'s `listOnly`, which follows a task's tab list without
-  watching a tab or opening saved ones (§15.25).
-- 2026-11-06, a rule: a `file:` page outside the task's files shows to a remote device in the tab where the task's
-  agent opened it with `browser_navigate`, and only there (§15.25); a remote's own opening of one stays refused (§15.30).
+Every revision of protocol 2 only adds optional fields or states a rule; where a section changed a behavior
+incompatibly, that section says so. The history of the contract is in the repository's history.
 
 ## 11. v2 transport
 
@@ -867,9 +782,9 @@ more Noise transport messages:
   empty associated data, one transport message per binary frame (≤ 65,535 bytes).
 - The receiver decrypts in order and joins the chunks. A message that fails to decrypt closes the
   connection (4401). A message from the phone over 8 MiB closes it (1009), as do the Mac's over 8 MiB; while a link
-  request waits for its answer (§12.1), anything over 65,536 bytes does, as soon as that much of it has arrived. Before
-  2026-10-27 a Mac closed a phone message over 65,536 bytes; a phone sends a larger one (images, §15.14) only to
-  a Mac that offers images.
+  request waits for its answer (§12.1), anything over 65,536 bytes does, as soon as that much of it has arrived. An older
+  Mac closes a phone message over 65,536 bytes, so a phone sends a larger one (images, §15.14) only to a Mac that
+  offers images.
 - Nonces start at 0 in each direction and grow by one per message (Noise).
 
 ### 13.3 Keepalive and closing
@@ -1019,9 +934,9 @@ them with the token.
 - Projects carry `canCreateTask: true` where `createTask` may start one (projects with a folder, and
   Chats).
 - A waiting task carries `pendingSummary` (the newest request's line, as the `attention` event's `summary`)
-  and `pendingKind` (`approval`, `question`, `planReview`, `form`, and since 2026-10-27 `browserHandoff`, §15.18),
-  so a list says what waits without opening the task. Since 2026-10-27 the `attention` event of a waiting task
-  (§5.2), and so its push (§16), carries the same `pendingKind` (not on a v1 connection). v1 phones ignore them.
+  and `pendingKind` (`approval`, `question`, `planReview`, `form`, `browserHandoff`, §15.18),
+  so a list says what waits without opening the task. The `attention` event of a waiting task (§5.2), and so its
+  push (§16), carries the same `pendingKind`.
 - `newTask` comes only with `snapshot`; a phone about to start a task asks for a `snapshot` again when it
   needs the Mac's current choice.
 
@@ -1126,8 +1041,8 @@ characters). Errors as §15.3.
 ### 15.9 Suggested tasks
 
 `activity` items with `activity` `taskSuggestion` carry `suggestionId`, `suggestionState` (`open`, `starting`,
-`started`, `failed`, `dismissed`, `sentHere`), `startedTaskId` once started, `suggestionFailure` while `failed` (since
-2026-11-10, ≤ 2,000 characters: why the Start failed, in the Mac's words, as the chip's row says it), and in `options`
+`started`, `failed`, `dismissed`, `sentHere`), `startedTaskId` once started, `suggestionFailure` while `failed` (≤ 2,000
+characters: why the Start failed, in the Mac's words, as the chip's row says it), and in `options`
 the actions the phone may take: `start`, `here` (do it in this task), `dismiss`.
 
 ```json
@@ -1200,7 +1115,7 @@ why, as the Mac's window does).
 
 Protocol 1 has been removed (§1).
 
-The sections below were added on 2026-10-27 (REMOTE_V2_DESIGN 5.2). Each only adds optional fields and
+The sections below (design: [REMOTE_V2_DESIGN](design/REMOTE_V2_DESIGN.md) 5.2) each only add optional fields and
 requests, so a phone learns what a Mac offers from the fields it sends: an older Mac never sends them, and a phone
 that does not know them ignores them.
 
@@ -1251,8 +1166,8 @@ that does not know them ignores them.
 - A task carries `steers: true` when a message sent while its turn runs can go into that turn now (Codex adds it
   to the running turn; Claude Code reads it at its next step). Every other harness holds it until the turn ends.
 - The snapshot carries `followUp`: `"steer"` or `"queue"`, what Return does on the Mac while a turn runs
-  (Settings). A phone's own choice starts from it. A Mac from 2026-10-27 on always sends it on v2, so a phone
-  may read its presence as that Mac taking everything in §15.13–§15.18 (a denial's `note` above all, which an
+  (Settings). A phone's own choice starts from it. A Mac that takes §15.13–§15.18 always sends it on v2, so a
+  phone may read its presence as that Mac taking everything in §15.13–§15.18 (a denial's `note` above all, which an
   older Mac would drop without a word).
 - `sendMessage` takes `followUp`: `"steer"` sends the message into the running turn, `"queue"` holds it until
   the turn ends. Absent: the Mac's setting. No turn running: the message starts one either way.
@@ -1352,13 +1267,13 @@ that does not know them ignores them.
 - `{"type": "answerHandoff", "taskId": "4C1F…", "requestId": "…", "answer": "done"}`: the bar's "I'm done" or
   "Decline", once the step is finished in the tab (§15.25) or elsewhere (a sign-in approved in another app, a link
   opened on the phone). A command. Errors: `requestNotFound`, `notAllowed`.
-- Since 2026-11-03 the item carries `tabId`, the handed tab, which `watchTab` shows (§15.25); absent when the Mac
+- The item carries `tabId`, the handed tab, which `watchTab` shows (§15.25); absent when the Mac
   does not know which of the task's tabs it is.
 - It is pushed (§16) like any other wait.
 
 ### 15.19 Every answer the Mac's card gives
 
-Added later on 2026-10-27 (REMOTE_V2_DESIGN 5.3). A phone answers a request with the same choices the Mac's card
+A phone answers a request with the same choices the Mac's card
 shows, instead of the few §4.4 and §15.13 name.
 
 - A pending `approval` item without a question or plan form (`requestKind` `approval`, and `form` for an MCP form)
@@ -1374,8 +1289,8 @@ shows, instead of the few §4.4 and §15.13 name.
   `title` is the card's words in the Mac's language; `role` is `primary` (the prominent answer), `secondary` or
   `destructive` (a denial). `standing: true`: the answer leaves a rule beyond this task (a settings file, a policy,
   an MCP tool allowed for good, an exec or network policy amendment). The phone asks once more before it sends one
-  (REMOTE_V2_DESIGN 5.3). The ids name the answers of this request only.
-- Since 2026-11-03 a choice Yardlet worded itself also carries `text`, the Mac's catalog key `title` was made from
+  ([REMOTE_V2_DESIGN](design/REMOTE_V2_DESIGN.md) 5.3). The ids name the answers of this request only.
+- A choice Yardlet worded itself also carries `text`, the Mac's catalog key `title` was made from
   and the arguments filled into it, each again a key or words as they are:
 
   ```json
@@ -1420,7 +1335,7 @@ shows, instead of the few §4.4 and §15.13 name.
   form's item also keeps `moreOnMac` for phones that do not read `choices`.
 - A question step whose answer is a secret (`secret: true` in `questionSteps`) is answered on the phone as any other
   step (§15.3). Such a question offers `answerSecret` in `options` instead of `answer`, with `moreOnMac` and a
-  `macNote`, so a phone from before 2026-10-27, which would show the value, still sends the person to the Mac. A
+  `macNote`, so a phone that does not know `answerSecret`, which would show the value, still sends the person to the Mac. A
   phone that reads `answerSecret` shows the field masked, keeps the value only until it is sent, and never stores or
   logs it; the Mac sends it to the provider as its card does.
 - `moreOnMac` and `macNote` remain for a request with no choices: one Yardlet itself answers nothing for (its
@@ -1430,7 +1345,7 @@ shows, instead of the few §4.4 and §15.13 name.
 
 ### 15.20 Files and photos from the camera
 
-Added later on 2026-10-27 (REMOTE_V2_DESIGN 5.3). Photos from the camera are images (§15.14). Any other file goes up
+Photos from the camera are images (§15.14). Any other file goes up
 in parts first, then a message or a new task names it.
 
 - A task carries `acceptsFiles: true` when a message to it can carry files; `newTaskOptions` says the same of each
@@ -1466,7 +1381,7 @@ in parts first, then a message or a new task names it.
 
 ### 15.21 Scheduled tasks
 
-Added on 2026-11-02. The phone lists the Mac's scheduled tasks (Yardlet's own, the Mac's Scheduled tasks list), runs
+The phone lists the Mac's scheduled tasks (Yardlet's own, the Mac's Scheduled tasks list), runs
 one now and pauses or resumes one, through the same paths as the Mac's Run now, Pause and Resume. Creating, editing
 and deleting schedules stay on the Mac unless it advertises §15.35.
 
@@ -1521,8 +1436,8 @@ and deleting schedules stay on the Mac unless it advertises §15.35.
 
 ### 15.22 Files from the Mac
 
-Added on 2026-11-02. The phone opens what a task made: the files the Mac's Outputs card lists, and a file in the
-task's own folders that the conversation names. Until now files went only from the phone to the Mac (§15.20).
+The phone opens what a task made: the files the Mac's Outputs card lists, and a file in the
+task's own folders that the conversation names. Files the other way, from the phone to the Mac, are §15.20.
 
 - The snapshot carries `taskFiles: true` when the Mac answers the requests below. A phone offers them only then.
 - ```json
@@ -1579,7 +1494,7 @@ task's own folders that the conversation names. Until now files went only from t
 
 ### 15.23 A task's settings, slash commands, edit and fork
 
-Added on 2026-11-03. Another device changes an existing task the way the Mac's task composer and turns do: the model,
+Another device changes an existing task the way the Mac's task composer and turns do: the model,
 effort and permission mode in the composer's bottom row, the slash commands that may run from elsewhere, the latest
 message's Edit message, and Fork from here. Each acts through the path the Mac's own control takes.
 
@@ -1698,7 +1613,7 @@ message's Edit message, and Fork from here. Each acts through the path the Mac's
 
 ### 15.24 A conversation in full detail
 
-Added on 2026-11-03. Yardlet on another computer (§18) draws a task's conversation with the Mac's own cards, and asks
+Yardlet on another computer (§18) draws a task's conversation with the Mac's own cards, and asks
 for what they read beyond §6's items. A phone keeps §6.
 
 - The snapshot carries `fullConversation: true` when the Mac answers `subscribeTask` with `"detail": "full"` (§4.2).
@@ -1723,7 +1638,7 @@ for what they read beyond §6's items. A phone keeps §6.
 
   `input` and `output` are cut at 64,000 characters. `taskIds`: the listed tasks a Codex subagent's child threads run
   in, which its "Open child task" opens; a child the Mac does not list yet has none. `copyText`: what the card's copy
-  button takes. Since 2026-11-10 every subscription carries what the card does: `subagent` with only `taskIds`, and
+  button takes. Every subscription carries what the card does: `subagent` with only `taskIds`, and
   `activityId` and `canStop` for a Claude Code subagent (§15.31's `subtask`), so a client reading §6 can stop the
   subagent and open its child tasks too.
 - **`compaction`** on a `notice` item that is a context compaction: `{"phase": "completed", "tokensBefore": 180000,
@@ -1732,7 +1647,7 @@ for what they read beyond §6's items. A phone keeps §6.
   "fromModel": "gpt-6", "reason": "highRiskCyberActivity"}`; `kind` `modelRerouted`, `warning`, `configWarning` or
   `deprecationNotice`, with `details` and a config file's `path` when it names one. A client words it itself.
 - **`schedule`** on the `activity` item of a schedule an agent created (§15.21): `{"id": "6B0E…", "name": "Morning
-  check"}`, the schedule's ID and the name the call gave. In every subscription since 2026-11-10.
+  check"}`, the schedule's ID and the name the call gave. In every subscription.
 - **`limit`** on an `error` item with `errorKind` `usageLimit`: the limit as the provider reported it, which a client
   words itself (its `title` and `message` are the Mac's words):
 
@@ -1756,7 +1671,7 @@ for what they read beyond §6's items. A phone keeps §6.
 
 ### 15.25 A task's browser tabs
 
-Added on 2026-11-03. The phone sees a task's browser tab and uses it, for a step only the person can take while away: a
+The phone sees a task's browser tab and uses it, for a step only the person can take while away: a
 sign-in, a two-factor code, an approval button, often the tab a browser handoff (§15.18) gave them. The Mac sends
 pictures of the tab's visible page while the phone watches it, and the phone's taps, scrolling and typing go to the
 page as the Mac's own browser panel sends the person's. Hosts advertising `tabControls` also accept addresses and
@@ -2143,8 +2058,7 @@ shows an update notice instead of sending those links to the client's own loopba
 ### 15.31 Conversation next steps and content
 
 The optional snapshot flag `nextSteps: true` advertises `nextStep`. Turn headers carry
-optional `planToImplement`, `nextQuestions` and `answeredQuestions` in every subscription (before 2026-11-10, only in
-full detail), the plan cut at 8,000 characters outside full detail as plan items are; each question carries `title`,
+optional `planToImplement`, `nextQuestions` and `answeredQuestions` in every subscription, the plan cut at 8,000 characters outside full detail as plan items are; each question carries `title`,
 `options`, and the provider's `itemID`. Answered questions additionally carry `answerOptions` and
 `customAnswer`. Full assistant items retain `sentWhileWorking` and `unmarkedAnswer`, so questions
 keep their host position instead of becoming a closing answer. These fields are derived from the host's conversation projection and retained with
@@ -2205,7 +2119,7 @@ an audited command. Neither requires an additional device permission. A Codex ch
 to open as the host's own task.
 
 `taskNotices: true` advertises the optional task `notices`: provider limit warnings, restart resume,
-reconnecting, missing folder and account-move state, and `error` (since 2026-11-10, ≤ 2,000 characters): the task's
+reconnecting, missing folder and account-move state, and `error` (≤ 2,000 characters): the task's
 last error where the Mac shows it as a card above its composer, in the Mac's words. That is where the conversation
 does not show it already: a conversation with no items yet, or a Codex task's failure outside its turns (a turn the
 App Server refused, a runtime that ended). It goes when the Mac clears it, on the task's next message. The desktop
@@ -2280,7 +2194,7 @@ composer with hosts that omit it. Existing requests and optional fields remain r
 
 - `composerState` takes `taskId` and returns `composerState`: `nextMessageSuggestion` when available,
   `queuePaused`, optional `connectors` with their display names, state, tool count, source and opaque IDs, and
-  optional `notice` (since 2026-11-10, ≤ 2,000 characters): what the Mac's composer for the task says under its text
+  optional `notice` (≤ 2,000 characters): what the Mac's composer for the task says under its text
   in the Mac's words, such as why a message stayed unsent or a command such as Compact failed. A message, command or
   edit the Mac takes from another device clears it, as sending from its own composer does.
   Connector credentials, server configuration and environment values never travel. The desktop draws the local

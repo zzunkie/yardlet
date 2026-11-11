@@ -159,7 +159,7 @@ let package = Package(
         .executable(name: "yardlet-mcp", targets: ["YardletMCP"]),
         // The launch daemon behind Settings › General › "Keep tasks working with the lid closed";
         // build-app.sh places it in Contents/Helpers beside its launchd property list
-        // (docs/REMOTE_V2_DESIGN.md §6.5).
+        // (docs/SLEEP_PREVENTION.md).
         .executable(name: "yardlet-lid-helper", targets: ["YardletLidHelper"]),
         // The phone remote's fixture server: the remote protocol on loopback with fixture tasks, for
         // building the Android client without real tasks (docs/REMOTE_PROTOCOL.md §9).
