@@ -121,8 +121,14 @@ function Find-Typed($root, $type) {
     $root.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($UIA::ControlTypeProperty, $type)))
 }
 
-function Find-Class($root, [string] $class) {
-    $root.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($UIA::ClassNameProperty, $class)))
+# The conversation's line that opens and closes: an element with the expand and collapse pattern that is not a
+# sidebar row or a menu. What else has the pattern is kept for the summary.
+function Find-Expandable($root) {
+    $condition = New-Object System.Windows.Automation.PropertyCondition($UIA::IsExpandCollapsePatternAvailableProperty, $true)
+    $found = @($root.FindAll($Scope::Descendants, $condition))
+    $script:summary.expandable = @($found | ForEach-Object { "$($_.Current.ClassName): $($_.Current.Name)" }) -join ' | '
+    $found | Where-Object { @('NavigationViewItem', 'ComboBox', 'ListViewItem') -notcontains $_.Current.ClassName } |
+        Select-Object -First 1
 }
 
 function Select-Named($root, [string] $text) {
@@ -209,13 +215,12 @@ if (-not $answer) { Finish 'no answer' }
 Start-Sleep -Seconds 1
 Save-Screen 'answered'
 # The edit's line, opened to its diff.
-$change = Find-Class $main 'Expander'
-$summary.fileChange = [bool]$change
-if ($change) {
-    $change.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
-    Start-Sleep -Seconds 1
-    Save-Screen 'file-change'
-}
+$change = Find-Expandable $main
+if (-not $change) { Finish 'no file change line to open' }
+$change.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+Start-Sleep -Seconds 1
+$summary.fileChange = "$($change.Current.ClassName)"
+Save-Screen 'file-change'
 $process.Kill()
 $process.WaitForExit()
 
