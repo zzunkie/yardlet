@@ -32,8 +32,8 @@ checks each session's event sequence (`HarnessProtocolEventContractValidator`).
 
 **External adapters, as a separate process.** `HarnessProtocolProcessHost` implements the JSONL process boundary
 described below: it launches an adapter executable, negotiates the version, correlates requests and responses, checks
-events, and ends the process tree on failure. Today it is used by the conformance runner
-(`HarnessProtocolExternalConformanceRunner`) and by Yardlet's tests, against the sample adapter in
+events, and ends the process tree on failure. Today it is used by Yardlet's tests and their conformance runner
+(`HarnessProtocolExternalConformanceRunner`), against the sample adapter in
 [`../Examples/YardletSampleAdapter`](../Examples/YardletSampleAdapter). The app's registry has no path to register or
 launch an external adapter: it builds only the built-in families above, and a harness it does not know gets
 `UnsupportedHarnessAdapter`. An adapter that passes conformance can therefore not yet be installed in Yardlet or chosen
@@ -224,7 +224,7 @@ For every adapter, built-in or external:
 
 Two runners check a real external adapter process against this baseline: the dependency-free
 `bin/yardlet-harness-conformance` in the SDK, and `HarnessProtocolExternalConformanceRunner` in Yardlet's
-own sources, which uses only YHP requests and events through `HarnessProtocolProcessHost`. The adapter
+own tests, which uses only YHP requests and events through `HarnessProtocolProcessHost`. The adapter
 must:
 
 1. negotiate `1.0` and advertise the portable baseline plus resume and interrupt;

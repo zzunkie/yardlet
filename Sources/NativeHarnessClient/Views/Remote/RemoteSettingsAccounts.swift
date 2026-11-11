@@ -122,15 +122,4 @@ extension RemoteHostModel {
     func connectorsSettingsSectionView() -> some View {
         RemoteSettingsConnectorsSection(model: self)
     }
-
-    /// The `SettingsAccountsContext` backed by this remote host model, for a `SettingsCenterView`
-    /// that embeds the host's stores directly.
-    func settingsAccountsContext(initialHarness: HarnessKind? = nil) -> SettingsAccountsContext {
-        SettingsAccountsContext(
-            runtimeSelections: remoteRuntimeSelections,
-            connections: remoteConnections,
-            initialHarness: initialHarness,
-            harnessUsage: remoteAccountHarnessUsage
-        )
-    }
 }

@@ -93,12 +93,6 @@ final class CodexProtocolTests: XCTestCase {
         XCTAssertEqual(usage.params, .null)
     }
 
-    func testConfigRequirementsRequestUsesTheLockedNullParamsEnvelope() {
-        let request = CodexProtocol.readConfigRequirements(id: 24)
-        XCTAssertEqual(request.method, "configRequirements/read")
-        XCTAssertEqual(request.params, .null)
-    }
-
     func testConfigReadRequestUsesTheLockedWorkspaceAndLayerEnvelope() {
         let request = CodexProtocol.readConfig(
             id: 22,

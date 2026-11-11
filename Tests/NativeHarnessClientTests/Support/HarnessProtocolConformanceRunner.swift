@@ -1,4 +1,5 @@
 import Foundation
+@testable import NativeHarnessClient
 
 struct HarnessProtocolExternalConformanceReport: Equatable, Sendable {
     let adapterID: String

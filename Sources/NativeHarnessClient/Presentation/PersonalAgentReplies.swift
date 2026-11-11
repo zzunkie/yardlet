@@ -135,9 +135,6 @@ final class PersonalAgentReplies {
         return preview.text.isEmpty ? (preview.hasAttachments ? .attachment : nil) : .text(preview.text)
     }
 
-    /// Whether the message is in the room's own loaded window, where its questions are answered.
-    func isInRoom(_ id: String) -> Bool { roomIDs.contains(canonical(id)) }
-
     /// The thread `messageID` belongs to: its named root, else its parent's, followed back.
     func rootOf(_ messageID: String) -> String {
         var current = canonical(messageID)

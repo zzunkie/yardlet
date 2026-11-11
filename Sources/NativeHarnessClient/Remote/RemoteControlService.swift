@@ -415,7 +415,6 @@ final class RemoteControlService {
     private(set) var pendingPermissionValues: [RemotePermissionKey: Bool] = [:]
     private var deactivation: Task<Void, Never>?
     private(set) var updatingDevicePermissions: [String: Set<RemoteDevicePermission>] = [:]
-    typealias UnsavedDeniedPermission = RemotePermissionKey
     private(set) var unsavedDeniedPermissions: Set<RemotePermissionKey> = []
     private(set) var unsafeDeniedPermissions: Set<RemotePermissionKey> = []
     var canRetryPermissionChange: Bool { !unsavedDeniedPermissions.isEmpty }

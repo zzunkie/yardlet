@@ -1,4 +1,5 @@
 import AppKit
+@testable import NativeHarnessClient
 
 /// Small, dependency-free WCAG contrast helper used by the native token tests.
 /// It deliberately audits only fixed semantic tokens; dynamic system text colors and

@@ -1,4 +1,5 @@
 import Foundation
+@testable import NativeHarnessClient
 
 enum HarnessEventContractViolation: Error, Equatable, Sendable {
     case wrongSession(expected: UUID, actual: UUID)
