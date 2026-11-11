@@ -131,30 +131,41 @@ enum AntigravityPermissionMode {
             })
     }
 
-    /// Over ACP (`agy acp`) the agent asks before what needs approval: Default shows each request,
+    /// Over ACP (`agy acp`) the agent asks before what needs approval, and its session mode (`mode`)
+    /// decides what it approves without asking: Default asks for each step the person's settings do
+    /// not allow, and Accept edits and Auto, where the CLI offers them, approve some steps themselves.
     /// Bypass permissions runs on a process that approves for itself (`ACPProcessLane`), and Plan,
-    /// kept by read-only runs and by tasks from print mode, answers no. A task that kept Accept edits
-    /// or Auto asks.
-    static func askingValue(_ saved: String?) -> String {
-        switch saved {
-        case bypass: bypass
-        case plan: plan
-        default: standard
-        }
+    /// kept by read-only runs and by tasks from print mode, has Yardlet answer no; both keep the
+    /// session on `default`. This is the session mode `permission` runs on.
+    static func sessionMode(for permission: String) -> String {
+        permission == bypass || permission == plan ? standard : permission
     }
 
-    /// The modes over ACP: Default and Bypass permissions, and Plan for a task that has it.
-    static func askingSelector(current: String?) -> ProviderCapabilitySelector {
-        let current = askingValue(current)
-        let values = current == plan ? [standard, plan, bypass] : [standard, bypass]
+    /// The modes over ACP: Default, the other modes the session lists (`offered`, its `mode` choices;
+    /// none before a session has listed them), Plan for a task that has it, and Bypass permissions.
+    /// A mode the CLI does not offer this account never shows, though a task's own mode stays in the
+    /// menu until its session lists the modes. The CLI's `plan` ("Plan carefully before executing a
+    /// task") is a way of working rather than of approving, and is left out: Plan here is the
+    /// read-only one.
+    static func askingSelector(current: String?, offered: [ProviderCapabilityChoice]) -> ProviderCapabilitySelector {
+        var values = [standard]
+        for choice in offered where ![standard, plan, bypass].contains(choice.value) && !values.contains(choice.value) {
+            values.append(choice.value)
+        }
+        if let current, current != bypass, !values.contains(current), displayName(current) != nil {
+            values.append(current)
+        }
+        values.append(bypass)
         return ProviderCapabilitySelector(
             id: optionID,
             name: L10n.string("Permission mode"),
             description: L10n.string("Antigravity asks before actions that need approval. Bypass permissions approves every request without asking."),
             category: "mode",
-            currentValue: current,
-            choices: values.compactMap { value in
-                displayName(value).map { ProviderCapabilityChoice(value: value, name: $0, description: nil) }
+            currentValue: current.flatMap { values.contains($0) ? $0 : nil } ?? standard,
+            choices: values.map { value in
+                ProviderCapabilityChoice(
+                    value: value, name: displayName(value) ?? offered.first { $0.value == value }?.name ?? value,
+                    description: nil)
             })
     }
 }

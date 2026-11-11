@@ -21,13 +21,14 @@ enum AntigravityTransport {
 /// - `model` is the model as `agy acp` names it in `configOptions` (`gemini-3.8-flash`); a variant a
 ///   task saved (`gemini-3.8-flash-low`) is that model with that effort.
 /// - `reasoningEffort` is `agy acp`'s `thought_level`.
-/// - `permissionMode` is how the session's approvals are answered
-///   (`AntigravityPermissionMode.askingValue`). Bypass permissions runs it on the CLI's own
-///   `agy acp --dangerously-skip-permissions` ("auto-approve all tool permission requests",
-///   `ACPProcessLane`); Plan has Yardlet answer no, as print mode refused what it could not ask about.
-/// - `agy acp`'s own session mode (`mode`: `default`, `accept-edits`, `plan`, from 1.5) is not
-///   offered, so the permission mode stays the one menu for approvals. A mode a task saved is not
-///   sent, and the session keeps the CLI's default, which a reloaded session starts on anyway.
+/// - `permissionMode` is the one menu for approvals (`AntigravityPermissionMode.askingSelector`). The
+///   CLI's own session modes (`mode`, from 1.5: `default`, `accept-edits`, and `auto` where the
+///   account has it) are its choices and set the session's `mode`. Bypass permissions runs the
+///   session on the CLI's own `agy acp --dangerously-skip-permissions` ("auto-approve all tool
+///   permission requests", `ACPProcessLane`), and Plan has Yardlet answer no, as print mode refused
+///   what it could not ask about; both keep the session on `default`. The menu shows the mode the
+///   session reports, so a task that attaches sends its saved mode only when the session is on
+///   another.
 /// - Print mode's agent, sandbox and review choices have no counterpart and are left alone.
 ///
 /// The models are the ones `agy acp` offers this client; Yardlet names itself and shows what it
@@ -46,8 +47,9 @@ enum AntigravityACPOptions {
     enum Step: Equatable, Sendable {
         /// Set these config options, in order.
         case send([ConfigValue])
-        /// Yardlet's own answer to approvals.
-        case permission(String)
+        /// Yardlet's permission mode, and the session mode to set for it (nil: the session is on it,
+        /// or lists no modes).
+        case permission(String, sessionMode: String?)
         /// Nothing to change.
         case none
     }
@@ -58,7 +60,14 @@ enum AntigravityACPOptions {
                      models: [ProviderCapabilityChoice]) throws -> Step {
         switch id {
         case AntigravityPermissionMode.optionID, StructuredHeadlessOptionID.executionMode:
-            return .permission(AntigravityPermissionMode.askingValue(value))
+            // A mode the session does not list (Auto kept from another account, say) asks, as Default.
+            let wanted = AntigravityPermissionMode.sessionMode(for: value)
+            let mode = offers(sessionModeConfigID, wanted, in: selectors) ? wanted : AntigravityPermissionMode.standard
+            guard selectors.first(where: { $0.id == sessionModeConfigID })?.currentValue != mode,
+                  offers(sessionModeConfigID, mode, in: selectors) else {
+                return .permission(value, sessionMode: nil)
+            }
+            return .permission(value, sessionMode: mode)
         case StructuredHeadlessOptionID.agent, StructuredHeadlessOptionID.sandbox, StructuredHeadlessOptionID.reviewPolicy,
              sessionModeConfigID:
             return .none
@@ -81,9 +90,15 @@ enum AntigravityACPOptions {
         }
     }
 
-    /// The session's controls under Yardlet's names, with the permission mode.
+    /// The session's controls under Yardlet's names, with the permission mode: Bypass permissions or
+    /// Plan when the task has it, otherwise the session's own mode. A session on the CLI's own `plan`,
+    /// which the menu does not offer, shows Default.
     static func project(_ state: ProviderCapabilityState, permissionMode: String?) -> ProviderCapabilityState {
         var state = state
+        let modes = state.selectors.first { $0.id == sessionModeConfigID }
+        let current = permissionMode == AntigravityPermissionMode.bypass || permissionMode == AntigravityPermissionMode.plan
+            ? permissionMode
+            : modes?.currentValue == AntigravityPermissionMode.plan ? AntigravityPermissionMode.standard : modes?.currentValue
         state.selectors = state.selectors.map { selector in
             guard selector.id == effortConfigID else { return selector }
             return ProviderCapabilitySelector(
@@ -91,7 +106,7 @@ enum AntigravityACPOptions {
                 category: selector.category, currentValue: selector.currentValue, choices: selector.choices)
         }
         state.selectors.removeAll { [AntigravityPermissionMode.optionID, sessionModeConfigID].contains($0.id) }
-        state.selectors.append(AntigravityPermissionMode.askingSelector(current: permissionMode))
+        state.selectors.append(AntigravityPermissionMode.askingSelector(current: current, offered: modes?.choices ?? []))
         return state
     }
 

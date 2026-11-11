@@ -436,19 +436,21 @@ final class ACPAdapterTests: XCTestCase {
         XCTAssertTrue(methods.contains("session/set_config_option"))
     }
 
-    /// Antigravity over ACP keeps the option names its print mode saved, and its permission mode, offered
-    /// in place of the CLI's own session mode, is how Yardlet answers what the agent asks: Default shows
-    /// the request and Plan answers no. Bypass permissions runs the session on
-    /// `agy acp --dangerously-skip-permissions`, which approves for itself even in the turns the agent
-    /// starts between prompts: the conversation is loaded there with the task's model and effort, and
-    /// closed on the process it leaves, between prompts.
+    /// Antigravity over ACP keeps the option names its print mode saved, and its permission mode is the
+    /// one menu for approvals: the CLI's own session modes (Default, Accept edits, Auto), set in the
+    /// session as they are chosen, and Plan, where Yardlet answers no. Bypass permissions runs the
+    /// session on `agy acp --dangerously-skip-permissions`, which approves for itself even in the turns
+    /// the agent starts between prompts: the conversation is loaded there with the task's model and
+    /// effort, and closed on the process it leaves, between prompts.
     func testAntigravityKeepsItsOptionNamesAndAnswersApprovalsByItsPermissionMode() async throws {
         let transport = FakeACPTransport(exposesAntigravity: true)
         let bypassing = FakeACPTransport(exposesAntigravity: true)
         let restarted = FakeACPTransport(exposesAntigravity: true)
         let savedInBypass = FakeACPTransport(exposesAntigravity: true)
+        let savedAccepting = FakeACPTransport(exposesAntigravity: true)
         let adapter = ACPAdapter(kind: .antigravityCLI, executableURL: URL(filePath: "/tmp/agy"), launchArguments: ["acp"],
-                                 transportFactory: transportSequence(transport, bypassing, restarted, savedInBypass))
+                                 transportFactory: transportSequence(transport, bypassing, restarted, savedInBypass,
+                                                                     savedAccepting))
         let localID = UUID()
         // A print-mode task that never ran a turn kept its local ID; it starts a conversation.
         let handle = try await adapter.resumeSession(providerSessionID: localID.uuidString.lowercased(),
@@ -460,8 +462,9 @@ final class ACPAdapterTests: XCTestCase {
         let initial = try await adapter.providerCapabilities(for: handle)
         XCTAssertEqual(initial.selectors.map(\.id), ["model", StructuredHeadlessOptionID.reasoningEffort,
                                                      AntigravityPermissionMode.optionID])
+        // The CLI's own `plan` is a way of working, not of approving, and is not offered.
         XCTAssertEqual(initial.selectors.last?.choices.map(\.value),
-                       [AntigravityPermissionMode.standard, AntigravityPermissionMode.bypass])
+                       ["default", "accept-edits", "auto", AntigravityPermissionMode.bypass])
         let models = await adapter.advertisedModels(for: localID)
         XCTAssertEqual(models?.map(\.value), ["gemini-3.8-flash"])
         XCTAssertEqual(models?.first?.effortLevels, ["low", "medium", "high"])
@@ -483,9 +486,6 @@ final class ACPAdapterTests: XCTestCase {
             _ = try await adapter.setProviderOption(id: "model", value: "claude-sonnet-4-6", in: handle)
             XCTFail("A model the session does not offer was accepted")
         } catch HarnessAdapterError.capabilityUnavailable {}
-        let accepting = try await adapter.setProviderOption(id: AntigravityPermissionMode.optionID,
-                                                            value: AntigravityPermissionMode.acceptEdits, in: handle)
-        XCTAssertEqual(accepting.selectors.last?.currentValue, AntigravityPermissionMode.standard)
 
         let recorder = ACPPayloadRecorder()
         let collector = Task { for await event in await adapter.events(for: handle) { await recorder.append(event.payload) } }
@@ -512,7 +512,15 @@ final class ACPAdapterTests: XCTestCase {
             }
         }
 
-        // Bypass permissions moves the idle session to a process that approves for itself.
+        // Accept edits is the session's own mode, set at once on the process it is on.
+        let accepting = try await adapter.setProviderOption(id: AntigravityPermissionMode.optionID,
+                                                            value: AntigravityPermissionMode.acceptEdits, in: handle)
+        XCTAssertEqual(accepting.selectors.last?.currentValue, AntigravityPermissionMode.acceptEdits)
+        let acceptSent = await configSent(transport)
+        XCTAssertEqual(acceptSent.last, "mode=accept-edits")
+
+        // Bypass permissions moves the idle session to a process that approves for itself, on the
+        // default mode.
         let bypass = try await adapter.setProviderOption(id: AntigravityPermissionMode.optionID,
                                                          value: AntigravityPermissionMode.bypass, in: handle)
         XCTAssertEqual(bypass.selectors.first { $0.id == StructuredHeadlessOptionID.reasoningEffort }?.currentValue, "low")
@@ -562,6 +570,12 @@ final class ACPAdapterTests: XCTestCase {
         XCTAssertEqual(payloads.filter { if case .permissionRequested = $0 { return true }; return false }.count, 1)
         let askAnswer = await answer("ask-1", on: restarted)
         XCTAssertNil(askAnswer)
+        // Auto is set in the session on the same process; what the CLI still asks is shown as before.
+        let auto = try await adapter.setProviderOption(id: AntigravityPermissionMode.optionID,
+                                                       value: AntigravityPermissionMode.auto, in: handle)
+        XCTAssertEqual(auto.selectors.last?.currentValue, AntigravityPermissionMode.auto)
+        let autoSent = await configSent(restarted)
+        XCTAssertEqual(autoSent.last, "mode=auto")
         collector.cancel()
         await adapter.close(handle)
 
@@ -573,6 +587,21 @@ final class ACPAdapterTests: XCTestCase {
         let savedArguments = await savedInBypass.configuration?.arguments
         XCTAssertEqual(savedArguments, ["acp", "--dangerously-skip-permissions"])
         await adapter.close(savedHandle)
+
+        // A task that kept Accept edits sets it in the session as it attaches, and only while the
+        // session is on another mode.
+        let keptAccepting = UUID()
+        await adapter.setLaunchOptions([AntigravityPermissionMode.optionID: AntigravityPermissionMode.acceptEdits],
+                                       for: keptAccepting)
+        let keptHandle = try await adapter.resumeSession(providerSessionID: "accepting-conversation",
+                                                         localSessionID: keptAccepting, workspaceURL: URL(filePath: "/tmp/project"))
+        for _ in 0..<2 {
+            _ = try await adapter.setProviderOption(id: AntigravityPermissionMode.optionID,
+                                                    value: AntigravityPermissionMode.acceptEdits, in: keptHandle)
+        }
+        let keptSent = await configSent(savedAccepting)
+        XCTAssertEqual(keptSent, ["mode=accept-edits"])
+        await adapter.close(keptHandle)
     }
 
 
@@ -1252,13 +1281,15 @@ actor FakeACPTransport: ACPTransport {
     private let exposesGrokModels: Bool
     private let canLoadSession: Bool
     private let advertisesImagePrompts: Bool
-    /// Answers as `agy acp` 1.5.4 does: a model, thinking level and session mode in
-    /// `configOptions`, the model variants in `models.availableModels` and the modes in `modes`.
+    /// Answers as `agy acp` 1.5.5 does: a model, thinking level and session mode in
+    /// `configOptions`, the model variants in `models.availableModels` and the modes in `modes`. A
+    /// session it loads starts on the default mode.
     private let exposesAntigravity: Bool
     /// Runs while the transport stops, as a process's end changes what the process table shows.
     private let onStop: (@Sendable () -> Void)?
     private var antigravityModel = "gemini-3.8-flash"
     private var antigravityEffort = "high"
+    private var antigravityMode = "default"
     private(set) var configuration: ACPLaunchConfiguration?
     private(set) var requestMethods: [String] = []
     private(set) var requestValues: [JSONValue] = []
@@ -1324,6 +1355,7 @@ actor FakeACPTransport: ACPTransport {
             let configValue = value["params"]?["value"]?.stringValue ?? ""
             if value["params"]?["configId"]?.stringValue == "model" { antigravityModel = configValue }
             if value["params"]?["configId"]?.stringValue == "thought_level" { antigravityEffort = configValue }
+            if value["params"]?["configId"]?.stringValue == "mode" { antigravityMode = configValue }
             return .object(["configOptions": antigravityConfigOptions()])
         case "session/set_config_option":
             return .object(["configOptions": configOptions(current: value["params"]?["value"]?.stringValue ?? "ask")])
@@ -1367,7 +1399,7 @@ actor FakeACPTransport: ACPTransport {
             "configOptions": antigravityConfigOptions(),
             "models": .object(["currentModelId": .string("gemini-3.8-flash-high"),
                                "availableModels": .array(["high", "medium", "low"].map(variant))]),
-            "modes": .object(["currentModeId": .string("default"), "availableModes": .array(antigravityModes.map {
+            "modes": .object(["currentModeId": .string(antigravityMode), "availableModes": .array(antigravityModes.map {
                 .object(["id": .string($0), "name": .string($0)])
             })])
         ]
@@ -1384,12 +1416,12 @@ actor FakeACPTransport: ACPTransport {
                          .object(["value": .string($0), "name": .string($0.capitalized)])
                      })]),
             .object(["id": .string("mode"), "name": .string("Mode"), "category": .string("mode"),
-                     "type": .string("select"), "currentValue": .string("default"),
+                     "type": .string("select"), "currentValue": .string(antigravityMode),
                      "options": .array(antigravityModes.map { .object(["value": .string($0), "name": .string($0)]) })])
         ])
     }
 
-    private let antigravityModes = ["default", "accept-edits", "plan"]
+    private let antigravityModes = ["default", "accept-edits", "auto", "plan"]
 
     private func grokModels(current: String) -> JSONValue {
         .object([

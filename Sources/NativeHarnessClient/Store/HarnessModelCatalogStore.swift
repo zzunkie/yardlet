@@ -47,6 +47,8 @@ final class HarnessModelCatalogStore {
         var codexThreads: [UUID: CodexModelSelection]? = nil
         /// Antigravity CLI's list, its effort variants folded (it has one sign-in, so no accounts).
         var antigravity: [HarnessModelOption]? = nil
+        /// Antigravity CLI's permission menu as a session last listed it (an earlier build leaves it out).
+        var antigravityModes: [ProviderCapabilityChoice]? = nil
         /// The context window Claude Code last reported for each model it ran (an earlier build
         /// leaves it out).
         var claudeContextWindows: [String: UInt64]? = nil
@@ -55,6 +57,9 @@ final class HarnessModelCatalogStore {
     private(set) var claude: [String: [HarnessModelOption]] = [:]
     /// The models Antigravity CLI last listed, with each one's effort variants as its levels.
     private(set) var antigravity: [HarnessModelOption] = []
+    /// The permission menu an Antigravity session last offered, with the session modes the CLI gives
+    /// this account (`AntigravityPermissionMode.askingSelector`), for the menus of a task before it attaches.
+    private(set) var antigravityModes: [ProviderCapabilityChoice] = []
     private(set) var codex: [String: [CodexModelOption]] = [:]
     /// The window Claude Code's `get_context_usage` last gave for each model, by the model as it
     /// names it (`claude-opus-5-5`, `claude-opus-4-8[1m]`). Claude Code takes a window from its own
@@ -80,6 +85,7 @@ final class HarnessModelCatalogStore {
         codex = snapshot.codex
         codexThreads = snapshot.codexThreads ?? [:]
         antigravity = snapshot.antigravity ?? []
+        antigravityModes = snapshot.antigravityModes ?? []
         claudeContextWindows = snapshot.claudeContextWindows ?? [:]
     }
 
@@ -103,6 +109,12 @@ final class HarnessModelCatalogStore {
     func recordAntigravity(_ models: [HarnessModelOption]) {
         guard !models.isEmpty, antigravity != models else { return }
         antigravity = models
+        save()
+    }
+
+    func recordAntigravityModes(_ choices: [ProviderCapabilityChoice]) {
+        guard !choices.isEmpty, antigravityModes != choices else { return }
+        antigravityModes = choices
         save()
     }
 
@@ -219,6 +231,7 @@ final class HarnessModelCatalogStore {
         guard let fileURL else { return }
         let snapshot = Snapshot(claude: claude, codex: codex, codexThreads: codexThreads.isEmpty ? nil : codexThreads,
                                 antigravity: antigravity.isEmpty ? nil : antigravity,
+                                antigravityModes: antigravityModes.isEmpty ? nil : antigravityModes,
                                 claudeContextWindows: claudeContextWindows.isEmpty ? nil : claudeContextWindows)
         do {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),

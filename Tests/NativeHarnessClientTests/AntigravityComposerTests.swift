@@ -18,27 +18,37 @@ final class AntigravityComposerTests: XCTestCase {
 
     // MARK: - Permission
 
-    /// Over ACP the agent asks, so every Antigravity menu offers Default and Bypass permissions, and
-    /// a task keeps Plan where it had it; Accept edits and Auto, which ACP has no counterpart for, ask.
-    func testEveryAntigravityPermissionMenuOffersAskingAndBypassAndAsksBeforeTheBypass() throws {
+    /// Over ACP the agent asks, and every Antigravity menu offers Default, the session modes the CLI
+    /// lists for the account (not its own Plan) and Bypass permissions: the session's own, and on the
+    /// new-task screen the ones a session last listed. A task keeps Plan, or a mode no session has
+    /// listed yet, where it had it.
+    func testEveryAntigravityPermissionMenuOffersTheSessionModesAndAsksBeforeTheBypass() throws {
         let attached = try XCTUnwrap(ComposerSessionOptionsProjection.make(
             harness: .antigravityCLI, session: Fixtures.session(.antigravityCLI),
             providerCapabilities: Self.liveCapabilities(mode: "default"), providerUsage: nil, isAttached: true).permission)
+        let newTask = try XCTUnwrap(ComposerSessionOptionsProjection.newTask(
+            harness: .antigravityCLI, choice: nil, catalogs: Self.catalogs(modes: attached.selector?.choices ?? []),
+            connection: nil, workspaceURL: nil).permission)
+        for (name, slot) in [("attached", attached), ("new task", newTask)] {
+            XCTAssertEqual(slot.selector?.choices.map(\.value), ["default", "accept-edits", "auto", "bypass"], name)
+            XCTAssertEqual(slot.selector?.choices.map(\.name), [L10n.string("Default"), L10n.string("Accept edits"),
+                                                                L10n.string("Auto"), L10n.string("Bypass permissions")], name)
+            XCTAssertEqual(slot.confirmations, ["bypass": Self.expectedConfirmation], name)
+            XCTAssertEqual(slot.apply.choice(id: "permissionMode", value: "auto"),
+                           .providerOption(id: "permissionMode", value: "auto"), name)
+            XCTAssertFalse(slot.isElevated, name)
+        }
+        // Before a session has listed its modes, the new-task screen offers Default and Bypass permissions.
+        let unlisted = try XCTUnwrap(ComposerSessionOptionsProjection.newTask(
+            harness: .antigravityCLI, choice: nil, catalogs: Self.catalogs(), connection: nil, workspaceURL: nil).permission)
+        XCTAssertEqual(unlisted.selector?.choices.map(\.value), ["default", "bypass"])
+        // Before it connects, a task shows the mode it kept, here under the earlier key.
         let detached = try XCTUnwrap(ComposerSessionOptionsProjection.make(
             harness: .antigravityCLI, session: Fixtures.session(.antigravityCLI, options: ["executionMode": "accept-edits"]),
             providerCapabilities: nil, providerUsage: nil, isAttached: false).permission)
-        let newTask = try XCTUnwrap(ComposerSessionOptionsProjection.newTask(
-            harness: .antigravityCLI, choice: nil, catalogs: Self.catalogs(), connection: nil, workspaceURL: nil).permission)
-        for (name, slot) in [("attached", attached), ("detached", detached), ("new task", newTask)] {
-            XCTAssertEqual(slot.selector?.choices.map(\.value), ["default", "bypass"], name)
-            XCTAssertEqual(slot.selector?.choices.last?.name, L10n.string("Bypass permissions"), name)
-            XCTAssertEqual(slot.confirmations, ["bypass": Self.expectedConfirmation], name)
-            XCTAssertEqual(slot.apply.choice(id: "permissionMode", value: "bypass"),
-                           .providerOption(id: "permissionMode", value: "bypass"), name)
-            XCTAssertFalse(slot.isElevated, name)
-        }
-        // Before it connects, the menu reads the mode saved under the earlier key: Accept edits asks.
-        XCTAssertEqual(detached.title, L10n.string("Default"))
+        XCTAssertEqual(detached.selector?.choices.map(\.value), ["default", "accept-edits", "bypass"])
+        XCTAssertEqual(detached.title, L10n.string("Accept edits"))
+        XCTAssertEqual(detached.confirmations, ["bypass": Self.expectedConfirmation])
         let plan = try XCTUnwrap(ComposerSessionOptionsProjection.make(
             harness: .antigravityCLI, session: Fixtures.session(.antigravityCLI, options: ["permissionMode": "plan"]),
             providerCapabilities: nil, providerUsage: nil, isAttached: false).permission)
@@ -66,7 +76,7 @@ final class AntigravityComposerTests: XCTestCase {
         let content = HarnessSettingsSheetProjection.providerContent(Self.liveCapabilities(mode: "default"), canBranch: false)
         let control = try XCTUnwrap(content.controls.first { $0.id == "option.permissionMode" })
         guard case let .selector(_, choices) = control.kind else { return XCTFail("The mode is a selector") }
-        XCTAssertEqual(choices.map(\.id), ["default", "bypass"])
+        XCTAssertEqual(choices.map(\.id), ["default", "accept-edits", "auto", "bypass"])
         XCTAssertEqual(choices.last?.confirmation, Self.expectedConfirmation)
         XCTAssertTrue(choices.dropLast().allSatisfy { $0.confirmation == nil })
     }
@@ -148,9 +158,10 @@ final class AntigravityComposerTests: XCTestCase {
             XCTAssertTrue(drawing.elements.contains { $0.role == "AXGroup" && $0.label == L10n.string("You") })
         }
 
-        // The permission menu as it opens, over ACP: Default and Bypass permissions.
+        // The permission menu as it opens, over ACP: the session's modes and Bypass permissions.
         for appearance in WindowlessRender.Appearance.allCases {
-            let menu = ComposerProviderOptionMenu(selector: AntigravityPermissionMode.askingSelector(current: "default"),
+            let menu = ComposerProviderOptionMenu(selector: AntigravityPermissionMode.askingSelector(
+                                                    current: "accept-edits", offered: Self.sessionModes),
                                                   isEnabled: true, onSelect: { _, _ in }, onDismiss: {})
                 .frame(width: 264).environment(\.colorScheme, appearance.colorScheme)
             let image = try WindowlessRender.image(menu)
@@ -233,7 +244,7 @@ final class AntigravityComposerTests: XCTestCase {
                           .init(value: "low", name: L10n.string("Low"), description: nil),
                           .init(value: "medium", name: L10n.string("Medium"), description: nil),
                           .init(value: "high", name: L10n.string("High"), description: nil)]),
-            AntigravityPermissionMode.askingSelector(current: mode),
+            AntigravityPermissionMode.askingSelector(current: mode, offered: sessionModes),
             ProviderCapabilitySelector(id: "sandbox", name: L10n.string("Sandbox mode"), description: nil, category: "mode",
                 currentValue: "default",
                 choices: [.init(value: "default", name: L10n.string("Default"), description: nil),
@@ -241,7 +252,16 @@ final class AntigravityComposerTests: XCTestCase {
         ])
     }
 
-    private static func catalogs(models: [HarnessModelOption]? = nil) -> HarnessModelCatalogStore {
+    /// The session modes `agy acp` 1.5.5 lists in `session/new` for an account that has Auto.
+    private static let sessionModes = [
+        ProviderCapabilityChoice(value: "default", name: "Default", description: "Ask before edits and commands, per your permission settings."),
+        ProviderCapabilityChoice(value: "accept-edits", name: "Accept edits", description: "Approve file edits in the workspace without asking."),
+        ProviderCapabilityChoice(value: "auto", name: "Auto", description: "Approve edits and safe commands; ask before irreversible actions."),
+        ProviderCapabilityChoice(value: "plan", name: "Plan", description: "Plan carefully before executing a task.")
+    ]
+
+    private static func catalogs(models: [HarnessModelOption]? = nil,
+                                 modes: [ProviderCapabilityChoice] = []) -> HarnessModelCatalogStore {
         let store = HarnessModelCatalogStore(locations: HarnessModelSettingsLocations(
             claudeConfigDirectory: URL(filePath: "/tmp/antigravity-composer-none/claude"),
             codexHome: URL(filePath: "/tmp/antigravity-composer-none/codex"),
@@ -250,6 +270,7 @@ final class AntigravityComposerTests: XCTestCase {
             HarnessModelOption(value: "gemini-3.8-flash", name: "Gemini 3.8 Flash", effortLevels: ["low", "medium", "high"]),
             HarnessModelOption(value: "claude-opus-4-6-thinking", name: "Claude Opus 4.6 (Thinking)")
         ])
+        store.recordAntigravityModes(modes)
         return store
     }
 

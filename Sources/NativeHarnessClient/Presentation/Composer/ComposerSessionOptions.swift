@@ -457,8 +457,9 @@ enum ComposerSessionOptionsProjection {
             selector = claudeModeSelector(current: session.providerOptions[ClaudeLaunchOption.permissionMode])
         }
         if selector == nil, harness == .antigravityCLI {
-            // An Antigravity task not attached yet shows the mode it attaches with.
-            selector = AntigravityPermissionMode.askingSelector(current: antigravitySavedPermissionMode(session))
+            // An Antigravity task not attached yet shows the mode it attaches with; opening the menu
+            // attaches and lists the session's modes.
+            selector = AntigravityPermissionMode.askingSelector(current: antigravitySavedPermissionMode(session), offered: [])
         }
         guard selector != nil || hasPending || supportsRequests else { return nil }
         let title: String
@@ -669,7 +670,7 @@ extension ComposerSessionOptionsProjection {
             options.permission = claudeLaunchPermission(choice?.permissionMode)
         }
         if harness == .antigravityCLI {
-            options.permission = antigravityLaunchPermission(choice?.permissionMode)
+            options.permission = antigravityLaunchPermission(choice?.permissionMode, offered: catalogs?.antigravityModes ?? [])
         }
         if harness == .codex {
             // The same control and choices as a Codex task's composer; the thread starts with the choice.
@@ -680,9 +681,11 @@ extension ComposerSessionOptionsProjection {
         return options
     }
 
-    /// Antigravity's permission modes for the new task. Bypass permissions asks first here too.
-    private static func antigravityLaunchPermission(_ chosen: String?) -> ComposerPermissionSlot {
-        let selector = AntigravityPermissionMode.askingSelector(current: chosen)
+    /// Antigravity's permission modes for the new task, with the session modes a session last listed.
+    /// Bypass permissions asks first here too.
+    private static func antigravityLaunchPermission(_ chosen: String?,
+                                                    offered: [ProviderCapabilityChoice]) -> ComposerPermissionSlot {
+        let selector = AntigravityPermissionMode.askingSelector(current: chosen, offered: offered)
         return ComposerPermissionSlot(
             title: ProviderCapabilityAccessibility.selectedChoiceName(for: selector), selector: selector,
             confirmations: antigravityPermissionConfirmations, canChoose: true, apply: .providerOption,
@@ -813,7 +816,8 @@ enum NewTaskModelProjection {
             var chosen = choice ?? NewTaskModelChoice(model: nil)
             switch id {
             case StructuredHeadlessOptionID.permissionMode:
-                guard AntigravityPermissionMode.askingSelector(current: nil).choices.contains(where: { $0.value == value })
+                guard AntigravityPermissionMode.askingSelector(current: chosen.permissionMode, offered: catalogs.antigravityModes)
+                    .choices.contains(where: { $0.value == value })
                 else { return nil }
                 chosen.permissionMode = value == AntigravityPermissionMode.standard ? nil : value
             case StructuredHeadlessOptionID.model:

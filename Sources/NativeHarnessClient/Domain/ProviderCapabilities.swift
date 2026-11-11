@@ -1,6 +1,6 @@
 import Foundation
 
-struct ProviderCapabilityChoice: Equatable, Identifiable, Sendable {
+struct ProviderCapabilityChoice: Codable, Equatable, Identifiable, Sendable {
     let value: String
     let name: String
     let description: String?

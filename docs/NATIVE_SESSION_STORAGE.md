@@ -857,15 +857,25 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
   and `thought_level` (`AntigravityACPOptions`). A model variant print mode saved (`gemini-3.8-flash-low`) is that model
   with that effort. The models are the ones `agy acp` offers Yardlet, which names itself in `clientInfo`; the CLI offers
   its Claude and GPT models only to the editors it lists, so a task that kept one says so when it attaches and runs on
-  the session's model. `agy acp` asks a client to approve a step only while a `session/prompt` streams, and none of the
-  session modes it offers (`default`, `accept-edits`, `plan`) approves every step. So Default shows each request and
-  Plan, which read-only runs use, answers no, while Bypass permissions runs the session on the
-  `agy acp --dangerously-skip-permissions` process, which approves for itself, also in the turns the agent starts between
-  prompts, and still blocks the commands on the CLI's own system denylist. Choosing Bypass permissions, or leaving it,
-  loads the conversation on the other process (`session/load`), sets the task's model and effort there again, since a
-  loaded session starts on the CLI's defaults, and closes it on the process it left (`session/close`), which ends once no
-  task uses it. This happens between prompts: a mode chosen while a prompt runs takes effect when the prompt ends. A task
-  that kept Accept edits or Auto asks. Print mode's agent, sandbox and review choices are left alone.
+  the session's model. `agy acp` asks a client to approve a step only while a `session/prompt` streams, and its session
+  mode (`mode`, from 1.5) decides what it approves without asking: `default` asks for each step the person's settings
+  do not allow, `accept-edits` approves file edits in the workspace, and `auto` (offered where the CLI gives the account
+  Auto mode, from 1.5.4) approves edits and safe commands and asks before irreversible ones. None approves every step.
+  The permission menu is the one control for this: Default and the other modes the session lists, in the CLI's order,
+  then Bypass permissions. Choosing a mode sets the session's `mode` (`session/set_config_option`) at once, also while
+  a prompt runs, and Yardlet shows each request the CLI still asks. The menu shows the mode the session reports, so a
+  task that attaches sends its saved mode only when the session is on another, and a saved mode the session does not
+  list (Auto kept from another account) runs as Default. The CLI's own `plan` ("Plan carefully before executing a
+  task") is a way of working rather than of approving, and is not offered. Plan in the menu is Yardlet's: read-only runs
+  and tasks from print mode keep it, Yardlet answers no to every request, and the session stays on `default`. Bypass
+  permissions runs the session on the `agy acp --dangerously-skip-permissions` process, which approves for itself,
+  also in the turns the agent starts between prompts, and still blocks the commands on the CLI's own system denylist.
+  Choosing Bypass permissions, or leaving it, loads the conversation on the other process (`session/load`), sets the
+  task's model, effort and mode there again, since a loaded session starts on the CLI's defaults, and closes it on the
+  process it left (`session/close`), which ends once no task uses it. This happens between prompts: Bypass permissions
+  chosen while a prompt runs takes effect when the prompt ends. The new-task screen offers the modes a session last
+  listed, and before any has, Default and Bypass permissions. Print mode's agent, sandbox and review choices are left
+  alone.
 
 - **Index `conversation_summaries.db`:** the `/resume` list of `agy`. It is in WAL mode, so opening it read-only can
   still create `-wal` and `-shm`, and Yardlet makes a copy (with `-wal` if present) in a 0700 temporary folder, reads it
@@ -913,7 +923,8 @@ Yardlet removes there is the CLI's extra copies of Yardlet's tool schemas, descr
   field that earlier builds ignore), and the new task view uses it. Over ACP a task reports the session's
   `models.availableModels`, collapsed the same way. Before any task has, opening the new task view's model menu reads
   `agy models`, which names the same models and starts no session, since every ACP session is a conversation the CLI
-  keeps.
+  keeps. The permission menu a task's session last listed is kept beside it in `antigravityModes`, also optional, for
+  the new task view's permission menu; nothing reads the modes without a session.
 - Native conversations, the index, logs, settings and credentials are not copied, moved or modified, and reading alone
   causes no model turn, attach or authentication change.
 

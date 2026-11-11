@@ -5009,8 +5009,13 @@ final class AppModel {
         do {
             let (adapter, provider, handle) = try await providerCapabilityProvider(for: session)
             state = try await provider.providerCapabilities(for: handle)
-            // Antigravity lists its models only here; the new-task screen offers what it listed.
-            if session.harness == .antigravityCLI { await rememberAdvertisedModels(from: adapter, for: session) }
+            // Antigravity lists its models and modes only here; the new-task screen offers what it listed.
+            if session.harness == .antigravityCLI {
+                await rememberAdvertisedModels(from: adapter, for: session)
+                if let modes = state.selectors.first(where: { $0.id == AntigravityPermissionMode.optionID })?.choices {
+                    modelCatalogs.recordAntigravityModes(modes)
+                }
+            }
         } catch HarnessAdapterError.capabilityUnavailable {
             state = unsupportedProviderState(for: session.harness)
         } catch {

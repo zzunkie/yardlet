@@ -89,8 +89,11 @@ final class AdditionalHarnessLiveTests: XCTestCase {
         let handle = try await adapter.createSession(CreateHarnessSessionRequest(
             localSessionID: localID, workspaceURL: workspace, initialPrompt: nil))
         let capabilities = try await adapter.providerCapabilities(for: handle)
-        XCTAssertEqual(capabilities.selectors.first { $0.id == AntigravityPermissionMode.optionID }?.choices.map(\.value),
-                       [AntigravityPermissionMode.standard, AntigravityPermissionMode.bypass])
+        // Default, the session modes the CLI gives this account, and Bypass permissions; never the CLI's own Plan.
+        let permissionModes = capabilities.selectors.first { $0.id == AntigravityPermissionMode.optionID }?.choices.map(\.value) ?? []
+        XCTAssertEqual(permissionModes.first, AntigravityPermissionMode.standard)
+        XCTAssertEqual(permissionModes.last, AntigravityPermissionMode.bypass)
+        XCTAssertFalse(permissionModes.contains(AntigravityPermissionMode.plan))
         let session = LiveApprovingSession(adapter: adapter, handle: handle)
         await session.start()
 

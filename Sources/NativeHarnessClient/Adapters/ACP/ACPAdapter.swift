@@ -114,7 +114,7 @@ actor ACPAdapter:
     func setLaunchOptions(_ options: [String: String], for localSessionID: UUID) {
         guard kind == .antigravityCLI else { return }
         let saved = options[AntigravityPermissionMode.optionID] ?? options[StructuredHeadlessOptionID.executionMode]
-        antigravityPermissionModeByLocalSessionID[localSessionID] = saved.map(AntigravityPermissionMode.askingValue)
+        antigravityPermissionModeByLocalSessionID[localSessionID] = saved
     }
 
     /// The project's other roots, held for the launch this session triggers. ACP `session/new`
@@ -471,17 +471,21 @@ actor ACPAdapter:
         var state = current
         switch try AntigravityACPOptions.step(id: id, value: value, selectors: current.selectors,
                                               models: antigravityModelsByLocalSessionID[session.localSessionID] ?? []) {
-        case let .permission(mode):
+        case let .permission(mode, sessionMode):
             let previous = antigravityPermissionModeByLocalSessionID[session.localSessionID]
             antigravityPermissionModeByLocalSessionID[session.localSessionID] = mode
-            // A prompt running finishes where it started, and the session moves when it ends.
-            if promptTasks[session.localSessionID] == nil {
-                do {
-                    try await moveToItsLane(session)
-                } catch {
-                    antigravityPermissionModeByLocalSessionID[session.localSessionID] = previous
-                    throw error
+            do {
+                // The session's own mode changes at once, as in the CLI, also for a prompt running. A
+                // move to another lane loads the conversation with it.
+                if let sessionMode {
+                    state = try await setSessionOption(
+                        id: AntigravityACPOptions.sessionModeConfigID, value: sessionMode, in: session)
                 }
+                // A prompt running finishes where it started, and the session moves when it ends.
+                if promptTasks[session.localSessionID] == nil { try await moveToItsLane(session) }
+            } catch {
+                antigravityPermissionModeByLocalSessionID[session.localSessionID] = previous
+                throw error
             }
             state = capabilityStateByLocalSessionID[session.localSessionID] ?? state
         case let .send(values):
@@ -708,8 +712,8 @@ actor ACPAdapter:
     /// Serves `session` from the lane its permission mode calls for, between prompts: the
     /// conversation is loaded on that lane's process with the model and settings it had, then
     /// closed on the one that served it, so the turns the agent starts on its own run there too.
-    /// `agy acp` has no session mode that approves every step (it offers `default`,
-    /// `accept-edits` and `plan`), and its `--dangerously-skip-permissions` holds for a whole process.
+    /// `agy acp` has no session mode that approves every step (`auto` still asks before what it
+    /// cannot undo), and its `--dangerously-skip-permissions` holds for a whole process.
     /// One move runs at a time, and a prompt or option for the session waits for it.
     private func moveToItsLane(_ session: HarnessSessionHandle) async throws {
         await waitForLaneMove(of: session.localSessionID)
