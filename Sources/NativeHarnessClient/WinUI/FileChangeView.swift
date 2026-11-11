@@ -34,13 +34,15 @@ enum FileChangeView {
         expander.header = header
         expander.horizontalAlignment = .stretch
         expander.horizontalContentAlignment = .stretch
-        // The diffs go into this panel the first time the line opens.
+        // The diffs go into this panel the first time the line opens. The handler holds the panel's wrapper: the
+        // bindings keep no Swift object alive for an element XAML holds, so a weak one would be gone by then, and
+        // the panel holds nothing that leads back to the handler.
         let panel = StackPanel()
         panel.spacing = 10
         expander.content = panel
         var isDrawn = false
-        expander.expanding.addHandler { [weak panel] _, _ in
-            guard let panel, !isDrawn else { return }
+        expander.expanding.addHandler { _, _ in
+            guard !isDrawn else { return }
             isDrawn = true
             draw(shown, error: error, in: panel)
         }
