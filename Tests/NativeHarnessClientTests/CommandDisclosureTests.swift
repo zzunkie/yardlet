@@ -162,14 +162,19 @@ final class CommandDisclosureTests: XCTestCase {
             size: ClaudeTurn.size, appearance: .light
         )
         defer { host.close() }
-        host.settle(passes: 10)
+        host.settle(until: { host.accessibilityElements().contains(label: L10n.string("Stop task")) })
         XCTAssertTrue(host.hosting.pressButton(labeled: L10n.string("Stop task")))
         XCTAssertEqual(stopped, ["toolu_measure"])
 
         // Opened by the person, the running command and the summary show what they hold.
         XCTAssertTrue(host.hosting.pressButton(labeled: ClaudeTurn.words(ClaudeTurn.measuring, .running)))
         XCTAssertTrue(host.hosting.pressButton(labeled: ClaudeTurn.summary))
-        host.settle()
+        host.settle(until: {
+            let elements = host.accessibilityElements()
+            return elements.contains(label: ClaudeTurn.words(ClaudeTurn.measuring, .running),
+                                     value: L10n.string("Expanded"))
+                && elements.contains(label: ClaudeTurn.summary, value: L10n.string("Expanded"))
+        })
         let opened = host.accessibilityElements()
         XCTAssertTrue(opened.contains(label: ClaudeTurn.words(ClaudeTurn.measuring, .running),
                                       value: L10n.string("Expanded")), "\(opened)")
@@ -256,20 +261,20 @@ final class CommandDisclosureTests: XCTestCase {
                                                           output: "Compiling")]),
                                          size: NSSize(width: 760, height: 700), appearance: .light)
         defer { host.close() }
-        host.settle()
+        host.settle(until: { live(line("Build the app", .running), in: host) != nil })
         let building = try XCTUnwrap(live(line("Build the app", .running), in: host), "\(host.accessibilityElements())")
         XCTAssertEqual(building.value, collapsed)
         XCTAssertNil(value(of: line("Build the app", .running), in: host), "not also listed above the live line")
         XCTAssertFalse(host.accessibilityElements().contains(text: "Compiling"), "nothing running starts open")
         XCTAssertTrue(host.hosting.pressButton { $0.hasPrefix(line("Build the app", .running) + ", ") })
-        host.settle()
+        host.settle(until: { live(line("Build the app", .running), in: host)?.value == expanded })
         XCTAssertEqual(live(line("Build the app", .running), in: host)?.value, expanded)
         XCTAssertEqual(value(of: line("Build the app", .running), in: host), expanded, "\(host.accessibilityElements())")
         host.hosting.rootView = view([user, bash(first, "a", "swift build", "Build the app", .completed,
                                                  output: "Build complete!"),
                                       TranscriptEntry(id: words, content: .assistant(text: "Built. Testing next.",
                                                                                      isStreaming: false))])
-        host.settle()
+        host.settle(until: { value(of: line("Build the app", .completed), in: host) == expanded })
         XCTAssertEqual(value(of: line("Build the app", .completed), in: host), expanded, "\(host.accessibilityElements())")
         XCTAssertTrue(host.accessibilityElements().contains(text: "Build complete!"))
 
@@ -282,12 +287,12 @@ final class CommandDisclosureTests: XCTestCase {
                    bash(second, "b", "swift test", "Run the tests", .running),
                    bash(third, "c", "swift run", "Run the app", .running)]
         host.hosting.rootView = view(two)
-        host.settle()
+        host.settle(until: { live(line("Run the app", .running), in: host) != nil })
         let running = try XCTUnwrap(live(line("Run the app", .running), in: host), "\(host.accessibilityElements())")
         XCTAssertEqual(running.value, collapsed)
         XCTAssertTrue(running.label.contains(L10n.format("%lld steps", Int64(3))), running.label)
         XCTAssertTrue(host.hosting.pressButton { $0.hasPrefix(line("Run the app", .running) + ", ") })
-        host.settle()
+        host.settle(until: { live(line("Run the app", .running), in: host)?.value == expanded })
         XCTAssertEqual(live(line("Run the app", .running), in: host)?.value, expanded)
         XCTAssertEqual(value(of: line("Run the tests", .running), in: host), collapsed, "each line still folded")
         host.hosting.rootView = view(Array(two.dropLast(2)) + [ran, bash(third, "c", "swift run", "Run the app", .running)])
@@ -295,36 +300,38 @@ final class CommandDisclosureTests: XCTestCase {
         let stillOpen = try XCTUnwrap(live(line("Run the app", .running), in: host))
         XCTAssertEqual(stillOpen.value, expanded, "it stays open as the run goes on")
         XCTAssertTrue(host.hosting.pressButton { $0.hasPrefix(line("Run the app", .running) + ", ") })
-        host.settle()
+        host.settle(until: { live(line("Run the app", .running), in: host)?.value == collapsed })
         XCTAssertEqual(live(line("Run the app", .running), in: host)?.value, collapsed)
         let settled = Array(two.dropLast(2)) + [ran, bash(third, "c", "swift run", "Run the app", .completed, output: "ok")]
-        host.hosting.rootView = view(settled)
-        host.settle()
         let summary = ConversationWorkSummary.title(for: (1...2).map {
             ConversationItem(id: "\($0)", kind: .command(ConversationCommand(command: "\($0)", status: "")),
                              phase: .completed, source: Self.source)
         }, harness: .claudeCode)
+        host.hosting.rootView = view(settled)
+        host.settle(until: { value(of: summary, in: host) == collapsed })
         XCTAssertEqual(value(of: summary, in: host), collapsed, "\(host.accessibilityElements())")
         XCTAssertNil(value(of: line("Run the tests", .completed), in: host), "its lines are folded with it")
 
         // Opened in the listed work, a run reads open under the live line when a call joins it again;
         // folded there, it stays folded until a call fails.
         XCTAssertTrue(host.hosting.pressButton(labeled: summary))
-        host.settle()
+        host.settle(until: { value(of: summary, in: host) == expanded })
         XCTAssertEqual(value(of: summary, in: host), expanded)
         host.hosting.rootView = view(settled + [bash(fourth, "d", "swift run -v", "Run the app again", .running)])
-        host.settle()
+        host.settle(until: { live(line("Run the app again", .running), in: host)?.value == expanded })
         XCTAssertEqual(live(line("Run the app again", .running), in: host)?.value, expanded,
                        "\(host.accessibilityElements())")
         XCTAssertTrue(host.hosting.pressButton { $0.hasPrefix(line("Run the app again", .running) + ", ") })
-        host.settle()
+        host.settle(until: { live(line("Run the app again", .running), in: host)?.value == collapsed })
         XCTAssertEqual(live(line("Run the app again", .running), in: host)?.value, collapsed)
 
         // A failure is what needs attention: the summary and the failed line open.
         host.hosting.rootView = view(Array(two.dropLast(2)) + [
             ran, bash(third, "c", "swift run", "Run the app", .failed, output: "Segmentation fault")
         ])
-        host.settle()
+        host.settle(until: {
+            value(of: summary, in: host) == expanded && value(of: line("Run the app", .failed), in: host) == expanded
+        })
         XCTAssertEqual(value(of: summary, in: host), expanded, "\(host.accessibilityElements())")
         XCTAssertEqual(value(of: line("Run the app", .failed), in: host), expanded)
         XCTAssertTrue(host.accessibilityElements().contains(text: "Segmentation fault"))

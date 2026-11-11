@@ -1683,7 +1683,8 @@ final class LegacyHarnessProtocolBridgeTests: XCTestCase {
             for await event in await bridge.events(for: localSessionID) { await recorder.append(event) }
         }
         await adapter.finishEvents(for: localSessionID, keepingPresentation: true)
-        // Long enough for the event relay to reach its end.
+        // Long enough for the event relay to reach its end, which shows nowhere a test could wait on. The
+        // test holds in either order; the pause makes it the order this test is about.
         try await Task.sleep(for: .milliseconds(200))
         var last = CodexTaskState.empty
         last.lastAppliedSequence = 7

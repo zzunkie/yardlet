@@ -115,7 +115,7 @@ final class TerminalCommandHandoffTests: XCTestCase {
                     size: NSSize(width: 760, height: 560), appearance: appearance
                 )
                 defer { host.close() }
-                host.settle()
+                host.settle(until: { host.accessibilityElements().contains(label: L10n.string("Run in terminal")) })
                 try WindowlessRender.writePNG(host.capture().bitmap, to: directory.appending(
                     path: "conversation-\(fixture.name)-\(appearance.suffix).png"))
                 guard appearance == .light else { continue }
@@ -214,11 +214,11 @@ final class TerminalCommandHandoffTests: XCTestCase {
                 size: NSSize(width: 1_000, height: 820), appearance: .light
             )
             defer { host.close() }
-            host.settle()
+            host.settle(until: { host.accessibilityElements().contains(label: L10n.string("Run in terminal")) })
             XCTAssertFalse(workspace.panels.isTerminalPresented)
             XCTAssertEqual(host.hosting.pressAccessibilityElements(labelled: L10n.string("Run in terminal")), 1,
                            fixture.name)
-            host.settle()
+            host.settle(until: { workspace.panels.isTerminalPresented })
             XCTAssertTrue(workspace.panels.isTerminalPresented, "\(fixture.name): the terminal opens")
 
             let output = "B10-\(fixture.name)"
@@ -256,20 +256,20 @@ final class TerminalCommandHandoffTests: XCTestCase {
         let workspace = TaskWorkspaceState()
         let host = Self.taskHost(fixture, workspace, launch: launch, appearance: .light)
         defer { host.close() }
-        host.settle()
-        func runInTerminal() {
+        host.settle(until: { host.accessibilityElements().contains(label: L10n.string("Run in terminal")) })
+        func runInTerminal(until isDone: () -> Bool) {
             XCTAssertEqual(host.hosting.pressAccessibilityElements(labelled: L10n.string("Run in terminal")), 1)
-            host.settle()
+            host.settle(until: isDone)
         }
 
-        runInTerminal()
+        runInTerminal(until: { !workspace.terminals.isEmpty })
         try waitForText("B10-%s", in: host)
         let busy = try XCTUnwrap(workspace.terminals.first)
         busy.send("\u{15}cat\r")
         try waitUntilSettled(in: host) { busy.isRunningProgram }
         XCTAssertFalse(busy.isAtPrompt)
 
-        runInTerminal()
+        runInTerminal(until: { workspace.terminals.count == 2 })
         XCTAssertEqual(workspace.terminals.count, 2, "a new tab, not the one where cat runs")
         let idle = workspace.terminals[1]
         try waitForText("B10-%s", in: host)
@@ -283,7 +283,7 @@ final class TerminalCommandHandoffTests: XCTestCase {
         idle.send("\u{15}")
         workspace.showTerminalTab(busy)
         host.settle()
-        runInTerminal()
+        runInTerminal(until: { workspace.terminal(in: fixture.workspaceURL, launch: launch, taskID: nil) === idle })
         XCTAssertEqual(workspace.terminals.count, 2, "the other tab at its prompt, not a third")
         XCTAssertTrue(workspace.terminal(in: fixture.workspaceURL, launch: launch, taskID: nil) === idle)
         try waitUntilSettled(in: host) { workspace.terminalHandoff == nil }
@@ -380,8 +380,8 @@ final class TerminalCommandHandoffTests: XCTestCase {
                 charactersIgnoringModifiers: "l", isARepeat: false, keyCode: 37))
             XCTAssertEqual(terminal.menu(for: click)?.items.first?.title, L10n.string("Attach Selection to Message"))
             XCTAssertTrue(terminal.performKeyEquivalent(with: key))
-            host.settle()
             let heading = L10n.format("Terminal (%@):", "yardlet") + "\n```\n"
+            host.settle(until: { draft.text.hasPrefix(heading) })
             XCTAssertTrue(draft.text.hasPrefix(heading), "An empty message starts with the block: \(draft.text)")
             XCTAssertTrue(draft.text.hasSuffix("printf 'B2-%s\\n' selected\nB2-selected\n```\n"), draft.text)
             XCTAssertEqual(draft.selection?.lowerBound, draft.text.endIndex, "the caret goes after the block")
@@ -395,7 +395,7 @@ final class TerminalCommandHandoffTests: XCTestCase {
                                           to: directory.appending(path: "attach-light.png"))
 
             defaults.set(false, forKey: TerminalSharingPreference.key)
-            host.settle()
+            host.settle(until: { terminal.menu(for: click) == nil })
             let attached = draft.text
             XCTAssertNil(terminal.menu(for: click), "Not shared, the terminal has no menu")
             XCTAssertFalse(terminal.performKeyEquivalent(with: key))
@@ -420,7 +420,9 @@ final class TerminalCommandHandoffTests: XCTestCase {
                     .environment(\.colorScheme, appearance.colorScheme),
                 size: NSSize(width: 820, height: 1_400), appearance: appearance)
             defer { host.close() }
-            host.settle()
+            host.settle(until: {
+                host.accessibilityElements().contains(label: L10n.string("Share the terminal with agents"))
+            })
             try WindowlessRender.writePNG(host.capture().bitmap,
                                           to: directory.appending(path: "settings-terminal-\(appearance.suffix).png"))
             guard appearance == .light else { continue }
@@ -477,7 +479,7 @@ final class TerminalCommandHandoffTests: XCTestCase {
                                           to: directory.appending(path: "right-\(appearance.suffix).png"))
             guard appearance == .dark else { continue }
             defaults.set(TerminalLocation.bottom.rawValue, forKey: TerminalLocation.key)
-            host.settle()
+            host.settle(until: { workspace.panels.isTerminalPresented })
             XCTAssertTrue(workspace.panels.isTerminalPresented, "back below")
             XCTAssertEqual(workspace.panels.trailingTabs, ["files"])
         }
@@ -513,7 +515,7 @@ final class TerminalCommandHandoffTests: XCTestCase {
                     let shown = workspace.terminal(in: fixture.workspaceURL, launch: launch, taskID: nil)
                     try waitUntilSettled(in: host) { shown.isAtPrompt }
                     XCTAssertEqual(host.hosting.pressAccessibilityElements(labelled: L10n.string("Split Terminal")), 1)
-                    host.settle()
+                    host.settle(until: { workspace.splitTerminal != nil })
                 }
                 let split = try XCTUnwrap(workspace.splitTerminal)
                 try waitUntilSettled(in: host) { split.isAtPrompt && split.bufferText.contains("%") }
@@ -608,7 +610,7 @@ final class TerminalCommandHandoffTests: XCTestCase {
             size: NSSize(width: 1_000, height: 820), appearance: .light
         )
         defer { host.close() }
-        host.settle()
+        host.settle(until: { host.accessibilityElements().contains(label: L10n.string("Run in terminal")) })
         let elements = host.accessibilityElements()
         XCTAssertTrue(elements.contains(label: L10n.string("Run in terminal")), "\(elements)")
         XCTAssertTrue(host.hosting.terminalText.isEmpty, "No shell started")
@@ -717,13 +719,13 @@ final class TerminalCommandHandoffTests: XCTestCase {
                 size: NSSize(width: 1_000, height: 820), appearance: appearance
             )
             defer { host.close() }
-            host.settle()
-            let runs = host.accessibilityElements().filter { $0.label == L10n.string("Run in terminal") }
-            XCTAssertEqual(runs.count, 2, "\(host.accessibilityElements())")
+            let runs = { host.accessibilityElements().filter { $0.label == L10n.string("Run in terminal") } }
+            host.settle(until: { runs().count == 2 })
+            XCTAssertEqual(runs().count, 2, "\(host.accessibilityElements())")
             if appearance == .light {
                 XCTAssertEqual(host.hosting.pressAccessibilityElements(labelled: L10n.string("Run in terminal"),
                                                                        valueContaining: "console"), 1)
-                host.settle()
+                host.settle(until: { workspace.panels.isTerminalPresented })
                 XCTAssertTrue(workspace.panels.isTerminalPresented, "the terminal opens")
                 var buffer = ""
                 let deadline = ContinuousClock.now + testWaitLimit
