@@ -4,9 +4,10 @@ import CoreImage.CIFilterBuiltins
 import Foundation
 import YardletAgentTools
 
-/// QA for the vault for agents against the real browser host (docs/BROWSER_VAULT_DESIGN.md §12 stages
-/// 1, 3 and 5), run by `run-check.sh … --ui-fixture-browser-check-only=vault`. The vault is the app's
-/// own, in memory for this run (`MacVault`), and holds made-up test sign-ins for the QA server only.
+/// QA for the vault for agents against the real browser host (docs/BROWSER_VAULT_DESIGN.md): CDP's virtual
+/// authenticator in this CEF, the agent's fills and the refusals that keep values away from it, Yardlet's passkeys,
+/// and the person's side in the panel, run by `run-check.sh … --ui-fixture-browser-check-only=vault`. The vault is
+/// the app's own, in memory for this run (`MacVault`), and holds made-up test sign-ins for the QA server only.
 /// Every call goes through the Yardlet MCP broker, as a harness's would. Checks land in `result.json`.
 @MainActor
 final class BrowserHostVaultQA {
@@ -408,7 +409,7 @@ final class BrowserHostVaultQA {
         try? vault.delete(strict.id)
     }
 
-    // MARK: Stage 1: CDP's virtual authenticator in this CEF
+    // MARK: CDP's virtual authenticator in this CEF
 
     private func exerciseVirtualAuthenticator() async {
         await navigate("vault/webauthn")
@@ -480,7 +481,7 @@ final class BrowserHostVaultQA {
               signedIn?["ok"]?.boolValue == true && asserted, "get \(String(describing: signedIn)), event \(asserted)")
     }
 
-    // MARK: Stage 5: Yardlet's passkeys
+    // MARK: Yardlet's passkeys
 
     /// The person makes a Yardlet passkey on the page (the right-click item's work), then the agent signs
     /// in with it without a dialog; the authenticator answers once and goes, and another site gets nothing.
@@ -532,7 +533,7 @@ final class BrowserHostVaultQA {
         """
     }
 
-    // MARK: Stage 4: the person's side in the panel
+    // MARK: The person's side in the panel
 
     /// In the task's panel: the person signs in (typed, trusted input) and the save bar offers the password;
     /// saving makes an item; the key button's fill puts it back; the page's menu has the vault's two items;
