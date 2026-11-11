@@ -862,13 +862,8 @@ struct ConnectionCenterContent: View {
                     .background(ParityTheme.subtleFill, in: Capsule())
             }
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(AccountConnectionPresentation.providerTitle(for: descriptor.id))
-                    .font(.system(size: 11.5, weight: .medium))
-                Text(AccountConnectionPresentation.providerDescription(for: descriptor.id))
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-            }
+            Text(AccountConnectionPresentation.providerTitle(for: descriptor.id))
+                .font(.system(size: 11.5, weight: .medium))
 
             if allowsAccountManagement {
                 HStack(spacing: 8) {
@@ -1160,11 +1155,13 @@ struct ConnectionCenterContent: View {
                     }
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(connectionPhaseColor)
-                    Text(connectionPhaseDetail)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 430)
+                    if let detail = connectionPhaseDetail {
+                        Text(detail)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 430)
+                    }
                 }
 
                 if let code = model.loginController.detectedCode {
@@ -1315,20 +1312,19 @@ struct ConnectionCenterContent: View {
         }
     }
 
-    private var connectionPhaseDetail: String {
+    /// A line under the step's title, where the title leaves something out.
+    private var connectionPhaseDetail: String? {
         switch model.loginController.phase {
-        case .preparing:
-            L10n.string("Yardlet is waiting for the harness to prepare its secure sign-in flow.")
+        case .preparing, .completed:
+            nil
         case .browserHandoff:
-            L10n.string("Complete account selection and approval in the browser. Yardlet never receives your password.")
+            L10n.string("Yardlet never receives your password.")
         case .inputRequired:
-            L10n.string("This harness owns the next provider or method choice. Continue in its setup controls below.")
-        case .completed:
-            L10n.string("The harness finished its account flow. Return to verify the current connection state.")
+            L10n.string("The harness asks you to choose a provider or a sign-in method.")
         case .failed:
-            L10n.string("Open CLI details for the runtime error, then retry from the harness page.")
+            L10n.string("Open CLI details to see the error.")
         case .cancelled:
-            L10n.string("No account change was completed. You can return and try again.")
+            L10n.string("Nothing was changed.")
         }
     }
 

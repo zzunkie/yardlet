@@ -168,7 +168,7 @@ struct RemoteSettingsView: View {
 
     private var pairingDescription: String {
         if let name = service.pairedDeviceName { return L10n.format("%@ is paired.", name) }
-        return L10n.string("Shows a code to scan with your phone, and a link for Yardlet on another computer. It works once and expires after 5 minutes.")
+        return L10n.string("A code to scan with your phone, or a link for Yardlet on another computer.")
     }
 
     /// The pairing link on the clipboard, for Yardlet on another computer: pasted there, or opened as a
@@ -298,8 +298,10 @@ struct RemoteSettingsView: View {
         HStack {
             VStack(alignment: .leading, spacing: 3) {
                 Text(L10n.string(title)).font(.callout)
-                Text(permissionDetail(permission)).font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                if let detail = permissionDetail(permission) {
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: 12)
             Toggle(L10n.string(title), isOn: Binding(
@@ -316,11 +318,12 @@ struct RemoteSettingsView: View {
         .font(.caption)
     }
 
-    private func permissionDetail(_ permission: RemoteDevicePermission) -> String {
+    /// What a permission lets the device do, where its name does not already say it.
+    private func permissionDetail(_ permission: RemoteDevicePermission) -> String? {
         switch permission {
         case .terminal: L10n.string("Run shell commands as the host user, and let agents act without asking.")
         case .fileWrites: L10n.string("Save and discard changes in the task's workspace.")
-        case .settings: L10n.string("Change Yardlet settings on this Mac.")
+        case .settings: nil
         }
     }
 

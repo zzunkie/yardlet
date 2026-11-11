@@ -381,12 +381,10 @@
 "Connection flow completed" = "연결 절차가 끝났습니다";
 "Connection could not be completed" = "연결을 완료하지 못했습니다";
 "Connection cancelled" = "연결을 취소했습니다";
-"Yardlet is waiting for the harness to prepare its secure sign-in flow." = "하네스가 안전한 로그인 절차를 준비할 때까지 Yardlet이 기다리고 있습니다.";
-"Complete account selection and approval in the browser. Yardlet never receives your password." = "브라우저에서 계정 선택과 승인을 완료하세요. Yardlet은 비밀번호를 전달받지 않습니다.";
-"This harness owns the next provider or method choice. Continue in its setup controls below." = "다음 제공자 또는 로그인 방식은 이 하네스가 관리합니다. 아래 설정 화면에서 계속하세요.";
-"The harness finished its account flow. Return to verify the current connection state." = "하네스의 계정 절차가 끝났습니다. 돌아가서 현재 연결 상태를 확인하세요.";
-"Open CLI details for the runtime error, then retry from the harness page." = "CLI 세부 정보에서 런타임 오류를 확인한 뒤 하네스 화면에서 다시 시도하세요.";
-"No account change was completed. You can return and try again." = "완료된 계정 변경은 없습니다. 돌아가서 다시 시도할 수 있습니다.";
+"Yardlet never receives your password." = "Yardlet은 비밀번호를 전달받지 않습니다.";
+"The harness asks you to choose a provider or a sign-in method." = "하네스가 제공자나 로그인 방식을 고르라고 묻습니다.";
+"Open CLI details to see the error." = "CLI 세부 정보에서 오류를 확인하세요.";
+"Nothing was changed." = "바뀐 것은 없습니다.";
 "Verification code" = "인증 코드";
 "Copy code" = "코드 복사";
 "Continue in browser" = "브라우저에서 계속";
@@ -777,8 +775,7 @@
 "Open System Settings" = "시스템 설정 열기";
 "Allow notifications for Yardlet in macOS settings." = "macOS 설정에서 Yardlet 알림을 허용하세요.";
 "Refresh notification status" = "알림 상태 새로고침";
-"System notifications are off until you allow them." = "허용하기 전까지 시스템 알림은 꺼져 있습니다.";
-"System notifications are delivered for background completion, failure, or approval." = "백그라운드 완료, 실패 또는 승인 대기 시 시스템 알림을 보냅니다.";
+"Notifies when a background task finishes, fails or needs approval." = "백그라운드 작업이 끝나거나 실패하거나 승인을 기다리면 알립니다.";
 "Background task notifications" = "백그라운드 작업 알림";
 "Git settings" = "Git 설정";
 "Hook execution" = "훅 실행";
@@ -991,11 +988,10 @@
 "Terminal location" = "터미널 위치";
 "Split Terminal" = "터미널 분할";
 "Unsplit Terminal" = "터미널 분할 해제";
-"Where the terminal opens: below the conversation, or as a tab of the side panel." = "터미널을 대화 아래에 열지, 사이드 패널의 탭으로 열지 고릅니다.";
 "Bottom" = "아래";
 "Right" = "오른쪽";
 "A shell in the task's folder in the side panel." = "사이드 패널에서 작업 폴더의 셸을 엽니다.";
-"A task's agent can read the task's terminal tabs, without typing in them, and a selection in the terminal can be attached to your message (⌘⇧L)." = "작업의 에이전트가 그 작업의 터미널 탭을 읽을 수 있고(입력은 하지 않습니다), 터미널에서 고른 부분을 메시지에 붙일 수 있습니다(⌘⇧L).";
+"Agents can read a task's terminal tabs but can't type in them. ⌘⇧L attaches a terminal selection to your message." = "에이전트가 작업의 터미널 탭을 읽을 수 있고 입력은 하지 않습니다. ⌘⇧L로 터미널에서 고른 부분을 메시지에 붙입니다.";
 "Attach Selection to Message" = "선택 영역을 메시지에 붙이기";
 "Paste" = "붙여 넣기";
 "Terminal (%@):" = "터미널(%@):";
@@ -1091,7 +1087,6 @@
 
 "Hermes provider setup" = "Hermes 제공자 설정";
 
-"Choose a provider in Hermes. Authentication and billing remain owned by that provider." = "Hermes에서 제공자를 선택하세요. 인증과 결제는 해당 제공자가 관리합니다.";
 
 /* Provider connections and account selection */
 "%.0f day limit" = "%.0f일 한도";
@@ -1138,7 +1133,7 @@
 "Automatic" = "자동";
 "Each new task starts on the account with the most room left in its limits" = "새 작업마다 한도 여유가 가장 많은 계정으로 시작합니다";
 "Choose the account for new tasks automatically" = "새 작업 계정 자동 선택";
-"With more than one account in automatic assignment, a new task starts on the one with the most room left in its limits unless you choose an account." = "자동 배정에 포함된 계정이 둘 이상이면, 계정을 직접 고르지 않은 새 작업은 한도 여유가 가장 많은 계정으로 시작합니다.";
+"A new task starts on the account with the most room left in its limits unless you choose one." = "계정을 직접 고르지 않은 새 작업은 한도 여유가 가장 많은 계정으로 시작합니다.";
 "%@ %lld%% used" = "%1$@ %2$lld%% 사용";
 "Frees up %@" = "%@에 풀림";
 "Switched from %@: nearly out of its limit" = "%@ 한도가 거의 소진되어 바꿈";
@@ -1151,7 +1146,6 @@
 
 "Provider settings" = "제공자 설정";
 
-"Choose a model provider and account using this harness’s own authentication." = "하네스의 인증 절차로 모델 제공자와 계정을 선택합니다.";
 
 "Choose provider" = "제공자 선택";
 
@@ -1285,7 +1279,7 @@
 "Claude Code user settings" = "Claude Code 사용자 설정";
 "Agent browser tools" = "에이전트 브라우저 도구";
 "Hide keys and tokens" = "키와 토큰 가리기";
-"Hides values that look like API keys, access tokens or private keys in what agents read in the browser, a terminal or another task. Turned off, agents read them as they are shown, and they stay in the task's history." = "에이전트가 브라우저, 터미널, 다른 작업에서 읽는 내용 중 API 키, 액세스 토큰, 개인 키처럼 보이는 값을 가립니다. 끄면 에이전트가 이 값을 보이는 그대로 읽고, 작업 기록에도 남습니다.";
+"Hides values that look like API keys, tokens or private keys in what agents read. Turned off, they also stay in the task's history." = "에이전트가 읽는 내용에서 API 키, 토큰, 개인 키처럼 보이는 값을 가립니다. 끄면 이 값이 작업 기록에도 남습니다.";
 "turn off hiding keys and tokens from agents" = "키와 토큰 가리기 끄기";
 "Always on in a build that is not team-signed." = "팀 서명이 없는 빌드에서는 항상 켜져 있습니다.";
 
@@ -1340,7 +1334,7 @@
 /* Connectors */
 "Connectors" = "커넥터";
 "Add connector" = "커넥터 추가";
-"Claude Code tasks get changes from their next turn; tasks in other harnesses, when they next start or resume. A connector signed in again works again in every task at once." = "Claude Code 작업은 다음 턴부터 바뀐 내용을 받고, 다른 하네스의 작업은 다음에 시작하거나 재개할 때 받습니다. 다시 로그인한 커넥터는 모든 작업에서 바로 다시 쓸 수 있습니다.";
+"Claude Code tasks get changes from their next turn, and other tasks when they next start or resume." = "바뀐 내용을 Claude Code 작업은 다음 턴부터, 다른 작업은 다음에 시작하거나 다시 열 때부터 받습니다.";
 "%lld tools" = "도구 %lld개";
 "Connecting…" = "연결 중…";
 "Sign in in your browser" = "브라우저에서 로그인하세요";
@@ -1405,14 +1399,13 @@
 "The harness's own servers" = "하네스 자체 서버";
 "Needs sign-in" = "로그인 필요";
 "Error" = "오류";
-"Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account." = "여기서 연결한 서비스의 도구는 Yardlet이 시작하거나 재개하는 모든 작업에서 씁니다. Claude Code·Codex·ACP 하네스와 모든 계정에 같습니다.";
+"Tools of the services you connect here work in every task, whichever harness or account it uses." = "여기서 연결한 서비스의 도구는 하네스나 계정과 상관없이 모든 작업에서 씁니다.";
 "Yardlet couldn't read %@, so your saved connectors aren't shown. The file is left as it is, and changes made here are lost when Yardlet quits." = "%@ 파일을 읽지 못해 저장된 커넥터를 표시하지 못했습니다. 파일은 그대로 두었으며, 여기서 바꾼 내용은 Yardlet을 끄면 사라집니다.";
 "Yardlet couldn't read %@, so what it holds isn't shown. A copy is kept in the same folder." = "%@ 파일을 읽지 못해 그 안에 저장된 내용을 표시하지 못했습니다. 사본은 같은 폴더에 보관해 두었습니다.";
 "Yardlet couldn't save %@. Changes made since then are lost when Yardlet quits." = "%@ 파일을 저장하지 못했습니다. 그 뒤로 바꾼 내용은 Yardlet을 끄면 사라집니다.";
 "Your connectors" = "내 커넥터";
 "No connectors yet" = "아직 연결한 커넥터가 없습니다";
-"Connect a service such as Linear, Notion, or GitHub, and every task can use its tools." = "Linear·Notion·GitHub 같은 서비스를 연결하면 모든 작업에서 그 도구를 씁니다.";
-"On: Claude tasks also load the connectors each Claude account connected on claude.ai, such as Gmail, Google Calendar, and Google Drive. They differ by account, and a service also connected here appears twice. Codex and ACP tasks are unaffected." = "켜면 Claude 작업이 각 Claude 계정이 claude.ai에 연결해 둔 커넥터(Gmail·Google Calendar·Google Drive 등)도 불러옵니다. 계정마다 다르고, 여기에도 연결한 서비스는 두 번 보입니다. Codex·ACP 작업에는 영향이 없습니다.";
+"Claude tasks also load the connectors each Claude account has on claude.ai. A service also connected here appears twice." = "Claude 작업이 각 Claude 계정이 claude.ai에 연결해 둔 커넥터도 불러옵니다. 여기에도 연결한 서비스는 두 번 보입니다.";
 "Pick a service. Sign-ins and keys stay in your keychain." = "서비스를 고르세요. 로그인 정보와 키는 키체인에 보관됩니다.";
 "Connect in one click" = "한 번에 연결";
 "Yardlet adds the service at once. For one with a sign-in, your browser opens: sign in and allow, and that is all." = "누르면 바로 추가합니다. 로그인이 있는 서비스는 브라우저가 열리고, 로그인해 허용하면 끝납니다.";
@@ -1580,7 +1573,7 @@
 "Continue with another account" = "다른 계정으로 계속";
 "Auto-continue when limits reset" = "초기화되면 자동으로 계속";
 "Continue automatically at usage limit" = "사용 한도가 초기화되면 자동으로 계속";
-"When a usage limit stops a Claude Code task and resets within a day, the task picks up where it stopped once it resets. A limit that resets later, such as a weekly one, continues only if you turn it on on its card." = "Claude Code 작업이 사용 한도로 멈추고 하루 안에 초기화되면, 초기화된 뒤 멈춘 곳부터 이어 갑니다. 주간 한도처럼 더 늦게 초기화되는 한도는 카드에서 켤 때만 이어 갑니다.";
+"A Claude Code task a usage limit stopped continues once the limit resets, if that is within a day." = "사용 한도로 멈춘 Claude Code 작업은 한도가 하루 안에 초기화되면 그때 이어 갑니다.";
 "Auto-resuming at %@" = "%@에 자동으로 계속합니다";
 "Type to search for files" = "파일을 검색하려면 입력하세요";
 "Searching files…" = "파일 검색 중…";
@@ -2002,7 +1995,6 @@
 "Language" = "언어";
 "Applies the next time you open Yardlet" = "다음에 Yardlet을 열 때부터 적용됩니다.";
 "Show in menu bar" = "메뉴 막대에 표시";
-"Keep Yardlet in the macOS menu bar when the main window is closed" = "메인 창을 닫아도 Yardlet을 macOS 메뉴 막대에 유지합니다.";
 "Show Yardlet in the menu bar" = "메뉴 막대에 Yardlet 표시";
 "Turn the sidebar activity view on or off" = "사이드바 활동 보기를 켜거나 끕니다";
 "5h" = "5시간";
@@ -2038,7 +2030,7 @@
 "Can't reach the Yardlet server" = "Yardlet 서버에 닿지 않음";
 "Scan this code with Yardlet on your phone." = "휴대폰의 Yardlet으로 이 QR 코드를 찍으세요.";
 "Works once for 5 minutes · %@ left" = "5분 동안 한 번 쓸 수 있습니다 · %@ 남음";
-"Shows a code to scan with your phone, and a link for Yardlet on another computer. It works once and expires after 5 minutes." = "휴대폰으로 찍을 코드와 다른 컴퓨터의 Yardlet에서 열 링크를 보여 줍니다. 한 번만 쓸 수 있고 5분 뒤 만료됩니다.";
+"A code to scan with your phone, or a link for Yardlet on another computer." = "휴대폰으로 찍을 코드나, 다른 컴퓨터의 Yardlet에서 열 링크를 만듭니다.";
 "%@ wants to connect to this Mac" = "%@ 기기가 이 Mac에 연결하려 합니다";
 "Link code" = "확인 숫자";
 "Allow it if the phone shows the same number." = "휴대폰에 같은 숫자가 보이면 허용하세요.";
@@ -2059,7 +2051,7 @@
 "Last connected %@" = "마지막 접속 %@";
 "Pairing QR code" = "연결 QR 코드";
 "Keep this Mac awake on power" = "전원이 연결된 동안 이 Mac을 깨어 있게 유지";
-"While it's plugged in, this Mac doesn't sleep on its own, so your devices can still reach it. The display can still turn off." = "전원이 연결되어 있으면 이 Mac이 스스로 잠자기에 들어가지 않아 다른 기기에서 계속 연결할 수 있습니다. 화면은 꺼질 수 있습니다.";
+"While plugged in, this Mac doesn't sleep on its own. The display can still turn off." = "전원에 연결되어 있는 동안 이 Mac이 스스로 잠들지 않습니다. 화면은 꺼질 수 있습니다.";
 "On another computer, copy the link and open it in Yardlet there." = "다른 컴퓨터에서는 링크를 복사해 그 컴퓨터의 Yardlet에서 여세요.";
 /* The desktop remote: another Mac's Yardlet in a window of its own (File › Connect to Mac…). */
 "%@ couldn't do that." = "%@에서 그 작업을 하지 못했습니다.";
@@ -2193,7 +2185,7 @@
 "Use %1$@ %2$@" = "%1$@ %2$@ 사용";
 "Installed by hand" = "직접 설치함";
 "CLI automatic updates" = "CLI 자동 업데이트";
-"Updates each harness CLI with its own updater while none of its tasks is running. Yardlet checks the CLI before and after, without a model turn, and goes back to the earlier version if the new one fails." = "하네스 CLI를 그 CLI의 업데이트 방법으로, 그 하네스 작업이 하나도 실행 중이지 않을 때 업데이트합니다. Yardlet이 모델 턴 없이 업데이트 전후로 CLI를 확인하고, 새 버전이 통과하지 못하면 이전 버전으로 되돌립니다.";
+"Updates each harness CLI while none of its tasks is running, and goes back to the earlier version if the new one fails." = "하네스의 작업이 실행 중이지 않을 때 CLI를 업데이트하고, 새 버전이 실패하면 이전 버전으로 되돌립니다.";
 "Checked %@ · checks every 6 hours" = "%@에 확인함 · 6시간마다 확인";
 "No harness CLI is installed." = "설치된 하네스 CLI가 없습니다.";
 "Check for Updates" = "업데이트 확인";
@@ -2218,9 +2210,9 @@
 "Moderate" = "보통";
 "Balanced (recommended)" = "균형(권장)";
 "Maximum" = "최대";
-"Frees the memory of tabs unused for 6 hours." = "6시간 동안 쓰지 않은 탭의 메모리를 비웁니다.";
-"Frees the memory of tabs unused for 4 hours." = "4시간 동안 쓰지 않은 탭의 메모리를 비웁니다.";
-"Frees the memory of tabs unused for 2 hours." = "2시간 동안 쓰지 않은 탭의 메모리를 비웁니다.";
+"Tabs unused for 6 hours" = "6시간 동안 쓰지 않은 탭";
+"Tabs unused for 4 hours" = "4시간 동안 쓰지 않은 탭";
+"Tabs unused for 2 hours" = "2시간 동안 쓰지 않은 탭";
 "Memory saver level" = "메모리 절약 단계";
 "Keeping the screen unlocked" = "화면 잠금을 막는 중";
 "Not keeping the screen unlocked: battery under 20%" = "배터리가 20% 아래라 화면 잠금을 막지 않는 중";
@@ -2332,8 +2324,7 @@
 "Restart to update" = "업데이트하려면 다시 시작";
 "Yardlet Instructions" = "Yardlet 지침";
 "Use Yardlet instructions" = "Yardlet 지침 사용";
-"Added when Yardlet starts or resumes a task; a task whose harness is already running keeps the instructions it started with until it resumes, for example after Yardlet reopens. Never written to a harness's own files." = "Yardlet이 작업을 시작하거나 다시 열 때 덧붙입니다. 하네스가 이미 실행 중인 작업은 다시 열 때까지(예: Yardlet을 다시 연 뒤) 처음 받은 지침을 그대로 씁니다. 하네스 자체 파일에는 쓰지 않습니다.";
-"Global instruction files such as AGENTS.md and CLAUDE.md also apply outside Yardlet; Yardlet instructions apply only to tasks Yardlet launches." = "AGENTS.md·CLAUDE.md 같은 전역 지침 파일은 Yardlet 밖에서도 적용되고, Yardlet 지침은 Yardlet이 띄운 작업에만 적용됩니다.";
+"Added to tasks Yardlet starts or resumes. A running task gets changes when it next resumes." = "Yardlet이 시작하거나 다시 여는 작업에 덧붙입니다. 실행 중인 작업은 다음에 다시 열 때 바뀐 지침을 받습니다.";
 "Not supported: %@" = "지원하지 않음: %@";
 "Turn off in this project" = "이 프로젝트에서 끄기";
 "Project Yardlet instructions" = "프로젝트 Yardlet 지침";
@@ -2341,7 +2332,7 @@
 
 /* Next message suggestions: Claude Code's and Codex's predicted next message as the empty composer's faint text (the Claude app's "Prompt suggestions", the Codex app's "Show predictions"). */
 "Next message suggestions" = "다음 메시지 추천";
-"After a reply, show a suggested next message as faint text in the empty message box. Claude Code and Codex make each one with one more model request, which adds a little to your usage." = "응답이 끝나면 빈 입력창에 보낼 만한 다음 메시지를 흐린 글자로 보여 줍니다. Claude Code와 Codex는 추천마다 모델 요청을 한 번 더 하므로 사용량이 조금 늘어납니다.";
+"Shows a suggested next message in the empty message box after a reply. Each one takes one more model request." = "응답이 끝나면 빈 입력창에 다음 메시지를 추천합니다. 추천마다 모델 요청이 한 번 더 듭니다.";
 "Codex tasks follow it from their next reply, Claude Code tasks from their next start or resume" = "Codex 작업은 다음 응답부터, Claude Code 작업은 다음에 시작하거나 다시 열 때부터 따릅니다";
 "Puts this message in the message box without sending it" = "보내지 않고 입력창에 넣습니다";
 
@@ -2417,7 +2408,7 @@
 "Show session rail" = "세션 레일 보기";
 "Hide session rail" = "세션 레일 숨기기";
 "Auto-fix failing CI" = "실패한 CI 자동 수정";
-"When a task first has a pull request, ask whether to send it failing checks to fix. Auto-fix stays off until you turn it on for that task." = "작업에 처음 풀 리퀘스트가 생기면 실패한 검사를 보내 고치게 할지 묻습니다. 그 작업에서 켜기 전에는 자동 수정이 꺼져 있습니다.";
+"When a task first has a pull request, asks whether to send it failing checks to fix." = "작업에 처음 풀 리퀘스트가 생기면 실패한 검사를 보내 고치게 할지 묻습니다.";
 "The task's environment, settings, context, changes and progress beside the conversation." = "대화 옆에 작업의 환경, 설정, 컨텍스트, 변경 사항, 진행 상황을 보입니다.";
 "Approved by %@" = "%@ 님이 승인함";
 "Changes requested by %@" = "%@ 님이 변경을 요청함";
@@ -2651,8 +2642,8 @@
 "Event %@" = "일정 %@";
 "File %@" = "파일 %@";
 "Folder %@" = "폴더 %@";
-"For services that need an app of your own: each step opens the right page, with every value to paste ready to copy." = "직접 만든 앱이 필요한 서비스: 단계마다 해당 페이지를 열고, 붙여 넣을 값은 복사 버튼으로 준비되어 있습니다.";
-"Found in your claude.ai accounts, Codex apps and plugins, harness settings, and the Claude app, Cursor, and VS Code. Connect one here once and every harness and account gets it; their settings stay as they are." = "claude.ai 계정, Codex 앱·플러그인, 하네스 설정, Claude 앱·Cursor·VS Code에서 찾았습니다. 여기서 한 번 연결하면 모든 하네스와 계정이 쓰고, 원래 설정은 그대로 둡니다.";
+"For services that need an app of your own." = "직접 만든 앱이 필요한 서비스입니다.";
+"Found in your other apps' and harnesses' settings. Connecting one here leaves those settings as they are." = "다른 앱과 하네스의 설정에서 찾았습니다. 여기서 연결해도 그 설정은 그대로 둡니다.";
 "From Yardlet's manifest" = "Yardlet 매니페스트로";
 "Gmail · Calendar · Drive" = "Gmail · Calendar · Drive";
 "Gmail, Google Calendar, and Google Drive with one Google OAuth app" = "Google OAuth 앱 하나로 Gmail·Google Calendar·Google Drive";
@@ -2808,7 +2799,7 @@
 "Wait" = "기다리기";
 "Not responding" = "응답 없음";
 "Choose harnesses and models by daily evaluation" = "매일 평가로 하네스·모델 고르기";
-"Once a day, the models you use review the day's tasks, their own included, and the routing they settle on is added to these instructions." = "하루 한 번, 쓰시는 모델들이 그날의 작업을 자기 작업까지 검토하고, 그렇게 정한 라우팅을 이 지침에 덧붙입니다.";
+"Once a day, the models you use review the day's tasks and add which harness and model suits which work to these instructions." = "하루 한 번, 쓰는 모델들이 그날의 작업을 검토해 어떤 일에 어떤 하네스와 모델이 맞는지 이 지침에 덧붙입니다.";
 "It uses your plans, and excerpts of your tasks are shown to the other harnesses' models. Turning it off removes its records." = "요금제 사용량을 쓰고, 작업의 일부가 다른 하네스의 모델에게 보입니다. 끄면 기록이 지워집니다.";
 "Last evaluation %@" = "마지막 평가 %@";
 "Open Report" = "보고서 열기";
@@ -3135,7 +3126,7 @@
 "Xcode didn't answer: %@" = "Xcode가 응답하지 않았습니다: %@";
 "This build of Yardlet can't sign App Store Connect tokens." = "이 Yardlet 빌드는 App Store Connect 토큰에 서명할 수 없습니다.";
 "Show servers tasks start" = "작업이 띄운 서버 보이기";
-"Show the localhost address of a server a task's harness or terminal starts beside the task's title" = "작업의 하네스나 터미널이 띄운 서버의 localhost 주소를 작업 제목 옆에 보입니다.";
+"Shows the server's localhost address beside the task's title." = "서버의 localhost 주소를 작업 제목 옆에 보여 줍니다.";
 "Open %@ in this task's browser" = "이 작업의 브라우저에서 %@ 열기";
 "and %lld more" = "외 %lld개";
 "Opens in this task's browser" = "이 작업의 브라우저에서 엽니다";
@@ -3350,7 +3341,7 @@
 "Google Search" = "Google 검색";
 "Remove suggestion" = "추천 삭제";
 "Autocomplete searches and URLs" = "검색어 및 URL 자동 완성";
-"Sends what you type in the address field to Google to suggest searches. Pages from your browsing history are suggested either way." = "주소창에 입력한 글자를 Google로 보내 검색어를 추천받습니다. 꺼도 방문 기록에 있는 페이지는 추천합니다.";
+"Sends what you type in the address field to Google." = "주소창에 입력한 글자를 Google로 보냅니다.";
 
 /* Personal agents */
 "This message cannot be displayed yet." = "이 메시지는 아직 표시할 수 없습니다.";
@@ -3439,7 +3430,7 @@
 "Remove from list" = "목록에서 제거";
 "Remove from history" = "방문 기록에서 제거";
 "Suggest pages on new tabs" = "새 탭에 페이지 추천";
-"Shows the pages this task opened and the sites you visit most on a new tab and in the side panel. Turned off, tasks keep no list of the pages they opened." = "새 탭과 사이드 패널에 이 작업에서 연 페이지와 자주 방문한 사이트를 보여 줍니다. 끄면 작업이 연 페이지를 따로 남기지 않습니다.";
+"Shows the pages this task opened and the sites you visit most. Turned off, tasks keep no list of the pages they opened." = "이 작업에서 연 페이지와 자주 방문한 사이트를 보여 줍니다. 끄면 작업이 연 페이지 목록을 남기지 않습니다.";
 "1 reset available" = "리셋권 1개";
 "%lld resets available" = "리셋권 %lld개";
 "No resets left after this one" = "사용하면 남는 리셋권 없음";
@@ -3668,9 +3659,9 @@
 "This message is in Spam. Check who sent it before opening its links or files." = "이 메일은 스팸함에 있습니다. 보낸 사람을 확인하기 전에는 링크나 첨부 파일을 열지 마세요.";
 "This message is in the Trash." = "이 메일은 휴지통에 있습니다.";
 "Mailbox" = "메일함";
-"Show the inboxes of the mail accounts connected in Connectors (Gmail, Outlook and accounts over IMAP) beside your tasks. Mail is read from the service and kept in memory only." = "커넥터에 연결한 메일 계정(Gmail, Outlook, IMAP 계정)의 받은편지함을 작업 옆에 보여 줍니다. 메일은 서비스에서 읽어 메모리에만 둡니다.";
+"Shows the inboxes of mail accounts connected in Connectors beside your tasks." = "커넥터에 연결한 메일 계정의 받은편지함을 작업 옆에 보여 줍니다.";
 "New mail" = "새 메일";
-"Notify when new mail reaches an inbox in the mailbox: in Gmail its Primary tab, in Outlook its Focused inbox" = "메일함의 받은편지함에 새 메일이 오면 알립니다. Gmail은 기본 탭, Outlook은 '포커스됨'의 메일만 알립니다.";
+"Only Gmail's Primary tab and Outlook's Focused inbox notify." = "Gmail은 기본 탭, Outlook은 '포커스됨'의 메일만 알립니다.";
 "Images in this message are not loaded, so its sender cannot tell it was read." = "보낸 사람이 열람 여부를 알 수 없도록 이 메일의 이미지는 불러오지 않았습니다.";
 "Show images" = "이미지 보기";
 "Mail handoff %@ %@ %@" = "계정: %1$@ · 스레드 %2$@ (%3$@ 도구로 읽기)";
@@ -3767,7 +3758,7 @@
 "Choose a service" = "서비스 선택";
 "Mail accounts…" = "메일 계정…";
 "Move tasks to an account with room" = "한도가 남은 계정으로 작업 옮기기";
-"Moves Claude Code tasks on an account that is nearly out of its limit to an account with room once they have been idle for an hour. A task that hits its limit continues on another account, or waits and continues if the limit resets soon." = "한도가 거의 찬 계정의 Claude Code 작업을, 1시간 쉬고 나면 한도가 남은 계정으로 옮깁니다. 한도에 걸린 작업은 다른 계정에서 이어 가거나, 곧 풀리면 기다렸다가 이어 갑니다.";
+"Moves Claude Code tasks from an account that is nearly out of its limit to one with room." = "한도가 거의 찬 계정의 Claude Code 작업을 한도가 남은 계정으로 옮깁니다.";
 
 /* Settings tools */
 "Change “%@”?" = "“%@” 설정을 바꿀까요?";
@@ -3823,13 +3814,12 @@
 "By kind" = "종류별";
 "Where it went" = "어디에 썼나";
 "Group by" = "묶기";
-"API equivalent is an estimate at the providers' public API prices (%@). A subscription pays in plan limits, not dollars. A model without a price is counted in tokens only." = "API 환산은 제공자의 공개 API 단가(%@)로 셈한 추정입니다. 구독에서는 돈이 나가지 않고 요금제 한도가 줄어듭니다. 단가가 없는 모델은 토큰만 셉니다.";
-"Counted from this Mac's Claude Code and Codex transcripts, read %@. Nothing is sent anywhere." = "이 Mac의 Claude Code·Codex 대화 기록에서 셉니다(%@ 읽음). 밖으로 보내는 것은 없습니다.";
+"API equivalent is an estimate at public API prices (%@), not what a subscription pays." = "API 환산은 공개 API 단가(%@)로 셈한 추정이며, 구독 요금과는 다릅니다.";
 "Last 14 days, API equivalent" = "최근 14일 API 환산";
 "No price" = "단가 없음";
 "Counting this Mac's transcripts…" = "이 Mac의 대화 기록을 세는 중…";
 "Count token usage" = "토큰 사용량 세기";
-"Reads only the new lines of Claude Code's and Codex's transcripts on this Mac and keeps the counts for a year. Turning it off deletes the counts; the transcripts stay as they are." = "이 Mac에 있는 Claude Code·Codex 대화 기록에서 새로 쓰인 줄만 읽고, 센 값을 1년 동안 둡니다. 끄면 센 값을 지우고, 대화 기록은 그대로 둡니다.";
+"Counts tokens from Claude Code's and Codex's transcripts on this Mac. Turning it off deletes the counts." = "이 Mac의 Claude Code·Codex 대화 기록에서 토큰을 셉니다. 끄면 센 값을 지웁니다.";
 "Not started in Yardlet" = "Yardlet 밖에서 시작함";
 
 "Write files" = "파일 쓰기";
@@ -3848,7 +3838,6 @@
 
 "Save and discard changes in the task's workspace." = "작업 폴더의 파일을 저장하거나 변경 내용을 버립니다.";
 
-"Change Yardlet settings on this Mac." = "이 Mac의 Yardlet 설정을 바꿉니다.";
 "Change Yardlet settings on this computer." = "이 컴퓨터의 Yardlet 설정을 바꿉니다.";
 
 "Permission is off for now. Recovery could not be saved; retry before restarting Yardlet." = "현재 권한은 꺼졌지만 복구 기록을 저장하지 못했습니다. Yardlet을 다시 시작하기 전에 다시 시도해 주세요.";

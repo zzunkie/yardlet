@@ -76,7 +76,7 @@ The API-equivalent cost uses the providers' public prices, copied into Yardlet w
   long-context prices over 272K input tokens; a cache write at the 30-minute write price.
 
 A model missing from the table is counted in tokens only and named "No price" by model. A subscription does not pay
-these dollars; it pays in plan limits, as the page says under the numbers.
+these dollars, as the page says under the numbers; it pays in plan limits.
 
 ## Pace
 

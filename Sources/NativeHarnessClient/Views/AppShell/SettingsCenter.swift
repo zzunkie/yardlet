@@ -781,9 +781,7 @@ struct SettingsCenterView: View {
         VStack(alignment: .leading, spacing: 12) {
             settingRow(
                 title: L10n.string("Background task notifications"),
-                detail: notifications.authorization.isDeliverable
-                    ? L10n.string("System notifications are delivered for background completion, failure, or approval.")
-                    : L10n.string("System notifications are off until you allow them."),
+                detail: L10n.string("Notifies when a background task finishes, fails or needs approval."),
                 status: notifications.statusLabel,
                 systemName: "bell"
             )

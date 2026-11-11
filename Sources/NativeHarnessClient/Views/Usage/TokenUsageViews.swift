@@ -383,7 +383,7 @@ struct TokenUsagePage: View {
 
             kinds(amount)
             breakdown(overview.rows(range, grouping), total: amount)
-            footnote(overview)
+            footnote
         }
     }
 
@@ -513,19 +513,15 @@ struct TokenUsagePage: View {
         }
     }
 
-    private func footnote(_ overview: TokenUsageOverview) -> some View {
+    private var footnote: some View {
         let tables = TokenUsagePrices.tables.map { table in
             let copied = (try? Date(table.copied, strategy: .iso8601.year().month().day()))
                 .map { $0.formatted(date: .numeric, time: .omitted) } ?? table.copied
             return "\(table.provider) \(copied)"
         }.joined(separator: ", ")
-        return VStack(alignment: .leading, spacing: 3) {
-            Text(L10n.format("API equivalent is an estimate at the providers' public API prices (%@). A subscription pays in plan limits, not dollars. A model without a price is counted in tokens only.", tables))
-            Text(L10n.format("Counted from this Mac's Claude Code and Codex transcripts, read %@. Nothing is sent anywhere.",
-                             overview.updatedAt.formatted(.relative(presentation: .named))))
-        }
-        .font(.system(size: 11))
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+        return Text(L10n.format("API equivalent is an estimate at public API prices (%@), not what a subscription pays.", tables))
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }

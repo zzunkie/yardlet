@@ -23,7 +23,7 @@ struct ConnectorSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             VStack(alignment: .leading, spacing: 6) {
-                Text(L10n.string("Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account."))
+                Text(L10n.string("Tools of the services you connect here work in every task, whichever harness or account it uses."))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -80,7 +80,7 @@ struct ConnectorSettingsView: View {
                     }
                     .padding(.horizontal, 12)
                     .parityCard()
-                    Text(L10n.string("Claude Code tasks get changes from their next turn; tasks in other harnesses, when they next start or resume. A connector signed in again works again in every task at once."))
+                    Text(L10n.string("Claude Code tasks get changes from their next turn, and other tasks when they next start or resume."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -119,11 +119,6 @@ struct ConnectorSettingsView: View {
                 .foregroundStyle(.secondary)
             Text(L10n.string("No connectors yet"))
                 .font(.callout.weight(.semibold))
-            Text(L10n.string("Connect a service such as Linear, Notion, or GitHub, and every task can use its tools."))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
             if !isRemote {
                 Button(L10n.string("Add connector")) { adding = .directory }
                     .parityProminentButton()
@@ -165,7 +160,7 @@ struct ConnectorSetupTiles: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(L10n.string("Set up in one go")).font(.headline)
-            Text(L10n.string("For services that need an app of your own: each step opens the right page, with every value to paste ready to copy."))
+            Text(L10n.string("For services that need an app of your own."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -741,7 +736,7 @@ struct ConnectorImportList: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Text(L10n.string("Found in your claude.ai accounts, Codex apps and plugins, harness settings, and the Claude app, Cursor, and VS Code. Connect one here once and every harness and account gets it; their settings stay as they are."))
+            Text(L10n.string("Found in your other apps' and harnesses' settings. Connecting one here leaves those settings as they are."))
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)

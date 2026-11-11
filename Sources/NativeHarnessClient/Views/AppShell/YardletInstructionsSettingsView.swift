@@ -75,10 +75,6 @@ struct YardletInstructionsSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(YardletSetting.yardletInstructions.note ?? "")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
                 Toggle(YardletSetting.yardletInstructions.title, isOn: isEnabledBinding)

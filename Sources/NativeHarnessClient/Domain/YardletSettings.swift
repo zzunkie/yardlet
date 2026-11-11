@@ -304,13 +304,12 @@ extension YardletSetting {
 
     static let showInMenuBar = YardletSetting(
         id: "show_in_menu_bar", section: .general, generalGroup: .app, symbol: "menubar.rectangle", title: L10n.string("Show in menu bar"),
-        detail: L10n.string("Keep Yardlet in the macOS menu bar when the main window is closed"),
         controlLabel: L10n.string("Show Yardlet in the menu bar"),
         values: .onOff, storage: .flag(key: MenuBarPreference.key, defaultValue: true))
 
     static let mailbox = YardletSetting(
         id: "mailbox", section: .general, generalGroup: .app, symbol: "envelope", title: L10n.string("Mailbox"),
-        detail: L10n.string("Show the inboxes of the mail accounts connected in Connectors (Gmail, Outlook and accounts over IMAP) beside your tasks. Mail is read from the service and kept in memory only."),
+        detail: L10n.string("Shows the inboxes of mail accounts connected in Connectors beside your tasks."),
         values: .onOff, storage: .flag(key: MailboxPreference.key, defaultValue: false))
 
     static let agentBrowserTools = YardletSetting(
@@ -320,12 +319,11 @@ extension YardletSetting {
 
     static let shareTerminal = YardletSetting(
         id: "share_terminal", section: .general, generalGroup: .terminal, symbol: "terminal", title: L10n.string("Share the terminal with agents"),
-        detail: L10n.string("A task's agent can read the task's terminal tabs, without typing in them, and a selection in the terminal can be attached to your message (⌘⇧L)."),
+        detail: L10n.string("Agents can read a task's terminal tabs but can't type in them. ⌘⇧L attaches a terminal selection to your message."),
         values: .onOff, storage: .flag(key: TerminalSharingPreference.key, defaultValue: true), asksEveryTime: true)
 
     static let terminalLocation = YardletSetting(
         id: "terminal_location", section: .general, generalGroup: .terminal, symbol: "rectangle.split.2x1", title: L10n.string("Terminal location"),
-        detail: L10n.string("Where the terminal opens: below the conversation, or as a tab of the side panel."),
         values: .choices([Choice(value: TerminalLocation.bottom.rawValue, title: L10n.string("Bottom")),
                           Choice(value: TerminalLocation.right.rawValue, title: L10n.string("Right"))]),
         storage: .choice(key: TerminalLocation.key, defaultValue: TerminalLocation.bottom.rawValue))
@@ -333,7 +331,7 @@ extension YardletSetting {
     /// Turning it off asks Touch ID or the login password as well (`VaultCenter.setHidesCredentials`).
     static let hideKeysAndTokens = YardletSetting(
         id: "hide_keys_and_tokens", section: .general, generalGroup: .browser, symbol: "eye.slash", title: L10n.string("Hide keys and tokens"),
-        detail: L10n.string("Hides values that look like API keys, access tokens or private keys in what agents read in the browser, a terminal or another task. Turned off, agents read them as they are shown, and they stay in the task's history."),
+        detail: L10n.string("Hides values that look like API keys, tokens or private keys in what agents read. Turned off, they also stay in the task's history."),
         values: .onOff,
         storage: appSwitch({ $0.vault?.hidesCredentials }, { context, hides in
             guard let vault = context.vault, vault.isAllowedBuild else {
@@ -346,7 +344,7 @@ extension YardletSetting {
 
     static let showTaskServers = YardletSetting(
         id: "show_task_servers", section: .general, generalGroup: .tasks, symbol: "server.rack", title: L10n.string("Show servers tasks start"),
-        detail: L10n.string("Show the localhost address of a server a task's harness or terminal starts beside the task's title"),
+        detail: L10n.string("Shows the server's localhost address beside the task's title."),
         values: .onOff, storage: .flag(key: TaskServersPreference.key, defaultValue: true))
 
     static let keepCookies = YardletSetting(
@@ -359,14 +357,14 @@ extension YardletSetting {
     static let searchSuggestions = YardletSetting(
         id: "search_suggestions", section: .general, generalGroup: .browser, symbol: "magnifyingglass",
         title: L10n.string("Autocomplete searches and URLs"),
-        detail: L10n.string("Sends what you type in the address field to Google to suggest searches. Pages from your browsing history are suggested either way."),
+        detail: L10n.string("Sends what you type in the address field to Google."),
         values: .onOff, storage: .flag(key: SearchSuggestionPreference.key, defaultValue: true))
 
     /// Turned off, each task's saved pages go.
     static let pageSuggestions = YardletSetting(
         id: "page_suggestions", section: .general, generalGroup: .browser, symbol: "clock.arrow.circlepath",
         title: L10n.string("Suggest pages on new tabs"),
-        detail: L10n.string("Shows the pages this task opened and the sites you visit most on a new tab and in the side panel. Turned off, tasks keep no list of the pages they opened."),
+        detail: L10n.string("Shows the pages this task opened and the sites you visit most. Turned off, tasks keep no list of the pages they opened."),
         values: .onOff, storage: .flag(key: BrowserPageSuggestionPreference.key, defaultValue: true), asksEveryTime: true)
 
     static let continueAfterRestart = YardletSetting(
@@ -407,14 +405,14 @@ extension YardletSetting {
     static let nextMessageSuggestions = YardletSetting(
         id: "next_message_suggestions", section: .general, generalGroup: .tasks, symbol: "text.bubble",
         title: L10n.string("Next message suggestions"),
-        detail: L10n.string("After a reply, show a suggested next message as faint text in the empty message box. Claude Code and Codex make each one with one more model request, which adds a little to your usage."),
+        detail: L10n.string("Shows a suggested next message in the empty message box after a reply. Each one takes one more model request."),
         hint: L10n.string("Codex tasks follow it from their next reply, Claude Code tasks from their next start or resume"),
         values: .onOff, storage: .flag(key: NextMessageSuggestionPreference.key, defaultValue: true))
 
     static let autoFixFailingCI = YardletSetting(
         id: "auto_fix_failing_ci", section: .general, generalGroup: .tasks, symbol: "wrench.and.screwdriver",
         title: L10n.string("Auto-fix failing CI"),
-        detail: L10n.string("When a task first has a pull request, ask whether to send it failing checks to fix. Auto-fix stays off until you turn it on for that task."),
+        detail: L10n.string("When a task first has a pull request, asks whether to send it failing checks to fix."),
         values: choices(PullRequestAutoFixPrompt.self, title: \.title),
         storage: .choice(key: PullRequestAutoFixPrompt.preferenceKey, defaultValue: PullRequestAutoFixPrompt.ask.rawValue))
 
@@ -450,7 +448,7 @@ extension YardletSetting {
 
     static let newMail = YardletSetting(
         id: "new_mail", section: .notifications, symbol: "envelope.badge", title: L10n.string("New mail"),
-        detail: L10n.string("Notify when new mail reaches an inbox in the mailbox: in Gmail its Primary tab, in Outlook its Focused inbox"),
+        detail: L10n.string("Only Gmail's Primary tab and Outlook's Focused inbox notify."),
         values: .onOff, storage: .flag(key: MailboxPreference.notificationsKey, defaultValue: true),
         shownWhileOn: mailbox.id)
 }
@@ -461,8 +459,7 @@ extension YardletSetting {
     static let yardletInstructions = YardletSetting(
         id: "yardlet_instructions", section: .instructions, symbol: "text.quote",
         title: L10n.string("Use Yardlet instructions"),
-        detail: L10n.string("Added when Yardlet starts or resumes a task; a task whose harness is already running keeps the instructions it started with until it resumes, for example after Yardlet reopens. Never written to a harness's own files."),
-        note: L10n.string("Global instruction files such as AGENTS.md and CLAUDE.md also apply outside Yardlet; Yardlet instructions apply only to tasks Yardlet launches."),
+        detail: L10n.string("Added to tasks Yardlet starts or resumes. A running task gets changes when it next resumes."),
         values: .onOff,
         storage: appSwitch({ $0.instructions?.isEnabled }, { context, isOn in
             context.instructions?.isEnabled = isOn
@@ -474,7 +471,7 @@ extension YardletSetting {
     static let dailyEvaluation = YardletSetting(
         id: "daily_evaluation", section: .instructions, symbol: "arrow.triangle.branch",
         title: L10n.string("Choose harnesses and models by daily evaluation"),
-        detail: L10n.string("Once a day, the models you use review the day's tasks, their own included, and the routing they settle on is added to these instructions."),
+        detail: L10n.string("Once a day, the models you use review the day's tasks and add which harness and model suits which work to these instructions."),
         note: L10n.string("It uses your plans, and excerpts of your tasks are shown to the other harnesses' models. Turning it off removes its records."),
         values: .onOff,
         storage: appSwitch({ $0.evaluation?.isEnabled }, { context, isOn in
@@ -486,7 +483,7 @@ extension YardletSetting {
     static let newTaskAccountAutomatically = YardletSetting(
         id: "new_task_account_automatically", section: .accounts,
         title: L10n.string("Choose the account for new tasks automatically"),
-        detail: L10n.string("With more than one account in automatic assignment, a new task starts on the one with the most room left in its limits unless you choose an account."),
+        detail: L10n.string("A new task starts on the account with the most room left in its limits unless you choose one."),
         values: .onOff,
         storage: appSwitch({ $0.connections?.picksNewTaskAccount }, { context, picks in
             context.connections?.setPicksNewTaskAccount(picks)
@@ -495,21 +492,21 @@ extension YardletSetting {
 
     static let continueAtUsageLimit = YardletSetting(
         id: "continue_at_usage_limit", section: .accounts, title: L10n.string("Continue automatically at usage limit"),
-        detail: L10n.string("When a usage limit stops a Claude Code task and resets within a day, the task picks up where it stopped once it resets. A limit that resets later, such as a weekly one, continues only if you turn it on on its card."),
+        detail: L10n.string("A Claude Code task a usage limit stopped continues once the limit resets, if that is within a day."),
         values: .onOff, storage: .flag(key: UsageLimitAutoContinuePreference.key, defaultValue: true))
 
     /// Shown once a Claude Code account is saved besides the default login, so there is one to move to.
     static let moveTasksToAccountsWithRoom = YardletSetting(
         id: "move_tasks_to_accounts_with_room", section: .accounts,
         title: L10n.string("Move tasks to an account with room"),
-        detail: L10n.string("Moves Claude Code tasks on an account that is nearly out of its limit to an account with room once they have been idle for an hour. A task that hits its limit continues on another account, or waits and continues if the limit resets soon."),
+        detail: L10n.string("Moves Claude Code tasks from an account that is nearly out of its limit to one with room."),
         values: .onOff, storage: .flag(key: AccountMovePreference.key, defaultValue: true),
         offered: { $0.connections?.connections(for: .claudeCode).isEmpty == false })
 
     static let claudeAIConnectors = YardletSetting(
         id: "claude_ai_connectors", section: .connectors, symbol: "person.crop.circle",
         title: L10n.string("Use claude.ai account connectors"),
-        detail: L10n.string("On: Claude tasks also load the connectors each Claude account connected on claude.ai, such as Gmail, Google Calendar, and Google Drive. They differ by account, and a service also connected here appears twice. Codex and ACP tasks are unaffected."),
+        detail: L10n.string("Claude tasks also load the connectors each Claude account has on claude.ai. A service also connected here appears twice."),
         values: .onOff, storage: .flag(key: ClaudeAIConnectorPreference.key, defaultValue: false), asksEveryTime: true,
         offered: { $0.hasConnectors })
 }
@@ -520,7 +517,7 @@ extension YardletSetting {
     /// Turning it off deletes the counts; the transcripts they came from stay.
     static let tokenUsage = YardletSetting(
         id: "token_usage", section: .usage, symbol: "chart.bar.xaxis", title: L10n.string("Count token usage"),
-        detail: L10n.string("Reads only the new lines of Claude Code's and Codex's transcripts on this Mac and keeps the counts for a year. Turning it off deletes the counts; the transcripts stay as they are."),
+        detail: L10n.string("Counts tokens from Claude Code's and Codex's transcripts on this Mac. Turning it off deletes the counts."),
         values: .onOff, storage: .flag(key: TokenUsagePreference.key, defaultValue: true),
         offered: { $0.hasUsage })
 }
@@ -576,7 +573,7 @@ extension YardletSetting {
 
     static let keepAwakeOnPower = YardletSetting(
         id: "keep_awake_on_power", section: .remote, symbol: "powerplug", title: L10n.string("Keep this Mac awake on power"),
-        detail: L10n.string("While it's plugged in, this Mac doesn't sleep on its own, so your devices can still reach it. The display can still turn off."),
+        detail: L10n.string("While plugged in, this Mac doesn't sleep on its own. The display can still turn off."),
         values: .onOff,
         storage: appSwitch({ $0.remote?.keepsAwakeOnPower }, { context, keepsAwake in
             context.remote?.setKeepsAwakeOnPower(keepsAwake)
@@ -588,7 +585,7 @@ extension YardletSetting {
     static let cliAutomaticUpdates = YardletSetting(
         id: "cli_automatic_updates", section: .cliUpdates, symbol: "arrow.triangle.2.circlepath",
         title: L10n.string("CLI automatic updates"),
-        detail: L10n.string("Updates each harness CLI with its own updater while none of its tasks is running. Yardlet checks the CLI before and after, without a model turn, and goes back to the earlier version if the new one fails."),
+        detail: L10n.string("Updates each harness CLI while none of its tasks is running, and goes back to the earlier version if the new one fails."),
         values: .onOff,
         storage: appSwitch({ $0.cliUpdates?.isAutoUpdateEnabled }, { context, isOn in
             context.cliUpdates?.setAutoUpdate(isOn)

@@ -26,9 +26,9 @@ enum BrowserMemorySaver {
         /// The level's line under its name, as Chrome has one, with its time.
         var detail: String {
             switch self {
-            case .moderate: L10n.string("Frees the memory of tabs unused for 6 hours.")
-            case .balanced: L10n.string("Frees the memory of tabs unused for 4 hours.")
-            case .maximum: L10n.string("Frees the memory of tabs unused for 2 hours.")
+            case .moderate: L10n.string("Tabs unused for 6 hours")
+            case .balanced: L10n.string("Tabs unused for 4 hours")
+            case .maximum: L10n.string("Tabs unused for 2 hours")
             }
         }
 

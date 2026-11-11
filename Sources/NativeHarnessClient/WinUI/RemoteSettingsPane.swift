@@ -104,7 +104,7 @@ final class RemoteSettingsPane {
         guard let pairing else {
             pairingPanel.children.append(Self.text(L10n.string("Pair a device"), size: 14, semibold: true))
             pairingPanel.children.append(Self.text(pairedName.map { L10n.format("%@ is paired.", $0) }
-                ?? L10n.string("Shows a code to scan with your phone, and a link for Yardlet on another computer. It works once and expires after 5 minutes."),
+                ?? L10n.string("A code to scan with your phone, or a link for Yardlet on another computer."),
                 muted: true))
             let pair = Self.button(L10n.string("Pair…")) { [weak self] in Task { await self?.service.startPairing() } }
             pair.isEnabled = canPair

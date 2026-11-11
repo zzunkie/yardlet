@@ -2596,7 +2596,7 @@ final class SessionToolTests: XCTestCase {
         let mailbox = try XCTUnwrap(settings.first { $0.id == "mailbox" })
         XCTAssertEqual(mailbox.section, L10n.string("General"))
         XCTAssertEqual(mailbox.title, L10n.string("Mailbox"))
-        XCTAssertEqual(mailbox.help, L10n.string("Show the inboxes of the mail accounts connected in Connectors (Gmail, Outlook and accounts over IMAP) beside your tasks. Mail is read from the service and kept in memory only."))
+        XCTAssertEqual(mailbox.help, L10n.string("Shows the inboxes of mail accounts connected in Connectors beside your tasks."))
         XCTAssertEqual(mailbox.kind, "switch")
         XCTAssertEqual(mailbox.value, "off")
         XCTAssertNil(mailbox.choices)

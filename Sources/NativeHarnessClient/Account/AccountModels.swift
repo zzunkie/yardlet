@@ -386,19 +386,6 @@ enum AccountConnectionPresentation {
             L10n.string("Provider settings")
         }
     }
-
-    static func providerDescription(for harness: HarnessKind) -> String {
-        switch harness {
-        case .hermes:
-            L10n.string(
-                "Choose a provider in Hermes. Authentication and billing remain owned by that provider."
-            )
-        default:
-            L10n.string(
-                "Choose a model provider and account using this harness’s own authentication."
-            )
-        }
-    }
 }
 
 /// Combines the visible account-card fields into one stable VoiceOver value without exposing

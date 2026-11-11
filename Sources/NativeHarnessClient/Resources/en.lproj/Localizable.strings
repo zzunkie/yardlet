@@ -381,12 +381,10 @@
 "Connection flow completed" = "Connection flow completed";
 "Connection could not be completed" = "Connection could not be completed";
 "Connection cancelled" = "Connection cancelled";
-"Yardlet is waiting for the harness to prepare its secure sign-in flow." = "Yardlet is waiting for the harness to prepare its secure sign-in flow.";
-"Complete account selection and approval in the browser. Yardlet never receives your password." = "Complete account selection and approval in the browser. Yardlet never receives your password.";
-"This harness owns the next provider or method choice. Continue in its setup controls below." = "This harness owns the next provider or method choice. Continue in its setup controls below.";
-"The harness finished its account flow. Return to verify the current connection state." = "The harness finished its account flow. Return to verify the current connection state.";
-"Open CLI details for the runtime error, then retry from the harness page." = "Open CLI details for the runtime error, then retry from the harness page.";
-"No account change was completed. You can return and try again." = "No account change was completed. You can return and try again.";
+"Yardlet never receives your password." = "Yardlet never receives your password.";
+"The harness asks you to choose a provider or a sign-in method." = "The harness asks you to choose a provider or a sign-in method.";
+"Open CLI details to see the error." = "Open CLI details to see the error.";
+"Nothing was changed." = "Nothing was changed.";
 "Verification code" = "Verification code";
 "Copy code" = "Copy code";
 "Continue in browser" = "Continue in browser";
@@ -777,8 +775,7 @@
 "Open System Settings" = "Open System Settings";
 "Allow notifications for Yardlet in macOS settings." = "Allow notifications for Yardlet in macOS settings.";
 "Refresh notification status" = "Refresh notification status";
-"System notifications are off until you allow them." = "System notifications are off until you allow them.";
-"System notifications are delivered for background completion, failure, or approval." = "System notifications are delivered for background completion, failure, or approval.";
+"Notifies when a background task finishes, fails or needs approval." = "Notifies when a background task finishes, fails or needs approval.";
 "Background task notifications" = "Background task notifications";
 "Git settings" = "Git settings";
 "Hook execution" = "Hook execution";
@@ -991,11 +988,10 @@
 "Terminal location" = "Terminal location";
 "Split Terminal" = "Split Terminal";
 "Unsplit Terminal" = "Unsplit Terminal";
-"Where the terminal opens: below the conversation, or as a tab of the side panel." = "Where the terminal opens: below the conversation, or as a tab of the side panel.";
 "Bottom" = "Bottom";
 "Right" = "Right";
 "A shell in the task's folder in the side panel." = "A shell in the task's folder in the side panel.";
-"A task's agent can read the task's terminal tabs, without typing in them, and a selection in the terminal can be attached to your message (⌘⇧L)." = "A task's agent can read the task's terminal tabs, without typing in them, and a selection in the terminal can be attached to your message (⌘⇧L).";
+"Agents can read a task's terminal tabs but can't type in them. ⌘⇧L attaches a terminal selection to your message." = "Agents can read a task's terminal tabs but can't type in them. ⌘⇧L attaches a terminal selection to your message.";
 "Attach Selection to Message" = "Attach Selection to Message";
 "Paste" = "Paste";
 "Terminal (%@):" = "Terminal (%@):";
@@ -1091,7 +1087,6 @@
 
 "Hermes provider setup" = "Hermes provider setup";
 
-"Choose a provider in Hermes. Authentication and billing remain owned by that provider." = "Choose a provider in Hermes. Authentication and billing remain owned by that provider.";
 
 /* Provider connections and account selection */
 "%.0f day limit" = "%.0f day limit";
@@ -1138,7 +1133,7 @@
 "Automatic" = "Automatic";
 "Each new task starts on the account with the most room left in its limits" = "Each new task starts on the account with the most room left in its limits";
 "Choose the account for new tasks automatically" = "Choose the account for new tasks automatically";
-"With more than one account in automatic assignment, a new task starts on the one with the most room left in its limits unless you choose an account." = "With more than one account in automatic assignment, a new task starts on the one with the most room left in its limits unless you choose an account.";
+"A new task starts on the account with the most room left in its limits unless you choose one." = "A new task starts on the account with the most room left in its limits unless you choose one.";
 "%@ %lld%% used" = "%1$@ %2$lld%% used";
 "Frees up %@" = "Frees up %@";
 "Switched from %@: nearly out of its limit" = "Switched from %@: nearly out of its limit";
@@ -1151,7 +1146,6 @@
 
 "Provider settings" = "Provider settings";
 
-"Choose a model provider and account using this harness’s own authentication." = "Choose a model provider and account using this harness’s own authentication.";
 
 "Choose provider" = "Choose provider";
 
@@ -1285,7 +1279,7 @@
 "Claude Code user settings" = "Claude Code user settings";
 "Agent browser tools" = "Agent browser tools";
 "Hide keys and tokens" = "Hide keys and tokens";
-"Hides values that look like API keys, access tokens or private keys in what agents read in the browser, a terminal or another task. Turned off, agents read them as they are shown, and they stay in the task's history." = "Hides values that look like API keys, access tokens or private keys in what agents read in the browser, a terminal or another task. Turned off, agents read them as they are shown, and they stay in the task's history.";
+"Hides values that look like API keys, tokens or private keys in what agents read. Turned off, they also stay in the task's history." = "Hides values that look like API keys, tokens or private keys in what agents read. Turned off, they also stay in the task's history.";
 "turn off hiding keys and tokens from agents" = "turn off hiding keys and tokens from agents";
 "Always on in a build that is not team-signed." = "Always on in a build that is not team-signed.";
 
@@ -1340,7 +1334,7 @@
 /* Connectors */
 "Connectors" = "Connectors";
 "Add connector" = "Add connector";
-"Claude Code tasks get changes from their next turn; tasks in other harnesses, when they next start or resume. A connector signed in again works again in every task at once." = "Claude Code tasks get changes from their next turn; tasks in other harnesses, when they next start or resume. A connector signed in again works again in every task at once.";
+"Claude Code tasks get changes from their next turn, and other tasks when they next start or resume." = "Claude Code tasks get changes from their next turn, and other tasks when they next start or resume.";
 "%lld tools" = "%lld tools";
 "Connecting…" = "Connecting…";
 "Sign in in your browser" = "Sign in in your browser";
@@ -1405,14 +1399,13 @@
 "The harness's own servers" = "The harness's own servers";
 "Needs sign-in" = "Needs sign-in";
 "Error" = "Error";
-"Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account." = "Services you connect here give their tools to every task Yardlet starts or resumes, in Claude Code, Codex, and ACP harnesses and every account.";
+"Tools of the services you connect here work in every task, whichever harness or account it uses." = "Tools of the services you connect here work in every task, whichever harness or account it uses.";
 "Yardlet couldn't read %@, so your saved connectors aren't shown. The file is left as it is, and changes made here are lost when Yardlet quits." = "Yardlet couldn't read %@, so your saved connectors aren't shown. The file is left as it is, and changes made here are lost when Yardlet quits.";
 "Yardlet couldn't read %@, so what it holds isn't shown. A copy is kept in the same folder." = "Yardlet couldn't read %@, so what it holds isn't shown. A copy is kept in the same folder.";
 "Yardlet couldn't save %@. Changes made since then are lost when Yardlet quits." = "Yardlet couldn't save %@. Changes made since then are lost when Yardlet quits.";
 "Your connectors" = "Your connectors";
 "No connectors yet" = "No connectors yet";
-"Connect a service such as Linear, Notion, or GitHub, and every task can use its tools." = "Connect a service such as Linear, Notion, or GitHub, and every task can use its tools.";
-"On: Claude tasks also load the connectors each Claude account connected on claude.ai, such as Gmail, Google Calendar, and Google Drive. They differ by account, and a service also connected here appears twice. Codex and ACP tasks are unaffected." = "On: Claude tasks also load the connectors each Claude account connected on claude.ai, such as Gmail, Google Calendar, and Google Drive. They differ by account, and a service also connected here appears twice. Codex and ACP tasks are unaffected.";
+"Claude tasks also load the connectors each Claude account has on claude.ai. A service also connected here appears twice." = "Claude tasks also load the connectors each Claude account has on claude.ai. A service also connected here appears twice.";
 "Pick a service. Sign-ins and keys stay in your keychain." = "Pick a service. Sign-ins and keys stay in your keychain.";
 "Connect in one click" = "Connect in one click";
 "Yardlet adds the service at once. For one with a sign-in, your browser opens: sign in and allow, and that is all." = "Yardlet adds the service at once. For one with a sign-in, your browser opens: sign in and allow, and that is all.";
@@ -1580,7 +1573,7 @@
 "Continue with another account" = "Continue with another account";
 "Auto-continue when limits reset" = "Auto-continue when limits reset";
 "Continue automatically at usage limit" = "Continue automatically at usage limit";
-"When a usage limit stops a Claude Code task and resets within a day, the task picks up where it stopped once it resets. A limit that resets later, such as a weekly one, continues only if you turn it on on its card." = "When a usage limit stops a Claude Code task and resets within a day, the task picks up where it stopped once it resets. A limit that resets later, such as a weekly one, continues only if you turn it on on its card.";
+"A Claude Code task a usage limit stopped continues once the limit resets, if that is within a day." = "A Claude Code task a usage limit stopped continues once the limit resets, if that is within a day.";
 "Auto-resuming at %@" = "Auto-resuming at %@";
 "Type to search for files" = "Type to search for files";
 "Searching files…" = "Searching files…";
@@ -2002,7 +1995,6 @@
 "Language" = "Language";
 "Applies the next time you open Yardlet" = "Applies the next time you open Yardlet";
 "Show in menu bar" = "Show in menu bar";
-"Keep Yardlet in the macOS menu bar when the main window is closed" = "Keep Yardlet in the macOS menu bar when the main window is closed";
 "Show Yardlet in the menu bar" = "Show Yardlet in the menu bar";
 "Turn the sidebar activity view on or off" = "Turn the sidebar activity view on or off";
 "5h" = "5h";
@@ -2038,7 +2030,7 @@
 "Can't reach the Yardlet server" = "Can't reach the Yardlet server";
 "Scan this code with Yardlet on your phone." = "Scan this code with Yardlet on your phone.";
 "Works once for 5 minutes · %@ left" = "Works once for 5 minutes · %@ left";
-"Shows a code to scan with your phone, and a link for Yardlet on another computer. It works once and expires after 5 minutes." = "Shows a code to scan with your phone, and a link for Yardlet on another computer. It works once and expires after 5 minutes.";
+"A code to scan with your phone, or a link for Yardlet on another computer." = "A code to scan with your phone, or a link for Yardlet on another computer.";
 "%@ wants to connect to this Mac" = "%@ wants to connect to this Mac";
 "Link code" = "Link code";
 "Allow it if the phone shows the same number." = "Allow it if the phone shows the same number.";
@@ -2059,7 +2051,7 @@
 "Last connected %@" = "Last connected %@";
 "Pairing QR code" = "Pairing QR code";
 "Keep this Mac awake on power" = "Keep this Mac awake on power";
-"While it's plugged in, this Mac doesn't sleep on its own, so your devices can still reach it. The display can still turn off." = "While it's plugged in, this Mac doesn't sleep on its own, so your devices can still reach it. The display can still turn off.";
+"While plugged in, this Mac doesn't sleep on its own. The display can still turn off." = "While plugged in, this Mac doesn't sleep on its own. The display can still turn off.";
 "On another computer, copy the link and open it in Yardlet there." = "On another computer, copy the link and open it in Yardlet there.";
 /* The desktop remote: another Mac's Yardlet in a window of its own (File › Connect to Mac…). */
 "%@ couldn't do that." = "%@ couldn't do that.";
@@ -2193,7 +2185,7 @@
 "Use %1$@ %2$@" = "Use %1$@ %2$@";
 "Installed by hand" = "Installed by hand";
 "CLI automatic updates" = "CLI automatic updates";
-"Updates each harness CLI with its own updater while none of its tasks is running. Yardlet checks the CLI before and after, without a model turn, and goes back to the earlier version if the new one fails." = "Updates each harness CLI with its own updater while none of its tasks is running. Yardlet checks the CLI before and after, without a model turn, and goes back to the earlier version if the new one fails.";
+"Updates each harness CLI while none of its tasks is running, and goes back to the earlier version if the new one fails." = "Updates each harness CLI while none of its tasks is running, and goes back to the earlier version if the new one fails.";
 "Checked %@ · checks every 6 hours" = "Checked %@ · checks every 6 hours";
 "No harness CLI is installed." = "No harness CLI is installed.";
 "Check for Updates" = "Check for Updates";
@@ -2218,9 +2210,9 @@
 "Moderate" = "Moderate";
 "Balanced (recommended)" = "Balanced (recommended)";
 "Maximum" = "Maximum";
-"Frees the memory of tabs unused for 6 hours." = "Frees the memory of tabs unused for 6 hours.";
-"Frees the memory of tabs unused for 4 hours." = "Frees the memory of tabs unused for 4 hours.";
-"Frees the memory of tabs unused for 2 hours." = "Frees the memory of tabs unused for 2 hours.";
+"Tabs unused for 6 hours" = "Tabs unused for 6 hours";
+"Tabs unused for 4 hours" = "Tabs unused for 4 hours";
+"Tabs unused for 2 hours" = "Tabs unused for 2 hours";
 "Memory saver level" = "Memory saver level";
 "Keeping the screen unlocked" = "Keeping the screen unlocked";
 "Not keeping the screen unlocked: battery under 20%" = "Not keeping the screen unlocked: battery under 20%";
@@ -2332,8 +2324,7 @@
 "Restart to update" = "Restart to update";
 "Yardlet Instructions" = "Yardlet Instructions";
 "Use Yardlet instructions" = "Use Yardlet instructions";
-"Added when Yardlet starts or resumes a task; a task whose harness is already running keeps the instructions it started with until it resumes, for example after Yardlet reopens. Never written to a harness's own files." = "Added when Yardlet starts or resumes a task; a task whose harness is already running keeps the instructions it started with until it resumes, for example after Yardlet reopens. Never written to a harness's own files.";
-"Global instruction files such as AGENTS.md and CLAUDE.md also apply outside Yardlet; Yardlet instructions apply only to tasks Yardlet launches." = "Global instruction files such as AGENTS.md and CLAUDE.md also apply outside Yardlet; Yardlet instructions apply only to tasks Yardlet launches.";
+"Added to tasks Yardlet starts or resumes. A running task gets changes when it next resumes." = "Added to tasks Yardlet starts or resumes. A running task gets changes when it next resumes.";
 "Not supported: %@" = "Not supported: %@";
 "Turn off in this project" = "Turn off in this project";
 "Project Yardlet instructions" = "Project Yardlet instructions";
@@ -2341,7 +2332,7 @@
 
 /* Next message suggestions: Claude Code's and Codex's predicted next message as the empty composer's faint text (the Claude app's "Prompt suggestions", the Codex app's "Show predictions"). */
 "Next message suggestions" = "Next message suggestions";
-"After a reply, show a suggested next message as faint text in the empty message box. Claude Code and Codex make each one with one more model request, which adds a little to your usage." = "After a reply, show a suggested next message as faint text in the empty message box. Claude Code and Codex make each one with one more model request, which adds a little to your usage.";
+"Shows a suggested next message in the empty message box after a reply. Each one takes one more model request." = "Shows a suggested next message in the empty message box after a reply. Each one takes one more model request.";
 "Codex tasks follow it from their next reply, Claude Code tasks from their next start or resume" = "Codex tasks follow it from their next reply, Claude Code tasks from their next start or resume";
 "Puts this message in the message box without sending it" = "Puts this message in the message box without sending it";
 
@@ -2417,7 +2408,7 @@
 "Show session rail" = "Show session rail";
 "Hide session rail" = "Hide session rail";
 "Auto-fix failing CI" = "Auto-fix failing CI";
-"When a task first has a pull request, ask whether to send it failing checks to fix. Auto-fix stays off until you turn it on for that task." = "When a task first has a pull request, ask whether to send it failing checks to fix. Auto-fix stays off until you turn it on for that task.";
+"When a task first has a pull request, asks whether to send it failing checks to fix." = "When a task first has a pull request, asks whether to send it failing checks to fix.";
 "The task's environment, settings, context, changes and progress beside the conversation." = "The task's environment, settings, context, changes and progress beside the conversation.";
 "Approved by %@" = "Approved by %@";
 "Changes requested by %@" = "Changes requested by %@";
@@ -2651,8 +2642,8 @@
 "Event %@" = "Event %@";
 "File %@" = "File %@";
 "Folder %@" = "Folder %@";
-"For services that need an app of your own: each step opens the right page, with every value to paste ready to copy." = "For services that need an app of your own: each step opens the right page, with every value to paste ready to copy.";
-"Found in your claude.ai accounts, Codex apps and plugins, harness settings, and the Claude app, Cursor, and VS Code. Connect one here once and every harness and account gets it; their settings stay as they are." = "Found in your claude.ai accounts, Codex apps and plugins, harness settings, and the Claude app, Cursor, and VS Code. Connect one here once and every harness and account gets it; their settings stay as they are.";
+"For services that need an app of your own." = "For services that need an app of your own.";
+"Found in your other apps' and harnesses' settings. Connecting one here leaves those settings as they are." = "Found in your other apps' and harnesses' settings. Connecting one here leaves those settings as they are.";
 "From Yardlet's manifest" = "From Yardlet's manifest";
 "Gmail · Calendar · Drive" = "Gmail · Calendar · Drive";
 "Gmail, Google Calendar, and Google Drive with one Google OAuth app" = "Gmail, Google Calendar, and Google Drive with one Google OAuth app";
@@ -2808,7 +2799,7 @@
 "Wait" = "Wait";
 "Not responding" = "Not responding";
 "Choose harnesses and models by daily evaluation" = "Choose harnesses and models by daily evaluation";
-"Once a day, the models you use review the day's tasks, their own included, and the routing they settle on is added to these instructions." = "Once a day, the models you use review the day's tasks, their own included, and the routing they settle on is added to these instructions.";
+"Once a day, the models you use review the day's tasks and add which harness and model suits which work to these instructions." = "Once a day, the models you use review the day's tasks and add which harness and model suits which work to these instructions.";
 "It uses your plans, and excerpts of your tasks are shown to the other harnesses' models. Turning it off removes its records." = "It uses your plans, and excerpts of your tasks are shown to the other harnesses' models. Turning it off removes its records.";
 "Last evaluation %@" = "Last evaluation %@";
 "Open Report" = "Open Report";
@@ -3135,7 +3126,7 @@
 "Xcode didn't answer: %@" = "Xcode didn't answer: %@";
 "This build of Yardlet can't sign App Store Connect tokens." = "This build of Yardlet can't sign App Store Connect tokens.";
 "Show servers tasks start" = "Show servers tasks start";
-"Show the localhost address of a server a task's harness or terminal starts beside the task's title" = "Show the localhost address of a server a task's harness or terminal starts beside the task's title";
+"Shows the server's localhost address beside the task's title." = "Shows the server's localhost address beside the task's title.";
 "Open %@ in this task's browser" = "Open %@ in this task's browser";
 "and %lld more" = "and %lld more";
 "Opens in this task's browser" = "Opens in this task's browser";
@@ -3350,7 +3341,7 @@
 "Google Search" = "Google Search";
 "Remove suggestion" = "Remove suggestion";
 "Autocomplete searches and URLs" = "Autocomplete searches and URLs";
-"Sends what you type in the address field to Google to suggest searches. Pages from your browsing history are suggested either way." = "Sends what you type in the address field to Google to suggest searches. Pages from your browsing history are suggested either way.";
+"Sends what you type in the address field to Google." = "Sends what you type in the address field to Google.";
 
 /* Personal agents */
 "This message cannot be displayed yet." = "This message cannot be displayed yet.";
@@ -3439,7 +3430,7 @@
 "Remove from list" = "Remove from list";
 "Remove from history" = "Remove from history";
 "Suggest pages on new tabs" = "Suggest pages on new tabs";
-"Shows the pages this task opened and the sites you visit most on a new tab and in the side panel. Turned off, tasks keep no list of the pages they opened." = "Shows the pages this task opened and the sites you visit most on a new tab and in the side panel. Turned off, tasks keep no list of the pages they opened.";
+"Shows the pages this task opened and the sites you visit most. Turned off, tasks keep no list of the pages they opened." = "Shows the pages this task opened and the sites you visit most. Turned off, tasks keep no list of the pages they opened.";
 "1 reset available" = "1 reset available";
 "%lld resets available" = "%lld resets available";
 "No resets left after this one" = "No resets left after this one";
@@ -3668,9 +3659,9 @@
 "This message is in Spam. Check who sent it before opening its links or files." = "This message is in Spam. Check who sent it before opening its links or files.";
 "This message is in the Trash." = "This message is in the Trash.";
 "Mailbox" = "Mailbox";
-"Show the inboxes of the mail accounts connected in Connectors (Gmail, Outlook and accounts over IMAP) beside your tasks. Mail is read from the service and kept in memory only." = "Show the inboxes of the mail accounts connected in Connectors (Gmail, Outlook and accounts over IMAP) beside your tasks. Mail is read from the service and kept in memory only.";
+"Shows the inboxes of mail accounts connected in Connectors beside your tasks." = "Shows the inboxes of mail accounts connected in Connectors beside your tasks.";
 "New mail" = "New mail";
-"Notify when new mail reaches an inbox in the mailbox: in Gmail its Primary tab, in Outlook its Focused inbox" = "Notify when new mail reaches an inbox in the mailbox: in Gmail its Primary tab, in Outlook its Focused inbox";
+"Only Gmail's Primary tab and Outlook's Focused inbox notify." = "Only Gmail's Primary tab and Outlook's Focused inbox notify.";
 "Images in this message are not loaded, so its sender cannot tell it was read." = "Images in this message are not loaded, so its sender cannot tell it was read.";
 "Show images" = "Show images";
 "Mail handoff %@ %@ %@" = "Account: %1$@ · thread %2$@, read with %3$@";
@@ -3767,7 +3758,7 @@
 "Choose a service" = "Choose a service";
 "Mail accounts…" = "Mail accounts…";
 "Move tasks to an account with room" = "Move tasks to an account with room";
-"Moves Claude Code tasks on an account that is nearly out of its limit to an account with room once they have been idle for an hour. A task that hits its limit continues on another account, or waits and continues if the limit resets soon." = "Moves Claude Code tasks on an account that is nearly out of its limit to an account with room once they have been idle for an hour. A task that hits its limit continues on another account, or waits and continues if the limit resets soon.";
+"Moves Claude Code tasks from an account that is nearly out of its limit to one with room." = "Moves Claude Code tasks from an account that is nearly out of its limit to one with room.";
 
 /* Settings tools */
 "Change “%@”?" = "Change “%@”?";
@@ -3823,13 +3814,12 @@
 "By kind" = "By kind";
 "Where it went" = "Where it went";
 "Group by" = "Group by";
-"API equivalent is an estimate at the providers' public API prices (%@). A subscription pays in plan limits, not dollars. A model without a price is counted in tokens only." = "API equivalent is an estimate at the providers' public API prices (%@). A subscription pays in plan limits, not dollars. A model without a price is counted in tokens only.";
-"Counted from this Mac's Claude Code and Codex transcripts, read %@. Nothing is sent anywhere." = "Counted from this Mac's Claude Code and Codex transcripts, read %@. Nothing is sent anywhere.";
+"API equivalent is an estimate at public API prices (%@), not what a subscription pays." = "API equivalent is an estimate at public API prices (%@), not what a subscription pays.";
 "Last 14 days, API equivalent" = "Last 14 days, API equivalent";
 "No price" = "No price";
 "Counting this Mac's transcripts…" = "Counting this Mac's transcripts…";
 "Count token usage" = "Count token usage";
-"Reads only the new lines of Claude Code's and Codex's transcripts on this Mac and keeps the counts for a year. Turning it off deletes the counts; the transcripts stay as they are." = "Reads only the new lines of Claude Code's and Codex's transcripts on this Mac and keeps the counts for a year. Turning it off deletes the counts; the transcripts stay as they are.";
+"Counts tokens from Claude Code's and Codex's transcripts on this Mac. Turning it off deletes the counts." = "Counts tokens from Claude Code's and Codex's transcripts on this Mac. Turning it off deletes the counts.";
 "Not started in Yardlet" = "Not started in Yardlet";
 
 "Permission is off for now. Recovery could not be saved; retry before restarting Yardlet." = "Permission is off for now. Recovery could not be saved; retry before restarting Yardlet.";
@@ -3838,7 +3828,6 @@
 
 "%@ for %@" = "%@ for %@";
 
-"Change Yardlet settings on this Mac." = "Change Yardlet settings on this Mac.";
 "Change Yardlet settings on this computer." = "Change Yardlet settings on this computer.";
 
 "Change settings" = "Change settings";
