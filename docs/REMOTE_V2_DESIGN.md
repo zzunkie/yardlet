@@ -227,7 +227,11 @@ account shows that person's Macs and lets them add a new phone. End-to-end encry
   operator), the phone would talk to a fake Mac. Each side computes the number from the two public keys it holds and a
   random nonce from each side, and the phone commits to its nonce before it learns the Mac's (commit, then reveal, as in
   Bluetooth's numeric comparison), so a swap makes the numbers on the two screens differ except by a one-in-a-million
-  chance. That way the account server does not need to be trusted. The Mac takes at most 5 link requests in 10 minutes.
+  chance. That way the account server does not need to be trusted with what passes between a phone and the person's
+  Mac. What the number shows is that the phone and the Mac displaying it hold the same keys; it does not show that a
+  Mac in the account's list is the person's own, since the list comes from the account server unsigned. So the person
+  links only when the number appears on the Mac in front of them: a phone linked to any other Mac reaches that Mac
+  alone, never the person's. The Mac takes at most 5 link requests in 10 minutes.
 - **When away:** if the person is not at the Mac, a phone already connected approves. With no connected phone and nobody
   at the Mac, a new phone cannot be added. That is the safe side.
 - **Sign-in methods:** GitHub and Google come first (OAuth 2.0 authorization code with PKCE; the apps use browser
