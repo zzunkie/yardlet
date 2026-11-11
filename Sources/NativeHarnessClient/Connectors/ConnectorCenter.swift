@@ -297,6 +297,9 @@ struct FileConnectorRepository: ConnectorRepository {
             if encoded != data {
                 try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try? encoded.write(to: fileURL, options: .atomic)
+                // Account addresses, mail hosts and each connector's tools: the person's alone.
+                try? FileManager.default.setAttributes([.posixPermissions: 0o600],
+                                                       ofItemAtPath: fileURL.path(percentEncoded: false))
             }
             known = (encoded, next)
             return true

@@ -19,6 +19,9 @@ enum StructuredHeadlessFlavor: Equatable, Sendable {
         options: StructuredHeadlessSessionOptions = .init(),
         catalog: AntigravityModelCatalog? = nil
     ) -> [String] {
+        // The prompt is one argument among the CLI's options. One that began with "-" would be read as an
+        // option, so it goes behind a line break, which changes nothing in what it asks.
+        let prompt = prompt.hasPrefix("-") ? "\n" + prompt : prompt
         switch self {
         case .cursor:
             var arguments = [

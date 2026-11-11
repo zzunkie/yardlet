@@ -13,11 +13,22 @@ struct GitExecutableLocatorTests {
         try runGit(["add", "review.txt"], at: root)
         try Data("working\n".utf8).write(to: file)
         try Data("new file\n".utf8).write(to: root.appending(path: "새 파일.txt"))
+        // A folder may come with a config of its own that names a program for Git to start as it reads.
+        let monitor = root.appending(path: ".git/monitor.sh")
+        try Data("#!/bin/sh\ntouch \"$(dirname \"$0\")/ran\"\n".utf8).write(to: monitor)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: monitor.path)
+        try runGit(["config", "core.fsmonitor", monitor.path], at: root)
         let indexURL = root.appending(path: ".git/index")
         let index = try Data(contentsOf: indexURL)
         let service = GitDiffService()
         let unstaged = try await service.load(workspaceURL: root)
         let staged = try await service.load(workspaceURL: root, target: .staged)
+        #expect(!FileManager.default.fileExists(atPath: root.appending(path: ".git/ran").path),
+                "Reading a folder starts no program its config names")
+        let given = GitExecutableLocator.withFileSystemMonitorOff(["GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "a.b",
+                                                                   "GIT_CONFIG_VALUE_0": "c"])
+        #expect(given == ["GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "a.b", "GIT_CONFIG_VALUE_0": "c",
+                          "GIT_CONFIG_KEY_1": "core.fsmonitor", "GIT_CONFIG_VALUE_1": "false"])
         #expect(Set(unstaged.files.map(\.path)) == ["review.txt", "새 파일.txt"])
         #expect(staged.files.map(\.path) == ["review.txt"])
         #expect(unstaged.lines.contains { $0.text == "+working" })

@@ -31,6 +31,8 @@ enum YardletProduct {
 
     /// Returns the user-visible Yardlet storage root and copies the existing session index on
     /// first use. The Application Support copy remains untouched as a rollback source.
+    /// The folder holds task titles, transcripts, schedules and connector records, so it is the
+    /// person's alone (0700), also one an earlier version made that the Mac's other accounts could read.
     static func storageRootURL(
         homeURL: URL = FileManager.default.homeDirectoryForCurrentUser,
         applicationSupportBaseURL: URL,
@@ -40,7 +42,9 @@ enum YardletProduct {
             path: storageDirectoryName,
             directoryHint: .isDirectory
         )
-        try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: destination, withIntermediateDirectories: true,
+                                        attributes: [.posixPermissions: 0o700])
+        try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: destination.path(percentEncoded: false))
 
         let previousRoot = try applicationSupportURL(
             baseURL: applicationSupportBaseURL,

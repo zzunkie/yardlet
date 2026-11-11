@@ -15,6 +15,12 @@ final class StructuredHeadlessAdapterTests: XCTestCase {
                 "--resume=cursor-chat", "hello"
             ]
         )
+        // A prompt is never read as one of the CLI's options.
+        for flavor in [StructuredHeadlessFlavor.cursor, .antigravity] {
+            let arguments = flavor.arguments(prompt: "--force", providerSessionID: "chat", isFirstTurn: false)
+            XCTAssertFalse(arguments.contains("--force"))
+            XCTAssertTrue(arguments.contains("\n--force"))
+        }
         XCTAssertFalse(
             StructuredHeadlessFlavor.antigravity.arguments(
                 prompt: "first",
