@@ -51,6 +51,8 @@ npm run typecheck
 The tests fake FCM, APNs, Google's OAuth endpoints and GitHub; they make no network requests. Their credentials are
 generated for each run.
 
+CI runs both, after `npm ci`, for every change under `relay/` (`.github/workflows/relay.yml`).
+
 ## Deploy
 
 Yardlet's own relay answers at `https://relay.yardlet.app`, a Custom Domain attached to the Worker in the
