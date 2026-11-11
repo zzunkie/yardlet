@@ -458,6 +458,10 @@ final class GoogleCalendarDriveConnectorTests: XCTestCase {
         let exported = try json(try await call(center, "drive_download_file_content", [
             "fileId": .string("doc-1"), "exportMimeType": .string("application/pdf")]))
         XCTAssertEqual(exported["mimeType"], .string("application/pdf"))
+        // A revision ID Google would not take is refused before a request, as any other ID is.
+        let badRevision = try await call(center, "drive_download_file_content", [
+            "fileId": .string("pdf-1"), "revisionId": .string("r\u{1}?x")])
+        XCTAssertTrue(badRevision.isError && badRevision.text.contains("Not an ID Google Drive takes"), badRevision.text)
         let huge = try await call(center, "drive_download_file_content", ["fileId": .string("huge-1")])
         XCTAssertTrue(huge.isError)
         XCTAssertFalse(google.calls("GET", "/drive/v3/files/huge-1").contains { $0.value("alt") == "media" },

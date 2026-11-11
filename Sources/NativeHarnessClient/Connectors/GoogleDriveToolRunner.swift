@@ -155,7 +155,7 @@ struct GoogleDriveToolRunner {
             if let size = file["size"]?.stringValue.flatMap(Int.init), size > maximumDownload {
                 throw GoogleREST.Failure.tooLarge(bytes: size, limit: maximumDownload)
             }
-            let path = Arguments.string(arguments, "revisionId").map { ["files", id, "revisions", (try? GoogleREST.segment($0)) ?? $0] }
+            let path = try Arguments.string(arguments, "revisionId").map { ["files", id, "revisions", try GoogleREST.segment($0)] }
                 ?? ["files", id]
             let answer = try await api.download(path, [URLQueryItem(name: "alt", value: "media"),
                                                       URLQueryItem(name: "supportsAllDrives", value: "true")],

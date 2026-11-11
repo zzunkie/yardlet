@@ -255,6 +255,7 @@ enum ConnectorOAuth {
         for url in authorizationServerMetadataURLs(issuer: issuer) {
             guard let metadata = await fetchJSON(url, http: http),
                   let authorization = metadata["authorization_endpoint"]?.stringValue.flatMap(URL.init(string:)),
+                  isSignInPage(authorization),
                   let token = metadata["token_endpoint"]?.stringValue.flatMap(URL.init(string:))
             else { continue }
             return OAuthAuthorizationServer(
@@ -266,6 +267,18 @@ enum ConnectorOAuth {
             )
         }
         return nil
+    }
+
+    /// Whether an address a server names as its sign-in page is one to open in the person's browser: a web
+    /// page over https, or over plain http on this Mac. The browser is asked to open it as it stands, so
+    /// any other scheme would be handed to whichever app takes that scheme.
+    static func isSignInPage(_ url: URL) -> Bool {
+        guard let host = url.host()?.lowercased(), !host.isEmpty else { return false }
+        switch url.scheme?.lowercased() {
+        case "https": return true
+        case "http": return ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host)
+        default: return false
+        }
     }
 
     // MARK: Registration

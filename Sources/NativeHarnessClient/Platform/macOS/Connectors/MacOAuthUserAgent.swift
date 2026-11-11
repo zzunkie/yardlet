@@ -7,8 +7,8 @@ import Network
 /// listener on 127.0.0.1 (RFC 8252). The browser keeps the user's existing sessions with the
 /// service, and Yardlet never sees the password.
 struct MacOAuthUserAgent: OAuthUserAgent {
-    func startLoopback(port: UInt16?) async throws -> any OAuthLoopbackReceiving {
-        try await MacOAuthLoopback.start(port: port)
+    func startLoopback(port: UInt16?, state: String) async throws -> any OAuthLoopbackReceiving {
+        try await MacOAuthLoopback.start(port: port, state: state)
     }
 
     func open(_ url: URL) async -> Bool {
@@ -46,30 +46,35 @@ extension ConnectorSignInConfirmation {
     }
 }
 
-/// One redirect's listener: the first `GET /callback` ends the wait, gets a short page telling
-/// the user to return to Yardlet, and brings Yardlet forward. Other paths get 404.
+/// One redirect's listener: the first `GET /callback` that carries the sign-in's `state` ends the
+/// wait, gets a short page telling the user to return to Yardlet, and brings Yardlet forward. Any
+/// page in the browser can send a request here, so one without the state is answered 404 like any
+/// other path and the wait goes on.
 final class MacOAuthLoopback: OAuthLoopbackReceiving, @unchecked Sendable {
     static let callbackPath = "/callback"
 
     let redirectURI: URL
+    private let state: String
     private let listener: NWListener
     private let queue: DispatchQueue
     private let lock = NSLock()
     private var outcome: Result<URL, Error>?
     private var waiters: [UUID: CheckedContinuation<URL, Error>] = [:]
 
-    private init(listener: NWListener, port: UInt16, queue: DispatchQueue) {
+    private init(listener: NWListener, port: UInt16, state: String, queue: DispatchQueue) {
         self.listener = listener
+        self.state = state
         self.queue = queue
         redirectURI = URL(string: "http://127.0.0.1:\(port)\(Self.callbackPath)")!
     }
 
-    /// Listens on 127.0.0.1: on `port` when a registered redirect URI names one, else on any.
-    static func start(port fixedPort: UInt16? = nil) async throws -> MacOAuthLoopback {
+    /// Listens on 127.0.0.1: on `port` when a registered redirect URI names one, else on any. The port
+    /// is this listener's alone while it waits.
+    static func start(port fixedPort: UInt16? = nil, state: String) async throws -> MacOAuthLoopback {
         let parameters = NWParameters.tcp
         let endpointPort = fixedPort.flatMap { NWEndpoint.Port(rawValue: $0) } ?? .any
         parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: endpointPort)
-        parameters.allowLocalEndpointReuse = fixedPort != nil
+        parameters.allowLocalEndpointReuse = false
         let listener = try NWListener(using: parameters)
         let queue = DispatchQueue(label: "Yardlet.ConnectorSignIn")
         let port: UInt16 = try await withCheckedThrowingContinuation { continuation in
@@ -89,7 +94,7 @@ final class MacOAuthLoopback: OAuthLoopbackReceiving, @unchecked Sendable {
             listener.newConnectionHandler = { $0.cancel() }
             listener.start(queue: queue)
         }
-        let loopback = MacOAuthLoopback(listener: listener, port: port, queue: queue)
+        let loopback = MacOAuthLoopback(listener: listener, port: port, state: state, queue: queue)
         listener.stateUpdateHandler = nil
         listener.newConnectionHandler = { [weak loopback] connection in loopback?.accept(connection) }
         return loopback
@@ -153,11 +158,13 @@ final class MacOAuthLoopback: OAuthLoopbackReceiving, @unchecked Sendable {
         let parts = head.split(separator: "\r\n").first?.split(separator: " ") ?? []
         let target = parts.count >= 2 ? String(parts[1]) : ""
         let path = target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? ""
-        guard parts.first == "GET", path == Self.callbackPath, let url = URL(string: "http://127.0.0.1\(target)") else {
+        guard parts.first == "GET", path == Self.callbackPath, let url = URL(string: "http://127.0.0.1\(target)"),
+              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              items.first(where: { $0.name == "state" })?.value == state else {
             respond(on: connection, status: "404 Not Found", body: "")
             return
         }
-        let failed = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.contains { $0.name == "error" } == true
+        let failed = items.contains { $0.name == "error" }
         respond(on: connection, status: "200 OK", body: Self.page(failed: failed))
         finish(.success(url))
         // Back from the browser to Yardlet, as after any sign-in; a background QA run stays put.
